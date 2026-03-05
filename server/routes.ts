@@ -434,10 +434,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ==================== LIVE CLASSES ROUTES ====================
   app.get("/api/live-classes", async (req: Request, res: Response) => {
     try {
-      const result = await db.query("SELECT * FROM live_classes WHERE is_completed = FALSE ORDER BY scheduled_at ASC");
+      const { courseId } = req.query;
+      let query = "SELECT * FROM live_classes WHERE is_completed = FALSE";
+      const params: unknown[] = [];
+      if (courseId) {
+        params.push(courseId);
+        query += ` AND (course_id = $${params.length} OR course_id IS NULL)`;
+      }
+      query += " ORDER BY scheduled_at ASC";
+      const result = await db.query(query, params);
       res.json(result.rows);
     } catch (err) {
       res.status(500).json({ message: "Failed to fetch live classes" });
+    }
+  });
+
+  app.delete("/api/admin/live-classes/:id", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      await db.query("DELETE FROM live_classes WHERE id = $1", [req.params.id]);
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ message: "Failed to delete live class" });
+    }
+  });
+
+  app.delete("/api/admin/study-materials/:id", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      await db.query("DELETE FROM study_materials WHERE id = $1", [req.params.id]);
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ message: "Failed to delete material" });
     }
   });
 
@@ -506,11 +532,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/admin/courses", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { title, description, teacherName, price, originalPrice, category, isFree, level, durationHours } = req.body;
+      const { title, description, teacherName, price, originalPrice, category, isFree, level, durationHours, courseType } = req.body;
       const result = await db.query(
-        `INSERT INTO courses (title, description, teacher_name, price, original_price, category, is_free, level, duration_hours, created_at) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
-        [title, description, teacherName || "3i Learning", price || 0, originalPrice || 0, category || "Mathematics", isFree || false, level || "Beginner", durationHours || 0, Date.now()]
+        `INSERT INTO courses (title, description, teacher_name, price, original_price, category, is_free, level, duration_hours, course_type, created_at) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+        [title, description, teacherName || "3i Learning", price || 0, originalPrice || 0, category || "Mathematics", isFree || false, level || "Beginner", durationHours || 0, courseType || "standard", Date.now()]
       );
       res.json(result.rows[0]);
     } catch (err) {
@@ -543,11 +569,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/admin/lectures", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { courseId, title, description, videoUrl, videoType, pdfUrl, durationMinutes, orderIndex, isFreePreview } = req.body;
+      const { courseId, title, description, videoUrl, videoType, pdfUrl, durationMinutes, orderIndex, isFreePreview, sectionTitle } = req.body;
       const result = await db.query(
-        `INSERT INTO lectures (course_id, title, description, video_url, video_type, pdf_url, duration_minutes, order_index, is_free_preview, created_at) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
-        [courseId, title, description, videoUrl, videoType || "youtube", pdfUrl, durationMinutes || 0, orderIndex || 0, isFreePreview || false, Date.now()]
+        `INSERT INTO lectures (course_id, title, description, video_url, video_type, pdf_url, duration_minutes, order_index, is_free_preview, section_title, created_at) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+        [courseId, title, description, videoUrl, videoType || "youtube", pdfUrl, durationMinutes || 0, orderIndex || 0, isFreePreview || false, sectionTitle || null, Date.now()]
       );
       await db.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [courseId]);
       res.json(result.rows[0]);
@@ -607,11 +633,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/admin/study-materials", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { title, description, fileUrl, fileType, courseId, isFree } = req.body;
+      const { title, description, fileUrl, fileType, courseId, isFree, sectionTitle } = req.body;
       const result = await db.query(
-        `INSERT INTO study_materials (title, description, file_url, file_type, course_id, is_free, created_at) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-        [title, description, fileUrl, fileType || "pdf", courseId || null, isFree !== false, Date.now()]
+        `INSERT INTO study_materials (title, description, file_url, file_type, course_id, is_free, section_title, created_at) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+        [title, description, fileUrl, fileType || "pdf", courseId || null, isFree !== false, sectionTitle || null, Date.now()]
       );
       res.json(result.rows[0]);
     } catch (err) {

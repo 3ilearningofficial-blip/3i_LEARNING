@@ -12,20 +12,43 @@ import * as Haptics from "expo-haptics";
 import { apiRequest } from "@/lib/query-client";
 import Colors from "@/constants/colors";
 
-function getYouTubeEmbedUrl(url: string): string {
-  let videoId = "";
+function getYouTubeVideoId(url: string): string {
+  if (!url) return "";
   try {
     const parsed = new URL(url);
     if (parsed.hostname.includes("youtu.be")) {
-      videoId = parsed.pathname.slice(1);
-    } else if (parsed.hostname.includes("youtube.com")) {
-      videoId = parsed.searchParams.get("v") || "";
+      return parsed.pathname.slice(1).split("?")[0];
     }
-  } catch {
-    const match = url.match(/(?:youtu\.be\/|youtube\.com\/watch\?v=|youtube\.com\/embed\/)([^&?\s]+)/);
-    videoId = match?.[1] || "";
-  }
-  return videoId ? `https://www.youtube.com/embed/${videoId}?playsinline=1&rel=0` : url;
+    if (parsed.hostname.includes("youtube.com")) {
+      return parsed.searchParams.get("v") || "";
+    }
+  } catch {}
+  const match = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/))([^&?\s/]+)/);
+  return match?.[1] || "";
+}
+
+function buildYouTubeHtml(videoId: string): string {
+  const embedUrl = `https://www.youtube.com/embed/${videoId}?playsinline=1&rel=0&modestbranding=1`;
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
+iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; }
+</style>
+</head>
+<body>
+<iframe
+  src="${embedUrl}"
+  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+  allowfullscreen
+  webkit-allowfullscreen
+  mozallowfullscreen
+></iframe>
+</body>
+</html>`;
 }
 
 export default function LectureScreen() {
@@ -35,11 +58,13 @@ export default function LectureScreen() {
   const insets = useSafeAreaInsets();
   const [isLoading, setIsLoading] = useState(true);
   const [isCompleted, setIsCompleted] = useState(false);
+  const [hasError, setHasError] = useState(false);
 
   const topPadding = Platform.OS === "web" ? 67 : insets.top;
   const bottomPadding = Platform.OS === "web" ? 34 : insets.bottom;
 
-  const embedUrl = videoUrl ? getYouTubeEmbedUrl(videoUrl) : "";
+  const videoId = getYouTubeVideoId(videoUrl || "");
+  const youtubeHtml = videoId ? buildYouTubeHtml(videoId) : "";
 
   const handleMarkComplete = async () => {
     try {
@@ -58,10 +83,12 @@ export default function LectureScreen() {
     }
   };
 
-  const secureWebViewScript = Platform.OS === "android" ? `
-    document.addEventListener('contextmenu', function(e){ e.preventDefault(); }, false);
+  const preventScreenCapture = `
+    (function() {
+      document.addEventListener('contextmenu', function(e){ e.preventDefault(); return false; });
+    })();
     true;
-  ` : undefined;
+  `;
 
   return (
     <View style={styles.container}>
@@ -82,22 +109,43 @@ export default function LectureScreen() {
       </LinearGradient>
 
       <View style={styles.playerContainer}>
-        {isLoading && (
+        {isLoading && !hasError && (
           <View style={styles.loadingOverlay}>
             <ActivityIndicator size="large" color={Colors.light.primary} />
             <Text style={styles.loadingText}>Loading video...</Text>
           </View>
         )}
-        <WebView
-          source={{ uri: embedUrl }}
-          style={styles.webView}
-          onLoadEnd={() => setIsLoading(false)}
-          allowsFullscreenVideo
-          mediaPlaybackRequiresUserAction={false}
-          injectedJavaScript={secureWebViewScript}
-          onShouldStartLoadWithRequest={() => true}
-          allowsInlineMediaPlayback
-        />
+        {hasError && (
+          <View style={styles.errorOverlay}>
+            <Ionicons name="alert-circle-outline" size={40} color="#EF4444" />
+            <Text style={styles.errorTitle}>Video unavailable</Text>
+            <Text style={styles.errorSub}>Check your internet connection and try again.</Text>
+            <Pressable style={styles.retryBtn} onPress={() => { setHasError(false); setIsLoading(true); }}>
+              <Text style={styles.retryBtnText}>Retry</Text>
+            </Pressable>
+          </View>
+        )}
+        {!hasError && youtubeHtml ? (
+          <WebView
+            source={{ html: youtubeHtml, baseUrl: "https://www.youtube.com" }}
+            style={styles.webView}
+            onLoad={() => setIsLoading(false)}
+            onError={() => { setIsLoading(false); setHasError(true); }}
+            allowsFullscreenVideo
+            mediaPlaybackRequiresUserAction={false}
+            injectedJavaScript={preventScreenCapture}
+            allowsInlineMediaPlayback
+            scrollEnabled={false}
+            javaScriptEnabled
+            domStorageEnabled
+            originWhitelist={["*"]}
+          />
+        ) : !hasError && !youtubeHtml ? (
+          <View style={styles.errorOverlay}>
+            <Ionicons name="videocam-off-outline" size={40} color={Colors.light.textMuted} />
+            <Text style={styles.errorTitle}>No video available</Text>
+          </View>
+        ) : null}
       </View>
 
       <ScrollView
@@ -110,7 +158,7 @@ export default function LectureScreen() {
 
         <View style={styles.securityNotice}>
           <Ionicons name="shield-checkmark" size={16} color={Colors.light.primary} />
-          <Text style={styles.securityText}>Recording & screenshots are disabled for this content</Text>
+          <Text style={styles.securityText}>Content protection is active. Recording & screenshots are restricted.</Text>
         </View>
 
         {!isCompleted && (
@@ -145,12 +193,20 @@ const styles = StyleSheet.create({
   lectureTitleText: { fontSize: 15, fontFamily: "Inter_600SemiBold", color: "#fff" },
   completedBadge: { width: 36, alignItems: "center" },
   playerContainer: { width: "100%", aspectRatio: 16 / 9, backgroundColor: "#000", position: "relative" },
-  webView: { flex: 1 },
+  webView: { flex: 1, backgroundColor: "#000" },
   loadingOverlay: {
     position: "absolute", top: 0, left: 0, right: 0, bottom: 0,
     backgroundColor: "#000", alignItems: "center", justifyContent: "center", gap: 12, zIndex: 10,
   },
-  loadingText: { color: "rgba(255,255,255,0.6)", fontFamily: "Inter_400Regular" },
+  loadingText: { color: "rgba(255,255,255,0.6)", fontFamily: "Inter_400Regular", fontSize: 13 },
+  errorOverlay: {
+    position: "absolute", top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: "#111", alignItems: "center", justifyContent: "center", gap: 10, padding: 24, zIndex: 10,
+  },
+  errorTitle: { fontSize: 16, fontFamily: "Inter_600SemiBold", color: "#fff", textAlign: "center" },
+  errorSub: { fontSize: 13, color: "rgba(255,255,255,0.5)", fontFamily: "Inter_400Regular", textAlign: "center" },
+  retryBtn: { backgroundColor: Colors.light.primary, borderRadius: 10, paddingHorizontal: 20, paddingVertical: 10, marginTop: 4 },
+  retryBtnText: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: "#fff" },
   infoSection: { flex: 1, backgroundColor: Colors.light.background },
   infoContent: { padding: 20, gap: 14 },
   lectureInfoTitle: { fontSize: 18, fontFamily: "Inter_700Bold", color: Colors.light.text },

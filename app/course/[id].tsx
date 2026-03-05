@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable,
-  Platform, ActivityIndicator, Alert,
+  Platform, ActivityIndicator, Alert, Linking,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -23,6 +23,7 @@ interface Lecture {
   duration_minutes: number;
   order_index: number;
   is_free_preview: boolean;
+  section_title?: string;
   isCompleted?: boolean;
 }
 
@@ -31,6 +32,7 @@ interface CourseTest {
   title: string;
   duration_minutes: number;
   total_questions: number;
+  total_marks: number;
   test_type: string;
 }
 
@@ -40,6 +42,17 @@ interface Material {
   description: string;
   file_url: string;
   file_type: string;
+  section_title?: string;
+}
+
+interface LiveClass {
+  id: number;
+  title: string;
+  description: string;
+  youtube_url: string;
+  is_live: boolean;
+  is_completed: boolean;
+  scheduled_at: number;
 }
 
 interface CourseDetail {
@@ -51,6 +64,7 @@ interface CourseDetail {
   original_price: string;
   category: string;
   is_free: boolean;
+  course_type?: string;
   total_lectures: number;
   total_tests: number;
   total_students: number;
@@ -63,7 +77,9 @@ interface CourseDetail {
   materials: Material[];
 }
 
-const TABS = ["Lectures", "Tests", "Materials"];
+const TEST_TYPE_COLORS: Record<string, string> = {
+  mock: "#DC2626", practice: "#1A56DB", chapter: "#059669", weekly: "#7C3AED",
+};
 
 export default function CourseDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -86,6 +102,18 @@ export default function CourseDetailScreen() {
     },
   });
 
+  const { data: liveClasses = [] } = useQuery<LiveClass[]>({
+    queryKey: ["/api/live-classes", id],
+    queryFn: async () => {
+      const baseUrl = getApiUrl();
+      const url = new URL(`/api/live-classes?courseId=${id}`, baseUrl);
+      const res = await fetch(url.toString(), { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: activeTab === "Live",
+  });
+
   const enrollMutation = useMutation({
     mutationFn: async () => {
       await apiRequest("POST", `/api/courses/${id}/enroll`);
@@ -106,20 +134,34 @@ export default function CourseDetailScreen() {
     if (course?.is_free) {
       enrollMutation.mutate();
     } else {
-      Alert.alert("Enroll in Course", `Enroll in "${course?.title}" for ₹${parseFloat(course?.price || "0").toFixed(0)}?`, [
-        { text: "Cancel", style: "cancel" },
-        { text: "Enroll", onPress: () => enrollMutation.mutate() },
-      ]);
+      Alert.alert(
+        "Purchase Course",
+        `Buy "${course?.title}" for ₹${parseFloat(course?.price || "0").toFixed(0)}?\n\nAfter purchase you'll get instant access to all content.`,
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Buy Now", onPress: () => enrollMutation.mutate() },
+        ]
+      );
     }
   };
 
   const handleLecture = (lecture: Lecture) => {
     if (!course?.isEnrolled && !lecture.is_free_preview) {
-      Alert.alert("Enroll Required", "Please enroll in this course to access all lectures.");
+      Alert.alert(
+        course?.is_free ? "Enroll Required" : "Purchase Required",
+        course?.is_free ? "Please enroll for free to access this lecture." : "Please purchase this course to access all lectures.",
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: course?.is_free ? "Enroll Free" : "Buy Now", onPress: handleEnroll },
+        ]
+      );
       return;
     }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    router.push({ pathname: `/lecture/${lecture.id}`, params: { courseId: id, videoUrl: lecture.video_url, title: lecture.title } });
+    router.push({
+      pathname: `/lecture/${lecture.id}`,
+      params: { courseId: id, videoUrl: lecture.video_url, title: lecture.title },
+    });
   };
 
   if (isLoading) {
@@ -138,9 +180,17 @@ export default function CourseDetailScreen() {
     );
   }
 
+  const isTestSeriesCourse = course.course_type === "test_series" || (course.total_lectures === 0 && course.total_tests > 0);
+  const TABS = isTestSeriesCourse
+    ? ["Tests", "Materials"]
+    : ["Lectures", "Tests", "Materials", "Live"];
+
   const discount = course.original_price && parseFloat(course.original_price) > 0
     ? Math.round((1 - parseFloat(course.price) / parseFloat(course.original_price)) * 100)
     : 0;
+
+  const firstTab = TABS[0];
+  const currentActiveTab = TABS.includes(activeTab) ? activeTab : firstTab;
 
   return (
     <View style={styles.container}>
@@ -151,12 +201,16 @@ export default function CourseDetailScreen() {
           </Pressable>
           <View style={styles.headerBadges}>
             {course.is_free && <View style={styles.freeBadge}><Text style={styles.freeBadgeText}>FREE</Text></View>}
-            {discount > 0 && <View style={styles.discountBadge}><Text style={styles.discountBadgeText}>{discount}% OFF</Text></View>}
+            {isTestSeriesCourse && <View style={styles.testSeriesBadge}><Text style={styles.testSeriesBadgeText}>TEST SERIES</Text></View>}
+            {!course.is_free && discount > 0 && <View style={styles.discountBadge}><Text style={styles.discountBadgeText}>{discount}% OFF</Text></View>}
           </View>
         </View>
 
         <View style={styles.courseIconArea}>
-          <MaterialCommunityIcons name="math-compass" size={48} color="rgba(255,255,255,0.25)" />
+          <MaterialCommunityIcons
+            name={isTestSeriesCourse ? "clipboard-check" : "math-compass"}
+            size={48} color="rgba(255,255,255,0.25)"
+          />
         </View>
 
         <Text style={styles.courseCategory}>{course.category}</Text>
@@ -171,10 +225,12 @@ export default function CourseDetailScreen() {
         </View>
 
         <View style={styles.courseQuickStats}>
-          <View style={styles.quickStat}>
-            <Ionicons name="videocam" size={16} color="rgba(255,255,255,0.8)" />
-            <Text style={styles.quickStatText}>{course.total_lectures} Lectures</Text>
-          </View>
+          {!isTestSeriesCourse && (
+            <View style={styles.quickStat}>
+              <Ionicons name="videocam" size={16} color="rgba(255,255,255,0.8)" />
+              <Text style={styles.quickStatText}>{course.total_lectures} Lectures</Text>
+            </View>
+          )}
           <View style={styles.quickStat}>
             <Ionicons name="document-text" size={16} color="rgba(255,255,255,0.8)" />
             <Text style={styles.quickStatText}>{course.total_tests} Tests</Text>
@@ -183,10 +239,12 @@ export default function CourseDetailScreen() {
             <Ionicons name="people" size={16} color="rgba(255,255,255,0.8)" />
             <Text style={styles.quickStatText}>{course.total_students} Students</Text>
           </View>
-          <View style={styles.quickStat}>
-            <Ionicons name="time" size={16} color="rgba(255,255,255,0.8)" />
-            <Text style={styles.quickStatText}>{course.duration_hours}h</Text>
-          </View>
+          {!isTestSeriesCourse && (
+            <View style={styles.quickStat}>
+              <Ionicons name="time" size={16} color="rgba(255,255,255,0.8)" />
+              <Text style={styles.quickStatText}>{course.duration_hours}h</Text>
+            </View>
+          )}
         </View>
 
         {course.isEnrolled && (
@@ -202,16 +260,28 @@ export default function CourseDetailScreen() {
         )}
       </LinearGradient>
 
-      <View style={styles.tabBar}>
+      <ScrollView
+        horizontal showsHorizontalScrollIndicator={false}
+        style={styles.tabBarScroll}
+        contentContainerStyle={styles.tabBarContent}
+      >
         {TABS.map((tab) => (
-          <Pressable key={tab} style={[styles.tabItem, activeTab === tab && styles.tabItemActive]} onPress={() => setActiveTab(tab)}>
-            <Text style={[styles.tabText, activeTab === tab && styles.tabTextActive]}>{tab}</Text>
+          <Pressable
+            key={tab}
+            style={[styles.tabItem, currentActiveTab === tab && styles.tabItemActive]}
+            onPress={() => setActiveTab(tab)}
+          >
+            <Text style={[styles.tabText, currentActiveTab === tab && styles.tabTextActive]}>{tab}</Text>
           </Pressable>
         ))}
-      </View>
+      </ScrollView>
 
-      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false} contentContainerStyle={[styles.scrollContent, { paddingBottom: bottomPadding + 100 }]}>
-        {activeTab === "Lectures" && (
+      <ScrollView
+        style={styles.scrollView}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: bottomPadding + 100 }]}
+      >
+        {currentActiveTab === "Lectures" && (
           <View style={styles.list}>
             {course.lectures.length === 0 ? (
               <View style={styles.emptyState}>
@@ -220,40 +290,47 @@ export default function CourseDetailScreen() {
               </View>
             ) : (
               course.lectures.map((lecture, idx) => (
-                <Pressable
-                  key={lecture.id}
-                  style={({ pressed }) => [styles.lectureItem, pressed && { opacity: 0.85 }]}
-                  onPress={() => handleLecture(lecture)}
-                >
-                  <View style={[styles.lectureNumber, lecture.isCompleted && styles.lectureNumberDone]}>
-                    {lecture.isCompleted ? (
-                      <Ionicons name="checkmark" size={16} color="#fff" />
-                    ) : (
-                      <Text style={styles.lectureNumberText}>{idx + 1}</Text>
-                    )}
-                  </View>
-                  <View style={styles.lectureInfo}>
-                    <Text style={styles.lectureTitle}>{lecture.title}</Text>
-                    <View style={styles.lectureMetaRow}>
-                      <Ionicons name="time-outline" size={12} color={Colors.light.textMuted} />
-                      <Text style={styles.lectureMeta}>{lecture.duration_minutes}min</Text>
-                      {lecture.is_free_preview && (
-                        <View style={styles.previewBadge}><Text style={styles.previewBadgeText}>Preview</Text></View>
+                <React.Fragment key={lecture.id}>
+                  {lecture.section_title && (
+                    <View style={styles.sectionHeader}>
+                      <Ionicons name="folder" size={14} color={Colors.light.primary} />
+                      <Text style={styles.sectionHeaderText}>{lecture.section_title}</Text>
+                    </View>
+                  )}
+                  <Pressable
+                    style={({ pressed }) => [styles.lectureItem, pressed && { opacity: 0.85 }]}
+                    onPress={() => handleLecture(lecture)}
+                  >
+                    <View style={[styles.lectureNumber, lecture.isCompleted && styles.lectureNumberDone]}>
+                      {lecture.isCompleted ? (
+                        <Ionicons name="checkmark" size={16} color="#fff" />
+                      ) : (
+                        <Text style={styles.lectureNumberText}>{idx + 1}</Text>
                       )}
                     </View>
-                  </View>
-                  {!course.isEnrolled && !lecture.is_free_preview ? (
-                    <Ionicons name="lock-closed" size={18} color={Colors.light.textMuted} />
-                  ) : (
-                    <Ionicons name="play-circle" size={22} color={Colors.light.primary} />
-                  )}
-                </Pressable>
+                    <View style={styles.lectureInfo}>
+                      <Text style={styles.lectureTitle}>{lecture.title}</Text>
+                      <View style={styles.lectureMetaRow}>
+                        <Ionicons name="time-outline" size={12} color={Colors.light.textMuted} />
+                        <Text style={styles.lectureMeta}>{lecture.duration_minutes}min</Text>
+                        {lecture.is_free_preview && (
+                          <View style={styles.previewBadge}><Text style={styles.previewBadgeText}>Preview</Text></View>
+                        )}
+                      </View>
+                    </View>
+                    {!course.isEnrolled && !lecture.is_free_preview ? (
+                      <Ionicons name="lock-closed" size={18} color={Colors.light.textMuted} />
+                    ) : (
+                      <Ionicons name="play-circle" size={22} color={Colors.light.primary} />
+                    )}
+                  </Pressable>
+                </React.Fragment>
               ))
             )}
           </View>
         )}
 
-        {activeTab === "Tests" && (
+        {currentActiveTab === "Tests" && (
           <View style={styles.list}>
             {course.tests.length === 0 ? (
               <View style={styles.emptyState}>
@@ -261,27 +338,43 @@ export default function CourseDetailScreen() {
                 <Text style={styles.emptyText}>No tests available</Text>
               </View>
             ) : (
-              course.tests.map((test) => (
-                <Pressable
-                  key={test.id}
-                  style={({ pressed }) => [styles.testItem, pressed && { opacity: 0.85 }]}
-                  onPress={() => router.push(`/test/${test.id}`)}
-                >
-                  <View style={styles.testItemIcon}>
-                    <Ionicons name="document-text" size={22} color={Colors.light.primary} />
-                  </View>
-                  <View style={styles.testItemInfo}>
-                    <Text style={styles.testItemTitle}>{test.title}</Text>
-                    <Text style={styles.testItemMeta}>{test.total_questions} questions · {test.duration_minutes}min</Text>
-                  </View>
-                  <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
-                </Pressable>
-              ))
+              course.tests.map((test) => {
+                const color = TEST_TYPE_COLORS[test.test_type] || Colors.light.primary;
+                return (
+                  <Pressable
+                    key={test.id}
+                    style={({ pressed }) => [styles.testCard, pressed && { opacity: 0.85 }]}
+                    onPress={() => {
+                      if (!course.isEnrolled && !course.is_free) {
+                        Alert.alert("Purchase Required", "Please purchase this course to access tests.");
+                        return;
+                      }
+                      router.push(`/test/${test.id}`);
+                    }}
+                  >
+                    <View style={[styles.testColorBar, { backgroundColor: color }]} />
+                    <View style={styles.testItemIcon}>
+                      <Ionicons name="document-text" size={22} color={color} />
+                    </View>
+                    <View style={styles.testItemInfo}>
+                      <Text style={styles.testItemTitle}>{test.title}</Text>
+                      <Text style={styles.testItemMeta}>
+                        {test.total_questions} questions · {test.duration_minutes}min · {test.total_marks} marks
+                      </Text>
+                    </View>
+                    {!course.isEnrolled && !course.is_free ? (
+                      <Ionicons name="lock-closed" size={18} color={Colors.light.textMuted} />
+                    ) : (
+                      <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
+                    )}
+                  </Pressable>
+                );
+              })
             )}
           </View>
         )}
 
-        {activeTab === "Materials" && (
+        {currentActiveTab === "Materials" && (
           <View style={styles.list}>
             {course.materials.length === 0 ? (
               <View style={styles.emptyState}>
@@ -290,15 +383,75 @@ export default function CourseDetailScreen() {
               </View>
             ) : (
               course.materials.map((mat) => (
-                <Pressable key={mat.id} style={styles.materialItem}>
-                  <View style={styles.materialIcon}>
-                    <Ionicons name="document-text" size={22} color="#DC2626" />
+                <React.Fragment key={mat.id}>
+                  {mat.section_title && (
+                    <View style={styles.sectionHeader}>
+                      <Ionicons name="folder" size={14} color="#DC2626" />
+                      <Text style={styles.sectionHeaderText}>{mat.section_title}</Text>
+                    </View>
+                  )}
+                  <Pressable
+                    style={({ pressed }) => [styles.materialItem, pressed && { opacity: 0.85 }]}
+                    onPress={() => mat.file_url ? Linking.openURL(mat.file_url) : null}
+                  >
+                    <View style={styles.materialIcon}>
+                      <Ionicons
+                        name={mat.file_type === "video" ? "videocam" : mat.file_type === "link" ? "link" : "document-text"}
+                        size={22} color="#DC2626"
+                      />
+                    </View>
+                    <View style={styles.materialInfo}>
+                      <Text style={styles.materialTitle}>{mat.title}</Text>
+                      {mat.description && <Text style={styles.materialDesc} numberOfLines={1}>{mat.description}</Text>}
+                      <Text style={styles.materialType}>{(mat.file_type || "pdf").toUpperCase()}</Text>
+                    </View>
+                    <Ionicons name="download-outline" size={20} color={Colors.light.primary} />
+                  </Pressable>
+                </React.Fragment>
+              ))
+            )}
+          </View>
+        )}
+
+        {currentActiveTab === "Live" && (
+          <View style={styles.list}>
+            {liveClasses.length === 0 ? (
+              <View style={styles.emptyState}>
+                <Ionicons name="videocam-outline" size={40} color={Colors.light.textMuted} />
+                <Text style={styles.emptyText}>No live classes scheduled</Text>
+                <Text style={styles.emptySubText}>Check back soon for upcoming live sessions</Text>
+              </View>
+            ) : (
+              liveClasses.map((lc) => (
+                <Pressable
+                  key={lc.id}
+                  style={({ pressed }) => [styles.liveClassItem, pressed && { opacity: 0.85 }]}
+                  onPress={() => router.push({
+                    pathname: `/lecture/${lc.id}`,
+                    params: { videoUrl: lc.youtube_url, title: lc.title },
+                  })}
+                >
+                  <LinearGradient
+                    colors={lc.is_live ? ["#DC2626", "#EF4444"] : ["#6B7280", "#9CA3AF"]}
+                    style={styles.liveStatusBadge}
+                  >
+                    {lc.is_live ? (
+                      <>
+                        <View style={styles.liveDot} />
+                        <Text style={styles.liveStatusText}>LIVE</Text>
+                      </>
+                    ) : (
+                      <Ionicons name="time" size={14} color="#fff" />
+                    )}
+                  </LinearGradient>
+                  <View style={styles.liveClassInfo}>
+                    <Text style={styles.liveClassTitle}>{lc.title}</Text>
+                    {lc.description ? <Text style={styles.liveClassDesc} numberOfLines={2}>{lc.description}</Text> : null}
+                    <Text style={styles.liveClassTime}>
+                      {lc.is_live ? "Happening now" : new Date(lc.scheduled_at).toLocaleString()}
+                    </Text>
                   </View>
-                  <View style={styles.materialInfo}>
-                    <Text style={styles.materialTitle}>{mat.title}</Text>
-                    {mat.description && <Text style={styles.materialDesc} numberOfLines={1}>{mat.description}</Text>}
-                  </View>
-                  <Ionicons name="download-outline" size={20} color={Colors.light.primary} />
+                  <Ionicons name={lc.is_live ? "play-circle" : "calendar"} size={24} color={lc.is_live ? "#DC2626" : Colors.light.textMuted} />
                 </Pressable>
               ))
             )}
@@ -325,11 +478,16 @@ export default function CourseDetailScreen() {
             onPress={handleEnroll}
             disabled={enrollMutation.isPending}
           >
-            <LinearGradient colors={[Colors.light.primary, Colors.light.primaryDark]} style={styles.enrollBtnGradient}>
+            <LinearGradient
+              colors={course.is_free ? ["#22C55E", "#16A34A"] : [Colors.light.accent, "#E55A25"]}
+              style={styles.enrollBtnGradient}
+            >
               {enrollMutation.isPending ? (
                 <ActivityIndicator color="#fff" size="small" />
               ) : (
-                <Text style={styles.enrollBtnText}>{course.is_free ? "Enroll for Free" : "Enroll Now"}</Text>
+                <Text style={styles.enrollBtnText}>
+                  {course.is_free ? "Enroll for Free" : "Buy Now"}
+                </Text>
               )}
             </LinearGradient>
           </Pressable>
@@ -349,6 +507,8 @@ const styles = StyleSheet.create({
   headerBadges: { flexDirection: "row", gap: 8 },
   freeBadge: { backgroundColor: "#22C55E", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4 },
   freeBadgeText: { color: "#fff", fontSize: 11, fontFamily: "Inter_700Bold" },
+  testSeriesBadge: { backgroundColor: "#7C3AED", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4 },
+  testSeriesBadgeText: { color: "#fff", fontSize: 11, fontFamily: "Inter_700Bold" },
   discountBadge: { backgroundColor: Colors.light.accent, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4 },
   discountBadgeText: { color: "#fff", fontSize: 11, fontFamily: "Inter_700Bold" },
   courseIconArea: { position: "absolute", right: 20, top: 60, opacity: 0.4 },
@@ -368,17 +528,25 @@ const styles = StyleSheet.create({
   progressPct: { fontSize: 12, fontFamily: "Inter_700Bold", color: "#22C55E" },
   progressBar: { height: 6, backgroundColor: "rgba(255,255,255,0.2)", borderRadius: 3, overflow: "hidden" },
   progressFill: { height: 6, backgroundColor: "#22C55E", borderRadius: 3 },
-  tabBar: { flexDirection: "row", backgroundColor: "#fff", borderBottomWidth: 1, borderBottomColor: Colors.light.border },
-  tabItem: { flex: 1, paddingVertical: 14, alignItems: "center", borderBottomWidth: 2, borderBottomColor: "transparent" },
+  tabBarScroll: { backgroundColor: "#fff", borderBottomWidth: 1, borderBottomColor: Colors.light.border, maxHeight: 52 },
+  tabBarContent: { paddingHorizontal: 4 },
+  tabItem: { paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 2, borderBottomColor: "transparent" },
   tabItemActive: { borderBottomColor: Colors.light.primary },
   tabText: { fontSize: 14, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary },
   tabTextActive: { color: Colors.light.primary, fontFamily: "Inter_600SemiBold" },
   scrollView: { flex: 1 },
-  scrollContent: { padding: 16, gap: 0 },
+  scrollContent: { gap: 0 },
   list: { gap: 0 },
+  sectionHeader: {
+    flexDirection: "row", alignItems: "center", gap: 8,
+    backgroundColor: "#F0F4FF", paddingHorizontal: 16, paddingVertical: 10,
+    borderBottomWidth: 1, borderBottomColor: Colors.light.border,
+  },
+  sectionHeaderText: { fontSize: 13, fontFamily: "Inter_700Bold", color: Colors.light.primary },
   lectureItem: {
     flexDirection: "row", alignItems: "center", gap: 12,
-    backgroundColor: "#fff", padding: 14, borderBottomWidth: 1, borderBottomColor: Colors.light.border,
+    backgroundColor: "#fff", paddingHorizontal: 16, paddingVertical: 14,
+    borderBottomWidth: 1, borderBottomColor: Colors.light.border,
   },
   lectureNumber: {
     width: 32, height: 32, borderRadius: 10,
@@ -392,18 +560,29 @@ const styles = StyleSheet.create({
   lectureMeta: { fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" },
   previewBadge: { backgroundColor: "#DCFCE7", borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2, marginLeft: 4 },
   previewBadgeText: { fontSize: 10, fontFamily: "Inter_600SemiBold", color: "#15803D" },
-  testItem: { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: "#fff", padding: 14, borderBottomWidth: 1, borderBottomColor: Colors.light.border },
-  testItemIcon: { width: 40, height: 40, borderRadius: 12, backgroundColor: Colors.light.secondary, alignItems: "center", justifyContent: "center" },
-  testItemInfo: { flex: 1 },
+  testCard: { flexDirection: "row", alignItems: "center", gap: 0, backgroundColor: "#fff", borderBottomWidth: 1, borderBottomColor: Colors.light.border },
+  testColorBar: { width: 4, alignSelf: "stretch" },
+  testItemIcon: { width: 40, height: 40, borderRadius: 12, backgroundColor: Colors.light.secondary, alignItems: "center", justifyContent: "center", margin: 12 },
+  testItemInfo: { flex: 1, paddingVertical: 14, paddingRight: 12 },
   testItemTitle: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text, marginBottom: 3 },
   testItemMeta: { fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" },
-  materialItem: { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: "#fff", padding: 14, borderBottomWidth: 1, borderBottomColor: Colors.light.border },
+  materialItem: { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: "#fff", paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: Colors.light.border },
   materialIcon: { width: 40, height: 40, borderRadius: 12, backgroundColor: "#FEE2E2", alignItems: "center", justifyContent: "center" },
   materialInfo: { flex: 1 },
   materialTitle: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text, marginBottom: 2 },
-  materialDesc: { fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" },
+  materialDesc: { fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", marginBottom: 2 },
+  materialType: { fontSize: 10, fontFamily: "Inter_700Bold", color: "#DC2626", backgroundColor: "#FEE2E2", paddingHorizontal: 6, paddingVertical: 1, borderRadius: 4, alignSelf: "flex-start" },
+  liveClassItem: { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: "#fff", paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: Colors.light.border },
+  liveStatusBadge: { width: 40, height: 40, borderRadius: 12, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 3 },
+  liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: "#fff" },
+  liveStatusText: { fontSize: 9, fontFamily: "Inter_700Bold", color: "#fff" },
+  liveClassInfo: { flex: 1 },
+  liveClassTitle: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text, marginBottom: 2 },
+  liveClassDesc: { fontSize: 12, color: Colors.light.textSecondary, fontFamily: "Inter_400Regular", marginBottom: 2 },
+  liveClassTime: { fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" },
   emptyState: { paddingVertical: 40, alignItems: "center", gap: 8 },
   emptyText: { fontSize: 15, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" },
+  emptySubText: { fontSize: 13, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", textAlign: "center", paddingHorizontal: 20 },
   enrollBar: {
     backgroundColor: "#fff", paddingHorizontal: 20, paddingTop: 12,
     borderTopWidth: 1, borderTopColor: Colors.light.border,

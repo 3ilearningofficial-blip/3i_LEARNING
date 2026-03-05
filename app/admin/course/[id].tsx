@@ -20,6 +20,7 @@ interface Lecture {
   duration_minutes: number;
   order_index: number;
   is_free_preview: boolean;
+  section_title?: string;
 }
 
 interface TestItem {
@@ -30,22 +31,41 @@ interface TestItem {
   test_type: string;
 }
 
-interface CourseDetail {
+interface Material {
   id: number;
   title: string;
   description: string;
-  teacher_name: string;
+  file_url: string;
+  file_type: string;
+  section_title?: string;
+}
+
+interface LiveClassItem {
+  id: number;
+  title: string;
+  youtube_url: string;
+  is_live: boolean;
+  scheduled_at: number;
+}
+
+interface CourseDetail {
+  id: number;
+  title: string;
   is_free: boolean;
-  is_published: boolean;
+  course_type?: string;
   total_lectures: number;
   total_tests: number;
   lectures: Lecture[];
   tests: TestItem[];
+  materials: Material[];
 }
+
+type AdminCourseTab = "lectures" | "tests" | "materials" | "live";
 
 interface NewLecture {
   title: string; description: string; videoUrl: string;
-  videoType: string; durationMinutes: string; orderIndex: string; isFreePreview: boolean;
+  videoType: string; durationMinutes: string; orderIndex: string;
+  isFreePreview: boolean; sectionTitle: string;
 }
 
 interface NewTestForm {
@@ -59,32 +79,50 @@ interface NewQuestion {
   explanation: string; topic: string; marks: string; negativeMarks: string;
 }
 
+interface NewMaterial {
+  title: string; description: string; fileUrl: string;
+  fileType: string; isFree: boolean; sectionTitle: string;
+}
+
+interface NewLiveClass {
+  title: string; description: string; youtubeUrl: string;
+  scheduledAt: string; isLive: boolean;
+}
+
+const ADMIN_COURSE_TABS: { key: AdminCourseTab; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
+  { key: "lectures", label: "Lectures", icon: "videocam" },
+  { key: "tests", label: "Tests", icon: "document-text" },
+  { key: "materials", label: "Materials", icon: "folder" },
+  { key: "live", label: "Live", icon: "radio" },
+];
+
+const emptyLecture: NewLecture = { title: "", description: "", videoUrl: "", videoType: "youtube", durationMinutes: "0", orderIndex: "0", isFreePreview: false, sectionTitle: "" };
+const emptyTest: NewTestForm = { title: "", description: "", durationMinutes: "60", totalMarks: "100", passingMarks: "35", testType: "practice" };
+const emptyQuestion: NewQuestion = { questionText: "", optionA: "", optionB: "", optionC: "", optionD: "", correctOption: "A", explanation: "", topic: "", marks: "4", negativeMarks: "1" };
+const emptyMaterial: NewMaterial = { title: "", description: "", fileUrl: "", fileType: "pdf", isFree: false, sectionTitle: "" };
+const emptyLiveClass: NewLiveClass = { title: "", description: "", youtubeUrl: "", scheduledAt: "", isLive: false };
+
 export default function AdminCourseScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
-  const [activeTab, setActiveTab] = useState<"lectures" | "tests">("lectures");
+  const [activeTab, setActiveTab] = useState<AdminCourseTab>("lectures");
   const [showAddLecture, setShowAddLecture] = useState(false);
   const [showAddTest, setShowAddTest] = useState(false);
   const [showAddQuestion, setShowAddQuestion] = useState<number | null>(null);
-
-  const [newLecture, setNewLecture] = useState<NewLecture>({
-    title: "", description: "", videoUrl: "", videoType: "youtube",
-    durationMinutes: "0", orderIndex: "0", isFreePreview: false,
-  });
-
-  const [newTest, setNewTest] = useState<NewTestForm>({
-    title: "", description: "", durationMinutes: "60",
-    totalMarks: "100", passingMarks: "35", testType: "practice",
-  });
-
-  const [newQuestion, setNewQuestion] = useState<NewQuestion>({
-    questionText: "", optionA: "", optionB: "", optionC: "", optionD: "",
-    correctOption: "A", explanation: "", topic: "", marks: "4", negativeMarks: "1",
-  });
+  const [showAddMaterial, setShowAddMaterial] = useState(false);
+  const [showAddLiveClass, setShowAddLiveClass] = useState(false);
+  const [newLecture, setNewLecture] = useState<NewLecture>(emptyLecture);
+  const [newTest, setNewTest] = useState<NewTestForm>(emptyTest);
+  const [newQuestion, setNewQuestion] = useState<NewQuestion>(emptyQuestion);
+  const [newMaterial, setNewMaterial] = useState<NewMaterial>(emptyMaterial);
+  const [newLiveClass, setNewLiveClass] = useState<NewLiveClass>(emptyLiveClass);
+  const [liveClasses, setLiveClasses] = useState<LiveClassItem[]>([]);
 
   const topPadding = Platform.OS === "web" ? 67 : insets.top;
   const bottomPadding = Platform.OS === "web" ? 34 : insets.bottom;
+
+  const isValidId = !!id && id !== "undefined" && id !== "null";
 
   const { data: course, isLoading } = useQuery<CourseDetail>({
     queryKey: ["/api/courses", id],
@@ -94,17 +132,33 @@ export default function AdminCourseScreen() {
       const res = await fetch(url.toString(), { credentials: "include" });
       return res.json();
     },
-    enabled: !!id && id !== "undefined",
+    enabled: isValidId,
+  });
+
+  const { data: courseLiveClasses = [] } = useQuery<LiveClassItem[]>({
+    queryKey: ["/api/live-classes", id, "admin"],
+    queryFn: async () => {
+      const baseUrl = getApiUrl();
+      const url = new URL(`/api/live-classes?courseId=${id}`, baseUrl);
+      const res = await fetch(url.toString(), { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: isValidId && activeTab === "live",
   });
 
   const addLectureMutation = useMutation({
     mutationFn: async (data: NewLecture) => {
-      await apiRequest("POST", "/api/admin/lectures", { ...data, courseId: parseInt(id), durationMinutes: parseInt(data.durationMinutes), orderIndex: parseInt(data.orderIndex) });
+      await apiRequest("POST", "/api/admin/lectures", {
+        ...data, courseId: parseInt(id),
+        durationMinutes: parseInt(data.durationMinutes) || 0,
+        orderIndex: parseInt(data.orderIndex) || 0,
+        sectionTitle: data.sectionTitle || null,
+      });
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/courses", id] });
-      setShowAddLecture(false);
-      setNewLecture({ title: "", description: "", videoUrl: "", videoType: "youtube", durationMinutes: "0", orderIndex: "0", isFreePreview: false });
+      setShowAddLecture(false); setNewLecture(emptyLecture);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       Alert.alert("Success", "Lecture added!");
     },
@@ -115,26 +169,21 @@ export default function AdminCourseScreen() {
     mutationFn: async (lectureId: number) => {
       await apiRequest("DELETE", `/api/admin/lectures/${lectureId}`);
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/courses", id] });
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/courses", id] }); },
   });
 
   const addTestMutation = useMutation({
     mutationFn: async (data: NewTestForm) => {
-      const res = await apiRequest("POST", "/api/admin/tests", {
+      await apiRequest("POST", "/api/admin/tests", {
         ...data, courseId: parseInt(id),
         durationMinutes: parseInt(data.durationMinutes),
         totalMarks: parseInt(data.totalMarks),
         passingMarks: parseInt(data.passingMarks),
       });
-      return res.json();
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/courses", id] });
-      setShowAddTest(false);
-      setNewTest({ title: "", description: "", durationMinutes: "60", totalMarks: "100", passingMarks: "35", testType: "practice" });
+      setShowAddTest(false); setNewTest(emptyTest);
       Alert.alert("Success", "Test created!");
     },
     onError: () => Alert.alert("Error", "Failed to create test"),
@@ -149,8 +198,7 @@ export default function AdminCourseScreen() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/courses", id] });
-      setShowAddQuestion(null);
-      setNewQuestion({ questionText: "", optionA: "", optionB: "", optionC: "", optionD: "", correctOption: "A", explanation: "", topic: "", marks: "4", negativeMarks: "1" });
+      setShowAddQuestion(null); setNewQuestion(emptyQuestion);
       Alert.alert("Success", "Question added!");
     },
     onError: () => Alert.alert("Error", "Failed to add question"),
@@ -160,14 +208,57 @@ export default function AdminCourseScreen() {
     mutationFn: async (testId: number) => {
       await apiRequest("DELETE", `/api/admin/tests/${testId}`);
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/courses", id] });
-    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/courses", id] }); },
   });
 
-  if (!id || id === "undefined") {
+  const addMaterialMutation = useMutation({
+    mutationFn: async (data: NewMaterial) => {
+      await apiRequest("POST", "/api/admin/study-materials", {
+        ...data, courseId: parseInt(id),
+        sectionTitle: data.sectionTitle || null,
+      });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/courses", id] });
+      setShowAddMaterial(false); setNewMaterial(emptyMaterial);
+      Alert.alert("Success", "Material added!");
+    },
+    onError: () => Alert.alert("Error", "Failed to add material"),
+  });
+
+  const deleteMaterialMutation = useMutation({
+    mutationFn: async (materialId: number) => {
+      await apiRequest("DELETE", `/api/admin/study-materials/${materialId}`);
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/courses", id] }); },
+  });
+
+  const addLiveClassMutation = useMutation({
+    mutationFn: async (data: NewLiveClass) => {
+      await apiRequest("POST", "/api/admin/live-classes", {
+        ...data,
+        courseId: parseInt(id),
+        scheduledAt: data.scheduledAt ? new Date(data.scheduledAt).getTime() : Date.now(),
+      });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/live-classes", id, "admin"] });
+      setShowAddLiveClass(false); setNewLiveClass(emptyLiveClass);
+      Alert.alert("Success", "Live class added!");
+    },
+    onError: () => Alert.alert("Error", "Failed to add live class"),
+  });
+
+  const deleteLiveClassMutation = useMutation({
+    mutationFn: async (lcId: number) => {
+      await apiRequest("DELETE", `/api/admin/live-classes/${lcId}`);
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/live-classes", id, "admin"] }); },
+  });
+
+  if (!isValidId) {
     return (
-      <View style={[styles.container, { paddingTop: topPadding }]}>
+      <View style={styles.container}>
         <LinearGradient colors={["#0A1628", "#1A2E50"]} style={[styles.header, { paddingTop: topPadding + 8 }]}>
           <Pressable style={styles.backBtn} onPress={() => router.back()}>
             <Ionicons name="arrow-back" size={20} color="#fff" />
@@ -175,7 +266,8 @@ export default function AdminCourseScreen() {
           <Text style={styles.headerTitle}>Select a Course</Text>
         </LinearGradient>
         <View style={styles.centered}>
-          <Text style={styles.errorText}>Please select a course from the admin dashboard</Text>
+          <Ionicons name="folder-open-outline" size={48} color={Colors.light.textMuted} />
+          <Text style={styles.errorText}>Please select a course from the Admin Dashboard</Text>
           <Pressable style={styles.backBtnSimple} onPress={() => router.back()}>
             <Text style={styles.backBtnText}>Go Back</Text>
           </Pressable>
@@ -185,20 +277,14 @@ export default function AdminCourseScreen() {
   }
 
   if (isLoading) {
-    return (
-      <View style={styles.centered}>
-        <ActivityIndicator size="large" color={Colors.light.primary} />
-      </View>
-    );
+    return <View style={styles.centered}><ActivityIndicator size="large" color={Colors.light.primary} /></View>;
   }
 
   if (!course) {
-    return (
-      <View style={styles.centered}>
-        <Text style={styles.errorText}>Course not found</Text>
-      </View>
-    );
+    return <View style={styles.centered}><Text style={styles.errorText}>Course not found</Text></View>;
   }
+
+  const isTestSeries = course.course_type === "test_series";
 
   return (
     <View style={styles.container}>
@@ -209,48 +295,66 @@ export default function AdminCourseScreen() {
           </Pressable>
           <View style={styles.headerContent}>
             <Text style={styles.headerTitle} numberOfLines={1}>{course.title}</Text>
-            <Text style={styles.headerSub}>{course.total_lectures} lectures · {course.total_tests} tests</Text>
+            <Text style={styles.headerSub}>
+              {isTestSeries ? "Test Series" : `${course.total_lectures} lectures`} · {course.total_tests} tests
+            </Text>
           </View>
         </View>
 
-        <View style={styles.tabRow}>
-          <Pressable style={[styles.tab, activeTab === "lectures" && styles.tabActive]} onPress={() => setActiveTab("lectures")}>
-            <Text style={[styles.tabText, activeTab === "lectures" && styles.tabTextActive]}>Lectures</Text>
-          </Pressable>
-          <Pressable style={[styles.tab, activeTab === "tests" && styles.tabActive]} onPress={() => setActiveTab("tests")}>
-            <Text style={[styles.tabText, activeTab === "tests" && styles.tabTextActive]}>Tests & Questions</Text>
-          </Pressable>
-        </View>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsRow}>
+          {ADMIN_COURSE_TABS.filter(t => !isTestSeries || t.key !== "lectures").map((tab) => (
+            <Pressable
+              key={tab.key}
+              style={[styles.tab, activeTab === tab.key && styles.tabActive]}
+              onPress={() => setActiveTab(tab.key)}
+            >
+              <Ionicons name={tab.icon} size={14} color={activeTab === tab.key ? Colors.light.primary : "rgba(255,255,255,0.6)"} />
+              <Text style={[styles.tabText, activeTab === tab.key && styles.tabTextActive]}>{tab.label}</Text>
+            </Pressable>
+          ))}
+        </ScrollView>
       </LinearGradient>
 
       <ScrollView contentContainerStyle={[styles.content, { paddingBottom: bottomPadding + 80 }]}>
-        {activeTab === "lectures" && (
+        {activeTab === "lectures" && !isTestSeries && (
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>Lectures ({course.lectures?.length || 0})</Text>
               <Pressable style={styles.addBtn} onPress={() => setShowAddLecture(true)}>
                 <Ionicons name="add" size={16} color="#fff" />
-                <Text style={styles.addBtnText}>Add</Text>
+                <Text style={styles.addBtnText}>Add Lecture</Text>
               </Pressable>
             </View>
-
+            <View style={styles.infoCard}>
+              <Ionicons name="information-circle" size={16} color={Colors.light.primary} />
+              <Text style={styles.infoText}>Use "Section/Folder Name" to organize lectures into folders. Leave blank for no folder.</Text>
+            </View>
             {course.lectures?.map((lecture) => (
               <View key={lecture.id} style={styles.itemCard}>
-                <View style={styles.itemIcon}>
-                  <Ionicons name="videocam" size={18} color={Colors.light.primary} />
+                {lecture.section_title && (
+                  <View style={styles.itemSectionBadge}>
+                    <Ionicons name="folder" size={12} color={Colors.light.primary} />
+                    <Text style={styles.itemSectionText}>{lecture.section_title}</Text>
+                  </View>
+                )}
+                <View style={styles.itemRow}>
+                  <View style={styles.itemIcon}>
+                    <Ionicons name="videocam" size={16} color={Colors.light.primary} />
+                  </View>
+                  <View style={styles.itemInfo}>
+                    <Text style={styles.itemTitle}>{lecture.title}</Text>
+                    <Text style={styles.itemMeta}>{lecture.duration_minutes}min · Order {lecture.order_index}{lecture.is_free_preview ? " · Free Preview" : ""}</Text>
+                  </View>
+                  <Pressable
+                    style={styles.deleteItemBtn}
+                    onPress={() => Alert.alert("Delete Lecture", `Delete "${lecture.title}"?`, [
+                      { text: "Cancel", style: "cancel" },
+                      { text: "Delete", style: "destructive", onPress: () => deleteLectureMutation.mutate(lecture.id) },
+                    ])}
+                  >
+                    <Ionicons name="trash-outline" size={16} color="#EF4444" />
+                  </Pressable>
                 </View>
-                <View style={styles.itemInfo}>
-                  <Text style={styles.itemTitle}>{lecture.title}</Text>
-                  <Text style={styles.itemMeta}>{lecture.duration_minutes}min · Order {lecture.order_index}{lecture.is_free_preview ? " · Preview" : ""}</Text>
-                </View>
-                <Pressable style={styles.deleteItemBtn} onPress={() => {
-                  Alert.alert("Delete", `Delete "${lecture.title}"?`, [
-                    { text: "Cancel", style: "cancel" },
-                    { text: "Delete", style: "destructive", onPress: () => deleteLectureMutation.mutate(lecture.id) },
-                  ]);
-                }}>
-                  <Ionicons name="trash-outline" size={16} color="#EF4444" />
-                </Pressable>
               </View>
             ))}
           </View>
@@ -265,7 +369,6 @@ export default function AdminCourseScreen() {
                 <Text style={styles.addBtnText}>Add Test</Text>
               </Pressable>
             </View>
-
             {course.tests?.map((test) => (
               <View key={test.id} style={styles.testCard}>
                 <View style={styles.testCardRow}>
@@ -276,7 +379,7 @@ export default function AdminCourseScreen() {
                       <Text style={styles.addQBtnText}>Add Q</Text>
                     </Pressable>
                     <Pressable style={styles.deleteItemBtn} onPress={() => {
-                      Alert.alert("Delete Test", `Delete "${test.title}"?`, [
+                      Alert.alert("Delete Test", `Delete "${test.title}" and all its questions?`, [
                         { text: "Cancel", style: "cancel" },
                         { text: "Delete", style: "destructive", onPress: () => deleteTestMutation.mutate(test.id) },
                       ]);
@@ -290,156 +393,277 @@ export default function AdminCourseScreen() {
             ))}
           </View>
         )}
+
+        {activeTab === "materials" && (
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Materials ({course.materials?.length || 0})</Text>
+              <Pressable style={styles.addBtn} onPress={() => setShowAddMaterial(true)}>
+                <Ionicons name="add" size={16} color="#fff" />
+                <Text style={styles.addBtnText}>Add Material</Text>
+              </Pressable>
+            </View>
+            <View style={styles.infoCard}>
+              <Ionicons name="information-circle" size={16} color={Colors.light.primary} />
+              <Text style={styles.infoText}>Add PDFs, notes, or reference links. Use "Folder Name" to organize materials into folders.</Text>
+            </View>
+            {course.materials?.map((mat) => (
+              <View key={mat.id} style={styles.itemCard}>
+                {mat.section_title && (
+                  <View style={styles.itemSectionBadge}>
+                    <Ionicons name="folder" size={12} color="#DC2626" />
+                    <Text style={[styles.itemSectionText, { color: "#DC2626" }]}>{mat.section_title}</Text>
+                  </View>
+                )}
+                <View style={styles.itemRow}>
+                  <View style={[styles.itemIcon, { backgroundColor: "#FEE2E2" }]}>
+                    <Ionicons name="document-text" size={16} color="#DC2626" />
+                  </View>
+                  <View style={styles.itemInfo}>
+                    <Text style={styles.itemTitle}>{mat.title}</Text>
+                    <Text style={styles.itemMeta}>{mat.file_type?.toUpperCase() || "PDF"}{mat.description ? ` · ${mat.description}` : ""}</Text>
+                  </View>
+                  <Pressable
+                    style={styles.deleteItemBtn}
+                    onPress={() => Alert.alert("Delete Material", `Delete "${mat.title}"?`, [
+                      { text: "Cancel", style: "cancel" },
+                      { text: "Delete", style: "destructive", onPress: () => deleteMaterialMutation.mutate(mat.id) },
+                    ])}
+                  >
+                    <Ionicons name="trash-outline" size={16} color="#EF4444" />
+                  </Pressable>
+                </View>
+              </View>
+            ))}
+          </View>
+        )}
+
+        {activeTab === "live" && (
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Live Classes ({courseLiveClasses.length})</Text>
+              <Pressable style={[styles.addBtn, { backgroundColor: "#DC2626" }]} onPress={() => setShowAddLiveClass(true)}>
+                <Ionicons name="radio" size={16} color="#fff" />
+                <Text style={styles.addBtnText}>Add Live</Text>
+              </Pressable>
+            </View>
+            <View style={styles.infoCard}>
+              <Ionicons name="information-circle" size={16} color={Colors.light.primary} />
+              <Text style={styles.infoText}>Add YouTube live stream URLs. Enable "Is Live Now" to show it as a live class to students.</Text>
+            </View>
+            {courseLiveClasses.map((lc) => (
+              <View key={lc.id} style={styles.itemCard}>
+                <View style={styles.itemRow}>
+                  <View style={[styles.itemIcon, { backgroundColor: lc.is_live ? "#FEE2E2" : Colors.light.secondary }]}>
+                    <Ionicons name="radio" size={16} color={lc.is_live ? "#DC2626" : Colors.light.primary} />
+                  </View>
+                  <View style={styles.itemInfo}>
+                    <View style={styles.liveRow}>
+                      <Text style={styles.itemTitle} numberOfLines={1}>{lc.title}</Text>
+                      {lc.is_live && (
+                        <View style={styles.liveBadge}>
+                          <Text style={styles.liveBadgeText}>LIVE</Text>
+                        </View>
+                      )}
+                    </View>
+                    <Text style={styles.itemMeta}>{new Date(lc.scheduled_at).toLocaleString()}</Text>
+                  </View>
+                  <Pressable
+                    style={styles.deleteItemBtn}
+                    onPress={() => Alert.alert("Delete Live Class", `Delete "${lc.title}"?`, [
+                      { text: "Cancel", style: "cancel" },
+                      { text: "Delete", style: "destructive", onPress: () => deleteLiveClassMutation.mutate(lc.id) },
+                    ])}
+                  >
+                    <Ionicons name="trash-outline" size={16} color="#EF4444" />
+                  </Pressable>
+                </View>
+              </View>
+            ))}
+          </View>
+        )}
       </ScrollView>
 
+      {/* Add Lecture Modal */}
       <Modal visible={showAddLecture} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Add Lecture</Text>
-              <Pressable onPress={() => setShowAddLecture(false)}>
+              <Pressable onPress={() => { setShowAddLecture(false); setNewLecture(emptyLecture); }}>
                 <Ionicons name="close" size={24} color={Colors.light.text} />
               </Pressable>
             </View>
-            <ScrollView style={{ maxHeight: 400 }}>
-              {[
-                { label: "Title *", key: "title", placeholder: "Lecture title" },
-                { label: "Description", key: "description", placeholder: "What will students learn?" },
-                { label: "YouTube URL *", key: "videoUrl", placeholder: "https://youtube.com/watch?v=..." },
-                { label: "Duration (minutes)", key: "durationMinutes", placeholder: "45", numeric: true },
-                { label: "Order Index", key: "orderIndex", placeholder: "1", numeric: true },
-              ].map((field) => (
-                <View key={field.key} style={styles.formField}>
-                  <Text style={styles.formLabel}>{field.label}</Text>
-                  <TextInput
-                    style={styles.formInput}
-                    placeholder={field.placeholder}
-                    placeholderTextColor={Colors.light.textMuted}
-                    value={String(newLecture[field.key as keyof NewLecture])}
-                    onChangeText={(val) => setNewLecture((prev) => ({ ...prev, [field.key]: val }))}
-                    keyboardType={field.numeric ? "numeric" : "default"}
-                  />
-                </View>
-              ))}
+            <ScrollView style={{ maxHeight: 480 }} showsVerticalScrollIndicator={false}>
+              <FormField label="Folder/Section Name (optional)" placeholder="e.g., Chapter 1 - Introduction" value={newLecture.sectionTitle} onChangeText={(v) => setNewLecture(p => ({ ...p, sectionTitle: v }))} />
+              <FormField label="Lecture Title *" placeholder="e.g., Introduction to Algebra" value={newLecture.title} onChangeText={(v) => setNewLecture(p => ({ ...p, title: v }))} />
+              <FormField label="YouTube URL *" placeholder="https://youtube.com/watch?v=..." value={newLecture.videoUrl} onChangeText={(v) => setNewLecture(p => ({ ...p, videoUrl: v }))} />
+              <FormField label="Description" placeholder="What students will learn" value={newLecture.description} onChangeText={(v) => setNewLecture(p => ({ ...p, description: v }))} multiline />
+              <FormField label="Duration (minutes)" placeholder="45" value={newLecture.durationMinutes} onChangeText={(v) => setNewLecture(p => ({ ...p, durationMinutes: v }))} numeric />
+              <FormField label="Order Index (lower = first)" placeholder="1" value={newLecture.orderIndex} onChangeText={(v) => setNewLecture(p => ({ ...p, orderIndex: v }))} numeric />
               <View style={styles.formField}>
-                <Text style={styles.formLabel}>Free Preview</Text>
-                <Switch
-                  value={newLecture.isFreePreview}
-                  onValueChange={(val) => setNewLecture((prev) => ({ ...prev, isFreePreview: val }))}
-                  trackColor={{ false: Colors.light.border, true: Colors.light.primary }}
-                  thumbColor="#fff"
-                />
+                <Text style={styles.formLabel}>Free Preview (visible without enrollment)</Text>
+                <Switch value={newLecture.isFreePreview} onValueChange={(v) => setNewLecture(p => ({ ...p, isFreePreview: v }))} trackColor={{ false: Colors.light.border, true: Colors.light.primary }} thumbColor="#fff" />
               </View>
             </ScrollView>
-            <Pressable
-              style={[styles.createBtn, (!newLecture.title || !newLecture.videoUrl) && styles.createBtnDisabled]}
-              onPress={() => (newLecture.title && newLecture.videoUrl) && addLectureMutation.mutate(newLecture)}
-              disabled={!newLecture.title || !newLecture.videoUrl || addLectureMutation.isPending}
-            >
-              <LinearGradient colors={[Colors.light.primary, Colors.light.primaryDark]} style={styles.createBtnGrad}>
-                {addLectureMutation.isPending ? <ActivityIndicator color="#fff" /> : <Text style={styles.createBtnText}>Add Lecture</Text>}
-              </LinearGradient>
-            </Pressable>
+            <ActionButton
+              label="Add Lecture"
+              onPress={() => addLectureMutation.mutate(newLecture)}
+              disabled={!newLecture.title || !newLecture.videoUrl}
+              loading={addLectureMutation.isPending}
+            />
           </View>
         </View>
       </Modal>
 
+      {/* Add Test Modal */}
       <Modal visible={showAddTest} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Create Test</Text>
-              <Pressable onPress={() => setShowAddTest(false)}>
+              <Pressable onPress={() => { setShowAddTest(false); setNewTest(emptyTest); }}>
                 <Ionicons name="close" size={24} color={Colors.light.text} />
               </Pressable>
             </View>
-            <ScrollView style={{ maxHeight: 400 }}>
-              {[
-                { label: "Test Title *", key: "title", placeholder: "e.g., Chapter 1 Test" },
-                { label: "Description", key: "description", placeholder: "Test description" },
-                { label: "Duration (minutes)", key: "durationMinutes", placeholder: "60", numeric: true },
-                { label: "Total Marks", key: "totalMarks", placeholder: "100", numeric: true },
-                { label: "Passing Marks", key: "passingMarks", placeholder: "35", numeric: true },
-                { label: "Test Type", key: "testType", placeholder: "practice / mock / chapter / weekly" },
-              ].map((field) => (
-                <View key={field.key} style={styles.formField}>
-                  <Text style={styles.formLabel}>{field.label}</Text>
-                  <TextInput
-                    style={styles.formInput}
-                    placeholder={field.placeholder}
-                    placeholderTextColor={Colors.light.textMuted}
-                    value={String(newTest[field.key as keyof NewTestForm])}
-                    onChangeText={(val) => setNewTest((prev) => ({ ...prev, [field.key]: val }))}
-                    keyboardType={field.numeric ? "numeric" : "default"}
-                  />
-                </View>
-              ))}
+            <ScrollView style={{ maxHeight: 420 }} showsVerticalScrollIndicator={false}>
+              <FormField label="Test Title *" placeholder="e.g., Chapter 1 Test" value={newTest.title} onChangeText={(v) => setNewTest(p => ({ ...p, title: v }))} />
+              <FormField label="Description" placeholder="Test description" value={newTest.description} onChangeText={(v) => setNewTest(p => ({ ...p, description: v }))} />
+              <FormField label="Type (practice/mock/chapter/weekly)" placeholder="practice" value={newTest.testType} onChangeText={(v) => setNewTest(p => ({ ...p, testType: v }))} />
+              <FormField label="Duration (minutes)" placeholder="60" value={newTest.durationMinutes} onChangeText={(v) => setNewTest(p => ({ ...p, durationMinutes: v }))} numeric />
+              <FormField label="Total Marks" placeholder="100" value={newTest.totalMarks} onChangeText={(v) => setNewTest(p => ({ ...p, totalMarks: v }))} numeric />
+              <FormField label="Passing Marks" placeholder="35" value={newTest.passingMarks} onChangeText={(v) => setNewTest(p => ({ ...p, passingMarks: v }))} numeric />
             </ScrollView>
-            <Pressable
-              style={[styles.createBtn, !newTest.title && styles.createBtnDisabled]}
-              onPress={() => newTest.title && addTestMutation.mutate(newTest)}
-              disabled={!newTest.title || addTestMutation.isPending}
-            >
-              <LinearGradient colors={[Colors.light.primary, Colors.light.primaryDark]} style={styles.createBtnGrad}>
-                {addTestMutation.isPending ? <ActivityIndicator color="#fff" /> : <Text style={styles.createBtnText}>Create Test</Text>}
-              </LinearGradient>
-            </Pressable>
+            <ActionButton label="Create Test" onPress={() => addTestMutation.mutate(newTest)} disabled={!newTest.title} loading={addTestMutation.isPending} />
           </View>
         </View>
       </Modal>
 
+      {/* Add Question Modal */}
       <Modal visible={showAddQuestion !== null} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Add Question</Text>
-              <Pressable onPress={() => setShowAddQuestion(null)}>
+              <Pressable onPress={() => { setShowAddQuestion(null); setNewQuestion(emptyQuestion); }}>
                 <Ionicons name="close" size={24} color={Colors.light.text} />
               </Pressable>
             </View>
-            <ScrollView style={{ maxHeight: 450 }}>
-              {[
-                { label: "Question *", key: "questionText", placeholder: "Enter the question" },
-                { label: "Option A *", key: "optionA", placeholder: "First option" },
-                { label: "Option B *", key: "optionB", placeholder: "Second option" },
-                { label: "Option C *", key: "optionC", placeholder: "Third option" },
-                { label: "Option D *", key: "optionD", placeholder: "Fourth option" },
-                { label: "Correct Option (A/B/C/D)", key: "correctOption", placeholder: "A" },
-                { label: "Topic", key: "topic", placeholder: "e.g., Real Numbers" },
-                { label: "Explanation", key: "explanation", placeholder: "Solution explanation" },
-                { label: "Marks", key: "marks", placeholder: "4", numeric: true },
-                { label: "Negative Marks", key: "negativeMarks", placeholder: "1", numeric: true },
-              ].map((field) => (
-                <View key={field.key} style={styles.formField}>
-                  <Text style={styles.formLabel}>{field.label}</Text>
-                  <TextInput
-                    style={styles.formInput}
-                    placeholder={field.placeholder}
-                    placeholderTextColor={Colors.light.textMuted}
-                    value={String(newQuestion[field.key as keyof NewQuestion])}
-                    onChangeText={(val) => setNewQuestion((prev) => ({ ...prev, [field.key]: val.toUpperCase() === val && field.key === "correctOption" ? val.toUpperCase() : val }))}
-                    keyboardType={(field as { numeric?: boolean }).numeric ? "numeric" : "default"}
-                    autoCapitalize={field.key === "correctOption" ? "characters" : "sentences"}
-                  />
-                </View>
-              ))}
+            <ScrollView style={{ maxHeight: 480 }} showsVerticalScrollIndicator={false}>
+              <FormField label="Question *" placeholder="Enter the question text" value={newQuestion.questionText} onChangeText={(v) => setNewQuestion(p => ({ ...p, questionText: v }))} multiline />
+              <FormField label="Option A *" placeholder="First option" value={newQuestion.optionA} onChangeText={(v) => setNewQuestion(p => ({ ...p, optionA: v }))} />
+              <FormField label="Option B *" placeholder="Second option" value={newQuestion.optionB} onChangeText={(v) => setNewQuestion(p => ({ ...p, optionB: v }))} />
+              <FormField label="Option C" placeholder="Third option" value={newQuestion.optionC} onChangeText={(v) => setNewQuestion(p => ({ ...p, optionC: v }))} />
+              <FormField label="Option D" placeholder="Fourth option" value={newQuestion.optionD} onChangeText={(v) => setNewQuestion(p => ({ ...p, optionD: v }))} />
+              <FormField label="Correct Option (A/B/C/D)" placeholder="A" value={newQuestion.correctOption} onChangeText={(v) => setNewQuestion(p => ({ ...p, correctOption: v.toUpperCase().slice(0, 1) }))} autoCapitalize="characters" />
+              <FormField label="Topic" placeholder="e.g., Trigonometry" value={newQuestion.topic} onChangeText={(v) => setNewQuestion(p => ({ ...p, topic: v }))} />
+              <FormField label="Explanation (optional)" placeholder="Solution explanation" value={newQuestion.explanation} onChangeText={(v) => setNewQuestion(p => ({ ...p, explanation: v }))} multiline />
+              <FormField label="Marks for correct" placeholder="4" value={newQuestion.marks} onChangeText={(v) => setNewQuestion(p => ({ ...p, marks: v }))} numeric />
+              <FormField label="Negative marks for wrong" placeholder="1" value={newQuestion.negativeMarks} onChangeText={(v) => setNewQuestion(p => ({ ...p, negativeMarks: v }))} numeric />
             </ScrollView>
-            <Pressable
-              style={[styles.createBtn, (!newQuestion.questionText || !newQuestion.optionA) && styles.createBtnDisabled]}
-              onPress={() => {
-                if (!newQuestion.questionText || !showAddQuestion) return;
-                addQuestionMutation.mutate({ testId: showAddQuestion, data: newQuestion });
-              }}
-              disabled={!newQuestion.questionText || !newQuestion.optionA || addQuestionMutation.isPending}
-            >
-              <LinearGradient colors={[Colors.light.primary, Colors.light.primaryDark]} style={styles.createBtnGrad}>
-                {addQuestionMutation.isPending ? <ActivityIndicator color="#fff" /> : <Text style={styles.createBtnText}>Add Question</Text>}
-              </LinearGradient>
-            </Pressable>
+            <ActionButton
+              label="Add Question"
+              onPress={() => { if (showAddQuestion) addQuestionMutation.mutate({ testId: showAddQuestion, data: newQuestion }); }}
+              disabled={!newQuestion.questionText || !newQuestion.optionA || !newQuestion.optionB}
+              loading={addQuestionMutation.isPending}
+            />
+          </View>
+        </View>
+      </Modal>
+
+      {/* Add Material Modal */}
+      <Modal visible={showAddMaterial} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Add Study Material</Text>
+              <Pressable onPress={() => { setShowAddMaterial(false); setNewMaterial(emptyMaterial); }}>
+                <Ionicons name="close" size={24} color={Colors.light.text} />
+              </Pressable>
+            </View>
+            <ScrollView style={{ maxHeight: 420 }} showsVerticalScrollIndicator={false}>
+              <FormField label="Folder Name (optional)" placeholder="e.g., Chapter 1 Notes" value={newMaterial.sectionTitle} onChangeText={(v) => setNewMaterial(p => ({ ...p, sectionTitle: v }))} />
+              <FormField label="Title *" placeholder="e.g., Algebra Formula Sheet" value={newMaterial.title} onChangeText={(v) => setNewMaterial(p => ({ ...p, title: v }))} />
+              <FormField label="File URL" placeholder="https://drive.google.com/..." value={newMaterial.fileUrl} onChangeText={(v) => setNewMaterial(p => ({ ...p, fileUrl: v }))} />
+              <FormField label="File Type (pdf/video/link/doc)" placeholder="pdf" value={newMaterial.fileType} onChangeText={(v) => setNewMaterial(p => ({ ...p, fileType: v }))} />
+              <FormField label="Description" placeholder="Short description of the material" value={newMaterial.description} onChangeText={(v) => setNewMaterial(p => ({ ...p, description: v }))} />
+              <View style={styles.formField}>
+                <Text style={styles.formLabel}>Free for all students (not just enrolled)</Text>
+                <Switch value={newMaterial.isFree} onValueChange={(v) => setNewMaterial(p => ({ ...p, isFree: v }))} trackColor={{ false: Colors.light.border, true: Colors.light.primary }} thumbColor="#fff" />
+              </View>
+            </ScrollView>
+            <ActionButton label="Add Material" onPress={() => addMaterialMutation.mutate(newMaterial)} disabled={!newMaterial.title} loading={addMaterialMutation.isPending} />
+          </View>
+        </View>
+      </Modal>
+
+      {/* Add Live Class Modal */}
+      <Modal visible={showAddLiveClass} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Add Live Class</Text>
+              <Pressable onPress={() => { setShowAddLiveClass(false); setNewLiveClass(emptyLiveClass); }}>
+                <Ionicons name="close" size={24} color={Colors.light.text} />
+              </Pressable>
+            </View>
+            <ScrollView style={{ maxHeight: 400 }} showsVerticalScrollIndicator={false}>
+              <FormField label="Title *" placeholder="e.g., Live Class - Trigonometry Revision" value={newLiveClass.title} onChangeText={(v) => setNewLiveClass(p => ({ ...p, title: v }))} />
+              <FormField label="YouTube URL *" placeholder="https://youtube.com/watch?v=... or live stream URL" value={newLiveClass.youtubeUrl} onChangeText={(v) => setNewLiveClass(p => ({ ...p, youtubeUrl: v }))} />
+              <FormField label="Description" placeholder="What will be covered" value={newLiveClass.description} onChangeText={(v) => setNewLiveClass(p => ({ ...p, description: v }))} />
+              <FormField label="Scheduled Date & Time" placeholder="2026-03-15 18:00" value={newLiveClass.scheduledAt} onChangeText={(v) => setNewLiveClass(p => ({ ...p, scheduledAt: v }))} />
+              <View style={styles.formField}>
+                <Text style={styles.formLabel}>Is Live Right Now?</Text>
+                <Switch value={newLiveClass.isLive} onValueChange={(v) => setNewLiveClass(p => ({ ...p, isLive: v }))} trackColor={{ false: Colors.light.border, true: "#DC2626" }} thumbColor="#fff" />
+              </View>
+            </ScrollView>
+            <ActionButton
+              label="Add Live Class"
+              onPress={() => addLiveClassMutation.mutate(newLiveClass)}
+              disabled={!newLiveClass.title || !newLiveClass.youtubeUrl}
+              loading={addLiveClassMutation.isPending}
+              color="#DC2626"
+            />
           </View>
         </View>
       </Modal>
     </View>
+  );
+}
+
+function FormField({
+  label, placeholder, value, onChangeText, multiline, numeric, autoCapitalize,
+}: {
+  label: string; placeholder: string; value: string;
+  onChangeText: (v: string) => void; multiline?: boolean; numeric?: boolean; autoCapitalize?: "none" | "sentences" | "words" | "characters";
+}) {
+  return (
+    <View style={styles.formField}>
+      <Text style={styles.formLabel}>{label}</Text>
+      <TextInput
+        style={[styles.formInput, multiline && styles.formInputMulti]}
+        placeholder={placeholder}
+        placeholderTextColor={Colors.light.textMuted}
+        value={value}
+        onChangeText={onChangeText}
+        multiline={multiline}
+        numberOfLines={multiline ? 3 : 1}
+        keyboardType={numeric ? "numeric" : "default"}
+        autoCapitalize={autoCapitalize || "sentences"}
+      />
+    </View>
+  );
+}
+
+function ActionButton({ label, onPress, disabled, loading, color }: { label: string; onPress: () => void; disabled?: boolean; loading?: boolean; color?: string }) {
+  const btnColor = color || Colors.light.primary;
+  const darkColor = color ? `${color}CC` : Colors.light.primaryDark;
+  return (
+    <Pressable style={[styles.createBtn, disabled && styles.createBtnDisabled]} onPress={onPress} disabled={disabled || loading}>
+      <LinearGradient colors={[btnColor, darkColor]} style={styles.createBtnGrad}>
+        {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.createBtnText}>{label}</Text>}
+      </LinearGradient>
+    </Pressable>
   );
 }
 
@@ -455,8 +679,8 @@ const styles = StyleSheet.create({
   headerContent: { flex: 1 },
   headerTitle: { fontSize: 16, fontFamily: "Inter_700Bold", color: "#fff" },
   headerSub: { fontSize: 12, color: "rgba(255,255,255,0.6)", fontFamily: "Inter_400Regular" },
-  tabRow: { flexDirection: "row", gap: 8 },
-  tab: { paddingHorizontal: 16, paddingVertical: 7, borderRadius: 18, backgroundColor: "rgba(255,255,255,0.1)" },
+  tabsRow: { gap: 8, paddingVertical: 4 },
+  tab: { flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 14, paddingVertical: 7, borderRadius: 18, backgroundColor: "rgba(255,255,255,0.1)" },
   tabActive: { backgroundColor: "#fff" },
   tabText: { fontSize: 13, fontFamily: "Inter_500Medium", color: "rgba(255,255,255,0.7)" },
   tabTextActive: { color: Colors.light.primary },
@@ -466,26 +690,35 @@ const styles = StyleSheet.create({
   sectionTitle: { fontSize: 17, fontFamily: "Inter_700Bold", color: Colors.light.text },
   addBtn: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: Colors.light.primary, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 },
   addBtnText: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#fff" },
-  itemCard: { backgroundColor: "#fff", borderRadius: 12, padding: 12, flexDirection: "row", alignItems: "center", gap: 10 },
+  infoCard: { backgroundColor: Colors.light.secondary, borderRadius: 10, padding: 12, flexDirection: "row", gap: 8, alignItems: "flex-start" },
+  infoText: { flex: 1, fontSize: 12, color: Colors.light.textSecondary, fontFamily: "Inter_400Regular", lineHeight: 18 },
+  itemCard: { backgroundColor: "#fff", borderRadius: 12, overflow: "hidden", borderWidth: 1, borderColor: Colors.light.border },
+  itemSectionBadge: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: Colors.light.secondary, paddingHorizontal: 12, paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: Colors.light.border },
+  itemSectionText: { fontSize: 11, fontFamily: "Inter_700Bold", color: Colors.light.primary },
+  itemRow: { flexDirection: "row", alignItems: "center", gap: 10, padding: 12 },
   itemIcon: { width: 36, height: 36, borderRadius: 10, backgroundColor: Colors.light.secondary, alignItems: "center", justifyContent: "center" },
   itemInfo: { flex: 1 },
   itemTitle: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
   itemMeta: { fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", marginTop: 2 },
   deleteItemBtn: { width: 32, height: 32, borderRadius: 8, backgroundColor: "#FEE2E2", alignItems: "center", justifyContent: "center" },
-  testCard: { backgroundColor: "#fff", borderRadius: 12, padding: 14, gap: 6 },
+  testCard: { backgroundColor: "#fff", borderRadius: 12, padding: 14, gap: 6, borderWidth: 1, borderColor: Colors.light.border },
   testCardRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   testCardTitle: { flex: 1, fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
   testCardActions: { flexDirection: "row", gap: 8 },
   addQBtn: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: Colors.light.secondary, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 5 },
   addQBtnText: { fontSize: 11, fontFamily: "Inter_600SemiBold", color: Colors.light.primary },
   testCardMeta: { fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" },
+  liveRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  liveBadge: { backgroundColor: "#DC2626", borderRadius: 4, paddingHorizontal: 5, paddingVertical: 2 },
+  liveBadgeText: { fontSize: 9, fontFamily: "Inter_700Bold", color: "#fff" },
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end" },
-  modalSheet: { backgroundColor: "#fff", borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: "90%", padding: 20 },
+  modalSheet: { backgroundColor: "#fff", borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: "92%", padding: 20 },
   modalHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 16 },
   modalTitle: { fontSize: 18, fontFamily: "Inter_700Bold", color: Colors.light.text },
   formField: { marginBottom: 12 },
   formLabel: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.text, marginBottom: 6 },
   formInput: { backgroundColor: Colors.light.background, borderRadius: 10, padding: 12, fontSize: 14, fontFamily: "Inter_400Regular", color: Colors.light.text, borderWidth: 1, borderColor: Colors.light.border },
+  formInputMulti: { height: 80, textAlignVertical: "top" },
   createBtn: { marginTop: 12, borderRadius: 12, overflow: "hidden" },
   createBtnDisabled: { opacity: 0.5 },
   createBtnGrad: { paddingVertical: 14, alignItems: "center" },

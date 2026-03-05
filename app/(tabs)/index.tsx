@@ -51,7 +51,7 @@ interface LiveClass {
   scheduled_at: number;
 }
 
-const CATEGORIES = ["All", "Class 10", "Class 12", "Fundamentals", "Trigonometry", "Calculus"];
+const CATEGORIES = ["All", "Class 10", "Class 12", "CDS", "NDA", "AFCAT", "Fundamentals", "Trigonometry", "Calculus"];
 
 const COURSE_COLORS = ["#1A56DB", "#7C3AED", "#DC2626", "#059669", "#D97706", "#0891B2"];
 

@@ -28,6 +28,7 @@ export const courses = pgTable("courses", {
   level: text("level").default("Beginner"),
   durationHours: decimal("duration_hours", { precision: 5, scale: 1 }).default("0"),
   isPublished: boolean("is_published").default(true),
+  courseType: text("course_type").default("standard"),
   createdAt: bigint("created_at", { mode: "number" }),
 });
 
@@ -42,6 +43,7 @@ export const lectures = pgTable("lectures", {
   durationMinutes: integer("duration_minutes").default(0),
   orderIndex: integer("order_index").default(0),
   isFreePreview: boolean("is_free_preview").default(false),
+  sectionTitle: text("section_title"),
   createdAt: bigint("created_at", { mode: "number" }),
 });
 
@@ -71,6 +73,7 @@ export const studyMaterials = pgTable("study_materials", {
   fileType: text("file_type").default("pdf"),
   courseId: integer("course_id"),
   isFree: boolean("is_free").default(true),
+  sectionTitle: text("section_title"),
   createdAt: bigint("created_at", { mode: "number" }),
 });
 
