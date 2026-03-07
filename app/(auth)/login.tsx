@@ -1,17 +1,8 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import {
-  View,
-  Text,
-  StyleSheet,
-  TextInput,
-  Pressable,
-  ScrollView,
-  KeyboardAvoidingView,
-  Platform,
-  ActivityIndicator,
-  Alert,
-  Image,
-  Modal,
+  View, Text, StyleSheet, TextInput, Pressable,
+  ScrollView, KeyboardAvoidingView, Platform,
+  ActivityIndicator, Alert, Image,
 } from "react-native";
 import { router } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
@@ -19,17 +10,80 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
-import { getApiUrl } from "@/lib/query-client";
 
 export default function LoginScreen() {
   const insets = useSafeAreaInsets();
   const [phone, setPhone] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [showWebView, setShowWebView] = useState(false);
-  const webViewRef = useRef<any>(null);
-  const pendingPhoneRef = useRef("");
+  const [statusText, setStatusText] = useState("");
+  const recaptchaVerifierRef = useRef<any>(null);
+  const recaptchaContainerRef = useRef<any>(null);
 
-  const sendViaServer = async (phoneNumber: string) => {
+  useEffect(() => {
+    if (Platform.OS === "web") {
+      setupRecaptcha();
+    }
+  }, []);
+
+  const setupRecaptcha = async () => {
+    try {
+      const { auth, RecaptchaVerifier } = await import("@/lib/firebase");
+      const container = document.getElementById("recaptcha-container");
+      if (!container) {
+        const div = document.createElement("div");
+        div.id = "recaptcha-container";
+        div.style.display = "none";
+        document.body.appendChild(div);
+      }
+      if (recaptchaVerifierRef.current) {
+        try { recaptchaVerifierRef.current.clear(); } catch {}
+      }
+      recaptchaVerifierRef.current = new RecaptchaVerifier(auth, "recaptcha-container", {
+        size: "invisible",
+        callback: () => {},
+        "expired-callback": () => {
+          console.log("reCAPTCHA expired, re-initializing...");
+          setupRecaptcha();
+        },
+      });
+    } catch (err) {
+      console.error("reCAPTCHA setup error:", err);
+    }
+  };
+
+  const sendOTPViaFirebaseWeb = async (phoneNumber: string): Promise<{ method: string; confirmationResult?: any; sessionInfo?: string; devOtp?: string }> => {
+    try {
+      const { auth, signInWithPhoneNumber } = await import("@/lib/firebase");
+
+      if (!recaptchaVerifierRef.current) {
+        await setupRecaptcha();
+      }
+
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("Firebase verification timed out")), 20000)
+      );
+
+      setStatusText("Sending verification code...");
+      const confirmationResult = await Promise.race([
+        signInWithPhoneNumber(auth, `+91${phoneNumber}`, recaptchaVerifierRef.current),
+        timeoutPromise,
+      ]);
+
+      return { method: "firebase-web", confirmationResult };
+    } catch (err: any) {
+      console.error("Firebase web auth error:", err?.code, err?.message);
+      setupRecaptcha();
+      throw new Error(
+        err?.code === "auth/too-many-requests"
+          ? "Too many attempts. Please wait a few minutes."
+          : err?.code === "auth/invalid-phone-number"
+            ? "Invalid phone number format."
+            : err?.message || "Firebase verification failed"
+      );
+    }
+  };
+
+  const sendOTPViaServer = async (phoneNumber: string): Promise<{ method: string; sessionInfo?: string; devOtp?: string }> => {
     const { apiRequest } = await import("@/lib/query-client");
     const res = await apiRequest("POST", "/api/auth/send-otp", {
       identifier: phoneNumber,
@@ -39,52 +93,11 @@ export default function LoginScreen() {
     if (!data.success) {
       throw new Error(data.message || "Failed to send OTP");
     }
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    router.push({
-      pathname: "/(auth)/otp",
-      params: { phone: phoneNumber, method: "server", devOtp: data.devOtp || "" },
-    });
-  };
-
-  const getFirebaseWebViewUrl = (phoneNumber: string) => {
-    const baseUrl = getApiUrl();
-    const apiKey = process.env.EXPO_PUBLIC_FIREBASE_API_KEY || "";
-    const projectId = process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID || "";
-    return `${baseUrl}/firebase-phone-auth?phone=${phoneNumber}&apiKey=${encodeURIComponent(apiKey)}&projectId=${encodeURIComponent(projectId)}`;
-  };
-
-  const handleWebViewMessage = (event: any) => {
-    try {
-      const data = JSON.parse(event.nativeEvent.data);
-      if (data.type === "otp-sent") {
-        setShowWebView(false);
-        setIsLoading(false);
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-        router.push({
-          pathname: "/(auth)/otp",
-          params: {
-            phone: pendingPhoneRef.current,
-            method: "firebase-webview",
-            verificationId: data.verificationId || "",
-          },
-        });
-      } else if (data.type === "error") {
-        console.warn("Firebase WebView error:", data.message, data.code);
-        setShowWebView(false);
-        if (data.code === "auth/too-many-requests") {
-          setIsLoading(false);
-          Alert.alert("Too Many Attempts", "Please wait a few minutes and try again.");
-        } else if (data.code === "auth/invalid-phone-number") {
-          setIsLoading(false);
-          Alert.alert("Invalid Number", "Please enter a valid phone number.");
-        } else {
-          sendViaServer(pendingPhoneRef.current).catch(() => {
-            setIsLoading(false);
-            Alert.alert("OTP Failed", "Could not send OTP. Please try again later.");
-          });
-        }
-      }
-    } catch {}
+    return {
+      method: data.method || "server",
+      sessionInfo: data.sessionInfo,
+      devOtp: data.devOtp,
+    };
   };
 
   const handleSendOTP = async () => {
@@ -98,101 +111,39 @@ export default function LoginScreen() {
     }
 
     setIsLoading(true);
+    setStatusText("Preparing...");
     const phoneNumber = phone.trim();
-    pendingPhoneRef.current = phoneNumber;
 
     try {
+      let result: any;
+
       if (Platform.OS === "web") {
-        try {
-          const { auth, RecaptchaVerifier, signInWithPhoneNumber } = await import("@/lib/firebase");
-
-          if ((window as any).recaptchaVerifier) {
-            try { (window as any).recaptchaVerifier.clear(); } catch {}
-            (window as any).recaptchaVerifier = null;
-          }
-          const existing = document.getElementById("recaptcha-container");
-          if (existing) existing.remove();
-
-          const container = document.createElement("div");
-          container.id = "recaptcha-container";
-          container.style.position = "fixed";
-          container.style.bottom = "10px";
-          container.style.left = "50%";
-          container.style.transform = "translateX(-50%)";
-          container.style.zIndex = "99999";
-          document.body.appendChild(container);
-
-          const verifier = new RecaptchaVerifier(auth, container, {
-            size: "normal",
-            callback: () => {
-              (window as any).__recaptchaSolved = true;
-            },
-            "expired-callback": () => {
-              (window as any).recaptchaVerifier = null;
-              (window as any).__recaptchaSolved = false;
-            },
-          });
-          (window as any).recaptchaVerifier = verifier;
-
-          const confirmation = await signInWithPhoneNumber(
-            auth,
-            `+91${phoneNumber}`,
-            verifier
-          );
-
-          (window as any).__firebaseConfirmation = confirmation;
-          const recaptchaEl = document.getElementById("recaptcha-container");
-          if (recaptchaEl) recaptchaEl.remove();
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-          router.push({
-            pathname: "/(auth)/otp",
-            params: { phone: phoneNumber, method: "firebase" },
-          });
-          return;
-        } catch (firebaseErr: any) {
-          console.warn("Firebase auth failed:", firebaseErr?.code, firebaseErr?.message);
-          (window as any).recaptchaVerifier = null;
-          const recaptchaEl = document.getElementById("recaptcha-container");
-          if (recaptchaEl) recaptchaEl.remove();
-
-          const fbCode = firebaseErr?.code || "";
-          const fbMsg = firebaseErr?.message || "Unknown error";
-
-          if (fbCode === "auth/too-many-requests") {
-            Alert.alert("Too Many Attempts", "Please wait a few minutes and try again.");
-            setIsLoading(false);
-            return;
-          }
-          if (fbCode === "auth/invalid-phone-number") {
-            Alert.alert("Invalid Number", "Please enter a valid phone number.");
-            setIsLoading(false);
-            return;
-          }
-
-          Alert.alert("Verification Error", `Firebase: ${fbCode || fbMsg}. Trying alternate method...`);
-
-          try {
-            await sendViaServer(phoneNumber);
-          } catch (serverErr: any) {
-            Alert.alert("OTP Failed", "Could not send OTP. Please try again later.");
-            setIsLoading(false);
-          }
-          return;
+        result = await sendOTPViaFirebaseWeb(phoneNumber);
+        if (result.confirmationResult) {
+          (globalThis as any).__firebaseConfirmationResult = result.confirmationResult;
         }
       } else {
-        setShowWebView(true);
+        result = await sendOTPViaServer(phoneNumber);
       }
+
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      router.push({
+        pathname: "/(auth)/otp",
+        params: {
+          phone: phoneNumber,
+          method: result.method,
+          sessionInfo: result.sessionInfo || "",
+          devOtp: result.devOtp || "",
+        },
+      });
     } catch (err: any) {
       console.error("Send OTP error:", err);
-      Alert.alert("Error", "Failed to send OTP. Please try again.");
+      Alert.alert("OTP Failed", err?.message || "Failed to send OTP. Please try again.");
     } finally {
-      if (!showWebView) {
-        setIsLoading(false);
-      }
+      setIsLoading(false);
+      setStatusText("");
     }
   };
-
-  const WebViewComponent = Platform.OS !== "web" ? require("react-native-webview").default : null;
 
   return (
     <LinearGradient colors={["#0A1628", "#1A2E50", "#0A1628"]} style={styles.container}>
@@ -224,6 +175,7 @@ export default function LoginScreen() {
                 onChangeText={setPhone}
                 returnKeyType="done"
                 onSubmitEditing={handleSendOTP}
+                testID="phone-input"
               />
             </View>
 
@@ -231,10 +183,14 @@ export default function LoginScreen() {
               style={({ pressed }) => [styles.sendBtn, pressed && styles.sendBtnPressed, isLoading && styles.sendBtnDisabled]}
               onPress={handleSendOTP}
               disabled={isLoading}
+              testID="send-otp-btn"
             >
               <LinearGradient colors={[Colors.light.primary, Colors.light.primaryDark]} style={styles.sendBtnGradient}>
                 {isLoading ? (
-                  <ActivityIndicator color="#fff" size="small" />
+                  <View style={{ alignItems: "center", gap: 8 }}>
+                    <ActivityIndicator color="#fff" size="small" />
+                    {statusText ? <Text style={styles.statusText}>{statusText}</Text> : null}
+                  </View>
                 ) : (
                   <>
                     <Text style={styles.sendBtnText}>Send OTP</Text>
@@ -251,32 +207,6 @@ export default function LoginScreen() {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
-
-      {Platform.OS !== "web" && WebViewComponent && (
-        <Modal visible={showWebView} animationType="slide" transparent={false} onRequestClose={() => { setShowWebView(false); setIsLoading(false); }}>
-          <View style={styles.webViewContainer}>
-            <View style={[styles.webViewHeader, { paddingTop: insets.top + 10 }]}>
-              <Pressable onPress={() => { setShowWebView(false); setIsLoading(false); }} style={styles.webViewCloseBtn}>
-                <Ionicons name="close" size={24} color="#fff" />
-              </Pressable>
-              <Text style={styles.webViewTitle}>Phone Verification</Text>
-              <View style={{ width: 34 }} />
-            </View>
-            <WebViewComponent
-              ref={webViewRef}
-              source={{ uri: getFirebaseWebViewUrl(pendingPhoneRef.current) }}
-              style={styles.webView}
-              onMessage={handleWebViewMessage}
-              javaScriptEnabled
-              domStorageEnabled
-              mixedContentMode="compatibility"
-              setSupportMultipleWindows={false}
-              originWhitelist={["*"]}
-              userAgent="Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
-            />
-          </View>
-        </Modal>
-      )}
     </LinearGradient>
   );
 }
@@ -292,9 +222,7 @@ const styles = StyleSheet.create({
     borderWidth: 2, borderColor: "rgba(255,255,255,0.3)",
     overflow: "hidden",
   },
-  logoImage: {
-    width: 100, height: 100,
-  },
+  logoImage: { width: 100, height: 100 },
   appName: { fontSize: 32, fontFamily: "Inter_700Bold", color: "#fff" },
   tagline: { fontSize: 14, color: "rgba(255,255,255,0.6)", fontFamily: "Inter_400Regular" },
   card: {
@@ -324,14 +252,7 @@ const styles = StyleSheet.create({
   sendBtnDisabled: { opacity: 0.7 },
   sendBtnGradient: { flexDirection: "row", alignItems: "center", justifyContent: "center", paddingVertical: 16, gap: 8 },
   sendBtnText: { fontSize: 16, fontFamily: "Inter_600SemiBold", color: "#fff" },
+  statusText: { fontSize: 12, color: "rgba(255,255,255,0.8)", fontFamily: "Inter_400Regular" },
   footer: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
   footerText: { fontSize: 13, color: "rgba(255,255,255,0.5)", fontFamily: "Inter_400Regular" },
-  webViewContainer: { flex: 1, backgroundColor: "#0A1628" },
-  webViewHeader: {
-    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-    paddingHorizontal: 16, paddingBottom: 12, backgroundColor: "#0A1628",
-  },
-  webViewCloseBtn: { width: 34, height: 34, borderRadius: 17, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" },
-  webViewTitle: { fontSize: 16, fontFamily: "Inter_600SemiBold", color: "#fff" },
-  webView: { flex: 1 },
 });

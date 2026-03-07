@@ -20,6 +20,61 @@ function generateOTP(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
+async function sendFirebasePhoneVerification(phone: string): Promise<{ sessionInfo: string } | null> {
+  const apiKey = process.env.FIREBASE_API_KEY;
+  if (!apiKey) {
+    console.error("[Firebase Phone] No FIREBASE_API_KEY set");
+    return null;
+  }
+  try {
+    const res = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:sendVerificationCode?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          phoneNumber: `+91${phone}`,
+          recaptchaToken: "FIREBASE_ADMIN_BYPASS",
+        }),
+      }
+    );
+    const data = await res.json();
+    if (data.sessionInfo) {
+      console.log(`[Firebase Phone] Verification sent to ${phone}`);
+      return { sessionInfo: data.sessionInfo };
+    }
+    console.error("[Firebase Phone] Failed:", JSON.stringify(data.error || data));
+    return null;
+  } catch (err) {
+    console.error("[Firebase Phone] Error:", err);
+    return null;
+  }
+}
+
+async function verifyFirebasePhoneCode(sessionInfo: string, code: string): Promise<{ idToken: string; phoneNumber: string } | null> {
+  const apiKey = process.env.FIREBASE_API_KEY;
+  if (!apiKey) return null;
+  try {
+    const res = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPhoneNumber?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionInfo, code }),
+      }
+    );
+    const data = await res.json();
+    if (data.idToken) {
+      return { idToken: data.idToken, phoneNumber: data.phoneNumber || "" };
+    }
+    console.error("[Firebase Phone] Verify failed:", JSON.stringify(data.error || data));
+    return null;
+  } catch (err) {
+    console.error("[Firebase Phone] Verify error:", err);
+    return null;
+  }
+}
+
 async function sendOTPviaSMS(phone: string, otp: string): Promise<boolean> {
   const apiKey = process.env.FAST2SMS_API_KEY;
   if (!apiKey) {
@@ -65,40 +120,53 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!identifier || !type) {
         return res.status(400).json({ message: "Identifier and type are required" });
       }
-      const otp = generateOTP();
-      const expires = Date.now() + 10 * 60 * 1000;
 
-      if (type === "email") {
-        const existing = await db.query("SELECT id FROM users WHERE email = $1", [identifier]);
-        if (existing.rows.length === 0) {
-          await db.query(
-            "INSERT INTO users (name, email, otp, otp_expires_at, role) VALUES ($1, $2, $3, $4, $5)",
-            [identifier.split("@")[0], identifier, otp, expires, ADMIN_EMAILS.includes(identifier) ? "admin" : "student"]
-          );
-        } else {
-          await db.query("UPDATE users SET otp = $1, otp_expires_at = $2 WHERE email = $3", [otp, expires, identifier]);
-        }
-      } else {
+      if (type === "phone") {
         const existing = await db.query("SELECT id FROM users WHERE phone = $1", [identifier]);
         if (existing.rows.length === 0) {
           await db.query(
-            "INSERT INTO users (name, phone, otp, otp_expires_at, role) VALUES ($1, $2, $3, $4, $5)",
-            [`Student${identifier.slice(-4)}`, identifier, otp, expires, ADMIN_PHONES.includes(identifier) ? "admin" : "student"]
+            "INSERT INTO users (name, phone, role) VALUES ($1, $2, $3)",
+            [`Student${identifier.slice(-4)}`, identifier, ADMIN_PHONES.includes(identifier) ? "admin" : "student"]
           );
-        } else {
-          await db.query("UPDATE users SET otp = $1, otp_expires_at = $2 WHERE phone = $3", [otp, expires, identifier]);
         }
+
+        const firebaseResult = await sendFirebasePhoneVerification(identifier);
+        if (firebaseResult) {
+          return res.json({
+            success: true,
+            message: "OTP sent to your phone",
+            method: "firebase",
+            sessionInfo: firebaseResult.sessionInfo,
+          });
+        }
+
+        const otp = generateOTP();
+        const expires = Date.now() + 10 * 60 * 1000;
+        await db.query("UPDATE users SET otp = $1, otp_expires_at = $2 WHERE phone = $3", [otp, expires, identifier]);
+        console.log(`OTP for ${identifier}: ${otp}`);
+        const smsSent = await sendOTPviaSMS(identifier, otp);
+        if (!smsSent && process.env.NODE_ENV === "production") {
+          return res.status(503).json({ success: false, message: "Could not send OTP. Please try again." });
+        }
+        const response: any = { success: true, message: "OTP sent to your phone", method: "server", smsSent };
+        if (process.env.NODE_ENV !== "production" && !smsSent) {
+          response.devOtp = otp;
+        }
+        return res.json(response);
       }
-      console.log(`OTP for ${identifier}: ${otp}`);
-      const smsSent = type === "phone" ? await sendOTPviaSMS(identifier, otp) : false;
-      if (type === "phone" && !smsSent && process.env.NODE_ENV === "production") {
-        return res.status(503).json({ success: false, message: "SMS delivery failed. Please try again or use a different login method." });
+
+      const otp = generateOTP();
+      const expires = Date.now() + 10 * 60 * 1000;
+      const existing = await db.query("SELECT id FROM users WHERE email = $1", [identifier]);
+      if (existing.rows.length === 0) {
+        await db.query(
+          "INSERT INTO users (name, email, otp, otp_expires_at, role) VALUES ($1, $2, $3, $4, $5)",
+          [identifier.split("@")[0], identifier, otp, expires, ADMIN_EMAILS.includes(identifier) ? "admin" : "student"]
+        );
+      } else {
+        await db.query("UPDATE users SET otp = $1, otp_expires_at = $2 WHERE email = $3", [otp, expires, identifier]);
       }
-      const response: any = { success: true, message: smsSent ? "OTP sent to your phone" : "OTP sent successfully", smsSent };
-      if (process.env.NODE_ENV !== "production" && !smsSent) {
-        response.devOtp = otp;
-      }
-      res.json(response);
+      res.json({ success: true, message: "OTP sent successfully", method: "server" });
     } catch (err) {
       console.error(err);
       res.status(500).json({ message: "Failed to send OTP" });
@@ -107,14 +175,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/auth/verify-otp", async (req: Request, res: Response) => {
     try {
-      const { identifier, type, otp, deviceId } = req.body;
+      const { identifier, type, otp, deviceId, sessionInfo } = req.body;
       if (!identifier || !otp) {
         return res.status(400).json({ message: "Identifier and OTP are required" });
       }
 
       const field = type === "email" ? "email" : "phone";
-      const result = await db.query(`SELECT * FROM users WHERE ${field} = $1`, [identifier]);
 
+      if (sessionInfo && type === "phone") {
+        const firebaseResult = await verifyFirebasePhoneCode(sessionInfo, otp);
+        if (!firebaseResult) {
+          return res.status(400).json({ message: "Invalid OTP" });
+        }
+
+        const result = await db.query(`SELECT * FROM users WHERE phone = $1`, [identifier]);
+        if (result.rows.length === 0) return res.status(404).json({ message: "User not found" });
+
+        const user = result.rows[0];
+        const sessionToken = Date.now().toString(36) + Math.random().toString(36).substr(2, 12);
+        await db.query("UPDATE users SET otp = NULL, otp_expires_at = NULL, device_id = $1, session_token = $2 WHERE id = $3", [deviceId || null, sessionToken, user.id]);
+
+        const sessionUser = {
+          id: user.id, name: user.name, email: user.email,
+          phone: user.phone, role: user.role,
+          deviceId, sessionToken,
+        };
+        (req.session as Record<string, unknown>).user = sessionUser;
+        return res.json({ success: true, user: sessionUser });
+      }
+
+      const result = await db.query(`SELECT * FROM users WHERE ${field} = $1`, [identifier]);
       if (result.rows.length === 0) return res.status(404).json({ message: "User not found" });
 
       const user = result.rows[0];
@@ -125,19 +215,53 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await db.query("UPDATE users SET otp = NULL, otp_expires_at = NULL, device_id = $1, session_token = $2 WHERE id = $3", [deviceId || null, sessionToken, user.id]);
 
       const sessionUser = {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        role: user.role,
-        deviceId: deviceId,
-        sessionToken: sessionToken,
+        id: user.id, name: user.name, email: user.email,
+        phone: user.phone, role: user.role,
+        deviceId, sessionToken,
       };
       (req.session as Record<string, unknown>).user = sessionUser;
       res.json({ success: true, user: sessionUser });
     } catch (err) {
       console.error(err);
       res.status(500).json({ message: "Failed to verify OTP" });
+    }
+  });
+
+  app.post("/api/auth/verify-firebase", async (req: Request, res: Response) => {
+    try {
+      const { idToken, phone: phoneNumber, deviceId } = req.body;
+      if (!idToken || !phoneNumber) {
+        return res.status(400).json({ message: "ID token and phone are required" });
+      }
+
+      const decoded = await verifyFirebaseToken(idToken);
+      if (!decoded.phone_number || !decoded.phone_number.endsWith(phoneNumber)) {
+        return res.status(400).json({ message: "Phone number mismatch" });
+      }
+
+      let result = await db.query("SELECT * FROM users WHERE phone = $1", [phoneNumber]);
+      if (result.rows.length === 0) {
+        await db.query(
+          "INSERT INTO users (name, phone, role) VALUES ($1, $2, $3)",
+          [`Student${phoneNumber.slice(-4)}`, phoneNumber, ADMIN_PHONES.includes(phoneNumber) ? "admin" : "student"]
+        );
+        result = await db.query("SELECT * FROM users WHERE phone = $1", [phoneNumber]);
+      }
+
+      const user = result.rows[0];
+      const sessionToken = Date.now().toString(36) + Math.random().toString(36).substr(2, 12);
+      await db.query("UPDATE users SET otp = NULL, otp_expires_at = NULL, device_id = $1, session_token = $2 WHERE id = $3", [deviceId || null, sessionToken, user.id]);
+
+      const sessionUser = {
+        id: user.id, name: user.name, email: user.email,
+        phone: user.phone, role: user.role,
+        deviceId, sessionToken,
+      };
+      (req.session as Record<string, unknown>).user = sessionUser;
+      res.json({ success: true, user: sessionUser });
+    } catch (err) {
+      console.error("Firebase verify error:", err);
+      res.status(400).json({ message: "Firebase verification failed" });
     }
   });
 
