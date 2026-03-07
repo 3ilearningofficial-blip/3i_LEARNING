@@ -46,7 +46,7 @@ const ADMIN_TABS: { key: AdminTab; label: string; icon: keyof typeof Ionicons.gl
 
 interface NewCourse {
   title: string; description: string; teacherName: string; price: string;
-  originalPrice: string; category: string; isFree: boolean; level: string; durationHours: string;
+  originalPrice: string; category: string; subject: string; isFree: boolean; level: string; durationHours: string;
 }
 
 export default function AdminDashboard() {
@@ -69,7 +69,7 @@ export default function AdminDashboard() {
   const [newCourse, setNewCourse] = useState<NewCourse>({
     title: "", description: "", teacherName: "3i Learning",
     price: "0", originalPrice: "0", category: "Mathematics",
-    isFree: false, level: "Beginner", durationHours: "0",
+    subject: "", isFree: false, level: "Beginner", durationHours: "0",
   });
 
   const topPadding = Platform.OS === "web" ? 67 : insets.top;
@@ -157,7 +157,7 @@ export default function AdminDashboard() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/courses"] });
       setShowAddCourse(false);
-      setNewCourse({ title: "", description: "", teacherName: "3i Learning", price: "0", originalPrice: "0", category: "Mathematics", isFree: false, level: "Beginner", durationHours: "0" });
+      setNewCourse({ title: "", description: "", teacherName: "3i Learning", price: "0", originalPrice: "0", category: "Mathematics", subject: "", isFree: false, level: "Beginner", durationHours: "0" });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       Alert.alert("Success", "Course created successfully!");
     },
@@ -537,7 +537,8 @@ export default function AdminDashboard() {
                 { label: "Course Title *", key: "title", placeholder: "e.g., Class 10 Mathematics" },
                 { label: "Description", key: "description", placeholder: "Course description..." },
                 { label: "Teacher Name", key: "teacherName", placeholder: "3i Learning" },
-                { label: "Category", key: "category", placeholder: "e.g., Class 10" },
+                { label: "Category", key: "category", placeholder: "e.g., NDA, CDS, AFCAT" },
+                { label: "Subject", key: "subject", placeholder: "e.g., Mathematics, English, GK" },
                 { label: "Level", key: "level", placeholder: "Beginner / Intermediate / Advanced" },
                 { label: "Price (₹)", key: "price", placeholder: "0 for free" },
                 { label: "Original Price (₹)", key: "originalPrice", placeholder: "For discount display" },

@@ -75,6 +75,7 @@ interface EditCourseForm {
   price: string;
   originalPrice: string;
   category: string;
+  subject: string;
   isFree: boolean;
   isPublished: boolean;
   level: string;
@@ -137,7 +138,7 @@ export default function AdminCourseScreen() {
   const [showEditCourse, setShowEditCourse] = useState(false);
   const [editForm, setEditForm] = useState<EditCourseForm>({
     title: "", description: "", teacherName: "", price: "0", originalPrice: "0",
-    category: "", isFree: false, isPublished: true, level: "beginner", durationHours: "0",
+    category: "", subject: "", isFree: false, isPublished: true, level: "beginner", durationHours: "0",
   });
   const [showBulkUpload, setShowBulkUpload] = useState<number | null>(null);
   const [bulkText, setBulkText] = useState("");
@@ -348,6 +349,7 @@ export default function AdminCourseScreen() {
         price: parseFloat(data.price) || 0,
         originalPrice: parseFloat(data.originalPrice) || 0,
         category: data.category,
+        subject: data.subject,
         isFree: data.isFree,
         isPublished: data.isPublished,
         level: data.level,
@@ -373,6 +375,7 @@ export default function AdminCourseScreen() {
         price: String(course.price || 0),
         originalPrice: String(course.original_price || 0),
         category: course.category || "",
+        subject: (course as any).subject || "",
         isFree: course.is_free || false,
         isPublished: course.is_published !== false,
         level: course.level || "beginner",
@@ -937,6 +940,7 @@ export default function AdminCourseScreen() {
               <FormField label="Course Title *" placeholder="e.g., NDA Mathematics" value={editForm.title} onChangeText={(v) => setEditForm(p => ({ ...p, title: v }))} />
               <FormField label="Description" placeholder="Course description" value={editForm.description} onChangeText={(v) => setEditForm(p => ({ ...p, description: v }))} multiline />
               <FormField label="Category *" placeholder="e.g., NDA, CDS, AFCAT" value={editForm.category} onChangeText={(v) => setEditForm(p => ({ ...p, category: v }))} />
+              <FormField label="Subject" placeholder="e.g., Mathematics, English, GK" value={editForm.subject} onChangeText={(v) => setEditForm(p => ({ ...p, subject: v }))} />
               <FormField label="Teacher Name" placeholder="e.g., Pankaj Sir" value={editForm.teacherName} onChangeText={(v) => setEditForm(p => ({ ...p, teacherName: v }))} />
               <FormField label="Level (beginner/intermediate/advanced)" placeholder="beginner" value={editForm.level} onChangeText={(v) => setEditForm(p => ({ ...p, level: v }))} />
               <FormField label="Duration (hours)" placeholder="10" value={editForm.durationHours} onChangeText={(v) => setEditForm(p => ({ ...p, durationHours: v }))} numeric />

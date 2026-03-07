@@ -6,7 +6,7 @@ import {
 import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
-import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import { Ionicons } from "@expo/vector-icons";
 import { useQuery } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import { useAuth } from "@/context/AuthContext";
@@ -22,6 +22,7 @@ interface Course {
   price: string;
   original_price: string;
   category: string;
+  subject?: string;
   thumbnail?: string;
   is_free: boolean;
   total_lectures: number;
@@ -68,19 +69,18 @@ function CourseCard({ course, index }: { course: Course; index: number }) {
     >
       <LinearGradient colors={[color, `${color}CC`]} style={styles.courseCardHeader}>
         <View style={styles.courseCardBadgeRow}>
+          <View style={styles.categoryBadge}><Text style={styles.categoryBadgeText}>{course.category}</Text></View>
+          <View style={{ flex: 1 }} />
           {course.is_free ? (
             <View style={styles.freeBadge}><Text style={styles.freeBadgeText}>FREE</Text></View>
           ) : discount > 0 ? (
             <View style={styles.discountBadge}><Text style={styles.discountBadgeText}>{discount}% OFF</Text></View>
           ) : null}
-          {course.isEnrolled ? (
-            <View style={styles.enrolledBadge}><Ionicons name="checkmark-circle" size={14} color="#22C55E" /><Text style={styles.enrolledBadgeText}>Enrolled</Text></View>
-          ) : null}
         </View>
-        <Text style={styles.courseCategory}>{course.category}</Text>
-        <View style={styles.courseIconArea}>
-          <MaterialCommunityIcons name="math-compass" size={36} color="rgba(255,255,255,0.3)" />
-        </View>
+        {course.subject ? <Text style={styles.courseSubject}>{course.subject}</Text> : null}
+        {course.isEnrolled ? (
+          <View style={styles.enrolledBadge}><Ionicons name="checkmark-circle" size={14} color="#22C55E" /><Text style={styles.enrolledBadgeText}>Enrolled</Text></View>
+        ) : null}
       </LinearGradient>
       <View style={styles.courseCardBody}>
         <Text style={styles.courseTitle} numberOfLines={2}>{course.title}</Text>
@@ -96,11 +96,6 @@ function CourseCard({ course, index }: { course: Course; index: number }) {
           <View style={styles.courseStat}>
             <Ionicons name="document-text" size={13} color={Colors.light.textMuted} />
             <Text style={styles.courseStatText}>{course.total_tests} tests</Text>
-          </View>
-          <View style={styles.courseStatDot} />
-          <View style={styles.courseStat}>
-            <Ionicons name="people" size={13} color={Colors.light.textMuted} />
-            <Text style={styles.courseStatText}>{course.total_students}</Text>
           </View>
         </View>
         {course.isEnrolled && (
@@ -413,15 +408,16 @@ const styles = StyleSheet.create({
     marginBottom: 4, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 12, elevation: 4,
   },
   courseCardHeader: { height: 90, padding: 14, justifyContent: "space-between" },
-  courseCardBadgeRow: { flexDirection: "row", gap: 8 },
+  courseCardBadgeRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  categoryBadge: { backgroundColor: "rgba(255,255,255,0.25)", borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
+  categoryBadgeText: { color: "#fff", fontSize: 10, fontFamily: "Inter_700Bold" },
   freeBadge: { backgroundColor: "#22C55E", borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
   freeBadgeText: { color: "#fff", fontSize: 10, fontFamily: "Inter_700Bold" },
   discountBadge: { backgroundColor: Colors.light.accent, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
   discountBadgeText: { color: "#fff", fontSize: 10, fontFamily: "Inter_700Bold" },
-  enrolledBadge: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "rgba(255,255,255,0.2)", borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
+  enrolledBadge: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "rgba(255,255,255,0.2)", borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3, alignSelf: "flex-start" },
   enrolledBadgeText: { color: "#22C55E", fontSize: 10, fontFamily: "Inter_600SemiBold" },
-  courseCategory: { color: "rgba(255,255,255,0.8)", fontSize: 12, fontFamily: "Inter_500Medium" },
-  courseIconArea: { position: "absolute", right: 12, bottom: 8 },
+  courseSubject: { color: "rgba(255,255,255,0.85)", fontSize: 13, fontFamily: "Inter_600SemiBold" },
   courseCardBody: { padding: 14, gap: 6 },
   courseTitle: { fontSize: 15, fontFamily: "Inter_700Bold", color: Colors.light.text, lineHeight: 20 },
   courseTeacher: { fontSize: 12, color: Colors.light.textSecondary, fontFamily: "Inter_400Regular" },
