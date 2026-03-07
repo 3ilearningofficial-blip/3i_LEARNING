@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState } from "react";
 import {
   View, Text, StyleSheet, TextInput, Pressable,
   ScrollView, KeyboardAvoidingView, Platform,
@@ -9,146 +9,66 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
+import { apiRequest } from "@/lib/query-client";
 import Colors from "@/constants/colors";
 
 export default function LoginScreen() {
   const insets = useSafeAreaInsets();
   const [phone, setPhone] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [statusText, setStatusText] = useState("");
-  const recaptchaVerifierRef = useRef<any>(null);
-  const recaptchaContainerRef = useRef<any>(null);
-
-  useEffect(() => {
-    if (Platform.OS === "web") {
-      setupRecaptcha();
-    }
-  }, []);
-
-  const setupRecaptcha = async () => {
-    try {
-      const { auth, RecaptchaVerifier } = await import("@/lib/firebase");
-      const container = document.getElementById("recaptcha-container");
-      if (!container) {
-        const div = document.createElement("div");
-        div.id = "recaptcha-container";
-        div.style.display = "none";
-        document.body.appendChild(div);
-      }
-      if (recaptchaVerifierRef.current) {
-        try { recaptchaVerifierRef.current.clear(); } catch {}
-      }
-      recaptchaVerifierRef.current = new RecaptchaVerifier(auth, "recaptcha-container", {
-        size: "invisible",
-        callback: () => {},
-        "expired-callback": () => {
-          console.log("reCAPTCHA expired, re-initializing...");
-          setupRecaptcha();
-        },
-      });
-    } catch (err) {
-      console.error("reCAPTCHA setup error:", err);
-    }
-  };
-
-  const sendOTPViaFirebaseWeb = async (phoneNumber: string): Promise<{ method: string; confirmationResult?: any; sessionInfo?: string; devOtp?: string }> => {
-    try {
-      const { auth, signInWithPhoneNumber } = await import("@/lib/firebase");
-
-      if (!recaptchaVerifierRef.current) {
-        await setupRecaptcha();
-      }
-
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("Firebase verification timed out")), 20000)
-      );
-
-      setStatusText("Sending verification code...");
-      const confirmationResult = await Promise.race([
-        signInWithPhoneNumber(auth, `+91${phoneNumber}`, recaptchaVerifierRef.current),
-        timeoutPromise,
-      ]);
-
-      return { method: "firebase-web", confirmationResult };
-    } catch (err: any) {
-      console.error("Firebase web auth error:", err?.code, err?.message);
-      setupRecaptcha();
-      throw new Error(
-        err?.code === "auth/too-many-requests"
-          ? "Too many attempts. Please wait a few minutes."
-          : err?.code === "auth/invalid-phone-number"
-            ? "Invalid phone number format."
-            : err?.message || "Firebase verification failed"
-      );
-    }
-  };
-
-  const sendOTPViaServer = async (phoneNumber: string): Promise<{ method: string; sessionInfo?: string; devOtp?: string }> => {
-    const { apiRequest } = await import("@/lib/query-client");
-    const res = await apiRequest("POST", "/api/auth/send-otp", {
-      identifier: phoneNumber,
-      type: "phone",
-    });
-    const data = await res.json();
-    if (!data.success) {
-      throw new Error(data.message || "Failed to send OTP");
-    }
-    return {
-      method: data.method || "server",
-      sessionInfo: data.sessionInfo,
-      devOtp: data.devOtp,
-    };
-  };
 
   const handleSendOTP = async () => {
-    if (!phone.trim()) {
+    const trimmed = phone.trim();
+    if (!trimmed) {
       Alert.alert("Error", "Enter your phone number");
       return;
     }
-    if (phone.length !== 10) {
+    if (trimmed.length !== 10 || !/^\d{10}$/.test(trimmed)) {
       Alert.alert("Error", "Enter a valid 10-digit phone number");
       return;
     }
 
     setIsLoading(true);
-    setStatusText("Preparing...");
-    const phoneNumber = phone.trim();
-
     try {
-      let result: any;
+      const res = await apiRequest("POST", "/api/auth/send-otp", {
+        identifier: trimmed,
+        type: "phone",
+      });
+      const data = await res.json();
 
-      if (Platform.OS === "web") {
-        result = await sendOTPViaFirebaseWeb(phoneNumber);
-        if (result.confirmationResult) {
-          (globalThis as any).__firebaseConfirmationResult = result.confirmationResult;
-        }
-      } else {
-        result = await sendOTPViaServer(phoneNumber);
+      if (!data.success) {
+        throw new Error(data.message || "Failed to send OTP");
       }
 
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       router.push({
         pathname: "/(auth)/otp",
         params: {
-          phone: phoneNumber,
-          method: result.method,
-          sessionInfo: result.sessionInfo || "",
-          devOtp: result.devOtp || "",
+          phone: trimmed,
+          devOtp: data.devOtp || "",
         },
       });
     } catch (err: any) {
-      console.error("Send OTP error:", err);
-      Alert.alert("OTP Failed", err?.message || "Failed to send OTP. Please try again.");
+      Alert.alert("Failed", err?.message || "Could not send OTP. Please try again.");
     } finally {
       setIsLoading(false);
-      setStatusText("");
     }
   };
 
   return (
     <LinearGradient colors={["#0A1628", "#1A2E50", "#0A1628"]} style={styles.container}>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
-        <ScrollView contentContainerStyle={[styles.scrollContent, { paddingTop: insets.top + (Platform.OS === "web" ? 67 : 0) + 40, paddingBottom: insets.bottom + (Platform.OS === "web" ? 34 : 0) + 20 }]} keyboardShouldPersistTaps="handled" bounces={false}>
+        <ScrollView
+          contentContainerStyle={[
+            styles.scrollContent,
+            {
+              paddingTop: insets.top + (Platform.OS === "web" ? 67 : 0) + 40,
+              paddingBottom: insets.bottom + (Platform.OS === "web" ? 34 : 0) + 20,
+            },
+          ]}
+          keyboardShouldPersistTaps="handled"
+          bounces={false}
+        >
           <View style={styles.logoSection}>
             <View style={styles.logoContainer}>
               <Image source={require("@/assets/images/logo.png")} style={styles.logoImage} resizeMode="cover" />
@@ -180,17 +100,18 @@ export default function LoginScreen() {
             </View>
 
             <Pressable
-              style={({ pressed }) => [styles.sendBtn, pressed && styles.sendBtnPressed, isLoading && styles.sendBtnDisabled]}
+              style={({ pressed }) => [
+                styles.sendBtn,
+                pressed && styles.sendBtnPressed,
+                isLoading && styles.sendBtnDisabled,
+              ]}
               onPress={handleSendOTP}
               disabled={isLoading}
               testID="send-otp-btn"
             >
               <LinearGradient colors={[Colors.light.primary, Colors.light.primaryDark]} style={styles.sendBtnGradient}>
                 {isLoading ? (
-                  <View style={{ alignItems: "center", gap: 8 }}>
-                    <ActivityIndicator color="#fff" size="small" />
-                    {statusText ? <Text style={styles.statusText}>{statusText}</Text> : null}
-                  </View>
+                  <ActivityIndicator color="#fff" size="small" />
                 ) : (
                   <>
                     <Text style={styles.sendBtnText}>Send OTP</Text>
@@ -217,10 +138,8 @@ const styles = StyleSheet.create({
   logoSection: { alignItems: "center", gap: 12 },
   logoContainer: {
     width: 100, height: 100, borderRadius: 50,
-    backgroundColor: "#fff",
-    alignItems: "center", justifyContent: "center",
-    borderWidth: 2, borderColor: "rgba(255,255,255,0.3)",
-    overflow: "hidden",
+    backgroundColor: "#fff", alignItems: "center", justifyContent: "center",
+    borderWidth: 2, borderColor: "rgba(255,255,255,0.3)", overflow: "hidden",
   },
   logoImage: { width: 100, height: 100 },
   appName: { fontSize: 32, fontFamily: "Inter_700Bold", color: "#fff" },
@@ -252,7 +171,6 @@ const styles = StyleSheet.create({
   sendBtnDisabled: { opacity: 0.7 },
   sendBtnGradient: { flexDirection: "row", alignItems: "center", justifyContent: "center", paddingVertical: 16, gap: 8 },
   sendBtnText: { fontSize: 16, fontFamily: "Inter_600SemiBold", color: "#fff" },
-  statusText: { fontSize: 12, color: "rgba(255,255,255,0.8)", fontFamily: "Inter_400Regular" },
   footer: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
   footerText: { fontSize: 13, color: "rgba(255,255,255,0.5)", fontFamily: "Inter_400Regular" },
 });

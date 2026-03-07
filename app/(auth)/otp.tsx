@@ -18,9 +18,7 @@ function generateDeviceId() {
 
 export default function OTPScreen() {
   const insets = useSafeAreaInsets();
-  const { phone, method, devOtp, sessionInfo } = useLocalSearchParams<{
-    phone: string; method: string; devOtp?: string; sessionInfo?: string;
-  }>();
+  const { phone, devOtp } = useLocalSearchParams<{ phone: string; devOtp?: string }>();
   const [otp, setOtp] = useState(["", "", "", "", "", ""]);
   const [isLoading, setIsLoading] = useState(false);
   const [countdown, setCountdown] = useState(30);
@@ -49,70 +47,28 @@ export default function OTPScreen() {
     }
   };
 
-  const verifyViaFirebaseWeb = async (code: string, deviceId: string) => {
-    const confirmationResult = (globalThis as any).__firebaseConfirmationResult;
-    if (!confirmationResult) {
-      throw new Error("Firebase session expired. Please go back and try again.");
-    }
-
-    const userCredential = await confirmationResult.confirm(code);
-    const idToken = await userCredential.user.getIdToken();
-
-    const res = await apiRequest("POST", "/api/auth/verify-firebase", {
-      idToken,
-      phone,
-      deviceId,
-    });
-    const data = await res.json();
-    return data;
-  };
-
-  const verifyViaServer = async (code: string, deviceId: string) => {
-    const body: any = {
-      identifier: phone,
-      type: "phone",
-      otp: code,
-      deviceId,
-    };
-    if (sessionInfo) {
-      body.sessionInfo = sessionInfo;
-    }
-    const res = await apiRequest("POST", "/api/auth/verify-otp", body);
-    return await res.json();
-  };
-
   const handleVerify = async (otpValue?: string) => {
     const code = otpValue || otp.join("");
     if (code.length !== 6) { Alert.alert("Error", "Enter the 6-digit OTP"); return; }
     setIsLoading(true);
     try {
       const deviceId = generateDeviceId();
-      let data: any;
-
-      if (method === "firebase-web" && Platform.OS === "web") {
-        data = await verifyViaFirebaseWeb(code, deviceId);
-      } else {
-        data = await verifyViaServer(code, deviceId);
-      }
-
+      const res = await apiRequest("POST", "/api/auth/verify-otp", {
+        identifier: phone,
+        type: "phone",
+        otp: code,
+        deviceId,
+      });
+      const data = await res.json();
       if (!data.success) {
         throw new Error(data.message || "Verification failed");
       }
-
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      delete (globalThis as any).__firebaseConfirmationResult;
       login(data.user);
       router.replace("/(tabs)");
     } catch (err: any) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      const errMsg = err?.message?.toLowerCase() || "";
-      if (errMsg.includes("expired") || errMsg.includes("session")) {
-        Alert.alert("Code Expired", "The verification code has expired. Please go back and request a new one.");
-      } else if (errMsg.includes("invalid") || errMsg.includes("incorrect")) {
-        Alert.alert("Invalid OTP", "The code you entered is incorrect. Please try again.");
-      } else {
-        Alert.alert("Verification Failed", err?.message || "Please try again.");
-      }
+      Alert.alert("Invalid OTP", err?.message || "The OTP you entered is incorrect. Please try again.");
       setOtp(["", "", "", "", "", ""]);
       inputs.current[0]?.focus();
     } finally {
@@ -122,12 +78,23 @@ export default function OTPScreen() {
 
   const handleResend = async () => {
     try {
-      delete (globalThis as any).__firebaseConfirmationResult;
-      router.replace({
-        pathname: "/(auth)/login",
-      });
+      const res = await apiRequest("POST", "/api/auth/send-otp", { identifier: phone, type: "phone" });
+      const data = await res.json();
+      if (!data.success) {
+        Alert.alert("Error", data.message || "Failed to resend OTP");
+        return;
+      }
+      setCountdown(30);
+      setCanResend(false);
+      const timer = setInterval(() => {
+        setCountdown((prev) => {
+          if (prev <= 1) { setCanResend(true); clearInterval(timer); return 0; }
+          return prev - 1;
+        });
+      }, 1000);
+      Alert.alert("OTP Sent", "A new OTP has been sent to your phone.");
     } catch {
-      Alert.alert("Error", "Please go back and try again.");
+      Alert.alert("Error", "Failed to resend OTP. Please try again.");
     }
   };
 
@@ -192,7 +159,7 @@ export default function OTPScreen() {
           <View style={styles.resendContainer}>
             {canResend ? (
               <Pressable onPress={handleResend}>
-                <Text style={styles.resendText}>Request New OTP</Text>
+                <Text style={styles.resendText}>Resend OTP</Text>
               </Pressable>
             ) : (
               <Text style={styles.countdownText}>Resend in {countdown}s</Text>
