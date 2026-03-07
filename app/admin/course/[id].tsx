@@ -505,26 +505,26 @@ export default function AdminCourseScreen() {
               <View key={test.id} style={styles.testCard}>
                 <View style={styles.testCardRow}>
                   <Text style={styles.testCardTitle}>{test.title}</Text>
-                  <View style={styles.testCardActions}>
-                    <Pressable style={styles.addQBtn} onPress={() => setShowAddQuestion(test.id)}>
-                      <Ionicons name="add-circle" size={16} color={Colors.light.primary} />
-                      <Text style={styles.addQBtnText}>Add Q</Text>
-                    </Pressable>
-                    <Pressable style={[styles.addQBtn, { backgroundColor: "#FFF3E0" }]} onPress={() => { setShowBulkUpload(test.id); setBulkResult(null); setBulkText(""); }}>
-                      <Ionicons name="cloud-upload" size={16} color="#FF6B35" />
-                      <Text style={[styles.addQBtnText, { color: "#FF6B35" }]}>Bulk</Text>
-                    </Pressable>
-                    <Pressable style={styles.deleteItemBtn} onPress={() => {
-                      Alert.alert("Delete Test", `Delete "${test.title}" and all its questions?`, [
-                        { text: "Cancel", style: "cancel" },
-                        { text: "Delete", style: "destructive", onPress: () => deleteTestMutation.mutate(test.id) },
-                      ]);
-                    }}>
-                      <Ionicons name="trash-outline" size={16} color="#EF4444" />
-                    </Pressable>
-                  </View>
+                  <Pressable style={styles.deleteItemBtn} onPress={() => {
+                    Alert.alert("Delete Test", `Delete "${test.title}" and all its questions?`, [
+                      { text: "Cancel", style: "cancel" },
+                      { text: "Delete", style: "destructive", onPress: () => deleteTestMutation.mutate(test.id) },
+                    ]);
+                  }}>
+                    <Ionicons name="trash-outline" size={16} color="#EF4444" />
+                  </Pressable>
                 </View>
                 <Text style={styles.testCardMeta}>{test.total_questions} questions · {test.duration_minutes}min · {test.test_type}</Text>
+                <View style={styles.testUploadRow}>
+                  <Pressable style={styles.testUploadBtn} onPress={() => setShowAddQuestion(test.id)}>
+                    <Ionicons name="create-outline" size={16} color={Colors.light.primary} />
+                    <Text style={styles.testUploadBtnText}>Add Manually</Text>
+                  </Pressable>
+                  <Pressable style={[styles.testUploadBtn, { backgroundColor: "#FFF3E0" }]} onPress={() => { setShowBulkUpload(test.id); setBulkResult(null); setBulkText(""); }}>
+                    <Ionicons name="cloud-upload" size={16} color="#FF6B35" />
+                    <Text style={[styles.testUploadBtnText, { color: "#FF6B35" }]}>Upload via Text/PDF</Text>
+                  </Pressable>
+                </View>
               </View>
             ))}
           </View>
@@ -665,7 +665,7 @@ export default function AdminCourseScreen() {
             <ScrollView style={{ maxHeight: 420 }} showsVerticalScrollIndicator={false}>
               <FormField label="Test Title *" placeholder="e.g., Chapter 1 Test" value={newTest.title} onChangeText={(v) => setNewTest(p => ({ ...p, title: v }))} />
               <FormField label="Description" placeholder="Test description" value={newTest.description} onChangeText={(v) => setNewTest(p => ({ ...p, description: v }))} />
-              <FormField label="Type (practice/mock/chapter/weekly)" placeholder="practice" value={newTest.testType} onChangeText={(v) => setNewTest(p => ({ ...p, testType: v }))} />
+              <FormField label="Type (practice/mock/chapter/weekly/pyq_practice/pyq_papers)" placeholder="practice" value={newTest.testType} onChangeText={(v) => setNewTest(p => ({ ...p, testType: v }))} />
               <FormField label="Duration (minutes)" placeholder="60" value={newTest.durationMinutes} onChangeText={(v) => setNewTest(p => ({ ...p, durationMinutes: v }))} numeric />
               <FormField label="Total Marks" placeholder="100" value={newTest.totalMarks} onChangeText={(v) => setNewTest(p => ({ ...p, totalMarks: v }))} numeric />
               <FormField label="Passing Marks" placeholder="35" value={newTest.passingMarks} onChangeText={(v) => setNewTest(p => ({ ...p, passingMarks: v }))} numeric />
@@ -1050,6 +1050,9 @@ const styles = StyleSheet.create({
   addQBtn: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: Colors.light.secondary, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 5 },
   addQBtnText: { fontSize: 11, fontFamily: "Inter_600SemiBold", color: Colors.light.primary },
   testCardMeta: { fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" },
+  testUploadRow: { flexDirection: "row", gap: 8, marginTop: 8 },
+  testUploadBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, backgroundColor: Colors.light.secondary, borderRadius: 10, paddingVertical: 10, paddingHorizontal: 8 },
+  testUploadBtnText: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.primary },
   liveRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   liveBadge: { backgroundColor: "#DC2626", borderRadius: 4, paddingHorizontal: 5, paddingVertical: 2 },
   liveBadgeText: { fontSize: 9, fontFamily: "Inter_700Bold", color: "#fff" },

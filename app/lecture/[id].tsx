@@ -35,7 +35,6 @@ function getYouTubeVideoId(url: string): string {
 }
 
 function buildYouTubeHtml(videoId: string): string {
-  const embedUrl = `https://www.youtube.com/embed/${videoId}?playsinline=1&rel=0&modestbranding=1`;
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -43,17 +42,35 @@ function buildYouTubeHtml(videoId: string): string {
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
-iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; }
+#player { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
 </style>
 </head>
 <body>
-<iframe
-  src="${embedUrl}"
-  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
-  allowfullscreen
-  webkit-allowfullscreen
-  mozallowfullscreen
-></iframe>
+<div id="player"></div>
+<script>
+var tag = document.createElement('script');
+tag.src = "https://www.youtube.com/iframe_api";
+document.head.appendChild(tag);
+function onYouTubeIframeAPIReady() {
+  new YT.Player('player', {
+    videoId: '${videoId}',
+    playerVars: {
+      autoplay: 1,
+      playsinline: 1,
+      rel: 0,
+      modestbranding: 1,
+      showinfo: 0,
+      fs: 1,
+      iv_load_policy: 3,
+      disablekb: 0,
+      origin: window.location.origin
+    },
+    events: {
+      onReady: function(e) { e.target.playVideo(); }
+    }
+  });
+}
+</script>
 </body>
 </html>`;
 }
@@ -134,7 +151,7 @@ export default function LectureScreen() {
         )}
         {!hasError && youtubeHtml && Platform.OS === "web" ? (
           <iframe
-            src={`https://www.youtube.com/embed/${videoId}?playsinline=1&rel=0&modestbranding=1`}
+            src={`https://www.youtube.com/embed/${videoId}?autoplay=1&playsinline=1&rel=0&modestbranding=1&showinfo=0&iv_load_policy=3`}
             style={{ width: "100%", height: "100%", border: "none", position: "absolute", top: 0, left: 0 } as any}
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
             allowFullScreen
