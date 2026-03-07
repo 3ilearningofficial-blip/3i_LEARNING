@@ -143,6 +143,10 @@ export default function MaterialViewerScreen() {
             domStorageEnabled
             startInLoadingState
             allowsInlineMediaPlayback
+            mixedContentMode="compatibility"
+            allowsFullscreenVideo
+            setSupportMultipleWindows={false}
+            originWhitelist={["*"]}
             renderLoading={() => (
               <View style={styles.webviewLoading}>
                 <ActivityIndicator size="large" color={Colors.light.primary} />

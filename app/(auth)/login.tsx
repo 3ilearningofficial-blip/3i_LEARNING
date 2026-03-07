@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState } from "react";
 import {
   View,
   Text,
@@ -15,7 +15,7 @@ import {
 import { router } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 
@@ -23,7 +23,6 @@ export default function LoginScreen() {
   const insets = useSafeAreaInsets();
   const [phone, setPhone] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const recaptchaContainerRef = useRef<View>(null);
 
   const handleSendOTP = async () => {
     if (!phone.trim()) {
@@ -37,79 +36,17 @@ export default function LoginScreen() {
 
     setIsLoading(true);
     try {
-      let firebaseSuccess = false;
-
-      if (Platform.OS === "web") {
-        try {
-          const { auth, RecaptchaVerifier, signInWithPhoneNumber } = await import("@/lib/firebase");
-
-          if (!(window as any).recaptchaVerifier) {
-            let container = document.getElementById("recaptcha-container");
-            if (!container) {
-              container = document.createElement("div");
-              container.id = "recaptcha-container";
-              container.style.position = "fixed";
-              container.style.bottom = "0";
-              container.style.left = "0";
-              container.style.zIndex = "-1";
-              container.style.opacity = "0.01";
-              container.style.width = "1px";
-              container.style.height = "1px";
-              container.style.overflow = "hidden";
-              document.body.appendChild(container);
-            }
-            (window as any).recaptchaVerifier = new RecaptchaVerifier(auth, container, {
-              size: "invisible",
-              callback: () => {},
-              "expired-callback": () => {
-                (window as any).recaptchaVerifier = null;
-              },
-            });
-          }
-
-          const confirmation = await signInWithPhoneNumber(
-            auth,
-            `+91${phone.trim()}`,
-            (window as any).recaptchaVerifier
-          );
-
-          (window as any).__firebaseConfirmation = confirmation;
-          firebaseSuccess = true;
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-          router.push({
-            pathname: "/(auth)/otp",
-            params: { phone: phone.trim(), method: "firebase" },
-          });
-        } catch (firebaseErr: any) {
-          console.warn("Firebase auth failed:", firebaseErr?.code, firebaseErr?.message, JSON.stringify(firebaseErr));
-          (window as any).recaptchaVerifier = null;
-
-          if (firebaseErr?.code === "auth/too-many-requests") {
-            Alert.alert("Too Many Attempts", "Please wait a few minutes and try again.");
-            setIsLoading(false);
-            return;
-          }
-          if (firebaseErr?.code === "auth/invalid-phone-number") {
-            Alert.alert("Invalid Number", "Please enter a valid phone number.");
-            setIsLoading(false);
-            return;
-          }
-        }
-      }
-
-      if (!firebaseSuccess) {
-        const { apiRequest } = await import("@/lib/query-client");
-        const res = await apiRequest("POST", "/api/auth/send-otp", {
-          identifier: phone.trim(),
-          type: "phone",
-        });
-        const data = await res.json();
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-        router.push({
-          pathname: "/(auth)/otp",
-          params: { phone: phone.trim(), method: "dev", devOtp: data.devOtp },
-        });
-      }
+      const { apiRequest } = await import("@/lib/query-client");
+      const res = await apiRequest("POST", "/api/auth/send-otp", {
+        identifier: phone.trim(),
+        type: "phone",
+      });
+      const data = await res.json();
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      router.push({
+        pathname: "/(auth)/otp",
+        params: { phone: phone.trim(), method: "server", devOtp: data.devOtp || "" },
+      });
     } catch (err: any) {
       console.error("Send OTP error:", err);
       Alert.alert("Error", "Failed to send OTP. Please try again.");
@@ -175,7 +112,6 @@ export default function LoginScreen() {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
-      <View ref={recaptchaContainerRef} />
     </LinearGradient>
   );
 }

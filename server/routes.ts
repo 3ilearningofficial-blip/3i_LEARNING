@@ -20,6 +20,40 @@ function generateOTP(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
+async function sendOTPviaSMS(phone: string, otp: string): Promise<boolean> {
+  const apiKey = process.env.FAST2SMS_API_KEY;
+  if (!apiKey) {
+    console.log(`[SMS] No FAST2SMS_API_KEY set — OTP for ${phone}: ${otp}`);
+    return false;
+  }
+  try {
+    const res = await fetch("https://www.fast2sms.com/dev/bulkV2", {
+      method: "POST",
+      headers: {
+        "authorization": apiKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        route: "otp",
+        variables_values: otp,
+        numbers: phone,
+        flash: "0",
+      }),
+    });
+    const data = await res.json();
+    if (data.return) {
+      console.log(`[SMS] OTP sent to ${phone}`);
+      return true;
+    } else {
+      console.error(`[SMS] Failed:`, data.message);
+      return false;
+    }
+  } catch (err) {
+    console.error(`[SMS] Error sending to ${phone}:`, err);
+    return false;
+  }
+}
+
 const ADMIN_EMAILS = ["3ilearningofficial@gmail.com"];
 const ADMIN_PHONES = ["9997198068"];
 
@@ -56,8 +90,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       console.log(`OTP for ${identifier}: ${otp}`);
-      const response: any = { success: true, message: "OTP sent successfully" };
-      if (process.env.NODE_ENV !== "production") {
+      const smsSent = type === "phone" ? await sendOTPviaSMS(identifier, otp) : false;
+      const response: any = { success: true, message: smsSent ? "OTP sent to your phone" : "OTP sent successfully" };
+      if (process.env.NODE_ENV !== "production" && !smsSent) {
         response.devOtp = otp;
       }
       res.json(response);

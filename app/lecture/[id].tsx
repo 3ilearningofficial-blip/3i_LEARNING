@@ -184,6 +184,8 @@ export default function LectureScreen() {
             scrollEnabled={false}
             javaScriptEnabled
             domStorageEnabled
+            mixedContentMode="compatibility"
+            setSupportMultipleWindows={false}
             originWhitelist={["*"]}
           />
         ) : !hasError && !youtubeHtml ? (

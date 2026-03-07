@@ -1,7 +1,7 @@
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable,
-  Platform, ActivityIndicator, Alert,
+  Platform, ActivityIndicator, Alert, Modal,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -13,6 +13,7 @@ import { apiRequest, getApiUrl } from "@/lib/query-client";
 import Colors from "@/constants/colors";
 import { fetch } from "expo/fetch";
 import { useAuth } from "@/context/AuthContext";
+import { WebView } from "react-native-webview";
 
 interface Lecture {
   id: number;
@@ -89,6 +90,7 @@ export default function CourseDetailScreen() {
   const qc = useQueryClient();
   const { user, isAdmin } = useAuth();
   const [activeTab, setActiveTab] = useState("Lectures");
+  const [paymentWebViewHtml, setPaymentWebViewHtml] = useState<string | null>(null);
 
   const topPadding = Platform.OS === "web" ? 67 : insets.top;
   const bottomPadding = Platform.OS === "web" ? 34 : insets.bottom;
@@ -179,11 +181,50 @@ export default function CourseDetailScreen() {
         const rzp = new (window as any).Razorpay(options);
         rzp.open();
       } else {
-        Alert.alert(
-          "Payment",
-          "Razorpay payment will open in a browser window.",
-          [{ text: "OK" }]
-        );
+        const baseUrl = getApiUrl();
+        const checkoutHtml = `
+<!DOCTYPE html>
+<html><head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+<style>body{margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#0A1628;font-family:sans-serif;color:#fff;}
+.loading{text-align:center}.spinner{border:3px solid rgba(255,255,255,0.2);border-top:3px solid #1A56DB;border-radius:50%;width:40px;height:40px;animation:spin 0.8s linear infinite;margin:0 auto 16px}
+@keyframes spin{to{transform:rotate(360deg)}}</style>
+</head><body>
+<div class="loading"><div class="spinner"></div><p>Opening payment...</p></div>
+<script>
+var options = {
+  key: "${orderData.keyId}",
+  amount: ${orderData.amount},
+  currency: "${orderData.currency}",
+  name: "3i Learning",
+  description: "Purchase: ${orderData.courseName?.replace(/"/g, '\\"') || 'Course'}",
+  order_id: "${orderData.orderId}",
+  handler: function(response) {
+    window.ReactNativeWebView.postMessage(JSON.stringify({
+      type: "payment_success",
+      razorpay_order_id: response.razorpay_order_id,
+      razorpay_payment_id: response.razorpay_payment_id,
+      razorpay_signature: response.razorpay_signature
+    }));
+  },
+  prefill: { contact: "${user?.phone ? `+91${user.phone}` : ''}" },
+  theme: { color: "#1A56DB" },
+  modal: {
+    ondismiss: function() {
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: "payment_dismissed" }));
+    }
+  }
+};
+setTimeout(function() {
+  var rzp = new Razorpay(options);
+  rzp.on("payment.failed", function(resp) {
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: "payment_failed", error: resp.error.description }));
+  });
+  rzp.open();
+}, 500);
+</script></body></html>`;
+        setPaymentWebViewHtml(checkoutHtml);
       }
     } catch (err: any) {
       const msg = err?.message || "";
@@ -581,6 +622,50 @@ export default function CourseDetailScreen() {
             </LinearGradient>
           </Pressable>
         </View>
+      )}
+
+      {paymentWebViewHtml && Platform.OS !== "web" && (
+        <Modal visible animationType="slide" onRequestClose={() => setPaymentWebViewHtml(null)}>
+          <View style={{ flex: 1, backgroundColor: "#0A1628" }}>
+            <View style={{ flexDirection: "row", alignItems: "center", paddingTop: insets.top + 8, paddingHorizontal: 16, paddingBottom: 12, backgroundColor: "#0A1628" }}>
+              <Pressable onPress={() => setPaymentWebViewHtml(null)} style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" }}>
+                <Ionicons name="close" size={22} color="#fff" />
+              </Pressable>
+              <Text style={{ flex: 1, textAlign: "center", fontSize: 16, fontFamily: "Inter_700Bold", color: "#fff", marginRight: 36 }}>Payment</Text>
+            </View>
+            <WebView
+              source={{ html: paymentWebViewHtml, baseUrl: "https://api.razorpay.com" }}
+              javaScriptEnabled
+              domStorageEnabled
+              mixedContentMode="compatibility"
+              setSupportMultipleWindows={false}
+              originWhitelist={["*"]}
+              onMessage={async (event) => {
+                try {
+                  const data = JSON.parse(event.nativeEvent.data);
+                  if (data.type === "payment_success") {
+                    setPaymentWebViewHtml(null);
+                    await apiRequest("POST", "/api/payments/verify", {
+                      razorpay_order_id: data.razorpay_order_id,
+                      razorpay_payment_id: data.razorpay_payment_id,
+                      razorpay_signature: data.razorpay_signature,
+                      courseId: parseInt(id as string),
+                    });
+                    qc.invalidateQueries({ queryKey: ["/api/courses", id] });
+                    qc.invalidateQueries({ queryKey: ["/api/courses"] });
+                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                    Alert.alert("Success!", "Payment successful! You are now enrolled.");
+                  } else if (data.type === "payment_dismissed") {
+                    setPaymentWebViewHtml(null);
+                  } else if (data.type === "payment_failed") {
+                    setPaymentWebViewHtml(null);
+                    Alert.alert("Payment Failed", data.error || "Payment could not be completed.");
+                  }
+                } catch {}
+              }}
+            />
+          </View>
+        </Modal>
       )}
     </View>
   );

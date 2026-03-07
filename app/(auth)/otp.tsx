@@ -53,45 +53,23 @@ export default function OTPScreen() {
     setIsLoading(true);
     try {
       const deviceId = generateDeviceId();
-
-      if (method === "firebase" && Platform.OS === "web") {
-        const confirmation = (window as any).__firebaseConfirmation;
-        if (!confirmation) {
-          Alert.alert("Error", "Session expired. Please go back and try again.");
-          setIsLoading(false);
-          return;
-        }
-
-        const result = await confirmation.confirm(code);
-        const idToken = await result.user.getIdToken();
-
-        const res = await apiRequest("POST", "/api/auth/firebase-login", {
-          idToken,
-          deviceId,
-        });
-        const data = await res.json();
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        login(data.user);
-        (window as any).__firebaseConfirmation = null;
-        router.replace("/(tabs)");
-      } else {
-        const res = await apiRequest("POST", "/api/auth/verify-otp", {
-          identifier: phone,
-          type: "phone",
-          otp: code,
-          deviceId,
-        });
-        const data = await res.json();
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        login(data.user);
-        router.replace("/(tabs)");
-      }
+      const res = await apiRequest("POST", "/api/auth/verify-otp", {
+        identifier: phone,
+        type: "phone",
+        otp: code,
+        deviceId,
+      });
+      const data = await res.json();
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      login(data.user);
+      router.replace("/(tabs)");
     } catch (err: any) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      if (err?.code === "auth/invalid-verification-code") {
-        Alert.alert("Invalid OTP", "The code you entered is incorrect. Please try again.");
-      } else if (err?.code === "auth/code-expired") {
+      const errMsg = err?.message?.toLowerCase() || "";
+      if (errMsg.includes("expired")) {
         Alert.alert("Code Expired", "The verification code has expired. Please request a new one.");
+      } else if (errMsg.includes("invalid") || errMsg.includes("incorrect")) {
+        Alert.alert("Invalid OTP", "The code you entered is incorrect. Please try again.");
       } else {
         Alert.alert("Invalid OTP", "The OTP you entered is incorrect. Please try again.");
       }
@@ -104,30 +82,7 @@ export default function OTPScreen() {
 
   const handleResend = async () => {
     try {
-      if (method === "firebase" && Platform.OS === "web") {
-        const { auth, RecaptchaVerifier, signInWithPhoneNumber } = await import("@/lib/firebase");
-        if (!(window as any).recaptchaVerifier) {
-          let container = document.getElementById("recaptcha-container");
-          if (!container) {
-            container = document.createElement("div");
-            container.id = "recaptcha-container";
-            container.style.position = "fixed";
-            container.style.bottom = "0";
-            container.style.left = "0";
-            container.style.zIndex = "-1";
-            container.style.opacity = "0";
-            document.body.appendChild(container);
-          }
-          (window as any).recaptchaVerifier = new RecaptchaVerifier(auth, container, {
-            size: "invisible",
-            callback: () => {},
-          });
-        }
-        const confirmation = await signInWithPhoneNumber(auth, `+91${phone}`, (window as any).recaptchaVerifier);
-        (window as any).__firebaseConfirmation = confirmation;
-      } else {
-        await apiRequest("POST", "/api/auth/send-otp", { identifier: phone, type: "phone" });
-      }
+      await apiRequest("POST", "/api/auth/send-otp", { identifier: phone, type: "phone" });
       setCountdown(30); setCanResend(false);
       const timer = setInterval(() => {
         setCountdown((prev) => { if (prev <= 1) { setCanResend(true); clearInterval(timer); return 0; } return prev - 1; });
