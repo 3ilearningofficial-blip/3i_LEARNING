@@ -81,7 +81,7 @@ export default function LoginScreen() {
             params: { phone: phone.trim(), method: "firebase" },
           });
         } catch (firebaseErr: any) {
-          console.warn("Firebase auth failed, falling back to dev OTP:", firebaseErr?.code || firebaseErr?.message);
+          console.warn("Firebase auth failed:", firebaseErr?.code, firebaseErr?.message, JSON.stringify(firebaseErr));
           (window as any).recaptchaVerifier = null;
 
           if (firebaseErr?.code === "auth/too-many-requests") {
