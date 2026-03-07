@@ -51,7 +51,7 @@ interface LiveClass {
   scheduled_at: number;
 }
 
-const CATEGORIES = ["All", "Class 10", "Class 12", "CDS", "NDA", "AFCAT", "Fundamentals", "Trigonometry", "Calculus"];
+const DEFAULT_CATEGORIES = ["NDA", "CDS", "AFCAT"];
 
 const COURSE_COLORS = ["#1A56DB", "#7C3AED", "#DC2626", "#059669", "#D97706", "#0891B2"];
 
@@ -135,24 +135,41 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const { user, isAdmin, logout } = useAuth();
   const [search, setSearch] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState("All");
+  const [selectedCategory, setSelectedCategory] = useState("NDA");
   const [refreshing, setRefreshing] = useState(false);
 
   const topPadding = Platform.OS === "web" ? 67 : insets.top;
   const bottomPadding = Platform.OS === "web" ? 34 : insets.bottom;
 
-  const { data: courses = [], refetch: refetchCourses, isLoading } = useQuery<Course[]>({
-    queryKey: ["/api/courses", selectedCategory, search],
+  const { data: allCourses = [], refetch: refetchCourses, isLoading } = useQuery<Course[]>({
+    queryKey: ["/api/courses"],
     queryFn: async () => {
       const baseUrl = getApiUrl();
       const url = new URL("/api/courses", baseUrl);
-      if (selectedCategory !== "All") url.searchParams.set("category", selectedCategory);
-      if (search) url.searchParams.set("search", search);
       const res = await fetch(url.toString(), { credentials: "include" });
       return res.json();
     },
     staleTime: 0,
   });
+
+  const dynamicCategories = React.useMemo(() => {
+    const courseCategories = [...new Set(allCourses.map((c) => c.category).filter(Boolean))];
+    const combined = [...DEFAULT_CATEGORIES];
+    courseCategories.forEach((cat) => {
+      if (!combined.includes(cat)) combined.push(cat);
+    });
+    return combined;
+  }, [allCourses]);
+
+  const courses = React.useMemo(() => {
+    let filtered = allCourses;
+    if (selectedCategory) filtered = filtered.filter((c) => c.category === selectedCategory);
+    if (search) {
+      const q = search.toLowerCase();
+      filtered = filtered.filter((c) => c.title.toLowerCase().includes(q) || c.description?.toLowerCase().includes(q));
+    }
+    return filtered;
+  }, [allCourses, selectedCategory, search]);
 
   const { data: freeMaterials = [] } = useQuery<StudyMaterial[]>({
     queryKey: ["/api/study-materials", "free"],
@@ -248,7 +265,7 @@ export default function HomeScreen() {
         )}
 
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.categoryScroll} contentContainerStyle={styles.categoryContent}>
-          {CATEGORIES.map((cat) => (
+          {dynamicCategories.map((cat) => (
             <Pressable key={cat} style={[styles.categoryChip, selectedCategory === cat && styles.categoryChipActive]} onPress={() => setSelectedCategory(cat)}>
               <Text style={[styles.categoryChipText, selectedCategory === cat && styles.categoryChipTextActive]}>{cat}</Text>
             </Pressable>

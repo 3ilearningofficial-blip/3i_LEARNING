@@ -120,11 +120,11 @@ export default function LoginScreen() {
 
   return (
     <LinearGradient colors={["#0A1628", "#1A2E50", "#0A1628"]} style={styles.container}>
-      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
-        <ScrollView contentContainerStyle={[styles.scrollContent, { paddingTop: insets.top + (Platform.OS === "web" ? 67 : 0) + 40, paddingBottom: insets.bottom + (Platform.OS === "web" ? 34 : 0) + 20 }]} keyboardShouldPersistTaps="handled">
+      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
+        <ScrollView contentContainerStyle={[styles.scrollContent, { paddingTop: insets.top + (Platform.OS === "web" ? 67 : 0) + 40, paddingBottom: insets.bottom + (Platform.OS === "web" ? 34 : 0) + 20 }]} keyboardShouldPersistTaps="handled" bounces={false}>
           <View style={styles.logoSection}>
             <View style={styles.logoContainer}>
-              <Image source={require("@/assets/images/logo.png")} style={styles.logoImage} resizeMode="contain" />
+              <Image source={require("@/assets/images/logo.png")} style={styles.logoImage} resizeMode="cover" />
             </View>
             <Text style={styles.appName}>3i Learning</Text>
             <Text style={styles.tagline}>Innovate | Interest | Intellect</Text>
@@ -192,7 +192,7 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   logoImage: {
-    width: 80, height: 80,
+    width: 100, height: 100,
   },
   appName: { fontSize: 32, fontFamily: "Inter_700Bold", color: "#fff" },
   tagline: { fontSize: 14, color: "rgba(255,255,255,0.6)", fontFamily: "Inter_400Regular" },
@@ -215,6 +215,7 @@ const styles = StyleSheet.create({
   input: {
     flex: 1, paddingHorizontal: 14, paddingVertical: 16,
     fontSize: 16, fontFamily: "Inter_400Regular", color: Colors.light.text,
+    ...(Platform.OS === "web" ? { outlineStyle: "none" as any } : {}),
   },
   phoneInput: { paddingLeft: 14 },
   sendBtn: { borderRadius: 14, overflow: "hidden" },
