@@ -50,40 +50,25 @@ function buildYouTubeHtml(videoId: string): string {
   return `<!DOCTYPE html>
 <html>
 <head>
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
-#player { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
-.ytp-chrome-top, .ytp-show-cards-title, .ytp-watermark, .ytp-youtube-button,
-.ytp-impression-link, .ytp-title, .ytp-title-channel, .ytp-share-button-visible { display: none !important; opacity: 0 !important; }
+.player-wrap { position: relative; width: 100%; height: 100%; }
+iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; }
 </style>
 </head>
 <body>
-<div id="player"></div>
+<div class="player-wrap">
+<iframe
+  src="https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&playsinline=1&rel=0&modestbranding=1&showinfo=0&iv_load_policy=3&cc_load_policy=0&fs=1&disablekb=0&controls=1"
+  allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+  allowfullscreen
+></iframe>
+</div>
 <script>
-var tag = document.createElement('script');
-tag.src = "https://www.youtube-nocookie.com/iframe_api";
-document.head.appendChild(tag);
-function onYouTubeIframeAPIReady() {
-  new YT.Player('player', {
-    videoId: '${videoId}',
-    playerVars: {
-      autoplay: 1,
-      playsinline: 1,
-      rel: 0,
-      modestbranding: 1,
-      showinfo: 0,
-      fs: 1,
-      iv_load_policy: 3,
-      disablekb: 0,
-      origin: window.location.origin
-    },
-    events: {
-      onReady: function(e) { e.target.playVideo(); }
-    }
-  });
-}
+document.addEventListener('contextmenu', function(e) { e.preventDefault(); return false; });
+document.addEventListener('selectstart', function(e) { e.preventDefault(); return false; });
 </script>
 </body>
 </html>`;
@@ -124,6 +109,7 @@ export default function LectureScreen() {
   const preventScreenCapture = `
     (function() {
       document.addEventListener('contextmenu', function(e){ e.preventDefault(); return false; });
+      document.addEventListener('selectstart', function(e){ e.preventDefault(); return false; });
     })();
     true;
   `;
@@ -165,7 +151,7 @@ export default function LectureScreen() {
         )}
         {!hasError && youtubeHtml && Platform.OS === "web" ? (
           <iframe
-            src={`https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&playsinline=1&rel=0&modestbranding=1&iv_load_policy=3&cc_load_policy=0&fs=1`}
+            srcDoc={youtubeHtml}
             style={{ width: "100%", height: "100%", border: "none", position: "absolute", top: 0, left: 0 } as any}
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
             allowFullScreen

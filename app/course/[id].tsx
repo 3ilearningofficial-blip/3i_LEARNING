@@ -356,12 +356,6 @@ setTimeout(function() {
             <Ionicons name="document-text" size={16} color="rgba(255,255,255,0.8)" />
             <Text style={styles.quickStatText}>{course.total_tests} Tests</Text>
           </View>
-          {isAdmin && (
-            <View style={styles.quickStat}>
-              <Ionicons name="people" size={16} color="rgba(255,255,255,0.8)" />
-              <Text style={styles.quickStatText}>{course.total_students} Students</Text>
-            </View>
-          )}
           {!isTestSeriesCourse && (
             <View style={styles.quickStat}>
               <Ionicons name="time" size={16} color="rgba(255,255,255,0.8)" />

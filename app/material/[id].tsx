@@ -13,17 +13,6 @@ import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/context/AuthContext";
 import Colors from "@/constants/colors";
 
-function getViewUrl(fileUrl: string, fileType: string, useDirectUrl: boolean = false): string {
-  if (!fileUrl) return "";
-  if (fileType === "pdf" || fileUrl.toLowerCase().endsWith(".pdf")) {
-    if (useDirectUrl) {
-      return fileUrl;
-    }
-    return `https://docs.google.com/gview?embedded=true&url=${encodeURIComponent(fileUrl)}`;
-  }
-  return fileUrl;
-}
-
 function getIconName(fileType: string): keyof typeof Ionicons.glyphMap {
   switch (fileType) {
     case "pdf": return "document-text";
@@ -33,13 +22,77 @@ function getIconName(fileType: string): keyof typeof Ionicons.glyphMap {
   }
 }
 
+function buildPdfViewerHtml(fileUrl: string): string {
+  return `<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 100%; height: 100%; background: #1a1a2e; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
+.viewer { width: 100%; height: 100%; border: none; }
+.loading { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 16px; color: #aaa; z-index: 10; background: #1a1a2e; }
+.spinner { width: 40px; height: 40px; border: 3px solid rgba(255,255,255,0.1); border-top: 3px solid #1A56DB; border-radius: 50%; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading p { font-size: 14px; }
+.error { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: none; align-items: center; justify-content: center; flex-direction: column; gap: 16px; color: #ccc; padding: 32px; text-align: center; background: #1a1a2e; z-index: 20; }
+.error h3 { font-size: 18px; color: #fff; margin-bottom: 4px; }
+.error p { font-size: 13px; color: #999; line-height: 1.5; }
+.error a { display: inline-block; color: #fff; background: #1A56DB; text-decoration: none; padding: 12px 28px; border-radius: 10px; font-size: 14px; font-weight: 600; margin-top: 8px; }
+.error a:hover { background: #1544b8; }
+</style>
+</head><body>
+<div id="loading" class="loading"><div class="spinner"></div><p>Loading PDF...</p></div>
+<div id="error" class="error">
+  <h3>Unable to preview</h3>
+  <p>This PDF cannot be previewed inline. Tap below to open it directly.</p>
+  <a href="${fileUrl}" target="_blank" rel="noopener">Open PDF</a>
+</div>
+<iframe id="viewer" class="viewer" style="display:none"></iframe>
+<script>
+(function() {
+  var viewer = document.getElementById('viewer');
+  var loading = document.getElementById('loading');
+  var error = document.getElementById('error');
+  var url = ${JSON.stringify(fileUrl)};
+  var loaded = false;
+  
+  function showViewer() {
+    if (loaded) return;
+    loaded = true;
+    loading.style.display = 'none';
+    viewer.style.display = 'block';
+  }
+  
+  function showError() {
+    if (loaded) return;
+    loaded = true;
+    loading.style.display = 'none';
+    error.style.display = 'flex';
+  }
+  
+  viewer.onload = showViewer;
+  viewer.onerror = showError;
+  
+  viewer.src = 'https://docs.google.com/gview?embedded=true&url=' + encodeURIComponent(url);
+  
+  setTimeout(function() {
+    if (!loaded) {
+      viewer.src = url;
+      setTimeout(function() {
+        if (!loaded) showError();
+      }, 8000);
+    }
+  }, 8000);
+})();
+</script>
+</body></html>`;
+}
+
 export default function MaterialViewerScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
-  const [retryCount, setRetryCount] = useState(0);
-  const [useDirectUrl, setUseDirectUrl] = useState(false);
   const topPadding = Platform.OS === "web" ? 67 : insets.top;
   const { isAdmin } = useAuth();
 
@@ -52,54 +105,7 @@ export default function MaterialViewerScreen() {
     enabled: !!id,
   });
 
-  const viewUrl = material ? getViewUrl(material.file_url, material.file_type, useDirectUrl) : "";
-
-  const handleRetry = () => {
-    if (!useDirectUrl) {
-      setUseDirectUrl(true);
-    } else {
-      setUseDirectUrl(false);
-      setRetryCount(prev => prev + 1);
-    }
-    setError(false);
-    setLoading(true);
-  };
-
-  const pdfViewerHtml = material && (material.file_type === "pdf" || material.file_url?.toLowerCase().endsWith(".pdf")) ? `
-<!DOCTYPE html>
-<html><head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body { background: #f5f5f5; height: 100vh; display: flex; flex-direction: column; }
-iframe, embed, object { width: 100%; flex: 1; border: none; }
-.loading { display: flex; align-items: center; justify-content: center; height: 100vh; font-family: sans-serif; color: #666; flex-direction: column; gap: 12px; }
-.error { display: none; align-items: center; justify-content: center; height: 100vh; font-family: sans-serif; color: #666; flex-direction: column; gap: 12px; text-align: center; padding: 24px; }
-.error a { color: #1A56DB; text-decoration: none; padding: 12px 24px; border: 1px solid #1A56DB; border-radius: 8px; margin-top: 8px; }
-</style>
-</head><body>
-<div id="loading" class="loading"><p>Loading PDF...</p></div>
-<div id="error" class="error">
-<p>Unable to preview this PDF</p>
-<a href="${material.file_url}" target="_blank">Open PDF Directly</a>
-</div>
-<iframe id="viewer" src="https://docs.google.com/gview?embedded=true&url=${encodeURIComponent(material.file_url)}" style="display:none" onload="onLoaded()"></iframe>
-<script>
-var loaded = false;
-function onLoaded() {
-  loaded = true;
-  document.getElementById('loading').style.display = 'none';
-  document.getElementById('viewer').style.display = 'block';
-}
-setTimeout(function() {
-  if (!loaded) {
-    document.getElementById('loading').style.display = 'none';
-    document.getElementById('error').style.display = 'flex';
-  }
-}, 10000);
-</script>
-</body></html>` : null;
+  const isPdf = material && (material.file_type === "pdf" || material.file_url?.toLowerCase().endsWith(".pdf"));
 
   return (
     <View style={styles.container}>
@@ -133,9 +139,6 @@ setTimeout(function() {
                 onPress={() => {
                   if (Platform.OS === "web") {
                     window.open(material.file_url, "_blank");
-                  } else {
-                    const { Linking } = require("react-native");
-                    Linking.openURL(material.file_url);
                   }
                 }}
               >
@@ -162,54 +165,37 @@ setTimeout(function() {
             <ActivityIndicator size="large" color={Colors.light.primary} />
             <Text style={styles.loadingText}>Loading material...</Text>
           </View>
-        ) : error ? (
-          <View style={styles.centered}>
-            <Ionicons name="alert-circle-outline" size={48} color={Colors.light.accent} />
-            <Text style={styles.errorTitle}>Unable to preview</Text>
-            <Text style={styles.errorSub}>This file can't be previewed right now.</Text>
-            <Pressable style={styles.retryBtn} onPress={handleRetry}>
-              <Ionicons name="refresh" size={16} color="#fff" />
-              <Text style={styles.retryBtnText}>Try Again</Text>
-            </Pressable>
-            {Platform.OS === "web" && (
-              <Pressable style={[styles.retryBtn, { backgroundColor: Colors.light.accent, marginTop: 10 }]} onPress={() => window.open(material.file_url, "_blank")}>
-                <Ionicons name="open-outline" size={16} color="#fff" />
-                <Text style={styles.retryBtnText}>Open PDF in New Tab</Text>
-              </Pressable>
-            )}
-          </View>
         ) : Platform.OS === "web" ? (
-          pdfViewerHtml ? (
-            <iframe
-              key={`pdf-frame-${retryCount}-${useDirectUrl}`}
-              srcDoc={pdfViewerHtml}
-              style={{ width: "100%", height: "100%", border: "none" } as any}
-              title={material.title}
-              onLoad={() => setLoading(false)}
-            />
-          ) : (
-            <iframe
-              key={`frame-${retryCount}`}
-              src={viewUrl}
-              style={{ width: "100%", height: "100%", border: "none" } as any}
-              title={material.title}
-              onLoad={() => setLoading(false)}
-            />
-          )
+          <>
+            {isPdf ? (
+              <iframe
+                srcDoc={buildPdfViewerHtml(material.file_url)}
+                style={{ width: "100%", height: "100%", border: "none" } as any}
+                title={material.title}
+                onLoad={() => setLoading(false)}
+              />
+            ) : (
+              <iframe
+                src={material.file_url}
+                style={{ width: "100%", height: "100%", border: "none" } as any}
+                title={material.title}
+                onLoad={() => setLoading(false)}
+              />
+            )}
+            {loading && (
+              <View style={styles.webLoadingOverlay}>
+                <ActivityIndicator size="large" color={Colors.light.primary} />
+              </View>
+            )}
+          </>
         ) : (
           <WebView
-            key={`webview-${retryCount}-${useDirectUrl}`}
-            source={{ uri: viewUrl }}
+            source={isPdf ? {
+              html: buildPdfViewerHtml(material.file_url),
+              baseUrl: "https://docs.google.com",
+            } : { uri: material.file_url }}
             style={styles.webview}
-            onLoadStart={() => setLoading(true)}
             onLoadEnd={() => setLoading(false)}
-            onError={() => { setLoading(false); setError(true); }}
-            onHttpError={(e) => {
-              if (e.nativeEvent.statusCode >= 400) {
-                setLoading(false);
-                setError(true);
-              }
-            }}
             javaScriptEnabled
             domStorageEnabled
             startInLoadingState
@@ -225,11 +211,6 @@ setTimeout(function() {
               </View>
             )}
           />
-        )}
-        {loading && Platform.OS === "web" && (
-          <View style={styles.webLoadingOverlay}>
-            <ActivityIndicator size="large" color={Colors.light.primary} />
-          </View>
         )}
       </View>
     </View>
