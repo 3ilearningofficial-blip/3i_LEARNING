@@ -34,8 +34,8 @@ async function sendOTPviaSMS(phone: string, otp: string): Promise<boolean> {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        route: "otp",
-        variables_values: otp,
+        route: "q",
+        message: `Your 3i Learning verification code is: ${otp}. Valid for 10 minutes. Do not share this code.`,
         numbers: phone,
         flash: "0",
       }),
@@ -91,7 +91,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       console.log(`OTP for ${identifier}: ${otp}`);
       const smsSent = type === "phone" ? await sendOTPviaSMS(identifier, otp) : false;
-      const response: any = { success: true, message: smsSent ? "OTP sent to your phone" : "OTP sent successfully" };
+      if (type === "phone" && !smsSent && process.env.NODE_ENV === "production") {
+        return res.status(503).json({ success: false, message: "SMS delivery failed. Please try again or use a different login method." });
+      }
+      const response: any = { success: true, message: smsSent ? "OTP sent to your phone" : "OTP sent successfully", smsSent };
       if (process.env.NODE_ENV !== "production" && !smsSent) {
         response.devOtp = otp;
       }

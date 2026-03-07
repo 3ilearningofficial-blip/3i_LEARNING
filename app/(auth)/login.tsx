@@ -36,6 +36,9 @@ export default function LoginScreen() {
       type: "phone",
     });
     const data = await res.json();
+    if (!data.success) {
+      throw new Error(data.message || "Failed to send OTP");
+    }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     router.push({
       pathname: "/(auth)/otp",
@@ -77,7 +80,7 @@ export default function LoginScreen() {
         } else {
           sendViaServer(pendingPhoneRef.current).catch(() => {
             setIsLoading(false);
-            Alert.alert("Error", "Failed to send OTP. Please try again.");
+            Alert.alert("OTP Failed", "Could not send OTP. Please try again later.");
           });
         }
       }
@@ -147,7 +150,7 @@ export default function LoginScreen() {
           });
           return;
         } catch (firebaseErr: any) {
-          console.warn("Firebase auth failed, using server OTP:", firebaseErr?.code, firebaseErr?.message);
+          console.warn("Firebase auth failed:", firebaseErr?.code, firebaseErr?.message);
           (window as any).recaptchaVerifier = null;
           const recaptchaEl = document.getElementById("recaptcha-container");
           if (recaptchaEl) recaptchaEl.remove();
@@ -162,8 +165,14 @@ export default function LoginScreen() {
             setIsLoading(false);
             return;
           }
+          try {
+            await sendViaServer(phoneNumber);
+          } catch (serverErr: any) {
+            Alert.alert("OTP Failed", "Could not send OTP. Please try again later.");
+            setIsLoading(false);
+          }
+          return;
         }
-        await sendViaServer(phoneNumber);
       } else {
         setShowWebView(true);
       }
