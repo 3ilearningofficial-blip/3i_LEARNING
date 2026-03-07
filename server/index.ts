@@ -249,6 +249,14 @@ function setupErrorHandler(app: express.Application) {
   setupBodyParsing(app);
   setupRequestLogging(app);
 
+  app.get("/firebase-phone-auth", (_req: Request, res: Response) => {
+    const firebaseAuthPath = path.resolve(process.cwd(), "server", "templates", "firebase-phone-auth.html");
+    if (fs.existsSync(firebaseAuthPath)) {
+      return res.type("html").sendFile(firebaseAuthPath);
+    }
+    res.status(404).send("Not found");
+  });
+
   const isProduction = process.env.NODE_ENV === "production";
   app.set("trust proxy", 1);
 

@@ -18,7 +18,7 @@ function generateDeviceId() {
 
 export default function OTPScreen() {
   const insets = useSafeAreaInsets();
-  const { phone, method, devOtp } = useLocalSearchParams<{ phone: string; method: string; devOtp?: string }>();
+  const { phone, method, devOtp, verificationId } = useLocalSearchParams<{ phone: string; method: string; devOtp?: string; verificationId?: string }>();
   const [otp, setOtp] = useState(["", "", "", "", "", ""]);
   const [isLoading, setIsLoading] = useState(false);
   const [countdown, setCountdown] = useState(30);
@@ -71,6 +71,27 @@ export default function OTPScreen() {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         login(data.user);
         (window as any).__firebaseConfirmation = null;
+        router.replace("/(tabs)");
+      } else if (method === "firebase-webview" && verificationId) {
+        const { initializeApp, getApps, getApp } = await import("firebase/app");
+        const { getAuth, PhoneAuthProvider, signInWithCredential } = await import("firebase/auth");
+        const firebaseConfig = {
+          apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
+          projectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID,
+          authDomain: `${process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID}.firebaseapp.com`,
+        };
+        const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+        const auth = getAuth(app);
+        const credential = PhoneAuthProvider.credential(verificationId, code);
+        const userCredential = await signInWithCredential(auth, credential);
+        const idToken = await userCredential.user.getIdToken();
+        const res = await apiRequest("POST", "/api/auth/firebase-login", {
+          idToken,
+          deviceId,
+        });
+        const data = await res.json();
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        login(data.user);
         router.replace("/(tabs)");
       } else {
         const res = await apiRequest("POST", "/api/auth/verify-otp", {

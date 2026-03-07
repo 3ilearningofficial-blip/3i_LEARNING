@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import {
   View,
   Text,
@@ -11,6 +11,7 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  Modal,
 } from "react-native";
 import { router } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
@@ -18,11 +19,15 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
+import { getApiUrl } from "@/lib/query-client";
 
 export default function LoginScreen() {
   const insets = useSafeAreaInsets();
   const [phone, setPhone] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [showWebView, setShowWebView] = useState(false);
+  const webViewRef = useRef<any>(null);
+  const pendingPhoneRef = useRef("");
 
   const sendViaServer = async (phoneNumber: string) => {
     const { apiRequest } = await import("@/lib/query-client");
@@ -38,6 +43,47 @@ export default function LoginScreen() {
     });
   };
 
+  const getFirebaseWebViewUrl = (phoneNumber: string) => {
+    const baseUrl = getApiUrl();
+    const apiKey = process.env.EXPO_PUBLIC_FIREBASE_API_KEY || "";
+    const projectId = process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID || "";
+    return `${baseUrl}/firebase-phone-auth?phone=${phoneNumber}&apiKey=${encodeURIComponent(apiKey)}&projectId=${encodeURIComponent(projectId)}`;
+  };
+
+  const handleWebViewMessage = (event: any) => {
+    try {
+      const data = JSON.parse(event.nativeEvent.data);
+      if (data.type === "otp-sent") {
+        setShowWebView(false);
+        setIsLoading(false);
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        router.push({
+          pathname: "/(auth)/otp",
+          params: {
+            phone: pendingPhoneRef.current,
+            method: "firebase-webview",
+            verificationId: data.verificationId || "",
+          },
+        });
+      } else if (data.type === "error") {
+        console.warn("Firebase WebView error:", data.message, data.code);
+        setShowWebView(false);
+        if (data.code === "auth/too-many-requests") {
+          setIsLoading(false);
+          Alert.alert("Too Many Attempts", "Please wait a few minutes and try again.");
+        } else if (data.code === "auth/invalid-phone-number") {
+          setIsLoading(false);
+          Alert.alert("Invalid Number", "Please enter a valid phone number.");
+        } else {
+          sendViaServer(pendingPhoneRef.current).catch(() => {
+            setIsLoading(false);
+            Alert.alert("Error", "Failed to send OTP. Please try again.");
+          });
+        }
+      }
+    } catch {}
+  };
+
   const handleSendOTP = async () => {
     if (!phone.trim()) {
       Alert.alert("Error", "Enter your phone number");
@@ -50,6 +96,7 @@ export default function LoginScreen() {
 
     setIsLoading(true);
     const phoneNumber = phone.trim();
+    pendingPhoneRef.current = phoneNumber;
 
     try {
       if (Platform.OS === "web") {
@@ -116,16 +163,21 @@ export default function LoginScreen() {
             return;
           }
         }
+        await sendViaServer(phoneNumber);
+      } else {
+        setShowWebView(true);
       }
-
-      await sendViaServer(phoneNumber);
     } catch (err: any) {
       console.error("Send OTP error:", err);
       Alert.alert("Error", "Failed to send OTP. Please try again.");
     } finally {
-      setIsLoading(false);
+      if (!showWebView) {
+        setIsLoading(false);
+      }
     }
   };
+
+  const WebViewComponent = Platform.OS !== "web" ? require("react-native-webview").default : null;
 
   return (
     <LinearGradient colors={["#0A1628", "#1A2E50", "#0A1628"]} style={styles.container}>
@@ -184,6 +236,32 @@ export default function LoginScreen() {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {Platform.OS !== "web" && WebViewComponent && (
+        <Modal visible={showWebView} animationType="slide" transparent={false} onRequestClose={() => { setShowWebView(false); setIsLoading(false); }}>
+          <View style={styles.webViewContainer}>
+            <View style={[styles.webViewHeader, { paddingTop: insets.top + 10 }]}>
+              <Pressable onPress={() => { setShowWebView(false); setIsLoading(false); }} style={styles.webViewCloseBtn}>
+                <Ionicons name="close" size={24} color="#fff" />
+              </Pressable>
+              <Text style={styles.webViewTitle}>Phone Verification</Text>
+              <View style={{ width: 34 }} />
+            </View>
+            <WebViewComponent
+              ref={webViewRef}
+              source={{ uri: getFirebaseWebViewUrl(pendingPhoneRef.current) }}
+              style={styles.webView}
+              onMessage={handleWebViewMessage}
+              javaScriptEnabled
+              domStorageEnabled
+              mixedContentMode="compatibility"
+              setSupportMultipleWindows={false}
+              originWhitelist={["*"]}
+              userAgent="Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+            />
+          </View>
+        </Modal>
+      )}
     </LinearGradient>
   );
 }
@@ -233,4 +311,12 @@ const styles = StyleSheet.create({
   sendBtnText: { fontSize: 16, fontFamily: "Inter_600SemiBold", color: "#fff" },
   footer: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
   footerText: { fontSize: 13, color: "rgba(255,255,255,0.5)", fontFamily: "Inter_400Regular" },
+  webViewContainer: { flex: 1, backgroundColor: "#0A1628" },
+  webViewHeader: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    paddingHorizontal: 16, paddingBottom: 12, backgroundColor: "#0A1628",
+  },
+  webViewCloseBtn: { width: 34, height: 34, borderRadius: 17, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" },
+  webViewTitle: { fontSize: 16, fontFamily: "Inter_600SemiBold", color: "#fff" },
+  webView: { flex: 1 },
 });

@@ -7,13 +7,13 @@ A comprehensive math education mobile app (Expo/React Native) with Express backe
 - **Frontend**: Expo (React Native) with expo-router file-based navigation, runs on port 8081
 - **Backend**: Express.js with TypeScript, runs on port 5000, serves API + landing page
 - **Database**: PostgreSQL via Drizzle ORM, sessions stored in PostgreSQL via connect-pg-simple
-- **Auth**: Server-side OTP via SMS (Fast2SMS API) on all platforms, Firebase Admin for token verification
+- **Auth**: Firebase Phone Auth (reCAPTCHA) on web + Android WebView, server-side OTP (Fast2SMS) as fallback, Firebase Admin for token verification
 - **Payments**: Razorpay (web: checkout.js, Android: WebView-based checkout)
 - **State**: React Query for server state, React Context for auth
 - **Security**: Rate limiting on auth endpoints (20 req/15min), single-device session enforcement
 
 ## Key Features
-- Phone OTP login via server-side SMS (Fast2SMS; single-device enforcement, new login auto-logouts previous)
+- Phone OTP login via Firebase Phone Auth (web: reCAPTCHA, Android: WebView with reCAPTCHA), Fast2SMS as fallback; single-device enforcement
 - Course management with sections/folders, video lectures (YouTube), PDFs
 - Razorpay payment gateway for paid course enrollment
 - OMR-style test engine with negative marking and detailed results
@@ -32,8 +32,9 @@ A comprehensive math education mobile app (Expo/React Native) with Express backe
 
 ## Important Files
 - `app/(tabs)/` - Main tab screens (Home, Daily Mission, Test Series, AI Tutor)
-- `app/(auth)/login.tsx` - Phone login with server-side OTP
-- `app/(auth)/otp.tsx` - OTP verification (server-side)
+- `app/(auth)/login.tsx` - Phone login with Firebase reCAPTCHA (web) / WebView (Android), server OTP fallback
+- `app/(auth)/otp.tsx` - OTP verification (Firebase or server-side)
+- `server/templates/firebase-phone-auth.html` - Firebase Phone Auth WebView page for Android
 - `app/material/[id].tsx` - In-app material viewer (WebView for Android, iframe for web)
 - `app/course/[id].tsx` - Course detail with Lectures/Tests/Materials/Live tabs + Razorpay enrollment
 - `app/admin/index.tsx` - Admin dashboard (Courses, Tests, Missions, Users, Notify tabs)

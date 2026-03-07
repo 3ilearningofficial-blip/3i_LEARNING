@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Verify</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: linear-gradient(135deg, #0A1628 0%, #1A2E50 50%, #0A1628 100%);
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+}
+.container {
+  text-align: center;
+  padding: 24px;
+  max-width: 400px;
+  width: 100%;
+}
+.title {
+  font-size: 20px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+.subtitle {
+  font-size: 14px;
+  color: rgba(255,255,255,0.6);
+  margin-bottom: 24px;
+}
+#recaptcha-box {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 20px;
+}
+.status {
+  font-size: 14px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  margin-top: 16px;
+}
+.status.loading {
+  background: rgba(26,86,219,0.2);
+  color: #93b4f4;
+}
+.status.success {
+  background: rgba(16,185,129,0.2);
+  color: #6ee7b7;
+}
+.status.error {
+  background: rgba(239,68,68,0.2);
+  color: #fca5a5;
+}
+.spinner {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  border: 2px solid rgba(255,255,255,0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  vertical-align: middle;
+  margin-right: 8px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="title">Verify to continue</div>
+  <div class="subtitle">Complete the verification below</div>
+  <div id="recaptcha-box"></div>
+  <div id="status"></div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script>
+(function() {
+  var params = new URLSearchParams(window.location.search);
+  var phone = params.get('phone');
+  var apiKey = params.get('apiKey');
+  var projectId = params.get('projectId');
+  var statusEl = document.getElementById('status');
+
+  function setStatus(msg, type) {
+    statusEl.className = 'status ' + type;
+    statusEl.innerHTML = (type === 'loading' ? '<span class="spinner"></span>' : '') + msg;
+  }
+
+  function postMsg(data) {
+    if (window.ReactNativeWebView) {
+      window.ReactNativeWebView.postMessage(JSON.stringify(data));
+    }
+  }
+
+  if (!phone || !apiKey || !projectId) {
+    setStatus('Missing parameters', 'error');
+    postMsg({ type: 'error', message: 'Missing parameters' });
+    return;
+  }
+
+  firebase.initializeApp({
+    apiKey: apiKey,
+    projectId: projectId,
+    authDomain: projectId + '.firebaseapp.com'
+  });
+
+  var auth = firebase.auth();
+
+  setStatus('Loading verification...', 'loading');
+
+  window.recaptchaVerifier = new firebase.auth.RecaptchaVerifier('recaptcha-box', {
+    size: 'normal',
+    callback: function() {
+      setStatus('Sending OTP...', 'loading');
+    },
+    'expired-callback': function() {
+      setStatus('Verification expired. Please try again.', 'error');
+    }
+  });
+
+  window.recaptchaVerifier.render().then(function() {
+    setStatus('Please complete the verification above', 'loading');
+  }).catch(function(err) {
+    setStatus('Failed to load verification', 'error');
+    postMsg({ type: 'error', message: err.message || 'reCAPTCHA failed' });
+  });
+
+  auth.languageCode = 'en';
+
+  var originalConfirm;
+  var observer = new MutationObserver(function() {
+    if (window.recaptchaVerifier && document.querySelector('.rc-anchor-normal-footer')) {
+      observer.disconnect();
+    }
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+
+  var interval = setInterval(function() {
+    var badge = document.querySelector('[data-sitekey]');
+    if (badge) {
+      clearInterval(interval);
+    }
+  }, 500);
+
+  window.recaptchaVerifier.verify && window.recaptchaVerifier.verify();
+
+  var checkRecaptcha = setInterval(function() {
+    var response = window.recaptchaVerifier && grecaptcha && grecaptcha.getResponse(window.recaptchaVerifier._widgetId);
+    if (response) {
+      clearInterval(checkRecaptcha);
+      sendOTP();
+    }
+  }, 1000);
+
+  function sendOTP() {
+    setStatus('Sending OTP to +91' + phone + '...', 'loading');
+    auth.signInWithPhoneNumber('+91' + phone, window.recaptchaVerifier)
+      .then(function(confirmationResult) {
+        setStatus('OTP sent successfully!', 'success');
+        postMsg({
+          type: 'otp-sent',
+          verificationId: confirmationResult.verificationId
+        });
+        window._confirmationResult = confirmationResult;
+
+        window.verifyOTP = function(code) {
+          setStatus('Verifying...', 'loading');
+          confirmationResult.confirm(code).then(function(result) {
+            return result.user.getIdToken();
+          }).then(function(idToken) {
+            setStatus('Verified!', 'success');
+            postMsg({ type: 'verified', idToken: idToken });
+          }).catch(function(err) {
+            setStatus('Invalid OTP. Try again.', 'error');
+            postMsg({ type: 'verify-error', message: err.message, code: err.code });
+          });
+        };
+      })
+      .catch(function(err) {
+        setStatus('Failed to send OTP: ' + (err.message || 'Unknown error'), 'error');
+        postMsg({ type: 'error', message: err.message, code: err.code });
+      });
+  }
+})();
+</script>
+</body>
+</html>
