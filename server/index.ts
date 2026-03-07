@@ -181,11 +181,15 @@ function configureExpoAndLanding(app: express.Application) {
     }
 
     if (req.path === "/app" || req.path.startsWith("/app/")) {
-      const indexPath = path.resolve(process.cwd(), "static-build", "web", "index.html");
-      if (fs.existsSync(indexPath)) {
-        return res.sendFile(indexPath);
+      const webBuildPath = path.resolve(process.cwd(), "static-build", "web", "index.html");
+      if (fs.existsSync(webBuildPath)) {
+        return res.sendFile(webBuildPath);
       }
-      return next();
+      const forwardedProto = req.header("x-forwarded-proto");
+      const protocol = forwardedProto || req.protocol || "https";
+      const forwardedHost = req.header("x-forwarded-host");
+      const host = forwardedHost || req.get("host");
+      return res.redirect(`${protocol}://${host}/`);
     }
 
     if (req.path !== "/" && req.path !== "/manifest") {
