@@ -82,6 +82,7 @@ interface NewQuestion {
 interface NewMaterial {
   title: string; description: string; fileUrl: string;
   fileType: string; isFree: boolean; sectionTitle: string;
+  downloadAllowed: boolean;
 }
 
 interface NewLiveClass {
@@ -99,7 +100,7 @@ const ADMIN_COURSE_TABS: { key: AdminCourseTab; label: string; icon: keyof typeo
 const emptyLecture: NewLecture = { title: "", description: "", videoUrl: "", videoType: "youtube", durationMinutes: "0", orderIndex: "0", isFreePreview: false, sectionTitle: "" };
 const emptyTest: NewTestForm = { title: "", description: "", durationMinutes: "60", totalMarks: "100", passingMarks: "35", testType: "practice" };
 const emptyQuestion: NewQuestion = { questionText: "", optionA: "", optionB: "", optionC: "", optionD: "", correctOption: "A", explanation: "", topic: "", marks: "4", negativeMarks: "1" };
-const emptyMaterial: NewMaterial = { title: "", description: "", fileUrl: "", fileType: "pdf", isFree: false, sectionTitle: "" };
+const emptyMaterial: NewMaterial = { title: "", description: "", fileUrl: "", fileType: "pdf", isFree: false, sectionTitle: "", downloadAllowed: false };
 const emptyLiveClass: NewLiveClass = { title: "", description: "", youtubeUrl: "", scheduledAt: "", isLive: false };
 
 export default function AdminCourseScreen() {
@@ -650,6 +651,10 @@ export default function AdminCourseScreen() {
               <View style={styles.formField}>
                 <Text style={styles.formLabel}>Free for all students (not just enrolled)</Text>
                 <Switch value={newMaterial.isFree} onValueChange={(v) => setNewMaterial(p => ({ ...p, isFree: v }))} trackColor={{ false: Colors.light.border, true: Colors.light.primary }} thumbColor="#fff" />
+              </View>
+              <View style={styles.formField}>
+                <Text style={styles.formLabel}>Allow Download</Text>
+                <Switch value={newMaterial.downloadAllowed} onValueChange={(v) => setNewMaterial(p => ({ ...p, downloadAllowed: v }))} trackColor={{ false: Colors.light.border, true: "#22C55E" }} thumbColor="#fff" />
               </View>
             </ScrollView>
             <ActionButton label="Add Material" onPress={() => addMaterialMutation.mutate(newMaterial)} disabled={!newMaterial.title} loading={addMaterialMutation.isPending} />

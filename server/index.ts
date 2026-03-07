@@ -1,6 +1,8 @@
 import express from "express";
 import type { Request, Response, NextFunction } from "express";
 import session from "express-session";
+import connectPgSimple from "connect-pg-simple";
+import rateLimit from "express-rate-limit";
 import { registerRoutes } from "./routes";
 import * as fs from "fs";
 import * as path from "path";
@@ -233,8 +235,15 @@ function setupErrorHandler(app: express.Application) {
 
   const isProduction = process.env.NODE_ENV === "production";
   app.set("trust proxy", 1);
+
+  const PgSession = connectPgSimple(session);
   app.use(
     session({
+      store: new PgSession({
+        conString: process.env.DATABASE_URL,
+        tableName: "session",
+        createTableIfMissing: true,
+      }),
       secret: process.env.SESSION_SECRET || "3ilearning-secret-2024",
       resave: false,
       saveUninitialized: false,
@@ -246,6 +255,16 @@ function setupErrorHandler(app: express.Application) {
       },
     })
   );
+
+  const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 20,
+    message: { message: "Too many requests, please try again later" },
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+  app.use("/api/auth/send-otp", authLimiter);
+  app.use("/api/auth/verify-otp", authLimiter);
 
   configureExpoAndLanding(app);
 

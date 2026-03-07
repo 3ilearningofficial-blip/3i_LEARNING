@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable,
-  Platform, ActivityIndicator, Alert,
+  Platform, ActivityIndicator, Alert, FlatList,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
@@ -26,13 +26,23 @@ interface DailyMission {
   description: string;
   questions: MissionQuestion[];
   xp_reward: number;
+  mission_type: string;
   isCompleted?: boolean;
   userScore?: number;
+  isAccessible?: boolean;
 }
+
+const TABS = [
+  { key: "all", label: "All" },
+  { key: "daily_drill", label: "Daily Drill" },
+  { key: "free_practice", label: "Free Practice" },
+];
 
 export default function DailyMissionScreen() {
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
+  const [activeTab, setActiveTab] = useState("all");
+  const [activeMission, setActiveMission] = useState<DailyMission | null>(null);
   const [currentQ, setCurrentQ] = useState(0);
   const [selectedAnswers, setSelectedAnswers] = useState<Record<number, string>>({});
   const [isSubmitted, setIsSubmitted] = useState(false);
@@ -42,11 +52,11 @@ export default function DailyMissionScreen() {
   const topPadding = Platform.OS === "web" ? 67 : insets.top;
   const bottomPadding = Platform.OS === "web" ? 34 : insets.bottom;
 
-  const { data: mission, isLoading } = useQuery<DailyMission | null>({
-    queryKey: ["/api/daily-mission"],
+  const { data: missions = [], isLoading } = useQuery<DailyMission[]>({
+    queryKey: ["/api/daily-missions", activeTab],
     queryFn: async () => {
       const baseUrl = getApiUrl();
-      const url = new URL("/api/daily-mission", baseUrl);
+      const url = new URL(`/api/daily-missions?type=${activeTab}`, baseUrl);
       const res = await fetch(url.toString(), { credentials: "include" });
       return res.json();
     },
@@ -57,11 +67,9 @@ export default function DailyMissionScreen() {
       await apiRequest("POST", `/api/daily-mission/${missionId}/complete`, { score });
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/daily-mission"] });
+      qc.invalidateQueries({ queryKey: ["/api/daily-missions"] });
     },
   });
-
-  const questions: MissionQuestion[] = mission?.questions || [];
 
   const handleSelectAnswer = (questionId: number, option: string) => {
     if (isSubmitted) return;
@@ -70,6 +78,7 @@ export default function DailyMissionScreen() {
   };
 
   const handleNext = () => {
+    const questions = activeMission?.questions || [];
     if (currentQ < questions.length - 1) setCurrentQ((prev) => prev + 1);
   };
 
@@ -78,7 +87,8 @@ export default function DailyMissionScreen() {
   };
 
   const handleSubmit = async () => {
-    if (!mission) return;
+    if (!activeMission) return;
+    const questions = activeMission.questions || [];
     const answeredCount = Object.keys(selectedAnswers).length;
     if (answeredCount < questions.length) {
       Alert.alert("Incomplete", `You have answered ${answeredCount} of ${questions.length} questions. Submit anyway?`, [
@@ -91,49 +101,51 @@ export default function DailyMissionScreen() {
   };
 
   const submitMission = () => {
-    if (!mission) return;
+    if (!activeMission) return;
+    const questions = activeMission.questions || [];
     let correct = 0;
     questions.forEach((q) => {
-      const userAns = selectedAnswers[q.id];
-      const correctAns = q.correct;
-      if (userAns === correctAns) correct++;
+      if (selectedAnswers[q.id] === q.correct) correct++;
     });
     setScore(correct);
     setIsSubmitted(true);
-    completeMutation.mutate({ missionId: mission.id, score: correct });
+    completeMutation.mutate({ missionId: activeMission.id, score: correct });
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   };
 
-  if (isLoading) {
-    return (
-      <View style={[styles.centered, { paddingTop: topPadding }]}>
-        <ActivityIndicator size="large" color={Colors.light.primary} />
-      </View>
-    );
-  }
+  const resetMission = () => {
+    setActiveMission(null);
+    setCurrentQ(0);
+    setSelectedAnswers({});
+    setIsSubmitted(false);
+    setScore(0);
+    setHasStarted(false);
+  };
 
-  if (!mission) {
-    return (
-      <View style={[styles.container, { paddingTop: topPadding }]}>
-        <LinearGradient colors={["#0A1628", "#1A2E50"]} style={styles.headerGradient}>
-          <Text style={styles.headerTitle}>Daily Mission</Text>
-          <Text style={styles.headerSub}>Your daily challenge</Text>
-        </LinearGradient>
-        <View style={styles.emptyState}>
-          <Ionicons name="flame-outline" size={60} color={Colors.light.textMuted} />
-          <Text style={styles.emptyTitle}>No Mission Today</Text>
-          <Text style={styles.emptySubtitle}>Check back tomorrow for your daily mission!</Text>
-        </View>
-      </View>
-    );
-  }
+  const startMission = (mission: DailyMission) => {
+    if (!mission.isAccessible) {
+      Alert.alert("Locked", "Purchase a course to access this mission.");
+      return;
+    }
+    setActiveMission(mission);
+    setCurrentQ(0);
+    setSelectedAnswers({});
+    setIsSubmitted(false);
+    setScore(0);
+    setHasStarted(false);
+  };
 
-  if (mission.isCompleted || isSubmitted) {
-    const finalScore = isSubmitted ? score : (mission.userScore || 0);
+  if (activeMission && (isSubmitted || activeMission.isCompleted)) {
+    const questions = activeMission.questions || [];
+    const finalScore = isSubmitted ? score : (activeMission.userScore || 0);
     const total = questions.length;
     const pct = total > 0 ? Math.round((finalScore / total) * 100) : 0;
     return (
       <ScrollView style={styles.container} contentContainerStyle={[styles.resultContent, { paddingTop: topPadding + 20, paddingBottom: bottomPadding + 100 }]}>
+        <Pressable onPress={resetMission} style={styles.backRow}>
+          <Ionicons name="arrow-back" size={20} color={Colors.light.primary} />
+          <Text style={styles.backText}>Back to Missions</Text>
+        </Pressable>
         <LinearGradient colors={pct >= 60 ? ["#22C55E", "#16A34A"] : ["#F59E0B", "#D97706"]} style={styles.resultCard}>
           <MaterialCommunityIcons name={pct >= 60 ? "trophy" : "emoticon-sad-outline"} size={56} color="#fff" />
           <Text style={styles.resultTitle}>{pct >= 60 ? "Mission Complete!" : "Good Try!"}</Text>
@@ -141,10 +153,9 @@ export default function DailyMissionScreen() {
           <Text style={styles.resultPct}>{pct}% correct</Text>
           <View style={styles.xpBadge}>
             <Ionicons name="star" size={16} color="#F59E0B" />
-            <Text style={styles.xpText}>+{pct >= 60 ? mission.xp_reward : Math.round(mission.xp_reward * 0.5)} XP earned</Text>
+            <Text style={styles.xpText}>+{pct >= 60 ? activeMission.xp_reward : Math.round(activeMission.xp_reward * 0.5)} XP earned</Text>
           </View>
         </LinearGradient>
-
         {isSubmitted && (
           <View style={styles.reviewSection}>
             <Text style={styles.reviewTitle}>Review Answers</Text>
@@ -170,13 +181,86 @@ export default function DailyMissionScreen() {
     );
   }
 
-  if (!hasStarted) {
+  if (activeMission && hasStarted) {
+    const questions = activeMission.questions || [];
+    const q = questions[currentQ];
+    const OPTIONS = ["A", "B", "C", "D"];
+    return (
+      <View style={[styles.container, { paddingBottom: bottomPadding + 80 }]}>
+        <LinearGradient colors={["#0A1628", "#1A2E50"]} style={[styles.quizHeader, { paddingTop: topPadding + 8 }]}>
+          <View style={styles.quizHeaderTop}>
+            <Pressable onPress={resetMission} hitSlop={10}>
+              <Ionicons name="arrow-back" size={22} color="#fff" />
+            </Pressable>
+            <Text style={styles.quizCounter}>{currentQ + 1}/{questions.length}</Text>
+            <Text style={styles.quizTopic}>{q?.topic}</Text>
+            <Text style={styles.quizXP}>{activeMission.xp_reward} XP</Text>
+          </View>
+          <View style={styles.quizProgress}>
+            {questions.map((_, i) => (
+              <View key={i} style={[styles.quizProgressDot, i === currentQ && styles.quizProgressDotActive, i < currentQ && styles.quizProgressDotDone, selectedAnswers[questions[i].id] ? styles.quizProgressDotAnswered : null]} />
+            ))}
+          </View>
+        </LinearGradient>
+        <ScrollView style={styles.quizContent} contentContainerStyle={styles.quizContentInner} keyboardShouldPersistTaps="handled">
+          <View style={styles.questionCard}>
+            <Text style={styles.questionText}>{q?.question}</Text>
+          </View>
+          <View style={styles.optionsList}>
+            {q?.options.map((opt, optIdx) => {
+              const letter = OPTIONS[optIdx];
+              const isSelected = selectedAnswers[q.id] === letter;
+              return (
+                <Pressable
+                  key={letter}
+                  style={({ pressed }) => [styles.option, isSelected && styles.optionSelected, pressed && !isSelected && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
+                  onPress={() => handleSelectAnswer(q.id, letter)}
+                >
+                  <View style={[styles.optionBullet, isSelected && styles.optionBulletSelected]}>
+                    <Text style={[styles.optionBulletText, isSelected && styles.optionBulletTextSelected]}>{letter}</Text>
+                  </View>
+                  <Text style={[styles.optionText, isSelected && styles.optionTextSelected]}>{opt}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </ScrollView>
+        <View style={[styles.quizActions, { paddingBottom: bottomPadding + 16 }]}>
+          <Pressable style={[styles.navBtn, currentQ === 0 && styles.navBtnDisabled]} onPress={handlePrev} disabled={currentQ === 0}>
+            <Ionicons name="chevron-back" size={20} color={currentQ === 0 ? Colors.light.textMuted : Colors.light.primary} />
+          </Pressable>
+          {currentQ === questions.length - 1 ? (
+            <Pressable style={styles.submitBtn} onPress={handleSubmit}>
+              <LinearGradient colors={["#22C55E", "#16A34A"]} style={styles.submitBtnGradient}>
+                <Text style={styles.submitBtnText}>Submit</Text>
+                <Ionicons name="checkmark-circle" size={20} color="#fff" />
+              </LinearGradient>
+            </Pressable>
+          ) : (
+            <Pressable style={styles.nextBtn} onPress={handleNext}>
+              <LinearGradient colors={[Colors.light.primary, Colors.light.primaryDark]} style={styles.nextBtnGradient}>
+                <Text style={styles.nextBtnText}>Next</Text>
+                <Ionicons name="chevron-forward" size={20} color="#fff" />
+              </LinearGradient>
+            </Pressable>
+          )}
+        </View>
+      </View>
+    );
+  }
+
+  if (activeMission && !hasStarted) {
+    const questions = activeMission.questions || [];
     return (
       <ScrollView style={styles.container} contentContainerStyle={[styles.startContent, { paddingTop: topPadding + 20, paddingBottom: bottomPadding + 100 }]}>
+        <Pressable onPress={resetMission} style={styles.backRow}>
+          <Ionicons name="arrow-back" size={20} color={Colors.light.primary} />
+          <Text style={styles.backText}>Back to Missions</Text>
+        </Pressable>
         <LinearGradient colors={["#F59E0B", "#EF4444"]} style={styles.missionCard}>
           <Ionicons name="flame" size={48} color="#fff" />
-          <Text style={styles.missionCardTitle}>{mission.title}</Text>
-          <Text style={styles.missionCardDesc}>{mission.description}</Text>
+          <Text style={styles.missionCardTitle}>{activeMission.title}</Text>
+          <Text style={styles.missionCardDesc}>{activeMission.description}</Text>
           <View style={styles.missionStats}>
             <View style={styles.missionStat}>
               <Ionicons name="help-circle" size={20} color="#fff" />
@@ -184,7 +268,7 @@ export default function DailyMissionScreen() {
             </View>
             <View style={styles.missionStat}>
               <Ionicons name="star" size={20} color="#fff" />
-              <Text style={styles.missionStatText}>{mission.xp_reward} XP</Text>
+              <Text style={styles.missionStatText}>{activeMission.xp_reward} XP</Text>
             </View>
           </View>
         </LinearGradient>
@@ -198,69 +282,87 @@ export default function DailyMissionScreen() {
     );
   }
 
-  const q = questions[currentQ];
-  const OPTIONS = ["A", "B", "C", "D"];
-
   return (
-    <View style={[styles.container, { paddingBottom: bottomPadding + 80 }]}>
-      <LinearGradient colors={["#0A1628", "#1A2E50"]} style={[styles.quizHeader, { paddingTop: topPadding + 8 }]}>
-        <View style={styles.quizHeaderTop}>
-          <Text style={styles.quizCounter}>{currentQ + 1}/{questions.length}</Text>
-          <Text style={styles.quizTopic}>{q.topic}</Text>
-          <Text style={styles.quizXP}>{mission.xp_reward} XP</Text>
-        </View>
-        <View style={styles.quizProgress}>
-          {questions.map((_, i) => (
-            <View key={i} style={[styles.quizProgressDot, i === currentQ && styles.quizProgressDotActive, i < currentQ && styles.quizProgressDotDone, selectedAnswers[questions[i].id] ? styles.quizProgressDotAnswered : null]} />
-          ))}
-        </View>
+    <View style={[styles.container, { paddingTop: topPadding }]}>
+      <LinearGradient colors={["#0A1628", "#1A2E50"]} style={styles.headerGradient}>
+        <Text style={styles.headerTitle}>Daily Missions</Text>
+        <Text style={styles.headerSub}>Practice and earn XP every day</Text>
       </LinearGradient>
 
-      <ScrollView style={styles.quizContent} contentContainerStyle={styles.quizContentInner} keyboardShouldPersistTaps="handled">
-        <View style={styles.questionCard}>
-          <Text style={styles.questionText}>{q.question}</Text>
-        </View>
+      <View style={styles.tabsRow}>
+        {TABS.map((tab) => (
+          <Pressable
+            key={tab.key}
+            style={[styles.tab, activeTab === tab.key && styles.tabActive]}
+            onPress={() => setActiveTab(tab.key)}
+          >
+            <Text style={[styles.tabText, activeTab === tab.key && styles.tabTextActive]}>{tab.label}</Text>
+          </Pressable>
+        ))}
+      </View>
 
-        <View style={styles.optionsList}>
-          {q.options.map((opt, optIdx) => {
-            const letter = OPTIONS[optIdx];
-            const isSelected = selectedAnswers[q.id] === letter;
+      {isLoading ? (
+        <View style={styles.centered}>
+          <ActivityIndicator size="large" color={Colors.light.primary} />
+        </View>
+      ) : missions.length === 0 ? (
+        <View style={styles.emptyState}>
+          <Ionicons name="flame-outline" size={60} color={Colors.light.textMuted} />
+          <Text style={styles.emptyTitle}>No Missions Available</Text>
+          <Text style={styles.emptySubtitle}>Check back later for new practice missions!</Text>
+        </View>
+      ) : (
+        <FlatList
+          data={missions}
+          keyExtractor={(item) => String(item.id)}
+          contentContainerStyle={{ padding: 16, paddingBottom: bottomPadding + 100, gap: 12 }}
+          scrollEnabled={missions.length > 0}
+          renderItem={({ item }) => {
+            const qCount = Array.isArray(item.questions) ? item.questions.length : 0;
+            const isLocked = !item.isAccessible;
+            const typeLabel = item.mission_type === "free_practice" ? "Free" : "Premium";
+            const typeColor = item.mission_type === "free_practice" ? "#22C55E" : "#F59E0B";
             return (
               <Pressable
-                key={letter}
-                style={({ pressed }) => [styles.option, isSelected && styles.optionSelected, pressed && !isSelected && { opacity: 0.85, transform: [{ scale: 0.98 }] }]}
-                onPress={() => handleSelectAnswer(q.id, letter)}
+                style={[styles.missionListCard, isLocked && styles.missionLocked]}
+                onPress={() => startMission(item)}
               >
-                <View style={[styles.optionBullet, isSelected && styles.optionBulletSelected]}>
-                  <Text style={[styles.optionBulletText, isSelected && styles.optionBulletTextSelected]}>{letter}</Text>
+                <View style={styles.missionListTop}>
+                  <View style={[styles.typeBadge, { backgroundColor: typeColor + "20" }]}>
+                    <Text style={[styles.typeBadgeText, { color: typeColor }]}>{typeLabel}</Text>
+                  </View>
+                  {item.isCompleted && (
+                    <View style={styles.completedBadge}>
+                      <Ionicons name="checkmark-circle" size={16} color="#22C55E" />
+                      <Text style={styles.completedText}>Done</Text>
+                    </View>
+                  )}
+                  {isLocked && (
+                    <Ionicons name="lock-closed" size={18} color={Colors.light.textMuted} />
+                  )}
                 </View>
-                <Text style={[styles.optionText, isSelected && styles.optionTextSelected]}>{opt}</Text>
+                <Text style={styles.missionListTitle}>{item.title}</Text>
+                {item.description ? <Text style={styles.missionListDesc} numberOfLines={2}>{item.description}</Text> : null}
+                <View style={styles.missionListFooter}>
+                  <View style={styles.missionListStat}>
+                    <Ionicons name="help-circle-outline" size={14} color={Colors.light.textMuted} />
+                    <Text style={styles.missionListStatText}>{qCount} Qs</Text>
+                  </View>
+                  <View style={styles.missionListStat}>
+                    <Ionicons name="star-outline" size={14} color="#F59E0B" />
+                    <Text style={styles.missionListStatText}>{item.xp_reward} XP</Text>
+                  </View>
+                  {item.isCompleted && item.userScore !== undefined && (
+                    <View style={styles.missionListStat}>
+                      <Text style={styles.missionListStatText}>Score: {item.userScore}/{qCount}</Text>
+                    </View>
+                  )}
+                </View>
               </Pressable>
             );
-          })}
-        </View>
-      </ScrollView>
-
-      <View style={[styles.quizActions, { paddingBottom: bottomPadding + 16 }]}>
-        <Pressable style={[styles.navBtn, currentQ === 0 && styles.navBtnDisabled]} onPress={handlePrev} disabled={currentQ === 0}>
-          <Ionicons name="chevron-back" size={20} color={currentQ === 0 ? Colors.light.textMuted : Colors.light.primary} />
-        </Pressable>
-        {currentQ === questions.length - 1 ? (
-          <Pressable style={styles.submitBtn} onPress={handleSubmit}>
-            <LinearGradient colors={["#22C55E", "#16A34A"]} style={styles.submitBtnGradient}>
-              <Text style={styles.submitBtnText}>Submit</Text>
-              <Ionicons name="checkmark-circle" size={20} color="#fff" />
-            </LinearGradient>
-          </Pressable>
-        ) : (
-          <Pressable style={styles.nextBtn} onPress={handleNext}>
-            <LinearGradient colors={[Colors.light.primary, Colors.light.primaryDark]} style={styles.nextBtnGradient}>
-              <Text style={styles.nextBtnText}>Next</Text>
-              <Ionicons name="chevron-forward" size={20} color="#fff" />
-            </LinearGradient>
-          </Pressable>
-        )}
-      </View>
+          }}
+        />
+      )}
     </View>
   );
 }
@@ -268,12 +370,31 @@ export default function DailyMissionScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.light.background },
   centered: { flex: 1, alignItems: "center", justifyContent: "center" },
-  headerGradient: { paddingHorizontal: 20, paddingBottom: 20, gap: 4 },
+  headerGradient: { paddingHorizontal: 20, paddingVertical: 16, gap: 4 },
   headerTitle: { fontSize: 24, fontFamily: "Inter_700Bold", color: "#fff" },
   headerSub: { fontSize: 13, color: "rgba(255,255,255,0.6)", fontFamily: "Inter_400Regular" },
+  tabsRow: { flexDirection: "row", paddingHorizontal: 16, paddingVertical: 10, gap: 8 },
+  tab: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, backgroundColor: Colors.light.background, borderWidth: 1, borderColor: Colors.light.border },
+  tabActive: { backgroundColor: Colors.light.primary, borderColor: Colors.light.primary },
+  tabText: { fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary },
+  tabTextActive: { color: "#fff" },
   emptyState: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12, padding: 40 },
   emptyTitle: { fontSize: 20, fontFamily: "Inter_700Bold", color: Colors.light.text },
   emptySubtitle: { fontSize: 14, color: Colors.light.textMuted, textAlign: "center", fontFamily: "Inter_400Regular" },
+  missionListCard: { backgroundColor: "#fff", borderRadius: 16, padding: 16, gap: 8, borderWidth: 1, borderColor: Colors.light.border },
+  missionLocked: { opacity: 0.6 },
+  missionListTop: { flexDirection: "row", alignItems: "center", gap: 8 },
+  typeBadge: { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
+  typeBadgeText: { fontSize: 11, fontFamily: "Inter_600SemiBold" },
+  completedBadge: { flexDirection: "row", alignItems: "center", gap: 4, marginLeft: "auto" },
+  completedText: { fontSize: 12, color: "#22C55E", fontFamily: "Inter_500Medium" },
+  missionListTitle: { fontSize: 16, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
+  missionListDesc: { fontSize: 13, color: Colors.light.textSecondary, fontFamily: "Inter_400Regular" },
+  missionListFooter: { flexDirection: "row", gap: 16, marginTop: 4 },
+  missionListStat: { flexDirection: "row", alignItems: "center", gap: 4 },
+  missionListStatText: { fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_500Medium" },
+  backRow: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 8 },
+  backText: { fontSize: 14, color: Colors.light.primary, fontFamily: "Inter_500Medium" },
   startContent: { padding: 20, gap: 20, alignItems: "stretch" },
   resultContent: { padding: 20, gap: 20 },
   missionCard: { borderRadius: 24, padding: 28, alignItems: "center", gap: 12 },
@@ -286,9 +407,9 @@ const styles = StyleSheet.create({
   startBtnGradient: { flexDirection: "row", alignItems: "center", justifyContent: "center", paddingVertical: 16, gap: 8 },
   startBtnText: { fontSize: 16, fontFamily: "Inter_600SemiBold", color: "#fff" },
   quizHeader: { paddingHorizontal: 20, paddingBottom: 16 },
-  quizHeaderTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 },
+  quizHeaderTop: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 12 },
   quizCounter: { fontSize: 15, fontFamily: "Inter_700Bold", color: "#fff" },
-  quizTopic: { fontSize: 12, color: "rgba(255,255,255,0.7)", fontFamily: "Inter_500Medium" },
+  quizTopic: { fontSize: 12, color: "rgba(255,255,255,0.7)", fontFamily: "Inter_500Medium", flex: 1 },
   quizXP: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: "#F59E0B" },
   quizProgress: { flexDirection: "row", gap: 6 },
   quizProgressDot: { flex: 1, height: 4, borderRadius: 2, backgroundColor: "rgba(255,255,255,0.2)" },

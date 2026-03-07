@@ -382,7 +382,9 @@ export default function CourseDetailScreen() {
                 <Text style={styles.emptyText}>No materials available</Text>
               </View>
             ) : (
-              course.materials.map((mat) => (
+              course.materials.map((mat) => {
+                const canAccess = mat.is_free || isEnrolled;
+                return (
                 <React.Fragment key={mat.id}>
                   {mat.section_title && (
                     <View style={styles.sectionHeader}>
@@ -391,24 +393,36 @@ export default function CourseDetailScreen() {
                     </View>
                   )}
                   <Pressable
-                    style={({ pressed }) => [styles.materialItem, pressed && { opacity: 0.85 }]}
-                    onPress={() => mat.file_url ? Linking.openURL(mat.file_url) : null}
+                    style={({ pressed }) => [styles.materialItem, pressed && { opacity: 0.85 }, !canAccess && { opacity: 0.5 }]}
+                    onPress={() => {
+                      if (!canAccess) { Alert.alert("Locked", "Enroll in this course to access materials."); return; }
+                      if (!mat.file_url) return;
+                      if (mat.download_allowed) {
+                        Linking.openURL(mat.file_url);
+                      } else {
+                        const viewUrl = mat.file_type === "pdf"
+                          ? `https://docs.google.com/gview?embedded=true&url=${encodeURIComponent(mat.file_url)}`
+                          : mat.file_url;
+                        Linking.openURL(viewUrl);
+                      }
+                    }}
                   >
                     <View style={styles.materialIcon}>
                       <Ionicons
-                        name={mat.file_type === "video" ? "videocam" : mat.file_type === "link" ? "link" : "document-text"}
-                        size={22} color="#DC2626"
+                        name={!canAccess ? "lock-closed" : mat.file_type === "video" ? "videocam" : mat.file_type === "link" ? "link" : "document-text"}
+                        size={22} color={!canAccess ? Colors.light.textMuted : "#DC2626"}
                       />
                     </View>
                     <View style={styles.materialInfo}>
                       <Text style={styles.materialTitle}>{mat.title}</Text>
                       {mat.description && <Text style={styles.materialDesc} numberOfLines={1}>{mat.description}</Text>}
-                      <Text style={styles.materialType}>{(mat.file_type || "pdf").toUpperCase()}</Text>
+                      <Text style={styles.materialType}>{(mat.file_type || "pdf").toUpperCase()}{mat.download_allowed ? "" : " · View Only"}</Text>
                     </View>
-                    <Ionicons name="download-outline" size={20} color={Colors.light.primary} />
+                    <Ionicons name={mat.download_allowed ? "download-outline" : "eye-outline"} size={20} color={Colors.light.primary} />
                   </Pressable>
                 </React.Fragment>
-              ))
+                );
+              })
             )}
           </View>
         )}

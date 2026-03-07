@@ -34,11 +34,12 @@ interface UserRecord {
   created_at: number;
 }
 
-type AdminTab = "courses" | "tests" | "users" | "notifications";
+type AdminTab = "courses" | "tests" | "users" | "notifications" | "missions";
 
 const ADMIN_TABS: { key: AdminTab; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
   { key: "courses", label: "Courses", icon: "book" },
   { key: "tests", label: "Tests", icon: "document-text" },
+  { key: "missions", label: "Missions", icon: "flame" },
   { key: "users", label: "Users", icon: "people" },
   { key: "notifications", label: "Notify", icon: "notifications" },
 ];
@@ -57,6 +58,13 @@ export default function AdminDashboard() {
   const [showNotification, setShowNotification] = useState(false);
   const [notifTitle, setNotifTitle] = useState("");
   const [notifMessage, setNotifMessage] = useState("");
+  const [showAddMission, setShowAddMission] = useState(false);
+  const [missionTitle, setMissionTitle] = useState("");
+  const [missionDesc, setMissionDesc] = useState("");
+  const [missionType, setMissionType] = useState<"daily_drill" | "free_practice">("free_practice");
+  const [missionXP, setMissionXP] = useState("50");
+  const [missionQuestions, setMissionQuestions] = useState<{ question: string; options: string[]; correct: string; topic: string }[]>([]);
+  const [missionCourseId, setMissionCourseId] = useState<number | null>(null);
 
   const [newCourse, setNewCourse] = useState<NewCourse>({
     title: "", description: "", teacherName: "3i Learning",
@@ -100,6 +108,45 @@ export default function AdminDashboard() {
       return res.json();
     },
     enabled: activeTab === "users",
+  });
+
+  const { data: adminMissions = [], isLoading: missionsLoading } = useQuery<any[]>({
+    queryKey: ["/api/admin/daily-missions"],
+    queryFn: async () => {
+      const baseUrl = getApiUrl();
+      const url = new URL("/api/admin/daily-missions", baseUrl);
+      const res = await fetch(url.toString(), { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: activeTab === "missions",
+  });
+
+  const addMissionMutation = useMutation({
+    mutationFn: async (data: any) => {
+      const res = await apiRequest("POST", "/api/admin/daily-missions", data);
+      return res.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/admin/daily-missions"] });
+      setShowAddMission(false);
+      setMissionTitle(""); setMissionDesc(""); setMissionQuestions([]);
+      setMissionXP("50"); setMissionType("free_practice"); setMissionCourseId(null);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Alert.alert("Success", "Mission created!");
+    },
+    onError: () => Alert.alert("Error", "Failed to create mission"),
+  });
+
+  const deleteMissionMutation = useMutation({
+    mutationFn: async (id: number) => {
+      await apiRequest("DELETE", `/api/admin/daily-missions/${id}`);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/admin/daily-missions"] });
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    },
+    onError: () => Alert.alert("Error", "Failed to delete mission"),
   });
 
   const addCourseMutation = useMutation({
@@ -327,7 +374,154 @@ export default function AdminDashboard() {
             ))}
           </View>
         )}
+
+        {activeTab === "missions" && (
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Daily Missions ({adminMissions.length})</Text>
+              <Pressable style={styles.addBtn} onPress={() => setShowAddMission(true)}>
+                <Ionicons name="add" size={18} color="#fff" />
+                <Text style={styles.addBtnText}>Add Mission</Text>
+              </Pressable>
+            </View>
+            {missionsLoading ? (
+              <ActivityIndicator size="large" color={Colors.light.primary} style={{ marginTop: 20 }} />
+            ) : adminMissions.length === 0 ? (
+              <View style={styles.infoCard}>
+                <Ionicons name="flame-outline" size={20} color={Colors.light.primary} />
+                <Text style={styles.infoText}>No missions yet. Create daily drill or free practice missions with questions for students.</Text>
+              </View>
+            ) : (
+              adminMissions.map((m: any) => {
+                const qCount = Array.isArray(m.questions) ? m.questions.length : 0;
+                return (
+                  <View key={m.id} style={styles.adminCard}>
+                    <View style={styles.adminCardContent}>
+                      <View style={styles.adminCardRow}>
+                        <Text style={styles.adminCardTitle} numberOfLines={2}>{m.title}</Text>
+                        <View style={[styles.typeBadge, { backgroundColor: m.mission_type === "free_practice" ? "#22C55E20" : "#F59E0B20" }]}>
+                          <Text style={{ fontSize: 10, fontFamily: "Inter_600SemiBold", color: m.mission_type === "free_practice" ? "#22C55E" : "#F59E0B" }}>
+                            {m.mission_type === "free_practice" ? "Free" : "Drill"}
+                          </Text>
+                        </View>
+                      </View>
+                      <View style={styles.adminCardMeta}>
+                        <Text style={styles.adminCardMetaText}>{qCount} questions</Text>
+                        <Text style={styles.adminCardMetaText}>|</Text>
+                        <Text style={styles.adminCardMetaText}>{m.xp_reward} XP</Text>
+                        <Text style={styles.adminCardMetaText}>|</Text>
+                        <Text style={styles.adminCardMetaText}>{m.mission_date}</Text>
+                      </View>
+                    </View>
+                    <Pressable style={styles.deleteBtn} onPress={() => {
+                      Alert.alert("Delete Mission", `Delete "${m.title}"?`, [
+                        { text: "Cancel", style: "cancel" },
+                        { text: "Delete", style: "destructive", onPress: () => deleteMissionMutation.mutate(m.id) },
+                      ]);
+                    }}>
+                      <Ionicons name="trash-outline" size={18} color="#EF4444" />
+                    </Pressable>
+                  </View>
+                );
+              })
+            )}
+          </View>
+        )}
       </ScrollView>
+
+      <Modal visible={showAddMission} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Add Mission</Text>
+              <Pressable onPress={() => setShowAddMission(false)}>
+                <Ionicons name="close" size={24} color={Colors.light.text} />
+              </Pressable>
+            </View>
+            <ScrollView style={styles.modalScroll}>
+              <View style={styles.formField}>
+                <Text style={styles.formLabel}>Mission Title *</Text>
+                <TextInput style={styles.formInput} placeholder="e.g., Algebra Practice" placeholderTextColor={Colors.light.textMuted} value={missionTitle} onChangeText={setMissionTitle} />
+              </View>
+              <View style={styles.formField}>
+                <Text style={styles.formLabel}>Description</Text>
+                <TextInput style={[styles.formInput, styles.formInputMulti]} placeholder="Mission description..." placeholderTextColor={Colors.light.textMuted} value={missionDesc} onChangeText={setMissionDesc} multiline numberOfLines={2} />
+              </View>
+              <View style={styles.formField}>
+                <Text style={styles.formLabel}>Type</Text>
+                <View style={{ flexDirection: "row", gap: 8 }}>
+                  {[{ key: "free_practice", label: "Free Practice" }, { key: "daily_drill", label: "Daily Drill" }].map((t) => (
+                    <Pressable key={t.key} style={[styles.typeSelectBtn, missionType === t.key && styles.typeSelectActive]} onPress={() => setMissionType(t.key as any)}>
+                      <Text style={[styles.typeSelectText, missionType === t.key && styles.typeSelectTextActive]}>{t.label}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </View>
+              <View style={styles.formField}>
+                <Text style={styles.formLabel}>XP Reward</Text>
+                <TextInput style={styles.formInput} placeholder="50" placeholderTextColor={Colors.light.textMuted} value={missionXP} onChangeText={setMissionXP} keyboardType="numeric" />
+              </View>
+              {missionType === "daily_drill" && (
+                <View style={styles.formField}>
+                  <Text style={styles.formLabel}>Linked Course (optional)</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 4 }}>
+                    <View style={{ flexDirection: "row", gap: 6 }}>
+                      <Pressable style={[styles.typeSelectBtn, { flex: 0, paddingHorizontal: 12 }, !missionCourseId && styles.typeSelectActive]} onPress={() => setMissionCourseId(null)}>
+                        <Text style={[styles.typeSelectText, !missionCourseId && styles.typeSelectTextActive]}>Any Course</Text>
+                      </Pressable>
+                      {courses.map((c) => (
+                        <Pressable key={c.id} style={[styles.typeSelectBtn, { flex: 0, paddingHorizontal: 12 }, missionCourseId === c.id && styles.typeSelectActive]} onPress={() => setMissionCourseId(c.id)}>
+                          <Text style={[styles.typeSelectText, missionCourseId === c.id && styles.typeSelectTextActive]} numberOfLines={1}>{c.title}</Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  </ScrollView>
+                </View>
+              )}
+              <View style={styles.formField}>
+                <Text style={styles.formLabel}>Questions ({missionQuestions.length})</Text>
+                {missionQuestions.map((q, idx) => (
+                  <View key={idx} style={styles.missionQCard}>
+                    <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                      <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>Q{idx + 1}</Text>
+                      <Pressable onPress={() => setMissionQuestions((prev) => prev.filter((_, i) => i !== idx))}>
+                        <Ionicons name="close-circle" size={20} color="#EF4444" />
+                      </Pressable>
+                    </View>
+                    <TextInput style={styles.formInput} placeholder="Question text" placeholderTextColor={Colors.light.textMuted} value={q.question} onChangeText={(v) => { const nq = [...missionQuestions]; nq[idx] = { ...nq[idx], question: v }; setMissionQuestions(nq); }} />
+                    {["A", "B", "C", "D"].map((letter, optIdx) => (
+                      <View key={letter} style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4 }}>
+                        <Pressable onPress={() => { const nq = [...missionQuestions]; nq[idx] = { ...nq[idx], correct: letter }; setMissionQuestions(nq); }}
+                          style={{ width: 24, height: 24, borderRadius: 12, borderWidth: 2, borderColor: q.correct === letter ? "#22C55E" : Colors.light.border, backgroundColor: q.correct === letter ? "#22C55E" : "transparent", alignItems: "center", justifyContent: "center" }}>
+                          {q.correct === letter && <Ionicons name="checkmark" size={14} color="#fff" />}
+                        </Pressable>
+                        <TextInput style={[styles.formInput, { flex: 1, paddingVertical: 6 }]} placeholder={`Option ${letter}`} placeholderTextColor={Colors.light.textMuted} value={q.options[optIdx]}
+                          onChangeText={(v) => { const nq = [...missionQuestions]; const opts = [...nq[idx].options]; opts[optIdx] = v; nq[idx] = { ...nq[idx], options: opts }; setMissionQuestions(nq); }} />
+                      </View>
+                    ))}
+                    <TextInput style={[styles.formInput, { marginTop: 4 }]} placeholder="Topic (e.g., Algebra)" placeholderTextColor={Colors.light.textMuted} value={q.topic} onChangeText={(v) => { const nq = [...missionQuestions]; nq[idx] = { ...nq[idx], topic: v }; setMissionQuestions(nq); }} />
+                  </View>
+                ))}
+                <Pressable style={styles.addQBtn} onPress={() => setMissionQuestions((prev) => [...prev, { question: "", options: ["", "", "", ""], correct: "A", topic: "" }])}>
+                  <Ionicons name="add-circle-outline" size={18} color={Colors.light.primary} />
+                  <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>Add Question</Text>
+                </Pressable>
+              </View>
+            </ScrollView>
+            <Pressable
+              style={[styles.createBtn, (!missionTitle || missionQuestions.length === 0) && styles.createBtnDisabled]}
+              disabled={!missionTitle || missionQuestions.length === 0 || addMissionMutation.isPending}
+              onPress={() => {
+                const questions = missionQuestions.map((q, i) => ({ id: i + 1, ...q }));
+                addMissionMutation.mutate({ title: missionTitle, description: missionDesc, questions, xpReward: parseInt(missionXP) || 50, missionType, missionDate: new Date().toISOString().split("T")[0], courseId: missionCourseId });
+              }}>
+              <LinearGradient colors={[Colors.light.primary, Colors.light.primaryDark]} style={styles.createBtnGrad}>
+                {addMissionMutation.isPending ? <ActivityIndicator color="#fff" /> : <Text style={styles.createBtnText}>Create Mission</Text>}
+              </LinearGradient>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
 
       <Modal visible={showAddCourse} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
@@ -466,4 +660,11 @@ const styles = StyleSheet.create({
   createBtnDisabled: { opacity: 0.5 },
   createBtnGrad: { paddingVertical: 14, alignItems: "center" },
   createBtnText: { fontSize: 15, fontFamily: "Inter_600SemiBold", color: "#fff" },
+  typeBadge: { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
+  typeSelectBtn: { flex: 1, borderRadius: 10, padding: 10, borderWidth: 1, borderColor: Colors.light.border, alignItems: "center" },
+  typeSelectActive: { borderColor: Colors.light.primary, backgroundColor: Colors.light.secondary },
+  typeSelectText: { fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary },
+  typeSelectTextActive: { color: Colors.light.primary, fontFamily: "Inter_600SemiBold" },
+  missionQCard: { backgroundColor: Colors.light.background, borderRadius: 12, padding: 12, gap: 6, marginTop: 8, borderWidth: 1, borderColor: Colors.light.border },
+  addQBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 12, marginTop: 8, borderRadius: 10, borderWidth: 1, borderColor: Colors.light.primary, borderStyle: "dashed" },
 });

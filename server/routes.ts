@@ -16,8 +16,8 @@ function generateOTP(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-const ADMIN_EMAILS = ["admin@3ilearning.com"];
-const ADMIN_PHONES = ["9999999999"];
+const ADMIN_EMAILS = ["3ilearningofficial@gmail.com"];
+const ADMIN_PHONES = ["9997198068"];
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // ==================== AUTH ROUTES ====================
@@ -75,7 +75,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (user.otp !== otp) return res.status(400).json({ message: "Invalid OTP" });
       if (Date.now() > user.otp_expires_at) return res.status(400).json({ message: "OTP expired" });
 
-      await db.query("UPDATE users SET otp = NULL, otp_expires_at = NULL, device_id = $1 WHERE id = $2", [deviceId || null, user.id]);
+      const sessionToken = Date.now().toString(36) + Math.random().toString(36).substr(2, 12);
+      await db.query("UPDATE users SET otp = NULL, otp_expires_at = NULL, device_id = $1, session_token = $2 WHERE id = $3", [deviceId || null, sessionToken, user.id]);
 
       const sessionUser = {
         id: user.id,
@@ -84,6 +85,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         phone: user.phone,
         role: user.role,
         deviceId: deviceId,
+        sessionToken: sessionToken,
       };
       (req.session as Record<string, unknown>).user = sessionUser;
       res.json({ success: true, user: sessionUser });
@@ -94,8 +96,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/auth/me", async (req: Request, res: Response) => {
-    const user = (req.session as Record<string, unknown>).user;
+    const user = (req.session as Record<string, unknown>).user as { id: number; sessionToken?: string } | undefined;
     if (!user) return res.status(401).json({ message: "Not authenticated" });
+    if (user.sessionToken) {
+      const dbUser = await db.query("SELECT session_token FROM users WHERE id = $1", [user.id]);
+      if (dbUser.rows.length > 0 && dbUser.rows[0].session_token !== user.sessionToken) {
+        (req.session as Record<string, unknown>).user = null;
+        return res.status(401).json({ message: "logged_in_elsewhere" });
+      }
+    }
     res.json(user);
   });
 
@@ -385,10 +394,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ==================== DAILY MISSION ROUTES ====================
+  app.get("/api/daily-missions", async (req: Request, res: Response) => {
+    try {
+      const user = (req.session as Record<string, unknown>).user as { id: number } | undefined;
+      const { type } = req.query;
+      let query = "SELECT * FROM daily_missions WHERE mission_date <= CURRENT_DATE";
+      const params: unknown[] = [];
+      if (type && type !== "all") {
+        params.push(type);
+        query += ` AND mission_type = $${params.length}`;
+      }
+      query += " ORDER BY mission_date DESC LIMIT 20";
+      const result = await db.query(query, params);
+      
+      if (user) {
+        const userEnrollments = await db.query("SELECT course_id FROM enrollments WHERE user_id = $1", [user.id]);
+        const enrolledCourseIds = new Set(userEnrollments.rows.map((e: { course_id: number }) => e.course_id));
+        
+        for (const mission of result.rows) {
+          const um = await db.query("SELECT * FROM user_missions WHERE user_id = $1 AND mission_id = $2", [user.id, mission.id]);
+          mission.isCompleted = um.rows.length > 0 && um.rows[0].is_completed;
+          mission.userScore = um.rows[0]?.score || 0;
+          mission.isAccessible = mission.mission_type === "free_practice" || (mission.course_id ? enrolledCourseIds.has(mission.course_id) : enrolledCourseIds.size > 0);
+        }
+      } else {
+        for (const mission of result.rows) {
+          mission.isAccessible = mission.mission_type === "free_practice";
+        }
+      }
+      res.json(result.rows);
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ message: "Failed to fetch daily missions" });
+    }
+  });
+
   app.get("/api/daily-mission", async (req: Request, res: Response) => {
     try {
       const user = (req.session as Record<string, unknown>).user as { id: number } | undefined;
-      const result = await db.query("SELECT * FROM daily_missions WHERE mission_date = CURRENT_DATE LIMIT 1");
+      const result = await db.query("SELECT * FROM daily_missions WHERE mission_date = CURRENT_DATE AND mission_type = 'daily_drill' LIMIT 1");
       if (result.rows.length === 0) return res.json(null);
       const mission = result.rows[0];
       if (user) {
@@ -764,11 +808,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/admin/study-materials", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { title, description, fileUrl, fileType, courseId, isFree, sectionTitle } = req.body;
+      const { title, description, fileUrl, fileType, courseId, isFree, sectionTitle, downloadAllowed } = req.body;
       const result = await db.query(
-        `INSERT INTO study_materials (title, description, file_url, file_type, course_id, is_free, section_title, created_at) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-        [title, description, fileUrl, fileType || "pdf", courseId || null, isFree !== false, sectionTitle || null, Date.now()]
+        `INSERT INTO study_materials (title, description, file_url, file_type, course_id, is_free, section_title, download_allowed, created_at) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+        [title, description, fileUrl, fileType || "pdf", courseId || null, isFree !== false, sectionTitle || null, downloadAllowed || false, Date.now()]
       );
       res.json(result.rows[0]);
     } catch (err) {
@@ -841,6 +885,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ message: "Failed to delete test" });
+    }
+  });
+
+  app.post("/api/admin/daily-missions", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const { title, description, questions, missionDate, xpReward, missionType, courseId } = req.body;
+      if (!title || !questions || !Array.isArray(questions) || questions.length === 0) {
+        return res.status(400).json({ message: "Title and questions are required" });
+      }
+      const result = await db.query(
+        `INSERT INTO daily_missions (title, description, questions, mission_date, xp_reward, mission_type, course_id) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+        [title, description || "", JSON.stringify(questions), missionDate || new Date().toISOString().split("T")[0], xpReward || 50, missionType || "daily_drill", courseId || null]
+      );
+      res.json(result.rows[0]);
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ message: "Failed to create daily mission" });
+    }
+  });
+
+  app.delete("/api/admin/daily-missions/:id", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      await db.query("DELETE FROM daily_missions WHERE id = $1", [req.params.id]);
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ message: "Failed to delete mission" });
+    }
+  });
+
+  app.get("/api/admin/daily-missions", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const result = await db.query("SELECT * FROM daily_missions ORDER BY mission_date DESC LIMIT 50");
+      res.json(result.rows);
+    } catch (err) {
+      res.status(500).json({ message: "Failed to fetch missions" });
     }
   });
 

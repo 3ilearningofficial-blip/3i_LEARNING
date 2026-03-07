@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode, useMemo } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Alert } from "react-native";
 import { apiRequest, getApiUrl } from "@/lib/query-client";
 import { fetch } from "expo/fetch";
 
@@ -10,6 +11,7 @@ interface AuthUser {
   phone?: string;
   role: "student" | "admin";
   deviceId?: string;
+  sessionToken?: string;
 }
 
 interface AuthContextValue {
@@ -37,6 +39,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(data);
         await AsyncStorage.setItem("user", JSON.stringify(data));
       } else {
+        const errorData = await res.json().catch(() => null);
+        if (errorData?.message === "logged_in_elsewhere") {
+          Alert.alert(
+            "Session Expired",
+            "Your account has been logged in on another device. You have been logged out.",
+            [{ text: "OK" }]
+          );
+        }
         setUser(null);
         await AsyncStorage.removeItem("user");
       }

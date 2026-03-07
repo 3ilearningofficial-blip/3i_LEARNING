@@ -7,6 +7,7 @@ export const users = pgTable("users", {
   phone: text("phone").unique(),
   role: text("role").notNull().default("student"),
   deviceId: text("device_id"),
+  sessionToken: text("session_token"),
   otp: text("otp"),
   otpExpiresAt: bigint("otp_expires_at", { mode: "number" }),
   createdAt: bigint("created_at", { mode: "number" }),
@@ -74,6 +75,7 @@ export const studyMaterials = pgTable("study_materials", {
   courseId: integer("course_id"),
   isFree: boolean("is_free").default(true),
   sectionTitle: text("section_title"),
+  downloadAllowed: boolean("download_allowed").default(false),
   createdAt: bigint("created_at", { mode: "number" }),
 });
 
@@ -129,6 +131,8 @@ export const dailyMissions = pgTable("daily_missions", {
   questions: jsonb("questions").default([]),
   missionDate: date("mission_date"),
   xpReward: integer("xp_reward").default(50),
+  missionType: text("mission_type").default("daily_drill"),
+  courseId: integer("course_id"),
 });
 
 export const userMissions = pgTable("user_missions", {
