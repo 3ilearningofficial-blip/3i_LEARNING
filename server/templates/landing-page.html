@@ -1,447 +1,366 @@
 <!doctype html>
-<html>
+<html lang="en">
   <head>
-    <title>APP_NAME_PLACEHOLDER</title>
+    <title>APP_NAME_PLACEHOLDER - Math Education Platform</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="3i Learning - Comprehensive math education platform with courses, tests, daily missions, and AI tutoring by expert teachers." />
+    <meta name="theme-color" content="#1A56DB" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
     <style>
-      * {
-        box-sizing: border-box;
-      }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
       body {
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        margin: 0;
-        padding: 32px 20px;
-        text-align: center;
-        background: #fff;
-        color: #222;
-        line-height: 1.5;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #0A1628;
+        color: #fff;
         min-height: 100vh;
+        overflow-x: hidden;
       }
-      .wrapper {
-        max-width: 480px;
-        margin: 0 auto;
-      }
-      h1 {
-        font-size: 26px;
-        font-weight: 600;
-        margin: 0;
-        color: #111;
-      }
-      .subtitle {
-        font-size: 15px;
-        color: #666;
-        margin-top: 8px;
-        margin-bottom: 32px;
-      }
-      .loading {
-        display: none;
-        margin: 60px 0;
-      }
-      .spinner {
-        border: 2px solid #ddd;
-        border-top-color: #333;
-        border-radius: 50%;
-        width: 32px;
-        height: 32px;
-        animation: spin 0.8s linear infinite;
-        margin: 20px auto;
-      }
-      @keyframes spin {
-        to {
-          transform: rotate(360deg);
-        }
-      }
-      .loading-text {
-        font-size: 16px;
-        color: #444;
-      }
-      .content {
-        display: block;
-      }
-
-      .steps-container {
-        display: flex;
-        flex-direction: column;
-        gap: 20px;
-      }
-
-      .step {
-        padding: 24px;
-        border: 1px solid #ddd;
-        border-radius: 12px;
+      .hero {
+        position: relative;
+        padding: 60px 20px 40px;
         text-align: center;
-        background: #fafafa;
+        background: linear-gradient(135deg, #0A1628 0%, #1A2E50 50%, #1A56DB 100%);
+        overflow: hidden;
       }
-      .step-header {
-        display: flex;
+      .hero::before {
+        content: '';
+        position: absolute;
+        top: -50%;
+        right: -30%;
+        width: 500px;
+        height: 500px;
+        background: radial-gradient(circle, rgba(26,86,219,0.3) 0%, transparent 70%);
+        border-radius: 50%;
+      }
+      .hero::after {
+        content: '';
+        position: absolute;
+        bottom: -40%;
+        left: -20%;
+        width: 400px;
+        height: 400px;
+        background: radial-gradient(circle, rgba(255,107,53,0.15) 0%, transparent 70%);
+        border-radius: 50%;
+      }
+      .hero-content { position: relative; z-index: 1; max-width: 800px; margin: 0 auto; }
+      .logo-badge {
+        display: inline-flex;
         align-items: center;
-        justify-content: center;
         gap: 10px;
-        margin-bottom: 12px;
+        background: rgba(255,255,255,0.1);
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255,255,255,0.15);
+        border-radius: 50px;
+        padding: 8px 20px 8px 8px;
+        margin-bottom: 24px;
       }
-      .step-number {
-        width: 28px;
-        height: 28px;
-        border: 1px solid #999;
+      .logo-icon {
+        width: 36px;
+        height: 36px;
+        background: linear-gradient(135deg, #1A56DB, #3B82F6);
         border-radius: 50%;
         display: flex;
         align-items: center;
         justify-content: center;
-        font-weight: 600;
+        font-weight: 800;
         font-size: 14px;
-        flex-shrink: 0;
-        color: #555;
+        color: #fff;
       }
-      .step-title {
-        font-size: 18px;
-        font-weight: 600;
-        margin: 0;
-        color: #222;
-      }
-      .step-description {
-        font-size: 14px;
+      .logo-text { font-size: 15px; font-weight: 600; color: #fff; }
+      h1 {
+        font-size: 40px;
+        font-weight: 800;
+        line-height: 1.15;
         margin-bottom: 16px;
-        color: #666;
+        background: linear-gradient(to right, #fff, #a0c4ff);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
       }
-
-      .store-buttons {
+      .hero-sub {
+        font-size: 17px;
+        color: rgba(255,255,255,0.7);
+        max-width: 480px;
+        margin: 0 auto 32px;
+        line-height: 1.6;
+      }
+      .cta-row {
         display: flex;
-        flex-direction: column;
-        gap: 6px;
+        gap: 12px;
         justify-content: center;
         flex-wrap: wrap;
+        margin-bottom: 40px;
       }
+      .cta-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 14px 28px;
+        font-size: 15px;
+        font-weight: 600;
+        border-radius: 12px;
+        text-decoration: none;
+        transition: transform 0.15s, box-shadow 0.15s;
+        cursor: pointer;
+        border: none;
+      }
+      .cta-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.3); }
+      .cta-primary {
+        background: linear-gradient(135deg, #FF6B35, #EF4444);
+        color: #fff;
+      }
+      .cta-secondary {
+        background: rgba(255,255,255,0.1);
+        border: 1px solid rgba(255,255,255,0.2);
+        color: #fff;
+        backdrop-filter: blur(10px);
+      }
+      .features {
+        padding: 60px 20px;
+        background: #0D1B2A;
+      }
+      .features-grid {
+        max-width: 900px;
+        margin: 0 auto;
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 16px;
+      }
+      .feature-card {
+        background: rgba(255,255,255,0.05);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 16px;
+        padding: 24px;
+        transition: transform 0.2s;
+      }
+      .feature-card:hover { transform: translateY(-2px); }
+      .feature-icon {
+        width: 44px;
+        height: 44px;
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 20px;
+        margin-bottom: 14px;
+      }
+      .feature-title { font-size: 16px; font-weight: 700; margin-bottom: 6px; color: #fff; }
+      .feature-desc { font-size: 13px; color: rgba(255,255,255,0.6); line-height: 1.5; }
+      .download-section {
+        padding: 60px 20px;
+        background: #0A1628;
+        text-align: center;
+      }
+      .download-title { font-size: 28px; font-weight: 800; margin-bottom: 8px; }
+      .download-sub { font-size: 15px; color: rgba(255,255,255,0.6); margin-bottom: 32px; }
+      .download-cards {
+        max-width: 700px;
+        margin: 0 auto;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+      .download-card {
+        background: rgba(255,255,255,0.05);
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 16px;
+        padding: 28px;
+        text-align: center;
+      }
+      .store-buttons { display: flex; flex-direction: column; gap: 10px; }
       .store-button {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        gap: 8px;
-        padding: 12px 20px;
-        font-size: 14px;
-        font-weight: 500;
-        border: 1px solid #ccc;
-        border-radius: 8px;
+        gap: 10px;
+        padding: 14px 24px;
+        font-size: 15px;
+        font-weight: 600;
+        border: 1px solid rgba(255,255,255,0.2);
+        border-radius: 12px;
         text-decoration: none;
-        color: #333;
-        background: #fff;
+        color: #fff;
+        background: rgba(255,255,255,0.08);
         transition: all 0.15s;
       }
-      .store-button:hover {
-        background: #f5f5f5;
-        border-color: #999;
-      }
-      .store-link {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        gap: 6px;
-        padding: 8px 0;
-        font-size: 13px;
-        font-weight: 400;
-        text-decoration: underline;
-        text-underline-offset: 2px;
-        color: #666;
-        background: none;
-        border: none;
-        transition: color 0.15s;
-      }
-      .store-link:hover {
-        color: #333;
-      }
-      .store-link .store-icon {
-        width: 14px;
-        height: 14px;
-      }
-      .store-icon {
-        width: 18px;
-        height: 18px;
-      }
-
-      .qr-section {
-        background: #333;
-        color: #fff;
-        border-color: #333;
-      }
-      .qr-section .step-number {
-        border-color: rgba(255, 255, 255, 0.5);
-        color: #fff;
-      }
-      .qr-section .step-title {
-        color: #fff;
-      }
-      .qr-section .step-description {
-        color: rgba(255, 255, 255, 0.7);
-      }
+      .store-button:hover { background: rgba(255,255,255,0.15); }
+      .store-icon { width: 20px; height: 20px; }
+      .qr-section { background: #fff; color: #0A1628; border-color: transparent; }
+      .qr-section .download-card-title { color: #0A1628; }
+      .qr-section .download-card-desc { color: #5A6A85; }
+      .download-card-title { font-size: 18px; font-weight: 700; margin-bottom: 6px; color: #fff; }
+      .download-card-desc { font-size: 13px; color: rgba(255,255,255,0.6); margin-bottom: 20px; }
       .qr-code {
         width: 180px;
         height: 180px;
         margin: 0 auto 16px;
         background: #fff;
-        border-radius: 8px;
+        border-radius: 12px;
         padding: 12px;
       }
-      .qr-code canvas {
-        width: 100%;
-        height: 100%;
-      }
+      .qr-code canvas { width: 100%; height: 100%; }
       .open-button {
         display: inline-block;
         padding: 12px 24px;
         font-size: 14px;
-        font-weight: 500;
-        border: 1px solid rgba(255, 255, 255, 0.3);
-        border-radius: 8px;
+        font-weight: 600;
+        border-radius: 10px;
         text-decoration: none;
-        color: #333;
-        background: #fff;
+        color: #fff;
+        background: linear-gradient(135deg, #1A56DB, #3B82F6);
         transition: opacity 0.15s;
       }
-      .open-button:hover {
-        opacity: 0.9;
+      .open-button:hover { opacity: 0.9; }
+      .footer {
+        padding: 32px 20px;
+        text-align: center;
+        background: #060E1A;
+        border-top: 1px solid rgba(255,255,255,0.05);
       }
-
-      /* Desktop styles */
-      @media (min-width: 768px) {
-        body {
-          padding: 48px 32px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-        }
-        .wrapper {
-          max-width: 720px;
-        }
-        h1 {
-          font-size: 32px;
-          margin-bottom: 10px;
-        }
-        .subtitle {
-          font-size: 16px;
-          margin-bottom: 40px;
-        }
-        .steps-container {
-          flex-direction: row;
-          gap: 20px;
-          align-items: stretch;
-        }
-        .step {
-          flex: 1;
-          display: flex;
-          flex-direction: column;
-          padding: 28px;
-        }
-        .step-description {
-          flex-grow: 1;
-        }
-        .store-buttons {
-          flex-direction: column;
-          gap: 10px;
-        }
-        .qr-code {
-          width: 200px;
-          height: 200px;
-        }
+      .footer-text { font-size: 13px; color: rgba(255,255,255,0.4); }
+      .loading { display: none; padding: 100px 20px; text-align: center; }
+      .spinner {
+        border: 3px solid rgba(255,255,255,0.2);
+        border-top-color: #3B82F6;
+        border-radius: 50%;
+        width: 40px;
+        height: 40px;
+        animation: spin 0.8s linear infinite;
+        margin: 20px auto;
       }
-
-      /* Large desktop */
+      @keyframes spin { to { transform: rotate(360deg); } }
+      .loading-text { font-size: 16px; color: rgba(255,255,255,0.7); }
+      .content { display: block; }
+      @media (min-width: 640px) {
+        .features-grid { grid-template-columns: 1fr 1fr; }
+        .download-cards { flex-direction: row; }
+        .download-card { flex: 1; }
+        h1 { font-size: 48px; }
+      }
       @media (min-width: 1024px) {
-        .wrapper {
-          max-width: 800px;
-        }
-        h1 {
-          font-size: 36px;
-        }
-        .steps-container {
-          gap: 28px;
-        }
-        .step {
-          padding: 32px;
-        }
-      }
-
-      /* Dark mode */
-      @media (prefers-color-scheme: dark) {
-        body {
-          background: #0d0d0d;
-          color: #e0e0e0;
-        }
-        h1 {
-          color: #f5f5f5;
-        }
-        .subtitle {
-          color: #999;
-        }
-        .spinner {
-          border-color: #444;
-          border-top-color: #ccc;
-        }
-        .loading-text {
-          color: #aaa;
-        }
-        .step {
-          border-color: #333;
-          background: #1a1a1a;
-        }
-        .step-number {
-          border-color: #666;
-          color: #bbb;
-        }
-        .step-title {
-          color: #f0f0f0;
-        }
-        .step-description {
-          color: #888;
-        }
-        .store-button {
-          border-color: #444;
-          color: #e0e0e0;
-          background: #222;
-        }
-        .store-button:hover {
-          background: #2a2a2a;
-          border-color: #666;
-        }
-        .store-link {
-          color: #888;
-        }
-        .store-link:hover {
-          color: #ccc;
-        }
-        .qr-section {
-          background: #111;
-          border-color: #333;
-        }
-        .qr-section .step-number {
-          border-color: rgba(255, 255, 255, 0.4);
-        }
-        .qr-section .step-description {
-          color: rgba(255, 255, 255, 0.6);
-        }
-        .open-button {
-          background: #f0f0f0;
-          color: #111;
-        }
-        .open-button:hover {
-          background: #e0e0e0;
-        }
+        .features-grid { grid-template-columns: repeat(3, 1fr); }
+        .hero { padding: 80px 40px 60px; }
       }
     </style>
   </head>
   <body>
-    <div class="wrapper">
-      <div class="loading" id="loading">
-        <div class="spinner"></div>
-        <div class="loading-text">Opening in Expo Go...</div>
-      </div>
+    <div class="loading" id="loading">
+      <div class="spinner"></div>
+      <div class="loading-text">Opening in Expo Go...</div>
+    </div>
 
-      <div class="content" id="content">
-        <h1>APP_NAME_PLACEHOLDER</h1>
-        <p class="subtitle">Preview this app on your phone</p>
-
-        <div class="steps-container">
-          <div class="step">
-            <div class="step-header">
-              <div class="step-number">1</div>
-              <h2 class="step-title">Download Expo Go</h2>
-            </div>
-            <p class="step-description">
-              Expo Go is a free app to test mobile apps
-            </p>
-            <div class="store-buttons" id="store-buttons">
-              <a
-                id="app-store-btn"
-                href="https://apps.apple.com/app/id982107779"
-                class="store-button"
-                target="_blank"
-              >
-                <svg class="store-icon" viewBox="0 0 24 24" fill="currentColor">
-                  <path
-                    d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"
-                  />
-                </svg>
-                App Store
-              </a>
-              <a
-                id="play-store-btn"
-                href="https://play.google.com/store/apps/details?id=host.exp.exponent"
-                class="store-button"
-                target="_blank"
-              >
-                <svg class="store-icon" viewBox="0 0 24 24" fill="currentColor">
-                  <path
-                    d="M3,20.5V3.5C3,2.91 3.34,2.39 3.84,2.15L13.69,12L3.84,21.85C3.34,21.6 3,21.09 3,20.5M16.81,15.12L6.05,21.34L14.54,12.85L16.81,15.12M20.16,10.81C20.5,11.08 20.75,11.5 20.75,12C20.75,12.5 20.53,12.9 20.18,13.18L17.89,14.5L15.39,12L17.89,9.5L20.16,10.81M6.05,2.66L16.81,8.88L14.54,11.15L6.05,2.66Z"
-                  />
-                </svg>
-                Google Play
-              </a>
-            </div>
+    <div class="content" id="content">
+      <section class="hero">
+        <div class="hero-content">
+          <div class="logo-badge">
+            <div class="logo-icon">3i</div>
+            <span class="logo-text">APP_NAME_PLACEHOLDER</span>
           </div>
-
-          <div class="step qr-section">
-            <div class="step-header">
-              <div class="step-number">2</div>
-              <h2 class="step-title">Scan QR Code</h2>
-            </div>
-            <p class="step-description">Use your phone's camera or Expo Go</p>
-            <div class="qr-code" id="qr-code"></div>
-            <a href="exps://EXPS_URL_PLACEHOLDER" class="open-button"
-              >Open in Expo Go</a
-            >
+          <h1>Master Mathematics with Expert Guidance</h1>
+          <p class="hero-sub">Courses, live classes, OMR-style tests, daily missions, and AI tutoring — everything you need to ace your exams.</p>
+          <div class="cta-row">
+            <a href="#download" class="cta-btn cta-primary">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              Download App
+            </a>
+            <a href="BASE_URL_PLACEHOLDER" class="cta-btn cta-secondary">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+              Open on Web
+            </a>
           </div>
         </div>
-      </div>
+      </section>
+
+      <section class="features">
+        <div class="features-grid">
+          <div class="feature-card">
+            <div class="feature-icon" style="background:rgba(26,86,219,0.15);">&#128218;</div>
+            <div class="feature-title">Video Courses</div>
+            <div class="feature-desc">Structured courses for Class 10, 12, CDS, NDA, AFCAT with YouTube lectures and PDF materials.</div>
+          </div>
+          <div class="feature-card">
+            <div class="feature-icon" style="background:rgba(255,107,53,0.15);">&#9997;&#65039;</div>
+            <div class="feature-title">OMR-Style Tests</div>
+            <div class="feature-desc">Full-length mock tests with negative marking, detailed analysis, and instant results.</div>
+          </div>
+          <div class="feature-card">
+            <div class="feature-icon" style="background:rgba(34,197,94,0.15);">&#127919;</div>
+            <div class="feature-title">Daily Missions</div>
+            <div class="feature-desc">Practice questions daily with XP rewards to build consistency and confidence.</div>
+          </div>
+          <div class="feature-card">
+            <div class="feature-icon" style="background:rgba(168,85,247,0.15);">&#129302;</div>
+            <div class="feature-title">AI Tutor</div>
+            <div class="feature-desc">Get instant help with doubts. Ask questions anytime and get step-by-step solutions.</div>
+          </div>
+          <div class="feature-card">
+            <div class="feature-icon" style="background:rgba(239,68,68,0.15);">&#128308;</div>
+            <div class="feature-title">Live Classes</div>
+            <div class="feature-desc">Join live sessions on YouTube for real-time interaction with your teacher.</div>
+          </div>
+          <div class="feature-card">
+            <div class="feature-icon" style="background:rgba(59,130,246,0.15);">&#128100;</div>
+            <div class="feature-title">Admin Dashboard</div>
+            <div class="feature-desc">Manage courses, lectures, tests, and students from a powerful admin panel.</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="download-section" id="download">
+        <h2 class="download-title">Get the App</h2>
+        <p class="download-sub">Available on Android and web</p>
+        <div class="download-cards">
+          <div class="download-card">
+            <div class="download-card-title">Download</div>
+            <div class="download-card-desc">Get the app from the Play Store or test via Expo Go</div>
+            <div class="store-buttons" id="store-buttons">
+              <a id="play-store-btn" href="https://play.google.com/store/apps/details?id=com.learning.threeI" class="store-button" target="_blank">
+                <svg class="store-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M3,20.5V3.5C3,2.91 3.34,2.39 3.84,2.15L13.69,12L3.84,21.85C3.34,21.6 3,21.09 3,20.5M16.81,15.12L6.05,21.34L14.54,12.85L16.81,15.12M20.16,10.81C20.5,11.08 20.75,11.5 20.75,12C20.75,12.5 20.53,12.9 20.18,13.18L17.89,14.5L15.39,12L17.89,9.5L20.16,10.81M6.05,2.66L16.81,8.88L14.54,11.15L6.05,2.66Z"/></svg>
+                Google Play
+              </a>
+              <a id="expo-go-btn" href="https://play.google.com/store/apps/details?id=host.exp.exponent" class="store-button" target="_blank" style="opacity:0.7;font-size:13px;">
+                <svg class="store-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+                Expo Go (Testing)
+              </a>
+            </div>
+          </div>
+          <div class="download-card qr-section">
+            <div class="download-card-title">Scan QR Code</div>
+            <div class="download-card-desc">Open with your phone camera or Expo Go</div>
+            <div class="qr-code" id="qr-code"></div>
+            <a href="exps://EXPS_URL_PLACEHOLDER" class="open-button">Open in Expo Go</a>
+          </div>
+        </div>
+      </section>
+
+      <footer class="footer">
+        <p class="footer-text">&copy; 2026 APP_NAME_PLACEHOLDER. All rights reserved.</p>
+      </footer>
     </div>
 
     <script src="https://unpkg.com/qr-code-styling@1.6.0/lib/qr-code-styling.js"></script>
     <script>
       (function () {
-        const ua = navigator.userAgent;
-        const loadingEl = document.getElementById("loading");
-        const contentEl = document.getElementById("content");
+        var ua = navigator.userAgent;
+        var loadingEl = document.getElementById("loading");
+        var contentEl = document.getElementById("content");
+        var isAndroid = /Android/i.test(ua);
+        var isIOS = /iPhone|iPad|iPod/i.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+        var deepLink = "exps://EXPS_URL_PLACEHOLDER";
 
-        const isAndroid = /Android/i.test(ua);
-        const isIOS =
-          /iPhone|iPad|iPod/i.test(ua) ||
-          (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-
-        const deepLink = "exps://EXPS_URL_PLACEHOLDER";
-
-        // Adjust store buttons based on platform
-        const appStoreBtn = document.getElementById("app-store-btn");
-        const playStoreBtn = document.getElementById("play-store-btn");
-        const storeButtonsContainer = document.getElementById("store-buttons");
-
-        if (isIOS) {
-          playStoreBtn.className = "store-link";
-          storeButtonsContainer.appendChild(playStoreBtn);
-        } else if (isAndroid) {
-          appStoreBtn.className = "store-link";
-          storeButtonsContainer.insertBefore(playStoreBtn, appStoreBtn);
-        }
-
-        const qrCode = new QRCodeStyling({
+        var qrCode = new QRCodeStyling({
           width: 400,
           height: 400,
           data: deepLink,
-          dotsOptions: {
-            color: "#333333",
-            type: "rounded",
-          },
-          backgroundOptions: {
-            color: "#ffffff",
-          },
-          cornersSquareOptions: {
-            type: "extra-rounded",
-          },
-          cornersDotOptions: {
-            type: "dot",
-          },
-          qrOptions: {
-            errorCorrectionLevel: "H",
-          },
+          dotsOptions: { color: "#1A56DB", type: "rounded" },
+          backgroundOptions: { color: "#ffffff" },
+          cornersSquareOptions: { type: "extra-rounded" },
+          cornersDotOptions: { type: "dot" },
+          qrOptions: { errorCorrectionLevel: "H" },
         });
-
         qrCode.append(document.getElementById("qr-code"));
 
         if (isAndroid || isIOS) {
