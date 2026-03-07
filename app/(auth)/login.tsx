@@ -155,16 +155,22 @@ export default function LoginScreen() {
           const recaptchaEl = document.getElementById("recaptcha-container");
           if (recaptchaEl) recaptchaEl.remove();
 
-          if (firebaseErr?.code === "auth/too-many-requests") {
+          const fbCode = firebaseErr?.code || "";
+          const fbMsg = firebaseErr?.message || "Unknown error";
+
+          if (fbCode === "auth/too-many-requests") {
             Alert.alert("Too Many Attempts", "Please wait a few minutes and try again.");
             setIsLoading(false);
             return;
           }
-          if (firebaseErr?.code === "auth/invalid-phone-number") {
+          if (fbCode === "auth/invalid-phone-number") {
             Alert.alert("Invalid Number", "Please enter a valid phone number.");
             setIsLoading(false);
             return;
           }
+
+          Alert.alert("Verification Error", `Firebase: ${fbCode || fbMsg}. Trying alternate method...`);
+
           try {
             await sendViaServer(phoneNumber);
           } catch (serverErr: any) {

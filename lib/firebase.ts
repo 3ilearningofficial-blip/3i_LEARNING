@@ -1,5 +1,5 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
-import { getAuth, RecaptchaVerifier, signInWithPhoneNumber, ConfirmationResult, Auth } from "firebase/auth";
+import { getAuth, RecaptchaVerifier, signInWithPhoneNumber, PhoneAuthProvider, signInWithCredential, ConfirmationResult, Auth } from "firebase/auth";
 import { Platform } from "react-native";
 
 const firebaseConfig = {
@@ -10,6 +10,7 @@ const firebaseConfig = {
 
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 const auth = getAuth(app);
+auth.useDeviceLanguage();
 
-export { auth, RecaptchaVerifier, signInWithPhoneNumber };
+export { auth, RecaptchaVerifier, signInWithPhoneNumber, PhoneAuthProvider, signInWithCredential };
 export type { ConfirmationResult, Auth };
