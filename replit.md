@@ -19,7 +19,9 @@ A comprehensive math education mobile app (Expo/React Native) with Express backe
 - OMR-style test engine with negative marking and detailed results
 - AI Tutor for instant doubt resolution
 - Daily missions with subsections: All, Daily Drill, Free Practice
-- Live classes (YouTube embeds)
+- Live classes (YouTube embeds) with auto-recording to lectures on end
+- Course types: Live (🔴) and Recorded (📹) with badges on cards
+- Import system: Copy lectures/tests from live courses into recorded courses
 - Admin dashboard for course/content/mission management
 - Download control per study material (admin can toggle allow/disallow)
 - Landing page at domain root for web visitors

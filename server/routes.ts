@@ -759,7 +759,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const result = await db.query(
         `INSERT INTO courses (title, description, teacher_name, price, original_price, category, is_free, level, duration_hours, course_type, subject, created_at) 
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
-        [title, description, teacherName || "3i Learning", price || 0, originalPrice || 0, category || "Mathematics", isFree || false, level || "Beginner", durationHours || 0, courseType || "standard", subject || "", Date.now()]
+        [title, description, teacherName || "3i Learning", price || 0, originalPrice || 0, category || "Mathematics", isFree || false, level || "Beginner", durationHours || 0, courseType || "live", subject || "", Date.now()]
       );
       res.json(result.rows[0]);
     } catch (err) {
@@ -770,14 +770,104 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.put("/api/admin/courses/:id", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { title, description, teacherName, price, originalPrice, category, isFree, level, durationHours, isPublished, totalTests, subject } = req.body;
+      const { title, description, teacherName, price, originalPrice, category, isFree, level, durationHours, isPublished, totalTests, subject, courseType } = req.body;
       await db.query(
-        `UPDATE courses SET title=$1, description=$2, teacher_name=$3, price=$4, original_price=$5, category=$6, is_free=$7, level=$8, duration_hours=$9, is_published=$10, total_tests=COALESCE($11, total_tests), subject=COALESCE($12, subject) WHERE id=$13`,
-        [title, description, teacherName, price, originalPrice, category, isFree, level, durationHours, isPublished, totalTests, subject, req.params.id]
+        `UPDATE courses SET title=$1, description=$2, teacher_name=$3, price=$4, original_price=$5, category=$6, is_free=$7, level=$8, duration_hours=$9, is_published=$10, total_tests=COALESCE($11, total_tests), subject=COALESCE($12, subject), course_type=COALESCE($13, course_type) WHERE id=$14`,
+        [title, description, teacherName, price, originalPrice, category, isFree, level, durationHours, isPublished, totalTests, subject, courseType, req.params.id]
       );
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ message: "Failed to update course" });
+    }
+  });
+
+  app.post("/api/admin/courses/:id/import-lectures", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const targetCourseId = req.params.id;
+      const { lectureIds, sectionTitle } = req.body;
+      if (!lectureIds || !Array.isArray(lectureIds) || lectureIds.length === 0) {
+        return res.status(400).json({ message: "No lectures selected" });
+      }
+      const maxOrder = await db.query("SELECT COALESCE(MAX(order_index), 0) + 1 as next_order FROM lectures WHERE course_id = $1", [targetCourseId]);
+      let orderIndex = maxOrder.rows[0].next_order;
+      for (const lecId of lectureIds) {
+        const lec = await db.query("SELECT * FROM lectures WHERE id = $1", [lecId]);
+        if (lec.rows.length > 0) {
+          const l = lec.rows[0];
+          await db.query(
+            `INSERT INTO lectures (course_id, title, description, video_url, video_type, duration_minutes, order_index, is_free_preview, section_title, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+            [targetCourseId, l.title, l.description || "", l.video_url, l.video_type || "youtube", l.duration_minutes || 0, orderIndex++, false, sectionTitle || l.section_title || null, Date.now()]
+          );
+        }
+      }
+      await db.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [targetCourseId]);
+      res.json({ success: true, imported: lectureIds.length });
+    } catch (err) {
+      console.error("Import lectures error:", err);
+      res.status(500).json({ message: "Failed to import lectures" });
+    }
+  });
+
+  app.post("/api/admin/courses/:id/import-tests", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const targetCourseId = req.params.id;
+      const { testIds } = req.body;
+      if (!testIds || !Array.isArray(testIds) || testIds.length === 0) {
+        return res.status(400).json({ message: "No tests selected" });
+      }
+      for (const testId of testIds) {
+        const test = await db.query("SELECT * FROM tests WHERE id = $1", [testId]);
+        if (test.rows.length > 0) {
+          const t = test.rows[0];
+          const newTest = await db.query(
+            `INSERT INTO tests (title, description, course_id, duration_minutes, total_marks, passing_marks, test_type, total_questions, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+            [t.title, t.description, targetCourseId, t.duration_minutes, t.total_marks, t.passing_marks, t.test_type, t.total_questions || 0, Date.now()]
+          );
+          const questions = await db.query("SELECT * FROM questions WHERE test_id = $1 ORDER BY order_index", [testId]);
+          for (const q of questions.rows) {
+            await db.query(
+              `INSERT INTO questions (test_id, question_text, option_a, option_b, option_c, option_d, correct_option, explanation, topic, difficulty, marks, negative_marks, order_index)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+              [newTest.rows[0].id, q.question_text, q.option_a, q.option_b, q.option_c, q.option_d, q.correct_option, q.explanation, q.topic, q.difficulty, q.marks, q.negative_marks, q.order_index]
+            );
+          }
+        }
+      }
+      await db.query("UPDATE courses SET total_tests = (SELECT COUNT(*) FROM tests WHERE course_id = $1) WHERE id = $1", [targetCourseId]);
+      res.json({ success: true, imported: testIds.length });
+    } catch (err) {
+      console.error("Import tests error:", err);
+      res.status(500).json({ message: "Failed to import tests" });
+    }
+  });
+
+  app.get("/api/admin/all-lectures", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const result = await db.query(`
+        SELECT l.*, c.title as course_title, c.course_type 
+        FROM lectures l 
+        JOIN courses c ON l.course_id = c.id 
+        ORDER BY c.title, l.order_index
+      `);
+      res.json(result.rows);
+    } catch (err) {
+      res.status(500).json({ message: "Failed to fetch lectures" });
+    }
+  });
+
+  app.get("/api/admin/all-tests", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const result = await db.query(`
+        SELECT t.*, c.title as course_title, c.course_type 
+        FROM tests t 
+        JOIN courses c ON t.course_id = c.id 
+        ORDER BY c.title, t.created_at DESC
+      `);
+      res.json(result.rows);
+    } catch (err) {
+      res.status(500).json({ message: "Failed to fetch tests" });
     }
   });
 

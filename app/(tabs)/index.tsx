@@ -32,6 +32,7 @@ interface Course {
   duration_hours: string;
   isEnrolled?: boolean;
   progress?: number;
+  course_type?: string;
 }
 
 interface StudyMaterial {
@@ -70,6 +71,11 @@ function CourseCard({ course, index }: { course: Course; index: number }) {
       <LinearGradient colors={[color, `${color}CC`]} style={styles.courseCardHeader}>
         <View style={styles.courseCardBadgeRow}>
           <View style={styles.categoryBadge}><Text style={styles.categoryBadgeText}>{course.category}</Text></View>
+          <View style={{ backgroundColor: (course.course_type || "live") === "live" ? "#EF444440" : "#8B5CF640", paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 }}>
+            <Text style={{ fontSize: 9, fontFamily: "Inter_700Bold", color: "#fff" }}>
+              {(course.course_type || "live") === "live" ? "LIVE" : "RECORDED"}
+            </Text>
+          </View>
           <View style={{ flex: 1 }} />
           {course.is_free ? (
             <View style={styles.freeBadge}><Text style={styles.freeBadgeText}>FREE</Text></View>

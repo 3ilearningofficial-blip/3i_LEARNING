@@ -23,6 +23,7 @@ interface Course {
   total_tests: number;
   is_published: boolean;
   price: string;
+  course_type?: string;
 }
 
 interface UserRecord {
@@ -47,6 +48,7 @@ const ADMIN_TABS: { key: AdminTab; label: string; icon: keyof typeof Ionicons.gl
 interface NewCourse {
   title: string; description: string; teacherName: string; price: string;
   originalPrice: string; category: string; subject: string; isFree: boolean; level: string; durationHours: string;
+  courseType: string;
 }
 
 export default function AdminDashboard() {
@@ -70,7 +72,17 @@ export default function AdminDashboard() {
     title: "", description: "", teacherName: "3i Learning",
     price: "0", originalPrice: "0", category: "Mathematics",
     subject: "", isFree: false, level: "Beginner", durationHours: "0",
+    courseType: "live",
   });
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importTargetCourseId, setImportTargetCourseId] = useState<number | null>(null);
+  const [importSourceCourseId, setImportSourceCourseId] = useState<number | null>(null);
+  const [allLectures, setAllLectures] = useState<any[]>([]);
+  const [allTests, setAllTests] = useState<any[]>([]);
+  const [selectedLectureIds, setSelectedLectureIds] = useState<number[]>([]);
+  const [selectedTestIds, setSelectedTestIds] = useState<number[]>([]);
+  const [importLoading, setImportLoading] = useState(false);
+  const [importSectionTitle, setImportSectionTitle] = useState("");
   const [showCreateTest, setShowCreateTest] = useState(false);
   const [testTitle, setTestTitle] = useState("");
   const [testDesc, setTestDesc] = useState("");
@@ -88,18 +100,6 @@ export default function AdminDashboard() {
 
   const topPadding = Platform.OS === "web" ? 67 : insets.top;
   const bottomPadding = Platform.OS === "web" ? 34 : insets.bottom;
-
-  if (!isAdmin) {
-    return (
-      <View style={styles.centered}>
-        <Ionicons name="lock-closed" size={48} color={Colors.light.textMuted} />
-        <Text style={styles.errorText}>Admin access required</Text>
-        <Pressable style={styles.backBtnSimple} onPress={() => router.back()}>
-          <Text style={styles.backBtnText}>Go Back</Text>
-        </Pressable>
-      </View>
-    );
-  }
 
   const { data: courses = [], isLoading: coursesLoading } = useQuery<Course[]>({
     queryKey: ["/api/courses"],
@@ -239,7 +239,7 @@ export default function AdminDashboard() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/courses"] });
       setShowAddCourse(false);
-      setNewCourse({ title: "", description: "", teacherName: "3i Learning", price: "0", originalPrice: "0", category: "Mathematics", subject: "", isFree: false, level: "Beginner", durationHours: "0" });
+      setNewCourse({ title: "", description: "", teacherName: "3i Learning", price: "0", originalPrice: "0", category: "Mathematics", subject: "", isFree: false, level: "Beginner", durationHours: "0", courseType: "live" });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       Alert.alert("Success", "Course created successfully!");
     },
@@ -268,6 +268,18 @@ export default function AdminDashboard() {
     },
     onError: () => Alert.alert("Error", "Failed to send notification"),
   });
+
+  if (!isAdmin) {
+    return (
+      <View style={styles.centered}>
+        <Ionicons name="lock-closed" size={48} color={Colors.light.textMuted} />
+        <Text style={styles.errorText}>Admin access required</Text>
+        <Pressable style={styles.backBtnSimple} onPress={() => router.back()}>
+          <Text style={styles.backBtnText}>Go Back</Text>
+        </Pressable>
+      </View>
+    );
+  }
 
   const handleDeleteCourse = (course: Course) => {
     if (Platform.OS === "web") {
@@ -331,7 +343,14 @@ export default function AdminDashboard() {
                   <View style={styles.adminCardContent}>
                     <View style={styles.adminCardRow}>
                       <Text style={styles.adminCardTitle} numberOfLines={2}>{course.title}</Text>
-                      <View style={[styles.statusDot, { backgroundColor: course.is_published ? "#22C55E" : "#F59E0B" }]} />
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                        <View style={{ backgroundColor: (course.course_type || "live") === "live" ? "#EF444420" : "#8B5CF620", paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8 }}>
+                          <Text style={{ fontSize: 10, fontFamily: "Inter_700Bold", color: (course.course_type || "live") === "live" ? "#EF4444" : "#8B5CF6", textTransform: "uppercase" }}>
+                            {(course.course_type || "live") === "live" ? "🔴 LIVE" : "📹 RECORDED"}
+                          </Text>
+                        </View>
+                        <View style={[styles.statusDot, { backgroundColor: course.is_published ? "#22C55E" : "#F59E0B" }]} />
+                      </View>
                     </View>
                     <View style={styles.adminCardMeta}>
                       <Text style={styles.adminCardMetaText}>{course.category}</Text>
@@ -342,6 +361,26 @@ export default function AdminDashboard() {
                     </View>
                   </View>
                   <View style={styles.adminCardActions}>
+                    {(course.course_type || "live") === "recorded" && (
+                      <Pressable style={[styles.editBtn, { backgroundColor: "#8B5CF615" }]} onPress={() => {
+                        setImportTargetCourseId(course.id);
+                        setImportSourceCourseId(null);
+                        setSelectedLectureIds([]);
+                        setSelectedTestIds([]);
+                        setImportSectionTitle("");
+                        const baseUrl = getApiUrl();
+                        Promise.all([
+                          globalThis.fetch(new URL("/api/admin/all-lectures", baseUrl).toString(), { credentials: "include" }).then(r => r.json()),
+                          globalThis.fetch(new URL("/api/admin/all-tests", baseUrl).toString(), { credentials: "include" }).then(r => r.json()),
+                        ]).then(([lecs, tests]) => {
+                          setAllLectures(lecs);
+                          setAllTests(tests);
+                          setShowImportModal(true);
+                        });
+                      }}>
+                        <Ionicons name="download-outline" size={18} color="#8B5CF6" />
+                      </Pressable>
+                    )}
                     <Pressable style={styles.editBtn} onPress={() => router.push({ pathname: "/admin/course/[id]", params: { id: course.id } })}>
                       <Ionicons name="create-outline" size={18} color={Colors.light.primary} />
                     </Pressable>
@@ -696,6 +735,19 @@ export default function AdminDashboard() {
                 </View>
               ))}
               <View style={styles.formField}>
+                <Text style={styles.formLabel}>Course Type</Text>
+                <View style={{ flexDirection: "row", gap: 10 }}>
+                  {(["live", "recorded"] as const).map((t) => (
+                    <Pressable key={t} onPress={() => setNewCourse((prev) => ({ ...prev, courseType: t }))}
+                      style={{ flex: 1, paddingVertical: 10, borderRadius: 10, borderWidth: 2, borderColor: newCourse.courseType === t ? (t === "live" ? "#EF4444" : "#8B5CF6") : Colors.light.border, backgroundColor: newCourse.courseType === t ? (t === "live" ? "#EF444410" : "#8B5CF610") : "transparent", alignItems: "center" }}>
+                      <Text style={{ fontSize: 13, fontFamily: "Inter_700Bold", color: newCourse.courseType === t ? (t === "live" ? "#EF4444" : "#8B5CF6") : Colors.light.textMuted }}>
+                        {t === "live" ? "🔴 Live" : "📹 Recorded"}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </View>
+              <View style={styles.formField}>
                 <Text style={styles.formLabel}>Free Course</Text>
                 <Switch
                   value={newCourse.isFree}
@@ -714,6 +766,131 @@ export default function AdminDashboard() {
                 {addCourseMutation.isPending ? <ActivityIndicator color="#fff" /> : (
                   <Text style={styles.createBtnText}>Create Course</Text>
                 )}
+              </LinearGradient>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={showImportModal} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16, maxHeight: "90%" }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Import Lectures & Tests</Text>
+              <Pressable onPress={() => setShowImportModal(false)}>
+                <Ionicons name="close" size={24} color={Colors.light.text} />
+              </Pressable>
+            </View>
+            <ScrollView style={styles.modalScroll}>
+              <View style={styles.formField}>
+                <Text style={styles.formLabel}>Section Title (optional)</Text>
+                <TextInput style={styles.formInput} placeholder="e.g., Week 1 - Algebra" placeholderTextColor={Colors.light.textMuted} value={importSectionTitle} onChangeText={setImportSectionTitle} />
+              </View>
+
+              <View style={styles.formField}>
+                <Text style={styles.formLabel}>Filter by Source Course</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 8 }}>
+                  <Pressable onPress={() => setImportSourceCourseId(null)} style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, backgroundColor: importSourceCourseId === null ? Colors.light.primary : Colors.light.secondary, marginRight: 8 }}>
+                    <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: importSourceCourseId === null ? "#fff" : Colors.light.text }}>All</Text>
+                  </Pressable>
+                  {courses.filter(c => c.id !== importTargetCourseId).map(c => (
+                    <Pressable key={c.id} onPress={() => setImportSourceCourseId(c.id)} style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, backgroundColor: importSourceCourseId === c.id ? Colors.light.primary : Colors.light.secondary, marginRight: 8 }}>
+                      <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: importSourceCourseId === c.id ? "#fff" : Colors.light.text }} numberOfLines={1}>{c.title}</Text>
+                    </Pressable>
+                  ))}
+                </ScrollView>
+              </View>
+
+              {(() => {
+                const filteredLectures = allLectures.filter(l => l.course_id !== importTargetCourseId && (importSourceCourseId === null || l.course_id === importSourceCourseId));
+                const filteredTests = allTests.filter(t => t.course_id !== importTargetCourseId && (importSourceCourseId === null || t.course_id === importSourceCourseId));
+                const groupedLectures: Record<string, any[]> = {};
+                filteredLectures.forEach(l => {
+                  const key = l.course_title || "Unknown";
+                  if (!groupedLectures[key]) groupedLectures[key] = [];
+                  groupedLectures[key].push(l);
+                });
+                const groupedTests: Record<string, any[]> = {};
+                filteredTests.forEach(t => {
+                  const key = t.course_title || "Unknown";
+                  if (!groupedTests[key]) groupedTests[key] = [];
+                  groupedTests[key].push(t);
+                });
+                return (
+                  <>
+                    <Text style={{ fontSize: 15, fontFamily: "Inter_700Bold", color: Colors.light.text, marginBottom: 8 }}>Lectures ({selectedLectureIds.length} selected)</Text>
+                    {Object.entries(groupedLectures).map(([courseName, lecs]) => (
+                      <View key={courseName} style={{ marginBottom: 12 }}>
+                        <Pressable onPress={() => {
+                          const lecIds = lecs.map(l => l.id);
+                          const allSelected = lecIds.every(id => selectedLectureIds.includes(id));
+                          if (allSelected) setSelectedLectureIds(prev => prev.filter(id => !lecIds.includes(id)));
+                          else setSelectedLectureIds(prev => [...new Set([...prev, ...lecIds])]);
+                        }}>
+                          <Text style={{ fontSize: 13, fontFamily: "Inter_700Bold", color: Colors.light.primary, marginBottom: 4 }}>{courseName} ({lecs.length})</Text>
+                        </Pressable>
+                        {lecs.map(l => (
+                          <Pressable key={l.id} style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 4, paddingHorizontal: 4 }}
+                            onPress={() => setSelectedLectureIds(prev => prev.includes(l.id) ? prev.filter(x => x !== l.id) : [...prev, l.id])}>
+                            <Ionicons name={selectedLectureIds.includes(l.id) ? "checkbox" : "square-outline"} size={20} color={selectedLectureIds.includes(l.id) ? Colors.light.primary : Colors.light.textMuted} />
+                            <Text style={{ fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.text, flex: 1 }} numberOfLines={1}>{l.title}</Text>
+                          </Pressable>
+                        ))}
+                      </View>
+                    ))}
+
+                    <Text style={{ fontSize: 15, fontFamily: "Inter_700Bold", color: Colors.light.text, marginTop: 12, marginBottom: 8 }}>Tests ({selectedTestIds.length} selected)</Text>
+                    {Object.entries(groupedTests).map(([courseName, tests]) => (
+                      <View key={courseName} style={{ marginBottom: 12 }}>
+                        <Pressable onPress={() => {
+                          const tIds = tests.map(t => t.id);
+                          const allSelected = tIds.every(id => selectedTestIds.includes(id));
+                          if (allSelected) setSelectedTestIds(prev => prev.filter(id => !tIds.includes(id)));
+                          else setSelectedTestIds(prev => [...new Set([...prev, ...tIds])]);
+                        }}>
+                          <Text style={{ fontSize: 13, fontFamily: "Inter_700Bold", color: Colors.light.primary, marginBottom: 4 }}>{courseName} ({tests.length})</Text>
+                        </Pressable>
+                        {tests.map(t => (
+                          <Pressable key={t.id} style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 4, paddingHorizontal: 4 }}
+                            onPress={() => setSelectedTestIds(prev => prev.includes(t.id) ? prev.filter(x => x !== t.id) : [...prev, t.id])}>
+                            <Ionicons name={selectedTestIds.includes(t.id) ? "checkbox" : "square-outline"} size={20} color={selectedTestIds.includes(t.id) ? Colors.light.primary : Colors.light.textMuted} />
+                            <Text style={{ fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.text, flex: 1 }} numberOfLines={1}>{t.title}</Text>
+                          </Pressable>
+                        ))}
+                      </View>
+                    ))}
+
+                    {filteredLectures.length === 0 && filteredTests.length === 0 && (
+                      <Text style={{ fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.textMuted, textAlign: "center", marginTop: 20 }}>No lectures or tests found in other courses</Text>
+                    )}
+                  </>
+                );
+              })()}
+            </ScrollView>
+            <Pressable
+              style={[styles.createBtn, (selectedLectureIds.length === 0 && selectedTestIds.length === 0) && styles.createBtnDisabled]}
+              disabled={importLoading || (selectedLectureIds.length === 0 && selectedTestIds.length === 0)}
+              onPress={async () => {
+                setImportLoading(true);
+                try {
+                  if (selectedLectureIds.length > 0) {
+                    await apiRequest("POST", `/api/admin/courses/${importTargetCourseId}/import-lectures`, { lectureIds: selectedLectureIds, sectionTitle: importSectionTitle || undefined });
+                  }
+                  if (selectedTestIds.length > 0) {
+                    await apiRequest("POST", `/api/admin/courses/${importTargetCourseId}/import-tests`, { testIds: selectedTestIds });
+                  }
+                  qc.invalidateQueries({ queryKey: ["/api/courses"] });
+                  setShowImportModal(false);
+                  Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                  Alert.alert("Success", `Imported ${selectedLectureIds.length} lectures and ${selectedTestIds.length} tests!`);
+                } catch (e) {
+                  Alert.alert("Error", "Failed to import");
+                } finally {
+                  setImportLoading(false);
+                }
+              }}>
+              <LinearGradient colors={["#8B5CF6", "#7C3AED"]} style={styles.createBtnGrad}>
+                {importLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.createBtnText}>Import {selectedLectureIds.length + selectedTestIds.length} Items</Text>}
               </LinearGradient>
             </Pressable>
           </View>
