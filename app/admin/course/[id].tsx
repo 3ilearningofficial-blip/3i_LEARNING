@@ -81,6 +81,8 @@ interface EditCourseForm {
   isPublished: boolean;
   level: string;
   durationHours: string;
+  startDate: string;
+  endDate: string;
 }
 
 type AdminCourseTab = "lectures" | "tests" | "materials" | "live";
@@ -139,7 +141,7 @@ export default function AdminCourseScreen() {
   const [showEditCourse, setShowEditCourse] = useState(false);
   const [editForm, setEditForm] = useState<EditCourseForm>({
     title: "", description: "", teacherName: "", price: "0", originalPrice: "0",
-    category: "", subject: "", isFree: false, isPublished: true, level: "beginner", durationHours: "0",
+    category: "", subject: "", isFree: false, isPublished: true, level: "beginner", durationHours: "0", startDate: "", endDate: "",
   });
   const [showBulkUpload, setShowBulkUpload] = useState<number | null>(null);
   const [bulkText, setBulkText] = useState("");
@@ -367,6 +369,8 @@ export default function AdminCourseScreen() {
         isPublished: data.isPublished,
         level: data.level,
         durationHours: parseFloat(data.durationHours) || 0,
+        startDate: data.startDate || null,
+        endDate: data.endDate || null,
       });
     },
     onSuccess: () => {
@@ -393,6 +397,8 @@ export default function AdminCourseScreen() {
         isPublished: course.is_published !== false,
         level: course.level || "beginner",
         durationHours: String(course.duration_hours || 0),
+        startDate: (course as any).start_date || "",
+        endDate: (course as any).end_date || "",
       });
       setShowEditCourse(true);
     }
@@ -1026,6 +1032,8 @@ export default function AdminCourseScreen() {
               <FormField label="Teacher Name" placeholder="e.g., Pankaj Sir" value={editForm.teacherName} onChangeText={(v) => setEditForm(p => ({ ...p, teacherName: v }))} />
               <FormField label="Level (beginner/intermediate/advanced)" placeholder="beginner" value={editForm.level} onChangeText={(v) => setEditForm(p => ({ ...p, level: v }))} />
               <FormField label="Duration (hours)" placeholder="10" value={editForm.durationHours} onChangeText={(v) => setEditForm(p => ({ ...p, durationHours: v }))} numeric />
+              <FormField label="Start Date" placeholder="e.g., 15 Mar 2026" value={editForm.startDate} onChangeText={(v) => setEditForm(p => ({ ...p, startDate: v }))} />
+              <FormField label="End Date" placeholder="e.g., 15 Jun 2026" value={editForm.endDate} onChangeText={(v) => setEditForm(p => ({ ...p, endDate: v }))} />
               <View style={styles.formField}>
                 <Text style={styles.formLabel}>Free Course</Text>
                 <Switch value={editForm.isFree} onValueChange={(v) => setEditForm(p => ({ ...p, isFree: v }))} trackColor={{ false: Colors.light.border, true: Colors.light.primary }} thumbColor="#fff" />

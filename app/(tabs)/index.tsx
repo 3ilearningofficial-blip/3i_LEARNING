@@ -33,6 +33,8 @@ interface Course {
   isEnrolled?: boolean;
   progress?: number;
   course_type?: string;
+  start_date?: string;
+  end_date?: string;
 }
 
 interface StudyMaterial {
@@ -104,6 +106,14 @@ function CourseCard({ course, index }: { course: Course; index: number }) {
             <Text style={styles.courseStatText}>{course.total_tests} tests</Text>
           </View>
         </View>
+        {(course.course_type || "live") === "live" && (course.start_date || course.end_date) && (
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+            <Ionicons name="calendar-outline" size={12} color={Colors.light.textMuted} />
+            <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: Colors.light.textMuted }}>
+              {course.start_date || "TBD"} → {course.end_date || "TBD"}
+            </Text>
+          </View>
+        )}
         {course.isEnrolled && (
           <View style={styles.progressContainer}>
             <View style={styles.progressBar}>

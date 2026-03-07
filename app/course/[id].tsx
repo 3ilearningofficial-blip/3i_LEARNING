@@ -65,6 +65,8 @@ interface CourseDetail {
   category: string;
   is_free: boolean;
   course_type?: string;
+  start_date?: string;
+  end_date?: string;
   total_lectures: number;
   total_tests: number;
   total_students: number;
@@ -292,6 +294,15 @@ export default function CourseDetailScreen() {
           <Text style={styles.instructorName}>{course.teacher_name}</Text>
           <View style={styles.levelChip}><Text style={styles.levelChipText}>{course.level}</Text></View>
         </View>
+
+        {(course.course_type || "live") === "live" && (course.start_date || course.end_date) && (
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 8 }}>
+            <Ionicons name="calendar" size={14} color="rgba(255,255,255,0.9)" />
+            <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: "rgba(255,255,255,0.9)" }}>
+              {course.start_date || "TBD"} → {course.end_date || "TBD"}
+            </Text>
+          </View>
+        )}
 
         <View style={styles.courseQuickStats}>
           {!isTestSeriesCourse && (

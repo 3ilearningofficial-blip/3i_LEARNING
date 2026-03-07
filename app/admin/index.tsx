@@ -24,6 +24,8 @@ interface Course {
   is_published: boolean;
   price: string;
   course_type?: string;
+  start_date?: string;
+  end_date?: string;
 }
 
 interface UserRecord {
@@ -48,7 +50,7 @@ const ADMIN_TABS: { key: AdminTab; label: string; icon: keyof typeof Ionicons.gl
 interface NewCourse {
   title: string; description: string; teacherName: string; price: string;
   originalPrice: string; category: string; subject: string; isFree: boolean; level: string; durationHours: string;
-  courseType: string;
+  courseType: string; startDate: string; endDate: string;
 }
 
 export default function AdminDashboard() {
@@ -72,7 +74,7 @@ export default function AdminDashboard() {
     title: "", description: "", teacherName: "3i Learning",
     price: "0", originalPrice: "0", category: "Mathematics",
     subject: "", isFree: false, level: "Beginner", durationHours: "0",
-    courseType: "live",
+    courseType: "live", startDate: "", endDate: "",
   });
   const [showImportModal, setShowImportModal] = useState(false);
   const [importTargetCourseId, setImportTargetCourseId] = useState<number | null>(null);
@@ -239,7 +241,7 @@ export default function AdminDashboard() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/courses"] });
       setShowAddCourse(false);
-      setNewCourse({ title: "", description: "", teacherName: "3i Learning", price: "0", originalPrice: "0", category: "Mathematics", subject: "", isFree: false, level: "Beginner", durationHours: "0", courseType: "live" });
+      setNewCourse({ title: "", description: "", teacherName: "3i Learning", price: "0", originalPrice: "0", category: "Mathematics", subject: "", isFree: false, level: "Beginner", durationHours: "0", courseType: "live", startDate: "", endDate: "" });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       Alert.alert("Success", "Course created successfully!");
     },
@@ -359,6 +361,14 @@ export default function AdminDashboard() {
                       <Text style={styles.adminCardMetaText}>|</Text>
                       <Text style={styles.adminCardMetaText}>{course.is_free ? "FREE" : `₹${parseFloat(course.price).toFixed(0)}`}</Text>
                     </View>
+                    {(course.course_type || "live") === "live" && (course.start_date || course.end_date) && (
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 2 }}>
+                        <Ionicons name="calendar-outline" size={12} color={Colors.light.textMuted} />
+                        <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: Colors.light.textMuted }}>
+                          {course.start_date || "TBD"} → {course.end_date || "TBD"}
+                        </Text>
+                      </View>
+                    )}
                   </View>
                   <View style={styles.adminCardActions}>
                     {(course.course_type || "live") === "recorded" && (
@@ -747,6 +757,18 @@ export default function AdminDashboard() {
                   ))}
                 </View>
               </View>
+              {newCourse.courseType === "live" && (
+                <>
+                  <View style={styles.formField}>
+                    <Text style={styles.formLabel}>Start Date</Text>
+                    <TextInput style={styles.formInput} placeholder="e.g., 15 Mar 2026" placeholderTextColor={Colors.light.textMuted} value={newCourse.startDate} onChangeText={(val) => setNewCourse((prev) => ({ ...prev, startDate: val }))} />
+                  </View>
+                  <View style={styles.formField}>
+                    <Text style={styles.formLabel}>End Date</Text>
+                    <TextInput style={styles.formInput} placeholder="e.g., 15 Jun 2026" placeholderTextColor={Colors.light.textMuted} value={newCourse.endDate} onChangeText={(val) => setNewCourse((prev) => ({ ...prev, endDate: val }))} />
+                  </View>
+                </>
+              )}
               <View style={styles.formField}>
                 <Text style={styles.formLabel}>Free Course</Text>
                 <Switch
