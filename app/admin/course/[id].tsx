@@ -51,13 +51,34 @@ interface LiveClassItem {
 interface CourseDetail {
   id: number;
   title: string;
+  description?: string;
+  teacher_name?: string;
+  price?: number;
+  original_price?: number;
+  category?: string;
   is_free: boolean;
+  is_published?: boolean;
+  level?: string;
+  duration_hours?: number;
   course_type?: string;
   total_lectures: number;
   total_tests: number;
   lectures: Lecture[];
   tests: TestItem[];
   materials: Material[];
+}
+
+interface EditCourseForm {
+  title: string;
+  description: string;
+  teacherName: string;
+  price: string;
+  originalPrice: string;
+  category: string;
+  isFree: boolean;
+  isPublished: boolean;
+  level: string;
+  durationHours: string;
 }
 
 type AdminCourseTab = "lectures" | "tests" | "materials" | "live";
@@ -113,6 +134,11 @@ export default function AdminCourseScreen() {
   const [showAddQuestion, setShowAddQuestion] = useState<number | null>(null);
   const [showAddMaterial, setShowAddMaterial] = useState(false);
   const [showAddLiveClass, setShowAddLiveClass] = useState(false);
+  const [showEditCourse, setShowEditCourse] = useState(false);
+  const [editForm, setEditForm] = useState<EditCourseForm>({
+    title: "", description: "", teacherName: "", price: "0", originalPrice: "0",
+    category: "", isFree: false, isPublished: true, level: "beginner", durationHours: "0",
+  });
   const [showBulkUpload, setShowBulkUpload] = useState<number | null>(null);
   const [bulkText, setBulkText] = useState("");
   const [bulkUploadMode, setBulkUploadMode] = useState<"text" | "pdf">("text");
@@ -313,6 +339,49 @@ export default function AdminCourseScreen() {
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/live-classes", id, "admin"] }); },
   });
 
+  const editCourseMutation = useMutation({
+    mutationFn: async (data: EditCourseForm) => {
+      await apiRequest("PUT", `/api/admin/courses/${id}`, {
+        title: data.title,
+        description: data.description,
+        teacherName: data.teacherName,
+        price: parseFloat(data.price) || 0,
+        originalPrice: parseFloat(data.originalPrice) || 0,
+        category: data.category,
+        isFree: data.isFree,
+        isPublished: data.isPublished,
+        level: data.level,
+        durationHours: parseFloat(data.durationHours) || 0,
+      });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/courses", id] });
+      qc.invalidateQueries({ queryKey: ["/api/courses"] });
+      setShowEditCourse(false);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Alert.alert("Success", "Course updated!");
+    },
+    onError: () => Alert.alert("Error", "Failed to update course"),
+  });
+
+  const openEditCourse = () => {
+    if (course) {
+      setEditForm({
+        title: course.title || "",
+        description: course.description || "",
+        teacherName: course.teacher_name || "",
+        price: String(course.price || 0),
+        originalPrice: String(course.original_price || 0),
+        category: course.category || "",
+        isFree: course.is_free || false,
+        isPublished: course.is_published !== false,
+        level: course.level || "beginner",
+        durationHours: String(course.duration_hours || 0),
+      });
+      setShowEditCourse(true);
+    }
+  };
+
   if (!isValidId) {
     return (
       <View style={styles.container}>
@@ -356,6 +425,9 @@ export default function AdminCourseScreen() {
               {isTestSeries ? "Test Series" : `${course.total_lectures} lectures`} · {course.total_tests} tests
             </Text>
           </View>
+          <Pressable style={styles.editCourseBtn} onPress={openEditCourse}>
+            <Ionicons name="create-outline" size={18} color="#fff" />
+          </Pressable>
         </View>
 
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsRow}>
@@ -851,6 +923,47 @@ export default function AdminCourseScreen() {
           </View>
         </View>
       </Modal>
+
+      <Modal visible={showEditCourse} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Edit Course</Text>
+              <Pressable onPress={() => setShowEditCourse(false)}>
+                <Ionicons name="close" size={24} color={Colors.light.text} />
+              </Pressable>
+            </View>
+            <ScrollView style={{ maxHeight: 480 }} showsVerticalScrollIndicator={false}>
+              <FormField label="Course Title *" placeholder="e.g., NDA Mathematics" value={editForm.title} onChangeText={(v) => setEditForm(p => ({ ...p, title: v }))} />
+              <FormField label="Description" placeholder="Course description" value={editForm.description} onChangeText={(v) => setEditForm(p => ({ ...p, description: v }))} multiline />
+              <FormField label="Category *" placeholder="e.g., NDA, CDS, AFCAT" value={editForm.category} onChangeText={(v) => setEditForm(p => ({ ...p, category: v }))} />
+              <FormField label="Teacher Name" placeholder="e.g., Pankaj Sir" value={editForm.teacherName} onChangeText={(v) => setEditForm(p => ({ ...p, teacherName: v }))} />
+              <FormField label="Level (beginner/intermediate/advanced)" placeholder="beginner" value={editForm.level} onChangeText={(v) => setEditForm(p => ({ ...p, level: v }))} />
+              <FormField label="Duration (hours)" placeholder="10" value={editForm.durationHours} onChangeText={(v) => setEditForm(p => ({ ...p, durationHours: v }))} numeric />
+              <View style={styles.formField}>
+                <Text style={styles.formLabel}>Free Course</Text>
+                <Switch value={editForm.isFree} onValueChange={(v) => setEditForm(p => ({ ...p, isFree: v }))} trackColor={{ false: Colors.light.border, true: Colors.light.primary }} thumbColor="#fff" />
+              </View>
+              {!editForm.isFree && (
+                <>
+                  <FormField label="Price (₹)" placeholder="499" value={editForm.price} onChangeText={(v) => setEditForm(p => ({ ...p, price: v }))} numeric />
+                  <FormField label="Original Price (₹)" placeholder="999" value={editForm.originalPrice} onChangeText={(v) => setEditForm(p => ({ ...p, originalPrice: v }))} numeric />
+                </>
+              )}
+              <View style={styles.formField}>
+                <Text style={styles.formLabel}>Published (visible to students)</Text>
+                <Switch value={editForm.isPublished} onValueChange={(v) => setEditForm(p => ({ ...p, isPublished: v }))} trackColor={{ false: Colors.light.border, true: "#16A34A" }} thumbColor="#fff" />
+              </View>
+            </ScrollView>
+            <ActionButton
+              label="Save Changes"
+              onPress={() => editCourseMutation.mutate(editForm)}
+              disabled={!editForm.title || !editForm.category}
+              loading={editCourseMutation.isPending}
+            />
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -900,6 +1013,7 @@ const styles = StyleSheet.create({
   header: { paddingHorizontal: 20, paddingBottom: 12, gap: 10 },
   headerRow: { flexDirection: "row", alignItems: "center", gap: 12 },
   backBtn: { width: 36, height: 36, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" },
+  editCourseBtn: { width: 36, height: 36, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" },
   headerContent: { flex: 1 },
   headerTitle: { fontSize: 16, fontFamily: "Inter_700Bold", color: "#fff" },
   headerSub: { fontSize: 12, color: "rgba(255,255,255,0.6)", fontFamily: "Inter_400Regular" },
