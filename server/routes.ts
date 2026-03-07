@@ -2,7 +2,9 @@ import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "node:http";
 import { Pool } from "pg";
 import multer from "multer";
-import pdfParse from "pdf-parse";
+import { createRequire } from "module";
+const require = createRequire(import.meta.url);
+const pdfParse = require("pdf-parse");
 import { verifyFirebaseToken } from "./firebase";
 import { getRazorpay, verifyPaymentSignature } from "./razorpay";
 

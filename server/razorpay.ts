@@ -1,5 +1,7 @@
-import Razorpay from "razorpay";
 import crypto from "crypto";
+import { createRequire } from "module";
+const require = createRequire(import.meta.url);
+const Razorpay = require("razorpay");
 
 let razorpayInstance: any = null;
 
