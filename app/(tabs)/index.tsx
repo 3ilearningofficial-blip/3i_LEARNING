@@ -73,9 +73,9 @@ function CourseCard({ course, index }: { course: Course; index: number }) {
       <LinearGradient colors={[color, `${color}CC`]} style={styles.courseCardHeader}>
         <View style={styles.courseCardBadgeRow}>
           <View style={styles.categoryBadge}><Text style={styles.categoryBadgeText}>{course.category}</Text></View>
-          <View style={{ backgroundColor: (course.course_type || "live") === "live" ? "#EF444440" : "#8B5CF640", paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 }}>
+          <View style={{ backgroundColor: (course.course_type || "live") === "live" ? "#EF444440" : (course.course_type === "test_series" ? "#F59E0B40" : "#8B5CF640"), paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 }}>
             <Text style={{ fontSize: 9, fontFamily: "Inter_700Bold", color: "#fff" }}>
-              {(course.course_type || "live") === "live" ? "LIVE" : "RECORDED"}
+              {(course.course_type || "live") === "live" ? "LIVE" : (course.course_type === "test_series" ? "TEST SERIES" : "RECORDED")}
             </Text>
           </View>
           <View style={{ flex: 1 }} />

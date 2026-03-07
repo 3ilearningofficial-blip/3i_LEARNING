@@ -22,8 +22,12 @@ A comprehensive math education mobile app (Expo/React Native) with Express backe
 - Live classes (YouTube embeds) with auto-recording to lectures on end
 - Course types: Live (🔴) and Recorded (📹) with badges on cards
 - Import system: Copy lectures/tests from live courses into recorded courses
-- Admin dashboard for course/content/mission management
+- Course creation: Choose between "Course" (full) or "Test Series" (tests only)
+- Admin dashboard with Courses, Tests, Materials, Missions, Users, Notify tabs
+- Free Study Materials tab in admin for uploading materials accessible without enrollment
+- Course materials are enrolled-only by default (no "free for all" toggle)
 - Download control per study material (admin can toggle allow/disallow)
+- Custom domain: 3ilearning.in (CORS configured)
 - Landing page at domain root for web visitors
 
 ## Important Files

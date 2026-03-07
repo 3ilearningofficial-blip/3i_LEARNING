@@ -433,6 +433,7 @@ export default function AdminCourseScreen() {
   }
 
   const isTestSeries = course.course_type === "test_series";
+  const effectiveTab = isTestSeries ? "tests" : activeTab;
 
   return (
     <View style={styles.container}>
@@ -453,21 +454,21 @@ export default function AdminCourseScreen() {
         </View>
 
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsRow}>
-          {ADMIN_COURSE_TABS.filter(t => !isTestSeries || t.key !== "lectures").map((tab) => (
+          {ADMIN_COURSE_TABS.filter(t => !isTestSeries || t.key === "tests").map((tab) => (
             <Pressable
               key={tab.key}
-              style={[styles.tab, activeTab === tab.key && styles.tabActive]}
+              style={[styles.tab, effectiveTab === tab.key && styles.tabActive]}
               onPress={() => setActiveTab(tab.key)}
             >
-              <Ionicons name={tab.icon} size={14} color={activeTab === tab.key ? Colors.light.primary : "rgba(255,255,255,0.6)"} />
-              <Text style={[styles.tabText, activeTab === tab.key && styles.tabTextActive]}>{tab.label}</Text>
+              <Ionicons name={tab.icon} size={14} color={effectiveTab === tab.key ? Colors.light.primary : "rgba(255,255,255,0.6)"} />
+              <Text style={[styles.tabText, effectiveTab === tab.key && styles.tabTextActive]}>{tab.label}</Text>
             </Pressable>
           ))}
         </ScrollView>
       </LinearGradient>
 
       <ScrollView contentContainerStyle={[styles.content, { paddingBottom: bottomPadding + 80 }]}>
-        {activeTab === "lectures" && !isTestSeries && (
+        {effectiveTab === "lectures" && !isTestSeries && (
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>Lectures ({course.lectures?.length || 0})</Text>
@@ -517,7 +518,7 @@ export default function AdminCourseScreen() {
           </View>
         )}
 
-        {activeTab === "tests" && (
+        {effectiveTab === "tests" && (
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>Tests ({course.tests?.length || 0})</Text>
@@ -559,7 +560,7 @@ export default function AdminCourseScreen() {
           </View>
         )}
 
-        {activeTab === "materials" && (
+        {effectiveTab === "materials" && (
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>Materials ({course.materials?.length || 0})</Text>
@@ -609,7 +610,7 @@ export default function AdminCourseScreen() {
           </View>
         )}
 
-        {activeTab === "live" && (
+        {effectiveTab === "live" && (
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>Live Classes ({courseLiveClasses.length})</Text>
@@ -811,10 +812,6 @@ export default function AdminCourseScreen() {
               <FormField label="File URL" placeholder="https://drive.google.com/..." value={newMaterial.fileUrl} onChangeText={(v) => setNewMaterial(p => ({ ...p, fileUrl: v }))} />
               <FormField label="File Type (pdf/video/link/doc)" placeholder="pdf" value={newMaterial.fileType} onChangeText={(v) => setNewMaterial(p => ({ ...p, fileType: v }))} />
               <FormField label="Description" placeholder="Short description of the material" value={newMaterial.description} onChangeText={(v) => setNewMaterial(p => ({ ...p, description: v }))} />
-              <View style={styles.formField}>
-                <Text style={styles.formLabel}>Free for all students (not just enrolled)</Text>
-                <Switch value={newMaterial.isFree} onValueChange={(v) => setNewMaterial(p => ({ ...p, isFree: v }))} trackColor={{ false: Colors.light.border, true: Colors.light.primary }} thumbColor="#fff" />
-              </View>
               <View style={styles.formField}>
                 <Text style={styles.formLabel}>Allow Download</Text>
                 <Switch value={newMaterial.downloadAllowed} onValueChange={(v) => setNewMaterial(p => ({ ...p, downloadAllowed: v }))} trackColor={{ false: Colors.light.border, true: "#22C55E" }} thumbColor="#fff" />

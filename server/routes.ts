@@ -1101,7 +1101,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const result = await db.query(
         `INSERT INTO study_materials (title, description, file_url, file_type, course_id, is_free, section_title, download_allowed, created_at) 
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-        [title, description, fileUrl, fileType || "pdf", courseId || null, isFree !== false, sectionTitle || null, downloadAllowed || false, Date.now()]
+        [title, description, fileUrl, fileType || "pdf", courseId || null, courseId ? false : (isFree !== false), sectionTitle || null, downloadAllowed || false, Date.now()]
       );
       res.json(result.rows[0]);
     } catch (err) {

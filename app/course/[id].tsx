@@ -253,7 +253,7 @@ export default function CourseDetailScreen() {
 
   const isTestSeriesCourse = course.course_type === "test_series" || (course.total_lectures === 0 && course.total_tests > 0);
   const TABS = isTestSeriesCourse
-    ? ["Tests", "Materials"]
+    ? ["Tests"]
     : ["Lectures", "Tests", "Materials", "Live"];
 
   const discount = course.original_price && parseFloat(course.original_price) > 0
@@ -465,7 +465,7 @@ export default function CourseDetailScreen() {
               </View>
             ) : (
               course.materials.map((mat) => {
-                const canAccess = mat.is_free || isEnrolled;
+                const canAccess = isEnrolled;
                 return (
                 <React.Fragment key={mat.id}>
                   {mat.section_title && (

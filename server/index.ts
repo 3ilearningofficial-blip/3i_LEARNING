@@ -30,6 +30,9 @@ function setupCors(app: express.Application) {
       });
     }
 
+    origins.add("https://3ilearning.in");
+    origins.add("https://www.3ilearning.in");
+
     const origin = req.header("origin");
 
     // Allow localhost origins for Expo web development (any port)

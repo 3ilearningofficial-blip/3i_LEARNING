@@ -37,11 +37,12 @@ interface UserRecord {
   created_at: number;
 }
 
-type AdminTab = "courses" | "tests" | "users" | "notifications" | "missions";
+type AdminTab = "courses" | "tests" | "materials" | "users" | "notifications" | "missions";
 
 const ADMIN_TABS: { key: AdminTab; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
   { key: "courses", label: "Courses", icon: "book" },
   { key: "tests", label: "Tests", icon: "document-text" },
+  { key: "materials", label: "Materials", icon: "folder-open" },
   { key: "missions", label: "Missions", icon: "flame" },
   { key: "users", label: "Users", icon: "people" },
   { key: "notifications", label: "Notify", icon: "notifications" },
@@ -51,6 +52,16 @@ interface NewCourse {
   title: string; description: string; teacherName: string; price: string;
   originalPrice: string; category: string; subject: string; isFree: boolean; level: string; durationHours: string;
   courseType: string; startDate: string; endDate: string;
+}
+
+interface FreeMaterial {
+  id: number;
+  title: string;
+  file_url: string;
+  file_type: string;
+  section_title?: string;
+  download_allowed: boolean;
+  created_at: number;
 }
 
 export default function AdminDashboard() {
@@ -70,12 +81,19 @@ export default function AdminDashboard() {
   const [missionQuestions, setMissionQuestions] = useState<{ question: string; options: string[]; correct: string; topic: string }[]>([]);
   const [missionCourseId, setMissionCourseId] = useState<number | null>(null);
 
+  const [showCourseTypeChoice, setShowCourseTypeChoice] = useState(false);
   const [newCourse, setNewCourse] = useState<NewCourse>({
     title: "", description: "", teacherName: "3i Learning",
     price: "0", originalPrice: "0", category: "Mathematics",
     subject: "", isFree: false, level: "Beginner", durationHours: "0",
     courseType: "live", startDate: "", endDate: "",
   });
+  const [showAddFreeMaterial, setShowAddFreeMaterial] = useState(false);
+  const [freMatTitle, setFreMatTitle] = useState("");
+  const [freMatUrl, setFreMatUrl] = useState("");
+  const [freMatType, setFreMatType] = useState("pdf");
+  const [freMatSection, setFreMatSection] = useState("");
+  const [freMatDownload, setFreMatDownload] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [importTargetCourseId, setImportTargetCourseId] = useState<number | null>(null);
   const [importSourceCourseId, setImportSourceCourseId] = useState<number | null>(null);
@@ -136,6 +154,44 @@ export default function AdminDashboard() {
       return res.json();
     },
     enabled: activeTab === "missions",
+  });
+
+  const { data: freeMaterials = [], isLoading: materialsLoading } = useQuery<FreeMaterial[]>({
+    queryKey: ["/api/study-materials", "free"],
+    queryFn: async () => {
+      const baseUrl = getApiUrl();
+      const url = new URL("/api/study-materials?free=true", baseUrl);
+      const res = await fetch(url.toString(), { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: activeTab === "materials",
+  });
+
+  const addFreeMaterialMutation = useMutation({
+    mutationFn: async (data: any) => {
+      const res = await apiRequest("POST", "/api/admin/study-materials", data);
+      return res.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/study-materials"] });
+      setShowAddFreeMaterial(false);
+      setFreMatTitle(""); setFreMatUrl(""); setFreMatType("pdf"); setFreMatSection(""); setFreMatDownload(false);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Alert.alert("Success", "Material added!");
+    },
+    onError: () => Alert.alert("Error", "Failed to add material"),
+  });
+
+  const deleteFreeMaterialMutation = useMutation({
+    mutationFn: async (id: number) => {
+      await apiRequest("DELETE", `/api/admin/study-materials/${id}`);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/study-materials"] });
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    },
+    onError: () => Alert.alert("Error", "Failed to delete material"),
   });
 
   const addMissionMutation = useMutation({
@@ -331,7 +387,7 @@ export default function AdminDashboard() {
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>Courses ({courses.length})</Text>
-              <Pressable style={styles.addBtn} onPress={() => setShowAddCourse(true)}>
+              <Pressable style={styles.addBtn} onPress={() => setShowCourseTypeChoice(true)}>
                 <Ionicons name="add" size={18} color="#fff" />
                 <Text style={styles.addBtnText}>Add Course</Text>
               </Pressable>
@@ -346,9 +402,9 @@ export default function AdminDashboard() {
                     <View style={styles.adminCardRow}>
                       <Text style={styles.adminCardTitle} numberOfLines={2}>{course.title}</Text>
                       <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                        <View style={{ backgroundColor: (course.course_type || "live") === "live" ? "#EF444420" : "#8B5CF620", paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8 }}>
-                          <Text style={{ fontSize: 10, fontFamily: "Inter_700Bold", color: (course.course_type || "live") === "live" ? "#EF4444" : "#8B5CF6", textTransform: "uppercase" }}>
-                            {(course.course_type || "live") === "live" ? "🔴 LIVE" : "📹 RECORDED"}
+                        <View style={{ backgroundColor: (course.course_type || "live") === "live" ? "#EF444420" : (course.course_type === "test_series" ? "#F59E0B20" : "#8B5CF620"), paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8 }}>
+                          <Text style={{ fontSize: 10, fontFamily: "Inter_700Bold", color: (course.course_type || "live") === "live" ? "#EF4444" : (course.course_type === "test_series" ? "#F59E0B" : "#8B5CF6"), textTransform: "uppercase" }}>
+                            {(course.course_type || "live") === "live" ? "🔴 LIVE" : (course.course_type === "test_series" ? "📋 TEST SERIES" : "📹 RECORDED")}
                           </Text>
                         </View>
                         <View style={[styles.statusDot, { backgroundColor: course.is_published ? "#22C55E" : "#F59E0B" }]} />
@@ -395,6 +451,51 @@ export default function AdminDashboard() {
                       <Ionicons name="create-outline" size={18} color={Colors.light.primary} />
                     </Pressable>
                     <Pressable style={styles.deleteBtn} onPress={() => handleDeleteCourse(course)}>
+                      <Ionicons name="trash-outline" size={18} color="#EF4444" />
+                    </Pressable>
+                  </View>
+                </View>
+              ))
+            )}
+          </View>
+        )}
+
+        {activeTab === "materials" && (
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Free Study Materials ({freeMaterials.length})</Text>
+              <Pressable style={styles.addBtn} onPress={() => setShowAddFreeMaterial(true)}>
+                <Ionicons name="add" size={18} color="#fff" />
+                <Text style={styles.addBtnText}>Add Material</Text>
+              </Pressable>
+            </View>
+            <Text style={{ fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.textMuted, marginBottom: 12 }}>These materials are free for all students (no enrollment required)</Text>
+
+            {materialsLoading ? (
+              <ActivityIndicator size="large" color={Colors.light.primary} style={{ marginTop: 20 }} />
+            ) : freeMaterials.length === 0 ? (
+              <Text style={{ fontSize: 14, fontFamily: "Inter_500Medium", color: Colors.light.textMuted, textAlign: "center", marginTop: 30 }}>No free materials yet</Text>
+            ) : (
+              freeMaterials.map((mat) => (
+                <View key={mat.id} style={styles.adminCard}>
+                  <View style={styles.adminCardContent}>
+                    <View style={styles.adminCardRow}>
+                      <Text style={styles.adminCardTitle} numberOfLines={2}>{mat.title}</Text>
+                      <View style={{ backgroundColor: "#10B98120", paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8 }}>
+                        <Text style={{ fontSize: 10, fontFamily: "Inter_700Bold", color: "#10B981", textTransform: "uppercase" }}>{mat.file_type}</Text>
+                      </View>
+                    </View>
+                    <View style={styles.adminCardMeta}>
+                      {mat.section_title && <Text style={styles.adminCardMetaText}>{mat.section_title}</Text>}
+                      {mat.section_title && <Text style={styles.adminCardMetaText}>|</Text>}
+                      <Text style={styles.adminCardMetaText}>{mat.download_allowed ? "Download ON" : "View only"}</Text>
+                    </View>
+                  </View>
+                  <View style={styles.adminCardActions}>
+                    <Pressable style={styles.deleteBtn} onPress={() => {
+                      if (Platform.OS === "web") { if (window.confirm(`Delete "${mat.title}"?`)) deleteFreeMaterialMutation.mutate(mat.id); }
+                      else Alert.alert("Delete", `Delete "${mat.title}"?`, [{ text: "Cancel" }, { text: "Delete", style: "destructive", onPress: () => deleteFreeMaterialMutation.mutate(mat.id) }]);
+                    }}>
                       <Ionicons name="trash-outline" size={18} color="#EF4444" />
                     </Pressable>
                   </View>
@@ -709,11 +810,56 @@ export default function AdminDashboard() {
         </View>
       </Modal>
 
+      <Modal visible={showCourseTypeChoice} animationType="fade" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16, maxHeight: 380 }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>What do you want to create?</Text>
+              <Pressable onPress={() => setShowCourseTypeChoice(false)}>
+                <Ionicons name="close" size={24} color={Colors.light.text} />
+              </Pressable>
+            </View>
+            <View style={{ gap: 12, padding: 16 }}>
+              <Pressable
+                style={{ padding: 16, borderRadius: 14, borderWidth: 2, borderColor: Colors.light.primary, backgroundColor: `${Colors.light.primary}08` }}
+                onPress={() => {
+                  setShowCourseTypeChoice(false);
+                  setNewCourse(prev => ({ ...prev, courseType: "live" }));
+                  setShowAddCourse(true);
+                }}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 6 }}>
+                  <Ionicons name="book" size={24} color={Colors.light.primary} />
+                  <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Course</Text>
+                </View>
+                <Text style={{ fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.textMuted }}>
+                  Full course with lectures, tests, study materials, and live classes
+                </Text>
+              </Pressable>
+              <Pressable
+                style={{ padding: 16, borderRadius: 14, borderWidth: 2, borderColor: "#8B5CF6", backgroundColor: "#8B5CF608" }}
+                onPress={() => {
+                  setShowCourseTypeChoice(false);
+                  setNewCourse(prev => ({ ...prev, courseType: "test_series" }));
+                  setShowAddCourse(true);
+                }}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 6 }}>
+                  <Ionicons name="clipboard" size={24} color="#8B5CF6" />
+                  <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Test Series</Text>
+                </View>
+                <Text style={{ fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.textMuted }}>
+                  Only tests — mock, practice, PYQ, chapter tests. No lectures, materials, or live classes.
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       <Modal visible={showAddCourse} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Add New Course</Text>
+              <Text style={styles.modalTitle}>{newCourse.courseType === "test_series" ? "Add Test Series" : "Add New Course"}</Text>
               <Pressable onPress={() => setShowAddCourse(false)}>
                 <Ionicons name="close" size={24} color={Colors.light.text} />
               </Pressable>
@@ -728,7 +874,7 @@ export default function AdminDashboard() {
                 { label: "Level", key: "level", placeholder: "Beginner / Intermediate / Advanced" },
                 { label: "Price (₹)", key: "price", placeholder: "0 for free" },
                 { label: "Original Price (₹)", key: "originalPrice", placeholder: "For discount display" },
-                { label: "Duration (hours)", key: "durationHours", placeholder: "e.g., 40" },
+                ...(newCourse.courseType !== "test_series" ? [{ label: "Duration (hours)", key: "durationHours", placeholder: "e.g., 40" }] : []),
               ].map((field) => (
                 <View key={field.key} style={styles.formField}>
                   <Text style={styles.formLabel}>{field.label}</Text>
@@ -744,19 +890,21 @@ export default function AdminDashboard() {
                   />
                 </View>
               ))}
-              <View style={styles.formField}>
-                <Text style={styles.formLabel}>Course Type</Text>
-                <View style={{ flexDirection: "row", gap: 10 }}>
-                  {(["live", "recorded"] as const).map((t) => (
-                    <Pressable key={t} onPress={() => setNewCourse((prev) => ({ ...prev, courseType: t }))}
-                      style={{ flex: 1, paddingVertical: 10, borderRadius: 10, borderWidth: 2, borderColor: newCourse.courseType === t ? (t === "live" ? "#EF4444" : "#8B5CF6") : Colors.light.border, backgroundColor: newCourse.courseType === t ? (t === "live" ? "#EF444410" : "#8B5CF610") : "transparent", alignItems: "center" }}>
-                      <Text style={{ fontSize: 13, fontFamily: "Inter_700Bold", color: newCourse.courseType === t ? (t === "live" ? "#EF4444" : "#8B5CF6") : Colors.light.textMuted }}>
-                        {t === "live" ? "🔴 Live" : "📹 Recorded"}
-                      </Text>
-                    </Pressable>
-                  ))}
+              {newCourse.courseType !== "test_series" && (
+                <View style={styles.formField}>
+                  <Text style={styles.formLabel}>Course Type</Text>
+                  <View style={{ flexDirection: "row", gap: 10 }}>
+                    {(["live", "recorded"] as const).map((t) => (
+                      <Pressable key={t} onPress={() => setNewCourse((prev) => ({ ...prev, courseType: t }))}
+                        style={{ flex: 1, paddingVertical: 10, borderRadius: 10, borderWidth: 2, borderColor: newCourse.courseType === t ? (t === "live" ? "#EF4444" : "#8B5CF6") : Colors.light.border, backgroundColor: newCourse.courseType === t ? (t === "live" ? "#EF444410" : "#8B5CF610") : "transparent", alignItems: "center" }}>
+                        <Text style={{ fontSize: 13, fontFamily: "Inter_700Bold", color: newCourse.courseType === t ? (t === "live" ? "#EF4444" : "#8B5CF6") : Colors.light.textMuted }}>
+                          {t === "live" ? "🔴 Live" : "📹 Recorded"}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
                 </View>
-              </View>
+              )}
               {newCourse.courseType === "live" && (
                 <>
                   <View style={styles.formField}>
@@ -786,7 +934,7 @@ export default function AdminDashboard() {
             >
               <LinearGradient colors={[Colors.light.primary, Colors.light.primaryDark]} style={styles.createBtnGrad}>
                 {addCourseMutation.isPending ? <ActivityIndicator color="#fff" /> : (
-                  <Text style={styles.createBtnText}>Create Course</Text>
+                  <Text style={styles.createBtnText}>{newCourse.courseType === "test_series" ? "Create Test Series" : "Create Course"}</Text>
                 )}
               </LinearGradient>
             </Pressable>
@@ -1124,6 +1272,55 @@ export default function AdminDashboard() {
                 </Pressable>
               </ScrollView>
             )}
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={showAddFreeMaterial} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Add Free Study Material</Text>
+              <Pressable onPress={() => setShowAddFreeMaterial(false)}>
+                <Ionicons name="close" size={24} color={Colors.light.text} />
+              </Pressable>
+            </View>
+            <ScrollView style={styles.modalScroll}>
+              <View style={styles.formField}>
+                <Text style={styles.formLabel}>Title *</Text>
+                <TextInput style={styles.formInput} placeholder="e.g., Algebra Formulae Sheet" placeholderTextColor={Colors.light.textMuted} value={freMatTitle} onChangeText={setFreMatTitle} />
+              </View>
+              <View style={styles.formField}>
+                <Text style={styles.formLabel}>File URL *</Text>
+                <TextInput style={styles.formInput} placeholder="https://drive.google.com/..." placeholderTextColor={Colors.light.textMuted} value={freMatUrl} onChangeText={setFreMatUrl} />
+              </View>
+              <View style={styles.formField}>
+                <Text style={styles.formLabel}>File Type</Text>
+                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                  {["pdf", "video", "link", "doc"].map(t => (
+                    <Pressable key={t} onPress={() => setFreMatType(t)} style={{ paddingHorizontal: 14, paddingVertical: 6, borderRadius: 8, backgroundColor: freMatType === t ? Colors.light.primary : Colors.light.secondary }}>
+                      <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: freMatType === t ? "#fff" : Colors.light.text }}>{t.toUpperCase()}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </View>
+              <View style={styles.formField}>
+                <Text style={styles.formLabel}>Folder / Section</Text>
+                <TextInput style={styles.formInput} placeholder="e.g., Formulas, Notes" placeholderTextColor={Colors.light.textMuted} value={freMatSection} onChangeText={setFreMatSection} />
+              </View>
+              <View style={styles.formField}>
+                <Text style={styles.formLabel}>Allow Download</Text>
+                <Switch value={freMatDownload} onValueChange={setFreMatDownload} trackColor={{ false: Colors.light.border, true: Colors.light.primary }} thumbColor="#fff" />
+              </View>
+            </ScrollView>
+            <Pressable
+              style={[styles.createBtn, (!freMatTitle || !freMatUrl) && styles.createBtnDisabled]}
+              disabled={!freMatTitle || !freMatUrl || addFreeMaterialMutation.isPending}
+              onPress={() => addFreeMaterialMutation.mutate({ title: freMatTitle, fileUrl: freMatUrl, fileType: freMatType, sectionTitle: freMatSection || null, downloadAllowed: freMatDownload, isFree: true })}>
+              <LinearGradient colors={["#10B981", "#059669"]} style={styles.createBtnGrad}>
+                {addFreeMaterialMutation.isPending ? <ActivityIndicator color="#fff" /> : <Text style={styles.createBtnText}>Add Material</Text>}
+              </LinearGradient>
+            </Pressable>
           </View>
         </View>
       </Modal>
