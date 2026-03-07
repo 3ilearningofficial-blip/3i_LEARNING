@@ -3,6 +3,8 @@ import { createServer, type Server } from "node:http";
 import { Pool } from "pg";
 import multer from "multer";
 import pdfParse from "pdf-parse";
+import { verifyFirebaseToken } from "./firebase";
+import { getRazorpay, verifyPaymentSignature } from "./razorpay";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -106,6 +108,50 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
     }
     res.json(user);
+  });
+
+  app.post("/api/auth/firebase-login", async (req: Request, res: Response) => {
+    try {
+      const { idToken, deviceId } = req.body;
+      if (!idToken) return res.status(400).json({ message: "Firebase ID token is required" });
+
+      const decoded = await verifyFirebaseToken(idToken);
+      const phoneNumber = decoded.phone_number;
+      if (!phoneNumber) return res.status(400).json({ message: "Phone number not found in token" });
+
+      const phone = phoneNumber.replace(/^\+91/, "");
+
+      let result = await db.query("SELECT * FROM users WHERE phone = $1", [phone]);
+      if (result.rows.length === 0) {
+        const role = ADMIN_PHONES.includes(phone) ? "admin" : "student";
+        result = await db.query(
+          "INSERT INTO users (name, phone, role, created_at) VALUES ($1, $2, $3, $4) RETURNING *",
+          [`Student${phone.slice(-4)}`, phone, role, Date.now()]
+        );
+      }
+
+      const user = result.rows[0];
+      const sessionToken = Date.now().toString(36) + Math.random().toString(36).substr(2, 12);
+      await db.query("UPDATE users SET device_id = $1, session_token = $2 WHERE id = $3", [deviceId || null, sessionToken, user.id]);
+
+      const sessionUser = {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+        deviceId: deviceId,
+        sessionToken: sessionToken,
+      };
+      (req.session as Record<string, unknown>).user = sessionUser;
+      res.json({ success: true, user: sessionUser });
+    } catch (err: any) {
+      console.error("Firebase login error:", err);
+      if (err.code === "auth/id-token-expired") {
+        return res.status(401).json({ message: "Token expired, please try again" });
+      }
+      res.status(500).json({ message: "Authentication failed" });
+    }
   });
 
   app.post("/api/auth/logout", (req: Request, res: Response) => {
@@ -221,6 +267,87 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ message: "Failed to enroll" });
+    }
+  });
+
+  // ==================== PAYMENT ROUTES ====================
+  app.post("/api/payments/create-order", async (req: Request, res: Response) => {
+    try {
+      const user = (req.session as Record<string, unknown>).user as { id: number } | undefined;
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+
+      const { courseId } = req.body;
+      if (!courseId) return res.status(400).json({ message: "Course ID is required" });
+
+      const courseResult = await db.query("SELECT * FROM courses WHERE id = $1", [courseId]);
+      if (courseResult.rows.length === 0) return res.status(404).json({ message: "Course not found" });
+
+      const course = courseResult.rows[0];
+      if (course.is_free) return res.status(400).json({ message: "This course is free, no payment needed" });
+
+      const existingEnrollment = await db.query("SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2", [user.id, courseId]);
+      if (existingEnrollment.rows.length > 0) return res.status(400).json({ message: "Already enrolled" });
+
+      const amount = Math.round(parseFloat(course.price) * 100);
+      const razorpay = getRazorpay();
+      const order = await razorpay.orders.create({
+        amount,
+        currency: "INR",
+        receipt: `course_${courseId}_user_${user.id}_${Date.now()}`,
+        notes: { courseId: courseId.toString(), userId: user.id.toString(), courseTitle: course.title },
+      });
+
+      await db.query(
+        "INSERT INTO payments (user_id, course_id, razorpay_order_id, amount, status, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
+        [user.id, courseId, order.id, course.price, "created", Date.now()]
+      );
+
+      res.json({
+        orderId: order.id,
+        amount: order.amount,
+        currency: order.currency,
+        keyId: process.env.RAZORPAY_KEY_ID,
+        courseName: course.title,
+        courseId,
+      });
+    } catch (err) {
+      console.error("Create order error:", err);
+      res.status(500).json({ message: "Failed to create payment order" });
+    }
+  });
+
+  app.post("/api/payments/verify", async (req: Request, res: Response) => {
+    try {
+      const user = (req.session as Record<string, unknown>).user as { id: number } | undefined;
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+
+      const { razorpay_order_id, razorpay_payment_id, razorpay_signature, courseId } = req.body;
+      if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+        return res.status(400).json({ message: "Payment details are required" });
+      }
+
+      const isValid = verifyPaymentSignature(razorpay_order_id, razorpay_payment_id, razorpay_signature);
+      if (!isValid) return res.status(400).json({ message: "Invalid payment signature" });
+
+      await db.query(
+        "UPDATE payments SET razorpay_payment_id = $1, razorpay_signature = $2, status = $3 WHERE razorpay_order_id = $4 AND user_id = $5",
+        [razorpay_payment_id, razorpay_signature, "paid", razorpay_order_id, user.id]
+      );
+
+      await db.query(
+        "INSERT INTO enrollments (user_id, course_id, enrolled_at) VALUES ($1, $2, $3) ON CONFLICT (user_id, course_id) DO NOTHING",
+        [user.id, courseId, Date.now()]
+      );
+
+      await db.query(
+        "UPDATE courses SET total_students = COALESCE(total_students, 0) + 1 WHERE id = $1",
+        [courseId]
+      );
+
+      res.json({ success: true, message: "Payment verified and enrolled successfully" });
+    } catch (err) {
+      console.error("Verify payment error:", err);
+      res.status(500).json({ message: "Payment verification failed" });
     }
   });
 

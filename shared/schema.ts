@@ -176,6 +176,19 @@ export const doubts = pgTable("doubts", {
   createdAt: bigint("created_at", { mode: "number" }),
 });
 
+export const payments = pgTable("payments", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id"),
+  courseId: integer("course_id"),
+  razorpayOrderId: text("razorpay_order_id"),
+  razorpayPaymentId: text("razorpay_payment_id"),
+  razorpaySignature: text("razorpay_signature"),
+  amount: decimal("amount", { precision: 10, scale: 2 }),
+  currency: text("currency").default("INR"),
+  status: text("status").default("created"),
+  createdAt: bigint("created_at", { mode: "number" }),
+});
+
 export type User = typeof users.$inferSelect;
 export type Course = typeof courses.$inferSelect;
 export type Lecture = typeof lectures.$inferSelect;
