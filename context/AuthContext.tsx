@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode, useMemo } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { Alert } from "react-native";
+import { Alert, Platform } from "react-native";
 import { apiRequest, getApiUrl } from "@/lib/query-client";
 import { fetch } from "expo/fetch";
 
@@ -25,6 +25,37 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+const storageKey = "user";
+
+async function storeUser(userData: AuthUser) {
+  if (Platform.OS === "web" && typeof sessionStorage !== "undefined") {
+    sessionStorage.setItem(storageKey, JSON.stringify(userData));
+  } else {
+    await AsyncStorage.setItem(storageKey, JSON.stringify(userData));
+  }
+}
+
+async function getStoredUser(): Promise<AuthUser | null> {
+  try {
+    if (Platform.OS === "web" && typeof sessionStorage !== "undefined") {
+      const stored = sessionStorage.getItem(storageKey);
+      return stored ? JSON.parse(stored) : null;
+    }
+    const stored = await AsyncStorage.getItem(storageKey);
+    return stored ? JSON.parse(stored) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function removeStoredUser() {
+  if (Platform.OS === "web" && typeof sessionStorage !== "undefined") {
+    sessionStorage.removeItem(storageKey);
+  } else {
+    await AsyncStorage.removeItem(storageKey);
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -37,7 +68,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (res.ok) {
         const data = await res.json();
         setUser(data);
-        await AsyncStorage.setItem("user", JSON.stringify(data));
+        await storeUser(data);
       } else {
         const errorData = await res.json().catch(() => null);
         if (errorData?.message === "logged_in_elsewhere") {
@@ -48,12 +79,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           );
         }
         setUser(null);
-        await AsyncStorage.removeItem("user");
+        await removeStoredUser();
       }
     } catch {
-      const stored = await AsyncStorage.getItem("user");
+      const stored = await getStoredUser();
       if (stored) {
-        setUser(JSON.parse(stored));
+        setUser(stored);
       }
     }
   };
@@ -68,7 +99,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = (userData: AuthUser) => {
     setUser(userData);
-    AsyncStorage.setItem("user", JSON.stringify(userData));
+    storeUser(userData);
   };
 
   const logout = async () => {
@@ -76,7 +107,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await apiRequest("POST", "/api/auth/logout");
     } catch {}
     setUser(null);
-    await AsyncStorage.removeItem("user");
+    await removeStoredUser();
   };
 
   const value = useMemo(

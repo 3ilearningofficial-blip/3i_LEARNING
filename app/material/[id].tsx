@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import {
   View, Text, StyleSheet, Pressable, Platform,
-  ActivityIndicator, Share, Linking,
+  ActivityIndicator,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { WebView } from "react-native-webview";
@@ -10,6 +10,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useQuery } from "@tanstack/react-query";
+import { useAuth } from "@/context/AuthContext";
 import Colors from "@/constants/colors";
 
 function getViewUrl(fileUrl: string, fileType: string): string {
@@ -34,7 +35,10 @@ export default function MaterialViewerScreen() {
   const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const [retryCount, setRetryCount] = useState(0);
   const topPadding = Platform.OS === "web" ? 67 : insets.top;
+  const { isAdmin } = useAuth();
+
 
   const { data: material, isError: fetchError } = useQuery<{
     id: number; title: string; file_url: string; file_type: string;
@@ -46,6 +50,12 @@ export default function MaterialViewerScreen() {
   });
 
   const viewUrl = material ? getViewUrl(material.file_url, material.file_type) : "";
+
+  const handleRetry = () => {
+    setError(false);
+    setLoading(true);
+    setRetryCount(prev => prev + 1);
+  };
 
   return (
     <View style={styles.container}>
@@ -73,28 +83,21 @@ export default function MaterialViewerScreen() {
             )}
           </View>
           <View style={styles.headerActions}>
-            {material?.download_allowed && (
+            {isAdmin && material?.download_allowed && (
               <Pressable
                 style={styles.actionBtn}
                 onPress={() => {
-                  if (material?.file_url) Linking.openURL(material.file_url);
+                  if (Platform.OS === "web") {
+                    window.open(material.file_url, "_blank");
+                  } else {
+                    const { Linking } = require("react-native");
+                    Linking.openURL(material.file_url);
+                  }
                 }}
               >
                 <Ionicons name="download-outline" size={20} color="#fff" />
               </Pressable>
             )}
-            <Pressable
-              style={styles.actionBtn}
-              onPress={async () => {
-                if (material?.file_url) {
-                  try {
-                    await Share.share({ url: material.file_url, message: `${material.title}: ${material.file_url}` });
-                  } catch {}
-                }
-              }}
-            >
-              <Ionicons name="share-outline" size={20} color="#fff" />
-            </Pressable>
           </View>
         </View>
       </LinearGradient>
@@ -105,9 +108,9 @@ export default function MaterialViewerScreen() {
             <Ionicons name="alert-circle-outline" size={48} color={Colors.light.accent} />
             <Text style={styles.errorTitle}>Failed to load material</Text>
             <Text style={styles.errorSub}>Please check your connection and try again.</Text>
-            <Pressable style={styles.openExtBtn} onPress={() => router.back()}>
+            <Pressable style={styles.retryBtn} onPress={() => router.back()}>
               <Ionicons name="arrow-back" size={16} color="#fff" />
-              <Text style={styles.openExtBtnText}>Go Back</Text>
+              <Text style={styles.retryBtnText}>Go Back</Text>
             </Pressable>
           </View>
         ) : !material ? (
@@ -119,26 +122,35 @@ export default function MaterialViewerScreen() {
           <View style={styles.centered}>
             <Ionicons name="alert-circle-outline" size={48} color={Colors.light.accent} />
             <Text style={styles.errorTitle}>Unable to preview</Text>
-            <Text style={styles.errorSub}>This file can't be previewed in-app.</Text>
-            <Pressable style={styles.openExtBtn} onPress={() => Linking.openURL(material.file_url)}>
-              <Ionicons name="open-outline" size={16} color="#fff" />
-              <Text style={styles.openExtBtnText}>Open in Browser</Text>
+            <Text style={styles.errorSub}>This file can't be previewed right now.</Text>
+            <Pressable style={styles.retryBtn} onPress={handleRetry}>
+              <Ionicons name="refresh" size={16} color="#fff" />
+              <Text style={styles.retryBtnText}>Try Again</Text>
             </Pressable>
           </View>
         ) : Platform.OS === "web" ? (
           <iframe
+            key={`pdf-frame-${retryCount}`}
             src={viewUrl}
             style={{ width: "100%", height: "100%", border: "none" } as any}
             title={material.title}
             onLoad={() => setLoading(false)}
+            sandbox="allow-scripts allow-same-origin"
           />
         ) : (
           <WebView
+            key={`webview-${retryCount}`}
             source={{ uri: viewUrl }}
             style={styles.webview}
             onLoadStart={() => setLoading(true)}
             onLoadEnd={() => setLoading(false)}
             onError={() => { setLoading(false); setError(true); }}
+            onHttpError={(e) => {
+              if (e.nativeEvent.statusCode >= 400) {
+                setLoading(false);
+                setError(true);
+              }
+            }}
             javaScriptEnabled
             domStorageEnabled
             startInLoadingState
@@ -147,6 +159,7 @@ export default function MaterialViewerScreen() {
             allowsFullscreenVideo
             setSupportMultipleWindows={false}
             originWhitelist={["*"]}
+            userAgent="Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
             renderLoading={() => (
               <View style={styles.webviewLoading}>
                 <ActivityIndicator size="large" color={Colors.light.primary} />
@@ -182,8 +195,8 @@ const styles = StyleSheet.create({
   loadingText: { fontSize: 14, fontFamily: "Inter_500Medium", color: Colors.light.textMuted, marginTop: 12 },
   errorTitle: { fontSize: 18, fontFamily: "Inter_700Bold", color: Colors.light.text, marginTop: 16 },
   errorSub: { fontSize: 14, fontFamily: "Inter_400Regular", color: Colors.light.textMuted, marginTop: 6, textAlign: "center" },
-  openExtBtn: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: Colors.light.primary, paddingHorizontal: 20, paddingVertical: 12, borderRadius: 12, marginTop: 20 },
-  openExtBtnText: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: "#fff" },
+  retryBtn: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: Colors.light.primary, paddingHorizontal: 20, paddingVertical: 12, borderRadius: 12, marginTop: 20 },
+  retryBtnText: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: "#fff" },
   webview: { flex: 1 },
   webviewLoading: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, alignItems: "center", justifyContent: "center", backgroundColor: Colors.light.background },
   webLoadingOverlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, alignItems: "center", justifyContent: "center", backgroundColor: Colors.light.background },
