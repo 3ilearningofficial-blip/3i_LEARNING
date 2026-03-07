@@ -180,6 +180,14 @@ function configureExpoAndLanding(app: express.Application) {
       return next();
     }
 
+    if (req.path === "/app" || req.path.startsWith("/app/")) {
+      const indexPath = path.resolve(process.cwd(), "static-build", "web", "index.html");
+      if (fs.existsSync(indexPath)) {
+        return res.sendFile(indexPath);
+      }
+      return next();
+    }
+
     if (req.path !== "/" && req.path !== "/manifest") {
       return next();
     }
@@ -203,6 +211,8 @@ function configureExpoAndLanding(app: express.Application) {
 
   app.use("/assets", express.static(path.resolve(process.cwd(), "assets")));
   app.use(express.static(path.resolve(process.cwd(), "static-build")));
+  app.use("/_expo", express.static(path.resolve(process.cwd(), "static-build", "web", "_expo")));
+  app.use("/static", express.static(path.resolve(process.cwd(), "static-build", "web")));
 
   log("Expo routing: Checking expo-platform header on / and /manifest");
 }
