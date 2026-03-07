@@ -53,8 +53,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
           await db.query("UPDATE users SET otp = $1, otp_expires_at = $2 WHERE phone = $3", [otp, expires, identifier]);
         }
       }
-      console.log(`OTP for ${identifier}: ${otp}`);
-      res.json({ success: true, message: "OTP sent successfully", devOtp: otp });
+      if (process.env.NODE_ENV !== "production") {
+        console.log(`OTP for ${identifier}: ${otp}`);
+      }
+      const response: any = { success: true, message: "OTP sent successfully" };
+      if (process.env.NODE_ENV !== "production") {
+        response.devOtp = otp;
+      }
+      res.json(response);
     } catch (err) {
       console.error(err);
       res.status(500).json({ message: "Failed to send OTP" });
@@ -329,6 +335,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const isValid = verifyPaymentSignature(razorpay_order_id, razorpay_payment_id, razorpay_signature);
       if (!isValid) return res.status(400).json({ message: "Invalid payment signature" });
 
+      const paymentRecord = await db.query(
+        "SELECT * FROM payments WHERE razorpay_order_id = $1 AND user_id = $2",
+        [razorpay_order_id, user.id]
+      );
+      if (paymentRecord.rows.length === 0) return res.status(400).json({ message: "Payment order not found" });
+      if (paymentRecord.rows[0].status === "paid") return res.status(400).json({ message: "Payment already processed" });
+
+      const paymentCourseId = paymentRecord.rows[0].course_id;
+      if (courseId && paymentCourseId !== courseId) return res.status(400).json({ message: "Course mismatch" });
+
       await db.query(
         "UPDATE payments SET razorpay_payment_id = $1, razorpay_signature = $2, status = $3 WHERE razorpay_order_id = $4 AND user_id = $5",
         [razorpay_payment_id, razorpay_signature, "paid", razorpay_order_id, user.id]
@@ -336,12 +352,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       await db.query(
         "INSERT INTO enrollments (user_id, course_id, enrolled_at) VALUES ($1, $2, $3) ON CONFLICT (user_id, course_id) DO NOTHING",
-        [user.id, courseId, Date.now()]
+        [user.id, paymentCourseId, Date.now()]
       );
 
       await db.query(
         "UPDATE courses SET total_students = COALESCE(total_students, 0) + 1 WHERE id = $1",
-        [courseId]
+        [paymentCourseId]
       );
 
       res.json({ success: true, message: "Payment verified and enrolled successfully" });

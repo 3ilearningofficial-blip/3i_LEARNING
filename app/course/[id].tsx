@@ -129,6 +129,70 @@ export default function CourseDetailScreen() {
     },
   });
 
+  const handleRazorpayPayment = async () => {
+    try {
+      const orderRes = await apiRequest("POST", "/api/payments/create-order", { courseId: parseInt(id as string) });
+      const orderData = await orderRes.json();
+
+      if (Platform.OS === "web") {
+        const script = document.querySelector('script[src="https://checkout.razorpay.com/v1/checkout.js"]');
+        if (!script) {
+          const s = document.createElement("script");
+          s.src = "https://checkout.razorpay.com/v1/checkout.js";
+          document.head.appendChild(s);
+          await new Promise((resolve) => { s.onload = resolve; });
+        }
+
+        const options = {
+          key: orderData.keyId,
+          amount: orderData.amount,
+          currency: orderData.currency,
+          name: "3i Learning",
+          description: `Purchase: ${orderData.courseName}`,
+          order_id: orderData.orderId,
+          handler: async (response: any) => {
+            try {
+              await apiRequest("POST", "/api/payments/verify", {
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature: response.razorpay_signature,
+                courseId: parseInt(id as string),
+              });
+              qc.invalidateQueries({ queryKey: ["/api/courses", id] });
+              qc.invalidateQueries({ queryKey: ["/api/courses"] });
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+              Alert.alert("Success!", "Payment successful! You are now enrolled.");
+            } catch {
+              Alert.alert("Error", "Payment was received but enrollment failed. Please contact support.");
+            }
+          },
+          prefill: {
+            contact: user?.phone ? `+91${user.phone}` : "",
+          },
+          theme: { color: "#1A56DB" },
+          modal: { ondismiss: () => {} },
+        };
+
+        const rzp = new (window as any).Razorpay(options);
+        rzp.open();
+      } else {
+        Alert.alert(
+          "Payment",
+          "Razorpay payment will open in a browser window.",
+          [{ text: "OK" }]
+        );
+      }
+    } catch (err: any) {
+      const msg = err?.message || "";
+      if (msg.includes("Already enrolled")) {
+        Alert.alert("Already Enrolled", "You are already enrolled in this course.");
+        qc.invalidateQueries({ queryKey: ["/api/courses", id] });
+      } else {
+        Alert.alert("Error", "Failed to initiate payment. Please try again.");
+      }
+    }
+  };
+
   const handleEnroll = () => {
     if (!user) { router.push("/(auth)/login"); return; }
     if (course?.is_free) {
@@ -136,10 +200,10 @@ export default function CourseDetailScreen() {
     } else {
       Alert.alert(
         "Purchase Course",
-        `Buy "${course?.title}" for ₹${parseFloat(course?.price || "0").toFixed(0)}?\n\nAfter purchase you'll get instant access to all content.`,
+        `Buy "${course?.title}" for ₹${parseFloat(course?.price || "0").toFixed(0)}?\n\nYou will be redirected to secure payment.`,
         [
           { text: "Cancel", style: "cancel" },
-          { text: "Buy Now", onPress: () => enrollMutation.mutate() },
+          { text: "Pay Now", onPress: handleRazorpayPayment },
         ]
       );
     }

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import {
   View,
   Text,
@@ -15,45 +15,102 @@ import { router } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
-import { apiRequest } from "@/lib/query-client";
 import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 
-type LoginMode = "phone" | "email";
-
 export default function LoginScreen() {
   const insets = useSafeAreaInsets();
-  const [mode, setMode] = useState<LoginMode>("phone");
-  const [identifier, setIdentifier] = useState("");
+  const [phone, setPhone] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const recaptchaContainerRef = useRef<View>(null);
 
   const handleSendOTP = async () => {
-    if (!identifier.trim()) {
-      Alert.alert("Error", mode === "phone" ? "Enter your phone number" : "Enter your email address");
+    if (!phone.trim()) {
+      Alert.alert("Error", "Enter your phone number");
       return;
     }
-    if (mode === "phone" && identifier.length !== 10) {
+    if (phone.length !== 10) {
       Alert.alert("Error", "Enter a valid 10-digit phone number");
-      return;
-    }
-    if (mode === "email" && !identifier.includes("@")) {
-      Alert.alert("Error", "Enter a valid email address");
       return;
     }
 
     setIsLoading(true);
     try {
-      const res = await apiRequest("POST", "/api/auth/send-otp", {
-        identifier: identifier.trim(),
-        type: mode,
-      });
-      const data = await res.json();
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      router.push({
-        pathname: "/(auth)/otp",
-        params: { identifier: identifier.trim(), type: mode, devOtp: data.devOtp },
-      });
-    } catch (err) {
+      let firebaseSuccess = false;
+
+      if (Platform.OS === "web") {
+        try {
+          const { auth, RecaptchaVerifier, signInWithPhoneNumber } = await import("@/lib/firebase");
+
+          if (!(window as any).recaptchaVerifier) {
+            let container = document.getElementById("recaptcha-container");
+            if (!container) {
+              container = document.createElement("div");
+              container.id = "recaptcha-container";
+              container.style.position = "fixed";
+              container.style.bottom = "0";
+              container.style.left = "0";
+              container.style.zIndex = "-1";
+              container.style.opacity = "0.01";
+              container.style.width = "1px";
+              container.style.height = "1px";
+              container.style.overflow = "hidden";
+              document.body.appendChild(container);
+            }
+            (window as any).recaptchaVerifier = new RecaptchaVerifier(auth, container, {
+              size: "invisible",
+              callback: () => {},
+              "expired-callback": () => {
+                (window as any).recaptchaVerifier = null;
+              },
+            });
+          }
+
+          const confirmation = await signInWithPhoneNumber(
+            auth,
+            `+91${phone.trim()}`,
+            (window as any).recaptchaVerifier
+          );
+
+          (window as any).__firebaseConfirmation = confirmation;
+          firebaseSuccess = true;
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+          router.push({
+            pathname: "/(auth)/otp",
+            params: { phone: phone.trim(), method: "firebase" },
+          });
+        } catch (firebaseErr: any) {
+          console.warn("Firebase auth failed, falling back to dev OTP:", firebaseErr?.code || firebaseErr?.message);
+          (window as any).recaptchaVerifier = null;
+
+          if (firebaseErr?.code === "auth/too-many-requests") {
+            Alert.alert("Too Many Attempts", "Please wait a few minutes and try again.");
+            setIsLoading(false);
+            return;
+          }
+          if (firebaseErr?.code === "auth/invalid-phone-number") {
+            Alert.alert("Invalid Number", "Please enter a valid phone number.");
+            setIsLoading(false);
+            return;
+          }
+        }
+      }
+
+      if (!firebaseSuccess) {
+        const { apiRequest } = await import("@/lib/query-client");
+        const res = await apiRequest("POST", "/api/auth/send-otp", {
+          identifier: phone.trim(),
+          type: "phone",
+        });
+        const data = await res.json();
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        router.push({
+          pathname: "/(auth)/otp",
+          params: { phone: phone.trim(), method: "dev", devOtp: data.devOtp },
+        });
+      }
+    } catch (err: any) {
+      console.error("Send OTP error:", err);
       Alert.alert("Error", "Failed to send OTP. Please try again.");
     } finally {
       setIsLoading(false);
@@ -63,7 +120,7 @@ export default function LoginScreen() {
   return (
     <LinearGradient colors={["#0A1628", "#1A2E50", "#0A1628"]} style={styles.container}>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
-        <ScrollView contentContainerStyle={[styles.scrollContent, { paddingTop: insets.top + 40, paddingBottom: insets.bottom + 20 }]} keyboardShouldPersistTaps="handled">
+        <ScrollView contentContainerStyle={[styles.scrollContent, { paddingTop: insets.top + (Platform.OS === "web" ? 67 : 0) + 40, paddingBottom: insets.bottom + (Platform.OS === "web" ? 34 : 0) + 20 }]} keyboardShouldPersistTaps="handled">
           <View style={styles.logoSection}>
             <View style={styles.logoContainer}>
               <MaterialCommunityIcons name="math-compass" size={40} color="#fff" />
@@ -73,57 +130,24 @@ export default function LoginScreen() {
           </View>
 
           <View style={styles.card}>
-            <Text style={styles.cardTitle}>Welcome Back</Text>
-            <Text style={styles.cardSubtitle}>Sign in to continue your learning journey</Text>
-
-            <View style={styles.toggleContainer}>
-              <Pressable
-                style={[styles.toggleBtn, mode === "phone" && styles.toggleBtnActive]}
-                onPress={() => { setMode("phone"); setIdentifier(""); }}
-              >
-                <Ionicons name="call-outline" size={16} color={mode === "phone" ? "#fff" : Colors.light.textSecondary} />
-                <Text style={[styles.toggleText, mode === "phone" && styles.toggleTextActive]}>Phone</Text>
-              </Pressable>
-              <Pressable
-                style={[styles.toggleBtn, mode === "email" && styles.toggleBtnActive]}
-                onPress={() => { setMode("email"); setIdentifier(""); }}
-              >
-                <Ionicons name="mail-outline" size={16} color={mode === "email" ? "#fff" : Colors.light.textSecondary} />
-                <Text style={[styles.toggleText, mode === "email" && styles.toggleTextActive]}>Email</Text>
-              </Pressable>
-            </View>
+            <Text style={styles.cardTitle}>Welcome</Text>
+            <Text style={styles.cardSubtitle}>Sign in with your phone number to continue</Text>
 
             <View style={styles.inputContainer}>
-              {mode === "phone" ? (
-                <>
-                  <View style={styles.phonePrefix}>
-                    <Text style={styles.phonePrefixText}>+91</Text>
-                  </View>
-                  <TextInput
-                    style={[styles.input, styles.phoneInput]}
-                    placeholder="Enter mobile number"
-                    placeholderTextColor={Colors.light.textMuted}
-                    keyboardType="phone-pad"
-                    maxLength={10}
-                    value={identifier}
-                    onChangeText={setIdentifier}
-                    returnKeyType="done"
-                    onSubmitEditing={handleSendOTP}
-                  />
-                </>
-              ) : (
-                <TextInput
-                  style={styles.input}
-                  placeholder="Enter email address"
-                  placeholderTextColor={Colors.light.textMuted}
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                  value={identifier}
-                  onChangeText={setIdentifier}
-                  returnKeyType="done"
-                  onSubmitEditing={handleSendOTP}
-                />
-              )}
+              <View style={styles.phonePrefix}>
+                <Text style={styles.phonePrefixText}>+91</Text>
+              </View>
+              <TextInput
+                style={[styles.input, styles.phoneInput]}
+                placeholder="Enter mobile number"
+                placeholderTextColor={Colors.light.textMuted}
+                keyboardType="phone-pad"
+                maxLength={10}
+                value={phone}
+                onChangeText={setPhone}
+                returnKeyType="done"
+                onSubmitEditing={handleSendOTP}
+              />
             </View>
 
             <Pressable
@@ -142,10 +166,6 @@ export default function LoginScreen() {
                 )}
               </LinearGradient>
             </Pressable>
-
-            <Text style={styles.adminHint}>
-              Admin login: admin@3ilearning.com
-            </Text>
           </View>
 
           <View style={styles.footer}>
@@ -154,6 +174,7 @@ export default function LoginScreen() {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
+      <View ref={recaptchaContainerRef} />
     </LinearGradient>
   );
 }
@@ -176,17 +197,6 @@ const styles = StyleSheet.create({
   },
   cardTitle: { fontSize: 22, fontFamily: "Inter_700Bold", color: Colors.light.text },
   cardSubtitle: { fontSize: 14, color: Colors.light.textSecondary, fontFamily: "Inter_400Regular", marginTop: -8 },
-  toggleContainer: {
-    flexDirection: "row", backgroundColor: Colors.light.background,
-    borderRadius: 12, padding: 4,
-  },
-  toggleBtn: {
-    flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center",
-    paddingVertical: 10, borderRadius: 10, gap: 6,
-  },
-  toggleBtnActive: { backgroundColor: Colors.light.primary },
-  toggleText: { fontSize: 14, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary },
-  toggleTextActive: { color: "#fff" },
   inputContainer: {
     flexDirection: "row", alignItems: "center",
     backgroundColor: Colors.light.background, borderRadius: 12,
@@ -207,7 +217,6 @@ const styles = StyleSheet.create({
   sendBtnDisabled: { opacity: 0.7 },
   sendBtnGradient: { flexDirection: "row", alignItems: "center", justifyContent: "center", paddingVertical: 16, gap: 8 },
   sendBtnText: { fontSize: 16, fontFamily: "Inter_600SemiBold", color: "#fff" },
-  adminHint: { fontSize: 11, color: Colors.light.textMuted, textAlign: "center", fontFamily: "Inter_400Regular" },
   footer: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
   footerText: { fontSize: 13, color: "rgba(255,255,255,0.5)", fontFamily: "Inter_400Regular" },
 });

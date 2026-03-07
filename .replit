@@ -72,3 +72,9 @@ task = "shell.exec"
 args = "npm run expo:dev"
 waitForPort = 8081
 ensurePreviewReachable = "/status"
+
+[userenv]
+
+[userenv.shared]
+EXPO_PUBLIC_FIREBASE_API_KEY = "AIzaSyA7KoeaMEmEH9EujxEJWo7dbUrTExI_DEM"
+EXPO_PUBLIC_FIREBASE_PROJECT_ID = "i-learning-aa525"

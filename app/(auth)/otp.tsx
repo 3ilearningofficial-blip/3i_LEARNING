@@ -11,7 +11,6 @@ import { apiRequest } from "@/lib/query-client";
 import { useAuth } from "@/context/AuthContext";
 import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
-import "react-native-get-random-values";
 
 function generateDeviceId() {
   return Date.now().toString() + Math.random().toString(36).substr(2, 9);
@@ -19,7 +18,7 @@ function generateDeviceId() {
 
 export default function OTPScreen() {
   const insets = useSafeAreaInsets();
-  const { identifier, type, devOtp } = useLocalSearchParams<{ identifier: string; type: string; devOtp: string }>();
+  const { phone, method, devOtp } = useLocalSearchParams<{ phone: string; method: string; devOtp?: string }>();
   const [otp, setOtp] = useState(["", "", "", "", "", ""]);
   const [isLoading, setIsLoading] = useState(false);
   const [countdown, setCountdown] = useState(30);
@@ -54,16 +53,48 @@ export default function OTPScreen() {
     setIsLoading(true);
     try {
       const deviceId = generateDeviceId();
-      const res = await apiRequest("POST", "/api/auth/verify-otp", {
-        identifier, type, otp: code, deviceId,
-      });
-      const data = await res.json();
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      login(data.user);
-      router.replace("/(tabs)");
-    } catch (err: unknown) {
+
+      if (method === "firebase" && Platform.OS === "web") {
+        const confirmation = (window as any).__firebaseConfirmation;
+        if (!confirmation) {
+          Alert.alert("Error", "Session expired. Please go back and try again.");
+          setIsLoading(false);
+          return;
+        }
+
+        const result = await confirmation.confirm(code);
+        const idToken = await result.user.getIdToken();
+
+        const res = await apiRequest("POST", "/api/auth/firebase-login", {
+          idToken,
+          deviceId,
+        });
+        const data = await res.json();
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        login(data.user);
+        (window as any).__firebaseConfirmation = null;
+        router.replace("/(tabs)");
+      } else {
+        const res = await apiRequest("POST", "/api/auth/verify-otp", {
+          identifier: phone,
+          type: "phone",
+          otp: code,
+          deviceId,
+        });
+        const data = await res.json();
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        login(data.user);
+        router.replace("/(tabs)");
+      }
+    } catch (err: any) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      Alert.alert("Invalid OTP", "The OTP you entered is incorrect. Please try again.");
+      if (err?.code === "auth/invalid-verification-code") {
+        Alert.alert("Invalid OTP", "The code you entered is incorrect. Please try again.");
+      } else if (err?.code === "auth/code-expired") {
+        Alert.alert("Code Expired", "The verification code has expired. Please request a new one.");
+      } else {
+        Alert.alert("Invalid OTP", "The OTP you entered is incorrect. Please try again.");
+      }
       setOtp(["", "", "", "", "", ""]);
       inputs.current[0]?.focus();
     } finally {
@@ -73,22 +104,44 @@ export default function OTPScreen() {
 
   const handleResend = async () => {
     try {
-      await apiRequest("POST", "/api/auth/send-otp", { identifier, type });
+      if (method === "firebase" && Platform.OS === "web") {
+        const { auth, RecaptchaVerifier, signInWithPhoneNumber } = await import("@/lib/firebase");
+        if (!(window as any).recaptchaVerifier) {
+          let container = document.getElementById("recaptcha-container");
+          if (!container) {
+            container = document.createElement("div");
+            container.id = "recaptcha-container";
+            container.style.position = "fixed";
+            container.style.bottom = "0";
+            container.style.left = "0";
+            container.style.zIndex = "-1";
+            container.style.opacity = "0";
+            document.body.appendChild(container);
+          }
+          (window as any).recaptchaVerifier = new RecaptchaVerifier(auth, container, {
+            size: "invisible",
+            callback: () => {},
+          });
+        }
+        const confirmation = await signInWithPhoneNumber(auth, `+91${phone}`, (window as any).recaptchaVerifier);
+        (window as any).__firebaseConfirmation = confirmation;
+      } else {
+        await apiRequest("POST", "/api/auth/send-otp", { identifier: phone, type: "phone" });
+      }
       setCountdown(30); setCanResend(false);
       const timer = setInterval(() => {
         setCountdown((prev) => { if (prev <= 1) { setCanResend(true); clearInterval(timer); return 0; } return prev - 1; });
       }, 1000);
-    } catch { Alert.alert("Error", "Failed to resend OTP"); }
+      Alert.alert("OTP Sent", "A new OTP has been sent to your phone.");
+    } catch { Alert.alert("Error", "Failed to resend OTP. Please try again."); }
   };
 
-  const maskedId = type === "phone"
-    ? `+91 ******${identifier?.slice(-4)}`
-    : `${identifier?.slice(0, 2)}***@${identifier?.split("@")[1]}`;
+  const maskedPhone = `+91 ******${phone?.slice(-4)}`;
 
   return (
     <LinearGradient colors={["#0A1628", "#1A2E50", "#0A1628"]} style={styles.container}>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
-        <View style={[styles.content, { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 20 }]}>
+        <View style={[styles.content, { paddingTop: insets.top + (Platform.OS === "web" ? 67 : 0) + 20, paddingBottom: insets.bottom + (Platform.OS === "web" ? 34 : 0) + 20 }]}>
           <Pressable style={styles.backBtn} onPress={() => router.back()}>
             <Ionicons name="arrow-back" size={24} color="#fff" />
           </Pressable>
@@ -98,7 +151,7 @@ export default function OTPScreen() {
           </View>
 
           <Text style={styles.title}>Verify OTP</Text>
-          <Text style={styles.subtitle}>Enter the 6-digit code sent to{"\n"}{maskedId}</Text>
+          <Text style={styles.subtitle}>Enter the 6-digit code sent to{"\n"}{maskedPhone}</Text>
 
           {devOtp ? (
             <View style={styles.devOtpContainer}>
