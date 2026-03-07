@@ -73,10 +73,13 @@ export default function LoginScreen() {
           document.body.appendChild(container);
 
           const verifier = new RecaptchaVerifier(auth, container, {
-            size: "invisible",
-            callback: () => {},
+            size: "normal",
+            callback: () => {
+              (window as any).__recaptchaSolved = true;
+            },
             "expired-callback": () => {
               (window as any).recaptchaVerifier = null;
+              (window as any).__recaptchaSolved = false;
             },
           });
           (window as any).recaptchaVerifier = verifier;
@@ -88,6 +91,8 @@ export default function LoginScreen() {
           );
 
           (window as any).__firebaseConfirmation = confirmation;
+          const recaptchaEl = document.getElementById("recaptcha-container");
+          if (recaptchaEl) recaptchaEl.remove();
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
           router.push({
             pathname: "/(auth)/otp",
@@ -97,8 +102,8 @@ export default function LoginScreen() {
         } catch (firebaseErr: any) {
           console.warn("Firebase auth failed, using server OTP:", firebaseErr?.code, firebaseErr?.message);
           (window as any).recaptchaVerifier = null;
-          const existing = document.getElementById("recaptcha-container");
-          if (existing) existing.remove();
+          const recaptchaEl = document.getElementById("recaptcha-container");
+          if (recaptchaEl) recaptchaEl.remove();
 
           if (firebaseErr?.code === "auth/too-many-requests") {
             Alert.alert("Too Many Attempts", "Please wait a few minutes and try again.");
