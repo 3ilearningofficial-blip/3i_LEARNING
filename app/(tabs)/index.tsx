@@ -51,7 +51,7 @@ interface LiveClass {
   scheduled_at: number;
 }
 
-const DEFAULT_CATEGORIES = ["NDA", "CDS", "AFCAT"];
+const DEFAULT_CATEGORIES = ["All", "NDA", "CDS", "AFCAT"];
 
 const COURSE_COLORS = ["#1A56DB", "#7C3AED", "#DC2626", "#059669", "#D97706", "#0891B2"];
 
@@ -135,7 +135,7 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const { user, isAdmin, logout } = useAuth();
   const [search, setSearch] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState("NDA");
+  const [selectedCategory, setSelectedCategory] = useState("All");
   const [refreshing, setRefreshing] = useState(false);
 
   const topPadding = Platform.OS === "web" ? 67 : insets.top;
@@ -163,7 +163,7 @@ export default function HomeScreen() {
 
   const courses = React.useMemo(() => {
     let filtered = allCourses;
-    if (selectedCategory) filtered = filtered.filter((c) => c.category === selectedCategory);
+    if (selectedCategory && selectedCategory !== "All") filtered = filtered.filter((c) => c.category === selectedCategory);
     if (search) {
       const q = search.toLowerCase();
       filtered = filtered.filter((c) => c.title.toLowerCase().includes(q) || c.description?.toLowerCase().includes(q));
