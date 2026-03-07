@@ -24,6 +24,20 @@ export default function LoginScreen() {
   const [phone, setPhone] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
+  const sendViaServer = async (phoneNumber: string) => {
+    const { apiRequest } = await import("@/lib/query-client");
+    const res = await apiRequest("POST", "/api/auth/send-otp", {
+      identifier: phoneNumber,
+      type: "phone",
+    });
+    const data = await res.json();
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    router.push({
+      pathname: "/(auth)/otp",
+      params: { phone: phoneNumber, method: "server", devOtp: data.devOtp || "" },
+    });
+  };
+
   const handleSendOTP = async () => {
     if (!phone.trim()) {
       Alert.alert("Error", "Enter your phone number");
@@ -35,18 +49,71 @@ export default function LoginScreen() {
     }
 
     setIsLoading(true);
+    const phoneNumber = phone.trim();
+
     try {
-      const { apiRequest } = await import("@/lib/query-client");
-      const res = await apiRequest("POST", "/api/auth/send-otp", {
-        identifier: phone.trim(),
-        type: "phone",
-      });
-      const data = await res.json();
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      router.push({
-        pathname: "/(auth)/otp",
-        params: { phone: phone.trim(), method: "server", devOtp: data.devOtp || "" },
-      });
+      if (Platform.OS === "web") {
+        try {
+          const { auth, RecaptchaVerifier, signInWithPhoneNumber } = await import("@/lib/firebase");
+
+          if ((window as any).recaptchaVerifier) {
+            try { (window as any).recaptchaVerifier.clear(); } catch {}
+            (window as any).recaptchaVerifier = null;
+          }
+          const existing = document.getElementById("recaptcha-container");
+          if (existing) existing.remove();
+
+          const container = document.createElement("div");
+          container.id = "recaptcha-container";
+          container.style.position = "fixed";
+          container.style.bottom = "10px";
+          container.style.left = "50%";
+          container.style.transform = "translateX(-50%)";
+          container.style.zIndex = "99999";
+          document.body.appendChild(container);
+
+          const verifier = new RecaptchaVerifier(auth, container, {
+            size: "invisible",
+            callback: () => {},
+            "expired-callback": () => {
+              (window as any).recaptchaVerifier = null;
+            },
+          });
+          (window as any).recaptchaVerifier = verifier;
+
+          const confirmation = await signInWithPhoneNumber(
+            auth,
+            `+91${phoneNumber}`,
+            verifier
+          );
+
+          (window as any).__firebaseConfirmation = confirmation;
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+          router.push({
+            pathname: "/(auth)/otp",
+            params: { phone: phoneNumber, method: "firebase" },
+          });
+          return;
+        } catch (firebaseErr: any) {
+          console.warn("Firebase auth failed, using server OTP:", firebaseErr?.code, firebaseErr?.message);
+          (window as any).recaptchaVerifier = null;
+          const existing = document.getElementById("recaptcha-container");
+          if (existing) existing.remove();
+
+          if (firebaseErr?.code === "auth/too-many-requests") {
+            Alert.alert("Too Many Attempts", "Please wait a few minutes and try again.");
+            setIsLoading(false);
+            return;
+          }
+          if (firebaseErr?.code === "auth/invalid-phone-number") {
+            Alert.alert("Invalid Number", "Please enter a valid phone number.");
+            setIsLoading(false);
+            return;
+          }
+        }
+      }
+
+      await sendViaServer(phoneNumber);
     } catch (err: any) {
       console.error("Send OTP error:", err);
       Alert.alert("Error", "Failed to send OTP. Please try again.");

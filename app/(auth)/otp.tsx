@@ -53,22 +53,44 @@ export default function OTPScreen() {
     setIsLoading(true);
     try {
       const deviceId = generateDeviceId();
-      const res = await apiRequest("POST", "/api/auth/verify-otp", {
-        identifier: phone,
-        type: "phone",
-        otp: code,
-        deviceId,
-      });
-      const data = await res.json();
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      login(data.user);
-      router.replace("/(tabs)");
+
+      if (method === "firebase" && Platform.OS === "web") {
+        const confirmation = (window as any).__firebaseConfirmation;
+        if (!confirmation) {
+          Alert.alert("Session Expired", "Please go back and try again.");
+          setIsLoading(false);
+          return;
+        }
+        const result = await confirmation.confirm(code);
+        const idToken = await result.user.getIdToken();
+        const res = await apiRequest("POST", "/api/auth/firebase-login", {
+          idToken,
+          deviceId,
+        });
+        const data = await res.json();
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        login(data.user);
+        (window as any).__firebaseConfirmation = null;
+        router.replace("/(tabs)");
+      } else {
+        const res = await apiRequest("POST", "/api/auth/verify-otp", {
+          identifier: phone,
+          type: "phone",
+          otp: code,
+          deviceId,
+        });
+        const data = await res.json();
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        login(data.user);
+        router.replace("/(tabs)");
+      }
     } catch (err: any) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       const errMsg = err?.message?.toLowerCase() || "";
-      if (errMsg.includes("expired")) {
+      const errCode = err?.code || "";
+      if (errMsg.includes("expired") || errCode === "auth/code-expired") {
         Alert.alert("Code Expired", "The verification code has expired. Please request a new one.");
-      } else if (errMsg.includes("invalid") || errMsg.includes("incorrect")) {
+      } else if (errMsg.includes("invalid") || errMsg.includes("incorrect") || errCode === "auth/invalid-verification-code") {
         Alert.alert("Invalid OTP", "The code you entered is incorrect. Please try again.");
       } else {
         Alert.alert("Invalid OTP", "The OTP you entered is incorrect. Please try again.");
@@ -82,7 +104,28 @@ export default function OTPScreen() {
 
   const handleResend = async () => {
     try {
-      await apiRequest("POST", "/api/auth/send-otp", { identifier: phone, type: "phone" });
+      if (method === "firebase" && Platform.OS === "web") {
+        try {
+          const { auth, RecaptchaVerifier, signInWithPhoneNumber } = await import("@/lib/firebase");
+          const existing = document.getElementById("recaptcha-container");
+          if (existing) existing.remove();
+          const container = document.createElement("div");
+          container.id = "recaptcha-container";
+          container.style.position = "fixed";
+          container.style.bottom = "10px";
+          container.style.left = "50%";
+          container.style.transform = "translateX(-50%)";
+          container.style.zIndex = "99999";
+          document.body.appendChild(container);
+          const verifier = new RecaptchaVerifier(auth, container, { size: "invisible", callback: () => {} });
+          const confirmation = await signInWithPhoneNumber(auth, `+91${phone}`, verifier);
+          (window as any).__firebaseConfirmation = confirmation;
+        } catch {
+          await apiRequest("POST", "/api/auth/send-otp", { identifier: phone, type: "phone" });
+        }
+      } else {
+        await apiRequest("POST", "/api/auth/send-otp", { identifier: phone, type: "phone" });
+      }
       setCountdown(30); setCanResend(false);
       const timer = setInterval(() => {
         setCountdown((prev) => { if (prev <= 1) { setCanResend(true); clearInterval(timer); return 0; } return prev - 1; });
