@@ -1,31 +1,44 @@
-import { fetch } from "expo/fetch";
+import { Platform } from "react-native";
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
-/**
- * Gets the base URL for the Express API server (e.g., "http://localhost:3000")
- * @returns {string} The API base URL
- */
 export function getApiUrl(): string {
-  if (typeof window !== "undefined" && window.location && window.location.origin) {
-    return window.location.origin + "/";
+  if (Platform.OS === "web" && typeof window !== "undefined" && window.location) {
+    const host = window.location.host;
+    const protocol = window.location.protocol;
+
+    if (process.env.EXPO_PUBLIC_DOMAIN) {
+      return `https://${process.env.EXPO_PUBLIC_DOMAIN}`;
+    }
+
+    return `${protocol}//${host}/`;
   }
 
   let host = process.env.EXPO_PUBLIC_DOMAIN;
-
   if (!host) {
     throw new Error("EXPO_PUBLIC_DOMAIN is not set");
   }
 
-  let url = new URL(`https://${host}`);
-
-  return url.href;
+  return `https://${host}`;
 }
 
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
-    const text = (await res.text()) || res.statusText;
+    let text: string;
+    try {
+      text = await res.text();
+    } catch {
+      text = res.statusText;
+    }
     throw new Error(`${res.status}: ${text}`);
   }
+}
+
+async function doFetch(url: string, options?: RequestInit): Promise<Response> {
+  if (Platform.OS === "web") {
+    return globalThis.fetch(url, options);
+  }
+  const { fetch: expoFetch } = await import("expo/fetch");
+  return expoFetch(url, options);
 }
 
 export async function apiRequest(
@@ -36,7 +49,7 @@ export async function apiRequest(
   const baseUrl = getApiUrl();
   const url = new URL(route, baseUrl);
 
-  const res = await fetch(url.toString(), {
+  const res = await doFetch(url.toString(), {
     method,
     headers: data ? { "Content-Type": "application/json" } : {},
     body: data ? JSON.stringify(data) : undefined,
@@ -56,7 +69,7 @@ export const getQueryFn: <T>(options: {
     const baseUrl = getApiUrl();
     const url = new URL(queryKey.join("/") as string, baseUrl);
 
-    const res = await fetch(url.toString(), {
+    const res = await doFetch(url.toString(), {
       credentials: "include",
     });
 
