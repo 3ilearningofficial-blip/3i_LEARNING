@@ -10,6 +10,7 @@ import {
   Platform,
   ActivityIndicator,
   Alert,
+  Image,
 } from "react-native";
 import { router } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
@@ -123,10 +124,10 @@ export default function LoginScreen() {
         <ScrollView contentContainerStyle={[styles.scrollContent, { paddingTop: insets.top + (Platform.OS === "web" ? 67 : 0) + 40, paddingBottom: insets.bottom + (Platform.OS === "web" ? 34 : 0) + 20 }]} keyboardShouldPersistTaps="handled">
           <View style={styles.logoSection}>
             <View style={styles.logoContainer}>
-              <MaterialCommunityIcons name="math-compass" size={40} color="#fff" />
+              <Image source={require("@/assets/images/logo.png")} style={styles.logoImage} resizeMode="contain" />
             </View>
             <Text style={styles.appName}>3i Learning</Text>
-            <Text style={styles.tagline}>Learn. Practice. Excel.</Text>
+            <Text style={styles.tagline}>Innovate | Interest | Intellect</Text>
           </View>
 
           <View style={styles.card}>
@@ -184,10 +185,14 @@ const styles = StyleSheet.create({
   scrollContent: { flexGrow: 1, paddingHorizontal: 24, justifyContent: "center", gap: 32 },
   logoSection: { alignItems: "center", gap: 12 },
   logoContainer: {
-    width: 80, height: 80, borderRadius: 24,
-    backgroundColor: "rgba(255,255,255,0.15)",
+    width: 100, height: 100, borderRadius: 50,
+    backgroundColor: "#fff",
     alignItems: "center", justifyContent: "center",
-    borderWidth: 1, borderColor: "rgba(255,255,255,0.2)",
+    borderWidth: 2, borderColor: "rgba(255,255,255,0.3)",
+    overflow: "hidden",
+  },
+  logoImage: {
+    width: 80, height: 80,
   },
   appName: { fontSize: 32, fontFamily: "Inter_700Bold", color: "#fff" },
   tagline: { fontSize: 14, color: "rgba(255,255,255,0.6)", fontFamily: "Inter_400Regular" },

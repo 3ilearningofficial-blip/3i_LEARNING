@@ -1,7 +1,7 @@
 import React, { useState, useCallback } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable, TextInput,
-  RefreshControl, Platform, ActivityIndicator, FlatList,
+  RefreshControl, Platform, ActivityIndicator, FlatList, Image,
 } from "react-native";
 import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -191,9 +191,14 @@ export default function HomeScreen() {
     <View style={styles.container}>
       <LinearGradient colors={["#0A1628", "#1A2E50"]} style={[styles.header, { paddingTop: topPadding + 12 }]}>
         <View style={styles.headerTop}>
-          <View>
-            <Text style={styles.greeting}>Hello, {user?.name?.split(" ")[0] || "Student"}</Text>
-            <Text style={styles.subGreeting}>Ready to learn today?</Text>
+          <View style={styles.headerLeft}>
+            <View style={styles.headerLogo}>
+              <Image source={require("@/assets/images/logo.png")} style={styles.headerLogoImage} resizeMode="contain" />
+            </View>
+            <View>
+              <Text style={styles.greeting}>Hello, {user?.name?.split(" ")[0] || "Student"}</Text>
+              <Text style={styles.subGreeting}>Ready to learn today?</Text>
+            </View>
           </View>
           <View style={styles.headerActions}>
             {isAdmin && (
@@ -341,7 +346,15 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.light.background },
   header: { paddingHorizontal: 20, paddingBottom: 20, gap: 14 },
-  headerTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
+  headerTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  headerLeft: { flexDirection: "row", alignItems: "center", gap: 12 },
+  headerLogo: {
+    width: 44, height: 44, borderRadius: 22,
+    backgroundColor: "#fff",
+    alignItems: "center", justifyContent: "center",
+    overflow: "hidden",
+  },
+  headerLogoImage: { width: 36, height: 36 },
   greeting: { fontSize: 22, fontFamily: "Inter_700Bold", color: "#fff" },
   subGreeting: { fontSize: 13, color: "rgba(255,255,255,0.6)", fontFamily: "Inter_400Regular", marginTop: 2 },
   headerActions: { flexDirection: "row", gap: 8 },
