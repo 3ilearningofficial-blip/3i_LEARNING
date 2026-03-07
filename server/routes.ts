@@ -625,18 +625,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ==================== LIVE CLASSES ROUTES ====================
   app.get("/api/live-classes", async (req: Request, res: Response) => {
     try {
-      const { courseId } = req.query;
-      let query = "SELECT * FROM live_classes WHERE is_completed = FALSE";
+      const { courseId, admin } = req.query;
+      let query = admin === "true" ? "SELECT * FROM live_classes WHERE 1=1" : "SELECT * FROM live_classes WHERE is_completed = FALSE";
       const params: unknown[] = [];
       if (courseId) {
         params.push(courseId);
         query += ` AND (course_id = $${params.length} OR course_id IS NULL)`;
       }
-      query += " ORDER BY scheduled_at ASC";
+      query += " ORDER BY scheduled_at DESC";
       const result = await db.query(query, params);
       res.json(result.rows);
     } catch (err) {
       res.status(500).json({ message: "Failed to fetch live classes" });
+    }
+  });
+
+  app.put("/api/admin/live-classes/:id", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const { isLive, isCompleted, youtubeUrl, title, description } = req.body;
+      const updates: string[] = [];
+      const params: unknown[] = [];
+      if (isLive !== undefined) { params.push(isLive); updates.push(`is_live = $${params.length}`); }
+      if (isCompleted !== undefined) { params.push(isCompleted); updates.push(`is_completed = $${params.length}`); }
+      if (youtubeUrl !== undefined) { params.push(youtubeUrl); updates.push(`youtube_url = $${params.length}`); }
+      if (title !== undefined) { params.push(title); updates.push(`title = $${params.length}`); }
+      if (description !== undefined) { params.push(description); updates.push(`description = $${params.length}`); }
+      if (updates.length === 0) return res.status(400).json({ message: "No fields to update" });
+      params.push(req.params.id);
+      const result = await db.query(`UPDATE live_classes SET ${updates.join(", ")} WHERE id = $${params.length} RETURNING *`, params);
+      res.json(result.rows[0]);
+    } catch (err) {
+      console.error("Update live class error:", err);
+      res.status(500).json({ message: "Failed to update live class" });
     }
   });
 

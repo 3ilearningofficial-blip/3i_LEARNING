@@ -112,6 +112,7 @@ export default function CourseDetailScreen() {
       return res.json();
     },
     enabled: activeTab === "Live",
+    refetchInterval: activeTab === "Live" ? 10000 : false,
   });
 
   const enrollMutation = useMutation({

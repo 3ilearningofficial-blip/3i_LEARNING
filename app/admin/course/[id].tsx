@@ -45,6 +45,7 @@ interface LiveClassItem {
   title: string;
   youtube_url: string;
   is_live: boolean;
+  is_completed: boolean;
   scheduled_at: number;
 }
 
@@ -171,12 +172,13 @@ export default function AdminCourseScreen() {
     queryKey: ["/api/live-classes", id, "admin"],
     queryFn: async () => {
       const baseUrl = getApiUrl();
-      const url = new URL(`/api/live-classes?courseId=${id}`, baseUrl);
+      const url = new URL(`/api/live-classes?courseId=${id}&admin=true`, baseUrl);
       const res = await fetch(url.toString(), { credentials: "include" });
       if (!res.ok) return [];
       return res.json();
     },
     enabled: isValidId && activeTab === "live",
+    refetchInterval: activeTab === "live" ? 10000 : false,
   });
 
   const addLectureMutation = useMutation({
@@ -340,6 +342,16 @@ export default function AdminCourseScreen() {
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/live-classes", id, "admin"] }); },
   });
 
+  const updateLiveClassMutation = useMutation({
+    mutationFn: async ({ lcId, ...data }: { lcId: number; isLive?: boolean; isCompleted?: boolean; youtubeUrl?: string }) => {
+      await apiRequest("PUT", `/api/admin/live-classes/${lcId}`, data);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/live-classes", id, "admin"] });
+      qc.invalidateQueries({ queryKey: ["/api/live-classes"] });
+    },
+  });
+
   const editCourseMutation = useMutation({
     mutationFn: async (data: EditCourseForm) => {
       await apiRequest("PUT", `/api/admin/courses/${id}`, {
@@ -479,10 +491,16 @@ export default function AdminCourseScreen() {
                   </View>
                   <Pressable
                     style={styles.deleteItemBtn}
-                    onPress={() => Alert.alert("Delete Lecture", `Delete "${lecture.title}"?`, [
-                      { text: "Cancel", style: "cancel" },
-                      { text: "Delete", style: "destructive", onPress: () => deleteLectureMutation.mutate(lecture.id) },
-                    ])}
+                    onPress={() => {
+                      if (Platform.OS === "web") {
+                        if (window.confirm(`Delete "${lecture.title}"?`)) deleteLectureMutation.mutate(lecture.id);
+                      } else {
+                        Alert.alert("Delete Lecture", `Delete "${lecture.title}"?`, [
+                          { text: "Cancel", style: "cancel" },
+                          { text: "Delete", style: "destructive", onPress: () => deleteLectureMutation.mutate(lecture.id) },
+                        ]);
+                      }
+                    }}
                   >
                     <Ionicons name="trash-outline" size={16} color="#EF4444" />
                   </Pressable>
@@ -506,10 +524,14 @@ export default function AdminCourseScreen() {
                 <View style={styles.testCardRow}>
                   <Text style={styles.testCardTitle}>{test.title}</Text>
                   <Pressable style={styles.deleteItemBtn} onPress={() => {
-                    Alert.alert("Delete Test", `Delete "${test.title}" and all its questions?`, [
-                      { text: "Cancel", style: "cancel" },
-                      { text: "Delete", style: "destructive", onPress: () => deleteTestMutation.mutate(test.id) },
-                    ]);
+                    if (Platform.OS === "web") {
+                      if (window.confirm(`Delete "${test.title}" and all its questions?`)) deleteTestMutation.mutate(test.id);
+                    } else {
+                      Alert.alert("Delete Test", `Delete "${test.title}" and all its questions?`, [
+                        { text: "Cancel", style: "cancel" },
+                        { text: "Delete", style: "destructive", onPress: () => deleteTestMutation.mutate(test.id) },
+                      ]);
+                    }
                   }}>
                     <Ionicons name="trash-outline" size={16} color="#EF4444" />
                   </Pressable>
@@ -561,10 +583,16 @@ export default function AdminCourseScreen() {
                   </View>
                   <Pressable
                     style={styles.deleteItemBtn}
-                    onPress={() => Alert.alert("Delete Material", `Delete "${mat.title}"?`, [
-                      { text: "Cancel", style: "cancel" },
-                      { text: "Delete", style: "destructive", onPress: () => deleteMaterialMutation.mutate(mat.id) },
-                    ])}
+                    onPress={() => {
+                      if (Platform.OS === "web") {
+                        if (window.confirm(`Delete "${mat.title}"?`)) deleteMaterialMutation.mutate(mat.id);
+                      } else {
+                        Alert.alert("Delete Material", `Delete "${mat.title}"?`, [
+                          { text: "Cancel", style: "cancel" },
+                          { text: "Delete", style: "destructive", onPress: () => deleteMaterialMutation.mutate(mat.id) },
+                        ]);
+                      }
+                    }}
                   >
                     <Ionicons name="trash-outline" size={16} color="#EF4444" />
                   </Pressable>
@@ -580,38 +608,77 @@ export default function AdminCourseScreen() {
               <Text style={styles.sectionTitle}>Live Classes ({courseLiveClasses.length})</Text>
               <Pressable style={[styles.addBtn, { backgroundColor: "#DC2626" }]} onPress={() => setShowAddLiveClass(true)}>
                 <Ionicons name="radio" size={16} color="#fff" />
-                <Text style={styles.addBtnText}>Add Live</Text>
+                <Text style={styles.addBtnText}>Schedule Live</Text>
               </Pressable>
             </View>
-            <View style={styles.infoCard}>
-              <Ionicons name="information-circle" size={16} color={Colors.light.primary} />
-              <Text style={styles.infoText}>Add YouTube live stream URLs. Enable "Is Live Now" to show it as a live class to students.</Text>
-            </View>
+            {courseLiveClasses.length === 0 && (
+              <View style={styles.infoCard}>
+                <Ionicons name="information-circle" size={16} color={Colors.light.primary} />
+                <Text style={styles.infoText}>Schedule a live class, then tap "Go Live" when ready to start streaming. Paste the YouTube stream/share link.</Text>
+              </View>
+            )}
             {courseLiveClasses.map((lc) => (
-              <View key={lc.id} style={styles.itemCard}>
+              <View key={lc.id} style={[styles.itemCard, { gap: 10 }]}>
                 <View style={styles.itemRow}>
-                  <View style={[styles.itemIcon, { backgroundColor: lc.is_live ? "#FEE2E2" : Colors.light.secondary }]}>
-                    <Ionicons name="radio" size={16} color={lc.is_live ? "#DC2626" : Colors.light.primary} />
+                  <View style={[styles.itemIcon, { backgroundColor: lc.is_live ? "#FEE2E2" : lc.is_completed ? "#F3F4F6" : Colors.light.secondary }]}>
+                    <Ionicons name={lc.is_live ? "radio" : lc.is_completed ? "checkmark-circle" : "calendar"} size={16} color={lc.is_live ? "#DC2626" : lc.is_completed ? "#9CA3AF" : Colors.light.primary} />
                   </View>
                   <View style={styles.itemInfo}>
                     <View style={styles.liveRow}>
-                      <Text style={styles.itemTitle} numberOfLines={1}>{lc.title}</Text>
+                      <Text style={[styles.itemTitle, lc.is_completed && { color: Colors.light.textMuted }]} numberOfLines={1}>{lc.title}</Text>
                       {lc.is_live && (
                         <View style={styles.liveBadge}>
                           <Text style={styles.liveBadgeText}>LIVE</Text>
                         </View>
                       )}
+                      {lc.is_completed && (
+                        <View style={[styles.liveBadge, { backgroundColor: "#9CA3AF" }]}>
+                          <Text style={styles.liveBadgeText}>ENDED</Text>
+                        </View>
+                      )}
                     </View>
                     <Text style={styles.itemMeta}>{new Date(lc.scheduled_at).toLocaleString()}</Text>
+                    {lc.youtube_url ? <Text style={[styles.itemMeta, { color: Colors.light.primary }]} numberOfLines={1}>{lc.youtube_url}</Text> : null}
                   </View>
+                </View>
+                <View style={styles.liveActionRow}>
+                  {!lc.is_live && !lc.is_completed && (
+                    <Pressable
+                      style={[styles.liveActionBtn, { backgroundColor: "#DC262620" }]}
+                      onPress={() => {
+                        updateLiveClassMutation.mutate({ lcId: lc.id, isLive: true });
+                      }}
+                    >
+                      <Ionicons name="play-circle" size={16} color="#DC2626" />
+                      <Text style={[styles.liveActionBtnText, { color: "#DC2626" }]}>Go Live</Text>
+                    </Pressable>
+                  )}
+                  {lc.is_live && (
+                    <Pressable
+                      style={[styles.liveActionBtn, { backgroundColor: "#F59E0B20" }]}
+                      onPress={() => {
+                        updateLiveClassMutation.mutate({ lcId: lc.id, isLive: false, isCompleted: true });
+                      }}
+                    >
+                      <Ionicons name="stop-circle" size={16} color="#F59E0B" />
+                      <Text style={[styles.liveActionBtnText, { color: "#F59E0B" }]}>End Class</Text>
+                    </Pressable>
+                  )}
                   <Pressable
-                    style={styles.deleteItemBtn}
-                    onPress={() => Alert.alert("Delete Live Class", `Delete "${lc.title}"?`, [
-                      { text: "Cancel", style: "cancel" },
-                      { text: "Delete", style: "destructive", onPress: () => deleteLiveClassMutation.mutate(lc.id) },
-                    ])}
+                    style={[styles.liveActionBtn, { backgroundColor: "#FEE2E2" }]}
+                    onPress={() => {
+                      if (Platform.OS === "web") {
+                        if (window.confirm(`Delete "${lc.title}"?`)) deleteLiveClassMutation.mutate(lc.id);
+                      } else {
+                        Alert.alert("Delete", `Delete "${lc.title}"?`, [
+                          { text: "Cancel", style: "cancel" },
+                          { text: "Delete", style: "destructive", onPress: () => deleteLiveClassMutation.mutate(lc.id) },
+                        ]);
+                      }
+                    }}
                   >
-                    <Ionicons name="trash-outline" size={16} color="#EF4444" />
+                    <Ionicons name="trash-outline" size={14} color="#EF4444" />
+                    <Text style={[styles.liveActionBtnText, { color: "#EF4444" }]}>Delete</Text>
                   </Pressable>
                 </View>
               </View>
@@ -1034,6 +1101,9 @@ const styles = StyleSheet.create({
   addBtnText: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#fff" },
   infoCard: { backgroundColor: Colors.light.secondary, borderRadius: 10, padding: 12, flexDirection: "row", gap: 8, alignItems: "flex-start" },
   infoText: { flex: 1, fontSize: 12, color: Colors.light.textSecondary, fontFamily: "Inter_400Regular", lineHeight: 18 },
+  liveActionRow: { flexDirection: "row", gap: 8, paddingHorizontal: 12, paddingBottom: 12 },
+  liveActionBtn: { flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8 },
+  liveActionBtnText: { fontSize: 12, fontFamily: "Inter_600SemiBold" },
   itemCard: { backgroundColor: "#fff", borderRadius: 12, overflow: "hidden", borderWidth: 1, borderColor: Colors.light.border },
   itemSectionBadge: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: Colors.light.secondary, paddingHorizontal: 12, paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: Colors.light.border },
   itemSectionText: { fontSize: 11, fontFamily: "Inter_700Bold", color: Colors.light.primary },

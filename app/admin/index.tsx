@@ -270,10 +270,16 @@ export default function AdminDashboard() {
   });
 
   const handleDeleteCourse = (course: Course) => {
-    Alert.alert("Delete Course", `Delete "${course.title}"? This cannot be undone.`, [
-      { text: "Cancel", style: "cancel" },
-      { text: "Delete", style: "destructive", onPress: () => deleteCourseMutation.mutate(course.id) },
-    ]);
+    if (Platform.OS === "web") {
+      if (window.confirm(`Delete "${course.title}"? This will delete all lectures, tests, materials and enrollments. This cannot be undone.`)) {
+        deleteCourseMutation.mutate(course.id);
+      }
+    } else {
+      Alert.alert("Delete Course", `Delete "${course.title}"? This cannot be undone.`, [
+        { text: "Cancel", style: "cancel" },
+        { text: "Delete", style: "destructive", onPress: () => deleteCourseMutation.mutate(course.id) },
+      ]);
+    }
   };
 
   return (
@@ -483,10 +489,14 @@ export default function AdminDashboard() {
                         <Text style={[styles.testActionBtnText, { color: "#FF6B35" }]}>Bulk Upload</Text>
                       </Pressable>
                       <Pressable style={[styles.testActionBtn, { backgroundColor: "#FEE2E2" }]} onPress={() => {
-                        Alert.alert("Delete Test", `Delete "${test.title}"?`, [
-                          { text: "Cancel", style: "cancel" },
-                          { text: "Delete", style: "destructive", onPress: () => deleteTestMutation.mutate(test.id) },
-                        ]);
+                        if (Platform.OS === "web") {
+                          if (window.confirm(`Delete "${test.title}" and all its questions?`)) deleteTestMutation.mutate(test.id);
+                        } else {
+                          Alert.alert("Delete Test", `Delete "${test.title}"?`, [
+                            { text: "Cancel", style: "cancel" },
+                            { text: "Delete", style: "destructive", onPress: () => deleteTestMutation.mutate(test.id) },
+                          ]);
+                        }
                       }}>
                         <Ionicons name="trash-outline" size={14} color="#EF4444" />
                       </Pressable>
@@ -537,10 +547,14 @@ export default function AdminDashboard() {
                       </View>
                     </View>
                     <Pressable style={styles.deleteBtn} onPress={() => {
-                      Alert.alert("Delete Mission", `Delete "${m.title}"?`, [
-                        { text: "Cancel", style: "cancel" },
-                        { text: "Delete", style: "destructive", onPress: () => deleteMissionMutation.mutate(m.id) },
-                      ]);
+                      if (Platform.OS === "web") {
+                        if (window.confirm(`Delete "${m.title}"?`)) deleteMissionMutation.mutate(m.id);
+                      } else {
+                        Alert.alert("Delete Mission", `Delete "${m.title}"?`, [
+                          { text: "Cancel", style: "cancel" },
+                          { text: "Delete", style: "destructive", onPress: () => deleteMissionMutation.mutate(m.id) },
+                        ]);
+                      }
                     }}>
                       <Ionicons name="trash-outline" size={18} color="#EF4444" />
                     </Pressable>
