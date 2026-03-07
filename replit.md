@@ -54,5 +54,12 @@ Key columns added:
 3. Set `EXPO_PUBLIC_DOMAIN` to your production domain for the build
 4. Configure `eas.json` with your EAS project ID and Google service account key
 
+## Bulk Question Upload
+- Text paste mode: POST /api/admin/questions/bulk-text with { testId, text }
+- PDF upload mode: POST /api/admin/questions/bulk-pdf (multipart form with 'pdf' file)
+- Parser supports formats: Q1/1./Question 1 with A/B/C/D options, optional "Answer: X" line
+- Default answer is "A" if no answer line present (for PDFs without marked answers)
+- Dependencies: pdf-parse, multer, expo-document-picker
+
 ## Categories
 All, Class 10, Class 12, CDS, NDA, AFCAT, Fundamentals, Trigonometry, Calculus

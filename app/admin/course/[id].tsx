@@ -112,6 +112,10 @@ export default function AdminCourseScreen() {
   const [showAddQuestion, setShowAddQuestion] = useState<number | null>(null);
   const [showAddMaterial, setShowAddMaterial] = useState(false);
   const [showAddLiveClass, setShowAddLiveClass] = useState(false);
+  const [showBulkUpload, setShowBulkUpload] = useState<number | null>(null);
+  const [bulkText, setBulkText] = useState("");
+  const [bulkUploadMode, setBulkUploadMode] = useState<"text" | "pdf">("text");
+  const [bulkResult, setBulkResult] = useState<{ count: number; questions: any[] } | null>(null);
   const [newLecture, setNewLecture] = useState<NewLecture>(emptyLecture);
   const [newTest, setNewTest] = useState<NewTestForm>(emptyTest);
   const [newQuestion, setNewQuestion] = useState<NewQuestion>(emptyQuestion);
@@ -202,6 +206,58 @@ export default function AdminCourseScreen() {
       Alert.alert("Success", "Question added!");
     },
     onError: () => Alert.alert("Error", "Failed to add question"),
+  });
+
+  const bulkUploadTextMutation = useMutation({
+    mutationFn: async ({ testId, text }: { testId: number; text: string }) => {
+      const res = await apiRequest("POST", "/api/admin/questions/bulk-text", {
+        testId, text, defaultMarks: 4, defaultNegativeMarks: 1,
+      });
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      qc.invalidateQueries({ queryKey: ["/api/courses", id] });
+      setBulkResult({ count: data.count, questions: data.questions });
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    },
+    onError: (err: any) => Alert.alert("Error", err.message || "Failed to parse questions"),
+  });
+
+  const bulkUploadPdfMutation = useMutation({
+    mutationFn: async ({ testId, file }: { testId: number; file: any }) => {
+      const baseUrl = getApiUrl();
+      const url = new URL("/api/admin/questions/bulk-pdf", baseUrl);
+      const formData = new FormData();
+      formData.append("testId", String(testId));
+      formData.append("defaultMarks", "4");
+      formData.append("defaultNegativeMarks", "1");
+      if (Platform.OS === "web") {
+        formData.append("pdf", file);
+      } else {
+        const FileSystem = await import("expo-file-system");
+        const base64 = await FileSystem.readAsStringAsync(file.uri, { encoding: FileSystem.EncodingType.Base64 });
+        const byteArray = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+        const blob = new Blob([byteArray], { type: "application/pdf" });
+        formData.append("pdf", blob, file.name || "questions.pdf");
+      }
+      const nativeFetch = globalThis.fetch;
+      const res = await nativeFetch(url.toString(), {
+        method: "POST",
+        body: formData,
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.message || "Upload failed");
+      }
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      qc.invalidateQueries({ queryKey: ["/api/courses", id] });
+      setBulkResult({ count: data.count, questions: data.questions });
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    },
+    onError: (err: any) => Alert.alert("Error", err.message || "Failed to parse PDF"),
   });
 
   const deleteTestMutation = useMutation({
@@ -377,6 +433,10 @@ export default function AdminCourseScreen() {
                     <Pressable style={styles.addQBtn} onPress={() => setShowAddQuestion(test.id)}>
                       <Ionicons name="add-circle" size={16} color={Colors.light.primary} />
                       <Text style={styles.addQBtnText}>Add Q</Text>
+                    </Pressable>
+                    <Pressable style={[styles.addQBtn, { backgroundColor: "#FFF3E0" }]} onPress={() => { setShowBulkUpload(test.id); setBulkResult(null); setBulkText(""); }}>
+                      <Ionicons name="cloud-upload" size={16} color="#FF6B35" />
+                      <Text style={[styles.addQBtnText, { color: "#FF6B35" }]}>Bulk</Text>
                     </Pressable>
                     <Pressable style={styles.deleteItemBtn} onPress={() => {
                       Alert.alert("Delete Test", `Delete "${test.title}" and all its questions?`, [
@@ -627,6 +687,165 @@ export default function AdminCourseScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Bulk Upload Questions Modal */}
+      <Modal visible={showBulkUpload !== null} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Bulk Upload Questions</Text>
+              <Pressable onPress={() => { setShowBulkUpload(null); setBulkText(""); setBulkResult(null); }}>
+                <Ionicons name="close" size={24} color={Colors.light.text} />
+              </Pressable>
+            </View>
+
+            {bulkResult ? (
+              <View style={{ gap: 12 }}>
+                <View style={styles.successCard}>
+                  <Ionicons name="checkmark-circle" size={40} color={Colors.light.success} />
+                  <Text style={styles.successTitle}>{bulkResult.count} Questions Imported!</Text>
+                  <Text style={styles.successSub}>All questions have been added with default answer "A". Review and update correct answers as needed.</Text>
+                </View>
+                <ScrollView style={{ maxHeight: 200 }}>
+                  {bulkResult.questions.map((q, i) => (
+                    <View key={i} style={styles.previewQuestion}>
+                      <Text style={styles.previewQNum}>Q{i + 1}</Text>
+                      <Text style={styles.previewQText} numberOfLines={2}>{q.questionText}</Text>
+                    </View>
+                  ))}
+                </ScrollView>
+                <ActionButton label="Done" onPress={() => { setShowBulkUpload(null); setBulkText(""); setBulkResult(null); }} color={Colors.light.success} />
+              </View>
+            ) : (
+              <>
+                <View style={styles.modeToggle}>
+                  <Pressable
+                    style={[styles.modeBtn, bulkUploadMode === "text" && styles.modeBtnActive]}
+                    onPress={() => setBulkUploadMode("text")}
+                  >
+                    <Ionicons name="create" size={16} color={bulkUploadMode === "text" ? "#fff" : Colors.light.text} />
+                    <Text style={[styles.modeBtnText, bulkUploadMode === "text" && styles.modeBtnTextActive]}>Paste Text</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.modeBtn, bulkUploadMode === "pdf" && styles.modeBtnActive]}
+                    onPress={() => setBulkUploadMode("pdf")}
+                  >
+                    <Ionicons name="document" size={16} color={bulkUploadMode === "pdf" ? "#fff" : Colors.light.text} />
+                    <Text style={[styles.modeBtnText, bulkUploadMode === "pdf" && styles.modeBtnTextActive]}>Upload PDF</Text>
+                  </Pressable>
+                </View>
+
+                {bulkUploadMode === "text" ? (
+                  <ScrollView style={{ maxHeight: 400 }} showsVerticalScrollIndicator={false}>
+                    <View style={styles.infoCard}>
+                      <Ionicons name="information-circle" size={16} color={Colors.light.primary} />
+                      <Text style={styles.infoText}>
+                        Paste questions in this format:{"\n\n"}
+                        Q1. What is 2 + 2?{"\n"}
+                        A. 3{"\n"}
+                        B. 4{"\n"}
+                        C. 5{"\n"}
+                        D. 6{"\n"}
+                        Answer: B{"\n\n"}
+                        Q2. What is 3 x 3?{"\n"}
+                        A. 6{"\n"}
+                        B. 9{"\n"}
+                        C. 12{"\n"}
+                        D. 15{"\n\n"}
+                        Note: If no answer is marked, default "A" will be used. You can edit correct answers later.
+                      </Text>
+                    </View>
+                    <View style={styles.formField}>
+                      <Text style={styles.formLabel}>Paste Questions</Text>
+                      <TextInput
+                        style={[styles.formInput, { height: 200, textAlignVertical: "top" }]}
+                        placeholder={"Q1. What is the value of sin(90°)?\nA. 0\nB. 1\nC. -1\nD. 0.5\n\nQ2. What is cos(0°)?\nA. 0\nB. 1\nC. -1\nD. 0.5"}
+                        placeholderTextColor={Colors.light.textMuted}
+                        value={bulkText}
+                        onChangeText={setBulkText}
+                        multiline
+                        numberOfLines={10}
+                      />
+                    </View>
+                  </ScrollView>
+                ) : (
+                  <View style={{ gap: 12 }}>
+                    <View style={styles.infoCard}>
+                      <Ionicons name="information-circle" size={16} color={Colors.light.primary} />
+                      <Text style={styles.infoText}>
+                        Upload a PDF with questions. Each question should be numbered (Q1, 1., etc.) with options labeled A, B, C, D.{"\n\n"}
+                        The system will extract text from the PDF and parse questions automatically. Answers default to "A" — update them after import.
+                      </Text>
+                    </View>
+                    {Platform.OS === "web" ? (
+                      <View style={styles.formField}>
+                        <Text style={styles.formLabel}>Select PDF File</Text>
+                        <Pressable
+                          style={styles.filePickerBtn}
+                          onPress={() => {
+                            const input = document.createElement("input");
+                            input.type = "file";
+                            input.accept = ".pdf";
+                            input.onchange = (e: any) => {
+                              const file = e.target?.files?.[0];
+                              if (file && showBulkUpload) {
+                                bulkUploadPdfMutation.mutate({ testId: showBulkUpload, file });
+                              }
+                            };
+                            input.click();
+                          }}
+                        >
+                          <Ionicons name="cloud-upload" size={28} color={Colors.light.primary} />
+                          <Text style={styles.filePickerText}>Tap to select PDF file</Text>
+                          <Text style={styles.filePickerSub}>Max 10MB</Text>
+                        </Pressable>
+                      </View>
+                    ) : (
+                      <View style={styles.formField}>
+                        <Text style={styles.formLabel}>PDF Upload</Text>
+                        <Pressable
+                          style={styles.filePickerBtn}
+                          onPress={async () => {
+                            try {
+                              const DocumentPicker = await import("expo-document-picker");
+                              const result = await DocumentPicker.getDocumentAsync({ type: "application/pdf" });
+                              if (!result.canceled && result.assets?.[0] && showBulkUpload) {
+                                bulkUploadPdfMutation.mutate({ testId: showBulkUpload, file: result.assets[0] });
+                              }
+                            } catch {
+                              Alert.alert("Error", "Could not open file picker");
+                            }
+                          }}
+                        >
+                          <Ionicons name="cloud-upload" size={28} color={Colors.light.primary} />
+                          <Text style={styles.filePickerText}>Tap to select PDF file</Text>
+                          <Text style={styles.filePickerSub}>Max 10MB</Text>
+                        </Pressable>
+                      </View>
+                    )}
+                  </View>
+                )}
+
+                {bulkUploadMode === "text" && (
+                  <ActionButton
+                    label="Parse & Import Questions"
+                    onPress={() => { if (showBulkUpload && bulkText.trim()) bulkUploadTextMutation.mutate({ testId: showBulkUpload, text: bulkText }); }}
+                    disabled={!bulkText.trim()}
+                    loading={bulkUploadTextMutation.isPending}
+                    color="#FF6B35"
+                  />
+                )}
+                {bulkUploadMode === "pdf" && bulkUploadPdfMutation.isPending && (
+                  <View style={{ alignItems: "center", padding: 16 }}>
+                    <ActivityIndicator size="large" color="#FF6B35" />
+                    <Text style={{ marginTop: 8, color: Colors.light.textSecondary, fontFamily: "Inter_500Medium" }}>Parsing PDF...</Text>
+                  </View>
+                )}
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -723,4 +942,18 @@ const styles = StyleSheet.create({
   createBtnDisabled: { opacity: 0.5 },
   createBtnGrad: { paddingVertical: 14, alignItems: "center" },
   createBtnText: { fontSize: 15, fontFamily: "Inter_600SemiBold", color: "#fff" },
+  modeToggle: { flexDirection: "row" as const, gap: 8, marginBottom: 16 },
+  modeBtn: { flex: 1, flexDirection: "row" as const, alignItems: "center" as const, justifyContent: "center" as const, gap: 6, paddingVertical: 10, borderRadius: 10, backgroundColor: Colors.light.background, borderWidth: 1, borderColor: Colors.light.border },
+  modeBtnActive: { backgroundColor: Colors.light.primary, borderColor: Colors.light.primary },
+  modeBtnText: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
+  modeBtnTextActive: { color: "#fff" },
+  successCard: { backgroundColor: "#F0FDF4", borderRadius: 16, padding: 24, alignItems: "center" as const, gap: 8, borderWidth: 1, borderColor: "#BBF7D0" },
+  successTitle: { fontSize: 20, fontFamily: "Inter_700Bold", color: "#16A34A" },
+  successSub: { fontSize: 13, fontFamily: "Inter_400Regular", color: "#5A6A85", textAlign: "center" as const, lineHeight: 19 },
+  previewQuestion: { flexDirection: "row" as const, gap: 8, alignItems: "center" as const, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: Colors.light.border },
+  previewQNum: { fontSize: 12, fontFamily: "Inter_700Bold", color: Colors.light.primary, width: 28 },
+  previewQText: { flex: 1, fontSize: 13, fontFamily: "Inter_400Regular", color: Colors.light.text },
+  filePickerBtn: { borderWidth: 2, borderColor: Colors.light.border, borderStyle: "dashed" as const, borderRadius: 16, padding: 32, alignItems: "center" as const, gap: 8, backgroundColor: Colors.light.background },
+  filePickerText: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.primary },
+  filePickerSub: { fontSize: 12, fontFamily: "Inter_400Regular", color: Colors.light.textMuted },
 });

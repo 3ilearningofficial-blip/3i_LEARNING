@@ -1,6 +1,10 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "node:http";
 import { Pool } from "pg";
+import multer from "multer";
+import pdfParse from "pdf-parse";
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
@@ -628,6 +632,133 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (err) {
       console.error(err);
       res.status(500).json({ message: "Failed to add questions" });
+    }
+  });
+
+  function parseQuestionsFromText(text: string): Array<{questionText: string; optionA: string; optionB: string; optionC: string; optionD: string; correctOption: string}> {
+    const questions: Array<{questionText: string; optionA: string; optionB: string; optionC: string; optionD: string; correctOption: string}> = [];
+    const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+
+    let currentQuestion = '';
+    let options: string[] = [];
+    let correctOption = 'A';
+
+    function pushQuestion() {
+      if (currentQuestion && options.length >= 2) {
+        questions.push({
+          questionText: currentQuestion.replace(/^(Q\d+[\.\)\:]?\s*|\d+[\.\)\:]?\s*)/, '').trim(),
+          optionA: options[0]?.replace(/^[Aa][\.\)\:]?\s*/, '').trim() || '',
+          optionB: options[1]?.replace(/^[Bb][\.\)\:]?\s*/, '').trim() || '',
+          optionC: options[2]?.replace(/^[Cc][\.\)\:]?\s*/, '').trim() || '',
+          optionD: options[3]?.replace(/^[Dd][\.\)\:]?\s*/, '').trim() || '',
+          correctOption: correctOption,
+        });
+      }
+      currentQuestion = '';
+      options = [];
+      correctOption = 'A';
+    }
+
+    for (const line of lines) {
+      if (/^(Q\d+[\.\)\:]?\s|Question\s*\d+[\.\)\:]?\s|\d+[\.\)\:]\s)/i.test(line)) {
+        pushQuestion();
+        currentQuestion = line;
+      } else if (/^[Aa][\.\)\:]\s/.test(line) || /^\(a\)\s/i.test(line)) {
+        options[0] = line;
+      } else if (/^[Bb][\.\)\:]\s/.test(line) || /^\(b\)\s/i.test(line)) {
+        options[1] = line;
+      } else if (/^[Cc][\.\)\:]\s/.test(line) || /^\(c\)\s/i.test(line)) {
+        options[2] = line;
+      } else if (/^[Dd][\.\)\:]\s/.test(line) || /^\(d\)\s/i.test(line)) {
+        options[3] = line;
+      } else if (/^(Answer|Ans|Correct)[\s\:\.]*[:\s]*(A|B|C|D)/i.test(line)) {
+        const match = line.match(/^(?:Answer|Ans|Correct)[\s\:\.]*[:\s]*([A-D])/i);
+        if (match) correctOption = match[1].toUpperCase();
+      } else if (currentQuestion && options.length === 0) {
+        currentQuestion += ' ' + line;
+      }
+    }
+    pushQuestion();
+
+    return questions;
+  }
+
+  app.post("/api/admin/questions/bulk-text", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const { testId, text, defaultMarks, defaultNegativeMarks } = req.body;
+      if (!testId || !text) {
+        return res.status(400).json({ message: "testId and text are required" });
+      }
+
+      const parsed = parseQuestionsFromText(text);
+      if (parsed.length === 0) {
+        return res.status(400).json({ message: "No questions could be parsed from the provided text" });
+      }
+
+      const maxOrderResult = await db.query("SELECT COALESCE(MAX(order_index), 0) as max_order FROM questions WHERE test_id = $1", [testId]);
+      let idx = (maxOrderResult.rows[0]?.max_order || 0);
+      for (const q of parsed) {
+        idx++;
+        await db.query(
+          `INSERT INTO questions (test_id, question_text, option_a, option_b, option_c, option_d, correct_option, difficulty, marks, negative_marks, order_index) 
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+          [testId, q.questionText, q.optionA, q.optionB, q.optionC, q.optionD, q.correctOption, "medium", defaultMarks || 4, defaultNegativeMarks || 1, idx]
+        );
+      }
+
+      await db.query(
+        "UPDATE tests SET total_questions = (SELECT COUNT(*) FROM questions WHERE test_id = $1) WHERE id = $1",
+        [testId]
+      );
+
+      res.json({ success: true, count: parsed.length, questions: parsed });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ message: "Failed to parse and add questions" });
+    }
+  });
+
+  app.post("/api/admin/questions/bulk-pdf", requireAdmin, upload.single('pdf'), async (req: Request, res: Response) => {
+    try {
+      const testId = req.body.testId;
+      const defaultMarks = parseInt(req.body.defaultMarks) || 4;
+      const defaultNegativeMarks = parseFloat(req.body.defaultNegativeMarks) || 1;
+
+      if (!testId || !req.file) {
+        return res.status(400).json({ message: "testId and PDF file are required" });
+      }
+
+      const pdfData = await pdfParse(req.file.buffer);
+      const text = pdfData.text;
+
+      const parsed = parseQuestionsFromText(text);
+      if (parsed.length === 0) {
+        return res.status(400).json({ 
+          message: "No questions could be parsed from the PDF. Make sure questions are numbered (Q1, 1., etc.) with options labeled A, B, C, D.",
+          rawTextPreview: text.substring(0, 500)
+        });
+      }
+
+      const maxOrderResult = await db.query("SELECT COALESCE(MAX(order_index), 0) as max_order FROM questions WHERE test_id = $1", [testId]);
+      let idx = (maxOrderResult.rows[0]?.max_order || 0);
+      for (const q of parsed) {
+        idx++;
+        await db.query(
+          `INSERT INTO questions (test_id, question_text, option_a, option_b, option_c, option_d, correct_option, difficulty, marks, negative_marks, order_index) 
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+          [testId, q.questionText, q.optionA, q.optionB, q.optionC, q.optionD, q.correctOption, "medium", defaultMarks, defaultNegativeMarks, idx]
+        );
+      }
+
+      await db.query(
+        "UPDATE tests SET total_questions = (SELECT COUNT(*) FROM questions WHERE test_id = $1) WHERE id = $1",
+        [testId]
+      );
+
+      res.json({ success: true, count: parsed.length, questions: parsed });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ message: "Failed to parse PDF and add questions" });
     }
   });
 
