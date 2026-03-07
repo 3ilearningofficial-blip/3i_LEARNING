@@ -3,8 +3,12 @@ set -e
 
 echo "=== Building 3i Learning for deployment ==="
 
-echo "Step 1: Building Expo web app..."
-EXPO_PUBLIC_DOMAIN=$REPLIT_INTERNAL_APP_DOMAIN npx expo export --platform web --output-dir static-build/web
+if [ ! -f "static-build/web/index.html" ]; then
+  echo "Step 1: Building Expo web app..."
+  EXPO_PUBLIC_DOMAIN=$REPLIT_INTERNAL_APP_DOMAIN npx expo export --platform web --output-dir static-build/web
+else
+  echo "Step 1: Web build already exists, skipping..."
+fi
 
 echo "Step 2: Building native bundles..."
 node scripts/build.js
