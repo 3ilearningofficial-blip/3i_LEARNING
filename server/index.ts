@@ -220,6 +220,27 @@ function configureExpoAndLanding(app: express.Application) {
   app.use("/assets", express.static(path.resolve(process.cwd(), "assets")));
   app.use(express.static(path.resolve(process.cwd(), "static-build")));
 
+  const expoRoutes = ["/login", "/otp", "/profile", "/courses", "/settings", "/admin", "/material", "/test", "/ai-tutor", "/missions", "/live-class"];
+  app.get(expoRoutes, (req: Request, res: Response, next: NextFunction) => {
+    const webBuildPath = path.resolve(process.cwd(), "static-build", "web", "index.html");
+    if (fs.existsSync(webBuildPath)) {
+      return res.sendFile(webBuildPath);
+    }
+    next();
+  });
+
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (req.method !== "GET") return next();
+    if (req.path.startsWith("/api") || req.path.startsWith("/_expo") || req.path.startsWith("/assets") || req.path.startsWith("/firebase-phone-auth") || req.path.includes(".")) {
+      return next();
+    }
+    const webBuildPath = path.resolve(process.cwd(), "static-build", "web", "index.html");
+    if (fs.existsSync(webBuildPath)) {
+      return res.sendFile(webBuildPath);
+    }
+    next();
+  });
+
   log("Expo routing: Checking expo-platform header on / and /manifest");
 }
 
