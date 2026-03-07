@@ -71,6 +71,20 @@ export default function AdminDashboard() {
     price: "0", originalPrice: "0", category: "Mathematics",
     subject: "", isFree: false, level: "Beginner", durationHours: "0",
   });
+  const [showCreateTest, setShowCreateTest] = useState(false);
+  const [testTitle, setTestTitle] = useState("");
+  const [testDesc, setTestDesc] = useState("");
+  const [testType, setTestType] = useState("practice");
+  const [testDuration, setTestDuration] = useState("60");
+  const [testTotalMarks, setTestTotalMarks] = useState("100");
+  const [testPassingMarks, setTestPassingMarks] = useState("35");
+  const [testCourseId, setTestCourseId] = useState<number | null>(null);
+  const [showTestQuestions, setShowTestQuestions] = useState<number | null>(null);
+  const [showAddQ, setShowAddQ] = useState(false);
+  const [showBulkQ, setShowBulkQ] = useState(false);
+  const [bulkQText, setBulkQText] = useState("");
+  const [bulkQResult, setBulkQResult] = useState<{ count: number; questions: any[] } | null>(null);
+  const [newQ, setNewQ] = useState({ questionText: "", optionA: "", optionB: "", optionC: "", optionD: "", correctOption: "A", explanation: "", topic: "", marks: "4", negativeMarks: "1" });
 
   const topPadding = Platform.OS === "web" ? 67 : insets.top;
   const bottomPadding = Platform.OS === "web" ? 34 : insets.bottom;
@@ -95,7 +109,7 @@ export default function AdminDashboard() {
       const res = await fetch(url.toString(), { credentials: "include" });
       return res.json();
     },
-    enabled: activeTab === "courses",
+    enabled: activeTab === "courses" || activeTab === "tests",
   });
 
   const { data: users = [], isLoading: usersLoading } = useQuery<UserRecord[]>({
@@ -147,6 +161,74 @@ export default function AdminDashboard() {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
     },
     onError: () => Alert.alert("Error", "Failed to delete mission"),
+  });
+
+  const { data: adminTests = [], isLoading: testsLoading } = useQuery<any[]>({
+    queryKey: ["/api/admin/tests"],
+    queryFn: async () => {
+      const baseUrl = getApiUrl();
+      const url = new URL("/api/admin/tests", baseUrl);
+      const res = await fetch(url.toString(), { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: activeTab === "tests",
+  });
+
+  const createTestMutation = useMutation({
+    mutationFn: async (data: any) => {
+      const res = await apiRequest("POST", "/api/admin/tests", data);
+      return res.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/admin/tests"] });
+      setShowCreateTest(false);
+      setTestTitle(""); setTestDesc(""); setTestType("practice");
+      setTestDuration("60"); setTestTotalMarks("100"); setTestPassingMarks("35");
+      setTestCourseId(null);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Alert.alert("Success", "Test created!");
+    },
+    onError: () => Alert.alert("Error", "Failed to create test"),
+  });
+
+  const deleteTestMutation = useMutation({
+    mutationFn: async (id: number) => {
+      await apiRequest("DELETE", `/api/admin/tests/${id}`);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/admin/tests"] });
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    },
+    onError: () => Alert.alert("Error", "Failed to delete test"),
+  });
+
+  const addQuestionMutation = useMutation({
+    mutationFn: async (data: any) => {
+      const res = await apiRequest("POST", "/api/admin/questions", data);
+      return res.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/admin/tests"] });
+      setShowAddQ(false);
+      setNewQ({ questionText: "", optionA: "", optionB: "", optionC: "", optionD: "", correctOption: "A", explanation: "", topic: "", marks: "4", negativeMarks: "1" });
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Alert.alert("Success", "Question added!");
+    },
+    onError: () => Alert.alert("Error", "Failed to add question"),
+  });
+
+  const bulkUploadMutation = useMutation({
+    mutationFn: async (data: { testId: number; text: string }) => {
+      const res = await apiRequest("POST", "/api/admin/questions/bulk-text", data);
+      return res.json();
+    },
+    onSuccess: (result) => {
+      qc.invalidateQueries({ queryKey: ["/api/admin/tests"] });
+      setBulkQResult(result);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    },
+    onError: () => Alert.alert("Error", "Failed to upload questions"),
   });
 
   const addCourseMutation = useMutation({
@@ -353,25 +435,66 @@ export default function AdminDashboard() {
         {activeTab === "tests" && (
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Manage Tests</Text>
-              <Pressable style={styles.addBtn} onPress={() => router.push("/admin/course/[id]")}>
+              <Text style={styles.sectionTitle}>All Tests ({adminTests.length})</Text>
+              <Pressable style={styles.addBtn} onPress={() => setShowCreateTest(true)}>
                 <Ionicons name="add" size={18} color="#fff" />
-                <Text style={styles.addBtnText}>Add Test</Text>
+                <Text style={styles.addBtnText}>Create Test</Text>
               </Pressable>
             </View>
-            <View style={styles.infoCard}>
-              <Ionicons name="information-circle" size={20} color={Colors.light.primary} />
-              <Text style={styles.infoText}>Select a course to manage its tests and add questions. Each test can have multiple MCQ questions with marks and negative marking.</Text>
-            </View>
-            {courses.map((course) => (
-              <Pressable key={course.id} style={styles.courseTestCard} onPress={() => router.push({ pathname: "/admin/course/[id]", params: { id: course.id } })}>
-                <View style={styles.courseTestInfo}>
-                  <Text style={styles.courseTestTitle}>{course.title}</Text>
-                  <Text style={styles.courseTestMeta}>{course.total_tests} tests · {course.total_lectures} lectures</Text>
+            {testsLoading ? (
+              <ActivityIndicator size="large" color={Colors.light.primary} style={{ marginTop: 20 }} />
+            ) : adminTests.length === 0 ? (
+              <View style={styles.infoCard}>
+                <Ionicons name="document-text-outline" size={20} color={Colors.light.primary} />
+                <Text style={styles.infoText}>No tests yet. Create a test and add questions to it.</Text>
+              </View>
+            ) : (
+              adminTests.map((test: any) => (
+                <View key={test.id} style={styles.adminCard}>
+                  <View style={styles.adminCardContent}>
+                    <View style={styles.adminCardRow}>
+                      <Text style={styles.adminCardTitle} numberOfLines={2}>{test.title}</Text>
+                      <View style={[styles.typeBadge, { backgroundColor: "#1A56DB15" }]}>
+                        <Text style={{ fontSize: 10, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>
+                          {test.test_type}
+                        </Text>
+                      </View>
+                    </View>
+                    <View style={styles.adminCardMeta}>
+                      <Text style={styles.adminCardMetaText}>{test.total_questions || 0} Q</Text>
+                      <Text style={styles.adminCardMetaText}>·</Text>
+                      <Text style={styles.adminCardMetaText}>{test.duration_minutes}min</Text>
+                      <Text style={styles.adminCardMetaText}>·</Text>
+                      <Text style={styles.adminCardMetaText}>{test.total_marks} marks</Text>
+                      {test.course_title && (
+                        <>
+                          <Text style={styles.adminCardMetaText}>·</Text>
+                          <Text style={[styles.adminCardMetaText, { color: Colors.light.primary }]}>{test.course_title}</Text>
+                        </>
+                      )}
+                    </View>
+                    <View style={styles.testActionRow}>
+                      <Pressable style={styles.testActionBtn} onPress={() => { setShowTestQuestions(test.id); setShowAddQ(false); setShowBulkQ(false); setBulkQResult(null); setBulkQText(""); }}>
+                        <Ionicons name="create-outline" size={14} color={Colors.light.primary} />
+                        <Text style={styles.testActionBtnText}>Add Questions</Text>
+                      </Pressable>
+                      <Pressable style={[styles.testActionBtn, { backgroundColor: "#FFF3E0" }]} onPress={() => { setShowTestQuestions(test.id); setShowBulkQ(true); setShowAddQ(false); setBulkQResult(null); setBulkQText(""); }}>
+                        <Ionicons name="cloud-upload" size={14} color="#FF6B35" />
+                        <Text style={[styles.testActionBtnText, { color: "#FF6B35" }]}>Bulk Upload</Text>
+                      </Pressable>
+                      <Pressable style={[styles.testActionBtn, { backgroundColor: "#FEE2E2" }]} onPress={() => {
+                        Alert.alert("Delete Test", `Delete "${test.title}"?`, [
+                          { text: "Cancel", style: "cancel" },
+                          { text: "Delete", style: "destructive", onPress: () => deleteTestMutation.mutate(test.id) },
+                        ]);
+                      }}>
+                        <Ionicons name="trash-outline" size={14} color="#EF4444" />
+                      </Pressable>
+                    </View>
+                  </View>
                 </View>
-                <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
-              </Pressable>
-            ))}
+              ))
+            )}
           </View>
         )}
 
@@ -582,6 +705,215 @@ export default function AdminDashboard() {
           </View>
         </View>
       </Modal>
+
+      <Modal visible={showCreateTest} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Create Test</Text>
+              <Pressable onPress={() => setShowCreateTest(false)}>
+                <Ionicons name="close" size={24} color={Colors.light.text} />
+              </Pressable>
+            </View>
+            <ScrollView style={styles.modalScroll}>
+              <View style={styles.formField}>
+                <Text style={styles.formLabel}>Test Title *</Text>
+                <TextInput style={styles.formInput} placeholder="e.g., Chapter 1 Test" placeholderTextColor={Colors.light.textMuted} value={testTitle} onChangeText={setTestTitle} />
+              </View>
+              <View style={styles.formField}>
+                <Text style={styles.formLabel}>Description</Text>
+                <TextInput style={[styles.formInput, styles.formInputMulti]} placeholder="Test description" placeholderTextColor={Colors.light.textMuted} value={testDesc} onChangeText={setTestDesc} multiline numberOfLines={2} />
+              </View>
+              <View style={styles.formField}>
+                <Text style={styles.formLabel}>Type</Text>
+                <View style={styles.typeOptions}>
+                  {["practice", "mock", "chapter", "weekly", "pyq_practice", "pyq_papers"].map((t) => (
+                    <Pressable key={t} style={[styles.typeOption, testType === t && styles.typeOptionActive]} onPress={() => setTestType(t)}>
+                      <Text style={[styles.typeOptionText, testType === t && styles.typeOptionTextActive]}>{t}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </View>
+              <View style={styles.formField}>
+                <Text style={styles.formLabel}>Link to Course (optional)</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 4 }}>
+                  <Pressable style={[styles.typeOption, testCourseId === null && styles.typeOptionActive]} onPress={() => setTestCourseId(null)}>
+                    <Text style={[styles.typeOptionText, testCourseId === null && styles.typeOptionTextActive]}>Standalone</Text>
+                  </Pressable>
+                  {courses.map((c) => (
+                    <Pressable key={c.id} style={[styles.typeOption, testCourseId === c.id && styles.typeOptionActive, { marginLeft: 6 }]} onPress={() => setTestCourseId(c.id)}>
+                      <Text style={[styles.typeOptionText, testCourseId === c.id && styles.typeOptionTextActive]} numberOfLines={1}>{c.title}</Text>
+                    </Pressable>
+                  ))}
+                </ScrollView>
+              </View>
+              <View style={styles.formField}>
+                <Text style={styles.formLabel}>Duration (minutes)</Text>
+                <TextInput style={styles.formInput} placeholder="60" placeholderTextColor={Colors.light.textMuted} value={testDuration} onChangeText={setTestDuration} keyboardType="numeric" />
+              </View>
+              <View style={{ flexDirection: "row", gap: 12 }}>
+                <View style={[styles.formField, { flex: 1 }]}>
+                  <Text style={styles.formLabel}>Total Marks</Text>
+                  <TextInput style={styles.formInput} placeholder="100" placeholderTextColor={Colors.light.textMuted} value={testTotalMarks} onChangeText={setTestTotalMarks} keyboardType="numeric" />
+                </View>
+                <View style={[styles.formField, { flex: 1 }]}>
+                  <Text style={styles.formLabel}>Passing Marks</Text>
+                  <TextInput style={styles.formInput} placeholder="35" placeholderTextColor={Colors.light.textMuted} value={testPassingMarks} onChangeText={setTestPassingMarks} keyboardType="numeric" />
+                </View>
+              </View>
+            </ScrollView>
+            <Pressable
+              style={[styles.createBtn, !testTitle && styles.createBtnDisabled]}
+              onPress={() => testTitle && createTestMutation.mutate({
+                title: testTitle, description: testDesc, testType, courseId: testCourseId,
+                durationMinutes: parseInt(testDuration) || 60, totalMarks: parseInt(testTotalMarks) || 100, passingMarks: parseInt(testPassingMarks) || 35,
+              })}
+              disabled={!testTitle || createTestMutation.isPending}
+            >
+              <LinearGradient colors={[Colors.light.primary, Colors.light.primaryDark]} style={styles.createBtnGrad}>
+                {createTestMutation.isPending ? <ActivityIndicator color="#fff" /> : (
+                  <Text style={styles.createBtnText}>Create Test</Text>
+                )}
+              </LinearGradient>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={showTestQuestions !== null} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16, maxHeight: "90%" }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                {showBulkQ ? "Bulk Upload Questions" : "Add Question"}
+              </Text>
+              <Pressable onPress={() => { setShowTestQuestions(null); setShowAddQ(false); setShowBulkQ(false); setBulkQResult(null); }}>
+                <Ionicons name="close" size={24} color={Colors.light.text} />
+              </Pressable>
+            </View>
+            {!showBulkQ && !showAddQ && (
+              <View style={{ gap: 12, paddingVertical: 12 }}>
+                <Pressable style={styles.testActionBtnLarge} onPress={() => setShowAddQ(true)}>
+                  <Ionicons name="create-outline" size={22} color={Colors.light.primary} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Add Manually</Text>
+                    <Text style={{ fontSize: 12, fontFamily: "Inter_400Regular", color: Colors.light.textMuted }}>Add one question at a time</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
+                </Pressable>
+                <Pressable style={styles.testActionBtnLarge} onPress={() => setShowBulkQ(true)}>
+                  <Ionicons name="cloud-upload" size={22} color="#FF6B35" />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Bulk Text Upload</Text>
+                    <Text style={{ fontSize: 12, fontFamily: "Inter_400Regular", color: Colors.light.textMuted }}>Paste multiple questions in text format</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
+                </Pressable>
+              </View>
+            )}
+            {showAddQ && (
+              <ScrollView style={styles.modalScroll}>
+                <View style={styles.formField}>
+                  <Text style={styles.formLabel}>Question *</Text>
+                  <TextInput style={[styles.formInput, styles.formInputMulti]} placeholder="Enter question text" placeholderTextColor={Colors.light.textMuted} value={newQ.questionText} onChangeText={(v) => setNewQ(p => ({ ...p, questionText: v }))} multiline numberOfLines={3} />
+                </View>
+                {[
+                  { key: "optionA", label: "Option A *" },
+                  { key: "optionB", label: "Option B *" },
+                  { key: "optionC", label: "Option C" },
+                  { key: "optionD", label: "Option D" },
+                ].map((o) => (
+                  <View key={o.key} style={styles.formField}>
+                    <Text style={styles.formLabel}>{o.label}</Text>
+                    <TextInput style={styles.formInput} placeholder={o.label} placeholderTextColor={Colors.light.textMuted} value={(newQ as any)[o.key]} onChangeText={(v) => setNewQ(p => ({ ...p, [o.key]: v }))} />
+                  </View>
+                ))}
+                <View style={styles.formField}>
+                  <Text style={styles.formLabel}>Correct Option</Text>
+                  <View style={{ flexDirection: "row", gap: 8 }}>
+                    {["A", "B", "C", "D"].map((opt) => (
+                      <Pressable key={opt} style={[styles.typeOption, newQ.correctOption === opt && styles.typeOptionActive]} onPress={() => setNewQ(p => ({ ...p, correctOption: opt }))}>
+                        <Text style={[styles.typeOptionText, newQ.correctOption === opt && styles.typeOptionTextActive]}>{opt}</Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                </View>
+                <View style={styles.formField}>
+                  <Text style={styles.formLabel}>Explanation</Text>
+                  <TextInput style={[styles.formInput, styles.formInputMulti]} placeholder="Why this answer?" placeholderTextColor={Colors.light.textMuted} value={newQ.explanation} onChangeText={(v) => setNewQ(p => ({ ...p, explanation: v }))} multiline numberOfLines={2} />
+                </View>
+                <View style={{ flexDirection: "row", gap: 12 }}>
+                  <View style={[styles.formField, { flex: 1 }]}>
+                    <Text style={styles.formLabel}>Marks</Text>
+                    <TextInput style={styles.formInput} placeholder="4" placeholderTextColor={Colors.light.textMuted} value={newQ.marks} onChangeText={(v) => setNewQ(p => ({ ...p, marks: v }))} keyboardType="numeric" />
+                  </View>
+                  <View style={[styles.formField, { flex: 1 }]}>
+                    <Text style={styles.formLabel}>Negative</Text>
+                    <TextInput style={styles.formInput} placeholder="1" placeholderTextColor={Colors.light.textMuted} value={newQ.negativeMarks} onChangeText={(v) => setNewQ(p => ({ ...p, negativeMarks: v }))} keyboardType="numeric" />
+                  </View>
+                </View>
+                <Pressable
+                  style={[styles.createBtn, !newQ.questionText && styles.createBtnDisabled]}
+                  onPress={() => newQ.questionText && addQuestionMutation.mutate({
+                    testId: showTestQuestions,
+                    questionText: newQ.questionText, optionA: newQ.optionA, optionB: newQ.optionB,
+                    optionC: newQ.optionC, optionD: newQ.optionD, correctOption: newQ.correctOption,
+                    explanation: newQ.explanation, marks: parseInt(newQ.marks) || 4, negativeMarks: parseInt(newQ.negativeMarks) || 1,
+                  })}
+                  disabled={!newQ.questionText || addQuestionMutation.isPending}
+                >
+                  <LinearGradient colors={[Colors.light.primary, Colors.light.primaryDark]} style={styles.createBtnGrad}>
+                    {addQuestionMutation.isPending ? <ActivityIndicator color="#fff" /> : (
+                      <Text style={styles.createBtnText}>Add Question</Text>
+                    )}
+                  </LinearGradient>
+                </Pressable>
+              </ScrollView>
+            )}
+            {showBulkQ && (
+              <ScrollView style={styles.modalScroll}>
+                <View style={styles.infoCard}>
+                  <Ionicons name="information-circle" size={18} color={Colors.light.primary} />
+                  <Text style={[styles.infoText, { fontSize: 11 }]}>
+                    Format: Q1. question{"\n"}A. option{"\n"}B. option{"\n"}C. option{"\n"}D. option{"\n"}Answer: A
+                  </Text>
+                </View>
+                <View style={styles.formField}>
+                  <Text style={styles.formLabel}>Paste Questions</Text>
+                  <TextInput
+                    style={[styles.formInput, { minHeight: 150, textAlignVertical: "top" }]}
+                    placeholder={"Q1. What is 2+2?\nA. 3\nB. 4\nC. 5\nD. 6\nAnswer: B\n\nQ2. ..."}
+                    placeholderTextColor={Colors.light.textMuted}
+                    value={bulkQText}
+                    onChangeText={setBulkQText}
+                    multiline
+                    numberOfLines={8}
+                  />
+                </View>
+                {bulkQResult && (
+                  <View style={[styles.infoCard, { backgroundColor: "#DCFCE7" }]}>
+                    <Ionicons name="checkmark-circle" size={18} color="#22C55E" />
+                    <Text style={[styles.infoText, { color: "#166534" }]}>
+                      Successfully uploaded {bulkQResult.count} questions!
+                    </Text>
+                  </View>
+                )}
+                <Pressable
+                  style={[styles.createBtn, !bulkQText.trim() && styles.createBtnDisabled]}
+                  onPress={() => bulkQText.trim() && bulkUploadMutation.mutate({ testId: showTestQuestions!, text: bulkQText })}
+                  disabled={!bulkQText.trim() || bulkUploadMutation.isPending}
+                >
+                  <LinearGradient colors={["#FF6B35", "#E55A25"]} style={styles.createBtnGrad}>
+                    {bulkUploadMutation.isPending ? <ActivityIndicator color="#fff" /> : (
+                      <Text style={styles.createBtnText}>Upload Questions</Text>
+                    )}
+                  </LinearGradient>
+                </Pressable>
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -668,4 +1000,13 @@ const styles = StyleSheet.create({
   typeSelectTextActive: { color: Colors.light.primary, fontFamily: "Inter_600SemiBold" },
   missionQCard: { backgroundColor: Colors.light.background, borderRadius: 12, padding: 12, gap: 6, marginTop: 8, borderWidth: 1, borderColor: Colors.light.border },
   addQBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 12, marginTop: 8, borderRadius: 10, borderWidth: 1, borderColor: Colors.light.primary, borderStyle: "dashed" },
+  typeOptions: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+  typeOption: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8, backgroundColor: Colors.light.background, borderWidth: 1, borderColor: Colors.light.border },
+  typeOptionActive: { backgroundColor: Colors.light.secondary, borderColor: Colors.light.primary },
+  typeOptionText: { fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.textMuted },
+  typeOptionTextActive: { color: Colors.light.primary, fontFamily: "Inter_600SemiBold" },
+  testActionRow: { flexDirection: "row", gap: 6, marginTop: 8 },
+  testActionBtn: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: Colors.light.secondary, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 },
+  testActionBtnText: { fontSize: 11, fontFamily: "Inter_600SemiBold", color: Colors.light.primary },
+  testActionBtnLarge: { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: Colors.light.background, borderRadius: 14, padding: 16, borderWidth: 1, borderColor: Colors.light.border },
 });

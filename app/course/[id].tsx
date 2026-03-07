@@ -198,14 +198,18 @@ export default function CourseDetailScreen() {
     if (course?.is_free) {
       enrollMutation.mutate();
     } else {
-      Alert.alert(
-        "Purchase Course",
-        `Buy "${course?.title}" for ₹${parseFloat(course?.price || "0").toFixed(0)}?\n\nYou will be redirected to secure payment.`,
-        [
-          { text: "Cancel", style: "cancel" },
-          { text: "Pay Now", onPress: handleRazorpayPayment },
-        ]
-      );
+      if (Platform.OS === "web") {
+        handleRazorpayPayment();
+      } else {
+        Alert.alert(
+          "Purchase Course",
+          `Buy "${course?.title}" for ₹${parseFloat(course?.price || "0").toFixed(0)}?\n\nYou will be redirected to secure payment.`,
+          [
+            { text: "Cancel", style: "cancel" },
+            { text: "Pay Now", onPress: handleRazorpayPayment },
+          ]
+        );
+      }
     }
   };
 

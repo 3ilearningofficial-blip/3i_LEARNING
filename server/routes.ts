@@ -787,6 +787,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/admin/tests", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const result = await db.query(`
+        SELECT t.*, c.title as course_title 
+        FROM tests t 
+        LEFT JOIN courses c ON t.course_id = c.id 
+        ORDER BY t.created_at DESC
+      `);
+      res.json(result.rows);
+    } catch (err) {
+      res.status(500).json({ message: "Failed to fetch tests" });
+    }
+  });
+
   app.post("/api/admin/tests", requireAdmin, async (req: Request, res: Response) => {
     try {
       const { title, description, courseId, durationMinutes, totalMarks, passingMarks, testType } = req.body;

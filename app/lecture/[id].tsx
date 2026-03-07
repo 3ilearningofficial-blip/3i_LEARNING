@@ -49,7 +49,7 @@ html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
 <div id="player"></div>
 <script>
 var tag = document.createElement('script');
-tag.src = "https://www.youtube.com/iframe_api";
+tag.src = "https://www.youtube-nocookie.com/iframe_api";
 document.head.appendChild(tag);
 function onYouTubeIframeAPIReady() {
   new YT.Player('player', {
@@ -151,7 +151,7 @@ export default function LectureScreen() {
         )}
         {!hasError && youtubeHtml && Platform.OS === "web" ? (
           <iframe
-            src={`https://www.youtube.com/embed/${videoId}?autoplay=1&playsinline=1&rel=0&modestbranding=1&showinfo=0&iv_load_policy=3`}
+            src={`https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&playsinline=1&rel=0&modestbranding=1&iv_load_policy=3&cc_load_policy=0&fs=1`}
             style={{ width: "100%", height: "100%", border: "none", position: "absolute", top: 0, left: 0 } as any}
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
             allowFullScreen
@@ -159,7 +159,7 @@ export default function LectureScreen() {
           />
         ) : !hasError && youtubeHtml && Platform.OS !== "web" ? (
           <WebView
-            source={{ html: youtubeHtml, baseUrl: "https://www.youtube.com" }}
+            source={{ html: youtubeHtml, baseUrl: "https://www.youtube-nocookie.com" }}
             style={styles.webView}
             onLoad={() => setIsLoading(false)}
             onError={() => { setIsLoading(false); setHasError(true); }}
