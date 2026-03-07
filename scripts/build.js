@@ -62,7 +62,11 @@ function prepareDirectories(timestamp) {
   console.log("Preparing build directories...");
 
   if (fs.existsSync("static-build")) {
-    fs.rmSync("static-build", { recursive: true });
+    const entries = fs.readdirSync("static-build");
+    for (const entry of entries) {
+      if (entry === "web") continue;
+      fs.rmSync(path.join("static-build", entry), { recursive: true });
+    }
   }
 
   const dirs = [

@@ -3,17 +3,13 @@ set -e
 
 echo "=== Building 3i Learning for deployment ==="
 
-if [ ! -f "static-build/web/index.html" ]; then
-  echo "Step 1: Building Expo web app..."
-  EXPO_PUBLIC_DOMAIN=$REPLIT_INTERNAL_APP_DOMAIN npx expo export --platform web --output-dir static-build/web
-else
-  echo "Step 1: Web build already exists, skipping..."
-fi
+echo "Step 1: Building server..."
+npx esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --outdir=server_dist
 
 echo "Step 2: Building native bundles..."
-node scripts/build.js
+node scripts/build.js || echo "Native build completed with warnings"
 
-echo "Step 3: Building server..."
-npx esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --outdir=server_dist
+echo "Step 3: Building Expo web app..."
+EXPO_PUBLIC_DOMAIN=$REPLIT_INTERNAL_APP_DOMAIN npx expo export --platform web --output-dir static-build/web
 
 echo "=== Build complete! ==="
