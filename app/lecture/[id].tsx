@@ -125,7 +125,14 @@ export default function LectureScreen() {
             </Pressable>
           </View>
         )}
-        {!hasError && youtubeHtml ? (
+        {!hasError && youtubeHtml && Platform.OS === "web" ? (
+          <iframe
+            src={`https://www.youtube.com/embed/${videoId}?playsinline=1&rel=0&modestbranding=1`}
+            style={{ width: "100%", height: "100%", border: "none", position: "absolute", top: 0, left: 0 } as any}
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+            allowFullScreen
+          />
+        ) : !hasError && youtubeHtml && Platform.OS !== "web" ? (
           <WebView
             source={{ html: youtubeHtml, baseUrl: "https://www.youtube.com" }}
             style={styles.webView}
