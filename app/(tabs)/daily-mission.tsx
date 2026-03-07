@@ -33,8 +33,8 @@ interface DailyMission {
 }
 
 const TABS = [
-  { key: "all", label: "All" },
-  { key: "daily_drill", label: "Daily Drill" },
+  { key: "all", label: "All Missions" },
+  { key: "daily_drill", label: "Daily Drills" },
   { key: "free_practice", label: "Free Practice" },
 ];
 
@@ -287,19 +287,18 @@ export default function DailyMissionScreen() {
       <LinearGradient colors={["#0A1628", "#1A2E50"]} style={styles.headerGradient}>
         <Text style={styles.headerTitle}>Daily Missions</Text>
         <Text style={styles.headerSub}>Practice and earn XP every day</Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsRow}>
+          {TABS.map((tab) => (
+            <Pressable
+              key={tab.key}
+              style={[styles.tab, activeTab === tab.key && styles.tabActive]}
+              onPress={() => setActiveTab(tab.key)}
+            >
+              <Text style={[styles.tabText, activeTab === tab.key && styles.tabTextActive]}>{tab.label}</Text>
+            </Pressable>
+          ))}
+        </ScrollView>
       </LinearGradient>
-
-      <View style={styles.tabsRow}>
-        {TABS.map((tab) => (
-          <Pressable
-            key={tab.key}
-            style={[styles.tab, activeTab === tab.key && styles.tabActive]}
-            onPress={() => setActiveTab(tab.key)}
-          >
-            <Text style={[styles.tabText, activeTab === tab.key && styles.tabTextActive]}>{tab.label}</Text>
-          </Pressable>
-        ))}
-      </View>
 
       {isLoading ? (
         <View style={styles.centered}>
@@ -370,14 +369,14 @@ export default function DailyMissionScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.light.background },
   centered: { flex: 1, alignItems: "center", justifyContent: "center" },
-  headerGradient: { paddingHorizontal: 20, paddingVertical: 16, gap: 4 },
+  headerGradient: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 12, gap: 4 },
   headerTitle: { fontSize: 24, fontFamily: "Inter_700Bold", color: "#fff" },
   headerSub: { fontSize: 13, color: "rgba(255,255,255,0.6)", fontFamily: "Inter_400Regular" },
-  tabsRow: { flexDirection: "row", paddingHorizontal: 16, paddingVertical: 10, gap: 8 },
-  tab: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, backgroundColor: Colors.light.background, borderWidth: 1, borderColor: Colors.light.border },
-  tabActive: { backgroundColor: Colors.light.primary, borderColor: Colors.light.primary },
-  tabText: { fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary },
-  tabTextActive: { color: "#fff" },
+  tabsRow: { gap: 8, marginTop: 10 },
+  tab: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 18, backgroundColor: "rgba(255,255,255,0.1)" },
+  tabActive: { backgroundColor: "#fff" },
+  tabText: { fontSize: 13, fontFamily: "Inter_500Medium", color: "rgba(255,255,255,0.7)" },
+  tabTextActive: { color: Colors.light.primary },
   emptyState: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12, padding: 40 },
   emptyTitle: { fontSize: 20, fontFamily: "Inter_700Bold", color: Colors.light.text },
   emptySubtitle: { fontSize: 14, color: Colors.light.textMuted, textAlign: "center", fontFamily: "Inter_400Regular" },

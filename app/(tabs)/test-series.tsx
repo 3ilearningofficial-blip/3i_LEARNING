@@ -35,12 +35,12 @@ interface TestAttempt {
   completed_at: number;
 }
 
-const TEST_TYPES = ["All", "mock", "practice", "chapter", "weekly"];
+const TEST_TYPES = ["All", "mock", "practice", "chapter", "weekly", "pyq_practice", "pyq_papers"];
 const TEST_TYPE_LABELS: Record<string, string> = {
-  All: "All Tests", mock: "Mock Tests", practice: "Practice", chapter: "Chapter Tests", weekly: "Weekly Tests",
+  All: "All Tests", mock: "Mock Tests", practice: "Practice", chapter: "Chapter Tests", weekly: "Weekly Tests", pyq_practice: "PYQ Practice", pyq_papers: "PYQ Papers",
 };
 const TEST_TYPE_COLORS: Record<string, string> = {
-  mock: "#DC2626", practice: "#1A56DB", chapter: "#059669", weekly: "#7C3AED",
+  mock: "#DC2626", practice: "#1A56DB", chapter: "#059669", weekly: "#7C3AED", pyq_practice: "#D97706", pyq_papers: "#0891B2",
 };
 
 function TestCard({ test, onPress }: { test: Test; onPress: () => void }) {

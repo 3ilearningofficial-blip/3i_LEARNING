@@ -85,7 +85,7 @@ export default function CourseDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
-  const { user } = useAuth();
+  const { user, isAdmin } = useAuth();
   const [activeTab, setActiveTab] = useState("Lectures");
 
   const topPadding = Platform.OS === "web" ? 67 : insets.top;
@@ -299,10 +299,12 @@ export default function CourseDetailScreen() {
             <Ionicons name="document-text" size={16} color="rgba(255,255,255,0.8)" />
             <Text style={styles.quickStatText}>{course.total_tests} Tests</Text>
           </View>
-          <View style={styles.quickStat}>
-            <Ionicons name="people" size={16} color="rgba(255,255,255,0.8)" />
-            <Text style={styles.quickStatText}>{course.total_students} Students</Text>
-          </View>
+          {isAdmin && (
+            <View style={styles.quickStat}>
+              <Ionicons name="people" size={16} color="rgba(255,255,255,0.8)" />
+              <Text style={styles.quickStatText}>{course.total_students} Students</Text>
+            </View>
+          )}
           {!isTestSeriesCourse && (
             <View style={styles.quickStat}>
               <Ionicons name="time" size={16} color="rgba(255,255,255,0.8)" />

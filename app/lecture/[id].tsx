@@ -14,17 +14,24 @@ import Colors from "@/constants/colors";
 
 function getYouTubeVideoId(url: string): string {
   if (!url) return "";
+  const decoded = decodeURIComponent(url);
   try {
-    const parsed = new URL(url);
+    const parsed = new URL(decoded);
     if (parsed.hostname.includes("youtu.be")) {
-      return parsed.pathname.slice(1).split("?")[0];
+      return parsed.pathname.slice(1).split("?")[0].split("/")[0];
     }
     if (parsed.hostname.includes("youtube.com")) {
-      return parsed.searchParams.get("v") || "";
+      if (parsed.searchParams.get("v")) return parsed.searchParams.get("v")!;
+      const pathParts = parsed.pathname.split("/").filter(Boolean);
+      if (pathParts[0] === "embed" || pathParts[0] === "shorts" || pathParts[0] === "live") {
+        return pathParts[1] || "";
+      }
     }
   } catch {}
-  const match = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/))([^&?\s/]+)/);
-  return match?.[1] || "";
+  const match = decoded.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/|live\/))([^&?\s/]+)/);
+  if (match?.[1]) return match[1];
+  const simpleMatch = decoded.match(/[?&]v=([^&\s]+)/);
+  return simpleMatch?.[1] || "";
 }
 
 function buildYouTubeHtml(videoId: string): string {
@@ -131,6 +138,7 @@ export default function LectureScreen() {
             style={{ width: "100%", height: "100%", border: "none", position: "absolute", top: 0, left: 0 } as any}
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
             allowFullScreen
+            onLoad={() => setIsLoading(false)}
           />
         ) : !hasError && youtubeHtml && Platform.OS !== "web" ? (
           <WebView
