@@ -188,32 +188,8 @@
       }
       .store-button:hover { background: rgba(255,255,255,0.15); }
       .store-icon { width: 20px; height: 20px; }
-      .qr-section { background: #fff; color: #0A1628; border-color: transparent; }
-      .qr-section .download-card-title { color: #0A1628; }
-      .qr-section .download-card-desc { color: #5A6A85; }
       .download-card-title { font-size: 18px; font-weight: 700; margin-bottom: 6px; color: #fff; }
       .download-card-desc { font-size: 13px; color: rgba(255,255,255,0.6); margin-bottom: 20px; }
-      .qr-code {
-        width: 180px;
-        height: 180px;
-        margin: 0 auto 16px;
-        background: #fff;
-        border-radius: 12px;
-        padding: 12px;
-      }
-      .qr-code canvas { width: 100%; height: 100%; }
-      .open-button {
-        display: inline-block;
-        padding: 12px 24px;
-        font-size: 14px;
-        font-weight: 600;
-        border-radius: 10px;
-        text-decoration: none;
-        color: #fff;
-        background: linear-gradient(135deg, #1A56DB, #3B82F6);
-        transition: opacity 0.15s;
-      }
-      .open-button:hover { opacity: 0.9; }
       .footer {
         padding: 32px 20px;
         text-align: center;
@@ -315,23 +291,23 @@
         <div class="download-cards">
           <div class="download-card">
             <div class="download-card-title">Download</div>
-            <div class="download-card-desc">Get the app from the Play Store or test via Expo Go</div>
+            <div class="download-card-desc">Get the app from the Google Play Store</div>
             <div class="store-buttons" id="store-buttons">
               <a id="play-store-btn" href="https://play.google.com/store/apps/details?id=com.learning.threeI" class="store-button" target="_blank">
                 <svg class="store-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M3,20.5V3.5C3,2.91 3.34,2.39 3.84,2.15L13.69,12L3.84,21.85C3.34,21.6 3,21.09 3,20.5M16.81,15.12L6.05,21.34L14.54,12.85L16.81,15.12M20.16,10.81C20.5,11.08 20.75,11.5 20.75,12C20.75,12.5 20.53,12.9 20.18,13.18L17.89,14.5L15.39,12L17.89,9.5L20.16,10.81M6.05,2.66L16.81,8.88L14.54,11.15L6.05,2.66Z"/></svg>
                 Google Play
               </a>
-              <a id="expo-go-btn" href="https://play.google.com/store/apps/details?id=host.exp.exponent" class="store-button" target="_blank" style="opacity:0.7;font-size:13px;">
-                <svg class="store-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
-                Expo Go (Testing)
-              </a>
             </div>
           </div>
-          <div class="download-card qr-section">
-            <div class="download-card-title">Scan QR Code</div>
-            <div class="download-card-desc">Open with your phone camera or Expo Go</div>
-            <div class="qr-code" id="qr-code"></div>
-            <a href="exps://EXPS_URL_PLACEHOLDER" class="open-button">Open in Expo Go</a>
+          <div class="download-card">
+            <div class="download-card-title">Use on Web</div>
+            <div class="download-card-desc">Access directly from your browser</div>
+            <div class="store-buttons">
+              <a href="BASE_URL_PLACEHOLDER/app" class="store-button" style="background:linear-gradient(135deg, #1A56DB, #3B82F6);border:none;">
+                <svg class="store-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                Open Web App
+              </a>
+            </div>
           </div>
         </div>
       </section>
@@ -341,39 +317,12 @@
       </footer>
     </div>
 
-    <script src="https://unpkg.com/qr-code-styling@1.6.0/lib/qr-code-styling.js"></script>
     <script>
       (function () {
-        var ua = navigator.userAgent;
         var loadingEl = document.getElementById("loading");
         var contentEl = document.getElementById("content");
-        var isAndroid = /Android/i.test(ua);
-        var isIOS = /iPhone|iPad|iPod/i.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-        var deepLink = "exps://EXPS_URL_PLACEHOLDER";
-
-        var qrCode = new QRCodeStyling({
-          width: 400,
-          height: 400,
-          data: deepLink,
-          dotsOptions: { color: "#1A56DB", type: "rounded" },
-          backgroundOptions: { color: "#ffffff" },
-          cornersSquareOptions: { type: "extra-rounded" },
-          cornersDotOptions: { type: "dot" },
-          qrOptions: { errorCorrectionLevel: "H" },
-        });
-        qrCode.append(document.getElementById("qr-code"));
-
-        // Only auto-redirect to Expo Go in development, not production
-        var isDev = window.location.hostname.includes('replit.dev');
-        if ((isAndroid || isIOS) && isDev) {
-          loadingEl.style.display = "block";
-          contentEl.style.display = "none";
-          window.location.href = deepLink;
-          setTimeout(function () {
-            loadingEl.style.display = "none";
-            contentEl.style.display = "block";
-          }, 500);
-        }
+        if (loadingEl) loadingEl.style.display = "none";
+        if (contentEl) contentEl.style.display = "block";
       })();
     </script>
   </body>
