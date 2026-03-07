@@ -81,7 +81,24 @@ async function sendOTPviaSMS(phone: string, otp: string): Promise<boolean> {
     console.log(`[SMS] No FAST2SMS_API_KEY set — OTP for ${phone}: ${otp}`);
     return false;
   }
+
   try {
+    const url = `https://www.fast2sms.com/dev/bulkV2?authorization=${encodeURIComponent(apiKey)}&route=otp&variables_values=${encodeURIComponent(otp)}&flash=0&numbers=${encodeURIComponent(phone)}`;
+    console.log(`[SMS] Sending OTP via Fast2SMS OTP route to ${phone}`);
+    const res = await fetch(url, { method: "GET" });
+    const data = await res.json();
+    console.log(`[SMS] Fast2SMS response:`, JSON.stringify(data));
+    if (data.return === true) {
+      console.log(`[SMS] OTP sent successfully to ${phone}`);
+      return true;
+    }
+    console.error(`[SMS] OTP route failed:`, data.message || JSON.stringify(data));
+  } catch (err) {
+    console.error(`[SMS] OTP route error:`, err);
+  }
+
+  try {
+    console.log(`[SMS] Trying Quick SMS route for ${phone}`);
     const res = await fetch("https://www.fast2sms.com/dev/bulkV2", {
       method: "POST",
       headers: {
@@ -90,23 +107,23 @@ async function sendOTPviaSMS(phone: string, otp: string): Promise<boolean> {
       },
       body: JSON.stringify({
         route: "q",
-        message: `Your 3i Learning verification code is: ${otp}. Valid for 10 minutes. Do not share this code.`,
+        message: `Your 3i Learning OTP is ${otp}. Valid for 10 minutes.`,
         numbers: phone,
         flash: "0",
       }),
     });
     const data = await res.json();
-    if (data.return) {
-      console.log(`[SMS] OTP sent to ${phone}`);
+    console.log(`[SMS] Quick SMS response:`, JSON.stringify(data));
+    if (data.return === true) {
+      console.log(`[SMS] Quick SMS sent successfully to ${phone}`);
       return true;
-    } else {
-      console.error(`[SMS] Failed:`, data.message);
-      return false;
     }
+    console.error(`[SMS] Quick SMS failed:`, data.message || JSON.stringify(data));
   } catch (err) {
-    console.error(`[SMS] Error sending to ${phone}:`, err);
-    return false;
+    console.error(`[SMS] Quick SMS error:`, err);
   }
+
+  return false;
 }
 
 const ADMIN_EMAILS = ["3ilearningofficial@gmail.com"];
