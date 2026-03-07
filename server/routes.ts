@@ -751,9 +751,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.delete("/api/admin/courses/:id", requireAdmin, async (req: Request, res: Response) => {
     try {
-      await db.query("DELETE FROM courses WHERE id = $1", [req.params.id]);
+      const courseId = req.params.id;
+      await db.query("DELETE FROM test_attempts WHERE test_id IN (SELECT id FROM tests WHERE course_id = $1)", [courseId]);
+      await db.query("DELETE FROM questions WHERE test_id IN (SELECT id FROM tests WHERE course_id = $1)", [courseId]);
+      await db.query("DELETE FROM tests WHERE course_id = $1", [courseId]);
+      await db.query("DELETE FROM lectures WHERE course_id = $1", [courseId]);
+      await db.query("DELETE FROM enrollments WHERE course_id = $1", [courseId]);
+      await db.query("DELETE FROM payments WHERE course_id = $1", [courseId]);
+      await db.query("DELETE FROM study_materials WHERE course_id = $1", [courseId]);
+      await db.query("DELETE FROM live_classes WHERE course_id = $1", [courseId]);
+      await db.query("DELETE FROM courses WHERE id = $1", [courseId]);
       res.json({ success: true });
     } catch (err) {
+      console.error("Delete course error:", err);
       res.status(500).json({ message: "Failed to delete course" });
     }
   });
@@ -1038,9 +1048,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.delete("/api/admin/tests/:id", requireAdmin, async (req: Request, res: Response) => {
     try {
+      await db.query("DELETE FROM test_attempts WHERE test_id = $1", [req.params.id]);
+      await db.query("DELETE FROM questions WHERE test_id = $1", [req.params.id]);
       await db.query("DELETE FROM tests WHERE id = $1", [req.params.id]);
       res.json({ success: true });
     } catch (err) {
+      console.error("Delete test error:", err);
       res.status(500).json({ message: "Failed to delete test" });
     }
   });
