@@ -55,9 +55,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           await db.query("UPDATE users SET otp = $1, otp_expires_at = $2 WHERE phone = $3", [otp, expires, identifier]);
         }
       }
-      if (process.env.NODE_ENV !== "production") {
-        console.log(`OTP for ${identifier}: ${otp}`);
-      }
+      console.log(`OTP for ${identifier}: ${otp}`);
       const response: any = { success: true, message: "OTP sent successfully" };
       if (process.env.NODE_ENV !== "production") {
         response.devOtp = otp;
