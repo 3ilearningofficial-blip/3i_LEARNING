@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable,
-  Platform, ActivityIndicator, Alert, Linking,
+  Platform, ActivityIndicator, Alert,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -479,14 +479,7 @@ export default function CourseDetailScreen() {
                     onPress={() => {
                       if (!canAccess) { Alert.alert("Locked", "Enroll in this course to access materials."); return; }
                       if (!mat.file_url) return;
-                      if (mat.download_allowed) {
-                        Linking.openURL(mat.file_url);
-                      } else {
-                        const viewUrl = mat.file_type === "pdf"
-                          ? `https://docs.google.com/gview?embedded=true&url=${encodeURIComponent(mat.file_url)}`
-                          : mat.file_url;
-                        Linking.openURL(viewUrl);
-                      }
+                      router.push(`/material/${mat.id}`);
                     }}
                   >
                     <View style={styles.materialIcon}>

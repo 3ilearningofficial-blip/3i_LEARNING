@@ -299,13 +299,16 @@ export default function HomeScreen() {
                 </View>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.materialsList}>
                   {freeMaterials.map((mat) => (
-                    <Pressable key={mat.id} style={styles.materialCard} onPress={() => {}}>
+                    <Pressable key={mat.id} style={styles.materialCard} onPress={() => router.push(`/material/${mat.id}`)}>
                       <View style={styles.materialIconBg}>
-                        <Ionicons name="document-text" size={22} color={Colors.light.primary} />
+                        <Ionicons name={mat.file_type === "pdf" ? "document-text" : mat.file_type === "video" ? "videocam" : mat.file_type === "doc" ? "document" : "link"} size={22} color={Colors.light.primary} />
                       </View>
                       <View style={styles.materialInfo}>
                         <Text style={styles.materialTitle} numberOfLines={2}>{mat.title}</Text>
-                        <View style={styles.freePill}><Text style={styles.freePillText}>FREE</Text></View>
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                          <View style={styles.freePill}><Text style={styles.freePillText}>FREE</Text></View>
+                          <Text style={{ fontSize: 10, fontFamily: "Inter_500Medium", color: Colors.light.textMuted }}>{(mat.file_type || "file").toUpperCase()}</Text>
+                        </View>
                       </View>
                     </Pressable>
                   ))}
