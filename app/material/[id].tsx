@@ -13,9 +13,12 @@ import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/context/AuthContext";
 import Colors from "@/constants/colors";
 
-function getViewUrl(fileUrl: string, fileType: string): string {
+function getViewUrl(fileUrl: string, fileType: string, useDirectUrl: boolean = false): string {
   if (!fileUrl) return "";
   if (fileType === "pdf" || fileUrl.toLowerCase().endsWith(".pdf")) {
+    if (useDirectUrl) {
+      return fileUrl;
+    }
     return `https://docs.google.com/gview?embedded=true&url=${encodeURIComponent(fileUrl)}`;
   }
   return fileUrl;
@@ -36,9 +39,9 @@ export default function MaterialViewerScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
+  const [useDirectUrl, setUseDirectUrl] = useState(false);
   const topPadding = Platform.OS === "web" ? 67 : insets.top;
   const { isAdmin } = useAuth();
-
 
   const { data: material, isError: fetchError } = useQuery<{
     id: number; title: string; file_url: string; file_type: string;
@@ -49,13 +52,54 @@ export default function MaterialViewerScreen() {
     enabled: !!id,
   });
 
-  const viewUrl = material ? getViewUrl(material.file_url, material.file_type) : "";
+  const viewUrl = material ? getViewUrl(material.file_url, material.file_type, useDirectUrl) : "";
 
   const handleRetry = () => {
+    if (!useDirectUrl) {
+      setUseDirectUrl(true);
+    } else {
+      setUseDirectUrl(false);
+      setRetryCount(prev => prev + 1);
+    }
     setError(false);
     setLoading(true);
-    setRetryCount(prev => prev + 1);
   };
+
+  const pdfViewerHtml = material && (material.file_type === "pdf" || material.file_url?.toLowerCase().endsWith(".pdf")) ? `
+<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #f5f5f5; height: 100vh; display: flex; flex-direction: column; }
+iframe, embed, object { width: 100%; flex: 1; border: none; }
+.loading { display: flex; align-items: center; justify-content: center; height: 100vh; font-family: sans-serif; color: #666; flex-direction: column; gap: 12px; }
+.error { display: none; align-items: center; justify-content: center; height: 100vh; font-family: sans-serif; color: #666; flex-direction: column; gap: 12px; text-align: center; padding: 24px; }
+.error a { color: #1A56DB; text-decoration: none; padding: 12px 24px; border: 1px solid #1A56DB; border-radius: 8px; margin-top: 8px; }
+</style>
+</head><body>
+<div id="loading" class="loading"><p>Loading PDF...</p></div>
+<div id="error" class="error">
+<p>Unable to preview this PDF</p>
+<a href="${material.file_url}" target="_blank">Open PDF Directly</a>
+</div>
+<iframe id="viewer" src="https://docs.google.com/gview?embedded=true&url=${encodeURIComponent(material.file_url)}" style="display:none" onload="onLoaded()"></iframe>
+<script>
+var loaded = false;
+function onLoaded() {
+  loaded = true;
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('viewer').style.display = 'block';
+}
+setTimeout(function() {
+  if (!loaded) {
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('error').style.display = 'flex';
+  }
+}, 10000);
+</script>
+</body></html>` : null;
 
   return (
     <View style={styles.container}>
@@ -127,19 +171,34 @@ export default function MaterialViewerScreen() {
               <Ionicons name="refresh" size={16} color="#fff" />
               <Text style={styles.retryBtnText}>Try Again</Text>
             </Pressable>
+            {Platform.OS === "web" && (
+              <Pressable style={[styles.retryBtn, { backgroundColor: Colors.light.accent, marginTop: 10 }]} onPress={() => window.open(material.file_url, "_blank")}>
+                <Ionicons name="open-outline" size={16} color="#fff" />
+                <Text style={styles.retryBtnText}>Open PDF in New Tab</Text>
+              </Pressable>
+            )}
           </View>
         ) : Platform.OS === "web" ? (
-          <iframe
-            key={`pdf-frame-${retryCount}`}
-            src={viewUrl}
-            style={{ width: "100%", height: "100%", border: "none" } as any}
-            title={material.title}
-            onLoad={() => setLoading(false)}
-            sandbox="allow-scripts allow-same-origin"
-          />
+          pdfViewerHtml ? (
+            <iframe
+              key={`pdf-frame-${retryCount}-${useDirectUrl}`}
+              srcDoc={pdfViewerHtml}
+              style={{ width: "100%", height: "100%", border: "none" } as any}
+              title={material.title}
+              onLoad={() => setLoading(false)}
+            />
+          ) : (
+            <iframe
+              key={`frame-${retryCount}`}
+              src={viewUrl}
+              style={{ width: "100%", height: "100%", border: "none" } as any}
+              title={material.title}
+              onLoad={() => setLoading(false)}
+            />
+          )
         ) : (
           <WebView
-            key={`webview-${retryCount}`}
+            key={`webview-${retryCount}-${useDirectUrl}`}
             source={{ uri: viewUrl }}
             style={styles.webview}
             onLoadStart={() => setLoading(true)}

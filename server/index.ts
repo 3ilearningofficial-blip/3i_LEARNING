@@ -295,7 +295,8 @@ function setupErrorHandler(app: express.Application) {
       cookie: {
         secure: isProduction,
         httpOnly: true,
-        sameSite: isProduction ? "none" : "lax",
+        sameSite: "lax",
+        maxAge: 7 * 24 * 60 * 60 * 1000,
       },
     })
   );
