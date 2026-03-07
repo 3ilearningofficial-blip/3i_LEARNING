@@ -642,7 +642,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.put("/api/admin/live-classes/:id", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { isLive, isCompleted, youtubeUrl, title, description } = req.body;
+      const { isLive, isCompleted, youtubeUrl, title, description, convertToLecture, sectionTitle } = req.body;
       const updates: string[] = [];
       const params: unknown[] = [];
       if (isLive !== undefined) { params.push(isLive); updates.push(`is_live = $${params.length}`); }
@@ -653,7 +653,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (updates.length === 0) return res.status(400).json({ message: "No fields to update" });
       params.push(req.params.id);
       const result = await db.query(`UPDATE live_classes SET ${updates.join(", ")} WHERE id = $${params.length} RETURNING *`, params);
-      res.json(result.rows[0]);
+      const liveClass = result.rows[0];
+
+      if (isCompleted && convertToLecture && liveClass.youtube_url && liveClass.course_id) {
+        const maxOrder = await db.query("SELECT COALESCE(MAX(order_index), 0) + 1 as next_order FROM lectures WHERE course_id = $1", [liveClass.course_id]);
+        await db.query(
+          `INSERT INTO lectures (course_id, title, description, video_url, video_type, duration_minutes, order_index, is_free_preview, section_title, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+          [liveClass.course_id, liveClass.title, liveClass.description || "", liveClass.youtube_url, "youtube", 0, maxOrder.rows[0].next_order, false, sectionTitle || "Live Class Recordings", Date.now()]
+        );
+        await db.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [liveClass.course_id]);
+      }
+
+      res.json(liveClass);
     } catch (err) {
       console.error("Update live class error:", err);
       res.status(500).json({ message: "Failed to update live class" });

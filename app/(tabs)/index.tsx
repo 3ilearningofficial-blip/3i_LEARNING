@@ -185,6 +185,7 @@ export default function HomeScreen() {
       const res = await fetch(url.toString(), { credentials: "include" });
       return res.json();
     },
+    refetchInterval: 15000,
   });
 
   const myCourses = courses.filter((c) => c.isEnrolled);

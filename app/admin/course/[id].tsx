@@ -343,12 +343,13 @@ export default function AdminCourseScreen() {
   });
 
   const updateLiveClassMutation = useMutation({
-    mutationFn: async ({ lcId, ...data }: { lcId: number; isLive?: boolean; isCompleted?: boolean; youtubeUrl?: string }) => {
+    mutationFn: async ({ lcId, ...data }: { lcId: number; isLive?: boolean; isCompleted?: boolean; youtubeUrl?: string; convertToLecture?: boolean; sectionTitle?: string }) => {
       await apiRequest("PUT", `/api/admin/live-classes/${lcId}`, data);
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/live-classes", id, "admin"] });
       qc.invalidateQueries({ queryKey: ["/api/live-classes"] });
+      qc.invalidateQueries({ queryKey: ["/api/courses", id] });
     },
   });
 
@@ -657,11 +658,25 @@ export default function AdminCourseScreen() {
                     <Pressable
                       style={[styles.liveActionBtn, { backgroundColor: "#F59E0B20" }]}
                       onPress={() => {
-                        updateLiveClassMutation.mutate({ lcId: lc.id, isLive: false, isCompleted: true });
+                        const doEnd = () => {
+                          updateLiveClassMutation.mutate({
+                            lcId: lc.id, isLive: false, isCompleted: true,
+                            convertToLecture: true, sectionTitle: "Live Class Recordings",
+                          });
+                          qc.invalidateQueries({ queryKey: ["/api/courses", id] });
+                        };
+                        if (Platform.OS === "web") {
+                          if (window.confirm(`End "${lc.title}" and save as lecture recording?`)) doEnd();
+                        } else {
+                          Alert.alert("End Live Class", `End "${lc.title}" and save as lecture recording?`, [
+                            { text: "Cancel", style: "cancel" },
+                            { text: "End & Save", onPress: doEnd },
+                          ]);
+                        }
                       }}
                     >
                       <Ionicons name="stop-circle" size={16} color="#F59E0B" />
-                      <Text style={[styles.liveActionBtnText, { color: "#F59E0B" }]}>End Class</Text>
+                      <Text style={[styles.liveActionBtnText, { color: "#F59E0B" }]}>End & Save</Text>
                     </Pressable>
                   )}
                   <Pressable

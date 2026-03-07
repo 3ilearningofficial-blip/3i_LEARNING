@@ -55,6 +55,8 @@ function buildYouTubeHtml(videoId: string): string {
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
 #player { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+.ytp-chrome-top, .ytp-show-cards-title, .ytp-watermark, .ytp-youtube-button,
+.ytp-impression-link, .ytp-title, .ytp-title-channel, .ytp-share-button-visible { display: none !important; opacity: 0 !important; }
 </style>
 </head>
 <body>
