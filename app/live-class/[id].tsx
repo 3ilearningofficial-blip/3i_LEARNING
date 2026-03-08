@@ -243,14 +243,16 @@ export default function LiveClassScreen() {
             <ActivityIndicator size="large" color={Colors.light.primary} />
           </View>
         )}
-        {youtubeHtml && Platform.OS === "web" ? (
-          <iframe
-            srcDoc={youtubeHtml}
-            style={{ width: "100%", height: "100%", border: "none", position: "absolute", top: 0, left: 0 } as any}
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
-            allowFullScreen
-            onLoad={() => setIsVideoLoading(false)}
-          />
+        {videoId && Platform.OS === "web" ? (
+          <View style={{ width: "100%" as any, height: "100%", position: "relative" as any }}>
+            <iframe
+              src={`https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&playsinline=1&rel=0&modestbranding=1&showinfo=0&iv_load_policy=3&cc_load_policy=0&fs=1&controls=1`}
+              style={{ width: "100%", height: "100%", border: "none", position: "absolute", top: 0, left: 0 } as any}
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+              allowFullScreen
+              onLoad={() => setIsVideoLoading(false)}
+            />
+          </View>
         ) : youtubeHtml ? (
           <WebView
             source={{ html: youtubeHtml, baseUrl: "https://www.youtube-nocookie.com" }}
