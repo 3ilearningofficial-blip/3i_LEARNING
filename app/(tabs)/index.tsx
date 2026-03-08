@@ -440,7 +440,7 @@ const styles = StyleSheet.create({
   seeAll: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.primary },
   courseCard: {
     backgroundColor: "#fff", borderRadius: 20, overflow: "hidden",
-    marginBottom: 4, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 12, elevation: 4,
+    marginBottom: 14, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 12, elevation: 4,
   },
   courseCardHeader: { height: 90, padding: 14, justifyContent: "space-between" },
   courseCardBadgeRow: { flexDirection: "row", alignItems: "center", gap: 8 },
