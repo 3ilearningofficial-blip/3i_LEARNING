@@ -90,6 +90,7 @@ export default function CourseDetailScreen() {
   const qc = useQueryClient();
   const { user, isAdmin } = useAuth();
   const [activeTab, setActiveTab] = useState("Lectures");
+  const [expandedSection, setExpandedSection] = useState<string | null>("recordings");
   const [paymentWebViewHtml, setPaymentWebViewHtml] = useState<string | null>(null);
 
   const topPadding = Platform.OS === "web" ? 67 : insets.top;
@@ -406,53 +407,96 @@ setTimeout(function() {
                 <Text style={styles.emptyText}>No lectures added yet</Text>
               </View>
             ) : (
-              [...course.lectures].sort((a, b) => {
-                const aIsRecording = a.section_title === "Live Class Recordings" ? 1 : 0;
-                const bIsRecording = b.section_title === "Live Class Recordings" ? 1 : 0;
-                if (aIsRecording !== bIsRecording) return aIsRecording - bIsRecording;
-                return (a.order_index || 0) - (b.order_index || 0);
-              }).map((lecture, idx, sortedArr) => {
-                const prevSection = idx > 0 ? sortedArr[idx - 1].section_title : null;
-                const showSection = lecture.section_title && lecture.section_title !== prevSection;
+              (() => {
+                const regularLectures = course.lectures.filter((l: Lecture) => l.section_title !== "Live Class Recordings").sort((a: Lecture, b: Lecture) => (a.order_index || 0) - (b.order_index || 0));
+                const liveRecordings = course.lectures.filter((l: Lecture) => l.section_title === "Live Class Recordings").sort((a: Lecture, b: Lecture) => (a.order_index || 0) - (b.order_index || 0));
                 return (
-                <React.Fragment key={lecture.id}>
-                  {showSection && (
-                    <View style={styles.sectionHeader}>
-                      <Ionicons name="folder" size={14} color={Colors.light.primary} />
-                      <Text style={styles.sectionHeaderText}>{lecture.section_title}</Text>
+                  <>
+                    <View style={styles.recordingsRow}>
+                      <Pressable
+                        style={[styles.recordingCard, expandedSection === "recordings" && styles.recordingCardActive, { borderColor: Colors.light.primary }]}
+                        onPress={() => setExpandedSection(expandedSection === "recordings" ? null : "recordings")}
+                      >
+                        <View style={[styles.recordingIconBox, { backgroundColor: "#EEF2FF" }]}>
+                          <Ionicons name="play-circle" size={26} color={Colors.light.primary} />
+                        </View>
+                        <Text style={[styles.recordingCardTitle, { color: Colors.light.primary }]}>Recordings</Text>
+                        <Text style={styles.recordingCardCount}>{regularLectures.length} videos</Text>
+                        <Ionicons name={expandedSection === "recordings" ? "chevron-up" : "chevron-down"} size={16} color={Colors.light.textMuted} style={{ marginTop: 4 }} />
+                      </Pressable>
+                      <Pressable
+                        style={[styles.recordingCard, expandedSection === "live" && styles.recordingCardActive, { borderColor: "#DC2626" }]}
+                        onPress={() => setExpandedSection(expandedSection === "live" ? null : "live")}
+                      >
+                        <View style={[styles.recordingIconBox, { backgroundColor: "#FEE2E2" }]}>
+                          <Ionicons name="videocam" size={26} color="#DC2626" />
+                        </View>
+                        <Text style={[styles.recordingCardTitle, { color: "#DC2626" }]}>Live Recordings</Text>
+                        <Text style={styles.recordingCardCount}>{liveRecordings.length} videos</Text>
+                        <Ionicons name={expandedSection === "live" ? "chevron-up" : "chevron-down"} size={16} color={Colors.light.textMuted} style={{ marginTop: 4 }} />
+                      </Pressable>
                     </View>
-                  )}
-                  <Pressable
-                    style={({ pressed }) => [styles.lectureItem, pressed && { opacity: 0.85 }]}
-                    onPress={() => handleLecture(lecture)}
-                  >
-                    <View style={[styles.lectureNumber, lecture.isCompleted && styles.lectureNumberDone, lecture.section_title === "Live Class Recordings" && { backgroundColor: "#DC262620" }]}>
-                      {lecture.isCompleted ? (
-                        <Ionicons name="checkmark" size={16} color="#fff" />
-                      ) : lecture.section_title === "Live Class Recordings" ? (
-                        <Ionicons name="videocam" size={14} color="#DC2626" />
-                      ) : (
-                        <Text style={styles.lectureNumberText}>{idx + 1}</Text>
-                      )}
-                    </View>
-                    <View style={styles.lectureInfo}>
-                      <Text style={styles.lectureTitle}>{lecture.title}</Text>
-                      <View style={styles.lectureMetaRow}>
-                        <Ionicons name="time-outline" size={12} color={Colors.light.textMuted} />
-                        <Text style={styles.lectureMeta}>{lecture.duration_minutes}min</Text>
-                        {lecture.is_free_preview && (
-                          <View style={styles.previewBadge}><Text style={styles.previewBadgeText}>Preview</Text></View>
+
+                    {expandedSection === "recordings" && regularLectures.map((lecture: Lecture, idx: number) => (
+                      <Pressable
+                        key={lecture.id}
+                        style={({ pressed }) => [styles.lectureItem, pressed && { opacity: 0.85 }]}
+                        onPress={() => handleLecture(lecture)}
+                      >
+                        <View style={[styles.lectureNumber, lecture.isCompleted && styles.lectureNumberDone]}>
+                          {lecture.isCompleted ? (
+                            <Ionicons name="checkmark" size={16} color="#fff" />
+                          ) : (
+                            <Text style={styles.lectureNumberText}>{idx + 1}</Text>
+                          )}
+                        </View>
+                        <View style={styles.lectureInfo}>
+                          <Text style={styles.lectureTitle}>{lecture.title}</Text>
+                          <View style={styles.lectureMetaRow}>
+                            <Ionicons name="time-outline" size={12} color={Colors.light.textMuted} />
+                            <Text style={styles.lectureMeta}>{lecture.duration_minutes}min</Text>
+                            {lecture.is_free_preview && (
+                              <View style={styles.previewBadge}><Text style={styles.previewBadgeText}>Preview</Text></View>
+                            )}
+                          </View>
+                        </View>
+                        {!course.isEnrolled && !lecture.is_free_preview ? (
+                          <Ionicons name="lock-closed" size={18} color={Colors.light.textMuted} />
+                        ) : (
+                          <Ionicons name="play-circle" size={22} color={Colors.light.primary} />
                         )}
+                      </Pressable>
+                    ))}
+
+                    {expandedSection === "live" && liveRecordings.map((lecture: Lecture, idx: number) => (
+                      <Pressable
+                        key={lecture.id}
+                        style={({ pressed }) => [styles.lectureItem, pressed && { opacity: 0.85 }]}
+                        onPress={() => handleLecture(lecture)}
+                      >
+                        <View style={[styles.lectureNumber, { backgroundColor: "#FEE2E2" }]}>
+                          <Ionicons name="videocam" size={14} color="#DC2626" />
+                        </View>
+                        <View style={styles.lectureInfo}>
+                          <Text style={styles.lectureTitle}>{lecture.title}</Text>
+                          <View style={styles.lectureMetaRow}>
+                            <Ionicons name="time-outline" size={12} color={Colors.light.textMuted} />
+                            <Text style={styles.lectureMeta}>{lecture.duration_minutes}min</Text>
+                          </View>
+                        </View>
+                        <Ionicons name="play-circle" size={22} color="#DC2626" />
+                      </Pressable>
+                    ))}
+
+                    {expandedSection === "live" && liveRecordings.length === 0 && (
+                      <View style={styles.emptyState}>
+                        <Ionicons name="videocam-off-outline" size={32} color={Colors.light.textMuted} />
+                        <Text style={styles.emptyText}>No live recordings yet</Text>
                       </View>
-                    </View>
-                    {!course.isEnrolled && !lecture.is_free_preview ? (
-                      <Ionicons name="lock-closed" size={18} color={Colors.light.textMuted} />
-                    ) : (
-                      <Ionicons name="play-circle" size={22} color={Colors.light.primary} />
                     )}
-                  </Pressable>
-                </React.Fragment>
-              );})
+                  </>
+                );
+              })()
             )}
           </View>
         )}
@@ -760,6 +804,22 @@ const styles = StyleSheet.create({
   liveClassTitle: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text, marginBottom: 2 },
   liveClassDesc: { fontSize: 12, color: Colors.light.textSecondary, fontFamily: "Inter_400Regular", marginBottom: 2 },
   liveClassTime: { fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" },
+  recordingsRow: {
+    flexDirection: "row", gap: 12, paddingHorizontal: 16, paddingVertical: 14,
+    backgroundColor: "#fff", borderBottomWidth: 1, borderBottomColor: Colors.light.border,
+  },
+  recordingCard: {
+    flex: 1, alignItems: "center", paddingVertical: 16, paddingHorizontal: 8,
+    borderRadius: 14, borderWidth: 1.5, backgroundColor: "#fff",
+  },
+  recordingCardActive: {
+    backgroundColor: "#F8FAFC",
+  },
+  recordingIconBox: {
+    width: 48, height: 48, borderRadius: 14, alignItems: "center", justifyContent: "center", marginBottom: 8,
+  },
+  recordingCardTitle: { fontSize: 13, fontFamily: "Inter_700Bold", marginBottom: 2 },
+  recordingCardCount: { fontSize: 11, fontFamily: "Inter_400Regular", color: Colors.light.textMuted },
   emptyState: { paddingVertical: 40, alignItems: "center", gap: 8 },
   emptyText: { fontSize: 15, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" },
   emptySubText: { fontSize: 13, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", textAlign: "center", paddingHorizontal: 20 },
