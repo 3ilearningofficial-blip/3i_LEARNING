@@ -62,21 +62,14 @@ iframe {
 }
 .cover-top {
   position: absolute; top: 0; left: 0; right: 0;
-  height: 52px; background: #000;
+  height: 56px; background: #000;
   z-index: 50; pointer-events: auto;
   cursor: default;
 }
-.cover-top-right {
-  position: absolute; top: 0; right: 0;
-  width: 180px; height: 52px;
-  background: #000;
-  z-index: 51; pointer-events: auto;
-  cursor: default;
-}
 .cover-bottom-right {
-  position: absolute; bottom: 0; right: 60px;
-  width: 80px; height: 36px;
-  background: transparent;
+  position: absolute; bottom: 0; right: 0;
+  width: 90px; height: 42px;
+  background: #000;
   z-index: 50; pointer-events: auto;
   cursor: default;
 }
@@ -85,7 +78,6 @@ iframe {
 <body>
 <div class="wrapper">
 <div class="cover-top"></div>
-<div class="cover-top-right"></div>
 <iframe
   src="https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&playsinline=1&rel=0&modestbranding=1&showinfo=0&iv_load_policy=3&cc_load_policy=0&fs=1&disablekb=0&controls=1"
   allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; fullscreen"
@@ -245,7 +237,16 @@ const styles = StyleSheet.create({
   headerTitle: { flex: 1 },
   lectureTitleText: { fontSize: 15, fontFamily: "Inter_600SemiBold", color: "#fff" },
   completedBadge: { width: 36, alignItems: "center" },
-  playerContainer: { width: "100%", flex: 1, maxHeight: "56%" as any, backgroundColor: "#000", position: "relative", overflow: "hidden" },
+  playerContainer: {
+    width: "100%",
+    backgroundColor: "#000",
+    position: "relative" as const,
+    overflow: "hidden" as const,
+    ...Platform.select({
+      web: { aspectRatio: 16 / 9 },
+      default: { flex: 1, maxHeight: "56%" as any },
+    }),
+  },
   webView: { flex: 1, backgroundColor: "#000" },
   loadingOverlay: {
     position: "absolute", top: 0, left: 0, right: 0, bottom: 0,
