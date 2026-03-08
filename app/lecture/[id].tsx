@@ -62,13 +62,13 @@ iframe {
 }
 .cover-top-left {
   position: absolute; top: 0; left: 0;
-  width: 220px; height: 36px;
+  width: 280px; height: 42px;
   background: #000;
   z-index: 50; pointer-events: auto; cursor: default;
 }
 .cover-top-right {
   position: absolute; top: 0; right: 0;
-  width: 160px; height: 36px;
+  width: 50px; height: 42px;
   background: #000;
   z-index: 50; pointer-events: auto; cursor: default;
 }
