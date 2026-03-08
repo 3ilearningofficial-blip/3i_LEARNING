@@ -62,20 +62,30 @@ iframe {
 }
 .cover-top {
   position: absolute; top: 0; left: 0; right: 0;
-  height: 48px; background: linear-gradient(to bottom, rgba(0,0,0,0.95) 0%, rgba(0,0,0,0.7) 60%, transparent 100%);
-  z-index: 50; pointer-events: none;
+  height: 52px; background: #000;
+  z-index: 50; pointer-events: auto;
+  cursor: default;
+}
+.cover-top-right {
+  position: absolute; top: 0; right: 0;
+  width: 180px; height: 52px;
+  background: #000;
+  z-index: 51; pointer-events: auto;
+  cursor: default;
 }
 .cover-bottom-right {
-  position: absolute; bottom: 40px; right: 0;
-  width: 160px; height: 50px;
-  background: transparent; z-index: 50;
-  pointer-events: none;
+  position: absolute; bottom: 0; right: 60px;
+  width: 80px; height: 36px;
+  background: transparent;
+  z-index: 50; pointer-events: auto;
+  cursor: default;
 }
 </style>
 </head>
 <body>
 <div class="wrapper">
 <div class="cover-top"></div>
+<div class="cover-top-right"></div>
 <iframe
   src="https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&playsinline=1&rel=0&modestbranding=1&showinfo=0&iv_load_policy=3&cc_load_policy=0&fs=1&disablekb=0&controls=1"
   allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; fullscreen"

@@ -347,9 +347,13 @@ export default function HomeScreen() {
                   <Text style={styles.sectionTitle}>Free Courses</Text>
                   <Ionicons name="gift-outline" size={18} color={Colors.light.success} />
                 </View>
-                {freeCourses.map((course, index) => (
-                  <CourseCard key={course.id} course={course} index={index + 2} />
-                ))}
+                <View style={Platform.OS === "web" ? styles.courseGrid : undefined}>
+                  {freeCourses.map((course, index) => (
+                    <View key={course.id} style={Platform.OS === "web" ? styles.courseGridItem : undefined}>
+                      <CourseCard course={course} index={index + 2} />
+                    </View>
+                  ))}
+                </View>
               </View>
             )}
 
@@ -358,9 +362,13 @@ export default function HomeScreen() {
                 <View style={styles.sectionHeader}>
                   <Text style={styles.sectionTitle}>All Courses</Text>
                 </View>
-                {allOtherCourses.map((course, index) => (
-                  <CourseCard key={course.id} course={course} index={index} />
-                ))}
+                <View style={Platform.OS === "web" ? styles.courseGrid : undefined}>
+                  {allOtherCourses.map((course, index) => (
+                    <View key={course.id} style={Platform.OS === "web" ? styles.courseGridItem : undefined}>
+                      <CourseCard course={course} index={index} />
+                    </View>
+                  ))}
+                </View>
               </View>
             )}
 
@@ -423,6 +431,8 @@ const styles = StyleSheet.create({
   categoryChipText: { fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary },
   categoryChipTextActive: { color: "#fff" },
   section: { paddingHorizontal: 20, gap: 12 },
+  courseGrid: { flexDirection: "row", flexWrap: "wrap", gap: 16 },
+  courseGridItem: { width: "48%" as any, minWidth: 280 },
   sectionHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 12 },
   sectionTitle: { fontSize: 18, fontFamily: "Inter_700Bold", color: Colors.light.text },
   seeAll: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.primary },
