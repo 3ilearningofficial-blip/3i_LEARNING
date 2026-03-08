@@ -54,8 +54,24 @@ function buildYouTubeHtml(videoId: string): string {
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
-.player-wrap { position: relative; width: 100%; height: 100%; }
-iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; }
+.player-wrap {
+  position: relative; width: 100%; height: 100%; overflow: hidden;
+}
+iframe {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none;
+}
+.overlay-bottom-right {
+  position: absolute; bottom: 0; right: 0;
+  width: 120px; height: 40px;
+  background: transparent; z-index: 100;
+  cursor: default; pointer-events: all;
+}
+.overlay-top-right {
+  position: absolute; top: 0; right: 0;
+  width: 180px; height: 50px;
+  background: transparent; z-index: 100;
+  cursor: default; pointer-events: all;
+}
 </style>
 </head>
 <body>
@@ -65,6 +81,8 @@ iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border:
   allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; fullscreen"
   allowfullscreen
 ></iframe>
+<div class="overlay-bottom-right"></div>
+<div class="overlay-top-right"></div>
 </div>
 <script>
 document.addEventListener('contextmenu', function(e) { e.preventDefault(); return false; });

@@ -622,7 +622,7 @@ export default function AdminCourseScreen() {
             {courseLiveClasses.length === 0 && (
               <View style={styles.infoCard}>
                 <Ionicons name="information-circle" size={16} color={Colors.light.primary} />
-                <Text style={styles.infoText}>Schedule a live class, then tap "Go Live" when ready to start streaming. Paste the YouTube stream/share link.</Text>
+                <Text style={styles.infoText}>Schedule a live class, then tap "Go Live" when ready. Start OBS stream to YouTube, then paste the YouTube live stream share link here. YouTube branding will be hidden from students.</Text>
               </View>
             )}
             {courseLiveClasses.map((lc) => (
@@ -834,7 +834,7 @@ export default function AdminCourseScreen() {
             </View>
             <ScrollView style={{ maxHeight: 400 }} showsVerticalScrollIndicator={false}>
               <FormField label="Title *" placeholder="e.g., Live Class - Trigonometry Revision" value={newLiveClass.title} onChangeText={(v) => setNewLiveClass(p => ({ ...p, title: v }))} />
-              <FormField label="YouTube URL *" placeholder="https://youtube.com/watch?v=... or live stream URL" value={newLiveClass.youtubeUrl} onChangeText={(v) => setNewLiveClass(p => ({ ...p, youtubeUrl: v }))} />
+              <FormField label="YouTube Live/Stream URL *" placeholder="Paste YouTube live stream share link here" value={newLiveClass.youtubeUrl} onChangeText={(v) => setNewLiveClass(p => ({ ...p, youtubeUrl: v }))} />
               <FormField label="Description" placeholder="What will be covered" value={newLiveClass.description} onChangeText={(v) => setNewLiveClass(p => ({ ...p, description: v }))} />
               <FormField label="Scheduled Date & Time" placeholder="2026-03-15 18:00" value={newLiveClass.scheduledAt} onChangeText={(v) => setNewLiveClass(p => ({ ...p, scheduledAt: v }))} />
               <View style={styles.formField}>
