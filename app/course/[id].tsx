@@ -406,9 +406,17 @@ setTimeout(function() {
                 <Text style={styles.emptyText}>No lectures added yet</Text>
               </View>
             ) : (
-              course.lectures.map((lecture, idx) => (
+              [...course.lectures].sort((a, b) => {
+                const aIsRecording = a.section_title === "Live Class Recordings" ? 1 : 0;
+                const bIsRecording = b.section_title === "Live Class Recordings" ? 1 : 0;
+                if (aIsRecording !== bIsRecording) return aIsRecording - bIsRecording;
+                return (a.order_index || 0) - (b.order_index || 0);
+              }).map((lecture, idx, sortedArr) => {
+                const prevSection = idx > 0 ? sortedArr[idx - 1].section_title : null;
+                const showSection = lecture.section_title && lecture.section_title !== prevSection;
+                return (
                 <React.Fragment key={lecture.id}>
-                  {lecture.section_title && (
+                  {showSection && (
                     <View style={styles.sectionHeader}>
                       <Ionicons name="folder" size={14} color={Colors.light.primary} />
                       <Text style={styles.sectionHeaderText}>{lecture.section_title}</Text>
@@ -418,9 +426,11 @@ setTimeout(function() {
                     style={({ pressed }) => [styles.lectureItem, pressed && { opacity: 0.85 }]}
                     onPress={() => handleLecture(lecture)}
                   >
-                    <View style={[styles.lectureNumber, lecture.isCompleted && styles.lectureNumberDone]}>
+                    <View style={[styles.lectureNumber, lecture.isCompleted && styles.lectureNumberDone, lecture.section_title === "Live Class Recordings" && { backgroundColor: "#DC262620" }]}>
                       {lecture.isCompleted ? (
                         <Ionicons name="checkmark" size={16} color="#fff" />
+                      ) : lecture.section_title === "Live Class Recordings" ? (
+                        <Ionicons name="videocam" size={14} color="#DC2626" />
                       ) : (
                         <Text style={styles.lectureNumberText}>{idx + 1}</Text>
                       )}
@@ -442,7 +452,7 @@ setTimeout(function() {
                     )}
                   </Pressable>
                 </React.Fragment>
-              ))
+              );})
             )}
           </View>
         )}
@@ -499,11 +509,13 @@ setTimeout(function() {
                 <Text style={styles.emptyText}>No materials available</Text>
               </View>
             ) : (
-              course.materials.map((mat) => {
+              course.materials.map((mat, matIdx) => {
                 const canAccess = isEnrolled;
+                const prevMatSection = matIdx > 0 ? course.materials[matIdx - 1].section_title : null;
+                const showMatSection = mat.section_title && mat.section_title !== prevMatSection;
                 return (
                 <React.Fragment key={mat.id}>
-                  {mat.section_title && (
+                  {showMatSection && (
                     <View style={styles.sectionHeader}>
                       <Ionicons name="folder" size={14} color="#DC2626" />
                       <Text style={styles.sectionHeaderText}>{mat.section_title}</Text>
