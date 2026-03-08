@@ -46,29 +46,22 @@ function buildYouTubeHtml(videoId: string): string {
 html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
 .wrapper { position: relative; width: 100%; height: 100%; overflow: hidden; }
 iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; }
-.cover-top-left {
-  position: absolute; top: 0; left: 0;
-  width: 70%; height: 50px;
-  background: #000;
-  z-index: 50; pointer-events: auto; cursor: default;
-}
-.cover-top-right {
-  position: absolute; top: 0; right: 0;
-  width: 30%; height: 50px;
+.cover-top {
+  position: absolute; top: 0; left: 0; right: 0;
+  height: 60px;
   background: #000;
   z-index: 50; pointer-events: auto; cursor: default;
 }
 .cover-bottom-right {
   position: absolute; bottom: 0; right: 0;
-  width: 120px; height: 40px;
+  width: 140px; height: 46px;
   background: #000;
   z-index: 50; pointer-events: auto; cursor: default;
 }
 </style>
 </head><body>
 <div class="wrapper">
-<div class="cover-top-left"></div>
-<div class="cover-top-right"></div>
+<div class="cover-top"></div>
 <iframe
   src="https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&playsinline=1&rel=0&modestbranding=1&showinfo=0&iv_load_policy=3&cc_load_policy=0&fs=1&controls=1"
   allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; fullscreen"
