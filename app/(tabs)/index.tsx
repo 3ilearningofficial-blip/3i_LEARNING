@@ -163,6 +163,7 @@ export default function HomeScreen() {
       return res.json();
     },
     staleTime: 0,
+    refetchInterval: 30000,
   });
 
   const dynamicCategories = React.useMemo(() => {
