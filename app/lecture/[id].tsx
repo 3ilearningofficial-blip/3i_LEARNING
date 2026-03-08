@@ -78,6 +78,11 @@ iframe {
   background: #000;
   z-index: 50; pointer-events: auto; cursor: default;
 }
+@media (max-width: 600px) {
+  .cover-top-left { width: 180px; height: 36px; }
+  .cover-top-right { width: 36px; height: 30px; }
+  .cover-bottom-right { width: 80px; height: 26px; }
+}
 </style>
 </head>
 <body>

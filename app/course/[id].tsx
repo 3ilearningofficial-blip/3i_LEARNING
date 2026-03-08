@@ -114,6 +114,8 @@ export default function CourseDetailScreen() {
       if (!res.ok) throw new Error("Failed to load course");
       return res.json();
     },
+    staleTime: 0,
+    refetchInterval: 30000,
   });
 
   const { data: liveClasses = [] } = useQuery<LiveClass[]>({
