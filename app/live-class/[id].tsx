@@ -48,14 +48,15 @@ html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
 iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; }
 .cover-top {
   position: absolute; top: 0; left: 0; right: 0;
-  height: 56px; background: #000;
+  height: 42px;
+  background: linear-gradient(to bottom, rgba(0,0,0,1) 0%, rgba(0,0,0,0.85) 70%, transparent 100%);
   z-index: 50; pointer-events: auto;
   cursor: default;
 }
 .cover-bottom-right {
   position: absolute; bottom: 0; right: 0;
-  width: 90px; height: 42px;
-  background: #000;
+  width: 80px; height: 32px;
+  background: linear-gradient(to left, rgba(0,0,0,1) 0%, transparent 100%);
   z-index: 50; pointer-events: auto;
   cursor: default;
 }
