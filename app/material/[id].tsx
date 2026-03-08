@@ -11,6 +11,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/context/AuthContext";
+import { getApiUrl } from "@/lib/query-client";
 import Colors from "@/constants/colors";
 
 function getIconName(fileType: string): keyof typeof Ionicons.glyphMap {
@@ -22,68 +23,111 @@ function getIconName(fileType: string): keyof typeof Ionicons.glyphMap {
   }
 }
 
-function buildPdfViewerHtml(fileUrl: string): string {
+function buildPdfViewerHtml(fileUrl: string, proxyBaseUrl: string): string {
+  const proxyUrl = `${proxyBaseUrl}/api/pdf-proxy?url=${encodeURIComponent(fileUrl)}`;
+  const gviewUrl = `https://docs.google.com/gview?embedded=true&url=${encodeURIComponent(fileUrl)}`;
   return `<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-html, body { width: 100%; height: 100%; background: #1a1a2e; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
-.viewer { width: 100%; height: 100%; border: none; }
-.loading { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 16px; color: #aaa; z-index: 10; background: #1a1a2e; }
+html, body { width: 100%; height: 100%; background: #2a2a2a; overflow: auto; font-family: -apple-system, sans-serif; -webkit-overflow-scrolling: touch; }
+#viewer { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 8px 0; }
+.page-canvas { display: block; max-width: 100%; height: auto; box-shadow: 0 2px 8px rgba(0,0,0,0.3); background: #fff; }
+.loading { position: fixed; top: 0; left: 0; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 16px; color: #ccc; background: #2a2a2a; z-index: 10; }
 .spinner { width: 40px; height: 40px; border: 3px solid rgba(255,255,255,0.1); border-top: 3px solid #1A56DB; border-radius: 50%; animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
-.loading p { font-size: 14px; }
-.error { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: none; align-items: center; justify-content: center; flex-direction: column; gap: 16px; color: #ccc; padding: 32px; text-align: center; background: #1a1a2e; z-index: 20; }
-.error h3 { font-size: 18px; color: #fff; margin-bottom: 4px; }
+.fallback-frame { position: fixed; top: 0; left: 0; width: 100%; height: 100%; border: none; z-index: 5; }
+.error { position: fixed; top: 0; left: 0; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 16px; color: #ccc; padding: 32px; text-align: center; background: #2a2a2a; z-index: 20; }
+.error h3 { font-size: 18px; color: #fff; }
 .error p { font-size: 13px; color: #999; line-height: 1.5; }
-.error a { display: inline-block; color: #fff; background: #1A56DB; text-decoration: none; padding: 12px 28px; border-radius: 10px; font-size: 14px; font-weight: 600; margin-top: 8px; }
-.error a:hover { background: #1544b8; }
+.error a { display: inline-block; color: #fff; background: #1A56DB; text-decoration: none; padding: 12px 28px; border-radius: 10px; font-size: 14px; font-weight: 600; margin-top: 4px; }
+.page-info { color: #888; font-size: 12px; padding: 4px 0; }
 </style>
 </head><body>
 <div id="loading" class="loading"><div class="spinner"></div><p>Loading PDF...</p></div>
-<div id="error" class="error">
-  <h3>Unable to preview</h3>
-  <p>This PDF cannot be previewed inline. Tap below to open it directly.</p>
-  <a href="${fileUrl}" target="_blank" rel="noopener">Open PDF</a>
-</div>
-<iframe id="viewer" class="viewer" style="display:none"></iframe>
+<div id="viewer"></div>
 <script>
 (function() {
-  var viewer = document.getElementById('viewer');
-  var loading = document.getElementById('loading');
-  var error = document.getElementById('error');
-  var url = ${JSON.stringify(fileUrl)};
-  var loaded = false;
+  var directUrl = ${JSON.stringify(fileUrl)};
+  var proxyUrl = ${JSON.stringify(proxyUrl)};
+  var gviewUrl = ${JSON.stringify(gviewUrl)};
   
-  function showViewer() {
-    if (loaded) return;
-    loaded = true;
-    loading.style.display = 'none';
-    viewer.style.display = 'block';
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+  function renderWithPdfJs(url) {
+    return pdfjsLib.getDocument(url).promise.then(function(pdf) {
+      document.getElementById('loading').style.display = 'none';
+      var viewer = document.getElementById('viewer');
+      viewer.innerHTML = '';
+      var numPages = pdf.numPages;
+
+      function renderPage(num) {
+        pdf.getPage(num).then(function(page) {
+          var containerWidth = Math.min(window.innerWidth - 16, 900);
+          var viewport = page.getViewport({ scale: 1 });
+          var scale = containerWidth / viewport.width;
+          var scaledViewport = page.getViewport({ scale: scale * 2 });
+
+          var canvas = document.createElement('canvas');
+          canvas.className = 'page-canvas';
+          canvas.width = scaledViewport.width;
+          canvas.height = scaledViewport.height;
+          canvas.style.width = (scaledViewport.width / 2) + 'px';
+          canvas.style.height = (scaledViewport.height / 2) + 'px';
+          viewer.appendChild(canvas);
+
+          var info = document.createElement('div');
+          info.className = 'page-info';
+          info.textContent = 'Page ' + num + ' of ' + numPages;
+          viewer.appendChild(info);
+
+          page.render({ canvasContext: canvas.getContext('2d'), viewport: scaledViewport }).promise.then(function() {
+            if (num < numPages) renderPage(num + 1);
+          });
+        });
+      }
+      renderPage(1);
+    });
   }
-  
+
+  function showGoogleViewer() {
+    document.getElementById('loading').style.display = 'none';
+    var iframe = document.createElement('iframe');
+    iframe.className = 'fallback-frame';
+    iframe.src = gviewUrl;
+    document.body.appendChild(iframe);
+  }
+
   function showError() {
-    if (loaded) return;
-    loaded = true;
-    loading.style.display = 'none';
-    error.style.display = 'flex';
+    document.getElementById('loading').style.display = 'none';
+    var d = document.createElement('div');
+    d.className = 'error';
+    d.innerHTML = '<h3>Unable to preview</h3><p>This PDF cannot be previewed inline.</p><a href="'+directUrl+'" target="_blank">Open PDF Directly</a>';
+    document.body.appendChild(d);
   }
-  
-  viewer.onload = showViewer;
-  viewer.onerror = showError;
-  
-  viewer.src = 'https://docs.google.com/gview?embedded=true&url=' + encodeURIComponent(url);
-  
-  setTimeout(function() {
-    if (!loaded) {
-      viewer.src = url;
+
+  renderWithPdfJs(directUrl)
+    .catch(function() {
+      return renderWithPdfJs(proxyUrl);
+    })
+    .catch(function() {
+      showGoogleViewer();
       setTimeout(function() {
-        if (!loaded) showError();
-      }, 8000);
-    }
-  }, 8000);
+        var frames = document.querySelectorAll('.fallback-frame');
+        if (frames.length > 0) {
+          try {
+            var doc = frames[0].contentDocument;
+            if (doc && doc.body && doc.body.innerText && doc.body.innerText.indexOf('No preview') >= 0) {
+              frames[0].remove();
+              showError();
+            }
+          } catch(e) {}
+        }
+      }, 10000);
+    });
 })();
 </script>
 </body></html>`;
@@ -106,6 +150,7 @@ export default function MaterialViewerScreen() {
   });
 
   const isPdf = material && (material.file_type === "pdf" || material.file_url?.toLowerCase().endsWith(".pdf"));
+  const apiBaseUrl = getApiUrl();
 
   return (
     <View style={styles.container}>
@@ -169,7 +214,7 @@ export default function MaterialViewerScreen() {
           <>
             {isPdf ? (
               <iframe
-                srcDoc={buildPdfViewerHtml(material.file_url)}
+                srcDoc={buildPdfViewerHtml(material.file_url, apiBaseUrl)}
                 style={{ width: "100%", height: "100%", border: "none" } as any}
                 title={material.title}
                 onLoad={() => setLoading(false)}
@@ -191,8 +236,8 @@ export default function MaterialViewerScreen() {
         ) : (
           <WebView
             source={isPdf ? {
-              html: buildPdfViewerHtml(material.file_url),
-              baseUrl: "https://docs.google.com",
+              html: buildPdfViewerHtml(material.file_url, apiBaseUrl),
+              baseUrl: apiBaseUrl,
             } : { uri: material.file_url }}
             style={styles.webview}
             onLoadEnd={() => setLoading(false)}
@@ -200,11 +245,10 @@ export default function MaterialViewerScreen() {
             domStorageEnabled
             startInLoadingState
             allowsInlineMediaPlayback
-            mixedContentMode="compatibility"
+            mixedContentMode="always"
             allowsFullscreenVideo
             setSupportMultipleWindows={false}
             originWhitelist={["*"]}
-            userAgent="Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
             renderLoading={() => (
               <View style={styles.webviewLoading}>
                 <ActivityIndicator size="large" color={Colors.light.primary} />

@@ -307,8 +307,9 @@ function setupErrorHandler(app: express.Application) {
     message: { message: "Too many requests, please try again later" },
     standardHeaders: true,
     legacyHeaders: false,
+    validate: { xForwardedForHeader: false, ip: false },
     keyGenerator: (req: any) => {
-      return req.body?.identifier || req.ip || "unknown";
+      return req.body?.identifier || "global";
     },
   });
   const otpVerifyLimiter = rateLimit({
@@ -317,8 +318,9 @@ function setupErrorHandler(app: express.Application) {
     message: { message: "Too many requests, please try again later" },
     standardHeaders: true,
     legacyHeaders: false,
+    validate: { xForwardedForHeader: false, ip: false },
     keyGenerator: (req: any) => {
-      return req.body?.identifier || req.ip || "unknown";
+      return req.body?.identifier || "global";
     },
   });
   app.use("/api/auth/send-otp", otpSendLimiter);

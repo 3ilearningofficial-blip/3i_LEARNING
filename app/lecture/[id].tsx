@@ -54,39 +54,46 @@ function buildYouTubeHtml(videoId: string): string {
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
-.player-wrap {
+.wrapper {
   position: relative; width: 100%; height: 100%; overflow: hidden;
 }
+.iframe-container {
+  position: absolute;
+  top: -60px; left: 0; right: 0; bottom: -10px;
+  overflow: hidden;
+}
 iframe {
-  position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none;
+  position: absolute; top: 0; left: 0;
+  width: 100%; height: calc(100% + 70px);
+  border: none;
 }
-.overlay-bottom-right {
+.cover-top {
+  position: absolute; top: 0; left: 0; right: 0;
+  height: 0px; background: #000; z-index: 50;
+  pointer-events: all;
+}
+.cover-bottom-right {
   position: absolute; bottom: 0; right: 0;
-  width: 120px; height: 40px;
-  background: transparent; z-index: 100;
-  cursor: default; pointer-events: all;
-}
-.overlay-top-right {
-  position: absolute; top: 0; right: 0;
-  width: 180px; height: 50px;
-  background: transparent; z-index: 100;
-  cursor: default; pointer-events: all;
+  width: 140px; height: 45px;
+  background: transparent; z-index: 50;
+  pointer-events: all; cursor: default;
 }
 </style>
 </head>
 <body>
-<div class="player-wrap">
+<div class="wrapper">
+<div class="cover-top"></div>
+<div class="iframe-container">
 <iframe
   src="https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&playsinline=1&rel=0&modestbranding=1&showinfo=0&iv_load_policy=3&cc_load_policy=0&fs=1&disablekb=0&controls=1"
   allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; fullscreen"
   allowfullscreen
 ></iframe>
-<div class="overlay-bottom-right"></div>
-<div class="overlay-top-right"></div>
+</div>
+<div class="cover-bottom-right"></div>
 </div>
 <script>
-document.addEventListener('contextmenu', function(e) { e.preventDefault(); return false; });
-document.addEventListener('selectstart', function(e) { e.preventDefault(); return false; });
+document.addEventListener('contextmenu', function(e) { e.preventDefault(); });
 </script>
 </body>
 </html>`;
@@ -115,7 +122,7 @@ export default function LectureScreen() {
         isCompleted: true,
       });
       setIsCompleted(true);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       Alert.alert("Lecture Completed!", "Your progress has been saved.", [
         { text: "Continue", onPress: () => router.back() },
       ]);
@@ -127,7 +134,6 @@ export default function LectureScreen() {
   const preventScreenCapture = `
     (function() {
       document.addEventListener('contextmenu', function(e){ e.preventDefault(); return false; });
-      document.addEventListener('selectstart', function(e){ e.preventDefault(); return false; });
     })();
     true;
   `;
@@ -140,7 +146,7 @@ export default function LectureScreen() {
             <Ionicons name="arrow-back" size={22} color="#fff" />
           </Pressable>
           <View style={styles.headerTitle}>
-            <Text style={styles.lectureTitleText} numberOfLines={2}>{title || "Lecture"}</Text>
+            <Text style={styles.lectureTitleText} numberOfLines={1}>{title || "Lecture"}</Text>
           </View>
           {isCompleted ? (
             <View style={styles.completedBadge}>
@@ -206,12 +212,6 @@ export default function LectureScreen() {
         showsVerticalScrollIndicator={false}
       >
         <Text style={styles.lectureInfoTitle}>{title || "Lecture"}</Text>
-        <Text style={styles.lectureInfoSub}>Take notes and pause as needed for better understanding.</Text>
-
-        <View style={styles.securityNotice}>
-          <Ionicons name="shield-checkmark" size={16} color={Colors.light.primary} />
-          <Text style={styles.securityText}>Content protection is active. Recording & screenshots are restricted.</Text>
-        </View>
 
         {!isCompleted && (
           <Pressable
@@ -228,7 +228,7 @@ export default function LectureScreen() {
         {isCompleted && (
           <View style={styles.completedBanner}>
             <Ionicons name="checkmark-circle" size={24} color="#22C55E" />
-            <Text style={styles.completedBannerText}>Lecture completed! Great work!</Text>
+            <Text style={styles.completedBannerText}>Lecture completed!</Text>
           </View>
         )}
       </ScrollView>
@@ -238,13 +238,13 @@ export default function LectureScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#000" },
-  header: { paddingHorizontal: 16, paddingBottom: 12 },
+  header: { paddingHorizontal: 16, paddingBottom: 8 },
   headerRow: { flexDirection: "row", alignItems: "center", gap: 12 },
   backBtn: { width: 36, height: 36, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" },
   headerTitle: { flex: 1 },
   lectureTitleText: { fontSize: 15, fontFamily: "Inter_600SemiBold", color: "#fff" },
   completedBadge: { width: 36, alignItems: "center" },
-  playerContainer: { width: "100%", aspectRatio: 16 / 9, backgroundColor: "#000", position: "relative" },
+  playerContainer: { width: "100%", aspectRatio: 16 / 9, backgroundColor: "#000", position: "relative", overflow: "hidden" },
   webView: { flex: 1, backgroundColor: "#000" },
   loadingOverlay: {
     position: "absolute", top: 0, left: 0, right: 0, bottom: 0,
@@ -262,12 +262,6 @@ const styles = StyleSheet.create({
   infoSection: { flex: 1, backgroundColor: Colors.light.background },
   infoContent: { padding: 20, gap: 14 },
   lectureInfoTitle: { fontSize: 18, fontFamily: "Inter_700Bold", color: Colors.light.text },
-  lectureInfoSub: { fontSize: 13, color: Colors.light.textSecondary, fontFamily: "Inter_400Regular", lineHeight: 18 },
-  securityNotice: {
-    flexDirection: "row", alignItems: "center", gap: 8,
-    backgroundColor: Colors.light.secondary, borderRadius: 10, padding: 10,
-  },
-  securityText: { fontSize: 12, color: Colors.light.primary, fontFamily: "Inter_500Medium", flex: 1 },
   completeBtn: { borderRadius: 14, overflow: "hidden" },
   completeBtnGradient: { flexDirection: "row", alignItems: "center", justifyContent: "center", paddingVertical: 14, gap: 8 },
   completeBtnText: { fontSize: 15, fontFamily: "Inter_600SemiBold", color: "#fff" },

@@ -1394,6 +1394,78 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/pdf-proxy", (req: Request, res: Response) => {
+    const { url } = req.query;
+    if (!url || typeof url !== "string") {
+      return res.status(400).json({ message: "URL is required" });
+    }
+
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(url);
+    } catch {
+      return res.status(400).json({ message: "Invalid URL" });
+    }
+
+    if (!parsedUrl.pathname.toLowerCase().endsWith(".pdf")) {
+      return res.status(400).json({ message: "Only PDF files are allowed" });
+    }
+
+    const protocol = parsedUrl.protocol === "https:" ? require("https") : require("http");
+    const options = {
+      hostname: parsedUrl.hostname,
+      path: parsedUrl.pathname + parsedUrl.search,
+      method: "GET",
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/pdf,*/*",
+      },
+      timeout: 30000,
+    };
+
+    console.log(`[PDF-Proxy] Fetching: ${parsedUrl.hostname}${parsedUrl.pathname}`);
+
+    const proxyReq = protocol.request(options, (proxyRes: any) => {
+      if (proxyRes.statusCode >= 300 && proxyRes.statusCode < 400 && proxyRes.headers.location) {
+        const redirectUrl = new URL(proxyRes.headers.location, url);
+        console.log(`[PDF-Proxy] Following redirect to: ${redirectUrl.href}`);
+        proxyRes.resume();
+        req.query.url = redirectUrl.href;
+        return app._router.handle(req, res, () => {});
+      }
+
+      if (proxyRes.statusCode !== 200) {
+        console.log(`[PDF-Proxy] Upstream returned ${proxyRes.statusCode}`);
+        proxyRes.resume();
+        return res.status(proxyRes.statusCode).json({ message: "Failed to fetch PDF" });
+      }
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Cache-Control", "public, max-age=86400");
+      if (proxyRes.headers["content-length"]) {
+        res.setHeader("Content-Length", proxyRes.headers["content-length"]);
+      }
+      proxyRes.pipe(res);
+    });
+
+    proxyReq.on("error", (err: any) => {
+      console.error("[PDF-Proxy] Request error:", err.message);
+      if (!res.headersSent) {
+        res.status(502).json({ message: "Failed to fetch PDF" });
+      }
+    });
+
+    proxyReq.on("timeout", () => {
+      proxyReq.destroy();
+      if (!res.headersSent) {
+        res.status(504).json({ message: "PDF download timed out" });
+      }
+    });
+
+    proxyReq.end();
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }

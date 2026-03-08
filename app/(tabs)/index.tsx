@@ -266,7 +266,10 @@ export default function HomeScreen() {
         contentContainerStyle={[styles.scrollContent, { paddingBottom: bottomPadding + 80 }]}
       >
         {liveClass && (
-          <Pressable style={styles.liveClassBanner} onPress={() => router.push(`/lecture/${liveClass.id}`)}>
+          <Pressable style={styles.liveClassBanner} onPress={() => router.push({
+            pathname: `/lecture/${liveClass.id}`,
+            params: { videoUrl: liveClass.youtube_url, title: liveClass.title },
+          })}>
             <LinearGradient colors={["#DC2626", "#EF4444"]} style={styles.liveClassGradient}>
               <View style={styles.liveDot} />
               <Text style={styles.liveText}>LIVE NOW</Text>
