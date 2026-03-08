@@ -301,15 +301,28 @@ function setupErrorHandler(app: express.Application) {
     })
   );
 
-  const authLimiter = rateLimit({
+  const otpSendLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 20,
+    max: 200,
     message: { message: "Too many requests, please try again later" },
     standardHeaders: true,
     legacyHeaders: false,
+    keyGenerator: (req: any) => {
+      return req.body?.identifier || req.ip || "unknown";
+    },
   });
-  app.use("/api/auth/send-otp", authLimiter);
-  app.use("/api/auth/verify-otp", authLimiter);
+  const otpVerifyLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 300,
+    message: { message: "Too many requests, please try again later" },
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req: any) => {
+      return req.body?.identifier || req.ip || "unknown";
+    },
+  });
+  app.use("/api/auth/send-otp", otpSendLimiter);
+  app.use("/api/auth/verify-otp", otpVerifyLimiter);
 
   configureExpoAndLanding(app);
 

@@ -40,16 +40,23 @@ export default function LoginScreen() {
         throw new Error(data.message || "Failed to send OTP");
       }
 
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       router.push({
         pathname: "/(auth)/otp",
         params: {
           phone: trimmed,
-          devOtp: data.devOtp || "",
+          smsSent: data.smsSent ? "1" : "0",
         },
       });
     } catch (err: any) {
-      Alert.alert("Failed", err?.message || "Could not send OTP. Please try again.");
+      const msg = err?.message || "";
+      if (msg.includes("429") || msg.includes("Too many")) {
+        Alert.alert("Please Wait", "Too many attempts. Please try again after a few minutes.");
+      } else if (msg.includes("Failed to fetch") || msg.includes("Network") || msg.includes("timeout")) {
+        Alert.alert("Connection Error", "Unable to connect to the server. Please check your internet connection and try again.");
+      } else {
+        Alert.alert("Failed", msg || "Could not send OTP. Please try again.");
+      }
     } finally {
       setIsLoading(false);
     }

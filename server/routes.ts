@@ -83,22 +83,9 @@ async function sendOTPviaSMS(phone: string, otp: string): Promise<boolean> {
   }
 
   try {
-    const url = `https://www.fast2sms.com/dev/bulkV2?authorization=${encodeURIComponent(apiKey)}&route=otp&variables_values=${encodeURIComponent(otp)}&flash=0&numbers=${encodeURIComponent(phone)}`;
-    console.log(`[SMS] Sending OTP via Fast2SMS OTP route to ${phone}`);
-    const res = await fetch(url, { method: "GET" });
-    const data = await res.json();
-    console.log(`[SMS] Fast2SMS response:`, JSON.stringify(data));
-    if (data.return === true) {
-      console.log(`[SMS] OTP sent successfully to ${phone}`);
-      return true;
-    }
-    console.error(`[SMS] OTP route failed:`, data.message || JSON.stringify(data));
-  } catch (err) {
-    console.error(`[SMS] OTP route error:`, err);
-  }
-
-  try {
-    console.log(`[SMS] Trying Quick SMS route for ${phone}`);
+    console.log(`[SMS] Sending OTP via Quick SMS route to ${phone}`);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
     const res = await fetch("https://www.fast2sms.com/dev/bulkV2", {
       method: "POST",
       headers: {
@@ -107,20 +94,48 @@ async function sendOTPviaSMS(phone: string, otp: string): Promise<boolean> {
       },
       body: JSON.stringify({
         route: "q",
-        message: `Your 3i Learning OTP is ${otp}. Valid for 10 minutes.`,
+        message: `Your 3i Learning verification code is ${otp}. Valid for 10 minutes. Do not share this code.`,
         numbers: phone,
         flash: "0",
       }),
+      signal: controller.signal,
     });
+    clearTimeout(timeout);
     const data = await res.json();
     console.log(`[SMS] Quick SMS response:`, JSON.stringify(data));
     if (data.return === true) {
-      console.log(`[SMS] Quick SMS sent successfully to ${phone}`);
+      console.log(`[SMS] OTP sent successfully to ${phone}`);
       return true;
     }
     console.error(`[SMS] Quick SMS failed:`, data.message || JSON.stringify(data));
-  } catch (err) {
-    console.error(`[SMS] Quick SMS error:`, err);
+  } catch (err: any) {
+    if (err.name === "AbortError") {
+      console.error(`[SMS] Quick SMS timeout for ${phone}`);
+    } else {
+      console.error(`[SMS] Quick SMS error:`, err);
+    }
+  }
+
+  try {
+    console.log(`[SMS] Trying OTP route as fallback for ${phone}`);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    const url = `https://www.fast2sms.com/dev/bulkV2?authorization=${encodeURIComponent(apiKey)}&route=otp&variables_values=${encodeURIComponent(otp)}&flash=0&numbers=${encodeURIComponent(phone)}`;
+    const res = await fetch(url, { method: "GET", signal: controller.signal });
+    clearTimeout(timeout);
+    const data = await res.json();
+    console.log(`[SMS] OTP route response:`, JSON.stringify(data));
+    if (data.return === true) {
+      console.log(`[SMS] OTP route sent successfully to ${phone}`);
+      return true;
+    }
+    console.error(`[SMS] OTP route failed:`, data.message || JSON.stringify(data));
+  } catch (err: any) {
+    if (err.name === "AbortError") {
+      console.error(`[SMS] OTP route timeout for ${phone}`);
+    } else {
+      console.error(`[SMS] OTP route error:`, err);
+    }
   }
 
   return false;
@@ -153,16 +168,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.log(`[OTP] Generated for ${identifier}: ${otp}`);
 
         let smsSent = false;
-        smsSent = await sendOTPviaSMS(identifier, otp);
+        try {
+          smsSent = await sendOTPviaSMS(identifier, otp);
+        } catch (smsErr) {
+          console.error(`[OTP] SMS sending threw error for ${identifier}:`, smsErr);
+        }
         if (!smsSent) {
-          console.log(`[OTP] SMS delivery failed for ${identifier}, OTP stored in DB: ${otp}`);
+          console.log(`[OTP] SMS delivery failed for ${identifier}, OTP stored in DB`);
         }
 
-        const response: any = { success: true, message: "OTP sent to your phone", smsSent };
-        if (!smsSent) {
-          response.devOtp = otp;
-        }
-        return res.json(response);
+        return res.json({
+          success: true,
+          message: smsSent ? "OTP sent to your phone" : "OTP sent. If SMS is delayed, please wait 30 seconds and try again.",
+          smsSent,
+        });
       }
 
       const otp = generateOTP();

@@ -18,11 +18,12 @@ function generateDeviceId() {
 
 export default function OTPScreen() {
   const insets = useSafeAreaInsets();
-  const { phone, devOtp } = useLocalSearchParams<{ phone: string; devOtp?: string }>();
+  const { phone, smsSent } = useLocalSearchParams<{ phone: string; smsSent?: string }>();
   const [otp, setOtp] = useState(["", "", "", "", "", ""]);
   const [isLoading, setIsLoading] = useState(false);
   const [countdown, setCountdown] = useState(30);
   const [canResend, setCanResend] = useState(false);
+  const [resending, setResending] = useState(false);
   const inputs = useRef<(TextInput | null)[]>([]);
   const { login } = useAuth();
 
@@ -47,6 +48,15 @@ export default function OTPScreen() {
     }
   };
 
+  const handleKeyPress = (e: any, index: number) => {
+    if (e.nativeEvent.key === "Backspace" && !otp[index] && index > 0) {
+      const newOtp = [...otp];
+      newOtp[index - 1] = "";
+      setOtp(newOtp);
+      inputs.current[index - 1]?.focus();
+    }
+  };
+
   const handleVerify = async (otpValue?: string) => {
     const code = otpValue || otp.join("");
     if (code.length !== 6) { Alert.alert("Error", "Enter the 6-digit OTP"); return; }
@@ -63,12 +73,17 @@ export default function OTPScreen() {
       if (!data.success) {
         throw new Error(data.message || "Verification failed");
       }
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       login(data.user);
       router.replace("/(tabs)");
     } catch (err: any) {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      Alert.alert("Invalid OTP", err?.message || "The OTP you entered is incorrect. Please try again.");
+      if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      const msg = err?.message || "";
+      if (msg.includes("429") || msg.includes("Too many")) {
+        Alert.alert("Please Wait", "Too many attempts. Please try again after a few minutes.");
+      } else {
+        Alert.alert("Invalid OTP", "The OTP you entered is incorrect or expired. Please try again.");
+      }
       setOtp(["", "", "", "", "", ""]);
       inputs.current[0]?.focus();
     } finally {
@@ -77,6 +92,7 @@ export default function OTPScreen() {
   };
 
   const handleResend = async () => {
+    setResending(true);
     try {
       const res = await apiRequest("POST", "/api/auth/send-otp", { identifier: phone, type: "phone" });
       const data = await res.json();
@@ -92,13 +108,18 @@ export default function OTPScreen() {
           return prev - 1;
         });
       }, 1000);
-      Alert.alert("OTP Sent", "A new OTP has been sent to your phone.");
+      setOtp(["", "", "", "", "", ""]);
+      inputs.current[0]?.focus();
+      Alert.alert("OTP Sent", data.smsSent ? "A new OTP has been sent to your phone." : "OTP sent. If SMS is delayed, please wait and try again.");
     } catch {
-      Alert.alert("Error", "Failed to resend OTP. Please try again.");
+      Alert.alert("Error", "Failed to resend OTP. Check your internet connection.");
+    } finally {
+      setResending(false);
     }
   };
 
   const maskedPhone = `+91 ******${phone?.slice(-4)}`;
+  const smsWasSent = smsSent === "1";
 
   return (
     <LinearGradient colors={["#0A1628", "#1A2E50", "#0A1628"]} style={styles.container}>
@@ -115,12 +136,12 @@ export default function OTPScreen() {
           <Text style={styles.title}>Verify OTP</Text>
           <Text style={styles.subtitle}>Enter the 6-digit code sent to{"\n"}{maskedPhone}</Text>
 
-          {devOtp ? (
-            <View style={styles.devOtpContainer}>
+          {!smsWasSent && (
+            <View style={styles.smsWarning}>
               <Ionicons name="information-circle" size={16} color={Colors.light.warning} />
-              <Text style={styles.devOtpText}>Dev OTP: {devOtp}</Text>
+              <Text style={styles.smsWarningText}>SMS may be delayed. Please wait or tap Resend below.</Text>
             </View>
-          ) : null}
+          )}
 
           <View style={styles.otpContainer}>
             {otp.map((digit, index) => (
@@ -130,6 +151,7 @@ export default function OTPScreen() {
                 style={[styles.otpInput, digit ? styles.otpInputFilled : null]}
                 value={digit}
                 onChangeText={(val) => handleOtpChange(val, index)}
+                onKeyPress={(e) => handleKeyPress(e, index)}
                 keyboardType="number-pad"
                 maxLength={1}
                 selectTextOnFocus
@@ -158,8 +180,12 @@ export default function OTPScreen() {
 
           <View style={styles.resendContainer}>
             {canResend ? (
-              <Pressable onPress={handleResend}>
-                <Text style={styles.resendText}>Resend OTP</Text>
+              <Pressable onPress={handleResend} disabled={resending}>
+                {resending ? (
+                  <ActivityIndicator size="small" color={Colors.light.accent} />
+                ) : (
+                  <Text style={styles.resendText}>Resend OTP</Text>
+                )}
               </Pressable>
             ) : (
               <Text style={styles.countdownText}>Resend in {countdown}s</Text>
@@ -183,11 +209,11 @@ const styles = StyleSheet.create({
   },
   title: { fontSize: 28, fontFamily: "Inter_700Bold", color: "#fff" },
   subtitle: { fontSize: 15, color: "rgba(255,255,255,0.65)", textAlign: "center", fontFamily: "Inter_400Regular", lineHeight: 22 },
-  devOtpContainer: {
-    flexDirection: "row", alignItems: "center", gap: 6,
-    backgroundColor: "rgba(245,158,11,0.15)", paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10,
+  smsWarning: {
+    flexDirection: "row", alignItems: "center", gap: 8,
+    backgroundColor: "rgba(245,158,11,0.15)", paddingHorizontal: 16, paddingVertical: 10, borderRadius: 10,
   },
-  devOtpText: { color: Colors.light.warning, fontFamily: "Inter_600SemiBold", fontSize: 14 },
+  smsWarningText: { color: Colors.light.warning, fontFamily: "Inter_500Medium", fontSize: 13, flex: 1 },
   otpContainer: { flexDirection: "row", gap: 10, marginVertical: 8 },
   otpInput: {
     width: 48, height: 56, borderRadius: 14,
