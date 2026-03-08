@@ -44,10 +44,25 @@ function buildGoogleDriveViewerHtml(fileId: string): string {
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { width: 100%; height: 100%; background: #2a2a2a; overflow: hidden; }
+.wrapper { position: relative; width: 100%; height: 100%; overflow: hidden; }
 iframe { width: 100%; height: 100%; border: none; }
+.hide-share {
+  position: absolute; top: 0; right: 0;
+  width: 60px; height: 60px;
+  background: #2a2a2a; z-index: 100;
+  pointer-events: none;
+}
+.hide-bottom-bar {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  height: 2px; background: #2a2a2a; z-index: 100;
+}
 </style>
 </head><body>
-<iframe src="${previewUrl}" allow="autoplay" allowfullscreen></iframe>
+<div class="wrapper">
+  <div class="hide-share"></div>
+  <div class="hide-bottom-bar"></div>
+  <iframe src="${previewUrl}" allow="autoplay" allowfullscreen sandbox="allow-scripts allow-same-origin"></iframe>
+</div>
 </body></html>`;
 }
 

@@ -551,7 +551,7 @@ setTimeout(function() {
                   key={lc.id}
                   style={({ pressed }) => [styles.liveClassItem, pressed && { opacity: 0.85 }]}
                   onPress={() => router.push({
-                    pathname: `/lecture/${lc.id}`,
+                    pathname: `/live-class/${lc.id}`,
                     params: { videoUrl: lc.youtube_url, title: lc.title },
                   })}
                 >

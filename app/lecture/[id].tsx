@@ -63,13 +63,13 @@ iframe {
 .cover-top {
   position: absolute; top: 0; left: 0; right: 0;
   height: 48px; background: linear-gradient(to bottom, rgba(0,0,0,0.95) 0%, rgba(0,0,0,0.7) 60%, transparent 100%);
-  z-index: 50; pointer-events: all;
+  z-index: 50; pointer-events: none;
 }
 .cover-bottom-right {
   position: absolute; bottom: 40px; right: 0;
   width: 160px; height: 50px;
   background: transparent; z-index: 50;
-  pointer-events: all; cursor: default;
+  pointer-events: none;
 }
 </style>
 </head>

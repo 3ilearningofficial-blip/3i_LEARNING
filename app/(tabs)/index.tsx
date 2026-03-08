@@ -267,7 +267,7 @@ export default function HomeScreen() {
       >
         {liveClass && (
           <Pressable style={styles.liveClassBanner} onPress={() => router.push({
-            pathname: `/lecture/${liveClass.id}`,
+            pathname: `/live-class/${liveClass.id}`,
             params: { videoUrl: liveClass.youtube_url, title: liveClass.title },
           })}>
             <LinearGradient colors={["#DC2626", "#EF4444"]} style={styles.liveClassGradient}>

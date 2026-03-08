@@ -46,6 +46,7 @@ interface LiveClassItem {
   youtube_url: string;
   is_live: boolean;
   is_completed: boolean;
+  is_public: boolean;
   scheduled_at: number;
 }
 
@@ -112,7 +113,7 @@ interface NewMaterial {
 
 interface NewLiveClass {
   title: string; description: string; youtubeUrl: string;
-  scheduledAt: string; isLive: boolean;
+  scheduledAt: string; isLive: boolean; isPublic: boolean;
 }
 
 const ADMIN_COURSE_TABS: { key: AdminCourseTab; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
@@ -126,7 +127,7 @@ const emptyLecture: NewLecture = { title: "", description: "", videoUrl: "", vid
 const emptyTest: NewTestForm = { title: "", description: "", durationMinutes: "60", totalMarks: "100", passingMarks: "35", testType: "practice" };
 const emptyQuestion: NewQuestion = { questionText: "", optionA: "", optionB: "", optionC: "", optionD: "", correctOption: "A", explanation: "", topic: "", marks: "4", negativeMarks: "1" };
 const emptyMaterial: NewMaterial = { title: "", description: "", fileUrl: "", fileType: "pdf", isFree: false, sectionTitle: "", downloadAllowed: false };
-const emptyLiveClass: NewLiveClass = { title: "", description: "", youtubeUrl: "", scheduledAt: "", isLive: false };
+const emptyLiveClass: NewLiveClass = { title: "", description: "", youtubeUrl: "", scheduledAt: "", isLive: false, isPublic: false };
 
 export default function AdminCourseScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -645,7 +646,8 @@ export default function AdminCourseScreen() {
                         </View>
                       )}
                     </View>
-                    <Text style={styles.itemMeta}>{new Date(lc.scheduled_at).toLocaleString()}</Text>
+                    <Text style={styles.itemMeta}>{lc.scheduled_at ? new Date(Number(lc.scheduled_at) > 1e12 ? Number(lc.scheduled_at) : lc.scheduled_at).toLocaleString() : "Not scheduled"}</Text>
+                    <Text style={[styles.itemMeta, { color: lc.is_public ? "#22C55E" : "#F59E0B" }]}>{lc.is_public ? "All Students" : "Enrolled Only"}</Text>
                     {lc.youtube_url ? <Text style={[styles.itemMeta, { color: Colors.light.primary }]} numberOfLines={1}>{lc.youtube_url}</Text> : null}
                   </View>
                 </View>
@@ -838,6 +840,11 @@ export default function AdminCourseScreen() {
               <FormField label="Description" placeholder="What will be covered" value={newLiveClass.description} onChangeText={(v) => setNewLiveClass(p => ({ ...p, description: v }))} />
               <FormField label="Scheduled Date & Time" placeholder="2026-03-15 18:00" value={newLiveClass.scheduledAt} onChangeText={(v) => setNewLiveClass(p => ({ ...p, scheduledAt: v }))} />
               <View style={styles.formField}>
+                <Text style={styles.formLabel}>Accessible to All Students</Text>
+                <Text style={{ fontSize: 11, color: Colors.light.textMuted, marginBottom: 4, fontFamily: "Inter_400Regular" }}>If ON, all students can watch. If OFF, only enrolled students can access.</Text>
+                <Switch value={newLiveClass.isPublic} onValueChange={(v) => setNewLiveClass(p => ({ ...p, isPublic: v }))} trackColor={{ false: Colors.light.border, true: Colors.light.primary }} thumbColor="#fff" />
+              </View>
+              <View style={styles.formField}>
                 <Text style={styles.formLabel}>Is Live Right Now?</Text>
                 <Switch value={newLiveClass.isLive} onValueChange={(v) => setNewLiveClass(p => ({ ...p, isLive: v }))} trackColor={{ false: Colors.light.border, true: "#DC2626" }} thumbColor="#fff" />
               </View>
@@ -845,7 +852,7 @@ export default function AdminCourseScreen() {
             <ActionButton
               label="Add Live Class"
               onPress={() => addLiveClassMutation.mutate(newLiveClass)}
-              disabled={!newLiveClass.title || !newLiveClass.youtubeUrl}
+              disabled={!newLiveClass.title}
               loading={addLiveClassMutation.isPending}
               color="#DC2626"
             />

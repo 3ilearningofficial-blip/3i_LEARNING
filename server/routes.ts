@@ -804,11 +804,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/live-classes", async (req: Request, res: Response) => {
     try {
       const { courseId, admin } = req.query;
-      let query = admin === "true" ? "SELECT * FROM live_classes WHERE 1=1" : "SELECT * FROM live_classes WHERE is_completed = FALSE";
+      if (admin === "true") {
+        let query = "SELECT * FROM live_classes WHERE 1=1";
+        const params: unknown[] = [];
+        if (courseId) {
+          params.push(courseId);
+          query += ` AND (course_id = $${params.length} OR course_id IS NULL)`;
+        }
+        query += " ORDER BY scheduled_at DESC";
+        const result = await db.query(query, params);
+        return res.json(result.rows);
+      }
+
+      const userId = (req as any).session?.userId;
+      let query = "SELECT lc.* FROM live_classes lc WHERE lc.is_completed = FALSE";
       const params: unknown[] = [];
       if (courseId) {
         params.push(courseId);
-        query += ` AND (course_id = $${params.length} OR course_id IS NULL)`;
+        query += ` AND (lc.course_id = $${params.length} OR lc.course_id IS NULL)`;
+      }
+      if (userId) {
+        params.push(userId);
+        query += ` AND (lc.is_public = TRUE OR lc.course_id IS NULL OR EXISTS (SELECT 1 FROM enrollments e WHERE e.course_id = lc.course_id AND e.user_id = $${params.length}))`;
+      } else {
+        query += ` AND (lc.is_public = TRUE OR lc.course_id IS NULL)`;
       }
       query += " ORDER BY scheduled_at DESC";
       const result = await db.query(query, params);
@@ -828,6 +847,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (youtubeUrl !== undefined) { params.push(youtubeUrl); updates.push(`youtube_url = $${params.length}`); }
       if (title !== undefined) { params.push(title); updates.push(`title = $${params.length}`); }
       if (description !== undefined) { params.push(description); updates.push(`description = $${params.length}`); }
+      const { isPublic: isPublicVal } = req.body;
+      if (isPublicVal !== undefined) { params.push(isPublicVal); updates.push(`is_public = $${params.length}`); }
       if (updates.length === 0) return res.status(400).json({ message: "No fields to update" });
       params.push(req.params.id);
       const result = await db.query(`UPDATE live_classes SET ${updates.join(", ")} WHERE id = $${params.length} RETURNING *`, params);
@@ -922,12 +943,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  function requireAuth(req: Request, res: Response, next: () => void) {
+    const session = req.session as Record<string, unknown>;
+    const user = session.user as { id: number; name: string; phone: string; role: string } | undefined;
+    if (!user) {
+      return res.status(401).json({ message: "Login required" });
+    }
+    (req as any).user = user;
+    next();
+  }
+
   // ==================== ADMIN ROUTES ====================
   function requireAdmin(req: Request, res: Response, next: () => void) {
     const user = (req.session as Record<string, unknown>).user as { role: string } | undefined;
     if (!user || user.role !== "admin") {
       return res.status(403).json({ message: "Admin access required" });
     }
+    (req as any).user = user;
     next();
   }
 
@@ -1289,11 +1321,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/admin/live-classes", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { title, description, courseId, youtubeUrl, scheduledAt, isLive } = req.body;
+      const { title, description, courseId, youtubeUrl, scheduledAt, isLive, isPublic } = req.body;
       const result = await db.query(
-        `INSERT INTO live_classes (title, description, course_id, youtube_url, scheduled_at, is_live, created_at) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-        [title, description, courseId || null, youtubeUrl, scheduledAt, isLive || false, Date.now()]
+        `INSERT INTO live_classes (title, description, course_id, youtube_url, scheduled_at, is_live, is_public, created_at) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+        [title, description, courseId || null, youtubeUrl, scheduledAt, isLive || false, isPublic || false, Date.now()]
       );
       res.json(result.rows[0]);
     } catch (err) {
@@ -1391,6 +1423,67 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(result.rows);
     } catch (err) {
       res.status(500).json({ message: "Failed to fetch missions" });
+    }
+  });
+
+  // ==================== LIVE CHAT ROUTES ====================
+  async function checkLiveClassAccess(req: Request, res: Response, liveClassId: string): Promise<boolean> {
+    const lc = await db.query("SELECT * FROM live_classes WHERE id = $1", [liveClassId]);
+    if (lc.rows.length === 0) { res.status(404).json({ message: "Live class not found" }); return false; }
+    const liveClass = lc.rows[0];
+    if (liveClass.is_public || !liveClass.course_id) return true;
+    const session = req.session as Record<string, unknown>;
+    const user = session.user as { id: number; role: string } | undefined;
+    if (!user) { res.status(401).json({ message: "Login required" }); return false; }
+    if (user.role === "admin") return true;
+    const enrolled = await db.query("SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2", [user.id, liveClass.course_id]);
+    if (enrolled.rows.length === 0) { res.status(403).json({ message: "Not enrolled" }); return false; }
+    return true;
+  }
+
+  app.get("/api/live-classes/:id/chat", async (req: Request, res: Response) => {
+    try {
+      const hasAccess = await checkLiveClassAccess(req, res, req.params.id);
+      if (!hasAccess) return;
+      const { after } = req.query;
+      let query = "SELECT * FROM live_chat_messages WHERE live_class_id = $1";
+      const params: unknown[] = [req.params.id];
+      if (after) {
+        params.push(after);
+        query += ` AND created_at > $${params.length}`;
+      }
+      query += " ORDER BY created_at ASC LIMIT 200";
+      const result = await db.query(query, params);
+      res.json(result.rows);
+    } catch (err) {
+      res.status(500).json({ message: "Failed to fetch chat" });
+    }
+  });
+
+  app.post("/api/live-classes/:id/chat", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const hasAccess = await checkLiveClassAccess(req, res, req.params.id);
+      if (!hasAccess) return;
+      const { message } = req.body;
+      if (!message || !message.trim()) return res.status(400).json({ message: "Message is required" });
+      const user = (req as any).user;
+      const result = await db.query(
+        `INSERT INTO live_chat_messages (live_class_id, user_id, user_name, message, is_admin, created_at) 
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+        [req.params.id, user.id, user.name || user.phone, message.trim().slice(0, 500), user.role === "admin", Date.now()]
+      );
+      res.json(result.rows[0]);
+    } catch (err) {
+      res.status(500).json({ message: "Failed to send message" });
+    }
+  });
+
+  app.delete("/api/admin/live-classes/:lcId/chat/:msgId", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      await db.query("DELETE FROM live_chat_messages WHERE id = $1 AND live_class_id = $2", [req.params.msgId, req.params.lcId]);
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ message: "Failed to delete message" });
     }
   });
 

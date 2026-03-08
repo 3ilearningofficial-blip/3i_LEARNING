@@ -163,6 +163,17 @@ export const liveClasses = pgTable("live_classes", {
   scheduledAt: bigint("scheduled_at", { mode: "number" }),
   isLive: boolean("is_live").default(false),
   isCompleted: boolean("is_completed").default(false),
+  isPublic: boolean("is_public").default(false),
+  createdAt: bigint("created_at", { mode: "number" }),
+});
+
+export const liveChatMessages = pgTable("live_chat_messages", {
+  id: serial("id").primaryKey(),
+  liveClassId: integer("live_class_id").notNull(),
+  userId: integer("user_id").notNull(),
+  userName: text("user_name").notNull(),
+  message: text("message").notNull(),
+  isAdmin: boolean("is_admin").default(false),
   createdAt: bigint("created_at", { mode: "number" }),
 });
 

@@ -19,7 +19,7 @@ A comprehensive math education mobile app (Expo/React Native) with Express backe
 - OMR-style test engine with negative marking and detailed results
 - AI Tutor for instant doubt resolution
 - Daily missions with subsections: All, Daily Drill, Free Practice
-- Live classes (YouTube embeds) with auto-recording to lectures on end
+- Live classes (YouTube embeds) with live chat, access control (public/enrolled-only), auto-recording to lectures on end
 - Course types: Live (🔴) and Recorded (📹) with badges on cards
 - Import system: Copy lectures/tests from live courses into recorded courses
 - Course creation: Choose between "Course" (full) or "Test Series" (tests only)
@@ -35,7 +35,8 @@ A comprehensive math education mobile app (Expo/React Native) with Express backe
 - `app/(auth)/login.tsx` - Phone login with Firebase reCAPTCHA (web) / WebView (Android), server OTP fallback
 - `app/(auth)/otp.tsx` - OTP verification (Firebase or server-side)
 - `server/templates/firebase-phone-auth.html` - Firebase Phone Auth WebView page for Android
-- `app/material/[id].tsx` - In-app material viewer (WebView for Android, iframe for web)
+- `app/material/[id].tsx` - In-app material viewer (Google Drive preview + PDF.js fallback, share button hidden)
+- `app/live-class/[id].tsx` - Live classroom with YouTube player + live chat
 - `app/course/[id].tsx` - Course detail with Lectures/Tests/Materials/Live tabs + Razorpay enrollment
 - `app/admin/index.tsx` - Admin dashboard (Courses, Tests, Missions, Users, Notify tabs)
 - `app/admin/course/[id].tsx` - Admin course management (all 4 tabs)
@@ -50,7 +51,7 @@ A comprehensive math education mobile app (Expo/React Native) with Express backe
 - `constants/colors.ts` - Theme colors (Primary: #1A56DB, Accent: #FF6B35, Dark: #0A1628)
 
 ## Database Schema
-Tables: users, courses, lectures, enrollments, lecture_progress, study_materials, tests, questions, test_attempts, daily_missions, user_missions, notifications, live_classes, doubts, payments, session
+Tables: users, courses, lectures, enrollments, lecture_progress, study_materials, tests, questions, test_attempts, daily_missions, user_missions, notifications, live_classes, live_chat_messages, doubts, payments, session
 
 Key columns:
 - `users.session_token` - For single-device enforcement
@@ -60,6 +61,8 @@ Key columns:
 - `daily_missions.mission_type` (daily_drill/free_practice)
 - `daily_missions.course_id` - Links mission to specific course
 - `payments.razorpay_order_id/payment_id/signature` - Razorpay payment tracking
+- `live_classes.is_public` - If true, accessible to all students; if false, only enrolled students
+- `live_chat_messages` - Real-time chat messages for live classes (polling-based)
 
 Database indexes on: user_id, course_id, test_id, mission_date, session_token, email, phone, razorpay_order_id
 
