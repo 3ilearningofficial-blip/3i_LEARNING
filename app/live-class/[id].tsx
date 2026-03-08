@@ -48,13 +48,13 @@ html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
 iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; }
 .cover-top {
   position: absolute; top: 0; left: 0; right: 0;
-  height: 60px;
+  height: 32px;
   background: #000;
   z-index: 50; pointer-events: auto; cursor: default;
 }
 .cover-bottom-right {
   position: absolute; bottom: 0; right: 0;
-  width: 140px; height: 46px;
+  width: 120px; height: 36px;
   background: #000;
   z-index: 50; pointer-events: auto; cursor: default;
 }

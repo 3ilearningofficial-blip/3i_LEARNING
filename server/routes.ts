@@ -592,6 +592,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (courseId) {
         params.push(courseId);
         query += ` AND course_id = $${params.length}`;
+      } else {
+        query += ` AND course_id IS NULL`;
       }
       if (type) {
         params.push(type);
