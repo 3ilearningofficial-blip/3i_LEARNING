@@ -1,7 +1,7 @@
 import React, { useState, useCallback } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable, TextInput,
-  RefreshControl, Platform, ActivityIndicator, FlatList, Image,
+  RefreshControl, Platform, ActivityIndicator, FlatList, Image, useWindowDimensions,
 } from "react-native";
 import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -144,6 +144,8 @@ function CourseCard({ course, index }: { course: Course; index: number }) {
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
+  const { width: screenWidth } = useWindowDimensions();
+  const isWideScreen = screenWidth >= 768;
   const { user, isAdmin, logout } = useAuth();
   const [search, setSearch] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("All");
@@ -342,14 +344,14 @@ export default function HomeScreen() {
             )}
 
             {freeCourses.length > 0 && (
-              <View style={styles.section}>
+              <View style={[styles.section, !isWideScreen && { paddingHorizontal: 10 }]}>
                 <View style={styles.sectionHeader}>
                   <Text style={styles.sectionTitle}>Free Courses</Text>
                   <Ionicons name="gift-outline" size={18} color={Colors.light.success} />
                 </View>
-                <View style={Platform.OS === "web" ? styles.courseGrid : undefined}>
+                <View style={isWideScreen ? styles.courseGrid : undefined}>
                   {freeCourses.map((course, index) => (
-                    <View key={course.id} style={Platform.OS === "web" ? styles.courseGridItem : undefined}>
+                    <View key={course.id} style={isWideScreen ? styles.courseGridItem : undefined}>
                       <CourseCard course={course} index={index + 2} />
                     </View>
                   ))}
@@ -358,13 +360,13 @@ export default function HomeScreen() {
             )}
 
             {allOtherCourses.length > 0 && (
-              <View style={styles.section}>
+              <View style={[styles.section, !isWideScreen && { paddingHorizontal: 10 }]}>
                 <View style={styles.sectionHeader}>
                   <Text style={styles.sectionTitle}>All Courses</Text>
                 </View>
-                <View style={Platform.OS === "web" ? styles.courseGrid : undefined}>
+                <View style={isWideScreen ? styles.courseGrid : undefined}>
                   {allOtherCourses.map((course, index) => (
-                    <View key={course.id} style={Platform.OS === "web" ? styles.courseGridItem : undefined}>
+                    <View key={course.id} style={isWideScreen ? styles.courseGridItem : undefined}>
                       <CourseCard course={course} index={index} />
                     </View>
                   ))}
