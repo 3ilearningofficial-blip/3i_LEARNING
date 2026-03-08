@@ -35,6 +35,7 @@ interface CourseTest {
   total_questions: number;
   total_marks: number;
   test_type: string;
+  folder_name?: string;
 }
 
 interface Material {
@@ -81,8 +82,15 @@ interface CourseDetail {
 }
 
 const TEST_TYPE_COLORS: Record<string, string> = {
-  mock: "#DC2626", practice: "#1A56DB", chapter: "#059669", weekly: "#7C3AED",
+  mock: "#DC2626", practice: "#1A56DB", chapter: "#059669", weekly: "#7C3AED", test: "#059669", pyq: "#F59E0B",
 };
+
+const TEST_SERIES_SECTIONS = [
+  { key: "practice", label: "Practice", icon: "fitness" as const, color: "#1A56DB" },
+  { key: "test", label: "Test", icon: "document-text" as const, color: "#059669" },
+  { key: "pyq", label: "PYQs", icon: "time" as const, color: "#F59E0B" },
+  { key: "mock", label: "Mock", icon: "trophy" as const, color: "#DC2626" },
+];
 
 export default function CourseDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -91,6 +99,7 @@ export default function CourseDetailScreen() {
   const { user, isAdmin } = useAuth();
   const [activeTab, setActiveTab] = useState("Lectures");
   const [expandedSection, setExpandedSection] = useState<string | null>("recordings");
+  const [expandedTestSection, setExpandedTestSection] = useState<string | null>(null);
   const [paymentWebViewHtml, setPaymentWebViewHtml] = useState<string | null>(null);
 
   const topPadding = Platform.OS === "web" ? 67 : insets.top;
@@ -292,6 +301,39 @@ setTimeout(function() {
       </View>
     );
   }
+
+  const renderTestItem = (test: CourseTest, courseData: CourseDetail) => {
+    const color = TEST_TYPE_COLORS[test.test_type] || Colors.light.primary;
+    return (
+      <Pressable
+        key={test.id}
+        style={({ pressed }) => [styles.testCard, pressed && { opacity: 0.85 }]}
+        onPress={() => {
+          if (!courseData.isEnrolled && !courseData.is_free) {
+            Alert.alert("Purchase Required", "Please purchase this course to access tests.");
+            return;
+          }
+          router.push(`/test/${test.id}`);
+        }}
+      >
+        <View style={[styles.testColorBar, { backgroundColor: color }]} />
+        <View style={styles.testItemIcon}>
+          <Ionicons name="document-text" size={22} color={color} />
+        </View>
+        <View style={styles.testItemInfo}>
+          <Text style={styles.testItemTitle}>{test.title}</Text>
+          <Text style={styles.testItemMeta}>
+            {test.total_questions} questions · {test.duration_minutes}min · {test.total_marks} marks
+          </Text>
+        </View>
+        {!courseData.isEnrolled && !courseData.is_free ? (
+          <Ionicons name="lock-closed" size={18} color={Colors.light.textMuted} />
+        ) : (
+          <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
+        )}
+      </Pressable>
+    );
+  };
 
   const isTestSeriesCourse = course.course_type === "test_series" || (course.total_lectures === 0 && course.total_tests > 0);
   const TABS = isTestSeriesCourse
@@ -508,39 +550,55 @@ setTimeout(function() {
                 <Ionicons name="document-text-outline" size={40} color={Colors.light.textMuted} />
                 <Text style={styles.emptyText}>No tests available</Text>
               </View>
+            ) : isTestSeriesCourse ? (
+              <View style={{ gap: 12, padding: 16 }}>
+                {TEST_SERIES_SECTIONS.map((section) => {
+                  const sectionTests = course.tests.filter((t) => t.test_type === section.key);
+                  if (sectionTests.length === 0) return null;
+                  const isExpanded = expandedTestSection === section.key;
+                  const folders = [...new Set(sectionTests.map((t) => t.folder_name).filter(Boolean))] as string[];
+                  const unfolderedTests = sectionTests.filter((t) => !t.folder_name);
+
+                  return (
+                    <View key={section.key}>
+                      <Pressable
+                        style={[styles.testSectionCard, { borderLeftColor: section.color }]}
+                        onPress={() => setExpandedTestSection(isExpanded ? null : section.key)}
+                      >
+                        <View style={[styles.testSectionIconWrap, { backgroundColor: section.color + "18" }]}>
+                          <Ionicons name={section.icon} size={22} color={section.color} />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.testSectionTitle}>{section.label}</Text>
+                          <Text style={styles.testSectionCount}>{sectionTests.length} {sectionTests.length === 1 ? "test" : "tests"}</Text>
+                        </View>
+                        <Ionicons name={isExpanded ? "chevron-up" : "chevron-down"} size={20} color={Colors.light.textMuted} />
+                      </Pressable>
+
+                      {isExpanded && (
+                        <View style={styles.testSectionContent}>
+                          {folders.map((folder) => {
+                            const folderTests = sectionTests.filter((t) => t.folder_name === folder);
+                            return (
+                              <View key={folder} style={{ marginBottom: 8 }}>
+                                <View style={styles.testFolderHeader}>
+                                  <Ionicons name="folder" size={16} color={section.color} />
+                                  <Text style={[styles.testFolderName, { color: section.color }]}>{folder}</Text>
+                                  <Text style={styles.testFolderCount}>({folderTests.length})</Text>
+                                </View>
+                                {folderTests.map((test) => renderTestItem(test, course))}
+                              </View>
+                            );
+                          })}
+                          {unfolderedTests.map((test) => renderTestItem(test, course))}
+                        </View>
+                      )}
+                    </View>
+                  );
+                })}
+              </View>
             ) : (
-              course.tests.map((test) => {
-                const color = TEST_TYPE_COLORS[test.test_type] || Colors.light.primary;
-                return (
-                  <Pressable
-                    key={test.id}
-                    style={({ pressed }) => [styles.testCard, pressed && { opacity: 0.85 }]}
-                    onPress={() => {
-                      if (!course.isEnrolled && !course.is_free) {
-                        Alert.alert("Purchase Required", "Please purchase this course to access tests.");
-                        return;
-                      }
-                      router.push(`/test/${test.id}`);
-                    }}
-                  >
-                    <View style={[styles.testColorBar, { backgroundColor: color }]} />
-                    <View style={styles.testItemIcon}>
-                      <Ionicons name="document-text" size={22} color={color} />
-                    </View>
-                    <View style={styles.testItemInfo}>
-                      <Text style={styles.testItemTitle}>{test.title}</Text>
-                      <Text style={styles.testItemMeta}>
-                        {test.total_questions} questions · {test.duration_minutes}min · {test.total_marks} marks
-                      </Text>
-                    </View>
-                    {!course.isEnrolled && !course.is_free ? (
-                      <Ionicons name="lock-closed" size={18} color={Colors.light.textMuted} />
-                    ) : (
-                      <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
-                    )}
-                  </Pressable>
-                );
-              })
+              course.tests.map((test) => renderTestItem(test, course))
             )}
           </View>
         )}
@@ -790,6 +848,18 @@ const styles = StyleSheet.create({
   testItemInfo: { flex: 1, paddingVertical: 14, paddingRight: 12 },
   testItemTitle: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text, marginBottom: 3 },
   testItemMeta: { fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" },
+  testSectionCard: {
+    flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: "#fff",
+    borderRadius: 14, padding: 16, borderLeftWidth: 4,
+    shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 6, elevation: 2,
+  },
+  testSectionIconWrap: { width: 44, height: 44, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  testSectionTitle: { fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text },
+  testSectionCount: { fontSize: 12, fontFamily: "Inter_400Regular", color: Colors.light.textMuted, marginTop: 2 },
+  testSectionContent: { backgroundColor: "#F9FAFB", borderRadius: 12, marginTop: 6, overflow: "hidden" },
+  testFolderHeader: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 14, paddingVertical: 10, backgroundColor: "#F3F4F6", borderBottomWidth: 1, borderBottomColor: "#E5E7EB" },
+  testFolderName: { fontSize: 13, fontFamily: "Inter_700Bold" },
+  testFolderCount: { fontSize: 12, fontFamily: "Inter_400Regular", color: Colors.light.textMuted },
   materialItem: { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: "#fff", paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: Colors.light.border },
   materialIcon: { width: 40, height: 40, borderRadius: 12, backgroundColor: "#FEE2E2", alignItems: "center", justifyContent: "center" },
   materialInfo: { flex: 1 },

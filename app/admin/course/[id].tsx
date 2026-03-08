@@ -29,6 +29,7 @@ interface TestItem {
   total_questions: number;
   duration_minutes: number;
   test_type: string;
+  folder_name?: string;
 }
 
 interface Material {
@@ -96,7 +97,7 @@ interface NewLecture {
 
 interface NewTestForm {
   title: string; description: string; durationMinutes: string;
-  totalMarks: string; passingMarks: string; testType: string;
+  totalMarks: string; passingMarks: string; testType: string; folderName: string;
 }
 
 interface NewQuestion {
@@ -124,7 +125,8 @@ const ADMIN_COURSE_TABS: { key: AdminCourseTab; label: string; icon: keyof typeo
 ];
 
 const emptyLecture: NewLecture = { title: "", description: "", videoUrl: "", videoType: "youtube", durationMinutes: "0", orderIndex: "0", isFreePreview: false, sectionTitle: "" };
-const emptyTest: NewTestForm = { title: "", description: "", durationMinutes: "60", totalMarks: "100", passingMarks: "35", testType: "practice" };
+const TEST_TYPES = ["practice", "test", "pyq", "mock"];
+const emptyTest: NewTestForm = { title: "", description: "", durationMinutes: "60", totalMarks: "100", passingMarks: "35", testType: "practice", folderName: "" };
 const emptyQuestion: NewQuestion = { questionText: "", optionA: "", optionB: "", optionC: "", optionD: "", correctOption: "A", explanation: "", topic: "", marks: "4", negativeMarks: "1" };
 const emptyMaterial: NewMaterial = { title: "", description: "", fileUrl: "", fileType: "pdf", isFree: false, sectionTitle: "", downloadAllowed: false };
 const emptyLiveClass: NewLiveClass = { title: "", description: "", youtubeUrl: "", scheduledAt: "", isLive: false, isPublic: false };
@@ -216,6 +218,7 @@ export default function AdminCourseScreen() {
         durationMinutes: parseInt(data.durationMinutes),
         totalMarks: parseInt(data.totalMarks),
         passingMarks: parseInt(data.passingMarks),
+        folderName: data.folderName || null,
       });
     },
     onSuccess: () => {
@@ -545,7 +548,15 @@ export default function AdminCourseScreen() {
                     <Ionicons name="trash-outline" size={16} color="#EF4444" />
                   </Pressable>
                 </View>
-                <Text style={styles.testCardMeta}>{test.total_questions} questions · {test.duration_minutes}min · {test.test_type}</Text>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 2 }}>
+                  <Text style={styles.testCardMeta}>{test.total_questions} questions · {test.duration_minutes}min · {test.test_type}</Text>
+                  {test.folder_name && (
+                    <View style={styles.itemSectionBadge}>
+                      <Ionicons name="folder" size={12} color={Colors.light.primary} />
+                      <Text style={[styles.itemSectionText, { color: Colors.light.primary }]}>{test.folder_name}</Text>
+                    </View>
+                  )}
+                </View>
                 <View style={styles.testUploadRow}>
                   <Pressable style={styles.testUploadBtn} onPress={() => setShowAddQuestion(test.id)}>
                     <Ionicons name="create-outline" size={16} color={Colors.light.primary} />
@@ -756,7 +767,15 @@ export default function AdminCourseScreen() {
             <ScrollView style={{ maxHeight: 420 }} showsVerticalScrollIndicator={false}>
               <FormField label="Test Title *" placeholder="e.g., Chapter 1 Test" value={newTest.title} onChangeText={(v) => setNewTest(p => ({ ...p, title: v }))} />
               <FormField label="Description" placeholder="Test description" value={newTest.description} onChangeText={(v) => setNewTest(p => ({ ...p, description: v }))} />
-              <FormField label="Type (practice/mock/chapter/weekly/pyq_practice/pyq_papers)" placeholder="practice" value={newTest.testType} onChangeText={(v) => setNewTest(p => ({ ...p, testType: v }))} />
+              <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.text, marginBottom: 6 }}>Category</Text>
+              <View style={{ flexDirection: "row", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+                {TEST_TYPES.map((t) => (
+                  <Pressable key={t} onPress={() => setNewTest(p => ({ ...p, testType: t }))} style={{ paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8, backgroundColor: newTest.testType === t ? Colors.light.primary : "#F3F4F6", borderWidth: 1, borderColor: newTest.testType === t ? Colors.light.primary : "#E5E7EB" }}>
+                    <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: newTest.testType === t ? "#fff" : Colors.light.text, textTransform: "uppercase" }}>{t === "pyq" ? "PYQs" : t}</Text>
+                  </Pressable>
+                ))}
+              </View>
+              <FormField label="Folder (optional)" placeholder="e.g., Algebra, Geometry" value={newTest.folderName} onChangeText={(v) => setNewTest(p => ({ ...p, folderName: v }))} />
               <FormField label="Duration (minutes)" placeholder="60" value={newTest.durationMinutes} onChangeText={(v) => setNewTest(p => ({ ...p, durationMinutes: v }))} numeric />
               <FormField label="Total Marks" placeholder="100" value={newTest.totalMarks} onChangeText={(v) => setNewTest(p => ({ ...p, totalMarks: v }))} numeric />
               <FormField label="Passing Marks" placeholder="35" value={newTest.passingMarks} onChangeText={(v) => setNewTest(p => ({ ...p, passingMarks: v }))} numeric />

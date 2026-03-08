@@ -1031,9 +1031,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (test.rows.length > 0) {
           const t = test.rows[0];
           const newTest = await db.query(
-            `INSERT INTO tests (title, description, course_id, duration_minutes, total_marks, passing_marks, test_type, total_questions, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
-            [t.title, t.description, targetCourseId, t.duration_minutes, t.total_marks, t.passing_marks, t.test_type, t.total_questions || 0, Date.now()]
+            `INSERT INTO tests (title, description, course_id, duration_minutes, total_marks, passing_marks, test_type, folder_name, total_questions, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+            [t.title, t.description, targetCourseId, t.duration_minutes, t.total_marks, t.passing_marks, t.test_type, t.folder_name || null, t.total_questions || 0, Date.now()]
           );
           const questions = await db.query("SELECT * FROM questions WHERE test_id = $1 ORDER BY order_index", [testId]);
           for (const q of questions.rows) {
@@ -1145,11 +1145,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/admin/tests", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { title, description, courseId, durationMinutes, totalMarks, passingMarks, testType } = req.body;
+      const { title, description, courseId, durationMinutes, totalMarks, passingMarks, testType, folderName } = req.body;
       const result = await db.query(
-        `INSERT INTO tests (title, description, course_id, duration_minutes, total_marks, passing_marks, test_type, created_at) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-        [title, description, courseId || null, durationMinutes || 60, totalMarks || 100, passingMarks || 35, testType || "practice", Date.now()]
+        `INSERT INTO tests (title, description, course_id, duration_minutes, total_marks, passing_marks, test_type, folder_name, created_at) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+        [title, description, courseId || null, durationMinutes || 60, totalMarks || 100, passingMarks || 35, testType || "practice", folderName || null, Date.now()]
       );
       res.json(result.rows[0]);
     } catch (err) {

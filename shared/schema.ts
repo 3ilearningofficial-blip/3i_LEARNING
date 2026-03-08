@@ -89,6 +89,7 @@ export const tests = pgTable("tests", {
   totalMarks: integer("total_marks").default(100),
   passingMarks: integer("passing_marks").default(35),
   testType: text("test_type").default("practice"),
+  folderName: text("folder_name"),
   isPublished: boolean("is_published").default(true),
   createdAt: bigint("created_at", { mode: "number" }),
 });
