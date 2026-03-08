@@ -14,7 +14,7 @@
       "backgroundColor": "#0A1628"
     },
     "android": {
-      "package": "com.learning.threeI",
+      "package": "com.learning3i.app",
       "versionCode": 1,
       "adaptiveIcon": {
         "backgroundColor": "#0A1628",
@@ -37,7 +37,7 @@
       "output": "single",
       "name": "3i Learning",
       "shortName": "3i Learning",
-      "description": "Comprehensive math education platform with courses, tests, daily missions, and AI tutoring",
+      "description": "Comprehensive math education platform with courses, tests, daily missions, and AI tutoring by Pankaj Sir",
       "backgroundColor": "#0A1628",
       "themeColor": "#1A56DB"
     },
@@ -45,7 +45,7 @@
       [
         "expo-router",
         {
-          "origin": "https://replit.com/"
+          "origin": "https://3ilearning.in"
         }
       ],
       "expo-font",
