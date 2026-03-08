@@ -551,6 +551,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/lectures/:id", async (req: Request, res: Response) => {
+    try {
+      const result = await db.query("SELECT * FROM lectures WHERE id = $1", [req.params.id]);
+      if (result.rows.length === 0) return res.status(404).json({ message: "Lecture not found" });
+      res.json(result.rows[0]);
+    } catch (err) {
+      res.status(500).json({ message: "Failed to fetch lecture" });
+    }
+  });
+
   app.post("/api/lectures/:id/progress", async (req: Request, res: Response) => {
     try {
       const user = (req.session as Record<string, unknown>).user as { id: number } | undefined;
@@ -836,6 +846,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(result.rows);
     } catch (err) {
       res.status(500).json({ message: "Failed to fetch live classes" });
+    }
+  });
+
+  app.get("/api/live-classes/:id", async (req: Request, res: Response) => {
+    try {
+      const result = await db.query("SELECT * FROM live_classes WHERE id = $1", [req.params.id]);
+      if (result.rows.length === 0) return res.status(404).json({ message: "Live class not found" });
+      res.json(result.rows[0]);
+    } catch (err) {
+      res.status(500).json({ message: "Failed to fetch live class" });
     }
   });
 

@@ -10,6 +10,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { LinearGradient } from "expo-linear-gradient";
 import { apiRequest } from "@/lib/query-client";
+import { useQuery } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
 
 function getYouTubeVideoId(url: string): string {
@@ -115,7 +116,7 @@ if (window.innerWidth <= 600) {
 }
 
 export default function LectureScreen() {
-  const { id, courseId, videoUrl, title } = useLocalSearchParams<{
+  const { id, courseId, videoUrl: paramVideoUrl, title: paramTitle } = useLocalSearchParams<{
     id: string; courseId: string; videoUrl: string; title: string;
   }>();
   const insets = useSafeAreaInsets();
@@ -123,10 +124,17 @@ export default function LectureScreen() {
   const [isCompleted, setIsCompleted] = useState(false);
   const [hasError, setHasError] = useState(false);
 
+  const { data: lectureData } = useQuery<{ video_url: string; title: string }>({
+    queryKey: [`/api/lectures/${id}`],
+  });
+
+  const videoUrl = lectureData?.video_url || paramVideoUrl || "";
+  const title = lectureData?.title || paramTitle || "Lecture";
+
   const topPadding = Platform.OS === "web" ? 67 : insets.top;
   const bottomPadding = Platform.OS === "web" ? 34 : insets.bottom;
 
-  const videoId = getYouTubeVideoId(videoUrl || "");
+  const videoId = getYouTubeVideoId(videoUrl);
   const youtubeHtml = videoId ? buildYouTubeHtml(videoId) : "";
 
   const handleMarkComplete = async () => {

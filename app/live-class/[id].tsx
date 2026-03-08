@@ -109,7 +109,7 @@ interface ChatMsg {
 }
 
 export default function LiveClassScreen() {
-  const { id, videoUrl, title } = useLocalSearchParams<{
+  const { id, videoUrl: paramVideoUrl, title: paramTitle } = useLocalSearchParams<{
     id: string; videoUrl: string; title: string;
   }>();
   const insets = useSafeAreaInsets();
@@ -120,12 +120,19 @@ export default function LiveClassScreen() {
   const chatListRef = useRef<FlatList>(null);
   const lastMsgTimeRef = useRef<number>(0);
 
+  const { data: liveClassData } = useQuery<{ youtube_url: string; title: string }>({
+    queryKey: [`/api/live-classes/${id}`],
+  });
+
+  const videoUrl = liveClassData?.youtube_url || paramVideoUrl || "";
+  const title = liveClassData?.title || paramTitle || "Live Class";
+
   const topPadding = Platform.OS === "web" ? 67 : insets.top;
   const bottomPadding = Platform.OS === "web" ? 34 : insets.bottom;
   const screenHeight = Dimensions.get("window").height;
   const videoHeight = Math.min(screenHeight * 0.35, 280);
 
-  const videoId = getYouTubeVideoId(videoUrl || "");
+  const videoId = getYouTubeVideoId(videoUrl);
   const youtubeHtml = videoId ? buildYouTubeHtml(videoId) : "";
 
   const { data: chatMessages = [], refetch: refetchChat } = useQuery<ChatMsg[]>({
