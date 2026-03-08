@@ -78,10 +78,17 @@ iframe {
   background: #000;
   z-index: 50; pointer-events: auto; cursor: default;
 }
+.cover-bottom-left {
+  position: absolute; bottom: 0; left: 0;
+  width: 60px; height: 36px;
+  background: #000;
+  z-index: 50; pointer-events: auto; cursor: default;
+}
 @media (max-width: 600px) {
-  .cover-top-left { width: 180px; height: 36px; }
-  .cover-top-right { width: 36px; height: 30px; }
-  .cover-bottom-right { width: 80px; height: 26px; }
+  .cover-top-left { width: 45%; height: 42px; }
+  .cover-top-right { width: 40px; height: 36px; }
+  .cover-bottom-right { width: 140px; height: 32px; }
+  .cover-bottom-left { width: 50px; height: 32px; }
 }
 </style>
 </head>
@@ -90,10 +97,11 @@ iframe {
 <div class="cover-top-left"></div>
 <div class="cover-top-right"></div>
 <iframe
-  src="https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&playsinline=1&rel=0&modestbranding=1&showinfo=0&iv_load_policy=3&cc_load_policy=0&fs=1&disablekb=0&controls=1"
+  src="https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&mute=1&playsinline=1&rel=0&modestbranding=1&showinfo=0&iv_load_policy=3&cc_load_policy=0&fs=1&disablekb=0&controls=1"
   allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; fullscreen"
   allowfullscreen
 ></iframe>
+<div class="cover-bottom-left"></div>
 <div class="cover-bottom-right"></div>
 </div>
 <script>
