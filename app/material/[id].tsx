@@ -23,6 +23,34 @@ function getIconName(fileType: string): keyof typeof Ionicons.glyphMap {
   }
 }
 
+function getGoogleDriveFileId(url: string): string | null {
+  const match = url.match(/\/d\/([a-zA-Z0-9_-]+)/);
+  if (match) return match[1];
+  const idParam = url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  if (idParam) return idParam[1];
+  return null;
+}
+
+function isGoogleDriveUrl(url: string): boolean {
+  return url.includes("drive.google.com") || url.includes("docs.google.com");
+}
+
+function buildGoogleDriveViewerHtml(fileId: string): string {
+  const previewUrl = `https://drive.google.com/file/d/${fileId}/preview`;
+  return `<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 100%; height: 100%; background: #2a2a2a; overflow: hidden; }
+iframe { width: 100%; height: 100%; border: none; }
+</style>
+</head><body>
+<iframe src="${previewUrl}" allow="autoplay" allowfullscreen></iframe>
+</body></html>`;
+}
+
 function buildPdfViewerHtml(fileUrl: string, proxyBaseUrl: string): string {
   const proxyUrl = `${proxyBaseUrl}/api/pdf-proxy?url=${encodeURIComponent(fileUrl)}`;
   const gviewUrl = `https://docs.google.com/gview?embedded=true&url=${encodeURIComponent(fileUrl)}`;
@@ -150,6 +178,8 @@ export default function MaterialViewerScreen() {
   });
 
   const isPdf = material && (material.file_type === "pdf" || material.file_url?.toLowerCase().endsWith(".pdf"));
+  const isGDrive = material && isGoogleDriveUrl(material.file_url || "");
+  const gDriveFileId = material ? getGoogleDriveFileId(material.file_url || "") : null;
   const apiBaseUrl = getApiUrl();
 
   return (
@@ -212,7 +242,15 @@ export default function MaterialViewerScreen() {
           </View>
         ) : Platform.OS === "web" ? (
           <>
-            {isPdf ? (
+            {isGDrive && gDriveFileId ? (
+              <iframe
+                srcDoc={buildGoogleDriveViewerHtml(gDriveFileId)}
+                style={{ width: "100%", height: "100%", border: "none" } as any}
+                title={material.title}
+                allow="autoplay"
+                onLoad={() => setLoading(false)}
+              />
+            ) : isPdf ? (
               <iframe
                 srcDoc={buildPdfViewerHtml(material.file_url, apiBaseUrl)}
                 style={{ width: "100%", height: "100%", border: "none" } as any}
@@ -235,10 +273,13 @@ export default function MaterialViewerScreen() {
           </>
         ) : (
           <WebView
-            source={isPdf ? {
-              html: buildPdfViewerHtml(material.file_url, apiBaseUrl),
-              baseUrl: apiBaseUrl,
-            } : { uri: material.file_url }}
+            source={
+              isGDrive && gDriveFileId
+                ? { html: buildGoogleDriveViewerHtml(gDriveFileId), baseUrl: "https://drive.google.com" }
+                : isPdf
+                  ? { html: buildPdfViewerHtml(material.file_url, apiBaseUrl), baseUrl: apiBaseUrl }
+                  : { uri: material.file_url }
+            }
             style={styles.webview}
             onLoadEnd={() => setLoading(false)}
             javaScriptEnabled

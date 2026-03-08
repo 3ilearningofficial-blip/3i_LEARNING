@@ -6,9 +6,9 @@ import {
 import { router, useLocalSearchParams } from "expo-router";
 import { WebView } from "react-native-webview";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
+import { LinearGradient } from "expo-linear-gradient";
 import { apiRequest } from "@/lib/query-client";
 import Colors from "@/constants/colors";
 
@@ -54,27 +54,20 @@ function buildYouTubeHtml(videoId: string): string {
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
-.wrapper {
-  position: relative; width: 100%; height: 100%; overflow: hidden;
-}
-.iframe-container {
-  position: absolute;
-  top: -60px; left: 0; right: 0; bottom: -10px;
-  overflow: hidden;
-}
+.wrapper { position: relative; width: 100%; height: 100%; overflow: hidden; }
 iframe {
   position: absolute; top: 0; left: 0;
-  width: 100%; height: calc(100% + 70px);
+  width: 100%; height: 100%;
   border: none;
 }
 .cover-top {
   position: absolute; top: 0; left: 0; right: 0;
-  height: 0px; background: #000; z-index: 50;
-  pointer-events: all;
+  height: 48px; background: linear-gradient(to bottom, rgba(0,0,0,0.95) 0%, rgba(0,0,0,0.7) 60%, transparent 100%);
+  z-index: 50; pointer-events: all;
 }
 .cover-bottom-right {
-  position: absolute; bottom: 0; right: 0;
-  width: 140px; height: 45px;
+  position: absolute; bottom: 40px; right: 0;
+  width: 160px; height: 50px;
   background: transparent; z-index: 50;
   pointer-events: all; cursor: default;
 }
@@ -83,13 +76,11 @@ iframe {
 <body>
 <div class="wrapper">
 <div class="cover-top"></div>
-<div class="iframe-container">
 <iframe
   src="https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&playsinline=1&rel=0&modestbranding=1&showinfo=0&iv_load_policy=3&cc_load_policy=0&fs=1&disablekb=0&controls=1"
   allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; fullscreen"
   allowfullscreen
 ></iframe>
-</div>
 <div class="cover-bottom-right"></div>
 </div>
 <script>
@@ -140,7 +131,7 @@ export default function LectureScreen() {
 
   return (
     <View style={styles.container}>
-      <LinearGradient colors={["#0A1628", "#000"]} style={[styles.header, { paddingTop: topPadding + 4 }]}>
+      <View style={[styles.header, { paddingTop: topPadding + 4 }]}>
         <View style={styles.headerRow}>
           <Pressable style={styles.backBtn} onPress={() => router.back()}>
             <Ionicons name="arrow-back" size={22} color="#fff" />
@@ -154,7 +145,7 @@ export default function LectureScreen() {
             </View>
           ) : <View style={{ width: 36 }} />}
         </View>
-      </LinearGradient>
+      </View>
 
       <View style={styles.playerContainer}>
         {isLoading && !hasError && (
@@ -238,13 +229,13 @@ export default function LectureScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#000" },
-  header: { paddingHorizontal: 16, paddingBottom: 8 },
+  header: { paddingHorizontal: 16, paddingBottom: 8, backgroundColor: "#000", zIndex: 10 },
   headerRow: { flexDirection: "row", alignItems: "center", gap: 12 },
   backBtn: { width: 36, height: 36, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" },
   headerTitle: { flex: 1 },
   lectureTitleText: { fontSize: 15, fontFamily: "Inter_600SemiBold", color: "#fff" },
   completedBadge: { width: 36, alignItems: "center" },
-  playerContainer: { width: "100%", aspectRatio: 16 / 9, backgroundColor: "#000", position: "relative", overflow: "hidden" },
+  playerContainer: { width: "100%", flex: 1, maxHeight: "56%" as any, backgroundColor: "#000", position: "relative", overflow: "hidden" },
   webView: { flex: 1, backgroundColor: "#000" },
   loadingOverlay: {
     position: "absolute", top: 0, left: 0, right: 0, bottom: 0,

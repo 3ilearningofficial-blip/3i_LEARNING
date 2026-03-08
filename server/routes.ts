@@ -1407,14 +1407,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(400).json({ message: "Invalid URL" });
     }
 
-    if (!parsedUrl.pathname.toLowerCase().endsWith(".pdf")) {
-      return res.status(400).json({ message: "Only PDF files are allowed" });
+    const isGoogleDrive = parsedUrl.hostname.includes("drive.google.com") || parsedUrl.hostname.includes("docs.google.com");
+    const isPdfUrl = parsedUrl.pathname.toLowerCase().endsWith(".pdf");
+    if (!isPdfUrl && !isGoogleDrive) {
+      return res.status(400).json({ message: "Only PDF files and Google Drive links are allowed" });
     }
 
-    const protocol = parsedUrl.protocol === "https:" ? require("https") : require("http");
+    let finalUrl = url;
+    if (isGoogleDrive) {
+      const fileIdMatch = url.match(/\/d\/([a-zA-Z0-9_-]+)/);
+      if (fileIdMatch) {
+        finalUrl = `https://drive.google.com/uc?export=download&id=${fileIdMatch[1]}`;
+      }
+    }
+
+    const finalParsed = new URL(finalUrl);
+    const protocol = finalParsed.protocol === "https:" ? require("https") : require("http");
     const options = {
-      hostname: parsedUrl.hostname,
-      path: parsedUrl.pathname + parsedUrl.search,
+      hostname: finalParsed.hostname,
+      path: finalParsed.pathname + finalParsed.search,
       method: "GET",
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
