@@ -71,11 +71,9 @@ iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border:
   z-index: 50; pointer-events: auto; cursor: default;
 }
 @media (max-width: 600px) {
-  .cover-top-left { width: 50%; height: 44px; }
-  .cover-top-right { width: 40px; height: 36px; }
-  .cover-bottom-right { width: 55%; height: 34px; }
-  .cover-bottom-left { width: 50px; height: 34px; }
+  .cover-top-left, .cover-top-right, .cover-bottom-right, .cover-bottom-left { display: none; }
 }
+
 </style>
 </head><body>
 <div class="wrapper">
@@ -89,7 +87,14 @@ iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border:
 <div class="cover-bottom-left"></div>
 <div class="cover-bottom-right"></div>
 </div>
-<script>document.addEventListener('contextmenu', function(e) { e.preventDefault(); });</script>
+<script>
+document.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+if (window.innerWidth <= 600) {
+  var iframe = document.querySelector('iframe');
+  var src = iframe.getAttribute('src');
+  iframe.setAttribute('src', src + '&mute=1');
+}
+</script>
 </body></html>`;
 }
 
