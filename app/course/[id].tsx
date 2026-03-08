@@ -666,13 +666,15 @@ setTimeout(function() {
                 <Pressable
                   key={lc.id}
                   style={({ pressed }) => [styles.liveClassItem, pressed && { opacity: 0.85 }]}
-                  onPress={() => router.push({
-                    pathname: `/live-class/${lc.id}`,
-                    params: { videoUrl: lc.youtube_url, title: lc.title },
-                  })}
+                  onPress={() => {
+                    router.push({
+                      pathname: `/live-class/${lc.id}`,
+                      params: { videoUrl: lc.youtube_url, title: lc.title },
+                    });
+                  }}
                 >
                   <LinearGradient
-                    colors={lc.is_live ? ["#DC2626", "#EF4444"] : ["#6B7280", "#9CA3AF"]}
+                    colors={lc.is_live ? ["#DC2626", "#EF4444"] : lc.is_completed ? ["#1A56DB", "#3B82F6"] : ["#6B7280", "#9CA3AF"]}
                     style={styles.liveStatusBadge}
                   >
                     {lc.is_live ? (
@@ -680,6 +682,8 @@ setTimeout(function() {
                         <View style={styles.liveDot} />
                         <Text style={styles.liveStatusText}>LIVE</Text>
                       </>
+                    ) : lc.is_completed ? (
+                      <Ionicons name="play" size={14} color="#fff" />
                     ) : (
                       <Ionicons name="time" size={14} color="#fff" />
                     )}
@@ -688,10 +692,10 @@ setTimeout(function() {
                     <Text style={styles.liveClassTitle}>{lc.title}</Text>
                     {lc.description ? <Text style={styles.liveClassDesc} numberOfLines={2}>{lc.description}</Text> : null}
                     <Text style={styles.liveClassTime}>
-                      {lc.is_live ? "Happening now" : new Date(lc.scheduled_at).toLocaleString()}
+                      {lc.is_live ? "Happening now" : lc.is_completed ? "Recording" : new Date(lc.scheduled_at).toLocaleString()}
                     </Text>
                   </View>
-                  <Ionicons name={lc.is_live ? "play-circle" : "calendar"} size={24} color={lc.is_live ? "#DC2626" : Colors.light.textMuted} />
+                  <Ionicons name={lc.is_live ? "play-circle" : lc.is_completed ? "play-circle" : "calendar"} size={24} color={lc.is_live ? "#DC2626" : lc.is_completed ? Colors.light.primary : Colors.light.textMuted} />
                 </Pressable>
               ))
             )}

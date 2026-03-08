@@ -120,7 +120,7 @@ export default function LiveClassScreen() {
   const chatListRef = useRef<FlatList>(null);
   const lastMsgTimeRef = useRef<number>(0);
 
-  const { data: liveClassData } = useQuery<{ youtube_url: string; title: string }>({
+  const { data: liveClassData } = useQuery<{ youtube_url: string; title: string; is_completed: boolean; is_live: boolean }>({
     queryKey: [`/api/live-classes/${id}`],
   });
 
@@ -221,10 +221,17 @@ export default function LiveClassScreen() {
           <Ionicons name="arrow-back" size={20} color="#fff" />
         </Pressable>
         <View style={styles.headerCenter}>
-          <View style={styles.liveIndicator}>
-            <View style={styles.liveDot} />
-            <Text style={styles.liveText}>LIVE</Text>
-          </View>
+          {liveClassData?.is_completed ? (
+            <View style={[styles.liveIndicator, { backgroundColor: "rgba(26,86,219,0.3)" }]}>
+              <Ionicons name="play" size={10} color="#93C5FD" />
+              <Text style={styles.liveText}>Recording</Text>
+            </View>
+          ) : (
+            <View style={styles.liveIndicator}>
+              <View style={styles.liveDot} />
+              <Text style={styles.liveText}>LIVE</Text>
+            </View>
+          )}
           <Text style={styles.headerTitle} numberOfLines={1}>{title || "Live Class"}</Text>
         </View>
         <View style={{ width: 36 }} />

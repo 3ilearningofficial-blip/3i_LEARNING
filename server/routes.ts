@@ -829,11 +829,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const userId = (req as any).session?.userId;
-      let query = "SELECT lc.* FROM live_classes lc WHERE lc.is_completed = FALSE";
       const params: unknown[] = [];
+      let query = "SELECT lc.* FROM live_classes lc WHERE 1=1";
       if (courseId) {
         params.push(courseId);
         query += ` AND (lc.course_id = $${params.length} OR lc.course_id IS NULL)`;
+      } else {
+        query += ` AND lc.is_completed = FALSE`;
       }
       if (userId) {
         params.push(userId);
