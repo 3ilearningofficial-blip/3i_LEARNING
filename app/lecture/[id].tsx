@@ -62,7 +62,7 @@ iframe {
 }
 .cover-top-left {
   position: absolute; top: 0; left: 0;
-  width: 280px; height: 42px;
+  width: 280px; height: 56px;
   background: #000;
   z-index: 50; pointer-events: auto; cursor: default;
 }

@@ -48,7 +48,7 @@ html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
 iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; }
 .cover-top-left {
   position: absolute; top: 0; left: 0;
-  width: 280px; height: 42px;
+  width: 280px; height: 56px;
   background: #000;
   z-index: 50; pointer-events: auto; cursor: default;
 }
