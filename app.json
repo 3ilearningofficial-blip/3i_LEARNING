@@ -45,7 +45,7 @@
       [
         "expo-router",
         {
-          "origin": "https://3ilearning.in"
+          "origin": "http://localhost:5000"
         }
       ],
       "expo-font",

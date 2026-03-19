@@ -10,7 +10,7 @@ import { getRazorpay, verifyPaymentSignature } from "./razorpay";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const pool = new Pool({ connectionString: process.env.DATABASE_URL, connectionTimeoutMillis: 10000, idleTimeoutMillis: 30000 });
 
 const db = {
   query: (text: string, params?: unknown[]) => pool.query(text, params),
@@ -147,6 +147,7 @@ const ADMIN_PHONES = ["9997198068"];
 export async function registerRoutes(app: Express): Promise<Server> {
   // ==================== AUTH ROUTES ====================
   app.post("/api/auth/send-otp", async (req: Request, res: Response) => {
+    console.log("OTP request received:", req.body);
     try {
       const { identifier, type } = req.body;
       if (!identifier || !type) {
@@ -225,7 +226,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         phone: user.phone, role: user.role,
         deviceId, sessionToken,
       };
-      (req.session as Record<string, unknown>).user = sessionUser;
+      (req.session as any).user = sessionUser;
       res.json({ success: true, user: sessionUser });
     } catch (err) {
       console.error(err);
@@ -263,7 +264,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         phone: user.phone, role: user.role,
         deviceId, sessionToken,
       };
-      (req.session as Record<string, unknown>).user = sessionUser;
+      (req.session as any).user = sessionUser;
       res.json({ success: true, user: sessionUser });
     } catch (err) {
       console.error("Firebase verify error:", err);
@@ -272,12 +273,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.get("/api/auth/me", async (req: Request, res: Response) => {
-    const user = (req.session as Record<string, unknown>).user as { id: number; sessionToken?: string } | undefined;
+    const user = (req.session as any).user as { id: number; sessionToken?: string } | undefined;
     if (!user) return res.status(401).json({ message: "Not authenticated" });
     if (user.sessionToken) {
       const dbUser = await db.query("SELECT session_token FROM users WHERE id = $1", [user.id]);
       if (dbUser.rows.length > 0 && dbUser.rows[0].session_token !== user.sessionToken) {
-        (req.session as Record<string, unknown>).user = null;
+        (req.session as any).user = null;
         return res.status(401).json({ message: "logged_in_elsewhere" });
       }
     }
@@ -317,7 +318,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         deviceId: deviceId,
         sessionToken: sessionToken,
       };
-      (req.session as Record<string, unknown>).user = sessionUser;
+      (req.session as any).user = sessionUser;
       res.json({ success: true, user: sessionUser });
     } catch (err: any) {
       console.error("Firebase login error:", err);
@@ -329,17 +330,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   app.post("/api/auth/logout", (req: Request, res: Response) => {
-    (req.session as Record<string, unknown>).user = null;
+    (req.session as any).user = null;
     res.json({ success: true });
   });
 
   app.put("/api/auth/profile", async (req: Request, res: Response) => {
     try {
-      const user = (req.session as Record<string, unknown>).user as { id: number } | undefined;
+      const user = (req.session as any).user as { id: number } | undefined;
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const { name } = req.body;
       await db.query("UPDATE users SET name = $1 WHERE id = $2", [name, user.id]);
-      (req.session as Record<string, unknown>).user = { ...(user as object), name };
+      (req.session as any).user = { ...(user as object), name };
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ message: "Failed to update profile" });
@@ -349,7 +350,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ==================== COURSES ROUTES ====================
   app.get("/api/courses", async (req: Request, res: Response) => {
     try {
-      const user = (req.session as Record<string, unknown>).user as { id: number } | undefined;
+      const user = (req.session as any).user as { id: number } | undefined;
       const { category, search } = req.query;
       let query = "SELECT * FROM courses WHERE is_published = TRUE";
       const params: unknown[] = [];
@@ -377,7 +378,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           enrollMap[e.course_id] = e.progress_percent;
         });
         courses.forEach((c: Record<string, unknown>) => {
-          c.isEnrolled = c.id in enrollMap;
+          c.isEnrolled = !!enrollMap[c.id as number];
           c.progress = enrollMap[c.id as number] || 0;
         });
       }
@@ -391,7 +392,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/courses/:id", async (req: Request, res: Response) => {
     try {
-      const user = (req.session as Record<string, unknown>).user as { id: number } | undefined;
+      const user = (req.session as any).user as { id: number } | undefined;
       const courseResult = await db.query("SELECT * FROM courses WHERE id = $1", [req.params.id]);
       if (courseResult.rows.length === 0) return res.status(404).json({ message: "Course not found" });
 
@@ -432,7 +433,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/courses/:id/enroll", async (req: Request, res: Response) => {
     try {
-      const user = (req.session as Record<string, unknown>).user as { id: number } | undefined;
+      const user = (req.session as any).user as { id: number } | undefined;
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       await db.query(
         "INSERT INTO enrollments (user_id, course_id, enrolled_at) VALUES ($1, $2, $3) ON CONFLICT (user_id, course_id) DO NOTHING",
@@ -447,7 +448,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ==================== PAYMENT ROUTES ====================
   app.post("/api/payments/create-order", async (req: Request, res: Response) => {
     try {
-      const user = (req.session as Record<string, unknown>).user as { id: number } | undefined;
+      const user = (req.session as any).user as { id: number } | undefined;
       if (!user) return res.status(401).json({ message: "Not authenticated" });
 
       const { courseId } = req.body;
@@ -492,7 +493,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/payments/verify", async (req: Request, res: Response) => {
     try {
-      const user = (req.session as Record<string, unknown>).user as { id: number } | undefined;
+      const user = (req.session as any).user as { id: number } | undefined;
       if (!user) return res.status(401).json({ message: "Not authenticated" });
 
       const { razorpay_order_id, razorpay_payment_id, razorpay_signature, courseId } = req.body;
@@ -537,7 +538,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/my-courses", async (req: Request, res: Response) => {
     try {
-      const user = (req.session as Record<string, unknown>).user as { id: number } | undefined;
+      const user = (req.session as any).user as { id: number } | undefined;
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const result = await db.query(
         `SELECT c.*, e.progress_percent, e.enrolled_at FROM courses c 
@@ -563,7 +564,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/lectures/:id/progress", async (req: Request, res: Response) => {
     try {
-      const user = (req.session as Record<string, unknown>).user as { id: number } | undefined;
+      const user = (req.session as any).user as { id: number } | undefined;
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const { courseId, watchPercent, isCompleted } = req.body;
       await db.query(
@@ -630,7 +631,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/tests/:id/attempt", async (req: Request, res: Response) => {
     try {
-      const user = (req.session as Record<string, unknown>).user as { id: number } | undefined;
+      const user = (req.session as any).user as { id: number } | undefined;
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const { answers, timeTakenSeconds } = req.body;
       const testResult = await db.query("SELECT * FROM tests WHERE id = $1", [req.params.id]);
@@ -702,7 +703,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/my-attempts", async (req: Request, res: Response) => {
     try {
-      const user = (req.session as Record<string, unknown>).user as { id: number } | undefined;
+      const user = (req.session as any).user as { id: number } | undefined;
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const result = await db.query(
         `SELECT ta.*, t.title, t.total_marks, t.test_type FROM test_attempts ta 
@@ -719,7 +720,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ==================== DAILY MISSION ROUTES ====================
   app.get("/api/daily-missions", async (req: Request, res: Response) => {
     try {
-      const user = (req.session as Record<string, unknown>).user as { id: number } | undefined;
+      const user = (req.session as any).user as { id: number } | undefined;
       const { type } = req.query;
       let query = "SELECT * FROM daily_missions WHERE mission_date <= CURRENT_DATE";
       const params: unknown[] = [];
@@ -754,7 +755,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/daily-mission", async (req: Request, res: Response) => {
     try {
-      const user = (req.session as Record<string, unknown>).user as { id: number } | undefined;
+      const user = (req.session as any).user as { id: number } | undefined;
       const result = await db.query("SELECT * FROM daily_missions WHERE mission_date = CURRENT_DATE AND mission_type = 'daily_drill' LIMIT 1");
       if (result.rows.length === 0) return res.json(null);
       const mission = result.rows[0];
@@ -771,7 +772,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/daily-mission/:id/complete", async (req: Request, res: Response) => {
     try {
-      const user = (req.session as Record<string, unknown>).user as { id: number } | undefined;
+      const user = (req.session as any).user as { id: number } | undefined;
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const { score } = req.body;
       await db.query(
@@ -916,7 +917,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ==================== DOUBTS ROUTES ====================
   app.post("/api/doubts", async (req: Request, res: Response) => {
     try {
-      const user = (req.session as Record<string, unknown>).user as { id: number } | undefined;
+      const user = (req.session as any).user as { id: number } | undefined;
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const { question, topic } = req.body;
 
@@ -934,7 +935,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/doubts", async (req: Request, res: Response) => {
     try {
-      const user = (req.session as Record<string, unknown>).user as { id: number } | undefined;
+      const user = (req.session as any).user as { id: number } | undefined;
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const result = await db.query("SELECT * FROM doubts WHERE user_id = $1 ORDER BY created_at DESC", [user.id]);
       res.json(result.rows);
@@ -946,7 +947,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ==================== NOTIFICATIONS ROUTES ====================
   app.get("/api/notifications", async (req: Request, res: Response) => {
     try {
-      const user = (req.session as Record<string, unknown>).user as { id: number } | undefined;
+      const user = (req.session as any).user as { id: number } | undefined;
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const result = await db.query(
         "SELECT * FROM notifications WHERE user_id = $1 ORDER BY created_at DESC LIMIT 20",
@@ -968,7 +969,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   function requireAuth(req: Request, res: Response, next: () => void) {
-    const session = req.session as Record<string, unknown>;
+    const session = req.session as any;
     const user = session.user as { id: number; name: string; phone: string; role: string } | undefined;
     if (!user) {
       return res.status(401).json({ message: "Login required" });
@@ -979,7 +980,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ==================== ADMIN ROUTES ====================
   function requireAdmin(req: Request, res: Response, next: () => void) {
-    const user = (req.session as Record<string, unknown>).user as { role: string } | undefined;
+    const user = (req.session as any).user as { role: string } | undefined;
     if (!user || user.role !== "admin") {
       return res.status(403).json({ message: "Admin access required" });
     }
@@ -1456,7 +1457,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (lc.rows.length === 0) { res.status(404).json({ message: "Live class not found" }); return false; }
     const liveClass = lc.rows[0];
     if (liveClass.is_public || !liveClass.course_id) return true;
-    const session = req.session as Record<string, unknown>;
+    const session = req.session as any;
     const user = session.user as { id: number; role: string } | undefined;
     if (!user) { res.status(401).json({ message: "Login required" }); return false; }
     if (user.role === "admin") return true;
@@ -1467,7 +1468,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/live-classes/:id/chat", async (req: Request, res: Response) => {
     try {
-      const hasAccess = await checkLiveClassAccess(req, res, req.params.id);
+      const hasAccess = await checkLiveClassAccess(req, res, req.params.id as string);
       if (!hasAccess) return;
       const { after } = req.query;
       let query = "SELECT * FROM live_chat_messages WHERE live_class_id = $1";
@@ -1486,7 +1487,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/live-classes/:id/chat", requireAuth, async (req: Request, res: Response) => {
     try {
-      const hasAccess = await checkLiveClassAccess(req, res, req.params.id);
+      const hasAccess = await checkLiveClassAccess(req, res, req.params.id as string);
       if (!hasAccess) return;
       const { message } = req.body;
       if (!message || !message.trim()) return res.status(400).json({ message: "Message is required" });

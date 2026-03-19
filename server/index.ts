@@ -20,31 +20,21 @@ function setupCors(app: express.Application) {
   app.use((req, res, next) => {
     const origins = new Set<string>();
 
-    if (process.env.REPLIT_DEV_DOMAIN) {
-      origins.add(`https://${process.env.REPLIT_DEV_DOMAIN}`);
-    }
+    // Local development
+    origins.add("http://localhost:8081");
+    origins.add("http://localhost:3000");
 
-    if (process.env.REPLIT_DOMAINS) {
-      process.env.REPLIT_DOMAINS.split(",").forEach((d) => {
-        origins.add(`https://${d.trim()}`);
-      });
-    }
-
+    // Production domain
     origins.add("https://3ilearning.in");
     origins.add("https://www.3ilearning.in");
 
     const origin = req.header("origin");
 
-    // Allow localhost origins for Expo web development (any port)
-    const isLocalhost =
-      origin?.startsWith("http://localhost:") ||
-      origin?.startsWith("http://127.0.0.1:");
-
-    if (origin && (origins.has(origin) || isLocalhost)) {
+    if (origin && origins.has(origin)) {
       res.header("Access-Control-Allow-Origin", origin);
       res.header(
         "Access-Control-Allow-Methods",
-        "GET, POST, PUT, DELETE, OPTIONS",
+        "GET, POST, PUT, DELETE, OPTIONS"
       );
       res.header("Access-Control-Allow-Headers", "Content-Type");
       res.header("Access-Control-Allow-Credentials", "true");
@@ -288,6 +278,7 @@ function setupErrorHandler(app: express.Application) {
         conString: process.env.DATABASE_URL,
         tableName: "session",
         createTableIfMissing: true,
+        pool: new (require('pg').Pool)({ connectionString: process.env.DATABASE_URL, connectionTimeoutMillis: 10000 }),
       }),
       secret: process.env.SESSION_SECRET || "3ilearning-secret-2024",
       resave: false,
@@ -333,14 +324,7 @@ function setupErrorHandler(app: express.Application) {
   setupErrorHandler(app);
 
   const port = parseInt(process.env.PORT || "5000", 10);
-  server.listen(
-    {
-      port,
-      host: "0.0.0.0",
-      reusePort: true,
-    },
-    () => {
-      log(`express server serving on port ${port}`);
-    },
-  );
+  server.listen(port, () => {
+  log(`express server running on http://localhost:${port}`);
+});
 })();

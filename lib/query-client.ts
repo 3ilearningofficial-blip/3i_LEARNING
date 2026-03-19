@@ -3,22 +3,20 @@ import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
 export function getApiUrl(): string {
   if (Platform.OS === "web" && typeof window !== "undefined" && window.location) {
-    const host = window.location.host;
-    const protocol = window.location.protocol;
-
-    if (process.env.EXPO_PUBLIC_DOMAIN) {
-      return `https://${process.env.EXPO_PUBLIC_DOMAIN}`;
-    }
-
-    return `${protocol}//${host}/`;
+    // In dev, Expo runs on 8081 but backend is on 5000 — use EXPO_PUBLIC_DOMAIN if set
+    const host = process.env.EXPO_PUBLIC_DOMAIN || window.location.host;
+    const protocol = host.startsWith("localhost") ? "http" : "https";
+    return `${protocol}://${host}`;
   }
 
-  let host = process.env.EXPO_PUBLIC_DOMAIN;
+  // On mobile, use EXPO_PUBLIC_DOMAIN
+  const host = process.env.EXPO_PUBLIC_DOMAIN;
   if (!host) {
     throw new Error("EXPO_PUBLIC_DOMAIN is not set");
   }
 
-  return `https://${host}`;
+  const protocol = host.startsWith("localhost") ? "http" : "https";
+  return `${protocol}://${host}`;
 }
 
 async function throwIfResNotOk(res: Response) {
