@@ -8,9 +8,8 @@ import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
-import { apiRequest, getApiUrl } from "@/lib/query-client";
+import { apiRequest, getApiUrl, authFetch } from "@/lib/query-client";
 import Colors from "@/constants/colors";
-import { fetch } from "expo/fetch";
 
 interface Doubt {
   id: number;
@@ -37,15 +36,15 @@ export default function AITutorScreen() {
   const [isExpanded, setIsExpanded] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
 
-  const topPadding = Platform.OS === "web" ? 67 : insets.top;
-  const bottomPadding = Platform.OS === "web" ? 34 : insets.bottom;
+  const topPadding = insets.top;
+  const bottomPadding = insets.bottom;
 
   const { data: doubts = [], isLoading } = useQuery<Doubt[]>({
     queryKey: ["/api/doubts"],
     queryFn: async () => {
       const baseUrl = getApiUrl();
       const url = new URL("/api/doubts", baseUrl);
-      const res = await fetch(url.toString(), { credentials: "include" });
+      const res = await authFetch(url.toString());
       if (!res.ok) return [];
       return res.json();
     },
@@ -80,7 +79,7 @@ export default function AITutorScreen() {
       behavior={Platform.OS === "ios" ? "padding" : "height"}
       keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
     >
-      <LinearGradient colors={["#0A1628", "#1A2E50"]} style={[styles.header, { paddingTop: topPadding + 8 }]}>
+      <LinearGradient colors={["#0A1628", "#1A2E50"]} style={[styles.header, { paddingTop: topPadding + 20 }]}>
         <View style={styles.headerContent}>
           <View>
             <Text style={styles.headerTitle}>AI Tutor</Text>
@@ -195,7 +194,7 @@ export default function AITutorScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.light.background },
-  header: { paddingHorizontal: 20, paddingBottom: 16 },
+  header: { paddingHorizontal: 20, paddingBottom: 20 },
   headerContent: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   headerTitle: { fontSize: 24, fontFamily: "Inter_700Bold", color: "#fff" },
   headerSub: { fontSize: 13, color: "rgba(255,255,255,0.6)", fontFamily: "Inter_400Regular", marginTop: 2 },

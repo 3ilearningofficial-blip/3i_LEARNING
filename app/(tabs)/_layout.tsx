@@ -1,11 +1,79 @@
 import { Tabs } from "expo-router";
-import { Platform, StyleSheet, View, useColorScheme } from "react-native";
+import { Platform, StyleSheet, View, Text } from "react-native";
 import { BlurView } from "expo-blur";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import { useQuery } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
+import { authFetch, getApiUrl } from "@/lib/query-client";
 
-function TabIcon({ name, color, focused }: { name: keyof typeof Ionicons.glyphMap; color: string; focused: boolean }) {
-  return <Ionicons name={name} size={24} color={color} />;
+function ChatTabIcon({ color, focused }: { color: string; focused: boolean }) {
+  const { data: messages = [] } = useQuery<any[]>({
+    queryKey: ["/api/support/messages"],
+    queryFn: async () => {
+      try {
+        const baseUrl = getApiUrl();
+        const res = await authFetch(new URL("/api/support/messages", baseUrl).toString());
+        if (!res.ok) return [];
+        return res.json();
+      } catch { return []; }
+    },
+    refetchInterval: 10000,
+    staleTime: 5000,
+  });
+
+  const unread = messages.filter((m: any) => m.sender === "admin" && !m.is_read).length;
+
+  return (
+    <View style={{ width: 28, height: 28, alignItems: "center", justifyContent: "center" }}>
+      <Ionicons name={focused ? "chatbubbles" : "chatbubbles-outline"} size={24} color={color} />
+      {unread > 0 && (
+        <View style={{
+          position: "absolute", top: -2, right: -4,
+          backgroundColor: "#EF4444", borderRadius: 8,
+          minWidth: 16, height: 16,
+          alignItems: "center", justifyContent: "center",
+          paddingHorizontal: 3,
+        }}>
+          <Text style={{ fontSize: 9, fontFamily: "Inter_700Bold", color: "#fff" }}>{unread > 9 ? "9+" : unread}</Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
+function NotifTabIcon({ color, focused }: { color: string; focused: boolean }) {
+  const { data: notifications = [] } = useQuery<any[]>({
+    queryKey: ["/api/notifications"],
+    queryFn: async () => {
+      try {
+        const baseUrl = getApiUrl();
+        const res = await authFetch(new URL("/api/notifications", baseUrl).toString());
+        if (!res.ok) return [];
+        return res.json();
+      } catch { return []; }
+    },
+    refetchInterval: 30000,
+    staleTime: 10000,
+  });
+
+  const unread = notifications.filter((n: any) => !n.is_read).length;
+
+  return (
+    <View style={{ width: 28, height: 28, alignItems: "center", justifyContent: "center" }}>
+      <Ionicons name={focused ? "notifications" : "notifications-outline"} size={24} color={color} />
+      {unread > 0 && (
+        <View style={{
+          position: "absolute", top: -2, right: -4,
+          backgroundColor: "#EF4444", borderRadius: 8,
+          minWidth: 16, height: 16,
+          alignItems: "center", justifyContent: "center",
+          paddingHorizontal: 3,
+        }}>
+          <Text style={{ fontSize: 9, fontFamily: "Inter_700Bold", color: "#fff" }}>{unread > 9 ? "9+" : unread}</Text>
+        </View>
+      )}
+    </View>
+  );
 }
 
 export default function TabLayout() {
@@ -60,6 +128,13 @@ export default function TabLayout() {
           tabBarIcon: ({ color, focused }) => (
             <Ionicons name={focused ? "document-text" : "document-text-outline"} size={24} color={color} />
           ),
+        }}
+      />
+      <Tabs.Screen
+        name="support-chat-tab"
+        options={{
+          title: "Support",
+          tabBarIcon: ({ color, focused }) => <ChatTabIcon color={color} focused={focused} />,
         }}
       />
       <Tabs.Screen

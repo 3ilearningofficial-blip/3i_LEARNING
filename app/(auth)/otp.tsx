@@ -18,7 +18,7 @@ function generateDeviceId() {
 
 export default function OTPScreen() {
   const insets = useSafeAreaInsets();
-  const { phone, smsSent } = useLocalSearchParams<{ phone: string; smsSent?: string }>();
+  const { phone, smsSent, devOtp } = useLocalSearchParams<{ phone: string; smsSent?: string; devOtp?: string }>();
   const [otp, setOtp] = useState(["", "", "", "", "", ""]);
   const [isLoading, setIsLoading] = useState(false);
   const [countdown, setCountdown] = useState(30);
@@ -36,6 +36,15 @@ export default function OTPScreen() {
     }, 1000);
     return () => clearInterval(timer);
   }, []);
+
+  // Show dev OTP box when SMS fails — user taps to fill
+  useEffect(() => {
+    if (devOtp && devOtp.length === 6) {
+      const digits = devOtp.split("");
+      setOtp(digits);
+      // Don't auto-verify — let user see the OTP and tap Verify manually
+    }
+  }, [devOtp]);
 
   const handleOtpChange = (value: string, index: number) => {
     const newOtp = [...otp];
@@ -75,7 +84,15 @@ export default function OTPScreen() {
       }
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       login(data.user);
-      router.replace("/(tabs)");
+      console.log("[OTP] user:", JSON.stringify({ id: data.user.id, role: data.user.role, profileComplete: data.user.profileComplete, name: data.user.name }));
+      // Route based on profile completion
+      if (data.user.role !== "admin" && !data.user.profileComplete) {
+        console.log("[OTP] → profile-setup");
+        router.replace("/profile-setup");
+      } else {
+        console.log("[OTP] → tabs");
+        router.replace("/(tabs)");
+      }
     } catch (err: any) {
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       const msg = err?.message || "";
@@ -111,6 +128,10 @@ export default function OTPScreen() {
       setOtp(["", "", "", "", "", ""]);
       inputs.current[0]?.focus();
       Alert.alert("OTP Sent", data.smsSent ? "A new OTP has been sent to your phone." : "OTP sent. If SMS is delayed, please wait and try again.");
+      if (data.devOtp) {
+        const digits = data.devOtp.split("");
+        setOtp(digits);
+      }
     } catch {
       Alert.alert("Error", "Failed to resend OTP. Check your internet connection.");
     } finally {
@@ -124,7 +145,7 @@ export default function OTPScreen() {
   return (
     <LinearGradient colors={["#0A1628", "#1A2E50", "#0A1628"]} style={styles.container}>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
-        <View style={[styles.content, { paddingTop: insets.top + (Platform.OS === "web" ? 67 : 0) + 20, paddingBottom: insets.bottom + (Platform.OS === "web" ? 34 : 0) + 20 }]}>
+        <View style={[styles.content, { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 20 }]}>
           <Pressable style={styles.backBtn} onPress={() => router.back()}>
             <Ionicons name="arrow-back" size={24} color="#fff" />
           </Pressable>
@@ -141,6 +162,19 @@ export default function OTPScreen() {
               <Ionicons name="information-circle" size={16} color={Colors.light.warning} />
               <Text style={styles.smsWarningText}>SMS may be delayed. Please wait or tap Resend below.</Text>
             </View>
+          )}
+
+          {!!devOtp && (
+            <Pressable
+              style={styles.devOtpBox}
+              onPress={() => {
+                const digits = devOtp.split("");
+                setOtp(digits);
+              }}
+            >
+              <Ionicons name="bug-outline" size={16} color="#22C55E" />
+              <Text style={styles.devOtpText}>Dev OTP: <Text style={{ fontFamily: "Inter_700Bold", letterSpacing: 4 }}>{devOtp}</Text> (tap to fill)</Text>
+            </Pressable>
           )}
 
           <View style={styles.otpContainer}>
@@ -228,4 +262,10 @@ const styles = StyleSheet.create({
   resendContainer: { alignItems: "center" },
   resendText: { color: Colors.light.accent, fontSize: 14, fontFamily: "Inter_600SemiBold" },
   countdownText: { color: "rgba(255,255,255,0.5)", fontSize: 14, fontFamily: "Inter_400Regular" },
+  devOtpBox: {
+    flexDirection: "row", alignItems: "center", gap: 8,
+    backgroundColor: "rgba(34,197,94,0.15)", paddingHorizontal: 16, paddingVertical: 10,
+    borderRadius: 10, borderWidth: 1, borderColor: "rgba(34,197,94,0.3)",
+  },
+  devOtpText: { color: "#22C55E", fontFamily: "Inter_500Medium", fontSize: 13 },
 });

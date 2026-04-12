@@ -3,6 +3,7 @@ import type { Request, Response, NextFunction } from "express";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import rateLimit from "express-rate-limit";
+import compression from "compression";
 import { registerRoutes } from "./routes";
 import * as fs from "fs";
 import * as path from "path";
@@ -22,6 +23,7 @@ function setupCors(app: express.Application) {
 
     // Local development
     origins.add("http://localhost:8081");
+    origins.add("http://localhost:5000");
     origins.add("http://localhost:3000");
 
     // Production domain
@@ -30,14 +32,17 @@ function setupCors(app: express.Application) {
 
     const origin = req.header("origin");
 
-    if (origin && origins.has(origin)) {
+    // Allow any local network IP (192.168.x.x, 10.x.x.x, 172.16-31.x.x)
+    const isLocalNetwork = origin && /^http:\/\/(192\.168\.|10\.|172\.)/.test(origin);
+
+    if (origin && (origins.has(origin) || isLocalNetwork)) {
       res.header("Access-Control-Allow-Origin", origin);
-      res.header(
-        "Access-Control-Allow-Methods",
-        "GET, POST, PUT, DELETE, OPTIONS"
-      );
-      res.header("Access-Control-Allow-Headers", "Content-Type");
+      res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+      res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-User-Id");
       res.header("Access-Control-Allow-Credentials", "true");
+    } else if (!origin) {
+      // Same-origin or mobile requests — allow
+      res.header("Access-Control-Allow-Origin", "*");
     }
 
     if (req.method === "OPTIONS") {
@@ -51,44 +56,28 @@ function setupCors(app: express.Application) {
 function setupBodyParsing(app: express.Application) {
   app.use(
     express.json({
+      limit: "10mb", // allow base64 image uploads in notification payloads
       verify: (req, _res, buf) => {
         req.rawBody = buf;
       },
     }),
   );
 
-  app.use(express.urlencoded({ extended: false }));
+  app.use(express.urlencoded({ extended: false, limit: "10mb" }));
 }
 
 function setupRequestLogging(app: express.Application) {
   app.use((req, res, next) => {
     const start = Date.now();
-    const path = req.path;
-    let capturedJsonResponse: Record<string, unknown> | undefined = undefined;
-
-    const originalResJson = res.json;
-    res.json = function (bodyJson, ...args) {
-      capturedJsonResponse = bodyJson;
-      return originalResJson.apply(res, [bodyJson, ...args]);
-    };
-
+    const reqPath = req.path;
     res.on("finish", () => {
-      if (!path.startsWith("/api")) return;
-
+      if (!reqPath.startsWith("/api")) return;
       const duration = Date.now() - start;
-
-      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
+      // Only log slow requests (>500ms) or errors in production to reduce I/O
+      if (duration > 500 || res.statusCode >= 500) {
+        log(`${req.method} ${reqPath} ${res.statusCode} in ${duration}ms`);
       }
-
-      if (logLine.length > 80) {
-        logLine = logLine.slice(0, 79) + "…";
-      }
-
-      log(logLine);
     });
-
     next();
   });
 }
@@ -143,9 +132,6 @@ function serveLandingPage({
   const host = forwardedHost || req.get("host");
   const baseUrl = `${protocol}://${host}`;
   const expsUrl = `${host}`;
-
-  log(`baseUrl`, baseUrl);
-  log(`expsUrl`, expsUrl);
 
   const html = landingPageTemplate
     .replace(/BASE_URL_PLACEHOLDER/g, baseUrl)
@@ -257,6 +243,8 @@ function setupErrorHandler(app: express.Application) {
 
 (async () => {
   setupCors(app);
+  // Gzip all responses — reduces bandwidth by ~70% for JSON
+  app.use(compression());
   setupBodyParsing(app);
   setupRequestLogging(app);
 
@@ -271,26 +259,42 @@ function setupErrorHandler(app: express.Application) {
   const isProduction = process.env.NODE_ENV === "production";
   app.set("trust proxy", 1);
 
-  const PgSession = connectPgSimple(session);
-  app.use(
-    session({
-      store: new PgSession({
-        conString: process.env.DATABASE_URL,
-        tableName: "session",
-        createTableIfMissing: true,
-        pool: new (require('pg').Pool)({ connectionString: process.env.DATABASE_URL, connectionTimeoutMillis: 10000 }),
-      }),
-      secret: process.env.SESSION_SECRET || "3ilearning-secret-2024",
-      resave: false,
-      saveUninitialized: false,
-      cookie: {
-        secure: isProduction,
-        httpOnly: true,
-        sameSite: "lax",
-        maxAge: 7 * 24 * 60 * 60 * 1000,
-      },
-    })
-  );
+  // Security headers
+  app.use((_req: Request, res: Response, next: NextFunction) => {
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("X-Frame-Options", "SAMEORIGIN");
+    res.setHeader("X-XSS-Protection", "1; mode=block");
+    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+    if (isProduction) {
+      res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+    }
+    next();
+  });
+
+  const sessionConfig: session.SessionOptions = {
+    secret: process.env.SESSION_SECRET || (isProduction
+      ? (() => { throw new Error("SESSION_SECRET must be set in production"); })()
+      : "dev-secret-not-for-production"),
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      secure: false,           // Allow HTTP in dev
+      httpOnly: true,
+      sameSite: "lax",         // "lax" works for cross-origin on same host, no Secure required
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    },
+  };
+
+  if (isProduction && process.env.DATABASE_URL) {
+    const PgSession = connectPgSimple(session);
+    sessionConfig.store = new PgSession({
+      conString: process.env.DATABASE_URL,
+      tableName: "session",
+      createTableIfMissing: true,
+    });
+  }
+
+  app.use(session(sessionConfig));
 
   const otpSendLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
@@ -317,6 +321,17 @@ function setupErrorHandler(app: express.Application) {
   app.use("/api/auth/send-otp", otpSendLimiter);
   app.use("/api/auth/verify-otp", otpVerifyLimiter);
 
+  // Global API rate limit — prevents abuse across all endpoints
+  const globalApiLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 300,  // 300 req/min per IP — plenty for normal use
+    message: { message: "Too many requests, please slow down" },
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: (req) => req.path.startsWith("/api/auth/send-otp") || req.path.startsWith("/api/auth/verify-otp"),
+  });
+  app.use("/api", globalApiLimiter);
+
   configureExpoAndLanding(app);
 
   const server = await registerRoutes(app);
@@ -324,7 +339,21 @@ function setupErrorHandler(app: express.Application) {
   setupErrorHandler(app);
 
   const port = parseInt(process.env.PORT || "5000", 10);
-  server.listen(port, () => {
-  log(`express server running on http://localhost:${port}`);
-});
+
+  // Show local network IP for mobile access
+  try {
+    const { networkInterfaces } = await import("os");
+    const nets = networkInterfaces();
+    for (const iface of Object.values(nets)) {
+      for (const net of iface || []) {
+        if (net.family === "IPv4" && !net.internal) {
+          log(`Mobile access: http://${net.address}:${port}`);
+        }
+      }
+    }
+  } catch (_e) {}
+
+  server.listen(port, "0.0.0.0", () => {
+    log(`express server running on http://localhost:${port}`);
+  });
 })();

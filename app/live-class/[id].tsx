@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
 import {
   View, Text, StyleSheet, Pressable, Platform,
   ActivityIndicator, TextInput, FlatList, KeyboardAvoidingView,
-  Dimensions,
+  Dimensions, Alert,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { WebView } from "react-native-webview";
@@ -10,14 +10,18 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest, getApiUrl } from "@/lib/query-client";
+import { apiRequest } from "@/lib/query-client";
 import { useAuth } from "@/context/AuthContext";
 import Colors from "@/constants/colors";
+import { useScreenProtection } from "@/lib/useScreenProtection";
+import { isAndroidWeb } from "@/lib/useAndroidWebGate";
+import AndroidWebGate from "@/components/AndroidWebGate";
+import { VideoWatermark } from "@/components/VideoWatermark";
 
 function getYouTubeVideoId(url: string): string {
   if (!url) return "";
   let decoded = url;
-  try { decoded = decodeURIComponent(decodeURIComponent(url)); } catch { try { decoded = decodeURIComponent(url); } catch {} }
+  try { decoded = decodeURIComponent(decodeURIComponent(url)); } catch (_e) { try { decoded = decodeURIComponent(url); } catch (_e2) {} }
   decoded = decoded.trim();
   try {
     const parsed = new URL(decoded);
@@ -30,7 +34,7 @@ function getYouTubeVideoId(url: string): string {
         if (/^[A-Za-z0-9_-]{11}$/.test(p) && !["watch", "channel"].includes(p) && !p.startsWith("@")) return p;
       }
     }
-  } catch {}
+  } catch (_e) {}
   const m = decoded.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/|live\/|v\/))([A-Za-z0-9_-]{11})/);
   if (m?.[1]) return m[1];
   if (/^[A-Za-z0-9_-]{11}$/.test(decoded)) return decoded;
@@ -39,76 +43,203 @@ function getYouTubeVideoId(url: string): string {
 
 function buildYouTubeHtml(videoId: string): string {
   return `<!DOCTYPE html>
-<html><head>
+<html>
+<head>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
+html, body { width: 100%; height: 100%; background: #000; overflow: hidden; -webkit-user-select: none; user-select: none; }
 .wrapper { position: relative; width: 100%; height: 100%; overflow: hidden; }
 iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; }
-.cover-top-left {
-  position: absolute; top: 0; left: 0;
-  width: 280px; height: 56px;
-  background: #000;
-  z-index: 50; pointer-events: auto; cursor: default;
-}
-.cover-top-right {
-  position: absolute; top: 0; right: 0;
-  width: 50px; height: 42px;
-  background: #000;
-  z-index: 50; pointer-events: auto; cursor: default;
-}
-.cover-bottom-right {
-  position: absolute; bottom: 0; right: 0;
-  width: 120px; height: 36px;
-  background: #000;
-  z-index: 50; pointer-events: auto; cursor: default;
-}
-.cover-bottom-left {
-  position: absolute; bottom: 0; left: 0;
-  width: 60px; height: 36px;
-  background: #000;
-  z-index: 50; pointer-events: auto; cursor: default;
-}
+.cover-tl { position: absolute; top: 0; left: 0; width: 25%; height: 56px; background: #000; z-index: 9999; pointer-events: auto; cursor: default; }
+.cover-tr { position: absolute; top: 0; right: 0; width: 130px; height: 56px; background: #000; z-index: 9999; pointer-events: auto; cursor: default; }
+.cover-bl { position: absolute; bottom: 0; left: 0; width: 70px; height: 60px; background: #000; z-index: 9999; pointer-events: auto; cursor: default; }
+.cover-fs { position: absolute; bottom: 78px; right: 0; width: 90px; height: 50px; background: #000; z-index: 9999; pointer-events: auto; cursor: default; }
+.cover-br { position: absolute; bottom: 0; right: 50px; width: 280px; height: 60px; background: #000; z-index: 9999; pointer-events: auto; cursor: default; }
 @media (max-width: 600px) {
-  .cover-top-left, .cover-top-right, .cover-bottom-right, .cover-bottom-left { display: none; }
+  .cover-tl { width: 55%; }
+  .cover-tr { display: none; }
+  .cover-fs { display: none; }
+  .cover-br { width: 100%; right: 0; }
 }
-
+@media print { body { display: none !important; } }
 </style>
-</head><body>
+</head>
+<body>
 <div class="wrapper">
-<div class="cover-top-left"></div>
-<div class="cover-top-right"></div>
+<div class="cover-tl"></div>
+<div class="cover-tr"></div>
 <iframe
-  src="https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&playsinline=1&rel=0&modestbranding=1&showinfo=0&iv_load_policy=3&cc_load_policy=0&fs=1&controls=1"
+  src="https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&mute=1&playsinline=1&rel=0&modestbranding=1&showinfo=0&iv_load_policy=3&cc_load_policy=0&fs=1&disablekb=0&controls=1"
   allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; fullscreen"
   allowfullscreen
 ></iframe>
-<div class="cover-bottom-left"></div>
-<div class="cover-bottom-right"></div>
+<div class="cover-bl"></div>
+<div class="cover-fs"></div>
+<div class="cover-br"></div>
 </div>
+<script>document.addEventListener('contextmenu', function(e) { e.preventDefault(); });</script>
+</body>
+</html>`;
+}
+
+// Native-only: YouTube IFrame API with custom controls (zero YouTube branding)
+function buildNativeYouTubeHtml(videoId: string): string {
+  return `<!DOCTYPE html>
+<html><head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;background:#000;overflow:hidden;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+#pw{position:relative;width:100%;height:100%}
+#player{position:absolute;top:0;left:0;width:100%;height:100%}
+.ctl{position:absolute;bottom:0;left:0;right:0;background:linear-gradient(transparent,rgba(0,0,0,0.9));padding:10px 14px 14px;z-index:100;display:flex;flex-direction:column;gap:8px;transition:opacity 0.3s}
+.ctl.h{opacity:0;pointer-events:none}
+.pr{display:flex;align-items:center;gap:10px}
+.pb{flex:1;height:5px;background:rgba(255,255,255,0.25);border-radius:3px;position:relative}
+.pf{height:100%;background:#EF4444;border-radius:3px;position:relative}.pf::after{content:'';position:absolute;right:-6px;top:-4px;width:13px;height:13px;background:#EF4444;border-radius:50%}
+.bf{position:absolute;top:0;left:0;height:100%;background:rgba(255,255,255,0.15);border-radius:3px}
+.tt{font-size:12px;color:rgba(255,255,255,0.85);font-family:-apple-system,sans-serif;min-width:80px;text-align:center}
+.br{display:flex;align-items:center;gap:6px}
+.cb{background:none;border:none;color:#fff;padding:8px;display:flex;align-items:center;justify-content:center;-webkit-tap-highlight-color:transparent}
+.cb svg{width:26px;height:26px;fill:#fff}.cb.sm svg{width:22px;height:22px}
+.sp{flex:1}
+.bp{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:70px;height:70px;background:rgba(0,0,0,0.5);border-radius:50%;display:flex;align-items:center;justify-content:center;z-index:50;transition:opacity 0.2s;-webkit-tap-highlight-color:transparent}
+.bp.h{opacity:0;pointer-events:none}.bp svg{width:36px;height:36px;fill:#fff;margin-left:4px}
+.ld{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:44px;height:44px;border:3px solid rgba(255,255,255,0.2);border-top:3px solid #fff;border-radius:50%;animation:sp 0.8s linear infinite;z-index:50;display:none}
+@keyframes sp{to{transform:translate(-50%,-50%) rotate(360deg)}}
+</style></head><body>
+<div id="pw" ontouchstart="sc()">
+<div id="player"></div><div class="ld" id="ld"></div>
+<div class="bp" id="bp" ontouchend="tp()"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
+<div class="ctl" id="ctl">
+<div class="pr"><div class="pb" id="pb" ontouchend="skT(event)"><div class="bf" id="bf"></div><div class="pf" id="pf"></div></div><span class="tt" id="tt">0:00 / 0:00</span></div>
+<div class="br">
+<button class="cb" ontouchend="tp()"><svg viewBox="0 0 24 24" id="pli"><path d="M8 5v14l11-7z"/></svg></button>
+<button class="cb sm" ontouchend="fwd(-10)"><svg viewBox="0 0 24 24"><path d="M12.5 5V1l-5 5 5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6h-2c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/></svg></button>
+<button class="cb sm" ontouchend="fwd(10)"><svg viewBox="0 0 24 24"><path d="M18 13c0 3.31-2.69 6-6 6s-6-2.69-6-6h-2c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8V1l-5 5 5 5V7c3.31 0 6 2.69 6 6z"/></svg></button>
+<button class="cb sm" ontouchend="tm()"><svg viewBox="0 0 24 24" id="vi"><path d="M16.5 12A4.5 4.5 0 0014 8v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51A8.8 8.8 0 0021 12c0-4.28-3-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06a8.99 8.99 0 003.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></svg></button>
+<div class="sp"></div>
+<button class="cb sm" ontouchend="tsp()"><svg viewBox="0 0 24 24"><text x="12" y="17" font-size="12" fill="#fff" text-anchor="middle" font-weight="bold" font-family="sans-serif" id="spt">1x</text></svg></button>
+</div></div></div>
 <script>
-document.addEventListener('contextmenu', function(e) { e.preventDefault(); });
-if (window.innerWidth <= 600) {
-  var iframe = document.querySelector('iframe');
-  var src = iframe.getAttribute('src');
-  iframe.setAttribute('src', src + '&mute=1');
+var tag=document.createElement('script');tag.src='https://www.youtube.com/iframe_api';document.head.appendChild(tag);
+var p,rdy=0,ht,spds=[0.5,0.75,1,1.25,1.5,2],si=2,isMuted=1;
+function onYouTubeIframeAPIReady(){p=new YT.Player('player',{videoId:'${videoId}',playerVars:{autoplay:1,mute:1,controls:0,modestbranding:1,rel:0,showinfo:0,iv_load_policy:3,cc_load_policy:0,playsinline:1,disablekb:1,fs:0},events:{onReady:function(e){rdy=1;e.target.playVideo();up();sc();},onStateChange:function(e){var s=e.data;document.getElementById('ld').style.display=s===3?'block':'none';document.getElementById('bp').className=(s===1||s===3)?'bp h':'bp';upi();}}});}
+function tp(){if(!rdy)return;p.getPlayerState()===1?p.pauseVideo():p.playVideo();}
+function upi(){var pl=p&&p.getPlayerState()===1;document.getElementById('pli').innerHTML=pl?'<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>':'<path d="M8 5v14l11-7z"/>';}
+function fwd(s){if(!rdy)return;p.seekTo(Math.max(0,p.getCurrentTime()+s),true);}
+function tm(){if(!rdy)return;if(isMuted){p.unMute();p.setVolume(100);isMuted=0;}else{p.mute();isMuted=1;}uvi();}
+function uvi(){document.getElementById('vi').innerHTML=isMuted?'<path d="M16.5 12A4.5 4.5 0 0014 8v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51A8.8 8.8 0 0021 12c0-4.28-3-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06a8.99 8.99 0 003.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/>':'<path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0014 8v8.05A4.49 4.49 0 0016.5 12zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>';}
+function tsp(){si=(si+1)%spds.length;p.setPlaybackRate(spds[si]);document.getElementById('spt').textContent=spds[si]+'x';}
+function skT(e){if(!rdy)return;e.preventDefault();var b=document.getElementById('pb'),r=b.getBoundingClientRect();var t=e.changedTouches?e.changedTouches[0]:e;var pc=Math.max(0,Math.min(1,(t.clientX-r.left)/r.width));p.seekTo(pc*p.getDuration(),true);}
+function fm(s){s=Math.floor(s);var h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sc=s%60;return h>0?h+':'+(m<10?'0':'')+m+':'+(sc<10?'0':'')+sc:m+':'+(sc<10?'0':'')+sc;}
+function up(){if(rdy&&p.getDuration){var c=p.getCurrentTime()||0,d=p.getDuration()||1;document.getElementById('pf').style.width=(c/d*100)+'%';document.getElementById('tt').textContent=fm(c)+' / '+fm(d);var l=p.getVideoLoadedFraction?p.getVideoLoadedFraction():0;document.getElementById('bf').style.width=(l*100)+'%';}requestAnimationFrame(up);}
+function sc(){document.getElementById('ctl').className='ctl';clearTimeout(ht);ht=setTimeout(function(){if(p&&p.getPlayerState()===1)document.getElementById('ctl').className='ctl h';},4000);}
+document.addEventListener('contextmenu',function(e){e.preventDefault();});
+</script></body></html>`;
+}
+
+function isCloudflareStreamId(str: string): boolean {
+  if (!str) return false;
+  // Cloudflare Stream video IDs are 32-character hex strings
+  return /^[a-f0-9]{32}$/i.test(str.trim());
+}
+
+function buildCloudflareStreamHtml(videoId: string): string {
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 100%; height: 100%; background: #000; overflow: hidden; -webkit-user-select: none; user-select: none; }
+#player { width: 100%; height: 100%; }
+</style>
+<script src="https://embed.cloudflarestream.com/embed/sdk.latest.js"></script>
+</head>
+<body>
+<stream 
+  id="player"
+  src="${videoId}"
+  controls
+  autoplay
+  preload="auto"
+></stream>
+<script>
+// Disable right-click and context menu
+document.addEventListener('contextmenu', function(e) { e.preventDefault(); return false; });
+document.addEventListener('selectstart', function(e) { e.preventDefault(); return false; });
+
+const player = document.getElementById('player');
+if (player && window.ReactNativeWebView) {
+  player.addEventListener('loadstart', function() {
+    window.ReactNativeWebView.postMessage('ready');
+  });
 }
 </script>
-</body></html>`;
+</body>
+</html>`;
 }
 
 interface ChatMsg {
-  id: number;
-  live_class_id: number;
-  user_id: number;
-  user_name: string;
-  message: string;
-  is_admin: boolean;
-  created_at: number;
+  id: number; live_class_id: number; user_id: number;
+  user_name: string; message: string; is_admin: boolean; created_at: number;
+}
+interface HandRaise {
+  id: number; live_class_id: number; user_id: number; user_name: string; raised_at: number;
+}
+
+function WebYouTubePlayer({ videoId, onReady }: { videoId: string; onReady: () => void }) {
+  const calledRef = useRef(false);
+  useEffect(() => {
+    if (!calledRef.current) { calledRef.current = true; onReady(); }
+  }, []);
+  return (
+    <iframe
+      srcDoc={buildYouTubeHtml(videoId)}
+      style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" } as any}
+      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+      allowFullScreen
+    />
+  );
+}
+
+// Voice input hook — web Speech API
+function useVoiceInput(onResult: (text: string) => void) {
+  const [isListening, setIsListening] = useState(false);
+  const recognitionRef = useRef<any>(null);
+
+  const startListening = useCallback(() => {
+    if (Platform.OS !== "web") { Alert.alert("Voice input is only available on web"); return; }
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) { Alert.alert("Voice input not supported in this browser"); return; }
+    const recognition = new SpeechRecognition();
+    recognition.lang = "en-IN";
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+    recognition.onresult = (e: any) => {
+      const transcript = e.results[0][0].transcript;
+      onResult(transcript);
+    };
+    recognition.onend = () => setIsListening(false);
+    recognition.onerror = () => setIsListening(false);
+    recognitionRef.current = recognition;
+    recognition.start();
+    setIsListening(true);
+  }, [onResult]);
+
+  const stopListening = useCallback(() => {
+    recognitionRef.current?.stop();
+    setIsListening(false);
+  }, []);
+
+  return { isListening, startListening, stopListening };
 }
 
 export default function LiveClassScreen() {
+  useScreenProtection(true);
+  if (isAndroidWeb()) return <AndroidWebGate />;
   const { id, videoUrl: paramVideoUrl, title: paramTitle } = useLocalSearchParams<{
     id: string; videoUrl: string; title: string;
   }>();
@@ -117,56 +248,93 @@ export default function LiveClassScreen() {
   const qc = useQueryClient();
   const [chatMsg, setChatMsg] = useState("");
   const [isVideoLoading, setIsVideoLoading] = useState(true);
+  const [isVideoPlaying, setIsVideoPlaying] = useState(false);
+  const [handRaised, setHandRaised] = useState(false);
   const chatListRef = useRef<FlatList>(null);
   const lastMsgTimeRef = useRef<number>(0);
 
-  const { data: liveClassData } = useQuery<{ youtube_url: string; title: string; is_completed: boolean; is_live: boolean }>({
+  const { data: liveClassData } = useQuery<{ youtube_url: string; title: string; is_completed: boolean; is_live: boolean; show_viewer_count: boolean }>({
     queryKey: [`/api/live-classes/${id}`],
   });
 
+  // Student heartbeat — POST every 15 seconds while page is open
+  useEffect(() => {
+    if (!id) return;
+    const sendHeartbeat = () => {
+      apiRequest("POST", `/api/live-classes/${id}/viewers/heartbeat`, {}).catch(() => {});
+    };
+    sendHeartbeat(); // send immediately on mount
+    const interval = setInterval(sendHeartbeat, 15000);
+    return () => clearInterval(interval);
+  }, [id]);
+
   const videoUrl = liveClassData?.youtube_url || paramVideoUrl || "";
   const title = liveClassData?.title || paramTitle || "Live Class";
-
-  const topPadding = Platform.OS === "web" ? 67 : insets.top;
+  const topPadding = Platform.OS === "web" ? 16 : insets.top;
   const bottomPadding = Platform.OS === "web" ? 34 : insets.bottom;
   const screenHeight = Dimensions.get("window").height;
   const videoHeight = Math.min(screenHeight * 0.35, 280);
-
+  
+  // Determine video type
   const videoId = getYouTubeVideoId(videoUrl);
+  const isStreamId = !videoId && isCloudflareStreamId(videoUrl);
   const youtubeHtml = videoId ? buildYouTubeHtml(videoId) : "";
+  const streamHtml = isStreamId ? buildCloudflareStreamHtml(videoUrl) : "";
 
   const { data: chatMessages = [], refetch: refetchChat } = useQuery<ChatMsg[]>({
     queryKey: [`/api/live-classes/${id}/chat`],
     refetchInterval: 3000,
   });
 
+  const { data: viewerData } = useQuery<{ count: number; viewers: any[] }>({
+    queryKey: [`/api/live-classes/${id}/viewers`],
+    refetchInterval: 10000,
+  });
+
+  const { data: raisedHands = [], refetch: refetchHands } = useQuery<HandRaise[]>({
+    queryKey: [`/api/admin/live-classes/${id}/raised-hands`],
+    enabled: isAdmin,
+    refetchInterval: 5000,
+  });
+
   useEffect(() => {
     if (chatMessages.length > 0) {
-      const latestTime = chatMessages[chatMessages.length - 1].created_at;
+      const latestTime = Number(chatMessages[chatMessages.length - 1].created_at);
       if (latestTime > lastMsgTimeRef.current) {
         lastMsgTimeRef.current = latestTime;
-        setTimeout(() => {
-          chatListRef.current?.scrollToEnd({ animated: true });
-        }, 100);
+        setTimeout(() => chatListRef.current?.scrollToEnd({ animated: true }), 100);
       }
     }
   }, [chatMessages]);
 
   const sendMsgMutation = useMutation({
-    mutationFn: async (msg: string) => {
-      return apiRequest("POST", `/api/live-classes/${id}/chat`, { message: msg });
-    },
-    onSuccess: () => {
-      setChatMsg("");
-      refetchChat();
-    },
+    mutationFn: (msg: string) => apiRequest("POST", `/api/live-classes/${id}/chat`, { message: msg }),
+    onSuccess: () => { setChatMsg(""); refetchChat(); },
   });
 
   const deleteMsgMutation = useMutation({
-    mutationFn: async (msgId: number) => {
-      return apiRequest("DELETE", `/api/admin/live-classes/${id}/chat/${msgId}`);
-    },
+    mutationFn: (msgId: number) => apiRequest("DELETE", `/api/admin/live-classes/${id}/chat/${msgId}`),
     onSuccess: () => refetchChat(),
+  });
+
+  const toggleViewerCountMutation = useMutation({
+    mutationFn: (show: boolean) => apiRequest("POST", `/api/admin/live-classes/${id}/viewer-count-toggle`, { show }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: [`/api/live-classes/${id}`] }),
+  });
+
+  const raiseHandMutation = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/live-classes/${id}/raise-hand`, {}),
+    onSuccess: () => { setHandRaised(true); refetchHands(); },
+  });
+
+  const lowerHandMutation = useMutation({
+    mutationFn: () => apiRequest("DELETE", `/api/live-classes/${id}/raise-hand`),
+    onSuccess: () => { setHandRaised(false); refetchHands(); },
+  });
+
+  const resolveHandMutation = useMutation({
+    mutationFn: (userId: number) => apiRequest("POST", `/api/admin/live-classes/${id}/raised-hands/${userId}/resolve`, {}),
+    onSuccess: () => refetchHands(),
   });
 
   const handleSend = useCallback(() => {
@@ -176,34 +344,71 @@ export default function LiveClassScreen() {
     sendMsgMutation.mutate(msg);
   }, [chatMsg]);
 
+  const { isListening, startListening, stopListening } = useVoiceInput((text) => {
+    setChatMsg((prev) => (prev ? prev + " " + text : text));
+  });
+
+  const handleHandRaise = useCallback(() => {
+    if (handRaised) { lowerHandMutation.mutate(); }
+    else { raiseHandMutation.mutate(); }
+  }, [handRaised]);
+
+  const handleWebViewMessage = useCallback((event: any) => {
+    try {
+      const data = JSON.parse(event.nativeEvent.data);
+      if (data.event === 'play') {
+        setIsVideoPlaying(true);
+      } else if (data.event === 'pause' || data.event === 'ended') {
+        setIsVideoPlaying(false);
+      }
+    } catch (e) {
+      // Ignore non-JSON messages
+      if (event.nativeEvent.data === 'ready') {
+        setIsVideoPlaying(true); // Assume playing when ready
+      }
+    }
+  }, []);
+
+  const preventScreenCapture = `
+    (function() {
+      document.addEventListener('contextmenu', function(e){ e.preventDefault(); return false; });
+      
+      // Notify React Native about video play/pause events
+      const videos = document.querySelectorAll('video');
+      videos.forEach(function(video) {
+        video.addEventListener('play', function() {
+          window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({ event: 'play' }));
+        });
+        video.addEventListener('pause', function() {
+          window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({ event: 'pause' }));
+        });
+        video.addEventListener('ended', function() {
+          window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({ event: 'pause' }));
+        });
+      });
+    })();
+    true;
+  `;
+
   const renderChatItem = useCallback(({ item }: { item: ChatMsg }) => (
     <View style={[chatStyles.msgRow, item.is_admin && chatStyles.adminMsgRow]}>
       <View style={[chatStyles.avatar, item.is_admin && chatStyles.adminAvatar]}>
-        <Text style={chatStyles.avatarText}>
-          {item.is_admin ? "T" : (item.user_name?.charAt(0) || "S").toUpperCase()}
-        </Text>
+        <Text style={chatStyles.avatarText}>{item.is_admin ? "T" : (item.user_name?.charAt(0) || "S").toUpperCase()}</Text>
       </View>
       <View style={[chatStyles.msgBubble, item.is_admin && chatStyles.adminBubble]}>
         <View style={chatStyles.msgHeader}>
           <Text style={[chatStyles.msgName, item.is_admin && chatStyles.adminName]}>
             {item.is_admin ? "Pankaj Sir" : item.user_name}
           </Text>
-          {item.is_admin && (
-            <View style={chatStyles.teacherBadge}>
-              <Text style={chatStyles.teacherBadgeText}>TEACHER</Text>
-            </View>
-          )}
+          {item.is_admin && <View style={chatStyles.teacherBadge}><Text style={chatStyles.teacherBadgeText}>TEACHER</Text></View>}
           <Text style={chatStyles.msgTime}>
-            {new Date(item.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            {new Date(Number(item.created_at)).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
           </Text>
         </View>
         <Text style={chatStyles.msgText}>{item.message}</Text>
       </View>
       {isAdmin && (
-        <Pressable
-          style={chatStyles.deleteBtn}
-          onPress={() => deleteMsgMutation.mutate(item.id)}
-        >
+        <Pressable style={chatStyles.deleteBtn} onPress={() => deleteMsgMutation.mutate(item.id)}>
           <Ionicons name="close" size={14} color="#999" />
         </Pressable>
       )}
@@ -211,11 +416,7 @@ export default function LiveClassScreen() {
   ), [isAdmin]);
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
-      keyboardVerticalOffset={0}
-    >
+    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === "ios" ? "padding" : undefined} keyboardVerticalOffset={0}>
       <View style={[styles.header, { paddingTop: topPadding + 4 }]}>
         <Pressable style={styles.backBtn} onPress={() => router.back()}>
           <Ionicons name="arrow-back" size={20} color="#fff" />
@@ -238,26 +439,20 @@ export default function LiveClassScreen() {
       </View>
 
       <View style={[styles.playerContainer, { height: videoHeight }]}>
+        {/* Video Watermark Overlay */}
+        <VideoWatermark isPlaying={isVideoPlaying} />
+        
         {isVideoLoading && (
-          <View style={styles.loadingOverlay}>
-            <ActivityIndicator size="large" color={Colors.light.primary} />
-          </View>
+          <View style={styles.loadingOverlay}><ActivityIndicator size="large" color={Colors.light.primary} /></View>
         )}
         {videoId && Platform.OS === "web" ? (
-          <View style={{ width: "100%" as any, height: "100%", position: "relative" as any }}>
-            <iframe
-              src={`https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&playsinline=1&rel=0&modestbranding=1&showinfo=0&iv_load_policy=3&cc_load_policy=0&fs=1&controls=1`}
-              style={{ width: "100%", height: "100%", border: "none", position: "absolute", top: 0, left: 0 } as any}
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
-              allowFullScreen
-              onLoad={() => setIsVideoLoading(false)}
-            />
-          </View>
-        ) : youtubeHtml ? (
+          <WebYouTubePlayer videoId={videoId} onReady={() => setIsVideoLoading(false)} />
+        ) : isStreamId && streamHtml ? (
           <WebView
-            source={{ html: youtubeHtml, baseUrl: "https://www.youtube-nocookie.com" }}
+            source={{ html: streamHtml, baseUrl: "https://cloudflarestream.com" }}
             style={{ flex: 1, backgroundColor: "#000" }}
-            onLoad={() => setIsVideoLoading(false)}
+            onLoad={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }}
+            onMessage={handleWebViewMessage}
             allowsFullscreenVideo
             mediaPlaybackRequiresUserAction={false}
             allowsInlineMediaPlayback
@@ -265,8 +460,19 @@ export default function LiveClassScreen() {
             javaScriptEnabled
             domStorageEnabled
             mixedContentMode="compatibility"
-            setSupportMultipleWindows={false}
             originWhitelist={["*"]}
+          />
+        ) : youtubeHtml ? (
+          <WebView
+            source={{ html: buildNativeYouTubeHtml(videoId), baseUrl: "https://www.youtube.com" }}
+            style={{ flex: 1, backgroundColor: "#000" }}
+            onLoad={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }}
+            onMessage={handleWebViewMessage}
+            injectedJavaScript={preventScreenCapture}
+            allowsFullscreenVideo={false} mediaPlaybackRequiresUserAction={false}
+            allowsInlineMediaPlayback scrollEnabled={false}
+            javaScriptEnabled domStorageEnabled mixedContentMode="compatibility"
+            setSupportMultipleWindows={false} originWhitelist={["*"]}
           />
         ) : (
           <View style={styles.noVideoOverlay}>
@@ -277,11 +483,51 @@ export default function LiveClassScreen() {
       </View>
 
       <View style={styles.chatContainer}>
+        {/* Chat header with viewer count + admin toggle */}
         <View style={styles.chatHeader}>
           <Ionicons name="chatbubbles" size={18} color={Colors.light.primary} />
           <Text style={styles.chatHeaderText}>Live Chat</Text>
-          <Text style={styles.chatCount}>{chatMessages.length}</Text>
+          {/* Viewer count */}
+          {viewerData?.visible && (
+            <View style={styles.viewerCountBadge}>
+              <Ionicons name="people" size={13} color={Colors.light.primary} />
+              <Text style={styles.viewerCountText}>{viewerData.count} online</Text>
+            </View>
+          )}
+          {/* Admin: raised hands indicator */}
+          {isAdmin && raisedHands.length > 0 && (
+            <View style={styles.raisedHandsBadge}>
+              <Text style={styles.raisedHandsText}>✋ {raisedHands.length}</Text>
+            </View>
+          )}
+          {/* Admin: toggle viewer count */}
+          {isAdmin && (
+            <Pressable
+              style={styles.adminToggleBtn}
+              onPress={() => toggleViewerCountMutation.mutate(!(liveClassData?.show_viewer_count ?? true))}
+            >
+              <Ionicons
+                name={(liveClassData?.show_viewer_count ?? true) ? "eye" : "eye-off"}
+                size={16} color={Colors.light.textMuted}
+              />
+            </Pressable>
+          )}
         </View>
+
+        {/* Admin: raised hands list */}
+        {isAdmin && raisedHands.length > 0 && (
+          <View style={styles.raisedHandsList}>
+            <Text style={styles.raisedHandsTitle}>Raised Hands</Text>
+            {raisedHands.map((h) => (
+              <View key={h.id} style={styles.raisedHandItem}>
+                <Text style={styles.raisedHandName}>✋ {h.user_name}</Text>
+                <Pressable style={styles.resolveBtn} onPress={() => resolveHandMutation.mutate(h.user_id)}>
+                  <Text style={styles.resolveBtnText}>Dismiss</Text>
+                </Pressable>
+              </View>
+            ))}
+          </View>
+        )}
 
         <FlatList
           ref={chatListRef}
@@ -300,6 +546,13 @@ export default function LiveClassScreen() {
         />
 
         <View style={[styles.inputRow, { paddingBottom: Math.max(bottomPadding, 8) }]}>
+          {/* Raise hand button */}
+          <Pressable
+            style={[styles.iconBtn, handRaised && styles.iconBtnActive]}
+            onPress={handleHandRaise}
+          >
+            <Text style={{ fontSize: 18 }}>✋</Text>
+          </Pressable>
           <TextInput
             style={styles.chatInput}
             value={chatMsg}
@@ -310,16 +563,21 @@ export default function LiveClassScreen() {
             returnKeyType="send"
             onSubmitEditing={handleSend}
           />
+          {/* Voice input button (web only) */}
+          {Platform.OS === "web" && (
+            <Pressable
+              style={[styles.iconBtn, isListening && styles.iconBtnActive]}
+              onPress={isListening ? stopListening : startListening}
+            >
+              <Ionicons name={isListening ? "mic" : "mic-outline"} size={20} color={isListening ? "#EF4444" : Colors.light.textMuted} />
+            </Pressable>
+          )}
           <Pressable
             style={[styles.sendBtn, !chatMsg.trim() && styles.sendBtnDisabled]}
             onPress={handleSend}
             disabled={!chatMsg.trim() || sendMsgMutation.isPending}
           >
-            {sendMsgMutation.isPending ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <Ionicons name="send" size={18} color="#fff" />
-            )}
+            {sendMsgMutation.isPending ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="send" size={18} color="#fff" />}
           </Pressable>
         </View>
       </View>
@@ -329,92 +587,57 @@ export default function LiveClassScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#000" },
-  header: {
-    flexDirection: "row", alignItems: "center", gap: 10,
-    paddingHorizontal: 14, paddingBottom: 8, backgroundColor: "#0A1628",
-  },
-  backBtn: {
-    width: 36, height: 36, borderRadius: 10,
-    backgroundColor: "rgba(255,255,255,0.12)", alignItems: "center", justifyContent: "center",
-  },
+  header: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 14, paddingBottom: 8, backgroundColor: "#0A1628" },
+  backBtn: { width: 36, height: 36, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.12)", alignItems: "center", justifyContent: "center" },
   headerCenter: { flex: 1, flexDirection: "row", alignItems: "center", gap: 10 },
-  liveIndicator: {
-    flexDirection: "row", alignItems: "center", gap: 5,
-    backgroundColor: "#DC2626", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6,
-  },
+  liveIndicator: { flexDirection: "row", alignItems: "center", gap: 5, backgroundColor: "#DC2626", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
   liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: "#fff" },
   liveText: { fontSize: 10, fontFamily: "Inter_700Bold", color: "#fff", letterSpacing: 1 },
   headerTitle: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: "#fff", flex: 1 },
-  playerContainer: {
-    width: "100%", backgroundColor: "#000", position: "relative", overflow: "hidden",
-  },
-  loadingOverlay: {
-    position: "absolute", top: 0, left: 0, right: 0, bottom: 0,
-    backgroundColor: "#000", alignItems: "center", justifyContent: "center", zIndex: 10,
-  },
-  noVideoOverlay: {
-    flex: 1, alignItems: "center", justifyContent: "center", gap: 8,
-  },
+  playerContainer: { width: "100%", backgroundColor: "#000", position: "relative", overflow: "hidden" },
+  loadingOverlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "#000", alignItems: "center", justifyContent: "center", zIndex: 10 },
+  noVideoOverlay: { flex: 1, alignItems: "center", justifyContent: "center", gap: 8 },
   noVideoText: { color: "#666", fontFamily: "Inter_400Regular", fontSize: 13 },
   chatContainer: { flex: 1, backgroundColor: Colors.light.background },
-  chatHeader: {
-    flexDirection: "row", alignItems: "center", gap: 8,
-    paddingHorizontal: 16, paddingVertical: 10,
-    borderBottomWidth: 1, borderBottomColor: Colors.light.border,
-  },
+  chatHeader: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: Colors.light.border },
   chatHeaderText: { fontSize: 15, fontFamily: "Inter_600SemiBold", color: Colors.light.text, flex: 1 },
-  chatCount: {
-    fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.textMuted,
-    backgroundColor: Colors.light.secondary, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10,
-  },
+  viewerCountBadge: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: Colors.light.secondary, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 },
+  viewerCountText: { fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.primary },
+  raisedHandsBadge: { backgroundColor: "#FEF3C7", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 },
+  raisedHandsText: { fontSize: 12, fontFamily: "Inter_700Bold", color: "#B45309" },
+  adminToggleBtn: { padding: 4 },
+  raisedHandsList: { backgroundColor: "#FFFBEB", borderBottomWidth: 1, borderBottomColor: "#FDE68A", paddingHorizontal: 12, paddingVertical: 8, gap: 6 },
+  raisedHandsTitle: { fontSize: 12, fontFamily: "Inter_700Bold", color: "#B45309", marginBottom: 4 },
+  raisedHandItem: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  raisedHandName: { fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.text },
+  resolveBtn: { backgroundColor: "#F59E0B", paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
+  resolveBtnText: { fontSize: 11, fontFamily: "Inter_600SemiBold", color: "#fff" },
   chatList: { flex: 1 },
   chatListContent: { padding: 12, gap: 8 },
   emptyChat: { alignItems: "center", justifyContent: "center", paddingVertical: 40, gap: 8 },
   emptyChatText: { fontSize: 13, color: "#999", fontFamily: "Inter_400Regular" },
-  inputRow: {
-    flexDirection: "row", alignItems: "center", gap: 8,
-    paddingHorizontal: 12, paddingTop: 8,
-    borderTopWidth: 1, borderTopColor: Colors.light.border,
-    backgroundColor: Colors.light.background,
-  },
-  chatInput: {
-    flex: 1, backgroundColor: Colors.light.secondary,
-    borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10,
-    fontSize: 14, fontFamily: "Inter_400Regular", color: Colors.light.text,
-    maxHeight: 80,
-  },
-  sendBtn: {
-    width: 40, height: 40, borderRadius: 20,
-    backgroundColor: Colors.light.primary, alignItems: "center", justifyContent: "center",
-  },
+  inputRow: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 10, paddingTop: 8, borderTopWidth: 1, borderTopColor: Colors.light.border, backgroundColor: Colors.light.background },
+  iconBtn: { width: 38, height: 38, borderRadius: 19, backgroundColor: Colors.light.secondary, alignItems: "center", justifyContent: "center" },
+  iconBtnActive: { backgroundColor: "#FEF3C7" },
+  chatInput: { flex: 1, backgroundColor: Colors.light.secondary, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 10, fontSize: 14, fontFamily: "Inter_400Regular", color: Colors.light.text, maxHeight: 80 },
+  sendBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: Colors.light.primary, alignItems: "center", justifyContent: "center" },
   sendBtnDisabled: { backgroundColor: "#ccc" },
 });
 
 const chatStyles = StyleSheet.create({
   msgRow: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
   adminMsgRow: {},
-  avatar: {
-    width: 30, height: 30, borderRadius: 15,
-    backgroundColor: Colors.light.secondary, alignItems: "center", justifyContent: "center",
-  },
+  avatar: { width: 30, height: 30, borderRadius: 15, backgroundColor: Colors.light.secondary, alignItems: "center", justifyContent: "center" },
   adminAvatar: { backgroundColor: "#FEF3C7" },
   avatarText: { fontSize: 12, fontFamily: "Inter_700Bold", color: Colors.light.textMuted },
-  msgBubble: {
-    flex: 1, backgroundColor: Colors.light.secondary,
-    borderRadius: 12, padding: 10, borderTopLeftRadius: 4,
-  },
+  msgBubble: { flex: 1, backgroundColor: Colors.light.secondary, borderRadius: 12, padding: 10, borderTopLeftRadius: 4 },
   adminBubble: { backgroundColor: "#FEF3C7" },
   msgHeader: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 3 },
   msgName: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
   adminName: { color: "#B45309" },
-  teacherBadge: {
-    backgroundColor: "#F59E0B", paddingHorizontal: 5, paddingVertical: 1, borderRadius: 3,
-  },
+  teacherBadge: { backgroundColor: "#F59E0B", paddingHorizontal: 5, paddingVertical: 1, borderRadius: 3 },
   teacherBadgeText: { fontSize: 8, fontFamily: "Inter_700Bold", color: "#fff", letterSpacing: 0.5 },
   msgTime: { fontSize: 10, color: "#999", fontFamily: "Inter_400Regular", marginLeft: "auto" as any },
   msgText: { fontSize: 13, fontFamily: "Inter_400Regular", color: Colors.light.text, lineHeight: 18 },
-  deleteBtn: {
-    width: 24, height: 24, borderRadius: 12,
-    alignItems: "center", justifyContent: "center",
-  },
+  deleteBtn: { width: 24, height: 24, borderRadius: 12, alignItems: "center", justifyContent: "center" },
 });

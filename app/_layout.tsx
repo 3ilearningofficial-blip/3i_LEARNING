@@ -6,7 +6,7 @@ import {
   useFonts,
 } from "@expo-google-fonts/inter";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { Stack, router } from "expo-router";
+import { Stack, router, useSegments } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import React, { useEffect } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -15,30 +15,94 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { queryClient } from "@/lib/query-client";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { StatusBar } from "expo-status-bar";
+import * as ScreenOrientation from "expo-screen-orientation";
+import { Platform, AppState, AppStateStatus } from "react-native";
+import { useDownloadManager } from "@/lib/useDownloadManager";
 
 SplashScreen.preventAutoHideAsync();
 
+// Lock to portrait on mobile (native)
+if (Platform.OS !== "web") {
+  ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
+}
+// Lock to portrait on mobile web (phone browsers)
+if (Platform.OS === "web" && typeof window !== "undefined" && typeof screen !== "undefined") {
+  try {
+    const lockOrientation = (screen as any).orientation?.lock;
+    if (lockOrientation && window.innerWidth < 768) {
+      (screen as any).orientation.lock("portrait-primary").catch(() => {});
+    }
+  } catch {}
+}
+
 function RootLayoutNav() {
   const { user, isLoading } = useAuth();
+  const segments = useSegments();
+  const { runForegroundAccessCheck } = useDownloadManager();
+
+  // AppState listener for foreground access check
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+
+    const handleAppStateChange = (nextAppState: AppStateStatus) => {
+      if (nextAppState === 'active') {
+        // App came to foreground - run access check
+        runForegroundAccessCheck().catch((error) => {
+          console.error('[RootLayout] Foreground access check failed:', error);
+        });
+      }
+    };
+
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+
+    return () => {
+      subscription.remove();
+    };
+  }, [runForegroundAccessCheck]);
 
   useEffect(() => {
-    if (!isLoading) {
-      if (user) {
-        router.replace("/(tabs)");
+    if (isLoading) return;
+    if (!segments || segments.length === 0) return;
+    const inAuthGroup = segments[0] === "(auth)";
+    const inProfileSetup = segments[0] === "profile-setup";
+    const inWelcome = segments[0] === "welcome";
+
+    if (user && inAuthGroup) {
+      // Just completed OTP/login — check profile
+      if (!user.profileComplete && user.role !== "admin") {
+        router.replace("/profile-setup");
       } else {
-        router.replace("/(auth)/login");
+        router.replace("/(tabs)");
       }
+    } else if (user && inWelcome) {
+      // Logged-in user on welcome page (e.g. after profile setup or "Get Started" tap)
+      if (!user.profileComplete && user.role !== "admin") {
+        router.replace("/profile-setup");
+      } else {
+        router.replace("/(tabs)");
+      }
+    } else if (user && !inAuthGroup && !inProfileSetup && !inWelcome && !user.profileComplete && user.role !== "admin") {
+      // Already logged in but profile incomplete
+      router.replace("/profile-setup");
+    } else if (!user && !inAuthGroup && !inWelcome) {
+      router.replace("/welcome");
     }
-  }, [user, isLoading]);
+  }, [user?.id, user?.profileComplete, isLoading, segments.join("/")]);
 
   return (
     <Stack screenOptions={{ headerShown: false }}>
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+      <Stack.Screen name="welcome" options={{ headerShown: false }} />
+      <Stack.Screen name="profile-setup" options={{ headerShown: false }} />
+      <Stack.Screen name="profile" options={{ headerShown: false }} />
+      <Stack.Screen name="store" options={{ headerShown: false }} />
+      <Stack.Screen name="notifications" options={{ headerShown: false }} />
       <Stack.Screen name="course/[id]" options={{ headerShown: false }} />
       <Stack.Screen name="lecture/[id]" options={{ headerShown: false }} />
       <Stack.Screen name="test/[id]" options={{ headerShown: false }} />
       <Stack.Screen name="test-result/[id]" options={{ headerShown: false }} />
+      <Stack.Screen name="test-folder/[id]" options={{ headerShown: false }} />
       <Stack.Screen name="live-class/[id]" options={{ headerShown: false }} />
       <Stack.Screen name="admin/index" options={{ headerShown: false }} />
       <Stack.Screen name="admin/course/[id]" options={{ headerShown: false }} />

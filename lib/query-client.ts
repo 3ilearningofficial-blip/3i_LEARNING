@@ -3,19 +3,24 @@ import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
 export function getApiUrl(): string {
   if (Platform.OS === "web" && typeof window !== "undefined" && window.location) {
-    // In dev, Expo runs on 8081 but backend is on 5000 — use EXPO_PUBLIC_DOMAIN if set
-    const host = process.env.EXPO_PUBLIC_DOMAIN || window.location.host;
-    const protocol = host.startsWith("localhost") ? "http" : "https";
+    let host = window.location.host;
+    // If running on Expo dev server (port 8081), API is on port 5000
+    if (host.endsWith(":8081")) {
+      host = host.replace(":8081", ":5000");
+    }
+    const isLocal = host.startsWith("localhost") || /^(192\.168\.|172\.|10\.)/.test(host);
+    const protocol = isLocal ? "http" : "https";
     return `${protocol}://${host}`;
   }
 
-  // On mobile, use EXPO_PUBLIC_DOMAIN
+  // On native mobile, use EXPO_PUBLIC_DOMAIN
   const host = process.env.EXPO_PUBLIC_DOMAIN;
   if (!host) {
     throw new Error("EXPO_PUBLIC_DOMAIN is not set");
   }
 
-  const protocol = host.startsWith("localhost") ? "http" : "https";
+  const isLocal = host.startsWith("localhost") || /^(192\.168\.|172\.|10\.)/.test(host);
+  const protocol = isLocal ? "http" : "https";
   return `${protocol}://${host}`;
 }
 
@@ -36,7 +41,48 @@ async function doFetch(url: string, options?: RequestInit): Promise<Response> {
     return globalThis.fetch(url, options);
   }
   const { fetch: expoFetch } = await import("expo/fetch");
-  return expoFetch(url, options);
+  const { body, ...rest } = options || {};
+  return expoFetch(url, { ...rest, body: body ?? undefined } as any);
+}
+
+async function getStoredToken(): Promise<string | null> {
+  try {
+    if (Platform.OS === "web" && typeof localStorage !== "undefined") {
+      // Use localStorage so token persists across tabs and page refreshes
+      const stored = localStorage.getItem("user");
+      if (stored) return JSON.parse(stored)?.sessionToken || null;
+    } else {
+      const { default: AsyncStorage } = await import("@react-native-async-storage/async-storage");
+      const stored = await AsyncStorage.getItem("user");
+      if (stored) return JSON.parse(stored)?.sessionToken || null;
+    }
+  } catch (_e) {}
+  return null;
+}
+
+// Authenticated fetch — always sends Bearer token + user ID
+export async function authFetch(url: string, options?: RequestInit): Promise<Response> {
+  const token = await getStoredToken();
+  const userId = await getStoredUserId();
+  const headers: Record<string, string> = { ...(options?.headers as Record<string, string> || {}) };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  if (userId) headers["X-User-Id"] = String(userId);
+  const res = await doFetch(url, { ...options, headers, credentials: "include" });
+  return res;
+}
+
+async function getStoredUserId(): Promise<number | null> {
+  try {
+    if (Platform.OS === "web" && typeof localStorage !== "undefined") {
+      const stored = localStorage.getItem("user");
+      if (stored) return JSON.parse(stored)?.id || null;
+    } else {
+      const { default: AsyncStorage } = await import("@react-native-async-storage/async-storage");
+      const stored = await AsyncStorage.getItem("user");
+      if (stored) return JSON.parse(stored)?.id || null;
+    }
+  } catch (_e) {}
+  return null;
 }
 
 export async function apiRequest(
@@ -46,10 +92,17 @@ export async function apiRequest(
 ): Promise<Response> {
   const baseUrl = getApiUrl();
   const url = new URL(route, baseUrl);
+  const token = await getStoredToken();
+
+  const headers: Record<string, string> = {};
+  if (data) headers["Content-Type"] = "application/json";
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const userId = await getStoredUserId();
+  if (userId) headers["X-User-Id"] = String(userId);
 
   const res = await doFetch(url.toString(), {
     method,
-    headers: data ? { "Content-Type": "application/json" } : {},
+    headers,
     body: data ? JSON.stringify(data) : undefined,
     credentials: "include",
   });
@@ -66,9 +119,14 @@ export const getQueryFn: <T>(options: {
   async ({ queryKey }) => {
     const baseUrl = getApiUrl();
     const url = new URL(queryKey.join("/") as string, baseUrl);
+    const token = await getStoredToken();
+
+    const headers: Record<string, string> = {};
+    if (token) headers["Authorization"] = `Bearer ${token}`;
 
     const res = await doFetch(url.toString(), {
       credentials: "include",
+      headers,
     });
 
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {

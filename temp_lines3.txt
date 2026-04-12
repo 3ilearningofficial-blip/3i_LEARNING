@@ -1,0 +1,31 @@
+﻿466:             </View>
+467:           )}
+468:           {isTestSeriesCourse ? (
+469:             <>
+470:               <View style={styles.quickStat}>
+471:                 <Ionicons name="document-text" size={16} color="rgba(255,255,255,0.8)" />
+472:                 <Text style={styles.quickStatText}>{course.pyq_count || 0} PYQ</Text>
+473:               </View>
+474:               <View style={styles.quickStat}>
+475:                 <Ionicons name="clipboard" size={16} color="rgba(255,255,255,0.8)" />
+476:                 <Text style={styles.quickStatText}>{course.mock_count || 0} Mock</Text>
+477:               </View>
+478:               <View style={styles.quickStat}>
+479:                 <Ionicons name="create" size={16} color="rgba(255,255,255,0.8)" />
+480:                 <Text style={styles.quickStatText}>{course.practice_count || 0} Practice</Text>
+481:               </View>
+482:             </>
+483:           ) : (
+484:             <>
+485:               <View style={styles.quickStat}>
+486:                 <Ionicons name="document-text" size={16} color="rgba(255,255,255,0.8)" />
+487:                 <Text style={styles.quickStatText}>{course.total_tests} Tests</Text>
+488:               </View>
+489:               <View style={styles.quickStat}>
+490:                 <Ionicons name="folder" size={16} color="rgba(255,255,255,0.8)" />
+491:                 <Text style={styles.quickStatText}>{course.total_materials || 0} Materials</Text>
+492:               </View>
+493:               <View style={styles.quickStat}>
+494:                 <Ionicons name="time" size={16} color="rgba(255,255,255,0.8)" />
+495:                 <Text style={styles.quickStatText}>{course.duration_hours}h</Text>
+496:               </View>

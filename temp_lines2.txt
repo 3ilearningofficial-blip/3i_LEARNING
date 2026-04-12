@@ -1,0 +1,31 @@
+﻿880:             <ScrollView style={{ maxHeight: 420 }} showsVerticalScrollIndicator={false}>
+881:               <FormField label="Test Title *" placeholder="e.g., Chapter 1 Test" value={newTest.title} onChangeText={(v) => setNewTest(p => ({ ...p, title: v }))} />
+882:               <FormField label="Description" placeholder="Test description" value={newTest.description} onChangeText={(v) => setNewTest(p => ({ ...p, description: v }))} />
+883:               <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.text, marginBottom: 6 }}>Category</Text>
+884:               <View style={{ flexDirection: "row", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+885:                 {TEST_TYPES.map((t) => (
+886:                   <Pressable key={t} onPress={() => setNewTest(p => ({ ...p, testType: t }))} style={{ paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8, backgroundColor: newTest.testType === t ? Colors.light.primary : "#F3F4F6", borderWidth: 1, borderColor: newTest.testType === t ? Colors.light.primary : "#E5E7EB" }}>
+887:                     <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: newTest.testType === t ? "#fff" : Colors.light.text, textTransform: "uppercase" }}>{t === "pyq" ? "PYQs" : t}</Text>
+888:                   </Pressable>
+889:                 ))}
+890:               </View>
+891:               <FormField label="Folder (optional)" placeholder="e.g., Algebra, Geometry" value={newTest.folderName} onChangeText={(v) => setNewTest(p => ({ ...p, folderName: v }))} />
+892:               <FormField label="Duration (minutes)" placeholder="60" value={newTest.durationMinutes} onChangeText={(v) => setNewTest(p => ({ ...p, durationMinutes: v }))} numeric />
+893:               <FormField label="Total Marks" placeholder="100" value={newTest.totalMarks} onChangeText={(v) => setNewTest(p => ({ ...p, totalMarks: v }))} numeric />
+894:               <FormField label="Passing Marks" placeholder="35" value={newTest.passingMarks} onChangeText={(v) => setNewTest(p => ({ ...p, passingMarks: v }))} numeric />
+895:             </ScrollView>
+896:             <ActionButton label="Create Test" onPress={() => addTestMutation.mutate(newTest)} disabled={!newTest.title} loading={addTestMutation.isPending} />
+897:           </View>
+898:         </View>
+899:       </Modal>
+900: 
+901:       {/* Add Question Modal */}
+902:       <Modal visible={showAddQuestion !== null} animationType="slide" transparent>
+903:         <View style={styles.modalOverlay}>
+904:           <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
+905:             <View style={styles.modalHeader}>
+906:               <Text style={styles.modalTitle}>Add Question</Text>
+907:               <Pressable onPress={() => { setShowAddQuestion(null); setNewQuestion(emptyQuestion); }}>
+908:                 <Ionicons name="close" size={24} color={Colors.light.text} />
+909:               </Pressable>
+910:             </View>

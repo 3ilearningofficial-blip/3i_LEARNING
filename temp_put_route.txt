@@ -1,0 +1,29 @@
+  app.put("/api/admin/live-classes/:id", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const { isLive, isCompleted, youtubeUrl, title, description, sectionTitle, durationMinutes, showViewerCount } = req.body;
+      const updates: string[] = [];
+      const params: unknown[] = [];
+      if (isLive !== undefined) { params.push(isLive); updates.push(`is_live = $${params.length}`); }
+      if (isCompleted !== undefined) { params.push(isCompleted); updates.push(`is_completed = $${params.length}`); }
+      if (youtubeUrl !== undefined) { params.push(youtubeUrl); updates.push(`youtube_url = $${params.length}`); }
+      if (title !== undefined) { params.push(title); updates.push(`title = $${params.length}`); }
+      if (description !== undefined) { params.push(description); updates.push(`description = $${params.length}`); }
+      if (sectionTitle !== undefined) { params.push(sectionTitle); updates.push(`section_title = $${params.length}`); }
+      if (durationMinutes !== undefined) { params.push(durationMinutes); updates.push(`duration_minutes = $${params.length}`); }
+      if (showViewerCount !== undefined) { params.push(showViewerCount); updates.push(`show_viewer_count = $${params.length}`); }
+      const { isPublic: isPublicVal } = req.body;
+      if (isPublicVal !== undefined) { params.push(isPublicVal); updates.push(`is_public = $${params.length}`); }
+      if (updates.length === 0) return res.status(400).json({ message: "No fields to update" });
+      params.push(req.params.id);
+      const result = await db.query(`UPDATE live_classes SET ${updates.join(", ")} WHERE id = $${params.length} RETURNING *`, params);
+      const liveClass = result.rows[0];
+
+      // Note: convertToLecture is disabled — live class recordings stay in Live tab only
+      // They are not duplicated as lecture entries
+
+      res.json(liveClass);
+    } catch (err) {
+      console.error("Update live class error:", err);
+      res.status(500).json({ message: "Failed to update live class" });
+    }
+  });

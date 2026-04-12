@@ -10,21 +10,25 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { apiRequest } from "@/lib/query-client";
+import { useAuth } from "@/context/AuthContext";
 import Colors from "@/constants/colors";
 
 export default function LoginScreen() {
   const insets = useSafeAreaInsets();
+  const { login } = useAuth();
   const [phone, setPhone] = useState("");
+  const [otp, setOtp] = useState("");
+  const [otpSent, setOtpSent] = useState(false);
+  const [devOtp, setDevOtp] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [error, setError] = useState("");
 
   const handleSendOTP = async () => {
     const trimmed = phone.trim();
-    if (!trimmed) {
-      Alert.alert("Error", "Enter your phone number");
-      return;
-    }
-    if (trimmed.length !== 10 || !/^\d{10}$/.test(trimmed)) {
-      Alert.alert("Error", "Enter a valid 10-digit phone number");
+    setError("");
+    if (!trimmed || trimmed.length !== 10 || !/^\d{10}$/.test(trimmed)) {
+      setError("Enter a valid 10-digit phone number");
       return;
     }
 
@@ -35,30 +39,46 @@ export default function LoginScreen() {
         type: "phone",
       });
       const data = await res.json();
-
-      if (!data.success) {
-        throw new Error(data.message || "Failed to send OTP");
-      }
+      if (!data.success) throw new Error(data.message || "Failed to send OTP");
 
       if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      router.push({
-        pathname: "/(auth)/otp",
-        params: {
-          phone: trimmed,
-          smsSent: data.smsSent ? "1" : "0",
-        },
-      });
+      setOtpSent(true);
+      setDevOtp(data.devOtp || "");
     } catch (err: any) {
-      const msg = err?.message || "";
-      if (msg.includes("429") || msg.includes("Too many")) {
-        Alert.alert("Please Wait", "Too many attempts. Please try again after a few minutes.");
-      } else if (msg.includes("Failed to fetch") || msg.includes("Network") || msg.includes("timeout")) {
-        Alert.alert("Connection Error", "Unable to connect to the server. Please check your internet connection and try again.");
-      } else {
-        Alert.alert("Failed", msg || "Could not send OTP. Please try again.");
-      }
+      const msg = (err?.message || "").replace(/^\d+:\s*/, "");
+      setError(msg || "Could not send OTP. Please try again.");
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleVerifyOTP = async () => {
+    if (!otp || otp.length < 4) { setError("Enter the OTP sent to your phone"); return; }
+    setError("");
+    setIsVerifying(true);
+    try {
+      const res = await apiRequest("POST", "/api/auth/verify-otp", {
+        identifier: phone.trim(),
+        type: "phone",
+        otp: otp.trim(),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message || "Verification failed");
+
+      if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      login(data.user);
+
+      // If profile not complete → go to profile setup
+      if (!data.user.profileComplete && data.user.role !== "admin") {
+        router.replace("/profile-setup");
+      } else {
+        router.replace("/(tabs)");
+      }
+    } catch (err: any) {
+      const msg = (err?.message || "").replace(/^\d+:\s*/, "");
+      setError(msg || "Invalid OTP. Please try again.");
+    } finally {
+      setIsVerifying(false);
     }
   };
 
@@ -66,28 +86,29 @@ export default function LoginScreen() {
     <LinearGradient colors={["#0A1628", "#1A2E50", "#0A1628"]} style={styles.container}>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
         <ScrollView
-          contentContainerStyle={[
-            styles.scrollContent,
-            {
-              paddingTop: insets.top + (Platform.OS === "web" ? 67 : 0) + 40,
-              paddingBottom: insets.bottom + (Platform.OS === "web" ? 34 : 0) + 20,
-            },
-          ]}
+          contentContainerStyle={[styles.scrollContent, { paddingTop: insets.top + 40, paddingBottom: insets.bottom + 20 }]}
           keyboardShouldPersistTaps="handled"
           bounces={false}
         >
+          <Pressable style={{ alignSelf: "flex-start", marginBottom: 8 }} onPress={() => router.replace("/(auth)/email-login" as any)}>
+            <Ionicons name="arrow-back" size={22} color="#fff" />
+          </Pressable>
+
           <View style={styles.logoSection}>
             <View style={styles.logoContainer}>
               <Image source={require("@/assets/images/logo.png")} style={styles.logoImage} resizeMode="cover" />
             </View>
             <Text style={styles.appName}>3i Learning</Text>
-            <Text style={styles.tagline}>Innovate | Interest | Intellect</Text>
+            <Text style={styles.tagline}>Innovate Interest, Inspire Excellence</Text>
           </View>
 
           <View style={styles.card}>
-            <Text style={styles.cardTitle}>Welcome</Text>
-            <Text style={styles.cardSubtitle}>Sign in with your phone number to continue</Text>
+            <Text style={styles.cardTitle}>{otpSent ? "Verify OTP" : "Welcome"}</Text>
+            <Text style={styles.cardSubtitle}>
+              {otpSent ? `OTP sent to +91 ${phone}` : "Enter your phone number to continue"}
+            </Text>
 
+            {/* Phone input */}
             <View style={styles.inputContainer}>
               <View style={styles.phonePrefix}>
                 <Text style={styles.phonePrefixText}>+91</Text>
@@ -99,34 +120,73 @@ export default function LoginScreen() {
                 keyboardType="phone-pad"
                 maxLength={10}
                 value={phone}
-                onChangeText={setPhone}
+                onChangeText={(t) => { setPhone(t); if (otpSent) { setOtpSent(false); setOtp(""); } }}
+                editable={!otpSent}
                 returnKeyType="done"
-                onSubmitEditing={handleSendOTP}
-                testID="phone-input"
               />
+              {otpSent && (
+                <Pressable onPress={() => { setOtpSent(false); setOtp(""); setError(""); }} style={{ paddingHorizontal: 8 }}>
+                  <Ionicons name="pencil" size={16} color={Colors.light.primary} />
+                </Pressable>
+              )}
             </View>
 
+            {/* OTP input — shows after Send OTP */}
+            {otpSent && (
+              <View style={{ gap: 8 }}>
+                <TextInput
+                  style={[styles.input, { textAlign: "center", fontSize: 22, fontFamily: "Inter_700Bold", letterSpacing: 8, borderWidth: 1, borderColor: Colors.light.border, borderRadius: 12, paddingVertical: 14, backgroundColor: Colors.light.background }]}
+                  placeholder="Enter OTP"
+                  placeholderTextColor={Colors.light.textMuted}
+                  keyboardType="number-pad"
+                  maxLength={6}
+                  value={otp}
+                  onChangeText={setOtp}
+                  autoFocus
+                />
+                {devOtp ? (
+                  <Text style={{ fontSize: 12, fontFamily: "Inter_500Medium", color: "#22C55E", textAlign: "center" }}>Dev OTP: {devOtp}</Text>
+                ) : null}
+                <Pressable onPress={handleSendOTP} disabled={isLoading}>
+                  <Text style={{ fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.primary, textAlign: "center" }}>
+                    {isLoading ? "Sending..." : "Resend OTP"}
+                  </Text>
+                </Pressable>
+              </View>
+            )}
+
+            {/* Error */}
+            {!!error && (
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "#FEE2E2", borderRadius: 10, padding: 12 }}>
+                <Ionicons name="alert-circle-outline" size={16} color="#EF4444" />
+                <Text style={{ flex: 1, fontSize: 13, fontFamily: "Inter_500Medium", color: "#DC2626" }}>{error}</Text>
+              </View>
+            )}
+
+            {/* Action button */}
             <Pressable
-              style={({ pressed }) => [
-                styles.sendBtn,
-                pressed && styles.sendBtnPressed,
-                isLoading && styles.sendBtnDisabled,
-              ]}
-              onPress={handleSendOTP}
-              disabled={isLoading}
-              testID="send-otp-btn"
+              style={({ pressed }) => [styles.sendBtn, pressed && styles.sendBtnPressed, (isLoading || isVerifying) && styles.sendBtnDisabled]}
+              onPress={otpSent ? handleVerifyOTP : handleSendOTP}
+              disabled={isLoading || isVerifying}
             >
               <LinearGradient colors={[Colors.light.primary, Colors.light.primaryDark]} style={styles.sendBtnGradient}>
-                {isLoading ? (
+                {(isLoading || isVerifying) ? (
                   <ActivityIndicator color="#fff" size="small" />
                 ) : (
                   <>
-                    <Text style={styles.sendBtnText}>Send OTP</Text>
+                    <Text style={styles.sendBtnText}>{otpSent ? "Verify & Continue" : "Send OTP"}</Text>
                     <Ionicons name="arrow-forward" size={20} color="#fff" />
                   </>
                 )}
               </LinearGradient>
             </Pressable>
+
+            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 4, paddingTop: 4 }}>
+              <Text style={{ fontSize: 13, fontFamily: "Inter_400Regular", color: Colors.light.textMuted }}>Already registered?</Text>
+              <Pressable onPress={() => router.replace("/(auth)/email-login" as any)}>
+                <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>Sign In</Text>
+              </Pressable>
+            </View>
           </View>
 
           <View style={styles.footer}>

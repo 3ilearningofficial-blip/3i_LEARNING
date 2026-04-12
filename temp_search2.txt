@@ -1,0 +1,9 @@
+﻿112:   const [testDuration, setTestDuration] = useState("60");
+113:   const [testTotalMarks, setTestTotalMarks] = useState("100");
+114:   const [testPassingMarks, setTestPassingMarks] = useState("35");
+247:       setTestDuration("60"); setTestTotalMarks("100");
+1216:                 <TextInput style={styles.formInput} placeholder="60" placeholderTextColor={Colors.light.textMuted} value
+1221:                   <TextInput style={styles.formInput} placeholder="100" placeholderTextColor={Colors.light.textMuted} va
+1224:                   <Text style={styles.formLabel}>Passing Marks</Text>
+1225:                   <TextInput style={styles.formInput} placeholder="35" placeholderTextColor={Colors.light.textMuted} val
+1233:                 durationMinutes: parseInt(testDuration) || 60, totalMarks: parseInt(testTotalMarks) || 100, passingMarks
