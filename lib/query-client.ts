@@ -3,9 +3,9 @@ import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
 export function getApiUrl(): string {
   if (Platform.OS === "web" && typeof window !== "undefined" && window.location) {
-    let host = window.location.host;
-    // If running on Expo dev server (port 8081), API is on port 5000
-    if (host.endsWith(":8081")) {
+    let host = process.env.EXPO_PUBLIC_DOMAIN || window.location.host;
+    // Default Expo web dev server mapping when no explicit API host is configured.
+    if (!process.env.EXPO_PUBLIC_DOMAIN && host.endsWith(":8081")) {
       host = host.replace(":8081", ":5000");
     }
     const isLocal = host.startsWith("localhost") || /^(192\.168\.|172\.|10\.)/.test(host);

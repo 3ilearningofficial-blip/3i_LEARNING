@@ -19,34 +19,43 @@ declare module "http" {
 
 function setupCors(app: express.Application) {
   app.use((req, res, next) => {
-    const origins = new Set<string>();
-
-    // Local development
-    origins.add("http://localhost:8081");
-    origins.add("http://localhost:5000");
-    origins.add("http://localhost:3000");
-
-    // Production domain
-    origins.add("https://3ilearning.in");
-    origins.add("https://www.3ilearning.in");
-
     const origin = req.header("origin");
+    const requestedHeaders = req.header("access-control-request-headers");
+    const isProduction = process.env.NODE_ENV === "production";
+    const allowedOrigins = new Set<string>([
+      "https://3ilearning.in",
+      "https://www.3ilearning.in",
+    ]);
 
-    // Allow any local network IP (192.168.x.x, 10.x.x.x, 172.16-31.x.x)
-    const isLocalNetwork = origin && /^http:\/\/(192\.168\.|10\.|172\.)/.test(origin);
+    // Accept local dev origins regardless of which port Expo/web tooling is using.
+    const isLocalDevOrigin = !!origin && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+    const isLocalNetworkOrigin = !!origin && /^https?:\/\/(192\.168\.|10\.|172\.(1[6-9]|2\d|3[0-1])\.)(\d{1,3}\.){2}\d{1,3}(:\d+)?$/.test(origin);
+    const isAllowedOrigin = !!origin && (
+      allowedOrigins.has(origin) ||
+      isLocalDevOrigin ||
+      isLocalNetworkOrigin ||
+      !isProduction
+    );
 
-    if (origin && (origins.has(origin) || isLocalNetwork)) {
+    if (isAllowedOrigin && origin) {
+      res.header("Vary", "Origin");
       res.header("Access-Control-Allow-Origin", origin);
       res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-      res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-User-Id");
+      res.header(
+        "Access-Control-Allow-Headers",
+        requestedHeaders || "Content-Type, Authorization, X-User-Id",
+      );
       res.header("Access-Control-Allow-Credentials", "true");
+      res.header("Access-Control-Max-Age", "86400");
     } else if (!origin) {
       // Same-origin or mobile requests — allow
       res.header("Access-Control-Allow-Origin", "*");
+    } else {
+      console.warn(`[CORS] Blocked origin: ${origin}`);
     }
 
     if (req.method === "OPTIONS") {
-      return res.sendStatus(200);
+      return res.sendStatus(204);
     }
 
     next();

@@ -15,7 +15,7 @@ import { useAuth } from "@/context/AuthContext";
 import Colors from "@/constants/colors";
 
 const ADMIN_EMAIL = "3ilearningofficial@gmail.com";
-const ADMIN_WHATSAPP = "9997198068";
+const ADMIN_WHATSAPP = "7536001034";
 
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();

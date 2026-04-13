@@ -265,7 +265,7 @@ async function sendOTPviaSMS(phone: string, otp: string): Promise<boolean> {
 }
 
 const ADMIN_EMAILS = ["3ilearningofficial@gmail.com"];
-const ADMIN_PHONES = ["9997198068"];
+const ADMIN_PHONES = ["7536001034"];
 
 // Recompute and persist all test-type counts for a course
 async function updateCourseTestCounts(courseId: number | string) {
