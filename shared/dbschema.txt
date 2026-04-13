@@ -1,0 +1,469 @@
+CREATE SCHEMA "public";
+CREATE TABLE "admin_notifications" (
+	"id" serial PRIMARY KEY,
+	"title" text NOT NULL,
+	"message" text NOT NULL,
+	"target" text DEFAULT 'all' NOT NULL,
+	"course_id" integer,
+	"sent_count" integer DEFAULT 0,
+	"is_hidden" boolean DEFAULT false,
+	"image_url" text,
+	"created_at" bigint DEFAULT (EXTRACT(epoch FROM now()) * (1000)::numeric)
+);
+CREATE TABLE "book_click_tracking" (
+	"id" serial PRIMARY KEY,
+	"user_id" integer UNIQUE,
+	"book_id" integer UNIQUE,
+	"click_count" integer DEFAULT 1,
+	"created_at" bigint DEFAULT (EXTRACT(epoch FROM now()) * (1000)::numeric),
+	CONSTRAINT "book_click_tracking_user_id_book_id_key" UNIQUE("user_id","book_id")
+);
+CREATE TABLE "book_purchases" (
+	"id" serial PRIMARY KEY,
+	"user_id" integer UNIQUE,
+	"book_id" integer UNIQUE,
+	"purchased_at" bigint DEFAULT (EXTRACT(epoch FROM now()) * (1000)::numeric),
+	CONSTRAINT "book_purchases_user_id_book_id_key" UNIQUE("user_id","book_id")
+);
+CREATE TABLE "books" (
+	"id" serial PRIMARY KEY,
+	"title" text NOT NULL,
+	"description" text,
+	"author" text,
+	"price" numeric DEFAULT '0',
+	"original_price" numeric DEFAULT '0',
+	"cover_url" text,
+	"file_url" text,
+	"is_published" boolean DEFAULT true,
+	"created_at" bigint DEFAULT (EXTRACT(epoch FROM now()) * (1000)::numeric),
+	"is_hidden" boolean DEFAULT false
+);
+CREATE TABLE "course_folders" (
+	"id" serial PRIMARY KEY,
+	"course_id" integer UNIQUE,
+	"name" text NOT NULL UNIQUE,
+	"type" text NOT NULL UNIQUE,
+	"is_hidden" boolean DEFAULT false,
+	"created_at" bigint DEFAULT (EXTRACT(epoch FROM now()) * (1000)::numeric),
+	CONSTRAINT "course_folders_course_id_name_type_key" UNIQUE("course_id","name","type")
+);
+CREATE TABLE "courses" (
+	"id" serial PRIMARY KEY,
+	"title" text NOT NULL,
+	"description" text,
+	"teacher_name" text DEFAULT '3i Learning' NOT NULL,
+	"price" numeric(10, 2) DEFAULT '0',
+	"original_price" numeric(10, 2) DEFAULT '0',
+	"category" text DEFAULT 'Mathematics',
+	"thumbnail" text,
+	"is_free" boolean DEFAULT false,
+	"total_lectures" integer DEFAULT 0,
+	"total_tests" integer DEFAULT 0,
+	"total_students" integer DEFAULT 0,
+	"level" text DEFAULT 'Beginner',
+	"duration_hours" numeric(5, 1) DEFAULT '0',
+	"is_published" boolean DEFAULT true,
+	"course_type" text DEFAULT 'standard',
+	"created_at" bigint DEFAULT (EXTRACT(epoch FROM now()) * (1000)::numeric),
+	"subject" text DEFAULT '',
+	"start_date" text,
+	"end_date" text,
+	"pyq_count" integer DEFAULT 0,
+	"mock_count" integer DEFAULT 0,
+	"practice_count" integer DEFAULT 0,
+	"cover_color" text
+);
+CREATE TABLE "daily_missions" (
+	"id" serial PRIMARY KEY,
+	"title" text NOT NULL,
+	"description" text,
+	"questions" jsonb DEFAULT '[]',
+	"mission_date" date,
+	"xp_reward" integer DEFAULT 50,
+	"mission_type" text DEFAULT 'daily_drill',
+	"course_id" integer
+);
+CREATE TABLE "doubts" (
+	"id" serial PRIMARY KEY,
+	"user_id" integer,
+	"question" text NOT NULL,
+	"answer" text,
+	"topic" text,
+	"status" text DEFAULT 'pending',
+	"created_at" bigint
+);
+CREATE TABLE "download_tokens" (
+	"id" serial PRIMARY KEY,
+	"token" text NOT NULL CONSTRAINT "download_tokens_token_key" UNIQUE,
+	"user_id" integer NOT NULL,
+	"item_type" text NOT NULL,
+	"item_id" integer NOT NULL,
+	"r2_key" text NOT NULL,
+	"used" boolean DEFAULT false NOT NULL,
+	"created_at" bigint DEFAULT (EXTRACT(epoch FROM now()) * (1000)::numeric) NOT NULL,
+	"expires_at" bigint NOT NULL,
+	CONSTRAINT "download_tokens_item_type_check" CHECK ((item_type = ANY (ARRAY['lecture'::text, 'material'::text])))
+);
+CREATE TABLE "enrollments" (
+	"id" serial PRIMARY KEY,
+	"user_id" integer UNIQUE,
+	"course_id" integer UNIQUE,
+	"progress_percent" integer DEFAULT 0,
+	"last_lecture_id" integer,
+	"enrolled_at" bigint DEFAULT (EXTRACT(epoch FROM now()) * (1000)::numeric),
+	"status" text DEFAULT 'active',
+	"valid_until" bigint,
+	CONSTRAINT "enrollments_user_id_course_id_key" UNIQUE("user_id","course_id")
+);
+CREATE TABLE "folder_purchases" (
+	"id" serial PRIMARY KEY,
+	"user_id" integer UNIQUE,
+	"folder_id" integer UNIQUE,
+	"amount" numeric(10, 2),
+	"payment_id" text,
+	"created_at" bigint DEFAULT (EXTRACT(epoch FROM now()) * (1000)::numeric),
+	CONSTRAINT "folder_purchases_user_id_folder_id_key" UNIQUE("user_id","folder_id")
+);
+CREATE TABLE "hand_raises" (
+	"id" serial PRIMARY KEY,
+	"live_class_id" integer NOT NULL UNIQUE,
+	"user_id" integer NOT NULL UNIQUE,
+	"user_name" text NOT NULL,
+	"raised_at" bigint NOT NULL,
+	"is_resolved" boolean DEFAULT false,
+	CONSTRAINT "hand_raises_live_class_id_user_id_key" UNIQUE("live_class_id","user_id")
+);
+CREATE TABLE "lecture_progress" (
+	"id" serial PRIMARY KEY,
+	"user_id" integer,
+	"lecture_id" integer,
+	"is_completed" boolean DEFAULT false,
+	"watch_percent" integer DEFAULT 0,
+	"completed_at" bigint
+);
+CREATE TABLE "lectures" (
+	"id" serial PRIMARY KEY,
+	"course_id" integer,
+	"title" text NOT NULL,
+	"description" text,
+	"video_url" text,
+	"video_type" text DEFAULT 'youtube',
+	"pdf_url" text,
+	"duration_minutes" integer DEFAULT 0,
+	"order_index" integer DEFAULT 0,
+	"is_free_preview" boolean DEFAULT false,
+	"section_title" text,
+	"download_allowed" boolean DEFAULT false,
+	"created_at" bigint DEFAULT (EXTRACT(epoch FROM now()) * (1000)::numeric)
+);
+CREATE TABLE "live_chat_messages" (
+	"id" serial PRIMARY KEY,
+	"live_class_id" integer NOT NULL,
+	"user_id" integer NOT NULL,
+	"user_name" text NOT NULL,
+	"message" text NOT NULL,
+	"is_admin" boolean DEFAULT false,
+	"created_at" bigint
+);
+CREATE TABLE "live_class_hand_raises" (
+	"id" serial PRIMARY KEY,
+	"live_class_id" integer NOT NULL UNIQUE,
+	"user_id" integer NOT NULL UNIQUE,
+	"user_name" text NOT NULL,
+	"raised_at" bigint NOT NULL,
+	CONSTRAINT "live_class_hand_raises_live_class_id_user_id_key" UNIQUE("live_class_id","user_id")
+);
+CREATE TABLE "live_class_viewers" (
+	"id" serial PRIMARY KEY,
+	"live_class_id" integer NOT NULL UNIQUE,
+	"user_id" integer NOT NULL UNIQUE,
+	"user_name" text NOT NULL,
+	"last_heartbeat" bigint NOT NULL,
+	CONSTRAINT "live_class_viewers_live_class_id_user_id_key" UNIQUE("live_class_id","user_id")
+);
+CREATE TABLE "live_classes" (
+	"id" serial PRIMARY KEY,
+	"title" text NOT NULL,
+	"description" text,
+	"course_id" integer,
+	"youtube_url" text,
+	"scheduled_at" bigint,
+	"is_live" boolean DEFAULT false,
+	"is_completed" boolean DEFAULT false,
+	"is_public" boolean DEFAULT false,
+	"created_at" bigint,
+	"show_viewer_count" boolean DEFAULT true,
+	"section_title" text,
+	"duration_minutes" integer DEFAULT 0,
+	"notify_email" boolean DEFAULT false,
+	"notify_bell" boolean DEFAULT false,
+	"is_free_preview" boolean DEFAULT false,
+	"stream_type" text DEFAULT 'rtmp',
+	"chat_mode" text DEFAULT 'public',
+	"recording_url" text,
+	"cf_stream_uid" text,
+	"cf_stream_key" text,
+	"cf_stream_rtmp_url" text,
+	"cf_playback_hls" text
+);
+CREATE TABLE "notifications" (
+	"id" serial PRIMARY KEY,
+	"user_id" integer,
+	"title" text NOT NULL,
+	"message" text NOT NULL,
+	"type" text DEFAULT 'info',
+	"is_read" boolean DEFAULT false,
+	"created_at" bigint,
+	"source" text DEFAULT 'system',
+	"expires_at" bigint,
+	"is_hidden" boolean DEFAULT false,
+	"admin_notif_id" integer,
+	"image_url" text
+);
+CREATE TABLE "payments" (
+	"id" serial PRIMARY KEY,
+	"user_id" integer,
+	"course_id" integer,
+	"razorpay_order_id" text,
+	"razorpay_payment_id" text,
+	"razorpay_signature" text,
+	"amount" numeric(10, 2),
+	"currency" text DEFAULT 'INR',
+	"status" text DEFAULT 'created',
+	"created_at" bigint,
+	"click_count" integer DEFAULT 1
+);
+CREATE TABLE "playing_with_neon" (
+	"id" serial PRIMARY KEY,
+	"name" text NOT NULL,
+	"value" real
+);
+CREATE TABLE "question_reports" (
+	"id" serial PRIMARY KEY,
+	"question_id" integer UNIQUE,
+	"user_id" integer UNIQUE,
+	"reason" text NOT NULL,
+	"details" text,
+	"created_at" bigint,
+	CONSTRAINT "question_reports_question_id_user_id_key" UNIQUE("question_id","user_id")
+);
+CREATE TABLE "questions" (
+	"id" serial PRIMARY KEY,
+	"test_id" integer,
+	"question_text" text NOT NULL,
+	"option_a" text NOT NULL,
+	"option_b" text NOT NULL,
+	"option_c" text NOT NULL,
+	"option_d" text NOT NULL,
+	"correct_option" text NOT NULL,
+	"explanation" text,
+	"topic" text,
+	"difficulty" text DEFAULT 'medium',
+	"marks" integer DEFAULT 4,
+	"negative_marks" numeric(3, 1) DEFAULT '1',
+	"order_index" integer DEFAULT 0,
+	"image_url" text,
+	"solution_image_url" text
+);
+CREATE TABLE "session" (
+	"sid" varchar PRIMARY KEY,
+	"sess" json NOT NULL,
+	"expire" timestamp NOT NULL
+);
+CREATE TABLE "site_settings" (
+	"key" text PRIMARY KEY,
+	"value" text NOT NULL,
+	"updated_at" bigint
+);
+CREATE TABLE "standalone_folders" (
+	"id" serial PRIMARY KEY,
+	"name" text NOT NULL UNIQUE,
+	"type" text NOT NULL UNIQUE,
+	"is_hidden" boolean DEFAULT false,
+	"created_at" bigint DEFAULT (EXTRACT(epoch FROM now()) * (1000)::numeric),
+	"category" text,
+	"price" numeric(10, 2) DEFAULT '0',
+	"original_price" numeric(10, 2) DEFAULT '0',
+	"is_free" boolean DEFAULT true,
+	"description" text,
+	CONSTRAINT "standalone_folders_name_type_key" UNIQUE("name","type")
+);
+CREATE TABLE "study_materials" (
+	"id" serial PRIMARY KEY,
+	"title" text NOT NULL,
+	"description" text,
+	"file_url" text,
+	"file_type" text DEFAULT 'pdf',
+	"course_id" integer,
+	"is_free" boolean DEFAULT true,
+	"section_title" text,
+	"download_allowed" boolean DEFAULT false,
+	"created_at" bigint DEFAULT (EXTRACT(epoch FROM now()) * (1000)::numeric)
+);
+CREATE TABLE "support_messages" (
+	"id" serial PRIMARY KEY,
+	"user_id" integer,
+	"sender" text NOT NULL,
+	"message" text NOT NULL,
+	"is_read" boolean DEFAULT false,
+	"created_at" bigint DEFAULT (EXTRACT(epoch FROM now()) * (1000)::numeric),
+	CONSTRAINT "support_messages_sender_check" CHECK ((sender = ANY (ARRAY['user'::text, 'admin'::text])))
+);
+CREATE TABLE "test_attempts" (
+	"id" serial PRIMARY KEY,
+	"user_id" integer,
+	"test_id" integer,
+	"answers" jsonb DEFAULT '{}',
+	"score" numeric DEFAULT '0',
+	"total_marks" integer DEFAULT 0,
+	"percentage" numeric(5, 2) DEFAULT '0',
+	"time_taken_seconds" integer DEFAULT 0,
+	"status" text DEFAULT 'in_progress',
+	"started_at" bigint,
+	"completed_at" bigint,
+	"correct" integer DEFAULT 0,
+	"incorrect" integer DEFAULT 0,
+	"attempted" integer DEFAULT 0,
+	"question_times" jsonb
+);
+CREATE TABLE "test_purchases" (
+	"id" serial PRIMARY KEY,
+	"user_id" integer UNIQUE,
+	"test_id" integer UNIQUE,
+	"razorpay_order_id" text,
+	"razorpay_payment_id" text,
+	"created_at" bigint DEFAULT (EXTRACT(epoch FROM now()) * (1000)::numeric),
+	CONSTRAINT "test_purchases_user_id_test_id_key" UNIQUE("user_id","test_id")
+);
+CREATE TABLE "tests" (
+	"id" serial PRIMARY KEY,
+	"title" text NOT NULL,
+	"description" text,
+	"course_id" integer,
+	"duration_minutes" integer DEFAULT 60,
+	"total_questions" integer DEFAULT 0,
+	"total_marks" integer DEFAULT 100,
+	"passing_marks" integer DEFAULT 35,
+	"test_type" text DEFAULT 'practice',
+	"folder_name" text,
+	"is_published" boolean DEFAULT true,
+	"created_at" bigint,
+	"difficulty" text DEFAULT 'moderate',
+	"scheduled_at" bigint,
+	"mini_course_id" integer,
+	"price" numeric(10, 2) DEFAULT '0'
+);
+CREATE TABLE "user_downloads" (
+	"id" serial PRIMARY KEY,
+	"user_id" integer NOT NULL UNIQUE,
+	"item_type" text NOT NULL UNIQUE,
+	"item_id" integer NOT NULL UNIQUE,
+	"local_filename" text,
+	"downloaded_at" bigint DEFAULT (EXTRACT(epoch FROM now()) * (1000)::numeric),
+	CONSTRAINT "user_downloads_user_id_item_type_item_id_key" UNIQUE("user_id","item_type","item_id"),
+	CONSTRAINT "user_downloads_item_type_check" CHECK ((item_type = ANY (ARRAY['lecture'::text, 'material'::text])))
+);
+CREATE TABLE "user_missions" (
+	"id" serial PRIMARY KEY,
+	"user_id" integer,
+	"mission_id" integer,
+	"is_completed" boolean DEFAULT false,
+	"score" integer DEFAULT 0,
+	"completed_at" bigint,
+	"time_taken" integer DEFAULT 0,
+	"answers" jsonb DEFAULT '{}',
+	"incorrect" integer DEFAULT 0,
+	"skipped" integer DEFAULT 0
+);
+CREATE TABLE "users" (
+	"id" serial PRIMARY KEY,
+	"name" text DEFAULT '' NOT NULL,
+	"email" text CONSTRAINT "users_email_key" UNIQUE,
+	"phone" text CONSTRAINT "users_phone_key" UNIQUE,
+	"role" text DEFAULT 'student' NOT NULL,
+	"device_id" text,
+	"session_token" text,
+	"otp" text,
+	"otp_expires_at" bigint,
+	"created_at" bigint DEFAULT (EXTRACT(epoch FROM now()) * (1000)::numeric),
+	"date_of_birth" text,
+	"photo_url" text,
+	"profile_complete" boolean DEFAULT false,
+	"is_blocked" boolean DEFAULT false,
+	"last_active_at" bigint,
+	"password_hash" text
+);
+CREATE UNIQUE INDEX "admin_notifications_pkey" ON "admin_notifications" ("id");
+CREATE UNIQUE INDEX "book_click_tracking_pkey" ON "book_click_tracking" ("id");
+CREATE UNIQUE INDEX "book_click_tracking_user_id_book_id_key" ON "book_click_tracking" ("user_id","book_id");
+CREATE UNIQUE INDEX "book_purchases_pkey" ON "book_purchases" ("id");
+CREATE UNIQUE INDEX "book_purchases_user_id_book_id_key" ON "book_purchases" ("user_id","book_id");
+CREATE UNIQUE INDEX "books_pkey" ON "books" ("id");
+CREATE UNIQUE INDEX "course_folders_course_id_name_type_key" ON "course_folders" ("course_id","name","type");
+CREATE UNIQUE INDEX "course_folders_pkey" ON "course_folders" ("id");
+CREATE UNIQUE INDEX "courses_pkey" ON "courses" ("id");
+CREATE UNIQUE INDEX "daily_missions_pkey" ON "daily_missions" ("id");
+CREATE UNIQUE INDEX "doubts_pkey" ON "doubts" ("id");
+CREATE UNIQUE INDEX "download_tokens_pkey" ON "download_tokens" ("id");
+CREATE UNIQUE INDEX "download_tokens_token_key" ON "download_tokens" ("token");
+CREATE INDEX "idx_download_tokens_expires" ON "download_tokens" ("expires_at");
+CREATE INDEX "idx_download_tokens_token" ON "download_tokens" ("token");
+CREATE UNIQUE INDEX "enrollments_pkey" ON "enrollments" ("id");
+CREATE UNIQUE INDEX "enrollments_user_id_course_id_key" ON "enrollments" ("user_id","course_id");
+CREATE INDEX "idx_enrollments_course_id" ON "enrollments" ("course_id");
+CREATE INDEX "idx_enrollments_user_id" ON "enrollments" ("user_id");
+CREATE UNIQUE INDEX "folder_purchases_pkey" ON "folder_purchases" ("id");
+CREATE UNIQUE INDEX "folder_purchases_user_id_folder_id_key" ON "folder_purchases" ("user_id","folder_id");
+CREATE UNIQUE INDEX "hand_raises_live_class_id_user_id_key" ON "hand_raises" ("live_class_id","user_id");
+CREATE UNIQUE INDEX "hand_raises_pkey" ON "hand_raises" ("id");
+CREATE INDEX "idx_lecture_progress_user" ON "lecture_progress" ("user_id");
+CREATE UNIQUE INDEX "lecture_progress_pkey" ON "lecture_progress" ("id");
+CREATE UNIQUE INDEX "lecture_progress_user_lecture" ON "lecture_progress" ("user_id","lecture_id");
+CREATE UNIQUE INDEX "lectures_pkey" ON "lectures" ("id");
+CREATE UNIQUE INDEX "live_chat_messages_pkey" ON "live_chat_messages" ("id");
+CREATE UNIQUE INDEX "live_class_hand_raises_live_class_id_user_id_key" ON "live_class_hand_raises" ("live_class_id","user_id");
+CREATE UNIQUE INDEX "live_class_hand_raises_pkey" ON "live_class_hand_raises" ("id");
+CREATE UNIQUE INDEX "live_class_viewers_live_class_id_user_id_key" ON "live_class_viewers" ("live_class_id","user_id");
+CREATE UNIQUE INDEX "live_class_viewers_pkey" ON "live_class_viewers" ("id");
+CREATE UNIQUE INDEX "live_classes_pkey" ON "live_classes" ("id");
+CREATE INDEX "idx_notifications_user_id" ON "notifications" ("user_id");
+CREATE UNIQUE INDEX "notifications_pkey" ON "notifications" ("id");
+CREATE UNIQUE INDEX "payments_pkey" ON "payments" ("id");
+CREATE UNIQUE INDEX "payments_user_course_unique" ON "payments" ("user_id","course_id");
+CREATE UNIQUE INDEX "playing_with_neon_pkey" ON "playing_with_neon" ("id");
+CREATE UNIQUE INDEX "question_reports_pkey" ON "question_reports" ("id");
+CREATE UNIQUE INDEX "question_reports_question_id_user_id_key" ON "question_reports" ("question_id","user_id");
+CREATE INDEX "idx_questions_test_id" ON "questions" ("test_id");
+CREATE UNIQUE INDEX "questions_pkey" ON "questions" ("id");
+CREATE UNIQUE INDEX "session_pkey" ON "session" ("sid");
+CREATE UNIQUE INDEX "site_settings_pkey" ON "site_settings" ("key");
+CREATE UNIQUE INDEX "standalone_folders_name_type_key" ON "standalone_folders" ("name","type");
+CREATE UNIQUE INDEX "standalone_folders_pkey" ON "standalone_folders" ("id");
+CREATE UNIQUE INDEX "study_materials_pkey" ON "study_materials" ("id");
+CREATE INDEX "idx_support_messages_user_id" ON "support_messages" ("user_id");
+CREATE UNIQUE INDEX "support_messages_pkey" ON "support_messages" ("id");
+CREATE INDEX "idx_test_attempts_test_id" ON "test_attempts" ("test_id");
+CREATE INDEX "idx_test_attempts_user_test" ON "test_attempts" ("user_id","test_id");
+CREATE UNIQUE INDEX "test_attempts_pkey" ON "test_attempts" ("id");
+CREATE UNIQUE INDEX "test_purchases_pkey" ON "test_purchases" ("id");
+CREATE UNIQUE INDEX "test_purchases_user_id_test_id_key" ON "test_purchases" ("user_id","test_id");
+CREATE INDEX "idx_tests_course_id" ON "tests" ("course_id");
+CREATE UNIQUE INDEX "tests_pkey" ON "tests" ("id");
+CREATE UNIQUE INDEX "user_downloads_pkey" ON "user_downloads" ("id");
+CREATE UNIQUE INDEX "user_downloads_user_id_item_type_item_id_key" ON "user_downloads" ("user_id","item_type","item_id");
+CREATE UNIQUE INDEX "user_missions_pkey" ON "user_missions" ("id");
+CREATE UNIQUE INDEX "user_missions_unique" ON "user_missions" ("user_id","mission_id");
+CREATE UNIQUE INDEX "users_email_key" ON "users" ("email");
+CREATE UNIQUE INDEX "users_phone_key" ON "users" ("phone");
+CREATE UNIQUE INDEX "users_pkey" ON "users" ("id");
+ALTER TABLE "book_click_tracking" ADD CONSTRAINT "book_click_tracking_book_id_fkey" FOREIGN KEY ("book_id") REFERENCES "books"("id") ON DELETE CASCADE;
+ALTER TABLE "book_purchases" ADD CONSTRAINT "book_purchases_book_id_fkey" FOREIGN KEY ("book_id") REFERENCES "books"("id");
+ALTER TABLE "download_tokens" ADD CONSTRAINT "download_tokens_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE;
+ALTER TABLE "enrollments" ADD CONSTRAINT "enrollments_course_id_fkey" FOREIGN KEY ("course_id") REFERENCES "courses"("id") ON DELETE CASCADE;
+ALTER TABLE "enrollments" ADD CONSTRAINT "enrollments_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE;
+ALTER TABLE "folder_purchases" ADD CONSTRAINT "folder_purchases_folder_id_fkey" FOREIGN KEY ("folder_id") REFERENCES "standalone_folders"("id") ON DELETE CASCADE;
+ALTER TABLE "lectures" ADD CONSTRAINT "lectures_course_id_fkey" FOREIGN KEY ("course_id") REFERENCES "courses"("id") ON DELETE CASCADE;
+ALTER TABLE "question_reports" ADD CONSTRAINT "question_reports_question_id_fkey" FOREIGN KEY ("question_id") REFERENCES "questions"("id") ON DELETE CASCADE;
+ALTER TABLE "study_materials" ADD CONSTRAINT "study_materials_course_id_fkey" FOREIGN KEY ("course_id") REFERENCES "courses"("id") ON DELETE CASCADE;
+ALTER TABLE "test_purchases" ADD CONSTRAINT "test_purchases_test_id_fkey" FOREIGN KEY ("test_id") REFERENCES "tests"("id") ON DELETE CASCADE;
+ALTER TABLE "user_downloads" ADD CONSTRAINT "user_downloads_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE;

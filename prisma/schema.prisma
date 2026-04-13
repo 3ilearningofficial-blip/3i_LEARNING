@@ -7,19 +7,67 @@ datasource db {
   provider = "postgresql"
 }
 
-model User {
-  id           Int     @id @default(autoincrement())
-  name         String  @default("")
-  email        String? @unique
-  phone        String? @unique
-  role         String  @default("student")
-  deviceId     String? @map("device_id")
-  sessionToken String? @map("session_token")
-  otp          String?
-  otpExpiresAt BigInt? @map("otp_expires_at")
-  createdAt    BigInt? @map("created_at")
+model AdminNotification {
+  id        Int      @id @default(autoincrement())
+  title     String
+  message   String
+  target    String   @default("all")
+  courseId  Int?     @map("course_id")
+  sentCount Int?     @default(0) @map("sent_count")
+  isHidden  Boolean? @default(false) @map("is_hidden")
+  imageUrl  String?  @map("image_url")
+  createdAt BigInt?  @map("created_at")
 
-  @@map("users")
+  @@map("admin_notifications")
+}
+
+model BookClickTracking {
+  id         Int     @id @default(autoincrement())
+  userId     Int?    @unique @map("user_id")
+  bookId     Int?    @unique @map("book_id")
+  clickCount Int?    @default(1) @map("click_count")
+  createdAt  BigInt? @map("created_at")
+
+  @@unique([userId, bookId], map: "book_click_tracking_user_id_book_id_key")
+  @@map("book_click_tracking")
+}
+
+model BookPurchase {
+  id          Int     @id @default(autoincrement())
+  userId      Int?    @unique @map("user_id")
+  bookId      Int?    @unique @map("book_id")
+  purchasedAt BigInt? @map("purchased_at")
+
+  @@unique([userId, bookId], map: "book_purchases_user_id_book_id_key")
+  @@map("book_purchases")
+}
+
+model Book {
+  id            Int      @id @default(autoincrement())
+  title         String
+  description   String?
+  author        String?
+  price         Decimal? @default(0)
+  originalPrice Decimal? @default(0) @map("original_price")
+  coverUrl      String?  @map("cover_url")
+  fileUrl       String?  @map("file_url")
+  isPublished   Boolean? @default(true) @map("is_published")
+  createdAt     BigInt?  @map("created_at")
+  isHidden      Boolean? @default(false) @map("is_hidden")
+
+  @@map("books")
+}
+
+model CourseFolder {
+  id        Int      @id @default(autoincrement())
+  courseId  Int?     @unique @map("course_id")
+  name      String   @unique
+  type      String   @unique
+  isHidden  Boolean? @default(false) @map("is_hidden")
+  createdAt BigInt?  @map("created_at")
+
+  @@unique([courseId, name, type], map: "course_folders_course_id_name_type_key")
+  @@map("course_folders")
 }
 
 model Course {
@@ -40,8 +88,109 @@ model Course {
   isPublished   Boolean? @default(true) @map("is_published")
   courseType    String?  @default("standard") @map("course_type")
   createdAt     BigInt?  @map("created_at")
+  subject       String?  @default("")
+  startDate     String?  @map("start_date")
+  endDate       String?  @map("end_date")
+  pyqCount      Int?     @default(0) @map("pyq_count")
+  mockCount     Int?     @default(0) @map("mock_count")
+  practiceCount Int?     @default(0) @map("practice_count")
+  coverColor    String?  @map("cover_color")
 
   @@map("courses")
+}
+
+model DailyMission {
+  id          Int       @id @default(autoincrement())
+  title       String
+  description String?
+  questions   Json?     @default("[]")
+  missionDate DateTime? @map("mission_date") @db.Date
+  xpReward    Int?      @default(50) @map("xp_reward")
+  missionType String?   @default("daily_drill") @map("mission_type")
+  courseId    Int?      @map("course_id")
+
+  @@map("daily_missions")
+}
+
+model Doubt {
+  id        Int     @id @default(autoincrement())
+  userId    Int?    @map("user_id")
+  question  String
+  answer    String?
+  topic     String?
+  status    String? @default("pending")
+  createdAt BigInt? @map("created_at")
+
+  @@map("doubts")
+}
+
+model DownloadToken {
+  id        Int      @id @default(autoincrement())
+  token     String   @unique
+  userId    Int      @map("user_id")
+  itemType  String   @map("item_type")
+  itemId    Int      @map("item_id")
+  r2Key     String   @map("r2_key")
+  used      Boolean  @default(false)
+  createdAt BigInt   @map("created_at")
+  expiresAt BigInt   @map("expires_at")
+
+  @@index([expiresAt], map: "idx_download_tokens_expires")
+  @@index([token], map: "idx_download_tokens_token")
+  @@map("download_tokens")
+}
+
+model Enrollment {
+  id              Int     @id @default(autoincrement())
+  userId          Int?    @unique @map("user_id")
+  courseId        Int?    @unique @map("course_id")
+  progressPercent Int?    @default(0) @map("progress_percent")
+  lastLectureId   Int?    @map("last_lecture_id")
+  enrolledAt      BigInt? @map("enrolled_at")
+  status          String? @default("active")
+  validUntil      BigInt? @map("valid_until")
+
+  @@unique([userId, courseId], map: "enrollments_user_id_course_id_key")
+  @@index([courseId], map: "idx_enrollments_course_id")
+  @@index([userId], map: "idx_enrollments_user_id")
+  @@map("enrollments")
+}
+
+model FolderPurchase {
+  id        Int      @id @default(autoincrement())
+  userId    Int?     @unique @map("user_id")
+  folderId  Int?     @unique @map("folder_id")
+  amount    Decimal? @db.Decimal(10, 2)
+  paymentId String?  @map("payment_id")
+  createdAt BigInt?  @map("created_at")
+
+  @@unique([userId, folderId], map: "folder_purchases_user_id_folder_id_key")
+  @@map("folder_purchases")
+}
+
+model HandRaise {
+  id         Int      @id @default(autoincrement())
+  liveClassId Int     @unique @map("live_class_id")
+  userId     Int      @unique @map("user_id")
+  userName   String   @map("user_name")
+  raisedAt   BigInt   @map("raised_at")
+  isResolved Boolean? @default(false) @map("is_resolved")
+
+  @@unique([liveClassId, userId], map: "hand_raises_live_class_id_user_id_key")
+  @@map("hand_raises")
+}
+
+model LectureProgress {
+  id           Int      @id @default(autoincrement())
+  userId       Int?     @map("user_id")
+  lectureId    Int?     @map("lecture_id")
+  isCompleted  Boolean? @default(false) @map("is_completed")
+  watchPercent Int?     @default(0) @map("watch_percent")
+  completedAt  BigInt?  @map("completed_at")
+
+  @@unique([userId, lectureId], map: "lecture_progress_user_lecture")
+  @@index([userId], map: "idx_lecture_progress_user")
+  @@map("lecture_progress")
 }
 
 model Lecture {
@@ -56,31 +205,181 @@ model Lecture {
   orderIndex      Int?     @default(0) @map("order_index")
   isFreePreview   Boolean? @default(false) @map("is_free_preview")
   sectionTitle    String?  @map("section_title")
+  downloadAllowed Boolean? @default(false) @map("download_allowed")
   createdAt       BigInt?  @map("created_at")
 
   @@map("lectures")
 }
 
-model Enrollment {
-  id              Int     @id @default(autoincrement())
-  userId          Int?    @map("user_id")
-  courseId        Int?    @map("course_id")
-  progressPercent Int?    @default(0) @map("progress_percent")
-  lastLectureId   Int?    @map("last_lecture_id")
-  enrolledAt      BigInt? @map("enrolled_at")
+model LiveChatMessage {
+  id          Int      @id @default(autoincrement())
+  liveClassId Int      @map("live_class_id")
+  userId      Int      @map("user_id")
+  userName    String   @map("user_name")
+  message     String
+  isAdmin     Boolean? @default(false) @map("is_admin")
+  createdAt   BigInt?  @map("created_at")
 
-  @@map("enrollments")
+  @@map("live_chat_messages")
 }
 
-model LectureProgress {
+model LiveClassHandRaise {
+  id          Int    @id @default(autoincrement())
+  liveClassId Int    @unique @map("live_class_id")
+  userId      Int    @unique @map("user_id")
+  userName    String @map("user_name")
+  raisedAt    BigInt @map("raised_at")
+
+  @@unique([liveClassId, userId], map: "live_class_hand_raises_live_class_id_user_id_key")
+  @@map("live_class_hand_raises")
+}
+
+model LiveClassViewer {
+  id            Int    @id @default(autoincrement())
+  liveClassId   Int    @unique @map("live_class_id")
+  userId        Int    @unique @map("user_id")
+  userName      String @map("user_name")
+  lastHeartbeat BigInt @map("last_heartbeat")
+
+  @@unique([liveClassId, userId], map: "live_class_viewers_live_class_id_user_id_key")
+  @@map("live_class_viewers")
+}
+
+model LiveClass {
+  id              Int      @id @default(autoincrement())
+  title           String
+  description     String?
+  courseId        Int?     @map("course_id")
+  youtubeUrl      String?  @map("youtube_url")
+  scheduledAt     BigInt?  @map("scheduled_at")
+  isLive          Boolean? @default(false) @map("is_live")
+  isCompleted     Boolean? @default(false) @map("is_completed")
+  isPublic        Boolean? @default(false) @map("is_public")
+  createdAt       BigInt?  @map("created_at")
+  showViewerCount Boolean? @default(true) @map("show_viewer_count")
+  sectionTitle    String?  @map("section_title")
+  durationMinutes Int?     @default(0) @map("duration_minutes")
+  notifyEmail     Boolean? @default(false) @map("notify_email")
+  notifyBell      Boolean? @default(false) @map("notify_bell")
+  isFreePreview   Boolean? @default(false) @map("is_free_preview")
+  streamType      String?  @default("rtmp") @map("stream_type")
+  chatMode        String?  @default("public") @map("chat_mode")
+  recordingUrl    String?  @map("recording_url")
+  cfStreamUid     String?  @map("cf_stream_uid")
+  cfStreamKey     String?  @map("cf_stream_key")
+  cfStreamRtmpUrl String?  @map("cf_stream_rtmp_url")
+  cfPlaybackHls   String?  @map("cf_playback_hls")
+
+  @@map("live_classes")
+}
+
+model Notification {
   id           Int      @id @default(autoincrement())
   userId       Int?     @map("user_id")
-  lectureId    Int?     @map("lecture_id")
-  isCompleted  Boolean? @default(false) @map("is_completed")
-  watchPercent Int?     @default(0) @map("watch_percent")
-  completedAt  BigInt?  @map("completed_at")
+  title        String
+  message      String
+  type         String?  @default("info")
+  isRead       Boolean? @default(false) @map("is_read")
+  createdAt    BigInt?  @map("created_at")
+  source       String?  @default("system")
+  expiresAt    BigInt?  @map("expires_at")
+  isHidden     Boolean? @default(false) @map("is_hidden")
+  adminNotifId Int?     @map("admin_notif_id")
+  imageUrl     String?  @map("image_url")
 
-  @@map("lecture_progress")
+  @@index([userId], map: "idx_notifications_user_id")
+  @@map("notifications")
+}
+
+model Payment {
+  id                Int      @id @default(autoincrement())
+  userId            Int?     @map("user_id")
+  courseId          Int?     @map("course_id")
+  razorpayOrderId   String?  @map("razorpay_order_id")
+  razorpayPaymentId String?  @map("razorpay_payment_id")
+  razorpaySignature String?  @map("razorpay_signature")
+  amount            Decimal? @db.Decimal(10, 2)
+  currency          String?  @default("INR")
+  status            String?  @default("created")
+  createdAt         BigInt?  @map("created_at")
+  clickCount        Int?     @default(1) @map("click_count")
+
+  @@unique([userId, courseId], map: "payments_user_course_unique")
+  @@map("payments")
+}
+
+model PlayingWithNeon {
+  id    Int     @id @default(autoincrement())
+  name  String
+  value Float?
+
+  @@map("playing_with_neon")
+}
+
+model QuestionReport {
+  id         Int     @id @default(autoincrement())
+  questionId Int?    @unique @map("question_id")
+  userId     Int?    @unique @map("user_id")
+  reason     String
+  details    String?
+  createdAt  BigInt? @map("created_at")
+
+  @@unique([questionId, userId], map: "question_reports_question_id_user_id_key")
+  @@map("question_reports")
+}
+
+model Question {
+  id               Int      @id @default(autoincrement())
+  testId           Int?     @map("test_id")
+  questionText     String   @map("question_text")
+  optionA          String   @map("option_a")
+  optionB          String   @map("option_b")
+  optionC          String   @map("option_c")
+  optionD          String   @map("option_d")
+  correctOption    String   @map("correct_option")
+  explanation      String?
+  topic            String?
+  difficulty       String?  @default("medium")
+  marks            Int?     @default(4)
+  negativeMarks    Decimal? @default(1) @map("negative_marks") @db.Decimal(3, 1)
+  orderIndex       Int?     @default(0) @map("order_index")
+  imageUrl         String?  @map("image_url")
+  solutionImageUrl String?  @map("solution_image_url")
+
+  @@index([testId], map: "idx_questions_test_id")
+  @@map("questions")
+}
+
+model Session {
+  sid    String   @id @db.VarChar
+  sess   Json
+  expire DateTime
+
+  @@map("session")
+}
+
+model SiteSetting {
+  key       String  @id
+  value     String
+  updatedAt BigInt? @map("updated_at")
+
+  @@map("site_settings")
+}
+
+model StandaloneFolder {
+  id            Int      @id @default(autoincrement())
+  name          String   @unique
+  type          String   @unique
+  isHidden      Boolean? @default(false) @map("is_hidden")
+  createdAt     BigInt?  @map("created_at")
+  category      String?
+  price         Decimal? @default(0) @db.Decimal(10, 2)
+  originalPrice Decimal? @default(0) @map("original_price") @db.Decimal(10, 2)
+  isFree        Boolean? @default(true) @map("is_free")
+  description   String?
+
+  @@unique([name, type], map: "standalone_folders_name_type_key")
+  @@map("standalone_folders")
 }
 
 model StudyMaterial {
@@ -98,6 +397,52 @@ model StudyMaterial {
   @@map("study_materials")
 }
 
+model SupportMessage {
+  id        Int      @id @default(autoincrement())
+  userId    Int?     @map("user_id")
+  sender    String
+  message   String
+  isRead    Boolean? @default(false) @map("is_read")
+  createdAt BigInt?  @map("created_at")
+
+  @@index([userId], map: "idx_support_messages_user_id")
+  @@map("support_messages")
+}
+
+model TestAttempt {
+  id               Int      @id @default(autoincrement())
+  userId           Int?     @map("user_id")
+  testId           Int?     @map("test_id")
+  answers          Json?    @default("{}")
+  score            Decimal? @default(0)
+  totalMarks       Int?     @default(0) @map("total_marks")
+  percentage       Decimal? @default(0) @db.Decimal(5, 2)
+  timeTakenSeconds Int?     @default(0) @map("time_taken_seconds")
+  status           String?  @default("in_progress")
+  startedAt        BigInt?  @map("started_at")
+  completedAt      BigInt?  @map("completed_at")
+  correct          Int?     @default(0)
+  incorrect        Int?     @default(0)
+  attempted        Int?     @default(0)
+  questionTimes    Json?    @map("question_times")
+
+  @@index([testId], map: "idx_test_attempts_test_id")
+  @@index([userId, testId], map: "idx_test_attempts_user_test")
+  @@map("test_attempts")
+}
+
+model TestPurchase {
+  id                Int     @id @default(autoincrement())
+  userId            Int?    @unique @map("user_id")
+  testId            Int?    @unique @map("test_id")
+  razorpayOrderId   String? @map("razorpay_order_id")
+  razorpayPaymentId String? @map("razorpay_payment_id")
+  createdAt         BigInt? @map("created_at")
+
+  @@unique([userId, testId], map: "test_purchases_user_id_test_id_key")
+  @@map("test_purchases")
+}
+
 model Test {
   id              Int      @id @default(autoincrement())
   title           String
@@ -111,56 +456,25 @@ model Test {
   folderName      String?  @map("folder_name")
   isPublished     Boolean? @default(true) @map("is_published")
   createdAt       BigInt?  @map("created_at")
+  difficulty      String?  @default("moderate")
+  scheduledAt     BigInt?  @map("scheduled_at")
+  miniCourseId    Int?     @map("mini_course_id")
+  price           Decimal? @default(0) @db.Decimal(10, 2)
 
+  @@index([courseId], map: "idx_tests_course_id")
   @@map("tests")
 }
 
-model Question {
-  id            Int      @id @default(autoincrement())
-  testId        Int?     @map("test_id")
-  questionText  String   @map("question_text")
-  optionA       String   @map("option_a")
-  optionB       String   @map("option_b")
-  optionC       String   @map("option_c")
-  optionD       String   @map("option_d")
-  correctOption String   @map("correct_option")
-  explanation   String?
-  topic         String?
-  difficulty    String?  @default("medium")
-  marks         Int?     @default(4)
-  negativeMarks Decimal? @default(1) @map("negative_marks") @db.Decimal(3, 1)
-  orderIndex    Int?     @default(0) @map("order_index")
+model UserDownload {
+  id            Int     @id @default(autoincrement())
+  userId        Int     @unique @map("user_id")
+  itemType      String  @unique @map("item_type")
+  itemId        Int     @unique @map("item_id")
+  localFilename String? @map("local_filename")
+  downloadedAt  BigInt? @map("downloaded_at")
 
-  @@map("questions")
-}
-
-model TestAttempt {
-  id               Int      @id @default(autoincrement())
-  userId           Int?     @map("user_id")
-  testId           Int?     @map("test_id")
-  answers          Json?    @default("{}")
-  score            Int?     @default(0)
-  totalMarks       Int?     @default(0) @map("total_marks")
-  percentage       Decimal? @default(0) @db.Decimal(5, 2)
-  timeTakenSeconds Int?     @default(0) @map("time_taken_seconds")
-  status           String?  @default("in_progress")
-  startedAt        BigInt?  @map("started_at")
-  completedAt      BigInt?  @map("completed_at")
-
-  @@map("test_attempts")
-}
-
-model DailyMission {
-  id          Int       @id @default(autoincrement())
-  title       String
-  description String?
-  questions   Json?     @default("[]")
-  missionDate DateTime? @map("mission_date") @db.Date
-  xpReward    Int?      @default(50) @map("xp_reward")
-  missionType String?   @default("daily_drill") @map("mission_type")
-  courseId    Int?      @map("course_id")
-
-  @@map("daily_missions")
+  @@unique([userId, itemType, itemId], map: "user_downloads_user_id_item_type_item_id_key")
+  @@map("user_downloads")
 }
 
 model UserMission {
@@ -170,72 +484,32 @@ model UserMission {
   isCompleted Boolean? @default(false) @map("is_completed")
   score       Int?     @default(0)
   completedAt BigInt?  @map("completed_at")
+  timeTaken   Int?     @default(0) @map("time_taken")
+  answers     Json?    @default("{}")
+  incorrect   Int?     @default(0)
+  skipped     Int?     @default(0)
 
+  @@unique([userId, missionId], map: "user_missions_unique")
   @@map("user_missions")
 }
 
-model Notification {
-  id        Int      @id @default(autoincrement())
-  userId    Int?     @map("user_id")
-  title     String
-  message   String
-  type      String?  @default("info")
-  isRead    Boolean? @default(false) @map("is_read")
-  createdAt BigInt?  @map("created_at")
+model User {
+  id              Int      @id @default(autoincrement())
+  name            String   @default("")
+  email           String?  @unique
+  phone           String?  @unique
+  role            String   @default("student")
+  deviceId        String?  @map("device_id")
+  sessionToken    String?  @map("session_token")
+  otp             String?
+  otpExpiresAt    BigInt?  @map("otp_expires_at")
+  createdAt       BigInt?  @map("created_at")
+  dateOfBirth     String?  @map("date_of_birth")
+  photoUrl        String?  @map("photo_url")
+  profileComplete Boolean? @default(false) @map("profile_complete")
+  isBlocked       Boolean? @default(false) @map("is_blocked")
+  lastActiveAt    BigInt?  @map("last_active_at")
+  passwordHash    String?  @map("password_hash")
 
-  @@map("notifications")
-}
-
-model LiveClass {
-  id          Int      @id @default(autoincrement())
-  title       String
-  description String?
-  courseId    Int?     @map("course_id")
-  youtubeUrl  String?  @map("youtube_url")
-  scheduledAt BigInt?  @map("scheduled_at")
-  isLive      Boolean? @default(false) @map("is_live")
-  isCompleted Boolean? @default(false) @map("is_completed")
-  isPublic    Boolean? @default(false) @map("is_public")
-  createdAt   BigInt?  @map("created_at")
-
-  @@map("live_classes")
-}
-
-model LiveChatMessage {
-  id          Int      @id @default(autoincrement())
-  liveClassId Int      @map("live_class_id")
-  userId      Int      @map("user_id")
-  userName    String   @map("user_name")
-  message     String
-  isAdmin     Boolean? @default(false) @map("is_admin")
-  createdAt   BigInt?  @map("created_at")
-
-  @@map("live_chat_messages")
-}
-
-model Doubt {
-  id        Int     @id @default(autoincrement())
-  userId    Int?    @map("user_id")
-  question  String
-  answer    String?
-  topic     String?
-  status    String? @default("pending")
-  createdAt BigInt? @map("created_at")
-
-  @@map("doubts")
-}
-
-model Payment {
-  id                Int      @id @default(autoincrement())
-  userId            Int?     @map("user_id")
-  courseId          Int?     @map("course_id")
-  razorpayOrderId   String?  @map("razorpay_order_id")
-  razorpayPaymentId String?  @map("razorpay_payment_id")
-  razorpaySignature String?  @map("razorpay_signature")
-  amount            Decimal? @db.Decimal(10, 2)
-  currency          String?  @default("INR")
-  status            String?  @default("created")
-  createdAt         BigInt?  @map("created_at")
-
-  @@map("payments")
+  @@map("users")
 }
