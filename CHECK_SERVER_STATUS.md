@@ -12,6 +12,7 @@ Look for errors like:
 - ❌ `500 Internal Server Error` → Server crash
 - ❌ `404 Not Found` → Wrong API endpoint
 
+
 ---
 
 ### 2. Check Server Terminal
