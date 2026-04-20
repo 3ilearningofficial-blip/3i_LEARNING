@@ -2,29 +2,10 @@ import { Platform } from "react-native";
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
 export function getApiUrl(): string {
-  if (Platform.OS === "web" && typeof window !== "undefined" && window.location) {
-    let host = window.location.host;
-    // If running on Expo dev server (port 8081), API is on port 5000
-    if (host.endsWith(":8081")) {
-      host = host.replace(":8081", ":5000");
-    }
-    const isLocal = host.startsWith("localhost") || /^(192\.168\.|172\.|10\.)/.test(host);
-    const protocol = isLocal ? "http" : "https";
-    return `${protocol}://${host}`;
-  }
-
-  // On native mobile, use EXPO_PUBLIC_DOMAIN
-  const host = process.env.EXPO_PUBLIC_DOMAIN;
-  if (!host) {
-    throw new Error("EXPO_PUBLIC_DOMAIN is not set");
-  }
-
-  const isLocal = host.startsWith("localhost") || /^(192\.168\.|172\.|10\.)/.test(host);
-  const protocol = isLocal ? "http" : "https";
-  return `${protocol}://${host}`;
+  return process.env.EXPO_PUBLIC_API_URL || "https://api.3ilearning.in/api";
 }
 
-async function throwIfResNotOk(res: Response) {
+ async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
     let text: string;
     try {
