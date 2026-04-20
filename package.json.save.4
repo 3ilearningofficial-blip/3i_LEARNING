@@ -4,8 +4,8 @@
   "version": "1.0.0",
   "scripts": {
     "postinstall": "patch-package",
-    "expo:dev": "npx expo start --localhost",
-    "server:dev": "npx tsx server/index.ts",
+    "expo:dev": "npx expo start --localhost"
+    "server:dev": "node --env-file=.env --experimental-require-module node_modules/tsx/dist/cli.mjs server/index.ts",
     "expo:start:static:build": "npx expo start --no-dev --minify --localhost",
     "expo:static:build": "node scripts/build.js",
     "server:build": "esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --outdir=server_dist",
@@ -46,7 +46,6 @@
     "expo-secure-store": "^55.0.13",
     "expo-splash-screen": "~31.0.12",
     "expo-status-bar": "~3.0.9",
-    "expo-web-browser": "~15.0.10",
     "express": "^5.0.1",
     "express-rate-limit": "^8.3.0",
     "express-session": "^1.19.0",

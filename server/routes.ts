@@ -13,7 +13,10 @@ const uploadLarge = multer({ storage: multer.memoryStorage(), limits: { fileSize
 
 // Larger pool for 1000 concurrent users
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString: process.env.DATABASE_URL || "postgresql://neondb_owner:npg_lCd8Q5kexsDH@ep-flat-mud-a1l5ph0p-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require",
+  ssl: {
+    rejectUnauthorized: false,
+  },
   max: 10,
   min: 1,
   connectionTimeoutMillis: 10000,
