@@ -5450,6 +5450,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
     proxyReq.end();
   });
 
+  // ✅ Upload Presign Route
+app.post("/upload/presign", async (req, res) => {
+  try {
+    const { filename, contentType, folder } = req.body;
+
+    if (!filename) {
+      return res.status(400).json({ message: "Filename required" });
+    }
+
+    const key = `${folder || "uploads"}/${Date.now()}_${filename}`;
+
+    return res.json({
+      uploadUrl: "https://dummy-upload-url.com",
+      publicUrl: `/api/media/${key}`,
+      key,
+    });
+
+  } catch (err) {
+    console.error("Presign error:", err);
+    res.status(500).json({ message: "Presign failed" });
+  }
+});
+
+// ✅ Media Route
+app.get("/api/media/:key", async (req, res) => {
+  return res.status(404).json({ message: "File not found (temp)" });
+});
+  
   const httpServer = createServer(app);
   return httpServer;
 }
