@@ -33,6 +33,7 @@ interface TestItem {
   duration_minutes: number;
   test_type: string;
   folder_name?: string;
+  difficulty?: string;
 }
 
 interface Material {
@@ -42,6 +43,7 @@ interface Material {
   file_url: string;
   file_type: string;
   section_title?: string;
+  download_allowed?: boolean;
 }
 
 interface LiveClassItem {
@@ -580,6 +582,25 @@ export default function AdminCourseScreen() {
 
   return (
     <View style={styles.container}>
+      {/* Global upload progress overlay */}
+      {uploading && (
+        <View style={{
+          position: "absolute", top: 0, left: 0, right: 0, zIndex: 9999,
+          backgroundColor: "#0A1628", paddingVertical: 10, paddingHorizontal: 16,
+          flexDirection: "row", alignItems: "center", gap: 12,
+        }}>
+          <ActivityIndicator size="small" color="#fff" />
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontSize: 12, color: "rgba(255,255,255,0.7)", fontFamily: "Inter_500Medium", marginBottom: 4 }}>
+              Uploading... {uploadProgress}%
+            </Text>
+            <View style={{ height: 4, backgroundColor: "rgba(255,255,255,0.2)", borderRadius: 2, overflow: "hidden" }}>
+              <View style={{ height: 4, backgroundColor: "#22C55E", borderRadius: 2, width: `${uploadProgress}%` as any }} />
+            </View>
+          </View>
+          <Text style={{ fontSize: 13, fontFamily: "Inter_700Bold", color: "#22C55E" }}>{uploadProgress}%</Text>
+        </View>
+      )}
       <LinearGradient colors={["#0A1628", "#1A2E50"]} style={[styles.header, { paddingTop: topPadding + 8 }]}>
         <View style={styles.headerRow}>
           <Pressable style={styles.backBtn} onPress={() => { if (router.canGoBack()) router.back(); else router.replace("/admin" as any); }}>
@@ -751,7 +772,7 @@ export default function AdminCourseScreen() {
                 <View style={styles.testCardRow}>
                   <Text style={styles.testCardTitle}>{test.title}</Text>
                   <View style={{ flexDirection: "row", gap: 6, alignItems: "center" }}>
-                    <Pressable style={[styles.deleteItemBtn, { backgroundColor: "#EEF2FF" }]} onPress={() => setEditTest({ ...test, durationMinutes: String(test.duration_minutes), totalMarks: String(test.total_marks), difficulty: test.difficulty || "moderate" })}>
+                    <Pressable style={[styles.deleteItemBtn, { backgroundColor: "#EEF2FF" }]} onPress={() => setEditTest({ ...test, durationMinutes: String(test.duration_minutes), difficulty: test.difficulty || "moderate" })}>
                       <Ionicons name="pencil-outline" size={14} color={Colors.light.primary} />
                     </Pressable>
                     <Pressable style={styles.deleteItemBtn} onPress={() => {

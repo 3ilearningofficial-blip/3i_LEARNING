@@ -3650,7 +3650,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const uploadUrl = await getSignedUrl(r2, command, { expiresIn: 600 });
       const protocol = req.headers["x-forwarded-proto"] || req.protocol || "http";
       const host = req.headers["x-forwarded-host"] || req.headers.host || `localhost:${process.env.PORT || 5000}`;
-      const publicUrl = `${protocol}://${host}/api/media/${key}`;
+      const publicUrl = key;
       res.json({ uploadUrl, publicUrl, key });
     } catch (err: any) {
       console.error("[R2] Profile presign error:", err?.message || err);
@@ -5450,8 +5450,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     proxyReq.end();
   });
 
-  // ✅ Upload Presign Route
-app.post("/upload/presign", async (req, res) => {
+  app.post("/upload/presign", async (req, res) => {
   try {
     const { filename, contentType, folder } = req.body;
 
@@ -5459,23 +5458,68 @@ app.post("/upload/presign", async (req, res) => {
       return res.status(400).json({ message: "Filename required" });
     }
 
-    const key = `${folder || "uploads"}/${Date.now()}_${filename}`;
+    const { PutObjectCommand } = await import("@aws-sdk/client-s3");
+    const { getSignedUrl } = await import("@aws-sdk/s3-request-presigner");
 
-    return res.json({
-      uploadUrl: "https://dummy-upload-url.com",
-      publicUrl: `/api/media/${key}`,
+    const r2 = await getR2Client();
+
+    const safeFilename = filename.replace(/\s+/g, "_");
+const key = `${folder || "materials"}/${Date.now()}_${safeFilename}`;
+
+    const command = new PutObjectCommand({
+      Bucket: process.env.R2_BUCKET_NAME,
+      Key: key,
+      ContentType: contentType,
+    });
+
+    const uploadUrl = await getSignedUrl(r2, command, { expiresIn: 600 });
+
+    // ✅ IMPORTANT FIX
+    const publicUrl = key;
+
+    res.json({
+      uploadUrl,
+      publicUrl,
       key,
     });
 
   } catch (err) {
-    console.error("Presign error:", err);
-    res.status(500).json({ message: "Presign failed" });
+    console.error("[UPLOAD ERROR]", err);
+    res.status(500).json({ message: "Failed to generate upload URL" });
   }
 });
 
-// ✅ Media Route
-app.get("/api/media/:key", async (req, res) => {
-  return res.status(404).json({ message: "File not found (temp)" });
+app.get("/api/media/:key(*)", async (req, res) => {
+  try {
+    const key = (req.params as any).key;
+
+    const r2 = await getR2Client();
+    const { GetObjectCommand } = await import("@aws-sdk/client-s3");
+
+    const command = new GetObjectCommand({
+      Bucket: process.env.R2_BUCKET_NAME,
+      Key: key,
+    });
+
+    const response = await r2.send(command);
+
+    if (!response.Body) {
+      return res.status(404).send("File not found");
+    }
+
+    res.setHeader("Content-Type", response.ContentType || "application/octet-stream");
+    res.setHeader("Content-Length", response.ContentLength?.toString() || "");
+
+    // 🔥 IMPORTANT FIXES
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("X-Frame-Options", "ALLOWALL");
+
+    response.Body.pipe(res);
+
+  } catch (err) {
+    console.error("[MEDIA ERROR]", err);
+    res.status(500).send("Error fetching file");
+  }
 });
   
   const httpServer = createServer(app);

@@ -28,6 +28,8 @@ interface Question {
   topic: string;
   difficulty: string;
   order_index: number;
+  image_url?: string;
+  solution_image_url?: string;
 }
 interface TestData {
   id: number;

@@ -3076,6 +3076,25 @@ export default function AdminDashboard() {
 
   return (
     <View style={styles.container}>
+      {/* Upload progress overlay — shown when any file is uploading */}
+      {lessonUploading && (
+        <View style={{
+          position: "absolute", top: 0, left: 0, right: 0, zIndex: 9999,
+          backgroundColor: "#0A1628", paddingVertical: 10, paddingHorizontal: 16,
+          flexDirection: "row", alignItems: "center", gap: 12,
+        }}>
+          <ActivityIndicator size="small" color="#fff" />
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontSize: 12, color: "rgba(255,255,255,0.7)", fontFamily: "Inter_500Medium", marginBottom: 4 }}>
+              Uploading... {lessonUploadProgress}%
+            </Text>
+            <View style={{ height: 4, backgroundColor: "rgba(255,255,255,0.2)", borderRadius: 2, overflow: "hidden" }}>
+              <View style={{ height: 4, backgroundColor: "#22C55E", borderRadius: 2, width: `${lessonUploadProgress}%` as any }} />
+            </View>
+          </View>
+          <Text style={{ fontSize: 13, fontFamily: "Inter_700Bold", color: "#22C55E" }}>{lessonUploadProgress}%</Text>
+        </View>
+      )}
       {isWideSidebar ? (
         <View style={{ flex: 1, flexDirection: "row" }}>
           {/* Sidebar */}

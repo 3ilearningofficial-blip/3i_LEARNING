@@ -4,7 +4,7 @@ import { QueryClient, QueryFunction } from "@tanstack/react-query";
 export function getApiUrl(): string {
   // Always use backend domain in web
   if (typeof window !== "undefined") {
-    return "https://api.3ilearning.in";
+    return "https://api.3ilearning.in/api";
   }
 
   // fallback for mobile / expo
