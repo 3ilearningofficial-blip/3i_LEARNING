@@ -19,7 +19,7 @@ export async function uploadToR2(
   contentType: string,
   folder: UploadFolder = "uploads",
   onProgress?: (pct: number) => void,
-  presignEndpoint: string = "/upload/presign"
+  presignEndpoint: string = "/api/upload/presign"
 ): Promise<UploadResult> {
   let presignRes;
 
