@@ -1115,17 +1115,58 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ==================== AUTH ROUTES ====================
 
   // Update last_active_at for any authenticated API request
-  app.use("/api", async (req, res, next) => {
-    try {
-      const sessionUser = (req.session as any).user;
-      const headerUserId = req.headers["x-user-id"];
-      const userId = sessionUser?.id || (headerUserId ? parseInt(String(headerUserId)) : null);
-      if (userId && userId > 0) {
-        db.query("UPDATE users SET last_active_at = $1 WHERE id = $2", [Date.now(), userId]).catch(() => {});
+  app.use("/api", async (req: any, res, next) => {
+  try {
+    let sessionUser = req.session?.user;
+
+    // 🔥 If no session, check Bearer token
+    if (!sessionUser) {
+      const authHeader = req.headers.authorization;
+
+      if (authHeader && authHeader.startsWith("Bearer ")) {
+        const token = authHeader.split(" ")[1];
+
+        const result = await db.query(
+          "SELECT * FROM users WHERE session_token = $1",
+          [token]
+        );
+
+        if (result.rows.length > 0) {
+          const user = result.rows[0];
+
+          sessionUser = {
+            id: user.id,
+            name: user.name,
+            email: user.email,
+            phone: user.phone,
+            role: user.role,
+            sessionToken: user.session_token,
+          };
+
+          req.session = req.session || {};
+          req.session.user = sessionUser;
+        }
       }
-    } catch (_e) {}
+    }
+
+    // ✅ Update last active
+    const headerUserId = req.headers["x-user-id"];
+    const userId =
+      sessionUser?.id ||
+      (headerUserId ? parseInt(String(headerUserId)) : null);
+
+    if (userId && userId > 0) {
+      db.query(
+        "UPDATE users SET last_active_at = $1 WHERE id = $2",
+        [Date.now(), userId]
+      ).catch(() => {});
+    }
+
     next();
-  });
+  } catch (_e) {
+    next();
+  }
+});
 
   app.post("/api/auth/send-otp", async (req: Request, res: Response) => {
     console.log("OTP request received:", req.body);
