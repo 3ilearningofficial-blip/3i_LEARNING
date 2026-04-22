@@ -1,19 +1,24 @@
 import { Platform } from "react-native";
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
-export function getApiUrl(): string {
-  // Always use backend domain in web
+export function getWebUrl(): string {
+  // Web (browser)
   if (typeof window !== "undefined") {
-    return "https://api.3ilearning.in/api";
+    return window.location.origin;
   }
 
-  // fallback for mobile / expo
+  // Mobile / Expo fallback
   const host = process.env.EXPO_PUBLIC_DOMAIN;
-  if (!host) {
-    throw new Error("EXPO_PUBLIC_DOMAIN is not set");
+
+  if (host) {
+    return `https://${host}`;
   }
 
-  return `https://${host}`;
+  // Final fallback
+  return "https://3ilearning.in";
+}
+  export function getApiUrl(): string {
+  return "https://api.3ilearning.in/api";
 }
 
 async function throwIfResNotOk(res: Response) {
