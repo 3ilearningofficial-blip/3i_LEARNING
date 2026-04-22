@@ -24,40 +24,31 @@ declare module "http" {
   }
 }
 
+import cors from "cors";
+
 function setupCors(app: express.Application) {
-  app.use((req, res, next) => {
-    const origins = new Set<string>();
+  app.use(cors({
+  origin: function (
+    origin: string | undefined,
+    callback: (err: Error | null, allow?: boolean) => void
+  ) {
+    if (!origin) return callback(null, true);
 
-    // Local development
-    origins.add("http://localhost:8081");
-    origins.add("http://localhost:5000");
-    origins.add("http://localhost:3000");
-
-    // Production domain
-    origins.add("https://3ilearning.in");
-    origins.add("https://www.3ilearning.in");
-
-    const origin = req.header("origin");
-
-    // Allow any local network IP (192.168.x.x, 10.x.x.x, 172.16-31.x.x)
-    const isLocalNetwork = origin && /^http:\/\/(192\.168\.|10\.|172\.)/.test(origin);
-
-    if (origin && (origins.has(origin) || isLocalNetwork)) {
-      res.header("Access-Control-Allow-Origin", origin);
-      res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-      res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-User-Id");
-      res.header("Access-Control-Allow-Credentials", "true");
-    } else if (!origin) {
-      // Same-origin or mobile requests — allow
-      res.header("Access-Control-Allow-Origin", "*");
+    if (
+      origin.includes("vercel.app") ||
+      origin === "https://3ilearning.in" ||
+      origin === "https://www.3ilearning.in" ||
+      origin === "https://api.3ilearning.in"
+    ) {
+      return callback(null, true);
     }
 
-    if (req.method === "OPTIONS") {
-      return res.sendStatus(200);
-    }
-
-    next();
-  });
+    return callback(new Error("Not allowed by CORS"));
+  },
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-User-Id"],
+  credentials: true,
+}));
 }
 
 function setupBodyParsing(app: express.Application) {

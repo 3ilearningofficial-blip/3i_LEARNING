@@ -1,6 +1,6 @@
 import * as SecureStore from 'expo-secure-store';
 import * as FileSystem from 'expo-file-system';
-import CryptoJS from 'react-native-crypto-js';
+import CryptoJS from "crypto-js";
 import * as Crypto from 'expo-crypto';
 
 const KEY_STORAGE_KEY = 'download_encryption_key';
@@ -137,7 +137,7 @@ class EncryptionService {
 
       // Write decrypted data to destination path
       await FileSystem.writeAsStringAsync(destPath, decryptedString, {
-        encoding: FileSystem.EncodingType.UTF8,
+        encoding: "utf8" as any
       });
 
       return destPath;

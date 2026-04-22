@@ -803,6 +803,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS chat_mode TEXT DEFAULT 'public'").catch(() => {});
     await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS recording_url TEXT").catch(() => {});
     await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS show_viewer_count BOOLEAN DEFAULT TRUE").catch(() => {});
+    await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS started_at BIGINT").catch(() => {});
+    await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS ended_at BIGINT").catch(() => {});
+    await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS duration_minutes INTEGER DEFAULT 0").catch(() => {});
     // Cloudflare Stream integration columns
     await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS cf_stream_uid TEXT").catch(() => {});
     await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS cf_stream_key TEXT").catch(() => {});
@@ -3103,32 +3106,68 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json(result.rows);
       }
 
-      // Student/public view — ALL scheduled classes visible, live classes restricted by enrollment
-      // Scheduled = is_live IS NOT TRUE → visible to everyone
-      // Live = is_live = TRUE → only enrolled/public/free
+      // Student/public view:
+      // - Scheduled (not live, not completed) → visible to everyone
+      // - Live (is_live = TRUE) → only enrolled/public/free
+      // - Completed WITH recording → visible to enrolled students (as recordings)
       if (cid && user) {
         const result = await db.query(
-          "SELECT lc.*, c.title as course_title, c.is_free as course_is_free, EXISTS(SELECT 1 FROM enrollments e WHERE e.course_id = lc.course_id AND e.user_id = $2 AND (e.status = 'active' OR e.status IS NULL)) as is_enrolled FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id WHERE (lc.is_completed IS NOT TRUE) AND (lc.course_id = $1 OR lc.course_id IS NULL) AND ((lc.is_live IS NOT TRUE) OR lc.is_public = TRUE OR lc.is_free_preview = TRUE OR lc.course_id IS NULL OR EXISTS (SELECT 1 FROM enrollments e WHERE e.course_id = lc.course_id AND e.user_id = $2 AND (e.status = 'active' OR e.status IS NULL))) ORDER BY lc.scheduled_at DESC",
+          `SELECT lc.*, c.title as course_title, c.is_free as course_is_free,
+            EXISTS(SELECT 1 FROM enrollments e WHERE e.course_id = lc.course_id AND e.user_id = $2 AND (e.status = 'active' OR e.status IS NULL)) as is_enrolled
+           FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
+           WHERE (lc.course_id = $1 OR lc.course_id IS NULL)
+           AND (
+             -- Scheduled (upcoming)
+             (lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE)
+             -- Currently live (enrollment check)
+             OR (lc.is_live = TRUE AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE OR lc.course_id IS NULL OR EXISTS (SELECT 1 FROM enrollments e WHERE e.course_id = lc.course_id AND e.user_id = $2 AND (e.status = 'active' OR e.status IS NULL))))
+             -- Completed with recording (enrolled students can watch)
+             OR (lc.is_completed = TRUE AND (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL) AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE OR lc.course_id IS NULL OR EXISTS (SELECT 1 FROM enrollments e WHERE e.course_id = lc.course_id AND e.user_id = $2 AND (e.status = 'active' OR e.status IS NULL))))
+           )
+           ORDER BY lc.scheduled_at DESC`,
           [cid, user.id]
         );
         return res.json(result.rows);
       }
       if (cid) {
         const result = await db.query(
-          "SELECT lc.*, c.title as course_title, c.is_free as course_is_free, FALSE as is_enrolled FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id WHERE (lc.is_completed IS NOT TRUE) AND (lc.course_id = $1 OR lc.course_id IS NULL) AND ((lc.is_live IS NOT TRUE) OR lc.is_public = TRUE OR lc.is_free_preview = TRUE OR lc.course_id IS NULL) ORDER BY lc.scheduled_at DESC",
+          `SELECT lc.*, c.title as course_title, c.is_free as course_is_free, FALSE as is_enrolled
+           FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
+           WHERE (lc.course_id = $1 OR lc.course_id IS NULL)
+           AND (
+             (lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE)
+             OR (lc.is_live = TRUE AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE OR lc.course_id IS NULL))
+             OR (lc.is_completed = TRUE AND (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL) AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE OR lc.course_id IS NULL))
+           )
+           ORDER BY lc.scheduled_at DESC`,
           [cid]
         );
         return res.json(result.rows);
       }
       if (user) {
         const result = await db.query(
-          "SELECT lc.*, c.title as course_title, c.is_free as course_is_free, EXISTS(SELECT 1 FROM enrollments e WHERE e.course_id = lc.course_id AND e.user_id = $1 AND (e.status = 'active' OR e.status IS NULL)) as is_enrolled FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id WHERE (lc.is_completed IS NOT TRUE) AND ((lc.is_live IS NOT TRUE) OR lc.is_public = TRUE OR lc.is_free_preview = TRUE OR lc.course_id IS NULL OR EXISTS (SELECT 1 FROM enrollments e WHERE e.course_id = lc.course_id AND e.user_id = $1 AND (e.status = 'active' OR e.status IS NULL))) ORDER BY lc.scheduled_at DESC",
+          `SELECT lc.*, c.title as course_title, c.is_free as course_is_free,
+            EXISTS(SELECT 1 FROM enrollments e WHERE e.course_id = lc.course_id AND e.user_id = $1 AND (e.status = 'active' OR e.status IS NULL)) as is_enrolled
+           FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
+           WHERE (
+             (lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE)
+             OR (lc.is_live = TRUE AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE OR lc.course_id IS NULL OR EXISTS (SELECT 1 FROM enrollments e WHERE e.course_id = lc.course_id AND e.user_id = $1 AND (e.status = 'active' OR e.status IS NULL))))
+             OR (lc.is_completed = TRUE AND (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL) AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE OR lc.course_id IS NULL OR EXISTS (SELECT 1 FROM enrollments e WHERE e.course_id = lc.course_id AND e.user_id = $1 AND (e.status = 'active' OR e.status IS NULL))))
+           )
+           ORDER BY lc.scheduled_at DESC`,
           [user.id]
         );
         return res.json(result.rows);
       }
       const result = await db.query(
-        "SELECT lc.*, c.title as course_title, c.is_free as course_is_free, FALSE as is_enrolled FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id WHERE (lc.is_completed IS NOT TRUE) AND ((lc.is_live IS NOT TRUE) OR lc.is_public = TRUE OR lc.is_free_preview = TRUE OR lc.course_id IS NULL) ORDER BY lc.scheduled_at DESC"
+        `SELECT lc.*, c.title as course_title, c.is_free as course_is_free, FALSE as is_enrolled
+         FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
+         WHERE (
+           (lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE)
+           OR (lc.is_live = TRUE AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE OR lc.course_id IS NULL))
+           OR (lc.is_completed = TRUE AND (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL) AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE OR lc.course_id IS NULL))
+         )
+         ORDER BY lc.scheduled_at DESC`
       );
       res.json(result.rows);
     } catch (err) {
@@ -3138,12 +3177,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Upcoming scheduled classes (for admin panel and student home)
   app.get("/api/upcoming-classes", async (req: Request, res: Response) => {
     try {
+      // Include both scheduled (not completed) AND currently live classes
       const result = await db.query(`
         SELECT lc.*, c.title as course_title, c.is_free as course_is_free, c.category as course_category
         FROM live_classes lc
         LEFT JOIN courses c ON c.id = lc.course_id
         WHERE lc.is_completed IS NOT TRUE
-        ORDER BY lc.scheduled_at ASC NULLS LAST LIMIT 50
+        ORDER BY 
+          lc.is_live DESC,          -- live classes first
+          lc.scheduled_at ASC NULLS LAST
+        LIMIT 50
       `);
       console.log(`[UpcomingClasses] returning ${result.rows.length} classes`);
       res.json(result.rows);
@@ -3155,11 +3198,50 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/live-classes/:id", async (req: Request, res: Response) => {
     try {
+      const user = await getAuthUser(req);
       const result = await db.query("SELECT * FROM live_classes WHERE id = $1", [req.params.id]);
       if (result.rows.length === 0) return res.status(404).json({ message: "Live class not found" });
-      res.json(result.rows[0]);
+      const lc = result.rows[0];
+
+      // Add enrollment status for the requesting user
+      let isEnrolled = false;
+      if (user && lc.course_id) {
+        const enroll = await db.query(
+          "SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)",
+          [user.id, lc.course_id]
+        );
+        isEnrolled = enroll.rows.length > 0;
+      }
+
+      // Check access: free/public classes are open to all; paid classes need enrollment
+      const hasAccess = !lc.course_id || lc.is_public || lc.is_free_preview || isEnrolled || user?.role === "admin";
+
+      res.json({ ...lc, is_enrolled: isEnrolled, has_access: hasAccess });
     } catch (err) {
       res.status(500).json({ message: "Failed to fetch live class" });
+    }
+  });
+
+  // POST /api/admin/live-classes/cleanup — mark orphaned live classes as completed
+  // NOTE: Must be registered BEFORE /:id routes to avoid "cleanup" being treated as an id
+  app.post("/api/admin/live-classes/cleanup", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      console.log("[Cleanup] Starting live class cleanup...");
+      const findResult = await db.query(`
+        SELECT id, title FROM live_classes WHERE is_live = true ORDER BY scheduled_at DESC
+      `);
+      if (findResult.rows.length === 0) {
+        return res.json({ success: true, message: "No cleanup needed", cleaned: 0, classes: [] });
+      }
+      const updateResult = await db.query(`
+        UPDATE live_classes SET is_live = false, is_completed = true
+        WHERE is_live = true RETURNING id, title
+      `);
+      console.log(`[Cleanup] Marked ${updateResult.rows.length} live classes as completed`);
+      res.json({ success: true, message: `Marked ${updateResult.rows.length} live classes as completed`, cleaned: updateResult.rows.length, classes: updateResult.rows });
+    } catch (err) {
+      console.error("[Cleanup] Error:", err);
+      res.status(500).json({ message: "Failed to cleanup live classes" });
     }
   });
 
@@ -3171,6 +3253,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const add = (col: string, val: unknown) => { params.push(val); updates.push(col + " = $" + params.length); };
       if (isLive !== undefined) add("is_live", isLive);
       if (isCompleted !== undefined) add("is_completed", isCompleted);
+      // Track when class goes live (for duration calculation)
+      if (isLive === true) add("started_at", Date.now());
+      // Calculate duration when class ends
+      if (isCompleted === true || isLive === false) add("ended_at", Date.now());
       if (youtubeUrl !== undefined) add("youtube_url", youtubeUrl);
       if (title !== undefined) add("title", title);
       if (description !== undefined) add("description", description);
@@ -3205,6 +3291,54 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.log("[GoLive] Notification sent for '" + liveClass.title + "' to " + enrolled.rows.length + " students");
       }
 
+      // When going live, also mark all other classes with the same title as live
+      // so students in other courses see it as live too
+      if (isLive === true) {
+        const syncUpdates: string[] = [];
+        const syncParams: unknown[] = [];
+        const syncAdd = (col: string, val: unknown) => { syncParams.push(val); syncUpdates.push(col + " = $" + syncParams.length); };
+        syncAdd("is_live", true);
+        syncAdd("started_at", Date.now());
+        if (youtubeUrl !== undefined) syncAdd("youtube_url", youtubeUrl);
+        if (streamType !== undefined) syncAdd("stream_type", streamType);
+        if (chatMode !== undefined) syncAdd("chat_mode", chatMode);
+        if (showViewerCount !== undefined) syncAdd("show_viewer_count", showViewerCount);
+        // cf stream info
+        if (cfStreamUid !== undefined) syncAdd("cf_stream_uid", cfStreamUid);
+        const cfStreamKey = (req.body as any).cfStreamKey;
+        const cfStreamRtmpUrl = (req.body as any).cfStreamRtmpUrl;
+        const cfPlaybackHls = (req.body as any).cfPlaybackHls;
+        if (cfStreamKey !== undefined) syncAdd("cf_stream_key", cfStreamKey);
+        if (cfStreamRtmpUrl !== undefined) syncAdd("cf_stream_rtmp_url", cfStreamRtmpUrl);
+        if (cfPlaybackHls !== undefined) syncAdd("cf_playback_hls", cfPlaybackHls);
+
+        syncParams.push(req.params.id);
+        syncParams.push(liveClass.title);
+        await db.query(
+          `UPDATE live_classes SET ${syncUpdates.join(", ")} 
+           WHERE id != $${syncParams.length - 1} 
+             AND title = $${syncParams.length}
+             AND is_completed IS NOT TRUE`,
+          syncParams
+        ).catch(() => {});
+
+        // Send notifications for other courses too
+        const otherClasses = await db.query(
+          "SELECT course_id FROM live_classes WHERE id != $1 AND title = $2 AND is_completed IS NOT TRUE AND course_id IS NOT NULL",
+          [req.params.id, liveClass.title]
+        ).catch(() => ({ rows: [] as any[] }));
+        const expiresAt = Date.now() + 12 * 3600000;
+        for (const other of otherClasses.rows) {
+          const enrolled = await db.query("SELECT user_id FROM enrollments WHERE course_id = $1", [other.course_id]).catch(() => ({ rows: [] as any[] }));
+          for (const e of enrolled.rows) {
+            await db.query(
+              "INSERT INTO notifications (user_id, title, message, type, created_at, expires_at) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING",
+              [e.user_id, "🔴 Live Class Started!", '"' + liveClass.title + '" is live now. Join now!', "info", Date.now(), expiresAt]
+            ).catch(() => {});
+          }
+        }
+      }
+
       if (isCompleted && convertToLecture && liveClass.youtube_url && liveClass.course_id) {
         // Delete live class notifications when ending (they're no longer relevant)
         await db.query("DELETE FROM notifications WHERE title IN ('🔴 Live Class Started!', '🔴 Live Class Starting Now!', '⏰ Live Class in 30 minutes!') AND message ILIKE $1", ['%' + liveClass.title + '%']).catch(() => {});
@@ -3219,6 +3353,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (isCompleted && !convertToLecture && liveClass.title) {
         await db.query("DELETE FROM notifications WHERE title IN ('🔴 Live Class Started!', '🔴 Live Class Starting Now!', '⏰ Live Class in 30 minutes!') AND message ILIKE $1", ['%' + liveClass.title + '%']).catch(() => {});
       }
+
+      // When a live class ends, also mark any OTHER classes with the same title
+      // as completed — handles classes scheduled across multiple courses
+      if (isCompleted === true || isLive === false) {
+        await db.query(
+          `UPDATE live_classes 
+           SET is_completed = TRUE, is_live = FALSE
+           WHERE id != $1 
+             AND is_live IS NOT TRUE 
+             AND is_completed IS NOT TRUE
+             AND title = $2`,
+          [req.params.id, liveClass.title]
+        ).catch(() => {});
+
+        // Also end any currently live classes with the same title (started in other courses)
+        await db.query(
+          `UPDATE live_classes 
+           SET is_completed = TRUE, is_live = FALSE
+           WHERE id != $1 
+             AND is_live = TRUE
+             AND title = $2`,
+          [req.params.id, liveClass.title]
+        ).catch(() => {});
+      }
+
       res.json(liveClass);
     } catch (err) {
       console.error("Update live class error:", err);
@@ -4944,7 +5103,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
          ORDER BY user_name ASC`,
         [req.params.id, cutoff]
       );
-      res.json({ viewers: result.rows, count: result.rows.length });
+      // Include show_viewer_count from live class so students know if they can see it
+      const lcResult = await db.query(
+        "SELECT show_viewer_count FROM live_classes WHERE id = $1",
+        [req.params.id]
+      );
+      const visible = lcResult.rows[0]?.show_viewer_count ?? true;
+      res.json({ viewers: result.rows, count: result.rows.length, visible });
     } catch (err) {
       console.error("Viewer list error:", err);
       res.status(500).json({ message: "Failed to fetch viewers" });
@@ -5063,7 +5228,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const uid = input.uid;
       const rtmpUrl = input.rtmps?.url || `rtmps://live.cloudflare.com:443/live/`;
       const streamKey = input.rtmps?.streamKey || uid;
-      // Use the standard Cloudflare Stream embed/HLS URL (no customer subdomain needed)
       const playbackHls = `https://videodelivery.net/${uid}/manifest/video.m3u8`;
 
       // Persist to DB
@@ -5149,15 +5313,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       const liveClass = lcResult.rows[0];
 
-      // Update live class: set recording_url, is_completed=true, is_live=false
+      // Update live class: set recording_url, is_completed=true, is_live=false, ended_at, duration
+      const endedAt = Date.now();
       await db.query(
-        "UPDATE live_classes SET recording_url = $1, is_completed = TRUE, is_live = FALSE WHERE id = $2",
-        [recordingUrl, req.params.id]
+        `UPDATE live_classes 
+         SET recording_url = $1, is_completed = TRUE, is_live = FALSE, ended_at = $2,
+             duration_minutes = CASE 
+               WHEN started_at IS NOT NULL 
+               THEN GREATEST(1, ROUND(($2 - started_at) / 60000.0)::INTEGER)
+               ELSE 0 
+             END
+         WHERE id = $3`,
+        [recordingUrl, endedAt, req.params.id]
       );
 
       // Create lecture record if course is associated
       let lectureId = null;
       if (liveClass.course_id) {
+        // Calculate duration in minutes
+        const durationMins = liveClass.started_at
+          ? Math.max(1, Math.round((Date.now() - Number(liveClass.started_at)) / 60000))
+          : 0;
         const maxOrder = await db.query(
           "SELECT COALESCE(MAX(order_index), 0) + 1 as next_order FROM lectures WHERE course_id = $1",
           [liveClass.course_id]
@@ -5165,7 +5341,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const lectureResult = await db.query(
           `INSERT INTO lectures (course_id, title, description, video_url, video_type, duration_minutes, order_index, is_free_preview, section_title, created_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
-          [liveClass.course_id, liveClass.title, liveClass.description || "", recordingUrl, "r2", 0, maxOrder.rows[0].next_order, false, sectionTitle || "Live Class Recordings", Date.now()]
+          [liveClass.course_id, liveClass.title, liveClass.description || "", recordingUrl, "r2", durationMins, maxOrder.rows[0].next_order, false, sectionTitle || "Live Class Recordings", Date.now()]
         );
         lectureId = lectureResult.rows[0].id;
 
@@ -5176,58 +5352,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         );
       }
 
+      // Mark all other classes with the same title as completed (cross-course cleanup)
+      await db.query(
+        `UPDATE live_classes 
+         SET is_completed = TRUE, is_live = FALSE
+         WHERE id != $1 AND title = $2 AND (is_live = TRUE OR is_completed IS NOT TRUE)`,
+        [req.params.id, liveClass.title]
+      ).catch(() => {});
+
       res.json({ success: true, lectureId });
     } catch (err) {
       console.error("Recording completion error:", err);
       res.status(500).json({ message: "Failed to save recording" });
-    }
-  });
-
-  // POST /api/admin/live-classes/cleanup — mark orphaned live classes as completed
-  app.post("/api/admin/live-classes/cleanup", requireAdmin, async (req: Request, res: Response) => {
-    try {
-      console.log("[Cleanup] Starting live class cleanup...");
-
-      // Find all live classes that are still marked as live
-      const findResult = await db.query(`
-        SELECT id, title, scheduled_at, is_live, is_completed
-        FROM live_classes
-        WHERE is_live = true
-        ORDER BY scheduled_at DESC
-      `);
-
-      const orphanedClasses = findResult.rows;
-      console.log(`[Cleanup] Found ${orphanedClasses.length} live classes marked as "live"`);
-
-      if (orphanedClasses.length === 0) {
-        return res.json({ 
-          success: true, 
-          message: "No cleanup needed - all live classes are properly marked",
-          cleaned: 0,
-          classes: []
-        });
-      }
-
-      // Mark all as completed
-      const updateResult = await db.query(`
-        UPDATE live_classes
-        SET is_live = false,
-            is_completed = true
-        WHERE is_live = true
-        RETURNING id, title
-      `);
-
-      console.log(`[Cleanup] Marked ${updateResult.rows.length} live classes as completed`);
-
-      res.json({ 
-        success: true, 
-        message: `Successfully marked ${updateResult.rows.length} live classes as completed`,
-        cleaned: updateResult.rows.length,
-        classes: updateResult.rows
-      });
-    } catch (err) {
-      console.error("[Cleanup] Error:", err);
-      res.status(500).json({ message: "Failed to cleanup live classes" });
     }
   });
 

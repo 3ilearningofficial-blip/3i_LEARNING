@@ -2115,29 +2115,26 @@ export default function AdminDashboard() {
                                       </Pressable>
                                       <Pressable
                                         style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, backgroundColor: "#7F1D1D", borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12 }}
-                                        onPress={() => {
-                                          Alert.alert(
-                                            "End Live Class",
-                                            "Are you sure you want to end this live class?",
-                                            [
-                                              { text: "Cancel", style: "cancel" },
-                                              {
-                                                text: "End Class",
-                                                style: "destructive",
-                                                onPress: async () => {
-                                                  try {
-                                                    await apiRequest("PUT", `/api/admin/live-classes/${g.ids[0]}`, {
-                                                      isLive: false,
-                                                      isCompleted: true,
-                                                    });
-                                                    refetchUpcoming();
-                                                  } catch (e) {
-                                                    Alert.alert("Error", "Failed to end class");
-                                                  }
-                                                },
-                                              },
-                                            ]
-                                          );
+                                        onPress={async () => {
+                                          const confirmed = Platform.OS === "web"
+                                            ? window.confirm("End this live class?")
+                                            : await new Promise<boolean>(resolve =>
+                                                Alert.alert("End Live Class", "Are you sure?", [
+                                                  { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
+                                                  { text: "End Class", style: "destructive", onPress: () => resolve(true) },
+                                                ])
+                                              );
+                                          if (!confirmed) return;
+                                          try {
+                                            await apiRequest("PUT", `/api/admin/live-classes/${g.ids[0]}`, {
+                                              isLive: false,
+                                              isCompleted: true,
+                                            });
+                                            refetchUpcoming();
+                                          } catch (e) {
+                                            if (Platform.OS === "web") window.alert("Failed to end class");
+                                            else Alert.alert("Error", "Failed to end class");
+                                          }
                                         }}>
                                         <Ionicons name="stop-circle" size={14} color="#fff" />
                                         <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#fff" }}>End Live</Text>

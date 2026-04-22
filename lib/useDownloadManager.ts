@@ -118,7 +118,7 @@ export function useDownloadManager(): UseDownloadManagerReturn {
         
         const downloadResumable = FileSystem.createDownloadResumable(
           downloadUrl,
-          FileSystem.cacheDirectory + 'temp_download',
+          (FileSystem as any).cacheDirectory + 'temp_download',
           {},
           (downloadProgress) => {
             const progress = Math.round(
@@ -136,7 +136,7 @@ export function useDownloadManager(): UseDownloadManagerReturn {
 
         // Step 3: Read downloaded file
         const fileContent = await FileSystem.readAsStringAsync(downloadResult.uri, {
-          encoding: FileSystem.EncodingType.Base64,
+          encoding: (FileSystem as any).EncodingType.Base64,
         });
 
         // Step 4: Encrypt file
@@ -149,11 +149,11 @@ export function useDownloadManager(): UseDownloadManagerReturn {
         // Step 5: Generate UUID filename
         const { randomUUID } = await import('expo-crypto');
         const uuid = randomUUID();
-        const encryptedFilePath = `${FileSystem.documentDirectory}${uuid}.enc`;
+        const encryptedFilePath = `${(FileSystem as any).documentDirectory}${uuid}.enc`;
 
         // Step 6: Write encrypted file
         await FileSystem.writeAsStringAsync(encryptedFilePath, encrypted, {
-          encoding: FileSystem.EncodingType.UTF8,
+          encoding: (FileSystem as any).EncodingType.UTF8,
         });
 
         // Step 7: Delete temp file
@@ -207,7 +207,7 @@ export function useDownloadManager(): UseDownloadManagerReturn {
 
       try {
         // Delete local file
-        const filePath = `${FileSystem.documentDirectory}${state.localFilename}.enc`;
+        const filePath = `${(FileSystem as any).documentDirectory}${state.localFilename}.enc`;
         await FileSystem.deleteAsync(filePath, { idempotent: true });
 
         // Delete server record
@@ -256,7 +256,7 @@ export function useDownloadManager(): UseDownloadManagerReturn {
       }
 
       try {
-        const encryptedPath = `${FileSystem.documentDirectory}${state.localFilename}.enc`;
+        const encryptedPath = `${(FileSystem as any).documentDirectory}${state.localFilename}.enc`;
         
         // Check if file exists
         const fileInfo = await FileSystem.getInfoAsync(encryptedPath);
@@ -266,11 +266,11 @@ export function useDownloadManager(): UseDownloadManagerReturn {
 
         // Read encrypted file
         const encrypted = await FileSystem.readAsStringAsync(encryptedPath, {
-          encoding: FileSystem.EncodingType.UTF8,
+          encoding: (FileSystem as any).EncodingType.UTF8,
         });
 
         // Decrypt to temp file in cache directory
-        const tempPath = `${FileSystem.cacheDirectory}decrypted_${state.localFilename}`;
+        const tempPath = `${(FileSystem as any).cacheDirectory}decrypted_${state.localFilename}`;
         
         await encryptionService.decryptToUri(
           encrypted,
@@ -290,13 +290,13 @@ export function useDownloadManager(): UseDownloadManagerReturn {
 
   const getTotalStorageBytes = useCallback(async (): Promise<number> => {
     try {
-      const dirInfo = await FileSystem.readDirectoryAsync(FileSystem.documentDirectory || '');
+      const dirInfo = await FileSystem.readDirectoryAsync((FileSystem as any).documentDirectory || '');
       const encFiles = dirInfo.filter((name) => name.endsWith('.enc'));
       
       let totalBytes = 0;
       for (const file of encFiles) {
         const fileInfo = await FileSystem.getInfoAsync(
-          `${FileSystem.documentDirectory}${file}`
+          `${(FileSystem as any).documentDirectory}${file}`
         );
         if (fileInfo.exists && 'size' in fileInfo) {
           totalBytes += fileInfo.size;

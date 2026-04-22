@@ -51,15 +51,14 @@ function buildYouTubeHtml(videoId: string): string {
 html, body { width: 100%; height: 100%; background: #000; overflow: hidden; -webkit-user-select: none; user-select: none; }
 .wrapper { position: relative; width: 100%; height: 100%; overflow: hidden; }
 iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; }
-.cover-tl { position: absolute; top: 0; left: 0; width: 25%; height: 56px; background: #000; z-index: 9999; pointer-events: auto; cursor: default; }
-.cover-tr { position: absolute; top: 0; right: 0; width: 130px; height: 56px; background: #000; z-index: 9999; pointer-events: auto; cursor: default; }
-.cover-bl { position: absolute; bottom: 0; left: 0; width: 70px; height: 60px; background: #000; z-index: 9999; pointer-events: auto; cursor: default; }
-.cover-fs { position: absolute; bottom: 78px; right: 0; width: 90px; height: 50px; background: #000; z-index: 9999; pointer-events: auto; cursor: default; }
-.cover-br { position: absolute; bottom: 0; right: 50px; width: 280px; height: 60px; background: #000; z-index: 9999; pointer-events: auto; cursor: default; }
+/* Cover YouTube branding only — minimal, non-intrusive */
+.cover-tl { position: absolute; top: 0; left: 0; width: 120px; height: 42px; background: #000; z-index: 9999; pointer-events: none; }
+.cover-tr { position: absolute; top: 0; right: 0; width: 120px; height: 42px; background: #000; z-index: 9999; pointer-events: none; }
+.cover-bl { position: absolute; bottom: 0; left: 0; width: 60px; height: 50px; background: #000; z-index: 9999; pointer-events: none; }
+.cover-br { position: absolute; bottom: 0; right: 0; width: 220px; height: 50px; background: #000; z-index: 9999; pointer-events: none; }
 @media (max-width: 600px) {
-  .cover-tl { width: 55%; }
+  .cover-tl { width: 50%; }
   .cover-tr { display: none; }
-  .cover-fs { display: none; }
   .cover-br { width: 100%; right: 0; }
 }
 @media print { body { display: none !important; } }
@@ -70,12 +69,11 @@ iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border:
 <div class="cover-tl"></div>
 <div class="cover-tr"></div>
 <iframe
-  src="https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&mute=1&playsinline=1&rel=0&modestbranding=1&showinfo=0&iv_load_policy=3&cc_load_policy=0&fs=1&disablekb=0&controls=1"
+  src="https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&mute=0&playsinline=1&rel=0&modestbranding=1&showinfo=0&iv_load_policy=3&cc_load_policy=0&fs=1&disablekb=0&controls=1&color=white"
   allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; fullscreen"
   allowfullscreen
 ></iframe>
 <div class="cover-bl"></div>
-<div class="cover-fs"></div>
 <div class="cover-br"></div>
 </div>
 <script>document.addEventListener('contextmenu', function(e) { e.preventDefault(); });</script>
@@ -146,6 +144,60 @@ function isCloudflareStreamId(str: string): boolean {
   return /^[a-f0-9]{32}$/i.test(str.trim());
 }
 
+function buildCfHlsPlayerHtml(hlsUrl: string): string {
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
+video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+#overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #0a0a0a; color: #fff; font-family: sans-serif; gap: 12px; }
+#overlay.hidden { display: none; }
+.spinner { width: 36px; height: 36px; border: 3px solid #333; border-top-color: #F6821F; border-radius: 50%; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.msg { font-size: 13px; color: #aaa; text-align: center; }
+</style>
+</head>
+<body>
+<video id="v" autoplay controls playsinline></video>
+<div id="overlay"><div class="spinner"></div><div class="msg" id="msg">Connecting to live stream...</div></div>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest/dist/hls.min.js"></script>
+<script>
+var video = document.getElementById('v');
+var overlay = document.getElementById('overlay');
+var msg = document.getElementById('msg');
+var hlsUrl = '${hlsUrl}';
+var retryCount = 0;
+function showLive() {
+  overlay.classList.add('hidden');
+  if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({ event: 'play' }));
+}
+function tryLoad() {
+  if (Hls.isSupported()) {
+    var hls = new Hls({ liveSyncDurationCount: 2, liveMaxLatencyDurationCount: 6 });
+    hls.loadSource(hlsUrl);
+    hls.attachMedia(video);
+    hls.on(Hls.Events.MANIFEST_PARSED, function() {
+      video.play().then(showLive).catch(function() { video.muted = true; video.play().then(showLive); });
+    });
+    hls.on(Hls.Events.ERROR, function(e, d) {
+      if (d.fatal) { retryCount++; msg.textContent = 'Connecting... (' + retryCount + ')'; setTimeout(tryLoad, 5000); }
+    });
+  } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    video.src = hlsUrl;
+    video.addEventListener('loadedmetadata', showLive);
+    video.play().catch(function() { setTimeout(tryLoad, 5000); });
+  }
+}
+tryLoad();
+document.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+</script>
+</body>
+</html>`;
+}
+
 function buildCloudflareStreamHtml(videoId: string): string {
   return `<!DOCTYPE html>
 <html>
@@ -205,28 +257,35 @@ function WebYouTubePlayer({ videoId, onReady }: { videoId: string; onReady: () =
   );
 }
 
-// Voice input hook — web Speech API
+// Voice input hook — web Speech API only
 function useVoiceInput(onResult: (text: string) => void) {
   const [isListening, setIsListening] = useState(false);
   const recognitionRef = useRef<any>(null);
 
   const startListening = useCallback(() => {
-    if (Platform.OS !== "web") { Alert.alert("Voice input is only available on web"); return; }
+    if (Platform.OS !== "web") return; // silently ignore on native
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) { Alert.alert("Voice input not supported in this browser"); return; }
-    const recognition = new SpeechRecognition();
-    recognition.lang = "en-IN";
-    recognition.interimResults = false;
-    recognition.maxAlternatives = 1;
-    recognition.onresult = (e: any) => {
-      const transcript = e.results[0][0].transcript;
-      onResult(transcript);
-    };
-    recognition.onend = () => setIsListening(false);
-    recognition.onerror = () => setIsListening(false);
-    recognitionRef.current = recognition;
-    recognition.start();
-    setIsListening(true);
+    if (!SpeechRecognition) {
+      window.alert("Voice input not supported in this browser. Use Chrome.");
+      return;
+    }
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.lang = "en-IN";
+      recognition.interimResults = false;
+      recognition.maxAlternatives = 1;
+      recognition.onresult = (e: any) => {
+        const transcript = e.results[0][0].transcript;
+        onResult(transcript);
+      };
+      recognition.onend = () => setIsListening(false);
+      recognition.onerror = () => setIsListening(false);
+      recognitionRef.current = recognition;
+      recognition.start();
+      setIsListening(true);
+    } catch (e) {
+      setIsListening(false);
+    }
   }, [onResult]);
 
   const stopListening = useCallback(() => {
@@ -250,12 +309,39 @@ export default function LiveClassScreen() {
   const [isVideoLoading, setIsVideoLoading] = useState(true);
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
   const [handRaised, setHandRaised] = useState(false);
+  const [countdown, setCountdown] = useState<string | null>(null);
   const chatListRef = useRef<FlatList>(null);
   const lastMsgTimeRef = useRef<number>(0);
 
-  const { data: liveClassData } = useQuery<{ youtube_url: string; title: string; is_completed: boolean; is_live: boolean; show_viewer_count: boolean }>({
+  const { data: liveClassData } = useQuery<{ youtube_url: string; title: string; is_completed: boolean; is_live: boolean; show_viewer_count: boolean; cf_playback_hls?: string; stream_type?: string; recording_url?: string; duration_minutes?: number; scheduled_at?: number; has_access?: boolean; is_enrolled?: boolean; course_id?: number; is_public?: boolean }>({
     queryKey: [`/api/live-classes/${id}`],
+    refetchInterval: 5000,
+    staleTime: 0,
   });
+
+  // Countdown timer — counts down to scheduled_at, then shows "Starting soon"
+  useEffect(() => {
+    if (!liveClassData?.scheduled_at || liveClassData.is_live || liveClassData.is_completed) {
+      setCountdown(null);
+      return;
+    }
+    const tick = () => {
+      const diff = Number(liveClassData.scheduled_at) - Date.now();
+      if (diff <= 0) {
+        setCountdown(null); // past scheduled time → show "Starting soon"
+        return;
+      }
+      const h = Math.floor(diff / 3600000);
+      const m = Math.floor((diff % 3600000) / 60000);
+      const s = Math.floor((diff % 60000) / 1000);
+      if (h > 0) setCountdown(`${h}h ${m}m`);
+      else if (m > 0) setCountdown(`${m}m ${s}s`);
+      else setCountdown(`${s}s`);
+    };
+    tick();
+    const timer = setInterval(tick, 1000);
+    return () => clearInterval(timer);
+  }, [liveClassData?.scheduled_at, liveClassData?.is_live, liveClassData?.is_completed]);
 
   // Student heartbeat — POST every 15 seconds while page is open
   useEffect(() => {
@@ -268,16 +354,31 @@ export default function LiveClassScreen() {
     return () => clearInterval(interval);
   }, [id]);
 
-  const videoUrl = liveClassData?.youtube_url || paramVideoUrl || "";
   const title = liveClassData?.title || paramTitle || "Live Class";
   const topPadding = Platform.OS === "web" ? 16 : insets.top;
   const bottomPadding = Platform.OS === "web" ? 34 : insets.bottom;
   const screenHeight = Dimensions.get("window").height;
   const videoHeight = Math.min(screenHeight * 0.35, 280);
   
-  // Determine video type
+  // Determine video type — for Cloudflare stream, use HLS URL; for completed, use recording_url
+  const streamType = liveClassData?.stream_type;
+  const cfHlsUrl = liveClassData?.cf_playback_hls || "";
+  const recordingUrl = liveClassData?.recording_url || "";
+  const isCompleted = liveClassData?.is_completed;
+
+  // Priority: recording_url (completed) > cf_playback_hls (cloudflare live/recording) > youtube_url
+  const videoUrl = recordingUrl
+    ? recordingUrl
+    : (streamType === "cloudflare" && cfHlsUrl)
+      ? cfHlsUrl
+      : (liveClassData?.youtube_url || paramVideoUrl || "");
   const videoId = getYouTubeVideoId(videoUrl);
   const isStreamId = !videoId && isCloudflareStreamId(videoUrl);
+  // Cloudflare HLS live stream or recording (m3u8 URL)
+  const isCfHls = !videoId && !isStreamId && (
+    videoUrl.includes('.m3u8') ||
+    (streamType === "cloudflare" && cfHlsUrl && videoUrl === cfHlsUrl)
+  );
   const youtubeHtml = videoId ? buildYouTubeHtml(videoId) : "";
   const streamHtml = isStreamId ? buildCloudflareStreamHtml(videoUrl) : "";
 
@@ -286,7 +387,7 @@ export default function LiveClassScreen() {
     refetchInterval: 3000,
   });
 
-  const { data: viewerData } = useQuery<{ count: number; viewers: any[] }>({
+  const { data: viewerData } = useQuery<{ count: number; viewers: any[]; visible: boolean }>({
     queryKey: [`/api/live-classes/${id}/viewers`],
     refetchInterval: 10000,
   });
@@ -425,7 +526,9 @@ export default function LiveClassScreen() {
           {liveClassData?.is_completed ? (
             <View style={[styles.liveIndicator, { backgroundColor: "rgba(26,86,219,0.3)" }]}>
               <Ionicons name="play" size={10} color="#93C5FD" />
-              <Text style={styles.liveText}>Recording</Text>
+              <Text style={styles.liveText}>
+                Recording{liveClassData.duration_minutes ? ` · ${liveClassData.duration_minutes}m` : ""}
+              </Text>
             </View>
           ) : (
             <View style={styles.liveIndicator}>
@@ -438,149 +541,204 @@ export default function LiveClassScreen() {
         <View style={{ width: 36 }} />
       </View>
 
-      <View style={[styles.playerContainer, { height: videoHeight }]}>
-        {/* Video Watermark Overlay */}
-        <VideoWatermark isPlaying={isVideoPlaying} />
-        
-        {isVideoLoading && (
-          <View style={styles.loadingOverlay}><ActivityIndicator size="large" color={Colors.light.primary} /></View>
-        )}
-        {videoId && Platform.OS === "web" ? (
-          <WebYouTubePlayer videoId={videoId} onReady={() => setIsVideoLoading(false)} />
-        ) : isStreamId && streamHtml ? (
-          <WebView
-            source={{ html: streamHtml, baseUrl: "https://cloudflarestream.com" }}
-            style={{ flex: 1, backgroundColor: "#000" }}
-            onLoad={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }}
-            onMessage={handleWebViewMessage}
-            allowsFullscreenVideo
-            mediaPlaybackRequiresUserAction={false}
-            allowsInlineMediaPlayback
-            scrollEnabled={false}
-            javaScriptEnabled
-            domStorageEnabled
-            mixedContentMode="compatibility"
-            originWhitelist={["*"]}
-          />
-        ) : youtubeHtml ? (
-          <WebView
-            source={{ html: buildNativeYouTubeHtml(videoId), baseUrl: "https://www.youtube.com" }}
-            style={{ flex: 1, backgroundColor: "#000" }}
-            onLoad={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }}
-            onMessage={handleWebViewMessage}
-            injectedJavaScript={preventScreenCapture}
-            allowsFullscreenVideo={false} mediaPlaybackRequiresUserAction={false}
-            allowsInlineMediaPlayback scrollEnabled={false}
-            javaScriptEnabled domStorageEnabled mixedContentMode="compatibility"
-            setSupportMultipleWindows={false} originWhitelist={["*"]}
-          />
-        ) : (
-          <View style={styles.noVideoOverlay}>
-            <Ionicons name="videocam-off-outline" size={32} color="#666" />
-            <Text style={styles.noVideoText}>No video available</Text>
-          </View>
-        )}
-      </View>
-
-      <View style={styles.chatContainer}>
-        {/* Chat header with viewer count + admin toggle */}
-        <View style={styles.chatHeader}>
-          <Ionicons name="chatbubbles" size={18} color={Colors.light.primary} />
-          <Text style={styles.chatHeaderText}>Live Chat</Text>
-          {/* Viewer count */}
-          {viewerData?.visible && (
-            <View style={styles.viewerCountBadge}>
-              <Ionicons name="people" size={13} color={Colors.light.primary} />
-              <Text style={styles.viewerCountText}>{viewerData.count} online</Text>
-            </View>
-          )}
-          {/* Admin: raised hands indicator */}
-          {isAdmin && raisedHands.length > 0 && (
-            <View style={styles.raisedHandsBadge}>
-              <Text style={styles.raisedHandsText}>✋ {raisedHands.length}</Text>
-            </View>
-          )}
-          {/* Admin: toggle viewer count */}
-          {isAdmin && (
-            <Pressable
-              style={styles.adminToggleBtn}
-              onPress={() => toggleViewerCountMutation.mutate(!(liveClassData?.show_viewer_count ?? true))}
-            >
-              <Ionicons
-                name={(liveClassData?.show_viewer_count ?? true) ? "eye" : "eye-off"}
-                size={16} color={Colors.light.textMuted}
-              />
-            </Pressable>
-          )}
+      {/* Enrollment gate — show if class requires enrollment and user is not enrolled */}
+      {liveClassData && liveClassData.has_access === false && !isAdmin ? (
+        <View style={styles.enrollGate}>
+          <Ionicons name="lock-closed" size={48} color={Colors.light.primary} />
+          <Text style={styles.enrollGateTitle}>Enrollment Required</Text>
+          <Text style={styles.enrollGateSubtitle}>
+            You need to enroll in this course to watch live classes and recordings.
+          </Text>
+          <Pressable
+            style={styles.enrollGateBtn}
+            onPress={() => {
+              if (liveClassData.course_id) {
+                router.replace(`/course/${liveClassData.course_id}` as any);
+              } else {
+                router.back();
+              }
+            }}
+          >
+            <Text style={styles.enrollGateBtnText}>View Course</Text>
+          </Pressable>
         </View>
-
-        {/* Admin: raised hands list */}
-        {isAdmin && raisedHands.length > 0 && (
-          <View style={styles.raisedHandsList}>
-            <Text style={styles.raisedHandsTitle}>Raised Hands</Text>
-            {raisedHands.map((h) => (
-              <View key={h.id} style={styles.raisedHandItem}>
-                <Text style={styles.raisedHandName}>✋ {h.user_name}</Text>
-                <Pressable style={styles.resolveBtn} onPress={() => resolveHandMutation.mutate(h.user_id)}>
-                  <Text style={styles.resolveBtnText}>Dismiss</Text>
-                </Pressable>
+      ) : (
+        <>
+          <View style={[styles.playerContainer, { height: videoHeight }]}>
+            <VideoWatermark isPlaying={isVideoPlaying} />
+            {!liveClassData?.is_live && !liveClassData?.is_completed && (
+              <View style={styles.waitingOverlay}>
+                <View style={styles.waitingDot} />
+                {countdown ? (
+                  <>
+                    <Text style={styles.waitingTitle}>Class starts in</Text>
+                    <Text style={styles.waitingCountdown}>{countdown}</Text>
+                    <Text style={styles.waitingSubtitle}>Get ready! Class will begin shortly.</Text>
+                  </>
+                ) : (
+                  <>
+                    <Text style={styles.waitingTitle}>Starting Soon</Text>
+                    <Text style={styles.waitingSubtitle}>Waiting for teacher to start the class...</Text>
+                    <ActivityIndicator size="small" color="rgba(255,255,255,0.5)" style={{ marginTop: 8 }} />
+                  </>
+                )}
               </View>
-            ))}
+            )}
+            {isVideoLoading && liveClassData?.is_live && (
+              <View style={styles.loadingOverlay}><ActivityIndicator size="large" color={Colors.light.primary} /></View>
+            )}
+            {(liveClassData?.is_live || liveClassData?.is_completed) && videoId && Platform.OS === "web" ? (
+              <WebYouTubePlayer videoId={videoId} onReady={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }} />
+            ) : isCfHls && Platform.OS === "web" ? (
+              <iframe
+                srcDoc={buildCfHlsPlayerHtml(cfHlsUrl)}
+                style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" } as any}
+                allow="autoplay; fullscreen"
+                allowFullScreen
+                onLoad={() => setIsVideoLoading(false)}
+              />
+            ) : isCfHls && Platform.OS !== "web" ? (
+              <WebView
+                source={{ html: buildCfHlsPlayerHtml(cfHlsUrl) }}
+                style={{ flex: 1, backgroundColor: "#000" }}
+                onLoad={() => setIsVideoLoading(false)}
+                onMessage={handleWebViewMessage}
+                allowsFullscreenVideo mediaPlaybackRequiresUserAction={false}
+                allowsInlineMediaPlayback scrollEnabled={false}
+                javaScriptEnabled domStorageEnabled mixedContentMode="compatibility"
+                originWhitelist={["*"]}
+              />
+            ) : isStreamId && streamHtml ? (
+              <WebView
+                source={{ html: streamHtml, baseUrl: "https://cloudflarestream.com" }}
+                style={{ flex: 1, backgroundColor: "#000" }}
+                onLoad={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }}
+                onMessage={handleWebViewMessage}
+                allowsFullscreenVideo mediaPlaybackRequiresUserAction={false}
+                allowsInlineMediaPlayback scrollEnabled={false}
+                javaScriptEnabled domStorageEnabled mixedContentMode="compatibility"
+                originWhitelist={["*"]}
+              />
+            ) : youtubeHtml ? (
+              <WebView
+                source={{ html: buildNativeYouTubeHtml(videoId), baseUrl: "https://www.youtube.com" }}
+                style={{ flex: 1, backgroundColor: "#000" }}
+                onLoad={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }}
+                onMessage={handleWebViewMessage}
+                injectedJavaScript={preventScreenCapture}
+                allowsFullscreenVideo={false} mediaPlaybackRequiresUserAction={false}
+                allowsInlineMediaPlayback scrollEnabled={false}
+                javaScriptEnabled domStorageEnabled mixedContentMode="compatibility"
+                setSupportMultipleWindows={false} originWhitelist={["*"]}
+              />
+            ) : (
+              <View style={styles.noVideoOverlay}>
+                <Ionicons name="videocam-off-outline" size={32} color="#666" />
+                <Text style={styles.noVideoText}>No video available</Text>
+              </View>
+            )}
           </View>
-        )}
 
-        <FlatList
-          ref={chatListRef}
-          data={chatMessages}
-          keyExtractor={(item) => item.id.toString()}
-          renderItem={renderChatItem}
-          style={styles.chatList}
-          contentContainerStyle={styles.chatListContent}
-          showsVerticalScrollIndicator={false}
-          ListEmptyComponent={
-            <View style={styles.emptyChat}>
-              <Ionicons name="chatbubble-ellipses-outline" size={28} color="#ccc" />
-              <Text style={styles.emptyChatText}>No messages yet. Say hello!</Text>
-            </View>
-          }
-        />
-
-        <View style={[styles.inputRow, { paddingBottom: Math.max(bottomPadding, 8) }]}>
-          {/* Raise hand button */}
-          <Pressable
-            style={[styles.iconBtn, handRaised && styles.iconBtnActive]}
-            onPress={handleHandRaise}
-          >
-            <Text style={{ fontSize: 18 }}>✋</Text>
-          </Pressable>
-          <TextInput
-            style={styles.chatInput}
-            value={chatMsg}
-            onChangeText={setChatMsg}
-            placeholder="Ask a doubt or say hi..."
-            placeholderTextColor="#999"
-            maxLength={500}
-            returnKeyType="send"
-            onSubmitEditing={handleSend}
-          />
-          {/* Voice input button (web only) */}
-          {Platform.OS === "web" && (
-            <Pressable
-              style={[styles.iconBtn, isListening && styles.iconBtnActive]}
-              onPress={isListening ? stopListening : startListening}
-            >
-              <Ionicons name={isListening ? "mic" : "mic-outline"} size={20} color={isListening ? "#EF4444" : Colors.light.textMuted} />
-            </Pressable>
-          )}
-          <Pressable
-            style={[styles.sendBtn, !chatMsg.trim() && styles.sendBtnDisabled]}
-            onPress={handleSend}
-            disabled={!chatMsg.trim() || sendMsgMutation.isPending}
-          >
-            {sendMsgMutation.isPending ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="send" size={18} color="#fff" />}
-          </Pressable>
-        </View>
-      </View>
+          <View style={styles.chatContainer}>
+            {liveClassData?.is_completed && !isAdmin ? (
+              <View style={styles.recordingInfo}>
+                <Ionicons name="film-outline" size={32} color={Colors.light.textMuted} />
+                <Text style={styles.recordingInfoTitle}>Class Recording</Text>
+                <Text style={styles.recordingInfoSubtitle}>
+                  {liveClassData.duration_minutes ? `Duration: ${liveClassData.duration_minutes} minutes` : "Watch the full class recording above"}
+                </Text>
+              </View>
+            ) : (
+              <>
+                <View style={styles.chatHeader}>
+                  <Ionicons name="chatbubbles" size={18} color={Colors.light.primary} />
+                  <Text style={styles.chatHeaderText}>Live Chat</Text>
+                  {viewerData?.visible && (
+                    <View style={styles.viewerCountBadge}>
+                      <Ionicons name="people" size={13} color={Colors.light.primary} />
+                      <Text style={styles.viewerCountText}>{viewerData.count} online</Text>
+                    </View>
+                  )}
+                  {isAdmin && raisedHands.length > 0 && (
+                    <View style={styles.raisedHandsBadge}>
+                      <Text style={styles.raisedHandsText}>✋ {raisedHands.length}</Text>
+                    </View>
+                  )}
+                  {isAdmin && (
+                    <Pressable
+                      style={styles.adminToggleBtn}
+                      onPress={() => toggleViewerCountMutation.mutate(!(liveClassData?.show_viewer_count ?? true))}
+                    >
+                      <Ionicons
+                        name={(liveClassData?.show_viewer_count ?? true) ? "eye" : "eye-off"}
+                        size={16} color={Colors.light.textMuted}
+                      />
+                    </Pressable>
+                  )}
+                </View>
+                {isAdmin && raisedHands.length > 0 && (
+                  <View style={styles.raisedHandsList}>
+                    <Text style={styles.raisedHandsTitle}>Raised Hands</Text>
+                    {raisedHands.map((h) => (
+                      <View key={h.id} style={styles.raisedHandItem}>
+                        <Text style={styles.raisedHandName}>✋ {h.user_name}</Text>
+                        <Pressable style={styles.resolveBtn} onPress={() => resolveHandMutation.mutate(h.user_id)}>
+                          <Text style={styles.resolveBtnText}>Dismiss</Text>
+                        </Pressable>
+                      </View>
+                    ))}
+                  </View>
+                )}
+                <FlatList
+                  ref={chatListRef}
+                  data={chatMessages}
+                  keyExtractor={(item) => item.id.toString()}
+                  renderItem={renderChatItem}
+                  style={styles.chatList}
+                  contentContainerStyle={styles.chatListContent}
+                  showsVerticalScrollIndicator={false}
+                  ListEmptyComponent={
+                    <View style={styles.emptyChat}>
+                      <Ionicons name="chatbubble-ellipses-outline" size={28} color="#ccc" />
+                      <Text style={styles.emptyChatText}>No messages yet. Say hello!</Text>
+                    </View>
+                  }
+                />
+                <View style={[styles.inputRow, { paddingBottom: Math.max(bottomPadding, 8) }]}>
+                  <Pressable style={[styles.iconBtn, handRaised && styles.iconBtnActive]} onPress={handleHandRaise}>
+                    <Text style={{ fontSize: 18 }}>✋</Text>
+                  </Pressable>
+                  <TextInput
+                    style={styles.chatInput}
+                    value={chatMsg}
+                    onChangeText={setChatMsg}
+                    placeholder="Ask a doubt or say hi..."
+                    placeholderTextColor="#999"
+                    maxLength={500}
+                    returnKeyType="send"
+                    onSubmitEditing={handleSend}
+                  />
+                  {Platform.OS === "web" && (
+                    <Pressable
+                      style={[styles.iconBtn, isListening && styles.iconBtnActive]}
+                      onPress={isListening ? stopListening : startListening}
+                    >
+                      <Ionicons name={isListening ? "mic" : "mic-outline"} size={20} color={isListening ? "#EF4444" : Colors.light.textMuted} />
+                    </Pressable>
+                  )}
+                  <Pressable
+                    style={[styles.sendBtn, !chatMsg.trim() && styles.sendBtnDisabled]}
+                    onPress={handleSend}
+                    disabled={!chatMsg.trim() || sendMsgMutation.isPending}
+                  >
+                    {sendMsgMutation.isPending ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="send" size={18} color="#fff" />}
+                  </Pressable>
+                </View>
+              </>
+            )}
+          </View>
+        </>
+      )}
     </KeyboardAvoidingView>
   );
 }
@@ -596,8 +754,23 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: "#fff", flex: 1 },
   playerContainer: { width: "100%", backgroundColor: "#000", position: "relative", overflow: "hidden" },
   loadingOverlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "#000", alignItems: "center", justifyContent: "center", zIndex: 10 },
+  waitingOverlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "#0A1628", alignItems: "center", justifyContent: "center", gap: 6, zIndex: 10, padding: 20 },
+  waitingDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: "#EF4444", marginBottom: 4 },
+  waitingTitle: { fontSize: 18, fontFamily: "Inter_700Bold", color: "#fff" },
+  waitingCountdown: { fontSize: 32, fontFamily: "Inter_700Bold", color: "#F6821F", letterSpacing: 2 },
+  waitingSubtitle: { fontSize: 13, fontFamily: "Inter_400Regular", color: "rgba(255,255,255,0.5)", textAlign: "center" },
   noVideoOverlay: { flex: 1, alignItems: "center", justifyContent: "center", gap: 8 },
   noVideoText: { color: "#666", fontFamily: "Inter_400Regular", fontSize: 13 },
+  // Enrollment gate
+  enrollGate: { flex: 1, backgroundColor: Colors.light.background, alignItems: "center", justifyContent: "center", padding: 32, gap: 16 },
+  enrollGateTitle: { fontSize: 22, fontFamily: "Inter_700Bold", color: Colors.light.text, textAlign: "center" },
+  enrollGateSubtitle: { fontSize: 14, fontFamily: "Inter_400Regular", color: Colors.light.textMuted, textAlign: "center", lineHeight: 22 },
+  enrollGateBtn: { backgroundColor: Colors.light.primary, borderRadius: 14, paddingHorizontal: 32, paddingVertical: 14, marginTop: 8 },
+  enrollGateBtnText: { fontSize: 15, fontFamily: "Inter_600SemiBold", color: "#fff" },
+  // Recording info (replaces chat for completed classes)
+  recordingInfo: { flex: 1, alignItems: "center", justifyContent: "center", gap: 10, padding: 24 },
+  recordingInfoTitle: { fontSize: 18, fontFamily: "Inter_700Bold", color: Colors.light.text },
+  recordingInfoSubtitle: { fontSize: 14, fontFamily: "Inter_400Regular", color: Colors.light.textMuted, textAlign: "center" },
   chatContainer: { flex: 1, backgroundColor: Colors.light.background },
   chatHeader: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: Colors.light.border },
   chatHeaderText: { fontSize: 15, fontFamily: "Inter_600SemiBold", color: Colors.light.text, flex: 1 },

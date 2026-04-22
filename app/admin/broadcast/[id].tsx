@@ -30,6 +30,11 @@ function buildYouTubeEmbedUrl(videoId: string): string {
 }
 
 function buildHlsPlayerHtml(hlsUrl: string): string {
+  // Also try the live manifest variant
+  const liveHlsUrl = hlsUrl.includes('/manifest/video.m3u8')
+    ? hlsUrl.replace('/manifest/video.m3u8', '/manifest/video.m3u8')
+    : hlsUrl;
+
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -42,7 +47,7 @@ video { width: 100%; height: 100%; object-fit: contain; background: #000; }
 #overlay.hidden { display: none; }
 .spinner { width: 40px; height: 40px; border: 3px solid #333; border-top-color: #F6821F; border-radius: 50%; animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
-.msg { font-size: 14px; color: #aaa; text-align: center; }
+.msg { font-size: 14px; color: #aaa; text-align: center; line-height: 1.6; }
 .live-badge { background: #ef4444; color: #fff; font-size: 12px; font-weight: 700; padding: 4px 12px; border-radius: 4px; letter-spacing: 1px; display: none; position: absolute; top: 12px; left: 12px; }
 .live-badge.show { display: block; }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #fff; margin-right: 6px; animation: blink 1s infinite; }
@@ -53,7 +58,7 @@ video { width: 100%; height: 100%; object-fit: contain; background: #000; }
 <video id="v" autoplay controls playsinline></video>
 <div id="overlay">
   <div class="spinner"></div>
-  <div class="msg" id="msg">Waiting for OBS stream...<br><small style="color:#666">Start streaming in OBS to begin</small></div>
+  <div class="msg" id="msg">OBS is streaming...<br><small style="color:#666">Waiting for Cloudflare to process stream<br>(takes 15–30 seconds)</small></div>
 </div>
 <div class="live-badge" id="liveBadge"><span class="dot"></span>LIVE</div>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@latest/dist/hls.min.js"></script>
@@ -62,9 +67,10 @@ var video = document.getElementById('v');
 var overlay = document.getElementById('overlay');
 var msg = document.getElementById('msg');
 var liveBadge = document.getElementById('liveBadge');
-var hlsUrl = '${hlsUrl}';
+var hlsUrl = '${liveHlsUrl}';
 var hlsInstance = null;
 var retryCount = 0;
+var maxRetries = 60; // 5 minutes max
 
 function showLive() {
   overlay.classList.add('hidden');
@@ -72,14 +78,19 @@ function showLive() {
 }
 
 function tryLoad() {
+  if (retryCount >= maxRetries) {
+    msg.innerHTML = 'Stream not detected after 5 minutes.<br><small style="color:#666">Check OBS is streaming to the correct RTMP URL</small>';
+    return;
+  }
   if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
   
   if (Hls.isSupported()) {
     var hls = new Hls({
-      liveSyncDurationCount: 3,
-      liveMaxLatencyDurationCount: 10,
-      manifestLoadingMaxRetry: 3,
-      manifestLoadingRetryDelay: 2000,
+      liveSyncDurationCount: 2,
+      liveMaxLatencyDurationCount: 6,
+      manifestLoadingMaxRetry: 2,
+      manifestLoadingRetryDelay: 1000,
+      levelLoadingMaxRetry: 2,
     });
     hlsInstance = hls;
     hls.loadSource(hlsUrl);
@@ -92,17 +103,17 @@ function tryLoad() {
     hls.on(Hls.Events.ERROR, function(e, d) {
       if (d.fatal) {
         retryCount++;
-        msg.innerHTML = 'Waiting for stream... (retry ' + retryCount + ')<br><small style="color:#666">Make sure OBS is streaming</small>';
+        var secs = retryCount * 5;
+        msg.innerHTML = 'OBS is streaming...<br><small style="color:#666">Waiting for Cloudflare (' + secs + 's elapsed)<br>This takes 15–30 seconds</small>';
         setTimeout(tryLoad, 5000);
       }
     });
   } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
     video.src = hlsUrl;
-    video.play().then(showLive).catch(function() {
-      setTimeout(tryLoad, 5000);
-    });
+    video.addEventListener('loadedmetadata', showLive);
+    video.play().catch(function() { setTimeout(tryLoad, 5000); });
   } else {
-    msg.textContent = 'HLS not supported in this browser. Use Chrome or Safari.';
+    msg.textContent = 'HLS not supported. Use Chrome or Safari.';
   }
 }
 
@@ -150,7 +161,7 @@ export default function BroadcastPage() {
   const liveClassId = id;
   const { user } = useAuth();
 
-  // Fetch live class data
+  // Fetch live class data — poll every 5s so cfPlaybackHls updates when stream goes live
   const { data: liveClass, isLoading } = useQuery<any>({
     queryKey: ["/api/live-classes", liveClassId],
     queryFn: async () => {
@@ -160,6 +171,8 @@ export default function BroadcastPage() {
       return res.json();
     },
     enabled: !!liveClassId,
+    refetchInterval: 5000, // Poll every 5s to pick up cfPlaybackHls once OBS connects
+    staleTime: 0,
   });
 
   const streamType = liveClass?.stream_type || params.streamType || "webrtc";
@@ -276,65 +289,54 @@ export default function BroadcastPage() {
     uploadRecordingAndFinish(blob);
   }, [uploadRecordingAndFinish]);
 
-  const handleEndClass = useCallback(() => {
-    Alert.alert(
-      "End Class",
-      "Are you sure you want to end this live class?",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "End Class",
-          style: "destructive",
-          onPress: async () => {
-            setIsEnding(true);
-            setUploadError(null);
+  const handleEndClass = useCallback(async () => {
+    // Use window.confirm on web (Alert.alert buttons don't work on web)
+    const confirmed = Platform.OS === "web"
+      ? window.confirm("End this live class?")
+      : await new Promise<boolean>(resolve =>
+          Alert.alert("End Class", "Are you sure you want to end this live class?", [
+            { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
+            { text: "End Class", style: "destructive", onPress: () => resolve(true) },
+          ])
+        );
+    if (!confirmed) return;
 
-            try {
-              if (streamType === "webrtc") {
-                if (recorder.isRecording) {
-                  // WebRTC with active recording
-                  const blob = await recorder.stopRecording();
-                  retainedBlobRef.current = blob;
-                  await uploadRecordingAndFinish(blob);
-                } else {
-                  // WebRTC without recording — just mark completed
-                  await apiRequest("PUT", `/api/admin/live-classes/${liveClassId}`, {
-                    isLive: false,
-                    isCompleted: true,
-                  });
-                  webrtc.cleanup();
-                  router.replace("/admin" as any);
-                }
-              } else if (streamType === "cloudflare") {
-                // Cloudflare Stream — end the live input, save HLS URL as lecture
-                await apiRequest("POST", `/api/admin/live-classes/${liveClassId}/stream/end`, {});
-                if (cfPlaybackHls) {
-                  await apiRequest("POST", `/api/admin/live-classes/${liveClassId}/recording`, {
-                    recordingUrl: cfPlaybackHls,
-                    sectionTitle: "Live Class Recordings",
-                  });
-                } else {
-                  await apiRequest("PUT", `/api/admin/live-classes/${liveClassId}`, {
-                    isLive: false,
-                    isCompleted: true,
-                  });
-                }
-                router.replace("/admin" as any);
-              } else {
-                // RTMP — create lecture from YouTube URL
-                await apiRequest("POST", `/api/admin/live-classes/${liveClassId}/recording`, {
-                  recordingUrl: youtubeUrl,
-                  sectionTitle: "Live Class Recordings",
-                });
-                router.replace("/admin" as any);
-              }            } catch (err: any) {
-              Alert.alert("Error", err?.message || "Failed to end class. Please try again.");
-              setIsEnding(false);
-            }
-          },
-        },
-      ]
-    );
+    setIsEnding(true);
+    setUploadError(null);
+    try {
+      if (streamType === "webrtc") {
+        if (recorder.isRecording) {
+          const blob = await recorder.stopRecording();
+          retainedBlobRef.current = blob;
+          await uploadRecordingAndFinish(blob);
+        } else {
+          await apiRequest("PUT", `/api/admin/live-classes/${liveClassId}`, { isLive: false, isCompleted: true });
+          webrtc.cleanup();
+          router.replace("/admin" as any);
+        }
+      } else if (streamType === "cloudflare") {
+        await apiRequest("POST", `/api/admin/live-classes/${liveClassId}/stream/end`, {});
+        if (cfPlaybackHls) {
+          await apiRequest("POST", `/api/admin/live-classes/${liveClassId}/recording`, {
+            recordingUrl: cfPlaybackHls,
+            sectionTitle: "Live Class Recordings",
+          });
+        } else {
+          await apiRequest("PUT", `/api/admin/live-classes/${liveClassId}`, { isLive: false, isCompleted: true });
+        }
+        router.replace("/admin" as any);
+      } else {
+        await apiRequest("POST", `/api/admin/live-classes/${liveClassId}/recording`, {
+          recordingUrl: youtubeUrl,
+          sectionTitle: "Live Class Recordings",
+        });
+        router.replace("/admin" as any);
+      }
+    } catch (err: any) {
+      if (Platform.OS === "web") window.alert(err?.message || "Failed to end class. Please try again.");
+      else Alert.alert("Error", err?.message || "Failed to end class. Please try again.");
+      setIsEnding(false);
+    }
   }, [liveClassId, streamType, webrtc, recorder, youtubeUrl, cfPlaybackHls, uploadRecordingAndFinish]);
 
   if (isLoading) {

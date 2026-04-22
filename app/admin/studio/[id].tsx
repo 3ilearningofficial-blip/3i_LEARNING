@@ -25,31 +25,58 @@ export default function StudioSetupPage() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const liveClassId = id;
 
-  // Fetch live class data
+  // Fetch live class data — poll every 5s to detect when stream goes live
   const { data: liveClass, isLoading: isLoadingClass } = useQuery<any>({
     queryKey: ["/api/live-classes", liveClassId],
     queryFn: async () => {
       const baseUrl = getApiUrl();
-      const res = await authFetch(
-        `${baseUrl}/api/live-classes/${liveClassId}`
-      );
+      const res = await authFetch(`${baseUrl}/api/live-classes/${liveClassId}`);
       if (!res.ok) throw new Error("Failed to fetch live class");
       return res.json();
     },
     enabled: !!liveClassId,
+    refetchInterval: 5000,
+    staleTime: 0,
   });
 
-  // State
-  const [streamType, setStreamType] = useState<StreamType>("webrtc");
-  const [youtubeUrl, setYoutubeUrl] = useState("");
+  // State — restore from localStorage on refresh
+  const storageKey = `studio_state_${liveClassId}`;
+  const getSavedState = () => {
+    try {
+      if (Platform.OS === "web" && typeof localStorage !== "undefined") {
+        const saved = localStorage.getItem(storageKey);
+        return saved ? JSON.parse(saved) : null;
+      }
+    } catch { return null; }
+    return null;
+  };
+  const savedState = getSavedState();
+
+  const [streamType, setStreamTypeState] = useState<StreamType>(savedState?.streamType || "webrtc");
+  const [youtubeUrl, setYoutubeUrlState] = useState(savedState?.youtubeUrl || "");
   const [cfStreamInfo, setCfStreamInfo] = useState<{
     uid: string; rtmpUrl: string; streamKey: string; playbackHls: string;
   } | null>(null);
   const [cfStreamLoading, setCfStreamLoading] = useState(false);
-  const [showViewerCount, setShowViewerCount] = useState(true);
-  const [chatMode, setChatMode] = useState<ChatMode>("public");
+  const [showViewerCount, setShowViewerCountState] = useState(savedState?.showViewerCount ?? true);
+  const [chatMode, setChatModeState] = useState<ChatMode>(savedState?.chatMode || "public");
   const [isGoingLive, setIsGoingLive] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
+
+  // Persist state to localStorage on every change
+  const persistState = useCallback((updates: Record<string, any>) => {
+    if (Platform.OS === "web" && typeof localStorage !== "undefined") {
+      try {
+        const current = getSavedState() || {};
+        localStorage.setItem(storageKey, JSON.stringify({ ...current, ...updates }));
+      } catch {}
+    }
+  }, [storageKey]);
+
+  const setStreamType = (v: StreamType) => { setStreamTypeState(v); persistState({ streamType: v }); };
+  const setYoutubeUrl = (v: string) => { setYoutubeUrlState(v); persistState({ youtubeUrl: v }); };
+  const setShowViewerCount = (v: boolean) => { setShowViewerCountState(v); persistState({ showViewerCount: v }); };
+  const setChatMode = (v: ChatMode) => { setChatModeState(v); persistState({ chatMode: v }); };
 
   // WebRTC hook
   const webrtc = useWebRTCStream();
@@ -239,27 +266,37 @@ export default function StudioSetupPage() {
               </View>
             )
           ) : streamType === "cloudflare" ? (
-            // Cloudflare Stream preview
+            // Cloudflare Stream preview — show HLS player if stream is live, else show ready state
             <View style={styles.previewPlaceholder}>
-              <Text style={{ fontSize: 48 }}>☁️</Text>
               {cfStreamLoading ? (
                 <>
                   <ActivityIndicator size="large" color="#F6821F" />
                   <Text style={styles.previewPlaceholderText}>Creating Cloudflare Stream...</Text>
                 </>
+              ) : cfStreamInfo?.playbackHls && Platform.OS === "web" ? (
+                // Show HLS preview once OBS starts streaming
+                <iframe
+                  srcDoc={`<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><style>*{margin:0;padding:0;box-sizing:border-box}html,body{width:100%;height:100%;background:#000;overflow:hidden}video{width:100%;height:100%;object-fit:contain;background:#000}#ov{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#0a0a0a;color:#fff;font-family:sans-serif;gap:12px}#ov.h{display:none}.sp{width:36px;height:36px;border:3px solid #333;border-top-color:#F6821F;border-radius:50%;animation:spin 0.8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.msg{font-size:13px;color:#aaa;text-align:center}.lb{background:#ef4444;color:#fff;font-size:11px;font-weight:700;padding:3px 10px;border-radius:4px;letter-spacing:1px;display:none;position:absolute;top:10px;left:10px}.lb.s{display:block}.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#fff;margin-right:5px;animation:blink 1s infinite}@keyframes blink{0%,100%{opacity:1}50%{opacity:0.3}}</style></head><body><video id="v" autoplay controls playsinline></video><div id="ov"><div class="sp"></div><div class="msg" id="msg">OBS streaming...<br><small style="color:#666">Waiting for Cloudflare (15-30s)</small></div></div><div class="lb" id="lb"><span class="dot"></span>LIVE</div><script src="https://cdn.jsdelivr.net/npm/hls.js@latest/dist/hls.min.js"></script><script>var v=document.getElementById('v'),ov=document.getElementById('ov'),msg=document.getElementById('msg'),lb=document.getElementById('lb'),url='${cfStreamInfo.playbackHls}',r=0;function show(){ov.classList.add('h');lb.classList.add('s');}function load(){if(r>60)return;if(Hls.isSupported()){var h=new Hls({liveSyncDurationCount:2,liveMaxLatencyDurationCount:6});h.loadSource(url);h.attachMedia(v);h.on(Hls.Events.MANIFEST_PARSED,function(){v.play().then(show).catch(function(){v.muted=true;v.play().then(show);});});h.on(Hls.Events.ERROR,function(e,d){if(d.fatal){r++;msg.innerHTML='OBS streaming...<br><small style="color:#666">Waiting ('+r*5+'s)</small>';setTimeout(load,5000);}});}else if(v.canPlayType('application/vnd.apple.mpegurl')){v.src=url;v.addEventListener('loadedmetadata',show);v.play().catch(function(){setTimeout(load,5000);});}}load();</script></body></html>`}
+                  style={{ position: "absolute" as any, top: 0, left: 0, width: "100%", height: "100%", border: "none" }}
+                  allow="autoplay; fullscreen"
+                />
               ) : cfStreamInfo ? (
                 <>
+                  <Text style={{ fontSize: 48 }}>☁️</Text>
                   <View style={styles.cfReadyBadge}>
                     <Text style={styles.cfReadyText}>✓ Stream Ready</Text>
                   </View>
                   <Text style={styles.previewPlaceholderText}>
-                    Copy the RTMP URL and Stream Key from the panel →{"\n"}Paste into OBS and start streaming
+                    Copy the RTMP URL and Stream Key from the panel →{"\n"}Paste into OBS and start streaming{"\n"}Preview will appear here automatically
                   </Text>
                 </>
               ) : (
-                <Text style={styles.previewPlaceholderText}>
-                  Select Cloudflare Stream to generate your RTMP credentials
-                </Text>
+                <>
+                  <Text style={{ fontSize: 48 }}>☁️</Text>
+                  <Text style={styles.previewPlaceholderText}>
+                    Select Cloudflare Stream to generate your RTMP credentials
+                  </Text>
+                </>
               )}
             </View>
           ) : (
