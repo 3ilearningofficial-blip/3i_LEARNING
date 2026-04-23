@@ -1437,9 +1437,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Check if blocked
       if (user.is_blocked) return res.status(403).json({ message: "Your account has been blocked. Please contact support." });
 
-      // Check if profile is complete (registered properly)
-      if (!user.profile_complete && user.role !== "admin") {
-        return res.status(401).json({ message: "Account not fully registered. Please complete sign up first." });
+      // Check if profile is complete — applies to all roles
+      if (!user.profile_complete) {
+        return res.status(401).json({ message: "Profile not complete. Please sign in with Phone OTP to complete your profile first." });
       }
 
       // Ensure admin emails/phones always have admin role

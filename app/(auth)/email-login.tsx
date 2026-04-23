@@ -36,7 +36,8 @@ export default function EmailLoginScreen() {
       const data = await res.json();
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       login(data.user);
-      if (!data.user.profileComplete && data.user.role !== "admin") {
+      // All users including admin must complete profile before accessing the app
+      if (!data.user.profileComplete) {
         router.replace("/profile-setup");
       } else {
         router.replace("/(tabs)");
