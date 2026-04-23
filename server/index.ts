@@ -33,14 +33,12 @@ function setupCors(app: express.Application) {
     "https://api.3ilearning.in",
   ];
 
-  app.use(cors({
+  const corsOptions = {
     origin: function (
       origin: string | undefined,
       callback: (err: Error | null, allow?: boolean) => void
     ) {
-      // Allow requests with no origin (mobile apps, curl, server-to-server)
       if (!origin) return callback(null, true);
-      // Allow all Vercel preview and production deployments
       if (origin.includes("vercel.app") || origin.includes("3ilearning")) {
         return callback(null, true);
       }
@@ -52,11 +50,11 @@ function setupCors(app: express.Application) {
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allowedHeaders: ["Content-Type", "Authorization", "X-User-Id", "X-Requested-With"],
     credentials: true,
-    optionsSuccessStatus: 200, // Some browsers (IE11) choke on 204
-  }));
+    preflightContinue: false,
+    optionsSuccessStatus: 204,
+  };
 
-  // Explicitly handle preflight for all routes
-  app.options("/(.*)", cors());
+  app.use(cors(corsOptions));
 }
 
 function setupBodyParsing(app: express.Application) {
