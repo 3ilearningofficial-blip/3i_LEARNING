@@ -1629,6 +1629,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json({
         ...course,
+        total_materials: materialsResult.rows.length, // Always accurate count
         lectures: lecturesResult.rows,
         tests: testsResult.rows,
         materials: materialsResult.rows,
@@ -2757,6 +2758,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (err) {
       console.error("[Attempt] Submit error:", err);
       res.status(500).json({ message: "Failed to submit test", detail: String(err) });
+    }
+  });
+
+  // Get all attempts for a specific test by the current user (most recent first)
+  app.get("/api/tests/:id/my-attempts", async (req: Request, res: Response) => {
+    try {
+      const user = await getAuthUser(req);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+      const result = await db.query(
+        `SELECT ta.id, ta.score, ta.total_marks, ta.percentage, ta.correct, ta.incorrect,
+                ta.attempted, ta.time_taken_seconds, ta.completed_at, ta.status
+         FROM test_attempts ta
+         WHERE ta.user_id = $1 AND ta.test_id = $2 AND ta.status = 'completed'
+         ORDER BY ta.completed_at DESC`,
+        [user.id, req.params.id]
+      );
+      res.json(result.rows);
+    } catch (err) {
+      res.status(500).json({ message: "Failed to fetch attempts" });
+    }
+  });
+
+  // Alias with underscore for compatibility
+  app.get("/api/tests/:id/my_attempts", async (req: Request, res: Response) => {
+    try {
+      const user = await getAuthUser(req);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+      const result = await db.query(
+        `SELECT ta.id, ta.score, ta.total_marks, ta.percentage, ta.correct, ta.incorrect,
+                ta.attempted, ta.time_taken_seconds, ta.completed_at, ta.status
+         FROM test_attempts ta
+         WHERE ta.user_id = $1 AND ta.test_id = $2 AND ta.status = 'completed'
+         ORDER BY ta.completed_at DESC`,
+        [user.id, req.params.id]
+      );
+      res.json(result.rows);
+    } catch (err) {
+      res.status(500).json({ message: "Failed to fetch attempts" });
     }
   });
 

@@ -361,13 +361,17 @@ export default function MaterialViewerScreen() {
     if (raw.includes("r2.cloudflarestorage.com")) return raw;
     if (raw.includes("pub-") && raw.includes(".r2.dev")) return raw;
     
-    // URL stored as /api/media/... path — prepend base URL
-    if (raw.startsWith("/api/media/")) return `${getBaseUrl()}${raw}`;
+    // URL stored as /api/media/... path
+    // On web, use relative URL (goes through Vercel proxy with session cookies)
+    // On native, use absolute API URL
+    if (raw.startsWith("/api/media/")) {
+      return Platform.OS === "web" ? raw : `${getBaseUrl()}${raw}`;
+    }
     
     // URL stored with old host — extract path and use current base
     if (raw.includes("/api/media/")) {
       const path = raw.replace(/^https?:\/\/[^/]+/, "");
-      return `${getBaseUrl()}${path}`;
+      return Platform.OS === "web" ? path : `${getBaseUrl()}${path}`;
     }
     
     // Google Drive / Docs — use as-is
@@ -518,12 +522,28 @@ export default function MaterialViewerScreen() {
                     onLoad={() => setLoading(false)}
                   />
                 ) : (
-                  <iframe
-                    src={fileUrl}
-                    style={{ width: "100%", height: "100%", border: "none" } as any}
-                    title={material.title}
-                    onLoad={() => setLoading(false)}
-                  />
+                  // For video files — use <video> tag (iframes blocked by X-Frame-Options)
+                  // For other files — use iframe
+                  material?.file_type === "video" || fileUrl?.match(/\.(mp4|mov|webm|mkv|avi)(\?|$)/i) ? (
+                    <video
+                      src={fileUrl}
+                      controls
+                      autoPlay
+                      playsInline
+                      controlsList="nodownload noplaybackrate"
+                      disablePictureInPicture
+                      style={{ width: "100%", height: "100%", objectFit: "contain", backgroundColor: "#000" } as any}
+                      onLoadedData={() => setLoading(false)}
+                      onContextMenu={(e: any) => e.preventDefault()}
+                    />
+                  ) : (
+                    <iframe
+                      src={fileUrl}
+                      style={{ width: "100%", height: "100%", border: "none" } as any}
+                      title={material?.title || "File"}
+                      onLoad={() => setLoading(false)}
+                    />
+                  )
                 )}
                 {loading && (
                   <View style={styles.webLoadingOverlay}>

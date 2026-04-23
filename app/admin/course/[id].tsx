@@ -421,6 +421,7 @@ export default function AdminCourseScreen() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/courses", id] });
+      qc.invalidateQueries({ queryKey: ["/api/courses"] });
       setShowAddMaterial(false); setFolderAddModal(false); setNewMaterial(emptyMaterial);
       Alert.alert("Success", "Material added!");
     },
@@ -431,7 +432,7 @@ export default function AdminCourseScreen() {
     mutationFn: async (materialId: number) => {
       await apiRequest("DELETE", `/api/admin/study-materials/${materialId}`);
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/courses", id] }); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/courses", id] }); qc.invalidateQueries({ queryKey: ["/api/courses"] }); },
   });
 
   const updateMaterialMutation = useMutation({
