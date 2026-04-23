@@ -454,8 +454,17 @@ setTimeout(function() {
     const color = TEST_TYPE_COLORS[test.test_type] || Colors.light.primary;
     const attempt = attemptSummary[test.id];
     const handlePress = () => {
-      if (!courseData.isEnrolled && !courseData.is_free) {
-        Alert.alert("Purchase Required", "Please purchase this course to access tests.");
+      if (!isAdmin && !courseData.isEnrolled) {
+        Alert.alert(
+          courseData.is_free ? "Enroll Required" : "Purchase Required",
+          courseData.is_free
+            ? "Please enroll for free to access this test."
+            : "Please purchase this course to access tests.",
+          [
+            { text: "Cancel", style: "cancel" },
+            { text: courseData.is_free ? "Enroll Free" : "Buy Now", onPress: handleEnroll },
+          ]
+        );
         return;
       }
       if (attempt) {
@@ -510,7 +519,7 @@ setTimeout(function() {
             )}
           </View>
         </View>
-        {!courseData.isEnrolled && !courseData.is_free ? (
+        {!isAdmin && !courseData.isEnrolled ? (
           <Ionicons name="lock-closed" size={18} color={Colors.light.textMuted} />
         ) : attempt ? (
           <Ionicons name="bar-chart" size={18} color={Colors.light.primary} />

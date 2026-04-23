@@ -1531,7 +1531,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.log(`[Courses] auth user=${user?.id || "none"}, xUserId=${req.headers["x-user-id"] || "none"}, _uid=${req.query._uid || "none"}`);
       const { category, search } = req.query;
       // Admins see all courses; students only see published ones
-      let query = user?.role === "admin" ? "SELECT * FROM courses WHERE 1=1" : "SELECT * FROM courses WHERE is_published = TRUE";
+      let query = user?.role === "admin"
+        ? `SELECT c.*, (SELECT COUNT(*) FROM study_materials sm WHERE sm.course_id = c.id) AS total_materials FROM courses c WHERE 1=1`
+        : `SELECT c.*, (SELECT COUNT(*) FROM study_materials sm WHERE sm.course_id = c.id) AS total_materials FROM courses c WHERE c.is_published = TRUE`;
       const params: unknown[] = [];
 
       if (search) {
@@ -2496,9 +2498,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/lectures/:id", async (req: Request, res: Response) => {
     try {
-      const result = await db.query("SELECT * FROM lectures WHERE id = $1", [req.params.id]);
+      const user = await getAuthUser(req);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+
+      const result = await db.query(
+        `SELECT l.*, c.is_free AS course_is_free
+         FROM lectures l
+         LEFT JOIN courses c ON l.course_id = c.id
+         WHERE l.id = $1`,
+        [req.params.id]
+      );
       if (result.rows.length === 0) return res.status(404).json({ message: "Lecture not found" });
-      res.json(result.rows[0]);
+      const lecture = result.rows[0];
+
+      // Access control — admins and free-preview lectures bypass enrollment check
+      if (user.role !== "admin" && !lecture.is_free_preview) {
+        if (lecture.course_id) {
+          const enrolled = await db.query(
+            "SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)",
+            [user.id, lecture.course_id]
+          );
+          if (enrolled.rows.length === 0) {
+            return res.status(403).json({ message: "Enrollment required to access this lecture" });
+          }
+        }
+      }
+
+      res.json(lecture);
     } catch (err) {
       res.status(500).json({ message: "Failed to fetch lecture" });
     }

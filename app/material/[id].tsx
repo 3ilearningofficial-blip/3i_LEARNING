@@ -514,7 +514,7 @@ export default function MaterialViewerScreen() {
                     allow="autoplay"
                     onLoad={() => setLoading(false)}
                   />
-                ) : isPdf ? (
+                ) : isPdf && fileUrl ? (
                   <iframe
                     srcDoc={buildPdfViewerHtml(fileUrl, apiBaseUrl)}
                     style={{ width: "100%", height: "100%", border: "none" } as any}

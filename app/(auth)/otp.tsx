@@ -85,8 +85,8 @@ export default function OTPScreen() {
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       login(data.user);
       console.log("[OTP] user:", JSON.stringify({ id: data.user.id, role: data.user.role, profileComplete: data.user.profileComplete, name: data.user.name }));
-      // Route based on profile completion
-      if (data.user.role !== "admin" && !data.user.profileComplete) {
+      // Route based on profile completion — applies to all roles including admin
+      if (!data.user.profileComplete) {
         console.log("[OTP] → profile-setup");
         router.replace("/profile-setup");
       } else {

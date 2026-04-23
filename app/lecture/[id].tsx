@@ -369,8 +369,18 @@ export default function LectureScreen() {
   const [hasError, setHasError] = useState(false);
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
 
-  const { data: lectureData } = useQuery<{ video_url: string; title: string; is_completed?: boolean; download_allowed?: boolean }>({
+  const { data: lectureData, error: lectureError } = useQuery<{ video_url: string; title: string; is_completed?: boolean; download_allowed?: boolean; course_id?: number }>({
     queryKey: [`/api/lectures/${id}`],
+    queryFn: async () => {
+      const baseUrl = getApiUrl();
+      const url = new URL(`/api/lectures/${id}`, baseUrl);
+      const res = await authFetch(url.toString());
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message || "Failed to load lecture");
+      }
+      return res.json();
+    },
   });
 
   const { data: progressData } = useQuery<{ is_completed: boolean }>({
@@ -508,7 +518,25 @@ export default function LectureScreen() {
         </View>
       </View>
 
-
+      {/* Enrollment gate */}
+      {lectureError ? (
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 32, gap: 16 }}>
+          <Ionicons name="lock-closed" size={48} color={Colors.light.primary} />
+          <Text style={{ fontSize: 18, fontFamily: "Inter_700Bold", color: Colors.light.text, textAlign: "center" }}>
+            {(lectureError as any)?.message || "Access Denied"}
+          </Text>
+          <Text style={{ fontSize: 14, fontFamily: "Inter_400Regular", color: Colors.light.textSecondary, textAlign: "center" }}>
+            You need to enroll in this course to watch lectures.
+          </Text>
+          <Pressable
+            onPress={() => router.back()}
+            style={{ backgroundColor: Colors.light.primary, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 12 }}
+          >
+            <Text style={{ color: "#fff", fontFamily: "Inter_600SemiBold" }}>Go Back</Text>
+          </Pressable>
+        </View>
+      ) : (
+        <>
       <View style={styles.playerContainer}>
         {/* Video Watermark Overlay */}
         <VideoWatermark isPlaying={isVideoPlaying} />
@@ -621,6 +649,8 @@ export default function LectureScreen() {
           </View>
         )}
       </ScrollView>
+        </>
+      )}
     </View>
   );
 }
