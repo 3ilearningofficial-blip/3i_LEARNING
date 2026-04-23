@@ -398,22 +398,18 @@ export default function LectureScreen() {
   const isCompleted = progressData?.is_completed || lectureData?.is_completed || false;
 
   const rawVideoUrl = lectureData?.video_url || paramVideoUrl || "";
-  // Convert stored URLs to use the correct server base URL for current device
   const baseUrl = getBaseUrl();
   let videoUrl = rawVideoUrl;
-  
-  // Skip URL conversion for local file:// URIs
+
   if (!rawVideoUrl.startsWith('file://')) {
-    if (rawVideoUrl.startsWith("https://cdn.3ilearning.in/")) {
-      // Already a full R2 CDN URL — serve directly
+    if (rawVideoUrl.startsWith("https://cdn.3ilearning.in/") ||
+        rawVideoUrl.includes("r2.cloudflarestorage.com") ||
+        rawVideoUrl.includes("youtube.com") ||
+        rawVideoUrl.includes("youtu.be")) {
       videoUrl = rawVideoUrl;
-    } else if (rawVideoUrl.includes("r2.cloudflarestorage.com")) {
-      videoUrl = rawVideoUrl;
-    } else if (rawVideoUrl.startsWith("/api/media/")) {
-      videoUrl = `${baseUrl}${rawVideoUrl}`;
     } else if (rawVideoUrl.includes("/api/media/")) {
-      // Extract path and use current base (avoids double /api/media/)
-      const path = rawVideoUrl.replace(/^https?:\/\/[^/]+/, "");
+      const path = rawVideoUrl.startsWith("/") ? rawVideoUrl : rawVideoUrl.replace(/^https?:\/\/[^/]+/, "");
+      // Videos use direct API URL (video tags support cross-origin, no iframe restriction)
       videoUrl = `${baseUrl}${path}`;
     }
   }

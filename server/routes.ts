@@ -5689,31 +5689,75 @@ const key = `${folder || "materials"}/${Date.now()}_${safeFilename}`;
 
 app.use("/api/media", async (req: any, res: any) => {
   try {
+    // Auth check — must be logged in
+    const user = await getAuthUser(req);
+    if (!user) {
+      return res.status(401).send("Unauthorized");
+    }
+
     const key = req.path.replace(/^\//, ""); // strip leading slash
+    if (!key) return res.status(400).send("Invalid path");
+
+    // Enrollment check for non-admins
+    // Find the material or lecture that owns this file
+    if (user.role !== "admin") {
+      // Check study_materials
+      const matResult = await db.query(
+        "SELECT course_id, is_free FROM study_materials WHERE file_url LIKE $1",
+        [`%${key}%`]
+      );
+      if (matResult.rows.length > 0) {
+        const mat = matResult.rows[0];
+        if (mat.course_id && !mat.is_free) {
+          const enrolled = await db.query(
+            "SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)",
+            [user.id, mat.course_id]
+          );
+          if (enrolled.rows.length === 0) {
+            return res.status(403).send("Enrollment required");
+          }
+        }
+      } else {
+        // Check lectures
+        const lecResult = await db.query(
+          "SELECT course_id, is_free_preview FROM lectures WHERE video_url LIKE $1 OR pdf_url LIKE $1",
+          [`%${key}%`]
+        );
+        if (lecResult.rows.length > 0) {
+          const lec = lecResult.rows[0];
+          if (lec.course_id && !lec.is_free_preview) {
+            const enrolled = await db.query(
+              "SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)",
+              [user.id, lec.course_id]
+            );
+            if (enrolled.rows.length === 0) {
+              return res.status(403).send("Enrollment required");
+            }
+          }
+        }
+      }
+    }
 
     const r2 = await getR2Client();
     const { GetObjectCommand } = await import("@aws-sdk/client-s3");
-
     const command = new GetObjectCommand({
       Bucket: process.env.R2_BUCKET_NAME,
       Key: key,
     });
-
     const response = await r2.send(command);
+    if (!response.Body) return res.status(404).send("File not found");
 
-    if (!response.Body) {
-      return res.status(404).send("File not found");
-    }
-
-    res.setHeader("Content-Type", response.ContentType || "application/octet-stream");
-    res.setHeader("Content-Length", response.ContentLength?.toString() || "");
-
-    // 🔥 IMPORTANT FIXES
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("X-Frame-Options", "ALLOWALL");
+    const contentType = response.ContentType || "application/octet-stream";
+    res.setHeader("Content-Type", contentType);
+    if (response.ContentLength) res.setHeader("Content-Length", response.ContentLength.toString());
+    // Prevent caching and downloading
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    res.setHeader("Content-Disposition", "inline"); // view in browser, not download
+    res.setHeader("X-Frame-Options", "SAMEORIGIN");
+    res.setHeader("Access-Control-Allow-Origin", req.headers.origin || "*");
+    res.setHeader("Access-Control-Allow-Credentials", "true");
 
     response.Body.pipe(res);
-
   } catch (err) {
     console.error("[MEDIA ERROR]", err);
     res.status(500).send("Error fetching file");

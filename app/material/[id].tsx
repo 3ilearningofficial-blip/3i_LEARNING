@@ -351,35 +351,32 @@ export default function MaterialViewerScreen() {
   // Convert R2 CDN URLs to server proxy URLs (same as lecture viewer)
   // Skip conversion for local file:// URIs
   const fileUrl = (() => {
-    if (localUri) return localUri; // Use local URI if provided
+    if (localUri) return localUri;
     const raw = material?.file_url || "";
     if (!raw) return "";
-    if (raw.startsWith('file://')) return raw; // Skip conversion for local files
-    
-    // Already a full R2/CDN URL — serve directly (no proxy needed for R2 public URLs)
+    if (raw.startsWith('file://')) return raw;
+
+    // Already a full R2/CDN URL — serve directly
     if (raw.startsWith("https://cdn.3ilearning.in/")) return raw;
     if (raw.includes("r2.cloudflarestorage.com")) return raw;
     if (raw.includes("pub-") && raw.includes(".r2.dev")) return raw;
-    
-    // URL stored as /api/media/... path
-    // On web, use relative URL (goes through Vercel proxy with session cookies)
-    // On native, use absolute API URL
-    if (raw.startsWith("/api/media/")) {
-      return Platform.OS === "web" ? raw : `${getBaseUrl()}${raw}`;
-    }
-    
-    // URL stored with old host — extract path and use current base
+
+    // Any URL containing /api/media/ — use Vercel proxy on web (full origin URL),
+    // or direct API URL on native
     if (raw.includes("/api/media/")) {
-      const path = raw.replace(/^https?:\/\/[^/]+/, "");
-      return Platform.OS === "web" ? path : `${getBaseUrl()}${path}`;
+      const path = raw.startsWith("/") ? raw : raw.replace(/^https?:\/\/[^/]+/, "");
+      if (Platform.OS === "web" && typeof window !== "undefined") {
+        return `${window.location.origin}${path}`;
+      }
+      return `${getBaseUrl()}${path}`;
     }
-    
+
     // Google Drive / Docs — use as-is
     if (raw.includes("drive.google.com") || raw.includes("docs.google.com")) return raw;
-    
+
     // Relative path — prepend base
     if (raw.startsWith("/")) return `${getBaseUrl()}${raw}`;
-    
+
     // Anything else (YouTube, external URLs) — use as-is
     return raw;
   })();
