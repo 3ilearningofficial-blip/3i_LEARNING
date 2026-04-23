@@ -205,7 +205,6 @@ document.addEventListener('keydown', function(e) {
 }
 
 function buildPdfViewerHtml(fileUrl: string, proxyBaseUrl: string): string {
-  const proxyUrl = `${proxyBaseUrl}/api/pdf-proxy?url=${encodeURIComponent(fileUrl)}`;
   const gviewUrl = `https://docs.google.com/gview?embedded=true&url=${encodeURIComponent(fileUrl)}`;
   return `<!DOCTYPE html>
 <html><head>
@@ -234,13 +233,15 @@ html, body { width: 100%; height: 100%; background: #2a2a2a; overflow: auto; fon
 <script>
 (function() {
   var directUrl = ${JSON.stringify(fileUrl)};
-  var proxyUrl = ${JSON.stringify(proxyUrl)};
   var gviewUrl = ${JSON.stringify(gviewUrl)};
   
   pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
   function renderWithPdfJs(url) {
-    return pdfjsLib.getDocument(url).promise.then(function(pdf) {
+    return pdfjsLib.getDocument({
+      url: url,
+      withCredentials: true,
+    }).promise.then(function(pdf) {
       document.getElementById('loading').style.display = 'none';
       var viewer = document.getElementById('viewer');
       viewer.innerHTML = '';
@@ -292,9 +293,6 @@ html, body { width: 100%; height: 100%; background: #2a2a2a; overflow: auto; fon
   }
 
   renderWithPdfJs(directUrl)
-    .catch(function() {
-      return renderWithPdfJs(proxyUrl);
-    })
     .catch(function() {
       showGoogleViewer();
       setTimeout(function() {
