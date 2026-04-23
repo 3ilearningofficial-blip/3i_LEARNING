@@ -648,6 +648,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     // Secure offline downloads indexes
     await db.query("CREATE INDEX IF NOT EXISTS idx_download_tokens_token ON download_tokens(token)");
     await db.query("CREATE INDEX IF NOT EXISTS idx_download_tokens_expires ON download_tokens(expires_at)");
+    // Short-lived media access tokens (for PDF/video viewing in iframes)
+    await db.query(`CREATE TABLE IF NOT EXISTS media_tokens (
+      token TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      file_key TEXT NOT NULL,
+      expires_at BIGINT NOT NULL,
+      created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
+    )`).catch(() => {});
+    await db.query("CREATE INDEX IF NOT EXISTS idx_media_tokens_expires ON media_tokens(expires_at)").catch(() => {});
     console.log("[DB] Indexes ensured");
   } catch (err) {
     console.error("[DB] Failed to create indexes:", err);
@@ -1506,6 +1515,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ success: true, user: updated });
     } catch (err) {
       res.status(500).json({ message: "Failed to update profile" });
+    }
+  });
+
+  // ==================== MEDIA TOKEN (short-lived auth for PDF/video iframes) ====================
+  app.post("/api/media-token", async (req: Request, res: Response) => {
+    try {
+      const user = await getAuthUser(req);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+      const { fileKey } = req.body;
+      if (!fileKey || typeof fileKey !== "string") return res.status(400).json({ message: "fileKey required" });
+      const token = Date.now().toString(36) + Math.random().toString(36).substr(2, 16);
+      const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
+      await db.query(
+        "INSERT INTO media_tokens (token, user_id, file_key, expires_at) VALUES ($1, $2, $3, $4)",
+        [token, user.id, fileKey, expiresAt]
+      );
+      // Clean up expired tokens
+      db.query("DELETE FROM media_tokens WHERE expires_at < $1", [Date.now()]).catch(() => {});
+      res.json({ token, expiresAt });
+    } catch (err) {
+      res.status(500).json({ message: "Failed to generate token" });
     }
   });
 
@@ -5689,19 +5719,37 @@ const key = `${folder || "materials"}/${Date.now()}_${safeFilename}`;
 
 app.use("/api/media", async (req: any, res: any) => {
   try {
-    // Auth check — must be logged in
-    const user = await getAuthUser(req);
-    if (!user) {
-      return res.status(401).send("Unauthorized");
-    }
-
-    const key = req.path.replace(/^\//, ""); // strip leading slash
+    const key = req.path.replace(/^\//, "");
     if (!key) return res.status(400).send("Invalid path");
 
+    // Auth: accept either session/Bearer token OR short-lived media token
+    const mediaToken = req.query.token as string | undefined;
+    let userId: number | null = null;
+    let userRole: string = "student";
+
+    if (mediaToken) {
+      // Validate media token
+      const tokenResult = await db.query(
+        "SELECT user_id FROM media_tokens WHERE token = $1 AND expires_at > $2 AND file_key = $3",
+        [mediaToken, Date.now(), key]
+      );
+      if (tokenResult.rows.length === 0) {
+        return res.status(401).send("Token expired or invalid");
+      }
+      userId = tokenResult.rows[0].user_id;
+      // Get role
+      const userResult = await db.query("SELECT role FROM users WHERE id = $1", [userId]);
+      if (userResult.rows.length > 0) userRole = userResult.rows[0].role;
+    } else {
+      // Standard session/Bearer auth
+      const user = await getAuthUser(req);
+      if (!user) return res.status(401).send("Unauthorized");
+      userId = user.id;
+      userRole = user.role;
+    }
+
     // Enrollment check for non-admins
-    // Find the material or lecture that owns this file
-    if (user.role !== "admin") {
-      // Check study_materials
+    if (userRole !== "admin") {
       const matResult = await db.query(
         "SELECT course_id, is_free FROM study_materials WHERE file_url LIKE $1",
         [`%${key}%`]
@@ -5711,14 +5759,11 @@ app.use("/api/media", async (req: any, res: any) => {
         if (mat.course_id && !mat.is_free) {
           const enrolled = await db.query(
             "SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)",
-            [user.id, mat.course_id]
+            [userId, mat.course_id]
           );
-          if (enrolled.rows.length === 0) {
-            return res.status(403).send("Enrollment required");
-          }
+          if (enrolled.rows.length === 0) return res.status(403).send("Enrollment required");
         }
       } else {
-        // Check lectures
         const lecResult = await db.query(
           "SELECT course_id, is_free_preview FROM lectures WHERE video_url LIKE $1 OR pdf_url LIKE $1",
           [`%${key}%`]
@@ -5728,11 +5773,9 @@ app.use("/api/media", async (req: any, res: any) => {
           if (lec.course_id && !lec.is_free_preview) {
             const enrolled = await db.query(
               "SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)",
-              [user.id, lec.course_id]
+              [userId, lec.course_id]
             );
-            if (enrolled.rows.length === 0) {
-              return res.status(403).send("Enrollment required");
-            }
+            if (enrolled.rows.length === 0) return res.status(403).send("Enrollment required");
           }
         }
       }
@@ -5740,23 +5783,17 @@ app.use("/api/media", async (req: any, res: any) => {
 
     const r2 = await getR2Client();
     const { GetObjectCommand } = await import("@aws-sdk/client-s3");
-    const command = new GetObjectCommand({
-      Bucket: process.env.R2_BUCKET_NAME,
-      Key: key,
-    });
+    const command = new GetObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: key });
     const response = await r2.send(command);
     if (!response.Body) return res.status(404).send("File not found");
 
-    const contentType = response.ContentType || "application/octet-stream";
-    res.setHeader("Content-Type", contentType);
+    res.setHeader("Content-Type", response.ContentType || "application/octet-stream");
     if (response.ContentLength) res.setHeader("Content-Length", response.ContentLength.toString());
-    // Prevent caching and downloading
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-    res.setHeader("Content-Disposition", "inline"); // view in browser, not download
+    res.setHeader("Content-Disposition", "inline");
     res.setHeader("X-Frame-Options", "SAMEORIGIN");
     res.setHeader("Access-Control-Allow-Origin", req.headers.origin || "*");
     res.setHeader("Access-Control-Allow-Credentials", "true");
-
     response.Body.pipe(res);
   } catch (err) {
     console.error("[MEDIA ERROR]", err);

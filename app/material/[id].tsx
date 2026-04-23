@@ -327,6 +327,7 @@ export default function MaterialViewerScreen() {
   const insets = useSafeAreaInsets();
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const [loading, setLoading] = useState(true);
+  const [mediaToken, setMediaToken] = useState<string | null>(null);
   const topPadding = Platform.OS === "web" ? 16 : insets.top;
   const { isAdmin } = useAuth();
 
@@ -385,6 +386,31 @@ export default function MaterialViewerScreen() {
   const youtubeVideoId = material ? getYouTubeVideoId(fileUrl || "") : null;
   const isYouTube = !!youtubeVideoId;
   const apiBaseUrl = getBaseUrl();
+
+  // Extract the R2 file key from the URL for token generation
+  const fileKey = (() => {
+    const raw = material?.file_url || "";
+    if (!raw || !raw.includes("/api/media/")) return null;
+    const path = raw.startsWith("/") ? raw : raw.replace(/^https?:\/\/[^/]+/, "");
+    return path.replace(/^\/api\/media\//, "");
+  })();
+
+  // Fetch a short-lived media token for PDF/video viewing (avoids srcDoc cookie issues)
+  React.useEffect(() => {
+    if (!fileKey || !material) return;
+    if (isGDrive || isYouTube) return; // not needed for these
+    apiRequest("POST", "/api/media-token", { fileKey })
+      .then(r => r.json())
+      .then(d => { if (d.token) setMediaToken(d.token); })
+      .catch(() => {}); // silently fail — fallback to direct URL
+  }, [fileKey, material?.id]);
+
+  // Authenticated URL with token for iframe src (works in all browsers including mobile)
+  const tokenizedUrl = mediaToken && fileKey
+    ? (Platform.OS === "web" && typeof window !== "undefined"
+        ? `${window.location.origin}/api/media/${fileKey}?token=${mediaToken}`
+        : `${getBaseUrl()}/api/media/${fileKey}?token=${mediaToken}`)
+    : fileUrl;
 
   return (
     <View style={styles.container}>
@@ -510,12 +536,21 @@ export default function MaterialViewerScreen() {
                     onLoad={() => setLoading(false)}
                   />
                 ) : isPdf && fileUrl && material ? (
-                  <iframe
-                    srcDoc={buildPdfViewerHtml(fileUrl, apiBaseUrl)}
-                    style={{ width: "100%", height: "100%", border: "none" } as any}
-                    title={material.title}
-                    onLoad={() => setLoading(false)}
-                  />
+                  (mediaToken || !fileKey) ? (
+                    // Use direct src with token (or direct URL if no fileKey needed)
+                    <iframe
+                      src={tokenizedUrl}
+                      style={{ width: "100%", height: "100%", border: "none" } as any}
+                      title={material.title}
+                      onLoad={() => setLoading(false)}
+                    />
+                  ) : (
+                    // Token not yet loaded — show spinner
+                    <View style={styles.centered}>
+                      <ActivityIndicator size="large" color={Colors.light.primary} />
+                      <Text style={styles.loadingText}>Loading PDF...</Text>
+                    </View>
+                  )
                 ) : isPdf && !fileUrl ? (
                   <View style={styles.centered}>
                     <Ionicons name="alert-circle-outline" size={48} color={Colors.light.accent} />
@@ -557,9 +592,9 @@ export default function MaterialViewerScreen() {
                 source={
                   isGDrive && gDriveFileId
                     ? { html: buildGoogleDriveViewerHtml(gDriveFileId), baseUrl: "https://drive.google.com" }
-                    : isPdf && fileUrl
-                      ? { html: buildPdfViewerHtml(fileUrl, apiBaseUrl), baseUrl: apiBaseUrl }
-                      : { uri: fileUrl || "about:blank" }
+                    : isPdf && tokenizedUrl
+                      ? { uri: tokenizedUrl }
+                      : { uri: tokenizedUrl || fileUrl || "about:blank" }
                 }
                 style={styles.webview}
                 onLoadEnd={() => setLoading(false)}
