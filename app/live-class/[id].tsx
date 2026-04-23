@@ -632,7 +632,6 @@ export default function LiveClassScreen() {
                 onLoadedData={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }}
                 onContextMenu={(e: any) => e.preventDefault()}
               />
-              />
             ) : isCfHls && Platform.OS !== "web" ? (
               <WebView
                 source={{ html: buildCfHlsPlayerHtml(cfHlsUrl) }}
