@@ -5,8 +5,10 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useQuery } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
 import { authFetch, getApiUrl } from "@/lib/query-client";
+import { useAuth } from "@/context/AuthContext";
 
 function ChatTabIcon({ color, focused }: { color: string; focused: boolean }) {
+  const { user } = useAuth();
   const { data: messages = [] } = useQuery<any[]>({
     queryKey: ["/api/support/messages"],
     queryFn: async () => {
@@ -17,6 +19,7 @@ function ChatTabIcon({ color, focused }: { color: string; focused: boolean }) {
         return res.json();
       } catch { return []; }
     },
+    enabled: !!user,
     refetchInterval: 10000,
     staleTime: 5000,
   });
@@ -42,6 +45,7 @@ function ChatTabIcon({ color, focused }: { color: string; focused: boolean }) {
 }
 
 function NotifTabIcon({ color, focused }: { color: string; focused: boolean }) {
+  const { user } = useAuth();
   const { data: notifications = [] } = useQuery<any[]>({
     queryKey: ["/api/notifications"],
     queryFn: async () => {
@@ -52,6 +56,7 @@ function NotifTabIcon({ color, focused }: { color: string; focused: boolean }) {
         return res.json();
       } catch { return []; }
     },
+    enabled: !!user,
     refetchInterval: 30000,
     staleTime: 10000,
   });

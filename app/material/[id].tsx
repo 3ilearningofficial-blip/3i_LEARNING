@@ -514,13 +514,19 @@ export default function MaterialViewerScreen() {
                     allow="autoplay"
                     onLoad={() => setLoading(false)}
                   />
-                ) : isPdf && fileUrl ? (
+                ) : isPdf && fileUrl && material ? (
                   <iframe
                     srcDoc={buildPdfViewerHtml(fileUrl, apiBaseUrl)}
                     style={{ width: "100%", height: "100%", border: "none" } as any}
                     title={material.title}
                     onLoad={() => setLoading(false)}
                   />
+                ) : isPdf && !fileUrl ? (
+                  <View style={styles.centered}>
+                    <Ionicons name="alert-circle-outline" size={48} color={Colors.light.accent} />
+                    <Text style={styles.errorTitle}>No file URL</Text>
+                    <Text style={styles.errorSub}>This material has no file attached.</Text>
+                  </View>
                 ) : (
                   // For video files — use <video> tag (iframes blocked by X-Frame-Options)
                   // For other files — use iframe
@@ -556,9 +562,9 @@ export default function MaterialViewerScreen() {
                 source={
                   isGDrive && gDriveFileId
                     ? { html: buildGoogleDriveViewerHtml(gDriveFileId), baseUrl: "https://drive.google.com" }
-                    : isPdf
+                    : isPdf && fileUrl
                       ? { html: buildPdfViewerHtml(fileUrl, apiBaseUrl), baseUrl: apiBaseUrl }
-                      : { uri: fileUrl }
+                      : { uri: fileUrl || "about:blank" }
                 }
                 style={styles.webview}
                 onLoadEnd={() => setLoading(false)}

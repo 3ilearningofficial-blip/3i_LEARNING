@@ -439,6 +439,7 @@ export default function HomeScreen() {
         return res.json();
       } catch { return []; }
     },
+    enabled: !!user, // only fetch when logged in — prevents 401 on welcome page
     refetchInterval: 30000,
     staleTime: 10000,
   });
