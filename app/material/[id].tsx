@@ -405,12 +405,19 @@ export default function MaterialViewerScreen() {
       .catch(() => {}); // silently fail — fallback to direct URL
   }, [fileKey, material?.id]);
 
-  // Authenticated URL with token for iframe src (works in all browsers including mobile)
+  // Authenticated URL with token
   const tokenizedUrl = mediaToken && fileKey
     ? (Platform.OS === "web" && typeof window !== "undefined"
         ? `${window.location.origin}/api/media/${fileKey}?token=${mediaToken}`
         : `${getBaseUrl()}/api/media/${fileKey}?token=${mediaToken}`)
     : fileUrl;
+
+  // PDF viewer URL — server-rendered page with pdf.js (no browser PDF controls)
+  const pdfViewerUrl = mediaToken && fileKey
+    ? (Platform.OS === "web" && typeof window !== "undefined"
+        ? `${window.location.origin}/api/pdf-viewer?key=${encodeURIComponent(fileKey)}&token=${mediaToken}`
+        : `${getBaseUrl()}/api/pdf-viewer?key=${encodeURIComponent(fileKey)}&token=${mediaToken}`)
+    : null;
 
   return (
     <View style={styles.container}>
@@ -536,16 +543,15 @@ export default function MaterialViewerScreen() {
                     onLoad={() => setLoading(false)}
                   />
                 ) : isPdf && fileUrl && material ? (
-                  (mediaToken || !fileKey) ? (
-                    // Use direct src with token (or direct URL if no fileKey needed)
+                  (pdfViewerUrl || !fileKey) ? (
+                    // Server-rendered pdf.js page — no browser PDF controls, no download button
                     <iframe
-                      src={tokenizedUrl}
+                      src={pdfViewerUrl || fileUrl}
                       style={{ width: "100%", height: "100%", border: "none" } as any}
                       title={material.title}
                       onLoad={() => setLoading(false)}
                     />
                   ) : (
-                    // Token not yet loaded — show spinner
                     <View style={styles.centered}>
                       <ActivityIndicator size="large" color={Colors.light.primary} />
                       <Text style={styles.loadingText}>Loading PDF...</Text>
@@ -558,11 +564,9 @@ export default function MaterialViewerScreen() {
                     <Text style={styles.errorSub}>This material has no file attached.</Text>
                   </View>
                 ) : (
-                  // For video files — use <video> tag (iframes blocked by X-Frame-Options)
-                  // For other files — use iframe
                   material?.file_type === "video" || fileUrl?.match(/\.(mp4|mov|webm|mkv|avi)(\?|$)/i) ? (
                     <video
-                      src={fileUrl}
+                      src={tokenizedUrl || fileUrl}
                       controls
                       autoPlay
                       playsInline
@@ -574,7 +578,7 @@ export default function MaterialViewerScreen() {
                     />
                   ) : (
                     <iframe
-                      src={fileUrl}
+                      src={tokenizedUrl || fileUrl}
                       style={{ width: "100%", height: "100%", border: "none" } as any}
                       title={material?.title || "File"}
                       onLoad={() => setLoading(false)}
@@ -592,8 +596,8 @@ export default function MaterialViewerScreen() {
                 source={
                   isGDrive && gDriveFileId
                     ? { html: buildGoogleDriveViewerHtml(gDriveFileId), baseUrl: "https://drive.google.com" }
-                    : isPdf && tokenizedUrl
-                      ? { uri: tokenizedUrl }
+                    : isPdf && pdfViewerUrl
+                      ? { uri: pdfViewerUrl }
                       : { uri: tokenizedUrl || fileUrl || "about:blank" }
                 }
                 style={styles.webview}

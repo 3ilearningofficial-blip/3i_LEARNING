@@ -360,18 +360,40 @@ export default function LiveClassScreen() {
   const screenHeight = Dimensions.get("window").height;
   const videoHeight = Math.min(screenHeight * 0.35, 280);
   
-  // Determine video type — for Cloudflare stream, use HLS URL; for completed, use recording_url
   const streamType = liveClassData?.stream_type;
   const cfHlsUrl = liveClassData?.cf_playback_hls || "";
   const recordingUrl = liveClassData?.recording_url || "";
   const isCompleted = liveClassData?.is_completed;
 
-  // Priority: recording_url (completed) > cf_playback_hls (cloudflare live/recording) > youtube_url
   const videoUrl = recordingUrl
     ? recordingUrl
     : (streamType === "cloudflare" && cfHlsUrl)
       ? cfHlsUrl
       : (liveClassData?.youtube_url || paramVideoUrl || "");
+
+  // For /api/media/ recording URLs, get a token so mobile web can play them
+  const [recordingToken, setRecordingToken] = useState<string | null>(null);
+  const recordingFileKey = (() => {
+    if (!recordingUrl || !recordingUrl.includes("/api/media/")) return null;
+    const path = recordingUrl.startsWith("/") ? recordingUrl : recordingUrl.replace(/^https?:\/\/[^/]+/, "");
+    return path.replace(/^\/api\/media\//, "");
+  })();
+  useEffect(() => {
+    if (!recordingFileKey) return;
+    apiRequest("POST", "/api/media-token", { fileKey: recordingFileKey })
+      .then(r => r.json())
+      .then(d => { if (d.token) setRecordingToken(d.token); })
+      .catch(() => {});
+  }, [recordingFileKey]);
+
+  const authenticatedVideoUrl = (() => {
+    if (!recordingFileKey) return videoUrl;
+    if (!recordingToken) return videoUrl;
+    if (Platform.OS === "web" && typeof window !== "undefined") {
+      return `${window.location.origin}/api/media/${recordingFileKey}?token=${recordingToken}`;
+    }
+    return videoUrl; // native uses session cookies directly
+  })();
   const videoId = getYouTubeVideoId(videoUrl);
   const isStreamId = !videoId && isCloudflareStreamId(videoUrl);
   // Cloudflare HLS live stream or recording (m3u8 URL)
@@ -597,6 +619,20 @@ export default function LiveClassScreen() {
                 allowFullScreen
                 onLoad={() => setIsVideoLoading(false)}
               />
+            ) : !videoId && !isCfHls && !isStreamId && authenticatedVideoUrl && Platform.OS === "web" ? (
+              // Direct video file (recording from /api/media/) — use <video> tag on web
+              <video
+                src={authenticatedVideoUrl}
+                controls
+                autoPlay
+                playsInline
+                controlsList="nodownload noplaybackrate"
+                disablePictureInPicture
+                style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "contain", backgroundColor: "#000" } as any}
+                onLoadedData={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }}
+                onContextMenu={(e: any) => e.preventDefault()}
+              />
+              />
             ) : isCfHls && Platform.OS !== "web" ? (
               <WebView
                 source={{ html: buildCfHlsPlayerHtml(cfHlsUrl) }}
@@ -611,6 +647,18 @@ export default function LiveClassScreen() {
             ) : isStreamId && streamHtml ? (
               <WebView
                 source={{ html: streamHtml, baseUrl: "https://cloudflarestream.com" }}
+                style={{ flex: 1, backgroundColor: "#000" }}
+                onLoad={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }}
+                onMessage={handleWebViewMessage}
+                allowsFullscreenVideo mediaPlaybackRequiresUserAction={false}
+                allowsInlineMediaPlayback scrollEnabled={false}
+                javaScriptEnabled domStorageEnabled mixedContentMode="compatibility"
+                originWhitelist={["*"]}
+              />
+            ) : !videoId && !isCfHls && !isStreamId && videoUrl && Platform.OS !== "web" ? (
+              // Direct video file on native
+              <WebView
+                source={{ uri: videoUrl }}
                 style={{ flex: 1, backgroundColor: "#000" }}
                 onLoad={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }}
                 onMessage={handleWebViewMessage}
