@@ -27,28 +27,36 @@ declare module "http" {
 import cors from "cors";
 
 function setupCors(app: express.Application) {
+  const allowedOrigins = [
+    "https://3ilearning.in",
+    "https://www.3ilearning.in",
+    "https://api.3ilearning.in",
+  ];
+
   app.use(cors({
-  origin: function (
-    origin: string | undefined,
-    callback: (err: Error | null, allow?: boolean) => void
-  ) {
-    if (!origin) return callback(null, true);
-
-    if (
-      origin.includes("vercel.app") ||
-      origin === "https://3ilearning.in" ||
-      origin === "https://www.3ilearning.in" ||
-      origin === "https://api.3ilearning.in"
+    origin: function (
+      origin: string | undefined,
+      callback: (err: Error | null, allow?: boolean) => void
     ) {
-      return callback(null, true);
-    }
+      // Allow requests with no origin (mobile apps, curl, server-to-server)
+      if (!origin) return callback(null, true);
+      // Allow all Vercel preview and production deployments
+      if (origin.includes("vercel.app") || origin.includes("3ilearning")) {
+        return callback(null, true);
+      }
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      return callback(new Error("Not allowed by CORS"));
+    },
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-User-Id", "X-Requested-With"],
+    credentials: true,
+    optionsSuccessStatus: 200, // Some browsers (IE11) choke on 204
+  }));
 
-    return callback(new Error("Not allowed by CORS"));
-  },
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-User-Id"],
-  credentials: true,
-}));
+  // Explicitly handle preflight for all routes
+  app.options("/(.*)", cors());
 }
 
 function setupBodyParsing(app: express.Application) {
@@ -272,9 +280,9 @@ function setupErrorHandler(app: express.Application) {
     resave: false,
     saveUninitialized: false,
     cookie: {
-      secure: false,           // Allow HTTP in dev
+      secure: isProduction,        // HTTPS only in production
       httpOnly: true,
-      sameSite: "lax",         // "lax" works for cross-origin on same host, no Secure required
+      sameSite: isProduction ? "none" : "lax",  // "none" required for cross-origin with credentials
       maxAge: 7 * 24 * 60 * 60 * 1000,
     },
   };
