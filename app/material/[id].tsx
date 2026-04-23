@@ -353,10 +353,30 @@ export default function MaterialViewerScreen() {
   const fileUrl = (() => {
     if (localUri) return localUri; // Use local URI if provided
     const raw = material?.file_url || "";
+    if (!raw) return "";
     if (raw.startsWith('file://')) return raw; // Skip conversion for local files
-    if (raw.includes("cdn.3ilearning.in")) return `${getBaseUrl()}/api/media/${raw.replace("https://cdn.3ilearning.in/", "")}`;
-    if (raw.includes("3ilearning.in/") && !raw.includes("drive.google.com")) return `${getBaseUrl()}/api/media/${raw.replace(/https?:\/\/[^/]*3ilearning\.in\//, "")}`;
-    if (raw.includes("/api/media/")) return `${getBaseUrl()}/api/media/${raw.replace(/^https?:\/\/[^/]+\/api\/media\//, "")}`;
+    
+    // Already a full R2/CDN URL — serve directly (no proxy needed for R2 public URLs)
+    if (raw.startsWith("https://cdn.3ilearning.in/")) return raw;
+    if (raw.includes("r2.cloudflarestorage.com")) return raw;
+    if (raw.includes("pub-") && raw.includes(".r2.dev")) return raw;
+    
+    // URL stored as /api/media/... path — prepend base URL
+    if (raw.startsWith("/api/media/")) return `${getBaseUrl()}${raw}`;
+    
+    // URL stored with old host — extract path and use current base
+    if (raw.includes("/api/media/")) {
+      const path = raw.replace(/^https?:\/\/[^/]+/, "");
+      return `${getBaseUrl()}${path}`;
+    }
+    
+    // Google Drive / Docs — use as-is
+    if (raw.includes("drive.google.com") || raw.includes("docs.google.com")) return raw;
+    
+    // Relative path — prepend base
+    if (raw.startsWith("/")) return `${getBaseUrl()}${raw}`;
+    
+    // Anything else (YouTube, external URLs) — use as-is
     return raw;
   })();
 

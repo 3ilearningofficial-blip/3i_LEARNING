@@ -394,13 +394,17 @@ export default function LectureScreen() {
   
   // Skip URL conversion for local file:// URIs
   if (!rawVideoUrl.startsWith('file://')) {
-    if (rawVideoUrl.includes("cdn.3ilearning.in")) {
-      videoUrl = `${baseUrl}/api/media/${rawVideoUrl.replace("https://cdn.3ilearning.in/", "")}`;
-    } else if (rawVideoUrl.includes("3ilearning.in/")) {
-      videoUrl = `${baseUrl}/api/media/${rawVideoUrl.replace(/https?:\/\/[^/]*3ilearning\.in\//, "")}`;
+    if (rawVideoUrl.startsWith("https://cdn.3ilearning.in/")) {
+      // Already a full R2 CDN URL — serve directly
+      videoUrl = rawVideoUrl;
+    } else if (rawVideoUrl.includes("r2.cloudflarestorage.com")) {
+      videoUrl = rawVideoUrl;
+    } else if (rawVideoUrl.startsWith("/api/media/")) {
+      videoUrl = `${baseUrl}${rawVideoUrl}`;
     } else if (rawVideoUrl.includes("/api/media/")) {
-      // Replace any host (localhost, other IP) with the correct one for this device
-      videoUrl = `${baseUrl}/api/media/${rawVideoUrl.replace(/^https?:\/\/[^/]+\/api\/media\//, "")}`;
+      // Extract path and use current base (avoids double /api/media/)
+      const path = rawVideoUrl.replace(/^https?:\/\/[^/]+/, "");
+      videoUrl = `${baseUrl}${path}`;
     }
   }
   
