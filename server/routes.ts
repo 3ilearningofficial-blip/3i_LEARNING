@@ -5687,9 +5687,9 @@ const key = `${folder || "materials"}/${Date.now()}_${safeFilename}`;
   }
 });
 
-app.get("/api/media/:key(*)", async (req, res) => {
+app.get("/api/media/*", async (req, res) => {
   try {
-    const key = (req.params as any).key;
+    const key = (req.params as any)[0] || req.path.replace("/api/media/", "");
 
     const r2 = await getR2Client();
     const { GetObjectCommand } = await import("@aws-sdk/client-s3");
