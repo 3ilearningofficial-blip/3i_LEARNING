@@ -543,15 +543,29 @@ export default function MaterialViewerScreen() {
                     onLoad={() => setLoading(false)}
                   />
                 ) : isPdf && fileUrl && material ? (
-                  (pdfViewerUrl || !fileKey) ? (
-                    // Server-rendered pdf.js page — no browser PDF controls, no download button
-                    <iframe
-                      src={pdfViewerUrl || fileUrl}
-                      style={{ width: "100%", height: "100%", border: "none" } as any}
-                      title={material.title}
-                      onLoad={() => setLoading(false)}
-                    />
-                  ) : (
+                  (pdfViewerUrl || !fileKey) ? (() => {
+                    // On mobile web, navigate directly to pdf-viewer page (same tab)
+                    // On desktop, use inline iframe
+                    // Both use the same server-rendered pdf.js page — no browser controls
+                    if (screenWidth < 768 && pdfViewerUrl && typeof window !== "undefined") {
+                      // Navigate immediately when token is ready
+                      window.location.href = pdfViewerUrl;
+                      return (
+                        <View style={styles.centered}>
+                          <ActivityIndicator size="large" color={Colors.light.primary} />
+                          <Text style={styles.loadingText}>Opening PDF...</Text>
+                        </View>
+                      );
+                    }
+                    return (
+                      <iframe
+                        src={pdfViewerUrl || fileUrl}
+                        style={{ width: "100%", height: "100%", border: "none" } as any}
+                        title={material.title}
+                        onLoad={() => setLoading(false)}
+                      />
+                    );
+                  })() : (
                     <View style={styles.centered}>
                       <ActivityIndicator size="large" color={Colors.light.primary} />
                       <Text style={styles.loadingText}>Loading PDF...</Text>
@@ -574,6 +588,7 @@ export default function MaterialViewerScreen() {
                       disablePictureInPicture
                       style={{ width: "100%", height: "100%", objectFit: "contain", backgroundColor: "#000" } as any}
                       onLoadedData={() => setLoading(false)}
+                      onError={() => setLoading(false)}
                       onContextMenu={(e: any) => e.preventDefault()}
                     />
                   ) : (

@@ -5601,7 +5601,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (!token || !key || typeof token !== "string" || typeof key !== "string") {
       return res.status(400).send("Missing token or key");
     }
-    // Validate token
     const tokenResult = await db.query(
       "SELECT user_id FROM media_tokens WHERE token = $1 AND expires_at > $2 AND file_key = $3",
       [token, Date.now(), key]
@@ -5609,7 +5608,88 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (!tokenResult.rows.length) {
       return res.status(401).send("Token expired or invalid");
     }
-    const pdfUrl = `/api/media/${key}?token=${token}`;
+    // Use absolute URL so it works whether served from Vercel proxy or direct EC2
+    const origin = `${req.headers["x-forwarded-proto"] || req.protocol}://${req.headers["x-forwarded-host"] || req.headers.host}`;
+    const pdfUrl = `${origin}/api/media/${key}?token=${token}`;
+    const html = `<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+<meta name="robots" content="noindex,nofollow">
+<title>PDF Viewer</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;background:#2a2a2a;overflow:auto;font-family:-apple-system,sans-serif;-webkit-overflow-scrolling:touch;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+#topbar{position:fixed;top:0;left:0;right:0;height:44px;background:#1a1a1a;display:flex;align-items:center;padding:0 12px;gap:12px;z-index:100;border-bottom:1px solid #333}
+#backbtn{background:rgba(255,255,255,0.1);border:none;color:#fff;padding:6px 14px;border-radius:8px;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:6px}
+#pdftitle{color:#ccc;font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#viewer{width:100%;display:flex;flex-direction:column;align-items:center;gap:8px;padding:52px 0 16px}
+.page-canvas{display:block;max-width:100%;height:auto;box-shadow:0 2px 8px rgba(0,0,0,0.3);background:#fff;pointer-events:none}
+.loading{position:fixed;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;color:#ccc;background:#2a2a2a;z-index:10}
+.spinner{width:40px;height:40px;border:3px solid rgba(255,255,255,0.1);border-top:3px solid #1A56DB;border-radius:50%;animation:spin 0.8s linear infinite}
+.page-info{color:#888;font-size:12px;padding:4px 0}
+.error{position:fixed;top:44px;left:0;width:100%;height:calc(100% - 44px);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;color:#ccc;padding:32px;text-align:center;background:#2a2a2a;z-index:20}
+.error h3{font-size:18px;color:#fff}.error p{font-size:13px;color:#999;line-height:1.5}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media print{body{display:none!important}}
+</style>
+</head><body>
+<div id="topbar">
+  <button id="backbtn" onclick="history.back()">&#8592; Back</button>
+  <span id="pdftitle">${String(key).split('/').pop() || 'Document'}</span>
+</div>
+<div id="loading" class="loading"><div class="spinner"></div><p>Loading PDF...</p></div>
+<div id="viewer"></div>
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+(function(){
+  var pdfUrl=${JSON.stringify(pdfUrl)};
+  function renderPdf(url){
+    return pdfjsLib.getDocument({url:url,withCredentials:true}).promise.then(function(pdf){
+      document.getElementById('loading').style.display='none';
+      var viewer=document.getElementById('viewer');
+      viewer.innerHTML='';
+      var n=pdf.numPages;
+      function renderPage(num){
+        pdf.getPage(num).then(function(page){
+          var w=Math.min(window.innerWidth-16,900);
+          var vp=page.getViewport({scale:1});
+          var scale=w/vp.width;
+          var svp=page.getViewport({scale:scale*2});
+          var canvas=document.createElement('canvas');
+          canvas.className='page-canvas';
+          canvas.width=svp.width;canvas.height=svp.height;
+          canvas.style.width=(svp.width/2)+'px';canvas.style.height=(svp.height/2)+'px';
+          viewer.appendChild(canvas);
+          var info=document.createElement('div');
+          info.className='page-info';info.textContent='Page '+num+' of '+n;
+          viewer.appendChild(info);
+          page.render({canvasContext:canvas.getContext('2d'),viewport:svp}).promise.then(function(){
+            if(num<n)renderPage(num+1);
+          });
+        });
+      }
+      renderPage(1);
+    });
+  }
+  renderPdf(pdfUrl).catch(function(){
+    document.getElementById('loading').style.display='none';
+    var d=document.createElement('div');d.className='error';
+    d.innerHTML='<h3>Unable to load PDF</h3><p>Please try again or contact support.</p>';
+    document.body.appendChild(d);
+  });
+  document.addEventListener('contextmenu',function(e){e.preventDefault();});
+  document.addEventListener('keydown',function(e){
+    if(e.key==='PrintScreen'||(e.ctrlKey&&(e.key==='p'||e.key==='P'||e.key==='s'||e.key==='S'))){e.preventDefault();}
+  });
+})();
+</script></body></html>`;
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("X-Frame-Options", "SAMEORIGIN");
+    res.send(html);
+  });
     const html = `<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
