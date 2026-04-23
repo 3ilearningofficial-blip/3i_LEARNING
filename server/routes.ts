@@ -5611,6 +5611,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     // Use absolute URL so it works whether served from Vercel proxy or direct EC2
     const origin = `${req.headers["x-forwarded-proto"] || req.protocol}://${req.headers["x-forwarded-host"] || req.headers.host}`;
     const pdfUrl = `${origin}/api/media/${key}?token=${token}`;
+    const pdfTitle = String(key).split('/').pop() || 'Document';
     const html = `<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
@@ -5637,7 +5638,7 @@ html,body{width:100%;height:100%;background:#2a2a2a;overflow:auto;font-family:-a
 </head><body>
 <div id="topbar">
   <button id="backbtn" onclick="history.back()">&#8592; Back</button>
-  <span id="pdftitle">${String(key).split('/').pop() || 'Document'}</span>
+  <span id="pdftitle">${pdfTitle}</span>
 </div>
 <div id="loading" class="loading"><div class="spinner"></div><p>Loading PDF...</p></div>
 <div id="viewer"></div>
