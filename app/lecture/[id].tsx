@@ -9,7 +9,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { LinearGradient } from "expo-linear-gradient";
-import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
+import { apiRequest, authFetch, getApiUrl, getBaseUrl } from "@/lib/query-client";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
 import { useScreenProtection } from "@/lib/useScreenProtection";
@@ -389,7 +389,7 @@ export default function LectureScreen() {
 
   const rawVideoUrl = lectureData?.video_url || paramVideoUrl || "";
   // Convert stored URLs to use the correct server base URL for current device
-  const baseUrl = getApiUrl();
+  const baseUrl = getBaseUrl();
   let videoUrl = rawVideoUrl;
   
   // Skip URL conversion for local file:// URIs

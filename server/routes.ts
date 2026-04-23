@@ -668,6 +668,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS start_date TEXT");
     await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS end_date TEXT");
     await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS total_students INTEGER DEFAULT 0");
+    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS total_materials INTEGER DEFAULT 0").catch(() => {});
     await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS pyq_count INTEGER DEFAULT 0");
     await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS mock_count INTEGER DEFAULT 0");
     await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS practice_count INTEGER DEFAULT 0");
@@ -3449,7 +3450,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.delete("/api/admin/study-materials/:id", requireAdmin, async (req: Request, res: Response) => {
     try {
       // Get material details before deletion
-      const material = await db.query("SELECT file_url FROM study_materials WHERE id = $1", [req.params.id]);
+      const material = await db.query("SELECT file_url, course_id FROM study_materials WHERE id = $1", [req.params.id]);
       
       if (material.rows.length > 0 && material.rows[0].file_url) {
         // Delete from R2
@@ -3481,8 +3482,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       
+      const courseId = material.rows[0]?.course_id;
       // Delete from database
       await db.query("DELETE FROM study_materials WHERE id = $1", [req.params.id]);
+      // Update total_materials count on the course
+      if (courseId) {
+        await db.query(
+          "UPDATE courses SET total_materials = (SELECT COUNT(*) FROM study_materials WHERE course_id = $1) WHERE id = $1",
+          [courseId]
+        );
+      }
       res.json({ success: true });
     } catch (err) {
       console.error("Delete study material error:", err);
@@ -4718,6 +4727,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
         [title, description, fileUrl, fileType || "pdf", courseId || null, courseId ? false : (isFree !== false), sectionTitle || null, downloadAllowed || false, Date.now()]
       );
+      // Update total_materials count on the course
+      if (courseId) {
+        await db.query(
+          "UPDATE courses SET total_materials = (SELECT COUNT(*) FROM study_materials WHERE course_id = $1) WHERE id = $1",
+          [courseId]
+        );
+      }
       res.json(result.rows[0]);
     } catch (err) {
       res.status(500).json({ message: "Failed to add material" });

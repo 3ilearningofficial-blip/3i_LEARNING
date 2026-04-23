@@ -1065,7 +1065,17 @@ setTimeout(function() {
                         return (
                           <Pressable key={folderKey}
                             style={[styles.testSectionCard, { borderLeftColor: folderColor }]}
-                            onPress={() => setOpenFolder({ name: folderName, type: "materials", color: folderColor, items: materials })}
+                            onPress={() => {
+                              if (isLocked) {
+                                Alert.alert(
+                                  course.is_free ? "Enroll Required" : "Purchase Required",
+                                  course.is_free ? "Please enroll for free to access materials." : "Please purchase this course to access materials.",
+                                  [{ text: "Cancel", style: "cancel" }, { text: course.is_free ? "Enroll Free" : "Buy Now", onPress: handleEnroll }]
+                                );
+                                return;
+                              }
+                              setOpenFolder({ name: folderName, type: "materials", color: folderColor, items: materials });
+                            }}
                           >
                             <View style={[styles.testSectionIconWrap, { backgroundColor: "#FEE2E2" }]}>
                               <Ionicons name="folder" size={22} color={folderColor} />
@@ -1137,7 +1147,18 @@ setTimeout(function() {
                       {hasFolder && (
                         <Pressable
                           style={[styles.folderHeader, { borderLeftColor: "#DC2626" }]}
-                          onPress={() => setOpenFolder({ name: folderName!, type: "live", color: "#DC2626", items: classes })}
+                          onPress={() => {
+                            const canAccess = isAdmin || course.isEnrolled || course.is_free;
+                            if (!canAccess) {
+                              Alert.alert(
+                                course.is_free ? "Enroll Required" : "Purchase Required",
+                                course.is_free ? "Please enroll for free to access live classes." : "Please purchase this course to access live classes.",
+                                [{ text: "Cancel", style: "cancel" }, { text: course.is_free ? "Enroll Free" : "Buy Now", onPress: handleEnroll }]
+                              );
+                              return;
+                            }
+                            setOpenFolder({ name: folderName!, type: "live", color: "#DC2626", items: classes });
+                          }}
                         >
                           <View style={[styles.folderIconBox, { backgroundColor: "#FEE2E2" }]}>
                             <Ionicons name="folder" size={20} color="#DC2626" />
@@ -1153,7 +1174,24 @@ setTimeout(function() {
                         <Pressable
                           key={lc.id}
                           style={({ pressed }) => [styles.liveClassItem, pressed && { opacity: 0.85 }]}
-                          onPress={() => router.push({ pathname: "/live-class/[id]", params: { id: lc.id, videoUrl: lc.youtube_url, title: lc.title } })}
+                          onPress={() => {
+                            // Check enrollment for non-free, non-public classes
+                            const canAccess = isAdmin || course.isEnrolled || course.is_free || (lc as any).is_free_preview;
+                            if (!canAccess) {
+                              Alert.alert(
+                                course.is_free ? "Enroll Required" : "Purchase Required",
+                                course.is_free
+                                  ? "Please enroll for free to access this live class."
+                                  : "Please purchase this course to access live classes.",
+                                [
+                                  { text: "Cancel", style: "cancel" },
+                                  { text: course.is_free ? "Enroll Free" : "Buy Now", onPress: handleEnroll },
+                                ]
+                              );
+                              return;
+                            }
+                            router.push({ pathname: "/live-class/[id]", params: { id: lc.id, videoUrl: lc.youtube_url, title: lc.title } });
+                          }}
                         >
                           <LinearGradient
                             colors={lc.is_live ? ["#DC2626", "#EF4444"] : lc.is_completed ? ["#1A56DB", "#3B82F6"] : ["#6B7280", "#9CA3AF"]}

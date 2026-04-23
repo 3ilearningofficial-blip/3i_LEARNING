@@ -11,7 +11,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/context/AuthContext";
-import { getApiUrl } from "@/lib/query-client";
+import { getApiUrl, getBaseUrl } from "@/lib/query-client";
 import Colors from "@/constants/colors";
 import { useScreenProtection } from "@/lib/useScreenProtection";
 import { useVideoScreenProtection } from "@/lib/useVideoScreenProtection";
@@ -354,9 +354,9 @@ export default function MaterialViewerScreen() {
     if (localUri) return localUri; // Use local URI if provided
     const raw = material?.file_url || "";
     if (raw.startsWith('file://')) return raw; // Skip conversion for local files
-    if (raw.includes("cdn.3ilearning.in")) return `${getApiUrl()}/api/media/${raw.replace("https://cdn.3ilearning.in/", "")}`;
-    if (raw.includes("3ilearning.in/") && !raw.includes("drive.google.com")) return `${getApiUrl()}/api/media/${raw.replace(/https?:\/\/[^/]*3ilearning\.in\//, "")}`;
-    if (raw.includes("/api/media/")) return `${getApiUrl()}/api/media/${raw.replace(/^https?:\/\/[^/]+\/api\/media\//, "")}`;
+    if (raw.includes("cdn.3ilearning.in")) return `${getBaseUrl()}/api/media/${raw.replace("https://cdn.3ilearning.in/", "")}`;
+    if (raw.includes("3ilearning.in/") && !raw.includes("drive.google.com")) return `${getBaseUrl()}/api/media/${raw.replace(/https?:\/\/[^/]*3ilearning\.in\//, "")}`;
+    if (raw.includes("/api/media/")) return `${getBaseUrl()}/api/media/${raw.replace(/^https?:\/\/[^/]+\/api\/media\//, "")}`;
     return raw;
   })();
 
@@ -365,7 +365,7 @@ export default function MaterialViewerScreen() {
   const gDriveFileId = material ? getGoogleDriveFileId(fileUrl || "") : null;
   const youtubeVideoId = material ? getYouTubeVideoId(fileUrl || "") : null;
   const isYouTube = !!youtubeVideoId;
-  const apiBaseUrl = getApiUrl();
+  const apiBaseUrl = getBaseUrl();
 
   return (
     <View style={styles.container}>

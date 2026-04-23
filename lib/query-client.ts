@@ -17,7 +17,13 @@ export function getWebUrl(): string {
   // Final fallback
   return "https://3ilearning.in";
 }
-  export function getApiUrl(): string {
+
+// Returns base URL without /api suffix — used for media proxy URLs
+export function getBaseUrl(): string {
+  return "https://api.3ilearning.in";
+}
+
+export function getApiUrl(): string {
   return "https://api.3ilearning.in/api";
 }
 

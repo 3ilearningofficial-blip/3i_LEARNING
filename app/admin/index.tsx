@@ -703,6 +703,8 @@ export default function AdminDashboard() {
   const [freMatType, setFreMatType] = useState("pdf");
   const [freMatSection, setFreMatSection] = useState("");
   const [freMatDownload, setFreMatDownload] = useState(false);
+  const [freMatUploading, setFreMatUploading] = useState(false);
+  const [freMatUploadProgress, setFreMatUploadProgress] = useState(0);
   const [showImportModal, setShowImportModal] = useState(false);
   const [importTargetCourseId, setImportTargetCourseId] = useState<number | null>(null);
   const [importSourceCourseId, setImportSourceCourseId] = useState<number | null>(null);
@@ -4384,29 +4386,44 @@ export default function AdminDashboard() {
                 ) : (
                   <>
                     <Pressable
-                      style={{ borderWidth: 1.5, borderColor: Colors.light.primary, borderStyle: "dashed" as any, borderRadius: 10, padding: 14, alignItems: "center", gap: 4, backgroundColor: "#EEF2FF", marginBottom: 6 }}
+                      style={{ borderWidth: 1.5, borderColor: Colors.light.primary, borderStyle: "dashed" as any, borderRadius: 10, padding: 14, alignItems: "center", gap: 4, backgroundColor: "#EEF2FF", marginBottom: 6, opacity: freMatUploading ? 0.6 : 1 }}
+                      disabled={freMatUploading}
                       onPress={() => {
                         if (Platform.OS === "web") {
                           const input = document.createElement("input"); input.type = "file"; input.accept = ".pdf,.doc,.docx,video/*,.mp4,.mov";
                           input.onchange = async (e: any) => {
                             const file = e.target.files?.[0]; if (!file) return;
+                            setFreMatUploading(true); setFreMatUploadProgress(0);
                             try {
                               const blobUrl = URL.createObjectURL(file);
-                              const { publicUrl } = await uploadToR2(blobUrl, file.name, file.type || getMimeType(file.name), "materials");
+                              const { publicUrl } = await uploadToR2(blobUrl, file.name, file.type || getMimeType(file.name), "materials", (pct) => setFreMatUploadProgress(pct));
                               URL.revokeObjectURL(blobUrl);
                               setFreMatUrl(publicUrl);
                               const ext = file.name.split(".").pop()?.toLowerCase() || "";
                               setFreMatType(ext === "pdf" ? "pdf" : ["doc","docx"].includes(ext) ? "doc" : "video");
                             } catch (err: any) { Alert.alert("Upload Failed", err?.message || "Could not upload."); }
+                            finally { setFreMatUploading(false); setFreMatUploadProgress(0); }
                           };
                           input.click();
                         } else {
                           Alert.alert("Add File", "Paste a URL below or use a cloud link.");
                         }
                       }}>
-                      <Ionicons name="cloud-upload-outline" size={22} color={Colors.light.primary} />
-                      <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>Upload File (PDF/DOC/Video)</Text>
-                      <Text style={{ fontSize: 10, color: Colors.light.textMuted }}>Uploads to Cloudflare R2</Text>
+                      {freMatUploading ? (
+                        <>
+                          <ActivityIndicator size="small" color={Colors.light.primary} />
+                          <Text style={{ fontSize: 13, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>{freMatUploadProgress}%</Text>
+                          <View style={{ width: "100%", height: 4, backgroundColor: "#C7D2FE", borderRadius: 2, overflow: "hidden" }}>
+                            <View style={{ height: 4, backgroundColor: Colors.light.primary, borderRadius: 2, width: `${freMatUploadProgress}%` as any }} />
+                          </View>
+                        </>
+                      ) : (
+                        <>
+                          <Ionicons name="cloud-upload-outline" size={22} color={Colors.light.primary} />
+                          <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>Upload File (PDF/DOC/Video)</Text>
+                          <Text style={{ fontSize: 10, color: Colors.light.textMuted }}>Uploads to Cloudflare R2</Text>
+                        </>
+                      )}
                     </Pressable>
                     <TextInput style={styles.formInput} placeholder="Or paste file URL (https://...)" placeholderTextColor={Colors.light.textMuted} value={freMatUrl} onChangeText={setFreMatUrl} />
                   </>
