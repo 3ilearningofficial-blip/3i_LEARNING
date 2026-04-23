@@ -453,20 +453,10 @@ setTimeout(function() {
   const renderTestItem = (test: CourseTest, courseData: CourseDetail) => {
     const color = TEST_TYPE_COLORS[test.test_type] || Colors.light.primary;
     const attempt = attemptSummary[test.id];
+    const isLocked = !isAdmin && !courseData.isEnrolled;
     const handlePress = () => {
-      if (!isAdmin && !courseData.isEnrolled) {
-        Alert.alert(
-          courseData.is_free ? "Enroll Required" : "Purchase Required",
-          courseData.is_free
-            ? "Please enroll for free to access this test."
-            : "Please purchase this course to access tests.",
-          [
-            { text: "Cancel", style: "cancel" },
-            { text: courseData.is_free ? "Enroll Free" : "Buy Now", onPress: handleEnroll },
-          ]
-        );
-        return;
-      }
+      // Locked — do nothing, item is visually locked
+      if (isLocked) return;
       if (attempt) {
         setOpenFolder(null);
         setTimeout(() => {
@@ -496,7 +486,7 @@ setTimeout(function() {
     return (
       <Pressable
         key={test.id}
-        style={({ pressed }) => [styles.testCard, pressed && { opacity: 0.85 }]}
+        style={({ pressed }) => [styles.testCard, isLocked && { opacity: 0.6 }, pressed && !isLocked && { opacity: 0.85 }]}
         onPress={handlePress}
       >
         <View style={[styles.testColorBar, { backgroundColor: color }]} />
