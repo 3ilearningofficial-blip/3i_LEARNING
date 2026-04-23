@@ -2653,10 +2653,51 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/tests/:id", async (req: Request, res: Response) => {
     try {
-      const testResult = await db.query("SELECT * FROM tests WHERE id = $1", [req.params.id]);
+      const user = await getAuthUser(req);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+
+      const testResult = await db.query(
+        `SELECT t.*, c.is_free AS course_is_free, sf.is_free AS folder_is_free
+         FROM tests t
+         LEFT JOIN courses c ON t.course_id = c.id
+         LEFT JOIN standalone_folders sf ON t.mini_course_id = sf.id
+         WHERE t.id = $1`,
+        [req.params.id]
+      );
       if (testResult.rows.length === 0) return res.status(404).json({ message: "Test not found" });
+      const test = testResult.rows[0];
+
+      // Access control — admins bypass
+      if (user.role !== "admin") {
+        if (test.course_id) {
+          const enrolled = await db.query(
+            "SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)",
+            [user.id, test.course_id]
+          );
+          if (enrolled.rows.length === 0) {
+            return res.status(403).json({ message: "Enrollment required to access this test" });
+          }
+        } else if (test.mini_course_id && !test.folder_is_free) {
+          const purchased = await db.query(
+            "SELECT id FROM folder_purchases WHERE user_id = $1 AND folder_id = $2",
+            [user.id, test.mini_course_id]
+          );
+          if (purchased.rows.length === 0) {
+            return res.status(403).json({ message: "Purchase required to access this test" });
+          }
+        } else if (test.price && parseFloat(test.price) > 0) {
+          const purchased = await db.query(
+            "SELECT id FROM test_purchases WHERE user_id = $1 AND test_id = $2",
+            [user.id, req.params.id]
+          );
+          if (purchased.rows.length === 0) {
+            return res.status(403).json({ message: "Purchase required to access this test" });
+          }
+        }
+      }
+
       const questionsResult = await db.query("SELECT * FROM questions WHERE test_id = $1 ORDER BY order_index", [req.params.id]);
-      res.json({ ...testResult.rows[0], questions: questionsResult.rows });
+      res.json({ ...test, questions: questionsResult.rows });
     } catch (err) {
       res.status(500).json({ message: "Failed to fetch test" });
     }
@@ -2669,15 +2710,50 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { answers, timeTakenSeconds, questionTimes } = req.body;
       const timeTaken = parseInt(String(timeTakenSeconds || "0")) || 0;
       console.log(`[Attempt] test=${req.params.id} user=${user.id} answers=${JSON.stringify(answers)?.slice(0,100)} timeTaken=${timeTaken}`);
-      const testResult = await db.query("SELECT t.*, c.is_free AS course_is_free FROM tests t LEFT JOIN courses c ON t.course_id = c.id WHERE t.id = $1", [req.params.id]);
+      const testResult = await db.query(
+        `SELECT t.*, c.is_free AS course_is_free, sf.is_free AS folder_is_free
+         FROM tests t
+         LEFT JOIN courses c ON t.course_id = c.id
+         LEFT JOIN standalone_folders sf ON t.mini_course_id = sf.id
+         WHERE t.id = $1`,
+        [req.params.id]
+      );
       if (testResult.rows.length === 0) return res.status(404).json({ message: "Test not found" });
       const test = testResult.rows[0];
-      // Check enrollment for paid courses
-      if (test.course_id && !test.course_is_free) {
-        const enrolled = await db.query("SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [user.id, test.course_id]);
-        if (enrolled.rows.length === 0 && user.role !== "admin") {
-          return res.status(403).json({ message: "Purchase required to attempt this test" });
+
+      // Access control — admins bypass all checks
+      if (user.role !== "admin") {
+        if (test.course_id) {
+          // Course test: must be enrolled regardless of whether course is free or paid
+          const enrolled = await db.query(
+            "SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)",
+            [user.id, test.course_id]
+          );
+          if (enrolled.rows.length === 0) {
+            return res.status(403).json({ message: "Enrollment required to attempt this test" });
+          }
+        } else if (test.mini_course_id) {
+          // Folder/mini-course test: must have purchased the folder (unless folder is free)
+          if (!test.folder_is_free) {
+            const purchased = await db.query(
+              "SELECT id FROM folder_purchases WHERE user_id = $1 AND folder_id = $2",
+              [user.id, test.mini_course_id]
+            );
+            if (purchased.rows.length === 0) {
+              return res.status(403).json({ message: "Purchase required to attempt this test" });
+            }
+          }
+        } else if (test.price && parseFloat(test.price) > 0) {
+          // Standalone paid test: must have purchased it
+          const purchased = await db.query(
+            "SELECT id FROM test_purchases WHERE user_id = $1 AND test_id = $2",
+            [user.id, req.params.id]
+          );
+          if (purchased.rows.length === 0) {
+            return res.status(403).json({ message: "Purchase required to attempt this test" });
+          }
         }
+        // else: free standalone test — open to all authenticated users
       }
       const questionsResult = await db.query("SELECT * FROM questions WHERE test_id = $1", [req.params.id]);
       const questions = questionsResult.rows;

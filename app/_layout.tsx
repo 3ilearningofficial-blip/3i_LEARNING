@@ -69,19 +69,19 @@ function RootLayoutNav() {
 
     if (user && inAuthGroup) {
       // Just completed OTP/login — check profile
-      if (!user.profileComplete && user.role !== "admin") {
+      if (!user.profileComplete) {
         router.replace("/profile-setup");
       } else {
         router.replace("/(tabs)");
       }
     } else if (user && inWelcome) {
-      // Logged-in user on welcome page (e.g. after profile setup or "Get Started" tap)
-      if (!user.profileComplete && user.role !== "admin") {
+      // Logged-in user on welcome page
+      if (!user.profileComplete) {
         router.replace("/profile-setup");
       } else {
         router.replace("/(tabs)");
       }
-    } else if (user && !inAuthGroup && !inProfileSetup && !inWelcome && !user.profileComplete && user.role !== "admin") {
+    } else if (user && !inAuthGroup && !inProfileSetup && !inWelcome && !user.profileComplete) {
       // Already logged in but profile incomplete
       router.replace("/profile-setup");
     } else if (!user && !inAuthGroup && !inWelcome) {
@@ -89,6 +89,8 @@ function RootLayoutNav() {
     }
   }, [user?.id, user?.profileComplete, isLoading, segments.join("/")]);
 
+  // Don't render anything until auth is resolved — prevents flash of wrong screen
+  if (isLoading) return null;
   return (
     <Stack screenOptions={{ headerShown: false }}>
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />

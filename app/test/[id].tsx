@@ -70,13 +70,16 @@ export default function TestScreen() {
   const submitCalledRef = useRef(false);
   const topPadding = Platform.OS === "web" ? 16 : insets.top;
   const bottomPadding = Platform.OS === "web" ? 34 : insets.bottom;
-  const { data: test, isLoading } = useQuery<TestData>({
+  const { data: test, isLoading, error: testError } = useQuery<TestData>({
     queryKey: ["/api/tests", id],
     queryFn: async () => {
       const baseUrl = getApiUrl();
       const url = new URL(`/api/tests/${id}`, baseUrl);
       const res = await authFetch(url.toString());
-      if (!res.ok) throw new Error("Failed to load test");
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.message || "Failed to load test");
+      }
       return res.json();
     },
   });
@@ -254,7 +257,15 @@ export default function TestScreen() {
     return <View style={styles.centered}><ActivityIndicator size="large" color={Colors.light.primary} /></View>;
   }
   if (!test) {
-    return <View style={styles.centered}><Text style={styles.errorText}>Test not found</Text></View>;
+    return (
+      <View style={styles.centered}>
+        <Ionicons name="lock-closed" size={40} color={Colors.light.textMuted} />
+        <Text style={styles.errorText}>{(testError as any)?.message || "Test not found"}</Text>
+        <Pressable onPress={() => router.back()} style={{ marginTop: 16, paddingHorizontal: 20, paddingVertical: 10, backgroundColor: Colors.light.primary, borderRadius: 10 }}>
+          <Text style={{ color: "#fff", fontFamily: "Inter_600SemiBold" }}>Go Back</Text>
+        </Pressable>
+      </View>
+    );
   }
   if (!hasStarted) {
     return (
