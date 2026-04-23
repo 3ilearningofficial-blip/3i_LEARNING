@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View, Text, StyleSheet, Pressable, Platform,
   ActivityIndicator, useWindowDimensions,
@@ -11,7 +11,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/context/AuthContext";
-import { getApiUrl, getBaseUrl } from "@/lib/query-client";
+import { getApiUrl, getBaseUrl, apiRequest } from "@/lib/query-client";
 import Colors from "@/constants/colors";
 import { useScreenProtection } from "@/lib/useScreenProtection";
 import { useVideoScreenProtection } from "@/lib/useVideoScreenProtection";
@@ -396,7 +396,7 @@ export default function MaterialViewerScreen() {
   })();
 
   // Fetch a short-lived media token for PDF/video viewing (avoids srcDoc cookie issues)
-  React.useEffect(() => {
+  useEffect(() => {
     if (!fileKey || !material) return;
     if (isGDrive || isYouTube) return; // not needed for these
     apiRequest("POST", "/api/media-token", { fileKey })
