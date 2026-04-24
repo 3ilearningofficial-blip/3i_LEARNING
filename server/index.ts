@@ -26,6 +26,23 @@ declare module "http" {
 import cors from "cors";
 
 function setupCors(app: express.Application) {
+  const normalizeOrigin = (value: string): string => {
+    const trimmed = value.trim();
+    if (!trimmed) return "";
+    try {
+      return new URL(trimmed).origin.toLowerCase();
+    } catch {
+      return trimmed.replace(/\/+$/, "").toLowerCase();
+    }
+  };
+
+  const originMatchesPattern = (origin: string, pattern: string): boolean => {
+    // Supports entries like: https://*.vercel.app
+    if (!pattern.includes("*")) return origin === pattern;
+    const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+    return new RegExp(`^${escaped}$`, "i").test(origin);
+  };
+
   const defaultAllowedOrigins = [
     "https://3ilearning.in",
     // Keep www variant for compatibility.
@@ -33,15 +50,22 @@ function setupCors(app: express.Application) {
   ];
   const envOrigins = (process.env.CORS_ORIGINS || "")
     .split(",")
-    .map((s) => s.trim())
+    .map((s) => normalizeOrigin(s))
     .filter(Boolean);
-  const allowedOrigins = new Set([...defaultAllowedOrigins, ...envOrigins]);
+  const allowedOriginPatterns = [
+    ...defaultAllowedOrigins.map((origin) => normalizeOrigin(origin)),
+    ...envOrigins,
+  ];
 
   const corsOptions = {
     origin(origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) {
       // Allow non-browser clients (curl/mobile/native fetch without Origin header).
       if (!origin) return callback(null, true);
-      if (allowedOrigins.has(origin)) return callback(null, true);
+      const normalizedOrigin = normalizeOrigin(origin);
+      if (allowedOriginPatterns.some((pattern) => originMatchesPattern(normalizedOrigin, pattern))) {
+        return callback(null, true);
+      }
+      console.warn(`[CORS] blocked origin: ${origin}`);
       return callback(new Error("Not allowed by CORS"));
     },
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
