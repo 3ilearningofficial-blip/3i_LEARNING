@@ -56,7 +56,6 @@ export function getBaseUrl(): string {
   if (explicit) return normalizeBaseUrl(explicit);
 
   if (Platform.OS === "web" && typeof window !== "undefined") {
-    const origin = window.location.origin;
     const host = window.location.hostname;
     if (host === "3ilearning.in" || host === "www.3ilearning.in") {
       return "https://api.3ilearning.in";
@@ -64,7 +63,9 @@ export function getBaseUrl(): string {
     if (host === "localhost" || host === "127.0.0.1") {
       return "http://localhost:5000";
     }
-    return normalizeBaseUrl(origin);
+    // Never default to frontend origin in web deployments.
+    // This avoids accidental /api calls hitting Vercel app routes.
+    return "https://api.3ilearning.in";
   }
 
   return "https://api.3ilearning.in";
