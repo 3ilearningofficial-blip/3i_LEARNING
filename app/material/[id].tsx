@@ -11,7 +11,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/context/AuthContext";
-import { getApiUrl, getBaseUrl, apiRequest } from "@/lib/query-client";
+import { getBaseUrl, apiRequest, toHttpsMediaUrl } from "@/lib/query-client";
 import Colors from "@/constants/colors";
 import { useScreenProtection } from "@/lib/useScreenProtection";
 import { useVideoScreenProtection } from "@/lib/useVideoScreenProtection";
@@ -360,21 +360,18 @@ export default function MaterialViewerScreen() {
     if (raw.includes("r2.cloudflarestorage.com")) return raw;
     if (raw.includes("pub-") && raw.includes(".r2.dev")) return raw;
 
-    // Any URL containing /api/media/ — use Vercel proxy on web (full origin URL),
-    // or direct API URL on native
+    // /api/media/* always hits the API host (not the web app origin) so auth + HTTPS stay correct.
     if (raw.includes("/api/media/")) {
       const path = raw.startsWith("/") ? raw : raw.replace(/^https?:\/\/[^/]+/, "");
-      if (Platform.OS === "web" && typeof window !== "undefined") {
-        return `${window.location.origin}${path}`;
-      }
-      return `${getBaseUrl()}${path}`;
+      const normalized = path.startsWith("/") ? path : `/${path}`;
+      return toHttpsMediaUrl(`${getBaseUrl()}${normalized}`);
     }
 
     // Google Drive / Docs — use as-is
     if (raw.includes("drive.google.com") || raw.includes("docs.google.com")) return raw;
 
     // Relative path — prepend base
-    if (raw.startsWith("/")) return `${getBaseUrl()}${raw}`;
+    if (raw.startsWith("/")) return toHttpsMediaUrl(`${getBaseUrl()}${raw}`);
 
     // Anything else (YouTube, external URLs) — use as-is
     return raw;
@@ -405,18 +402,16 @@ export default function MaterialViewerScreen() {
       .catch(() => {}); // silently fail — fallback to direct URL
   }, [fileKey, material?.id]);
 
-  // Authenticated URL with token
-  const tokenizedUrl = mediaToken && fileKey
-    ? (Platform.OS === "web" && typeof window !== "undefined"
-        ? `${window.location.origin}/api/media/${fileKey}?token=${mediaToken}`
-        : `${getBaseUrl()}/api/media/${fileKey}?token=${mediaToken}`)
-    : fileUrl;
+  // Authenticated URL with token (always use API base — never the Vercel preview origin on web)
+  const tokenizedUrl = toHttpsMediaUrl(
+    mediaToken && fileKey
+      ? `${getBaseUrl()}/api/media/${fileKey}?token=${mediaToken}`
+      : (fileUrl || "")
+  ) || fileUrl;
 
   // PDF viewer URL — server-rendered page with pdf.js (no browser PDF controls)
   const pdfViewerUrl = mediaToken && fileKey
-    ? (Platform.OS === "web" && typeof window !== "undefined"
-        ? `${window.location.origin}/api/pdf-viewer?key=${encodeURIComponent(fileKey)}&token=${mediaToken}`
-        : `${getBaseUrl()}/api/pdf-viewer?key=${encodeURIComponent(fileKey)}&token=${mediaToken}`)
+    ? `${getBaseUrl()}/api/pdf-viewer?key=${encodeURIComponent(fileKey)}&token=${mediaToken}`
     : null;
 
   return (

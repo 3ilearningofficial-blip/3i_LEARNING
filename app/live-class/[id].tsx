@@ -10,7 +10,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/query-client";
+import { apiRequest, getBaseUrl, toHttpsMediaUrl } from "@/lib/query-client";
 import { useAuth } from "@/context/AuthContext";
 import Colors from "@/constants/colors";
 import { useScreenProtection } from "@/lib/useScreenProtection";
@@ -387,12 +387,12 @@ export default function LiveClassScreen() {
   }, [recordingFileKey]);
 
   const authenticatedVideoUrl = (() => {
-    if (!recordingFileKey) return videoUrl;
-    if (!recordingToken) return videoUrl;
+    if (!recordingFileKey) return toHttpsMediaUrl(videoUrl);
+    if (!recordingToken) return toHttpsMediaUrl(videoUrl);
     if (Platform.OS === "web" && typeof window !== "undefined") {
-      return `${window.location.origin}/api/media/${recordingFileKey}?token=${recordingToken}`;
+      return toHttpsMediaUrl(`${getBaseUrl()}/api/media/${recordingFileKey}?token=${recordingToken}`);
     }
-    return videoUrl; // native uses session cookies directly
+    return toHttpsMediaUrl(videoUrl);
   })();
   const videoId = getYouTubeVideoId(videoUrl);
   const isStreamId = !videoId && isCloudflareStreamId(videoUrl);

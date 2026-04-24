@@ -26,7 +26,6 @@ export function registerPdfRoutes({ app, db }: RegisterPdfRoutesDeps): void {
     }
     const origin = `${req.headers["x-forwarded-proto"] || req.protocol}://${req.headers["x-forwarded-host"] || req.headers.host}`;
     const pdfUrl = `${origin}/api/media/${key}?token=${token}`;
-    const pdfTitle = String(key).split("/").pop() || "Document";
     const html = `<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
@@ -37,24 +36,17 @@ export function registerPdfRoutes({ app, db }: RegisterPdfRoutesDeps): void {
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{width:100%;height:100%;background:#2a2a2a;overflow:auto;font-family:-apple-system,sans-serif;-webkit-overflow-scrolling:touch;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
-#topbar{position:fixed;top:0;left:0;right:0;height:44px;background:#1a1a1a;display:flex;align-items:center;padding:0 12px;gap:12px;z-index:100;border-bottom:1px solid #333}
-#backbtn{background:rgba(255,255,255,0.1);border:none;color:#fff;padding:6px 14px;border-radius:8px;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:6px}
-#pdftitle{color:#ccc;font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#viewer{width:100%;display:flex;flex-direction:column;align-items:center;gap:8px;padding:52px 0 16px}
+#viewer{width:100%;display:flex;flex-direction:column;align-items:center;gap:8px;padding:12px 0 16px}
 .page-canvas{display:block;max-width:100%;height:auto;box-shadow:0 2px 8px rgba(0,0,0,0.3);background:#fff;pointer-events:none}
 .loading{position:fixed;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;color:#ccc;background:#2a2a2a;z-index:10}
 .spinner{width:40px;height:40px;border:3px solid rgba(255,255,255,0.1);border-top:3px solid #1A56DB;border-radius:50%;animation:spin 0.8s linear infinite}
 .page-info{color:#888;font-size:12px;padding:4px 0}
-.error{position:fixed;top:44px;left:0;width:100%;height:calc(100% - 44px);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;color:#ccc;padding:32px;text-align:center;background:#2a2a2a;z-index:20}
+.error{position:fixed;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;color:#ccc;padding:32px;text-align:center;background:#2a2a2a;z-index:20}
 .error h3{font-size:18px;color:#fff}.error p{font-size:13px;color:#999;line-height:1.5}
 @keyframes spin{to{transform:rotate(360deg)}}
 @media print{body{display:none!important}}
 </style>
 </head><body>
-<div id="topbar">
-  <button id="backbtn" onclick="history.back()">&#8592; Back</button>
-  <span id="pdftitle">${pdfTitle}</span>
-</div>
 <div id="loading" class="loading"><div class="spinner"></div><p>Loading PDF...</p></div>
 <div id="viewer"></div>
 <script>

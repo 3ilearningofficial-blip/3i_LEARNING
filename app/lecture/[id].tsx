@@ -9,7 +9,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { LinearGradient } from "expo-linear-gradient";
-import { apiRequest, authFetch, getApiUrl, getBaseUrl } from "@/lib/query-client";
+import { apiRequest, authFetch, getApiUrl, getBaseUrl, toHttpsMediaUrl } from "@/lib/query-client";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
 import { useScreenProtection } from "@/lib/useScreenProtection";
@@ -410,10 +410,11 @@ export default function LectureScreen() {
     } else if (rawVideoUrl.includes("/api/media/")) {
       const path = rawVideoUrl.startsWith("/") ? rawVideoUrl : rawVideoUrl.replace(/^https?:\/\/[^/]+/, "");
       // Videos use direct API URL (video tags support cross-origin, no iframe restriction)
-      videoUrl = `${baseUrl}${path}`;
+      videoUrl = `${baseUrl}${path.startsWith("/") ? path : `/${path}`}`;
     }
   }
-  
+  videoUrl = toHttpsMediaUrl(videoUrl);
+
   const title = lectureData?.title || paramTitle || "Lecture";
 
   const topPadding = Platform.OS === "web" ? 16 : insets.top;

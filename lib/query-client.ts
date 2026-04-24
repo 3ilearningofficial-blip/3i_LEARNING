@@ -75,6 +75,19 @@ export function getApiUrl(): string {
   return `${getBaseUrl()}/api`;
 }
 
+/** Upgrade http:// to https:// for non-localhost URLs to avoid mixed-content blocks in the browser. */
+export function toHttpsMediaUrl(url: string): string {
+  if (!url || !url.startsWith("http://")) return url;
+  try {
+    const u = new URL(url);
+    if (u.hostname === "localhost" || u.hostname === "127.0.0.1") return url;
+    u.protocol = "https:";
+    return u.href;
+  } catch {
+    return url;
+  }
+}
+
 async function getErrorMessage(res: Response): Promise<string> {
   const fallback = `Request failed (${res.status})`;
   try {

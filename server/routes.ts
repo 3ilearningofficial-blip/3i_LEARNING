@@ -673,6 +673,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     await db.query("ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active'");
     // Ensure courses table has all required columns
     await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_free BOOLEAN DEFAULT FALSE");
+    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS original_price DECIMAL(10, 2) DEFAULT 0");
     await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_published BOOLEAN DEFAULT TRUE");
     await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS course_type TEXT DEFAULT 'live'");
     await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS subject TEXT DEFAULT ''");
