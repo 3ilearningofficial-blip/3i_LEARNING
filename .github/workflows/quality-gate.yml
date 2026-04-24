@@ -14,18 +14,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # package-lock is generated with npm 11; Node 22's npm 10 reports lock out of sync (peer/esbuild)
+      # package-lock is generated with npm 11; Node 22's npm 10 reports lock out of sync (peer/esbuild).
+      # Use npx to run npm@11 (no global install; avoids GHA permission errors on `npm i -g npm`).
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
 
-      - name: Use npm 11
-        run: npm install -g npm@11
-
       - name: Install dependencies
-        run: npm ci
+        run: npx -y npm@11 ci
 
       - name: Lint
         run: npm run lint
