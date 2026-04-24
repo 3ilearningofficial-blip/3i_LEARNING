@@ -12,7 +12,6 @@ import connectPgSimple from "connect-pg-simple";
 import rateLimit from "express-rate-limit";
 import { ipKeyGenerator } from "express-rate-limit";
 import compression from "compression";
-import { registerRoutes } from "./routes";
 import * as fs from "fs";
 
 const app = express();
@@ -295,6 +294,9 @@ function setupErrorHandler(app: express.Application) {
 }
 
 (async () => {
+  // Import routes only after dotenv has initialized env vars.
+  const { registerRoutes } = await import("./routes");
+
   // 1) CORS
   setupCors(app);
 
