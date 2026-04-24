@@ -10,6 +10,7 @@ import type { Request, Response, NextFunction } from "express";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import rateLimit from "express-rate-limit";
+import { ipKeyGenerator } from "express-rate-limit";
 import compression from "compression";
 import { registerRoutes } from "./routes";
 import * as fs from "fs";
@@ -352,8 +353,8 @@ function setupErrorHandler(app: express.Application) {
     message: { message: "Too many requests, please try again later" },
     standardHeaders: true,
     legacyHeaders: false,
-    keyGenerator: (req: any) => {
-      return `${req.ip}:${req.body?.identifier || "global"}`;
+    keyGenerator: (req: Request) => {
+      return `${ipKeyGenerator(req.ip || "")}:${req.body?.identifier || "global"}`;
     },
   });
   const otpVerifyLimiter = rateLimit({
@@ -362,8 +363,8 @@ function setupErrorHandler(app: express.Application) {
     message: { message: "Too many requests, please try again later" },
     standardHeaders: true,
     legacyHeaders: false,
-    keyGenerator: (req: any) => {
-      return `${req.ip}:${req.body?.identifier || "global"}`;
+    keyGenerator: (req: Request) => {
+      return `${ipKeyGenerator(req.ip || "")}:${req.body?.identifier || "global"}`;
     },
   });
   app.use("/api/auth/send-otp", otpSendLimiter);
