@@ -67,10 +67,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const refreshUser = async () => {
     try {
+      const stored = await getStoredUser();
+      const token = await getStoredToken();
+
+      // Avoid noisy expected 401s on public auth pages when no session exists.
+      if (!token && !stored) {
+        setUser(null);
+        return;
+      }
+
       const baseUrl = getApiUrl();
       const url = new URL("/api/auth/me", baseUrl);
       // Send stored token so auth works consistently on web + native.
-      const token = await getStoredToken();
       const headers: Record<string, string> = {};
       if (token) headers["Authorization"] = `Bearer ${token}`;
       const res = await fetch(url.toString(), { credentials: "include", headers });
@@ -104,7 +112,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           await removeStoredUser();
         } else {
           // 401 with stale token — fall back to stored user so app stays usable
-          const stored = await getStoredUser();
           if (stored) {
             setUser(stored);
           } else {

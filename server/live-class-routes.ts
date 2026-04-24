@@ -90,8 +90,10 @@ export function registerLiveClassRoutes({
          ORDER BY lc.scheduled_at DESC`
       );
       res.json(result.rows);
-    } catch {
-      res.status(500).json({ message: "Failed to fetch live classes" });
+    } catch (err) {
+      console.error("[LiveClasses] list error:", err);
+      // Keep login/home resilient even if this auxiliary feed fails.
+      res.json([]);
     }
   });
 
@@ -111,7 +113,7 @@ export function registerLiveClassRoutes({
       res.json(result.rows);
     } catch (err) {
       console.error("[UpcomingClasses] error:", err);
-      res.status(500).json({ message: "Failed to fetch upcoming classes" });
+      res.json([]);
     }
   });
 

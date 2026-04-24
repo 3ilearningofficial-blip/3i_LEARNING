@@ -203,7 +203,6 @@ export default function ProfileScreen() {
       const type = user?.email ? "email" : "phone";
       const verifyRes = await apiRequest("POST", "/api/auth/verify-otp", { identifier, type, otp: otpCode });
       const verifyData = await verifyRes.json();
-      if (!verifyData.success) { setPwdError("Invalid OTP."); setPwdLoading(false); return; }
       // Now change password (no old password needed since OTP verified)
       await apiRequest("POST", "/api/auth/change-password", { newPassword: newPwd });
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);

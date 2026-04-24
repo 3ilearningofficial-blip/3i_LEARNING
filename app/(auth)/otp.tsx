@@ -79,9 +79,6 @@ export default function OTPScreen() {
         deviceId,
       });
       const data = await res.json();
-      if (!data.success) {
-        throw new Error(data.message || "Verification failed");
-      }
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       login(data.user);
       console.log("[OTP] user:", JSON.stringify({ id: data.user.id, role: data.user.role, profileComplete: data.user.profileComplete, name: data.user.name }));
@@ -113,10 +110,6 @@ export default function OTPScreen() {
     try {
       const res = await apiRequest("POST", "/api/auth/send-otp", { identifier: phone, type: "phone" });
       const data = await res.json();
-      if (!data.success) {
-        Alert.alert("Error", data.message || "Failed to resend OTP");
-        return;
-      }
       setCountdown(30);
       setCanResend(false);
       const timer = setInterval(() => {

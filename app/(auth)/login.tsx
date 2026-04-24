@@ -39,7 +39,6 @@ export default function LoginScreen() {
         type: "phone",
       });
       const data = await res.json();
-      if (!data.success) throw new Error(data.message || "Failed to send OTP");
 
       if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       setOtpSent(true);
@@ -63,7 +62,6 @@ export default function LoginScreen() {
         otp: otp.trim(),
       });
       const data = await res.json();
-      if (!data.success) throw new Error(data.message || "Verification failed");
 
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       login(data.user);
