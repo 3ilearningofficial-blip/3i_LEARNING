@@ -87,6 +87,7 @@
     "@types/react": "~19.1.10",
     "@vitest/ui": "^4.1.4",
     "drizzle-kit": "^0.18.1",
+    "esbuild": "^0.25.12",
     "eslint": "^9.31.0",
     "eslint-config-expo": "~10.0.0",
     "fast-check": "^4.6.0",
