@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { assertTestAccess } from "./test-access-guards";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -161,6 +162,27 @@ export function registerTestAttemptRoutes({
 
   app.get("/api/tests/:id/leaderboard", async (req: Request, res: Response) => {
     try {
+      const testResult = await db.query(
+        `SELECT t.*, c.is_free AS course_is_free, sf.is_free AS folder_is_free
+         FROM tests t
+         LEFT JOIN courses c ON t.course_id = c.id
+         LEFT JOIN standalone_folders sf ON t.mini_course_id = sf.id
+         WHERE t.id = $1`,
+        [req.params.id]
+      );
+      if (testResult.rows.length === 0) return res.status(404).json({ message: "Test not found" });
+      const test = testResult.rows[0];
+      const user = await getAuthUser(req);
+      if (user?.role !== "admin") {
+        const needsGate =
+          !!test.course_id || (!!test.mini_course_id && !test.folder_is_free) || (test.price && parseFloat(String(test.price)) > 0);
+        if (needsGate) {
+          if (!user) return res.status(401).json({ message: "Not authenticated" });
+          const a = await assertTestAccess(db, user, test, String(req.params.id));
+          if (!a.ok) return res.status(403).json({ message: a.message });
+        }
+      }
+
       const result = await db.query(
         `SELECT DISTINCT ON (ta.user_id)
            ta.score, ta.percentage, ta.time_taken_seconds, u.name, u.id as user_id

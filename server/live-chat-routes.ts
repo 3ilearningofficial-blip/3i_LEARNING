@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { userCanAccessLiveClassContent } from "./live-class-access";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -26,21 +27,14 @@ async function checkLiveClassAccess(
   }
 
   const liveClass = lc.rows[0];
-  if (liveClass.is_public || !liveClass.course_id) return true;
-
   const reqUser = (req as any).user as { id: number; role: string } | undefined;
   const user = reqUser || (await getAuthUser(req));
   if (!user) {
     res.status(401).json({ message: "Login required" });
     return false;
   }
-  if (user.role === "admin") return true;
-
-  const enrolled = await db.query(
-    "SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)",
-    [user.id, liveClass.course_id]
-  );
-  if (enrolled.rows.length === 0) {
+  const allow = await userCanAccessLiveClassContent(db, user, liveClass);
+  if (!allow) {
     res.status(403).json({ message: "Not enrolled" });
     return false;
   }

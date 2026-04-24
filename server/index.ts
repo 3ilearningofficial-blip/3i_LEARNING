@@ -335,10 +335,17 @@ function setupErrorHandler(app: express.Application) {
   const isProduction = process.env.NODE_ENV === "production";
   app.set("trust proxy", 1);
 
-  // Security headers
-  app.use((_req: Request, res: Response, next: NextFunction) => {
+  // Security headers. PDF viewer and media streams are loaded in an iframe from the web app
+  // (Vercel / custom domain) while the API is on a different host — so SAMEORIGIN must not apply to those paths.
+  app.use((req: Request, res: Response, next: NextFunction) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
-    res.setHeader("X-Frame-Options", "SAMEORIGIN");
+    const p = req.path || "";
+    const allowEmbed = p.startsWith("/api/pdf-viewer") || p.startsWith("/api/media");
+    if (allowEmbed) {
+      res.setHeader("Content-Security-Policy", "frame-ancestors *");
+    } else {
+      res.setHeader("X-Frame-Options", "SAMEORIGIN");
+    }
     res.setHeader("X-XSS-Protection", "1; mode=block");
     res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
     if (isProduction) {

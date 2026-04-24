@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { isEnrollmentExpired } from "./course-access-utils";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -48,16 +49,16 @@ export function registerMediaStreamRoutes({
         if (matResult.rows.length > 0) {
           const mat = matResult.rows[0];
           if (mat.course_id && !mat.is_free) {
-            const enrolled = await db.query("SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [userId, mat.course_id]);
-            if (enrolled.rows.length === 0) return res.status(403).json({ message: "Enrollment required" });
+            const enrolled = await db.query("SELECT * FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [userId, mat.course_id]);
+            if (enrolled.rows.length === 0 || isEnrollmentExpired(enrolled.rows[0])) return res.status(403).json({ message: "Enrollment required" });
           }
         } else {
           const lecResult = await db.query("SELECT course_id, is_free_preview FROM lectures WHERE video_url LIKE $1 OR pdf_url LIKE $1", [`%${key}%`]);
           if (lecResult.rows.length > 0) {
             const lec = lecResult.rows[0];
             if (lec.course_id && !lec.is_free_preview) {
-              const enrolled = await db.query("SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [userId, lec.course_id]);
-              if (enrolled.rows.length === 0) return res.status(403).json({ message: "Enrollment required" });
+              const enrolled = await db.query("SELECT * FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [userId, lec.course_id]);
+              if (enrolled.rows.length === 0 || isEnrollmentExpired(enrolled.rows[0])) return res.status(403).json({ message: "Enrollment required" });
             }
           }
         }

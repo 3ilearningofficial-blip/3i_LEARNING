@@ -1,4 +1,6 @@
 import type { Express, Request, Response } from "express";
+import { isEnrollmentExpired } from "./course-access-utils";
+import { sqlEnrollmentExistsForLiveList, userCanAccessLiveClassContent } from "./live-class-access";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -33,19 +35,27 @@ export function registerLiveClassRoutes({
         return res.json(result.rows);
       }
 
+      const ex23 = sqlEnrollmentExistsForLiveList(2, 3);
+      const now = Date.now();
       if (cid && user) {
         const result = await db.query(
           `SELECT lc.*, c.title as course_title, c.is_free as course_is_free,
-            EXISTS(SELECT 1 FROM enrollments e WHERE e.course_id = lc.course_id AND e.user_id = $2 AND (e.status = 'active' OR e.status IS NULL)) as is_enrolled
+            ${ex23} as is_enrolled
            FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
            WHERE (lc.course_id = $1 OR lc.course_id IS NULL)
            AND (
              (lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE)
-             OR (lc.is_live = TRUE AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE OR lc.course_id IS NULL OR EXISTS (SELECT 1 FROM enrollments e WHERE e.course_id = lc.course_id AND e.user_id = $2 AND (e.status = 'active' OR e.status IS NULL))))
-             OR (lc.is_completed = TRUE AND (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL) AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE OR lc.course_id IS NULL OR EXISTS (SELECT 1 FROM enrollments e WHERE e.course_id = lc.course_id AND e.user_id = $2 AND (e.status = 'active' OR e.status IS NULL))))
+             OR (lc.is_live = TRUE AND (
+                 (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
+                 OR (lc.course_id = $1 AND (lc.is_free_preview = TRUE OR ${ex23}))
+             ))
+             OR (lc.is_completed = TRUE AND (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL) AND (
+                 (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
+                 OR (lc.course_id = $1 AND (lc.is_free_preview = TRUE OR ${ex23}))
+             ))
            )
            ORDER BY lc.scheduled_at DESC`,
-          [cid, user.id]
+          [cid, user.id, now]
         );
         return res.json(result.rows);
       }
@@ -56,26 +66,39 @@ export function registerLiveClassRoutes({
            WHERE (lc.course_id = $1 OR lc.course_id IS NULL)
            AND (
              (lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE)
-             OR (lc.is_live = TRUE AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE OR lc.course_id IS NULL))
-             OR (lc.is_completed = TRUE AND (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL) AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE OR lc.course_id IS NULL))
+             OR (lc.is_live = TRUE AND (
+                 (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
+                 OR (lc.course_id = $1 AND lc.is_free_preview = TRUE)
+             ))
+             OR (lc.is_completed = TRUE AND (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL) AND (
+                 (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
+                 OR (lc.course_id = $1 AND lc.is_free_preview = TRUE)
+             ))
            )
            ORDER BY lc.scheduled_at DESC`,
           [cid]
         );
         return res.json(result.rows);
       }
+      const ex12 = sqlEnrollmentExistsForLiveList(1, 2);
       if (user) {
         const result = await db.query(
           `SELECT lc.*, c.title as course_title, c.is_free as course_is_free,
-            EXISTS(SELECT 1 FROM enrollments e WHERE e.course_id = lc.course_id AND e.user_id = $1 AND (e.status = 'active' OR e.status IS NULL)) as is_enrolled
+            ${ex12} as is_enrolled
            FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
            WHERE (
              (lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE)
-             OR (lc.is_live = TRUE AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE OR lc.course_id IS NULL OR EXISTS (SELECT 1 FROM enrollments e WHERE e.course_id = lc.course_id AND e.user_id = $1 AND (e.status = 'active' OR e.status IS NULL))))
-             OR (lc.is_completed = TRUE AND (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL) AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE OR lc.course_id IS NULL OR EXISTS (SELECT 1 FROM enrollments e WHERE e.course_id = lc.course_id AND e.user_id = $1 AND (e.status = 'active' OR e.status IS NULL))))
+             OR (lc.is_live = TRUE AND (
+                 (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
+                 OR (lc.course_id IS NOT NULL AND (lc.is_free_preview = TRUE OR ${ex12}))
+             ))
+             OR (lc.is_completed = TRUE AND (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL) AND (
+                 (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
+                 OR (lc.course_id IS NOT NULL AND (lc.is_free_preview = TRUE OR ${ex12}))
+             ))
            )
            ORDER BY lc.scheduled_at DESC`,
-          [user.id]
+          [user.id, now]
         );
         return res.json(result.rows);
       }
@@ -84,8 +107,14 @@ export function registerLiveClassRoutes({
          FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
          WHERE (
            (lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE)
-           OR (lc.is_live = TRUE AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE OR lc.course_id IS NULL))
-           OR (lc.is_completed = TRUE AND (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL) AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE OR lc.course_id IS NULL))
+           OR (lc.is_live = TRUE AND (
+                (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
+                OR (lc.course_id IS NOT NULL AND lc.is_free_preview = TRUE)
+           ))
+           OR (lc.is_completed = TRUE AND (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL) AND (
+                (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
+                OR (lc.course_id IS NOT NULL AND lc.is_free_preview = TRUE)
+           ))
          )
          ORDER BY lc.scheduled_at DESC`
       );
@@ -126,11 +155,11 @@ export function registerLiveClassRoutes({
 
       let isEnrolled = false;
       if (user && lc.course_id) {
-        const enroll = await db.query("SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [user.id, lc.course_id]);
-        isEnrolled = enroll.rows.length > 0;
+        const enroll = await db.query("SELECT * FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [user.id, lc.course_id]);
+        isEnrolled = enroll.rows.length > 0 && !isEnrollmentExpired(enroll.rows[0]);
       }
 
-      const hasAccess = !lc.course_id || lc.is_public || lc.is_free_preview || isEnrolled || user?.role === "admin";
+      const hasAccess = await userCanAccessLiveClassContent(db, user, lc);
 
       res.json({ ...lc, is_enrolled: isEnrolled, has_access: hasAccess });
     } catch {

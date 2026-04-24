@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { isEnrollmentExpired } from "./course-access-utils";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -125,6 +126,20 @@ export function registerStudentMissionMaterialRoutes({
     try {
       const result = await db.query("SELECT * FROM study_materials WHERE id = $1", [req.params.id]);
       if (result.rows.length === 0) return res.status(404).json({ message: "Material not found" });
+      const m = result.rows[0] as { course_id?: number | null; is_free?: boolean };
+      if (m.course_id) {
+        const user = await getAuthUser(req);
+        if (!user) return res.status(401).json({ message: "Not authenticated" });
+        if (user.role !== "admin" && !m.is_free) {
+          const e = await db.query(
+            "SELECT * FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)",
+            [user.id, m.course_id],
+          );
+          if (e.rows.length === 0 || isEnrollmentExpired(e.rows[0])) {
+            return res.status(403).json({ message: "Access denied" });
+          }
+        }
+      }
       res.json(result.rows[0]);
     } catch {
       res.status(500).json({ message: "Failed to fetch material" });

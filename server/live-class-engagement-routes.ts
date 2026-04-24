@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { userCanAccessLiveClassContent } from "./live-class-access";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -20,6 +21,11 @@ export function registerLiveClassEngagementRoutes({
   app.post("/api/live-classes/:id/viewers/heartbeat", requireAuth, async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
+      const lcResult = await db.query("SELECT course_id, is_free_preview FROM live_classes WHERE id = $1", [req.params.id]);
+      if (lcResult.rows.length === 0) return res.status(404).json({ message: "Live class not found" });
+      if (!(await userCanAccessLiveClassContent(db, user, lcResult.rows[0]))) {
+        return res.status(403).json({ message: "Access denied" });
+      }
       await db.query(
         `INSERT INTO live_class_viewers (live_class_id, user_id, user_name, last_heartbeat)
          VALUES ($1, $2, $3, $4)
@@ -54,6 +60,11 @@ export function registerLiveClassEngagementRoutes({
   app.post("/api/live-classes/:id/raise-hand", requireAuth, async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
+      const lcResult = await db.query("SELECT course_id, is_free_preview FROM live_classes WHERE id = $1", [req.params.id]);
+      if (lcResult.rows.length === 0) return res.status(404).json({ message: "Live class not found" });
+      if (!(await userCanAccessLiveClassContent(db, user, lcResult.rows[0]))) {
+        return res.status(403).json({ message: "Access denied" });
+      }
       await db.query(
         `INSERT INTO live_class_hand_raises (live_class_id, user_id, user_name, raised_at)
          VALUES ($1, $2, $3, $4)
@@ -70,6 +81,11 @@ export function registerLiveClassEngagementRoutes({
   app.delete("/api/live-classes/:id/raise-hand", requireAuth, async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
+      const lcResult = await db.query("SELECT course_id, is_free_preview FROM live_classes WHERE id = $1", [req.params.id]);
+      if (lcResult.rows.length === 0) return res.status(404).json({ message: "Live class not found" });
+      if (!(await userCanAccessLiveClassContent(db, user, lcResult.rows[0]))) {
+        return res.status(403).json({ message: "Access denied" });
+      }
       await db.query("DELETE FROM live_class_hand_raises WHERE live_class_id = $1 AND user_id = $2", [req.params.id, user.id]);
       res.json({ success: true });
     } catch (err) {

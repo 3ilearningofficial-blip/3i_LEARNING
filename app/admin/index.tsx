@@ -60,7 +60,8 @@ const ADMIN_TABS: { key: AdminTab; label: string; icon: keyof typeof Ionicons.gl
 interface NewCourse {
   title: string; description: string; teacherName: string; price: string;
   originalPrice: string; category: string; subject: string; isFree: boolean; level: string; durationHours: string;
-  courseType: string; startDate: string; endDate: string; thumbnail: string; coverColor: string;
+  courseType: string; startDate: string; endDate: string; validityMonths: string;
+  thumbnail: string; coverColor: string;
 }
 
 interface FreeMaterial {
@@ -113,6 +114,9 @@ function AnalyticsTab() {
   ];
 
   const periodLabel = period === "today" ? "Today" : period === "yesterday" ? "Yesterday" : period === "7days" ? "Last 7 Days" : period === "15days" ? "Last 15 Days" : period === "30days" ? "Last 30 Days" : "Custom";
+
+  /** When custom range is selected but not applied, the query is disabled and `data` is undefined — avoid reading properties of undefined. */
+  const a = analytics ?? {};
 
   const renderTransactionRow = (p: any, idx: number, total: number) => (
     <View key={String(p.id || idx)} style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 13, borderBottomWidth: idx < total - 1 ? 1 : 0, borderBottomColor: Colors.light.border }}>
@@ -215,8 +219,8 @@ function AnalyticsTab() {
         <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
           <View style={{ gap: 4 }}>
             <Text style={{ fontSize: 13, fontFamily: "Inter_500Medium", color: "rgba(255,255,255,0.6)" }}>Lifetime Revenue</Text>
-            <Text style={{ fontSize: 36, fontFamily: "Inter_700Bold", color: "#fff" }}>{formatCurrency((analytics?.lifetimeRevenue || 0) + (analytics?.lifetimeBookRevenue || 0) + (analytics?.lifetimeTestRevenue || 0))}</Text>
-            <Text style={{ fontSize: 13, color: "rgba(255,255,255,0.6)", fontFamily: "Inter_400Regular" }}>{analytics?.lifetimeEnrollments || 0} enrollments</Text>
+            <Text style={{ fontSize: 36, fontFamily: "Inter_700Bold", color: "#fff" }}>{formatCurrency((a.lifetimeRevenue || 0) + (a.lifetimeBookRevenue || 0) + (a.lifetimeTestRevenue || 0))}</Text>
+            <Text style={{ fontSize: 13, color: "rgba(255,255,255,0.6)", fontFamily: "Inter_400Regular" }}>{a.lifetimeEnrollments || 0} enrollments</Text>
           </View>
           <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: "rgba(255,255,255,0.1)", alignItems: "center", justifyContent: "center" }}>
             <Ionicons name="trending-up" size={32} color="#22C55E" />
@@ -225,15 +229,15 @@ function AnalyticsTab() {
         <View style={{ flexDirection: "row", gap: 12 }}>
           <View style={{ flex: 1, backgroundColor: "rgba(255,255,255,0.08)", borderRadius: 12, padding: 12, gap: 2 }}>
             <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: "rgba(255,255,255,0.5)" }}>Courses</Text>
-            <Text style={{ fontSize: 18, fontFamily: "Inter_700Bold", color: "#22C55E" }}>{formatCurrency(analytics?.lifetimeRevenue || 0)}</Text>
+            <Text style={{ fontSize: 18, fontFamily: "Inter_700Bold", color: "#22C55E" }}>{formatCurrency(a.lifetimeRevenue || 0)}</Text>
           </View>
           <View style={{ flex: 1, backgroundColor: "rgba(255,255,255,0.08)", borderRadius: 12, padding: 12, gap: 2 }}>
             <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: "rgba(255,255,255,0.5)" }}>Books</Text>
-            <Text style={{ fontSize: 18, fontFamily: "Inter_700Bold", color: "#A78BFA" }}>{formatCurrency(analytics?.lifetimeBookRevenue || 0)}</Text>
+            <Text style={{ fontSize: 18, fontFamily: "Inter_700Bold", color: "#A78BFA" }}>{formatCurrency(a.lifetimeBookRevenue || 0)}</Text>
           </View>
           <View style={{ flex: 1, backgroundColor: "rgba(255,255,255,0.08)", borderRadius: 12, padding: 12, gap: 2 }}>
             <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: "rgba(255,255,255,0.5)" }}>Tests</Text>
-            <Text style={{ fontSize: 18, fontFamily: "Inter_700Bold", color: "#38BDF8" }}>{formatCurrency(analytics?.lifetimeTestRevenue || 0)}</Text>
+            <Text style={{ fontSize: 18, fontFamily: "Inter_700Bold", color: "#38BDF8" }}>{formatCurrency(a.lifetimeTestRevenue || 0)}</Text>
           </View>
         </View>
       </View>
@@ -273,10 +277,10 @@ function AnalyticsTab() {
           {/* Summary cards */}
           <View style={{ flexDirection: "row", gap: 14, marginBottom: 20, flexWrap: "wrap" }}>
             {[
-              { label: "Course Revenue", value: formatCurrency(analytics.totalRevenue || 0), icon: "cash-outline" as const, color: "#22C55E", bg: "#DCFCE7" },
-              { label: "Book Revenue", value: formatCurrency((analytics.bookPurchases || []).reduce((s: number, b: any) => s + parseFloat(b.amount || 0), 0)), icon: "storefront-outline" as const, color: "#8B5CF6", bg: "#F3E8FF" },
-              { label: "Enrollments", value: String(analytics.totalEnrollments || 0), icon: "people-outline" as const, color: Colors.light.primary, bg: "#EEF2FF" },
-              { label: "Buy Now (Abandoned)", value: String((analytics.abandonedCheckouts || []).length), icon: "cart-outline" as const, color: "#F59E0B", bg: "#FEF3C7" },
+              { label: "Course Revenue", value: formatCurrency(a.totalRevenue || 0), icon: "cash-outline" as const, color: "#22C55E", bg: "#DCFCE7" },
+              { label: "Book Revenue", value: formatCurrency((a.bookPurchases || []).reduce((s: number, b: any) => s + parseFloat(b.amount || 0), 0)), icon: "storefront-outline" as const, color: "#8B5CF6", bg: "#F3E8FF" },
+              { label: "Enrollments", value: String(a.totalEnrollments || 0), icon: "people-outline" as const, color: Colors.light.primary, bg: "#EEF2FF" },
+              { label: "Buy Now (Abandoned)", value: String((a.abandonedCheckouts || []).length), icon: "cart-outline" as const, color: "#F59E0B", bg: "#FEF3C7" },
             ].map((stat) => (
               <View key={stat.label} style={{ flex: 1, minWidth: 150, backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 8, borderWidth: 1, borderColor: Colors.light.border }}>
                 <View style={{ width: 42, height: 42, borderRadius: 12, backgroundColor: stat.bg, alignItems: "center", justifyContent: "center" }}>
@@ -290,7 +294,7 @@ function AnalyticsTab() {
 
           {/* All Transactions */}
           {(() => {
-            const txns = (analytics.recentPurchases || []).filter((p: any, idx: number, arr: any[]) => arr.findIndex((x: any) => x.id === p.id) === idx);
+            const txns = (a.recentPurchases || []).filter((p: any, idx: number, arr: any[]) => arr.findIndex((x: any) => x.id === p.id) === idx);
             return (
               <>
                 <Text style={[styles.sectionTitle, { marginBottom: 12 }]}>All Transactions — {periodLabel} ({txns.length})</Text>
@@ -312,8 +316,8 @@ function AnalyticsTab() {
 
           {/* Buy Now Not Purchased — Courses + Books */}
           {(() => {
-            const courseAbandoned = analytics.abandonedCheckouts || [];
-            const bookAbandoned = (analytics.bookAbandonedCheckouts || []).map((b: any) => ({
+            const courseAbandoned = a.abandonedCheckouts || [];
+            const bookAbandoned = (a.bookAbandonedCheckouts || []).map((b: any) => ({
               ...b, course_title: b.book_title, category: b.author ? `by ${b.author}` : "Book", isBook: true,
             }));
             const allAbandoned = [...courseAbandoned, ...bookAbandoned].sort((a, b) => parseInt(b.click_count) - parseInt(a.click_count));
@@ -366,12 +370,12 @@ function AnalyticsTab() {
               <Text style={{ flex: 1, fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.textMuted, textTransform: "uppercase", textAlign: "center" }}>Enrollments</Text>
               <Text style={{ flex: 1, fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.textMuted, textTransform: "uppercase", textAlign: "right" }}>Revenue</Text>
             </View>
-            {(analytics.courseBreakdown || []).slice(0, 5).map((course: any, idx: number) => renderCourseRow(course, idx, Math.min(5, (analytics.courseBreakdown || []).length)))}
-            <ViewMoreBtn title="Course-wise Enrollments & Revenue" data={analytics.courseBreakdown || []} type="courses" />
+            {(a.courseBreakdown || []).slice(0, 5).map((course: any, idx: number) => renderCourseRow(course, idx, Math.min(5, (a.courseBreakdown || []).length)))}
+            <ViewMoreBtn title="Course-wise Enrollments & Revenue" data={a.courseBreakdown || []} type="courses" />
           </View>
 
           {/* Book Purchases */}
-          <Text style={[styles.sectionTitle, { marginBottom: 12 }]}>Book Purchases — {periodLabel} ({(analytics.bookPurchases || []).length})</Text>
+          <Text style={[styles.sectionTitle, { marginBottom: 12 }]}>Book Purchases — {periodLabel} ({(a.bookPurchases || []).length})</Text>
           <View style={{ backgroundColor: "#fff", borderRadius: 16, borderWidth: 1, borderColor: Colors.light.border, overflow: "hidden", marginBottom: 20 }}>
             <View style={{ flexDirection: "row", backgroundColor: "#F3E8FF", paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: "#E9D5FF" }}>
               <Text style={{ flex: 2, fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#6B21A8", textTransform: "uppercase" }}>Student</Text>
@@ -379,16 +383,16 @@ function AnalyticsTab() {
               <Text style={{ flex: 1, fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#6B21A8", textTransform: "uppercase", textAlign: "right" }}>Price</Text>
               <Text style={{ flex: 1, fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#6B21A8", textTransform: "uppercase", textAlign: "right" }}>Date</Text>
             </View>
-            {(analytics.bookPurchases || []).length === 0
+            {(a.bookPurchases || []).length === 0
               ? <View style={{ padding: 24, alignItems: "center" }}><Ionicons name="book-outline" size={32} color={Colors.light.textMuted} /><Text style={{ color: Colors.light.textMuted, fontFamily: "Inter_400Regular", marginTop: 8 }}>No book purchases in this period</Text></View>
-              : (analytics.bookPurchases || []).slice(0, 5).map((p: any, idx: number) => renderBookPurchaseRow(p, idx, Math.min(5, analytics.bookPurchases.length)))}
-            <ViewMoreBtn title={`Book Purchases — ${periodLabel}`} data={analytics.bookPurchases || []} type="books" />
+              : (a.bookPurchases || []).slice(0, 5).map((p: any, idx: number) => renderBookPurchaseRow(p, idx, Math.min(5, (a.bookPurchases || []).length)))}
+            <ViewMoreBtn title={`Book Purchases — ${periodLabel}`} data={a.bookPurchases || []} type="books" />
           </View>
 
           {/* Test Purchases */}
-          {(analytics.testPurchases || []).length > 0 && (
+          {(a.testPurchases || []).length > 0 && (
             <>
-              <Text style={[styles.sectionTitle, { marginBottom: 12 }]}>Test Purchases ({(analytics.testPurchases || []).length})</Text>
+              <Text style={[styles.sectionTitle, { marginBottom: 12 }]}>Test Purchases ({(a.testPurchases || []).length})</Text>
               <View style={{ backgroundColor: "#fff", borderRadius: 16, borderWidth: 1, borderColor: Colors.light.border, overflow: "hidden", marginBottom: 20 }}>
                 <View style={{ flexDirection: "row", backgroundColor: "#E0F2FE", paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: "#BAE6FD" }}>
                   <Text style={{ flex: 2, fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#0C4A6E", textTransform: "uppercase" }}>Student</Text>
@@ -396,8 +400,8 @@ function AnalyticsTab() {
                   <Text style={{ flex: 1, fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#0C4A6E", textTransform: "uppercase", textAlign: "right" }}>Amount</Text>
                   <Text style={{ flex: 1, fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#0C4A6E", textTransform: "uppercase", textAlign: "right" }}>Date</Text>
                 </View>
-                {(analytics.testPurchases || []).slice(0, 5).map((p: any, idx: number) => (
-                  <View key={String(p.id || idx)} style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 13, borderBottomWidth: idx < Math.min(4, (analytics.testPurchases || []).length - 1) ? 1 : 0, borderBottomColor: Colors.light.border }}>
+                {(a.testPurchases || []).slice(0, 5).map((p: any, idx: number) => (
+                  <View key={String(p.id || idx)} style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 13, borderBottomWidth: idx < Math.min(4, (a.testPurchases || []).length - 1) ? 1 : 0, borderBottomColor: Colors.light.border }}>
                     <View style={{ flex: 2, gap: 1 }}>
                       <Text style={{ fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text }} numberOfLines={1}>{p.user_name || "—"}</Text>
                       <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>{p.user_phone || p.user_email || ""}</Text>
@@ -695,7 +699,7 @@ export default function AdminDashboard() {
     title: "", description: "", teacherName: "3i Learning",
     price: "0", originalPrice: "0", category: "Mathematics",
     subject: "", isFree: false, level: "Beginner", durationHours: "0",
-    courseType: "live", startDate: "", endDate: "", thumbnail: "", coverColor: "",
+    courseType: "live", startDate: "", endDate: "", validityMonths: "", thumbnail: "", coverColor: "",
   });
   const [showAddFreeMaterial, setShowAddFreeMaterial] = useState(false);
   const [freMatTitle, setFreMatTitle] = useState("");
@@ -1274,7 +1278,7 @@ export default function AdminDashboard() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/courses"] });
       setShowAddCourse(false);
-      setNewCourse({ title: "", description: "", teacherName: "3i Learning", price: "0", originalPrice: "0", category: "Mathematics", subject: "", isFree: false, level: "Beginner", durationHours: "0", courseType: "live", startDate: "", endDate: "", thumbnail: "", coverColor: "" });
+      setNewCourse({ title: "", description: "", teacherName: "3i Learning", price: "0", originalPrice: "0", category: "Mathematics", subject: "", isFree: false, level: "Beginner", durationHours: "0", courseType: "live", startDate: "", endDate: "", validityMonths: "", thumbnail: "", coverColor: "" });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       if (Platform.OS === "web") window.alert("Course created successfully!");
       else Alert.alert("Success", "Course created successfully!");
@@ -2753,7 +2757,7 @@ export default function AdminDashboard() {
               <Text style={styles.sectionTitle}>All Tests ({adminTests.length})</Text>
               <View style={{ flexDirection: "row", gap: 8 }}>
                 <Pressable style={[styles.addBtn, { backgroundColor: "#059669" }]} onPress={() => {
-                  setNewCourse({ title: "", description: "", teacherName: "3i Learning", price: "0", originalPrice: "0", category: "Mathematics", subject: "", isFree: false, level: "Beginner", durationHours: "0", courseType: "test_series", startDate: "", endDate: "", thumbnail: "", coverColor: "" });
+                  setNewCourse({ title: "", description: "", teacherName: "3i Learning", price: "0", originalPrice: "0", category: "Mathematics", subject: "", isFree: false, level: "Beginner", durationHours: "0", courseType: "test_series", startDate: "", endDate: "", validityMonths: "", thumbnail: "", coverColor: "" });
                   setShowAddCourse(true);
                 }}>
                   <Ionicons name="albums" size={16} color="#fff" />
@@ -3803,6 +3807,20 @@ export default function AdminDashboard() {
                   <View style={styles.formField}>
                     <Text style={styles.formLabel}>End Date</Text>
                     <TextInput style={styles.formInput} placeholder="e.g., 15 Jun 2026" placeholderTextColor={Colors.light.textMuted} value={newCourse.endDate} onChangeText={(val) => setNewCourse((prev) => ({ ...prev, endDate: val }))} />
+                  </View>
+                  <View style={styles.formField}>
+                    <Text style={styles.formLabel}>Access validity (months from purchase, optional)</Text>
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="e.g., 6 or 12 or 18 (leave empty for no extra limit from purchase date)"
+                      placeholderTextColor={Colors.light.textMuted}
+                      value={newCourse.validityMonths}
+                      onChangeText={(val) => setNewCourse((prev) => ({ ...prev, validityMonths: val }))}
+                      keyboardType="numeric"
+                    />
+                    <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: Colors.light.textMuted, marginTop: 4 }}>
+                      Access ends on the earlier of: course end date, or (purchase time + this many months).
+                    </Text>
                   </View>
                 </>
               )}

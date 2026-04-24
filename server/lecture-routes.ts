@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { isEnrollmentExpired } from "./course-access-utils";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -34,8 +35,8 @@ export function registerLectureRoutes({
 
       if (user.role !== "admin" && !lecture.is_free_preview) {
         if (lecture.course_id) {
-          const enrolled = await db.query("SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [user.id, lecture.course_id]);
-          if (enrolled.rows.length === 0) {
+          const enrolled = await db.query("SELECT * FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [user.id, lecture.course_id]);
+          if (enrolled.rows.length === 0 || isEnrollmentExpired(enrolled.rows[0])) {
             return res.status(403).json({ message: "Enrollment required to access this lecture" });
           }
         }

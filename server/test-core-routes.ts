@@ -1,4 +1,6 @@
 import type { Express, Request, Response } from "express";
+import { assertTestAccess } from "./test-access-guards";
+import { isEnrollmentExpired } from "./course-access-utils";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -37,11 +39,14 @@ export function registerTestCoreRoutes({
       const result = await db.query(query, params);
       let tests: any[] = result.rows;
       if (user) {
-        const enrollResult = await db.query("SELECT course_id FROM enrollments WHERE user_id = $1", [user.id]);
-        const enrolledIds = new Set(enrollResult.rows.map((e: any) => Number(e.course_id)));
+        const enrollResult = await db.query("SELECT course_id, valid_until FROM enrollments WHERE user_id = $1", [user.id]);
+        const courseUnlocked = new Set<number>();
+        for (const e of enrollResult.rows as { course_id: number; valid_until?: number | null }[]) {
+          if (!isEnrollmentExpired(e as any)) courseUnlocked.add(Number(e.course_id));
+        }
         tests = tests.map((t: any) => ({
           ...t,
-          isLocked: t.course_id && !t.course_is_free && !enrolledIds.has(Number(t.course_id)),
+          isLocked: !!(t.course_id && !t.course_is_free && !courseUnlocked.has(Number(t.course_id))),
         }));
       } else {
         tests = tests.map((t: any) => ({
@@ -51,7 +56,8 @@ export function registerTestCoreRoutes({
       }
       res.set("Cache-Control", "private, no-store");
       res.json(tests);
-    } catch {
+    } catch (err) {
+      console.error("[api/tests] list error:", err);
       res.status(500).json({ message: "Failed to fetch tests" });
     }
   });
@@ -73,22 +79,8 @@ export function registerTestCoreRoutes({
       const test = testResult.rows[0];
 
       if (user.role !== "admin") {
-        if (test.course_id) {
-          const enrolled = await db.query("SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [user.id, test.course_id]);
-          if (enrolled.rows.length === 0) {
-            return res.status(403).json({ message: "Enrollment required to access this test" });
-          }
-        } else if (test.mini_course_id && !test.folder_is_free) {
-          const purchased = await db.query("SELECT id FROM folder_purchases WHERE user_id = $1 AND folder_id = $2", [user.id, test.mini_course_id]);
-          if (purchased.rows.length === 0) {
-            return res.status(403).json({ message: "Purchase required to access this test" });
-          }
-        } else if (test.price && parseFloat(test.price) > 0) {
-          const purchased = await db.query("SELECT id FROM test_purchases WHERE user_id = $1 AND test_id = $2", [user.id, req.params.id]);
-          if (purchased.rows.length === 0) {
-            return res.status(403).json({ message: "Purchase required to access this test" });
-          }
-        }
+        const a = await assertTestAccess(db, user, test, String(req.params.id));
+        if (!a.ok) return res.status(403).json({ message: a.message });
       }
 
       const questionsResult = await db.query("SELECT * FROM questions WHERE test_id = $1 ORDER BY order_index", [req.params.id]);
@@ -117,18 +109,8 @@ export function registerTestCoreRoutes({
       const test = testResult.rows[0];
 
       if (user.role !== "admin") {
-        if (test.course_id) {
-          const enrolled = await db.query("SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [user.id, test.course_id]);
-          if (enrolled.rows.length === 0) return res.status(403).json({ message: "Enrollment required to attempt this test" });
-        } else if (test.mini_course_id) {
-          if (!test.folder_is_free) {
-            const purchased = await db.query("SELECT id FROM folder_purchases WHERE user_id = $1 AND folder_id = $2", [user.id, test.mini_course_id]);
-            if (purchased.rows.length === 0) return res.status(403).json({ message: "Purchase required to attempt this test" });
-          }
-        } else if (test.price && parseFloat(test.price) > 0) {
-          const purchased = await db.query("SELECT id FROM test_purchases WHERE user_id = $1 AND test_id = $2", [user.id, req.params.id]);
-          if (purchased.rows.length === 0) return res.status(403).json({ message: "Purchase required to attempt this test" });
-        }
+        const a = await assertTestAccess(db, user, test, String(req.params.id));
+        if (!a.ok) return res.status(403).json({ message: a.message });
       }
       const questionsResult = await db.query("SELECT * FROM questions WHERE test_id = $1", [req.params.id]);
       const questions = questionsResult.rows;

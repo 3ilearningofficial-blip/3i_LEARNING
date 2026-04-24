@@ -318,17 +318,24 @@ export default function CourseDetailScreen() {
               Alert.alert("Success!", "Payment successful! You are now enrolled.");
             } catch {
               Alert.alert("Error", "Payment was received but enrollment failed. Please contact support.");
+            } finally {
+              setIsPaymentPending(false);
             }
           },
           prefill: {
             contact: user?.phone ? `+91${user.phone}` : "",
           },
           theme: { color: "#1A56DB" },
-          modal: { ondismiss: () => {} },
+          modal: {
+            ondismiss: () => {
+              setIsPaymentPending(false);
+            },
+          },
         };
 
         const rzp = new (window as any).Razorpay(options);
         rzp.open();
+        return;
       } else {
         const baseUrl = getApiUrl();
         const checkoutHtml = `
@@ -371,9 +378,10 @@ setTimeout(function() {
     window.ReactNativeWebView.postMessage(JSON.stringify({ type: "payment_failed", error: resp.error.description }));
   });
   rzp.open();
-}, 500);
+}, 0);
 </script></body></html>`;
         setPaymentWebViewHtml(checkoutHtml);
+        return;
       }
     } catch (err: any) {
       const msg = err?.message || "";
@@ -383,7 +391,6 @@ setTimeout(function() {
       } else {
         Alert.alert("Error", "Failed to initiate payment. Please try again.");
       }
-    } finally {
       setIsPaymentPending(false);
     }
   };
@@ -1302,7 +1309,7 @@ setTimeout(function() {
               colors={course.is_free ? ["#22C55E", "#16A34A"] : [Colors.light.accent, "#E55A25"]}
               style={styles.enrollBtnGradient}
             >
-              {enrollMutation.isPending ? (
+              {enrollMutation.isPending || isPaymentPending ? (
                 <ActivityIndicator color="#fff" size="small" />
               ) : (
                 <Text style={styles.enrollBtnText}>
@@ -1315,10 +1322,10 @@ setTimeout(function() {
       )}
 
       {paymentWebViewHtml && Platform.OS !== "web" && (
-        <Modal visible animationType="slide" onRequestClose={() => setPaymentWebViewHtml(null)}>
+        <Modal visible animationType="slide" onRequestClose={() => { setPaymentWebViewHtml(null); setIsPaymentPending(false); }}>
           <View style={{ flex: 1, backgroundColor: "#0A1628" }}>
             <View style={{ flexDirection: "row", alignItems: "center", paddingTop: insets.top + 8, paddingHorizontal: 16, paddingBottom: 12, backgroundColor: "#0A1628" }}>
-              <Pressable onPress={() => setPaymentWebViewHtml(null)} style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" }}>
+              <Pressable onPress={() => { setPaymentWebViewHtml(null); setIsPaymentPending(false); }} style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" }}>
                 <Ionicons name="close" size={22} color="#fff" />
               </Pressable>
               <Text style={{ flex: 1, textAlign: "center", fontSize: 16, fontFamily: "Inter_700Bold", color: "#fff", marginRight: 36 }}>Payment</Text>
@@ -1335,20 +1342,28 @@ setTimeout(function() {
                   const data = JSON.parse(event.nativeEvent.data);
                   if (data.type === "payment_success") {
                     setPaymentWebViewHtml(null);
-                    await apiRequest("POST", "/api/payments/verify", {
-                      razorpay_order_id: data.razorpay_order_id,
-                      razorpay_payment_id: data.razorpay_payment_id,
-                      razorpay_signature: data.razorpay_signature,
-                      courseId: parseInt(id as string),
-                    });
-                    qc.invalidateQueries({ queryKey: ["/api/courses", id] });
-                    qc.invalidateQueries({ queryKey: ["/api/courses"] });
-                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-                    Alert.alert("Success!", "Payment successful! You are now enrolled.");
+                    try {
+                      await apiRequest("POST", "/api/payments/verify", {
+                        razorpay_order_id: data.razorpay_order_id,
+                        razorpay_payment_id: data.razorpay_payment_id,
+                        razorpay_signature: data.razorpay_signature,
+                        courseId: parseInt(id as string),
+                      });
+                      qc.invalidateQueries({ queryKey: ["/api/courses", id] });
+                      qc.invalidateQueries({ queryKey: ["/api/courses"] });
+                      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                      Alert.alert("Success!", "Payment successful! You are now enrolled.");
+                    } catch {
+                      Alert.alert("Error", "Payment was received but enrollment failed. Please contact support.");
+                    } finally {
+                      setIsPaymentPending(false);
+                    }
                   } else if (data.type === "payment_dismissed") {
                     setPaymentWebViewHtml(null);
+                    setIsPaymentPending(false);
                   } else if (data.type === "payment_failed") {
                     setPaymentWebViewHtml(null);
+                    setIsPaymentPending(false);
                     Alert.alert("Payment Failed", data.error || "Payment could not be completed.");
                   }
                 } catch (_e) {}

@@ -388,6 +388,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         teacher_name TEXT NOT NULL DEFAULT '3i Learning',
         price DECIMAL(10, 2) DEFAULT 0,
         original_price DECIMAL(10, 2) DEFAULT 0,
+        validity_months NUMERIC(8, 2) DEFAULT NULL,
         category TEXT DEFAULT 'Mathematics',
         thumbnail TEXT,
         is_free BOOLEAN DEFAULT FALSE,
@@ -674,6 +675,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     // Ensure courses table has all required columns
     await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_free BOOLEAN DEFAULT FALSE");
     await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS original_price DECIMAL(10, 2) DEFAULT 0");
+    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS validity_months NUMERIC(8, 2) DEFAULT NULL");
+    await db.query("ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS valid_until BIGINT");
     await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_published BOOLEAN DEFAULT TRUE");
     await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS course_type TEXT DEFAULT 'live'");
     await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS subject TEXT DEFAULT ''");

@@ -150,7 +150,6 @@ export default function StoreScreen() {
     try {
       const orderRes = await apiRequest("POST", "/api/books/create-order", { bookId: book.id });
       const orderData = await orderRes.json();
-      setPayingBookId(null);
 
       if (Platform.OS === "web") {
         if (!document.querySelector('script[src="https://checkout.razorpay.com/v1/checkout.js"]')) {
@@ -176,10 +175,17 @@ export default function StoreScreen() {
               Alert.alert("Success!", `"${book.title}" purchased! Go to My Books to read it.`);
             } catch {
               Alert.alert("Error", "Payment received but activation failed. Contact support.");
+            } finally {
+              setPayingBookId(null);
             }
           },
           prefill: { contact: user?.phone ? `+91${user.phone}` : "" },
           theme: { color: "#1A56DB" },
+          modal: {
+            ondismiss: () => {
+              setPayingBookId(null);
+            },
+          },
         };
         const rzp = new (window as any).Razorpay(options);
         rzp.open();
@@ -198,7 +204,7 @@ description:"Purchase: ${(orderData.bookTitle||book.title).replace(/"/g,'\\"')}"
 handler:function(r){window.ReactNativeWebView.postMessage(JSON.stringify({type:"payment_success",razorpay_order_id:r.razorpay_order_id,razorpay_payment_id:r.razorpay_payment_id,razorpay_signature:r.razorpay_signature}))},
 prefill:{contact:"${user?.phone?`+91${user.phone}`:''}"},theme:{color:"#1A56DB"},
 modal:{ondismiss:function(){window.ReactNativeWebView.postMessage(JSON.stringify({type:"payment_dismissed"}))}}};
-setTimeout(function(){var rzp=new Razorpay(options);rzp.on("payment.failed",function(resp){window.ReactNativeWebView.postMessage(JSON.stringify({type:"payment_failed",error:resp.error.description}))});rzp.open()},500);
+setTimeout(function(){var rzp=new Razorpay(options);rzp.on("payment.failed",function(resp){window.ReactNativeWebView.postMessage(JSON.stringify({type:"payment_failed",error:resp.error.description}))});rzp.open()},0);
 </script></body></html>`;
         setPendingBookId(book.id);
         setPaymentWebViewHtml(checkoutHtml);
@@ -414,10 +420,10 @@ setTimeout(function(){var rzp=new Razorpay(options);rzp.on("payment.failed",func
 
       {/* Razorpay WebView Modal */}
       {paymentWebViewHtml && Platform.OS !== "web" && (
-        <Modal visible animationType="slide" onRequestClose={() => { setPaymentWebViewHtml(null); setPendingBookId(null); }}>
+        <Modal visible animationType="slide" onRequestClose={() => { setPaymentWebViewHtml(null); setPendingBookId(null); setPayingBookId(null); }}>
           <View style={{ flex: 1, backgroundColor: "#0A1628" }}>
             <View style={{ flexDirection: "row", alignItems: "center", paddingTop: insets.top + 8, paddingHorizontal: 16, paddingBottom: 12, backgroundColor: "#0A1628" }}>
-              <Pressable onPress={() => { setPaymentWebViewHtml(null); setPendingBookId(null); }}
+              <Pressable onPress={() => { setPaymentWebViewHtml(null); setPendingBookId(null); setPayingBookId(null); }}
                 style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" }}>
                 <Ionicons name="close" size={22} color="#fff" />
               </Pressable>
@@ -433,17 +439,25 @@ setTimeout(function(){var rzp=new Razorpay(options);rzp.on("payment.failed",func
                   if (data.type === "payment_success") {
                     setPaymentWebViewHtml(null);
                     const bookId = pendingBookId; setPendingBookId(null);
-                    await apiRequest("POST", "/api/books/verify-payment", {
-                      bookId, razorpayOrderId: data.razorpay_order_id,
-                      razorpayPaymentId: data.razorpay_payment_id, razorpaySignature: data.razorpay_signature,
-                    });
-                    qc.invalidateQueries({ queryKey: ["/api/my-books"] });
-                    qc.invalidateQueries({ queryKey: ["/api/books"] });
-                    Alert.alert("Success!", "Book purchased! Go to My Books to read it.");
+                    try {
+                      await apiRequest("POST", "/api/books/verify-payment", {
+                        bookId, razorpayOrderId: data.razorpay_order_id,
+                        razorpayPaymentId: data.razorpay_payment_id, razorpaySignature: data.razorpay_signature,
+                      });
+                      qc.invalidateQueries({ queryKey: ["/api/my-books"] });
+                      qc.invalidateQueries({ queryKey: ["/api/books"] });
+                      Alert.alert("Success!", "Book purchased! Go to My Books to read it.");
+                    } catch {
+                      Alert.alert("Error", "Payment received but activation failed. Contact support.");
+                    } finally {
+                      setPayingBookId(null);
+                    }
                   } else if (data.type === "payment_dismissed") {
                     setPaymentWebViewHtml(null); setPendingBookId(null);
+                    setPayingBookId(null);
                   } else if (data.type === "payment_failed") {
                     setPaymentWebViewHtml(null); setPendingBookId(null);
+                    setPayingBookId(null);
                     Alert.alert("Payment Failed", data.error || "Payment could not be completed.");
                   }
                 } catch (_e) {}

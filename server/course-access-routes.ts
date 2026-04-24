@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { computeEnrollmentValidUntil, isEnrollmentExpired } from "./course-access-utils";
 
 type DbQueryResult = {
   rows: any[];
@@ -122,15 +123,26 @@ export function registerCourseAccessRoutes({
       if (courseResult.rows.length === 0) return res.status(404).json({ message: "Course not found" });
 
       const course = courseResult.rows[0];
+      const endTs = course.end_date != null && String(course.end_date).trim() !== ""
+        ? Date.parse(String(course.end_date).trim()) : null;
+      if (Number.isFinite(endTs) && (endTs as number) < Date.now()) {
+        (course as any).courseEnded = true;
+      } else {
+        (course as any).courseEnded = false;
+      }
       const lecturesResult = await db.query("SELECT * FROM lectures WHERE course_id = $1 ORDER BY order_index", [req.params.id]);
       const testsResult = await db.query("SELECT * FROM tests WHERE course_id = $1 AND is_published = TRUE", [req.params.id]);
       const materialsResult = await db.query("SELECT * FROM study_materials WHERE course_id = $1", [req.params.id]);
 
       if (user) {
         const enroll = await db.query("SELECT * FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [user.id, req.params.id]);
-        (course as any).isEnrolled = enroll.rows.length > 0;
-        (course as any).progress = enroll.rows[0]?.progress_percent || 0;
-        (course as any).lastLectureId = enroll.rows[0]?.last_lecture_id;
+        const row = enroll.rows[0];
+        const accessExpired = row && isEnrollmentExpired(row);
+        (course as any).isEnrolled = enroll.rows.length > 0 && !accessExpired;
+        (course as any).accessExpired = accessExpired || false;
+        (course as any).enrollmentValidUntil = row && row.valid_until != null ? row.valid_until : null;
+        (course as any).progress = row && !accessExpired ? (row?.progress_percent || 0) : 0;
+        (course as any).lastLectureId = row && !accessExpired ? row?.last_lecture_id : null;
 
         if ((course as any).isEnrolled) {
           const lpResult = await db.query("SELECT * FROM lecture_progress WHERE user_id = $1", [user.id]);
@@ -188,10 +200,10 @@ export function registerCourseAccessRoutes({
 
       if (!user) return res.status(401).json({ message: "Not authenticated" });
 
-      const courseResult = await db.query("SELECT id, is_free FROM courses WHERE id = $1", [req.params.id]);
+      const courseResult = await db.query("SELECT * FROM courses WHERE id = $1", [req.params.id]);
       if (courseResult.rows.length === 0) return res.status(404).json({ message: "Course not found" });
-
-      if (!courseResult.rows[0].is_free && !isAdminGrant) return res.status(403).json({ message: "This course requires payment" });
+      const courseRow = courseResult.rows[0];
+      if (!courseRow.is_free && !isAdminGrant) return res.status(403).json({ message: "This course requires payment" });
 
       const existing = await db.query("SELECT id, status FROM enrollments WHERE user_id = $1 AND course_id = $2", [user.id, req.params.id]);
       if (existing.rows.length > 0) {
@@ -202,7 +214,9 @@ export function registerCourseAccessRoutes({
         return res.json({ success: true, alreadyEnrolled: true });
       }
 
-      await db.query("INSERT INTO enrollments (user_id, course_id, enrolled_at) VALUES ($1, $2, $3)", [user.id, req.params.id, Date.now()]);
+      const at = Date.now();
+      const vu = computeEnrollmentValidUntil(courseRow, at);
+      await db.query("INSERT INTO enrollments (user_id, course_id, enrolled_at, valid_until) VALUES ($1, $2, $3, $4)", [user.id, req.params.id, at, vu]);
       await db.query("UPDATE courses SET total_students = COALESCE(total_students, 0) + 1 WHERE id = $1", [req.params.id]);
       cacheInvalidate("courses:");
       res.json({ success: true });

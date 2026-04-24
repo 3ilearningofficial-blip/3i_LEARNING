@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { computeEnrollmentValidUntil } from "./course-access-utils";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -78,6 +79,11 @@ export function registerPaymentRoutes({
 
       const course = courseResult.rows[0];
       if (course.is_free) return res.status(400).json({ message: "This course is free, no payment needed" });
+      const endTs = course.end_date != null && String(course.end_date).trim() !== ""
+        ? Date.parse(String(course.end_date).trim()) : null;
+      if (Number.isFinite(endTs) && (endTs as number) < Date.now()) {
+        return res.status(400).json({ message: "This course has ended" });
+      }
 
       const existingEnrollment = await db.query("SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2", [user.id, courseId]);
       if (existingEnrollment.rows.length > 0) return res.status(400).json({ message: "Already enrolled" });
@@ -144,6 +150,15 @@ export function registerPaymentRoutes({
       const paymentCourseId = paymentRecord.rows[0].course_id;
       if (courseId && paymentCourseId !== courseId) return res.status(400).json({ message: "Course mismatch" });
 
+      const paidCourseResult = await db.query("SELECT * FROM courses WHERE id = $1", [paymentCourseId]);
+      const paidCourse = paidCourseResult.rows[0];
+      if (!paidCourse) return res.status(400).json({ message: "Course not found" });
+      const endTsPaid = paidCourse.end_date != null && String(paidCourse.end_date).trim() !== ""
+        ? Date.parse(String(paidCourse.end_date).trim()) : null;
+      if (Number.isFinite(endTsPaid) && (endTsPaid as number) < Date.now()) {
+        return res.status(400).json({ message: "This course has ended" });
+      }
+
       await db.query(
         "UPDATE payments SET razorpay_payment_id = $1, razorpay_signature = $2, status = $3 WHERE razorpay_order_id = $4 AND user_id = $5",
         [razorpay_payment_id, razorpay_signature, "paid", razorpay_order_id, user.id]
@@ -154,9 +169,11 @@ export function registerPaymentRoutes({
         [user.id, paymentCourseId]
       );
       if (alreadyEnrolled.rows.length === 0) {
+        const at = Date.now();
+        const vu = computeEnrollmentValidUntil(paidCourse, at);
         await db.query(
-          "INSERT INTO enrollments (user_id, course_id, enrolled_at) VALUES ($1, $2, $3)",
-          [user.id, paymentCourseId, Date.now()]
+          "INSERT INTO enrollments (user_id, course_id, enrolled_at, valid_until) VALUES ($1, $2, $3, $4)",
+          [user.id, paymentCourseId, at, vu]
         );
         await db.query(
           "UPDATE courses SET total_students = COALESCE(total_students, 0) + 1 WHERE id = $1",

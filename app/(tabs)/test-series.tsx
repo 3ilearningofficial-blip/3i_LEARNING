@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable,
   Platform, ActivityIndicator, FlatList, Alert, Modal,
@@ -139,7 +139,7 @@ function ScheduledTestCard({ test, onStart }: { test: Test; onStart: () => void 
   );
 }
 
-function TestCard({ test, attempt, onPress }: { test: Test; attempt?: any; onPress: () => void }) {
+function TestCard({ test, attempt, onPress, paymentLoading }: { test: Test; attempt?: any; onPress: () => void; paymentLoading?: boolean }) {
   const color = TEST_TYPE_COLORS[test.test_type] || Colors.light.primary;
   const hours = Math.floor(test.duration_minutes / 60);
   const mins = test.duration_minutes % 60;
@@ -182,9 +182,6 @@ function TestCard({ test, attempt, onPress }: { test: Test; attempt?: any; onPre
             [{ text: "OK" }]
           );
         }
-      } : isPaid ? () => {
-        if (Platform.OS === "web") window.alert(`This test costs ₹${parseFloat(String(test.price)).toFixed(0)}. Payment for standalone tests coming soon.`);
-        else Alert.alert("Paid Test", `This test costs ₹${parseFloat(String(test.price)).toFixed(0)}.\nPayment integration coming soon.`, [{ text: "OK" }]);
       } : onPress}
     >
       <View style={[styles.testTypeBar, { backgroundColor: isLocked ? "#9CA3AF" : color }]} />
@@ -272,9 +269,19 @@ function TestCard({ test, attempt, onPress }: { test: Test; attempt?: any; onPre
             </Text>
           </Pressable>
         ) : isPaid ? (
-          <Pressable style={[styles.startTestBtn, { backgroundColor: "#FEF3C7", borderColor: "#D97706" }]} onPress={() => onPress()}>
-            <Ionicons name="cash-outline" size={14} color="#D97706" />
-            <Text style={[styles.startTestBtnText, { color: "#D97706" }]}>Buy ₹{parseFloat(String(test.price)).toFixed(0)}</Text>
+          <Pressable
+            style={[styles.startTestBtn, { backgroundColor: "#FEF3C7", borderColor: "#D97706", opacity: paymentLoading ? 0.75 : 1 }]}
+            onPress={() => onPress()}
+            disabled={!!paymentLoading}
+          >
+            {paymentLoading ? (
+              <ActivityIndicator size="small" color="#D97706" />
+            ) : (
+              <>
+                <Ionicons name="cash-outline" size={14} color="#D97706" />
+                <Text style={[styles.startTestBtnText, { color: "#D97706" }]}>Buy ₹{parseFloat(String(test.price)).toFixed(0)}</Text>
+              </>
+            )}
           </Pressable>
         ) : isUpcoming ? (
           <Pressable style={[styles.startTestBtn, { backgroundColor: "#F3E8FF", borderColor: "#7C3AED" }]} onPress={undefined}>
@@ -308,15 +315,26 @@ export default function TestSeriesScreen() {
   const [selectedType, setSelectedType] = useState("All");
   const [paymentWebViewHtml, setPaymentWebViewHtml] = useState<string | null>(null);
   const [paymentPending, setPaymentPending] = useState(false);
+  const [payingTestId, setPayingTestId] = useState<number | null>(null);
+  const pendingTestIdRef = useRef<number | null>(null);
+
+  const clearTestPaymentUi = () => {
+    setPaymentPending(false);
+    setPayingTestId(null);
+    pendingTestIdRef.current = null;
+  };
 
   const handleTestPayment = async (test: Test) => {
     if (!user) { router.push("/(auth)/email-login" as any); return; }
     if (paymentPending) return;
     setPaymentPending(true);
+    setPayingTestId(test.id);
+    pendingTestIdRef.current = test.id;
     try {
       const orderRes = await apiRequest("POST", "/api/tests/create-order", { testId: test.id });
       const orderData = await orderRes.json();
       if (orderData.alreadyPurchased) {
+        clearTestPaymentUi();
         qc.invalidateQueries({ queryKey: ["/api/tests"] });
         return;
       }
@@ -334,25 +352,37 @@ export default function TestSeriesScreen() {
           order_id: orderData.orderId,
           handler: async (response: any) => {
             try {
-              await apiRequest("POST", "/api/tests/verify-payment", { ...response, testId: test.id });
+              await apiRequest("POST", "/api/tests/verify-payment", {
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature: response.razorpay_signature,
+                testId: test.id,
+              });
               qc.invalidateQueries({ queryKey: ["/api/tests"] });
               Alert.alert("Success!", "Payment successful! You can now attempt this test.");
-            } catch { Alert.alert("Error", "Payment received but verification failed. Contact support."); }
+            } catch {
+              Alert.alert("Error", "Payment received but verification failed. Contact support.");
+            } finally {
+              clearTestPaymentUi();
+            }
           },
           prefill: { contact: user?.phone ? `+91${user.phone}` : "" },
           theme: { color: "#1A56DB" },
+          modal: {
+            ondismiss: () => {
+              clearTestPaymentUi();
+            },
+          },
         };
         new (window as any).Razorpay(options).open();
-      } else {
-        const html = `<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><script src="https://checkout.razorpay.com/v1/checkout.js"></script><style>body{margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#0A1628;color:#fff;font-family:sans-serif}.spinner{border:3px solid rgba(255,255,255,0.2);border-top:3px solid #1A56DB;border-radius:50%;width:40px;height:40px;animation:spin 0.8s linear infinite;margin:0 auto 16px}@keyframes spin{to{transform:rotate(360deg)}}</style></head><body><div style="text-align:center"><div class="spinner"></div><p>Opening payment...</p></div><script>setTimeout(function(){var rzp=new Razorpay({key:"${orderData.keyId}",amount:${orderData.amount},currency:"${orderData.currency}",name:"3i Learning",description:"Purchase: ${(orderData.testName || "").replace(/"/g, '\\"')}",order_id:"${orderData.orderId}",handler:function(r){window.ReactNativeWebView.postMessage(JSON.stringify({type:"payment_success",razorpay_order_id:r.razorpay_order_id,razorpay_payment_id:r.razorpay_payment_id,razorpay_signature:r.razorpay_signature}))},prefill:{contact:"${user?.phone ? `+91${user.phone}` : ""}"},theme:{color:"#1A56DB"},modal:{ondismiss:function(){window.ReactNativeWebView.postMessage(JSON.stringify({type:"payment_dismissed"}))}}});rzp.on("payment.failed",function(e){window.ReactNativeWebView.postMessage(JSON.stringify({type:"payment_failed",error:e.error.description}))});rzp.open()},500);</script></body></html>`;
-        setPaymentWebViewHtml(html);
-        // Store testId for verification
-        (global as any)._pendingTestPaymentId = test.id;
+        return;
       }
-    } catch (err: any) {
+      const html = `<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><script src="https://checkout.razorpay.com/v1/checkout.js"></script><style>body{margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#0A1628;color:#fff;font-family:sans-serif}.spinner{border:3px solid rgba(255,255,255,0.2);border-top:3px solid #1A56DB;border-radius:50%;width:40px;height:40px;animation:spin 0.8s linear infinite;margin:0 auto 16px}@keyframes spin{to{transform:rotate(360deg)}}</style></head><body><div style="text-align:center"><div class="spinner"></div><p>Opening payment...</p></div><script>setTimeout(function(){var rzp=new Razorpay({key:"${orderData.keyId}",amount:${orderData.amount},currency:"${orderData.currency}",name:"3i Learning",description:"Purchase: ${(orderData.testName || "").replace(/"/g, '\\"')}",order_id:"${orderData.orderId}",handler:function(r){window.ReactNativeWebView.postMessage(JSON.stringify({type:"payment_success",razorpay_order_id:r.razorpay_order_id,razorpay_payment_id:r.razorpay_payment_id,razorpay_signature:r.razorpay_signature}))},prefill:{contact:"${user?.phone ? `+91${user.phone}` : ""}"},theme:{color:"#1A56DB"},modal:{ondismiss:function(){window.ReactNativeWebView.postMessage(JSON.stringify({type:"payment_dismissed"}))}}});rzp.on("payment.failed",function(e){window.ReactNativeWebView.postMessage(JSON.stringify({type:"payment_failed",error:e.error.description}))});rzp.open()},0);</script></body></html>`;
+      setPaymentWebViewHtml(html);
+      return;
+    } catch {
       Alert.alert("Error", "Failed to initiate payment. Please try again.");
-    } finally {
-      setPaymentPending(false);
+      clearTestPaymentUi();
     }
   };
 
@@ -617,7 +647,13 @@ export default function TestSeriesScreen() {
                   const endMs = Number(t.scheduled_at) + (t.duration_minutes || 60) * 60000;
                   return Date.now() >= endMs;
                 }).map((test) => (
-                  <TestCard key={test.id} test={test} attempt={attemptSummary[test.id]} onPress={() => (test.price ?? 0) > 0 ? handleTestPayment(test) : handleStartTest(test)} />
+                  <TestCard
+                    key={test.id}
+                    test={test}
+                    attempt={attemptSummary[test.id]}
+                    paymentLoading={!!(paymentPending && payingTestId === test.id)}
+                    onPress={() => ((test.price ?? 0) > 0 ? handleTestPayment(test) : handleStartTest(test))}
+                  />
                 ))
               )}
             </>
@@ -627,10 +663,10 @@ export default function TestSeriesScreen() {
 
       {/* Razorpay Payment WebView (mobile only) */}
       {paymentWebViewHtml && Platform.OS !== "web" && (
-        <Modal visible animationType="slide" onRequestClose={() => setPaymentWebViewHtml(null)}>
+        <Modal visible animationType="slide" onRequestClose={() => { setPaymentWebViewHtml(null); clearTestPaymentUi(); }}>
           <View style={{ flex: 1, backgroundColor: "#0A1628" }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 16, paddingTop: insets.top + 8, paddingBottom: 12 }}>
-              <Pressable onPress={() => setPaymentWebViewHtml(null)} style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" }}>
+              <Pressable onPress={() => { setPaymentWebViewHtml(null); clearTestPaymentUi(); }} style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" }}>
                 <Ionicons name="close" size={20} color="#fff" />
               </Pressable>
               <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: "#fff" }}>Complete Payment</Text>
@@ -643,18 +679,33 @@ export default function TestSeriesScreen() {
                 try {
                   const data = JSON.parse(e.nativeEvent.data);
                   if (data.type === "payment_success") {
-                    const testId = (global as any)._pendingTestPaymentId;
-                    await apiRequest("POST", "/api/tests/verify-payment", { ...data, testId });
-                    qc.invalidateQueries({ queryKey: ["/api/tests"] });
+                    const testId = pendingTestIdRef.current;
                     setPaymentWebViewHtml(null);
-                    Alert.alert("Success!", "Payment successful! You can now attempt this test.");
+                    try {
+                      await apiRequest("POST", "/api/tests/verify-payment", {
+                        razorpay_order_id: data.razorpay_order_id,
+                        razorpay_payment_id: data.razorpay_payment_id,
+                        razorpay_signature: data.razorpay_signature,
+                        testId,
+                      });
+                      qc.invalidateQueries({ queryKey: ["/api/tests"] });
+                      Alert.alert("Success!", "Payment successful! You can now attempt this test.");
+                    } catch {
+                      Alert.alert("Error", "Payment received but verification failed. Contact support.");
+                    } finally {
+                      clearTestPaymentUi();
+                    }
                   } else if (data.type === "payment_dismissed") {
                     setPaymentWebViewHtml(null);
+                    clearTestPaymentUi();
                   } else if (data.type === "payment_failed") {
                     setPaymentWebViewHtml(null);
+                    clearTestPaymentUi();
                     Alert.alert("Payment Failed", data.error || "Payment could not be processed.");
                   }
-                } catch {}
+                } catch {
+                  /* ignore */
+                }
               }}
             />
           </View>
