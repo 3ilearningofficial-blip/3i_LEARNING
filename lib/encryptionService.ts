@@ -5,28 +5,48 @@ import * as Crypto from 'expo-crypto';
 
 const KEY_STORAGE_KEY = 'download_encryption_key';
 const SALT_STORAGE_KEY = 'download_key_salt';
+const BINDING_STORAGE_KEY = 'download_key_binding';
 const ITERATIONS = 100000;
 const KEY_SIZE = 256 / 32; // 256 bits = 8 words (32-bit words)
 
 class EncryptionService {
   private cachedKey: string | null = null;
+  private cachedBinding: string | null = null;
+
+  private async computeBinding(sessionToken: string, deviceId: string): Promise<string> {
+    return Crypto.digestStringAsync(
+      Crypto.CryptoDigestAlgorithm.SHA256,
+      `${sessionToken}:${deviceId}`
+    );
+  }
 
   /**
    * Get or create encryption key using PBKDF2 derivation
    * Key = PBKDF2(sessionToken + deviceId, salt, 100000 iterations, 256 bits)
    */
   async getOrCreateKey(sessionToken: string, deviceId: string): Promise<string> {
+    const binding = await this.computeBinding(sessionToken, deviceId);
+
     // Return cached key if available
-    if (this.cachedKey) {
+    if (this.cachedKey && this.cachedBinding === binding) {
       return this.cachedKey;
     }
 
     try {
       // Check if key already exists in SecureStore
       const existingKey = await SecureStore.getItemAsync(KEY_STORAGE_KEY);
-      if (existingKey) {
+      const existingBinding = await SecureStore.getItemAsync(BINDING_STORAGE_KEY);
+      if (existingKey && existingBinding === binding) {
         this.cachedKey = existingKey;
+        this.cachedBinding = binding;
         return existingKey;
+      }
+
+      // Key exists but binding changed => rotate key material.
+      if (existingKey && existingBinding !== binding) {
+        await SecureStore.deleteItemAsync(KEY_STORAGE_KEY);
+        await SecureStore.deleteItemAsync(SALT_STORAGE_KEY);
+        await SecureStore.deleteItemAsync(BINDING_STORAGE_KEY);
       }
 
       // Get or create salt
@@ -52,7 +72,9 @@ class EncryptionService {
       
       // Store derived key in SecureStore
       await SecureStore.setItemAsync(KEY_STORAGE_KEY, keyString);
+      await SecureStore.setItemAsync(BINDING_STORAGE_KEY, binding);
       this.cachedKey = keyString;
+      this.cachedBinding = binding;
 
       return keyString;
     } catch (error) {
@@ -63,7 +85,7 @@ class EncryptionService {
 
   /**
    * Encrypt buffer data with AES-256-CBC
-   * Returns base64-encoded ciphertext with prepended IV
+   * Returns hex ciphertext with prepended IV (hex)
    */
   async encryptBuffer(
     data: string,
@@ -114,6 +136,9 @@ class EncryptionService {
       // Split IV (first 32 hex chars = 16 bytes) and ciphertext
       const ivHex = ciphertext.substring(0, 32);
       const ciphertextHex = ciphertext.substring(32);
+      if (ivHex.length !== 32 || ciphertextHex.length === 0) {
+        throw new Error('Invalid encrypted payload');
+      }
 
       // Convert IV from hex to WordArray
       const iv = CryptoJS.enc.Hex.parse(ivHex);
@@ -135,9 +160,9 @@ class EncryptionService {
         throw new Error('Decryption resulted in empty data');
       }
 
-      // Write decrypted data to destination path
+      // Decrypted content is a base64 file payload; write as binary.
       await FileSystem.writeAsStringAsync(destPath, decryptedString, {
-        encoding: "utf8" as any
+        encoding: (FileSystem as any).EncodingType.Base64,
       });
 
       return destPath;
@@ -152,6 +177,7 @@ class EncryptionService {
    */
   clearCache(): void {
     this.cachedKey = null;
+    this.cachedBinding = null;
   }
 
   /**
@@ -161,7 +187,9 @@ class EncryptionService {
     try {
       await SecureStore.deleteItemAsync(KEY_STORAGE_KEY);
       await SecureStore.deleteItemAsync(SALT_STORAGE_KEY);
+      await SecureStore.deleteItemAsync(BINDING_STORAGE_KEY);
       this.cachedKey = null;
+      this.cachedBinding = null;
     } catch (error) {
       console.error('[EncryptionService] Failed to delete keys:', error);
     }

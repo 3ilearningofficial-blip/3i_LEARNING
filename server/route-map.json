@@ -1,0 +1,747 @@
+[
+    {
+        "method":  "GET",
+        "path":  "/api/admin/all-lectures",
+        "file":  "admin-course-management-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/admin/all-materials",
+        "file":  "admin-course-management-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/admin/all-tests",
+        "file":  "admin-course-management-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/admin/analytics",
+        "file":  "admin-analytics-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/admin/books",
+        "file":  "book-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/admin/books",
+        "file":  "book-routes.ts"
+    },
+    {
+        "method":  "DELETE",
+        "path":  "/api/admin/books/:id",
+        "file":  "book-routes.ts"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/admin/books/:id",
+        "file":  "book-routes.ts"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/admin/books/:id/hide",
+        "file":  "book-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/admin/courses",
+        "file":  "admin-course-crud-routes.ts"
+    },
+    {
+        "method":  "DELETE",
+        "path":  "/api/admin/courses/:id",
+        "file":  "admin-enrollment-routes.ts"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/admin/courses/:id",
+        "file":  "admin-course-crud-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/admin/courses/:id/enrollments",
+        "file":  "admin-analytics-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/admin/courses/:id/folders",
+        "file":  "admin-course-management-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/admin/courses/:id/folders",
+        "file":  "admin-course-management-routes.ts"
+    },
+    {
+        "method":  "DELETE",
+        "path":  "/api/admin/courses/:id/folders/:folderId",
+        "file":  "admin-course-management-routes.ts"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/admin/courses/:id/folders/:folderId",
+        "file":  "admin-course-management-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/admin/courses/:id/import-lectures",
+        "file":  "admin-course-import-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/admin/courses/:id/import-materials",
+        "file":  "admin-course-import-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/admin/courses/:id/import-tests",
+        "file":  "admin-course-import-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/admin/daily-missions",
+        "file":  "admin-daily-mission-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/admin/daily-missions",
+        "file":  "admin-daily-mission-routes.ts"
+    },
+    {
+        "method":  "DELETE",
+        "path":  "/api/admin/daily-missions/:id",
+        "file":  "admin-daily-mission-routes.ts"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/admin/daily-missions/:id",
+        "file":  "admin-daily-mission-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/admin/daily-missions/:id/attempts",
+        "file":  "admin-daily-mission-routes.ts"
+    },
+    {
+        "method":  "DELETE",
+        "path":  "/api/admin/enrollments/:id",
+        "file":  "admin-enrollment-routes.ts"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/admin/enrollments/:id",
+        "file":  "admin-enrollment-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/admin/lectures",
+        "file":  "admin-lecture-routes.ts"
+    },
+    {
+        "method":  "DELETE",
+        "path":  "/api/admin/lectures/:id",
+        "file":  "admin-lecture-routes.ts"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/admin/lectures/:id",
+        "file":  "admin-lecture-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/admin/live-classes",
+        "file":  "admin-users-and-content-routes.ts"
+    },
+    {
+        "method":  "DELETE",
+        "path":  "/api/admin/live-classes/:id",
+        "file":  "admin-live-class-manage-routes.ts"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/admin/live-classes/:id",
+        "file":  "admin-live-class-manage-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/admin/live-classes/:id/raised-hands",
+        "file":  "live-class-engagement-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/admin/live-classes/:id/raised-hands/:userId/resolve",
+        "file":  "live-class-engagement-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/admin/live-classes/:id/recording",
+        "file":  "live-stream-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/admin/live-classes/:id/stream/create",
+        "file":  "live-stream-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/admin/live-classes/:id/stream/end",
+        "file":  "live-stream-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/admin/live-classes/:id/stream/status",
+        "file":  "live-stream-routes.ts"
+    },
+    {
+        "method":  "DELETE",
+        "path":  "/api/admin/live-classes/:lcId/chat/:msgId",
+        "file":  "live-chat-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/admin/live-classes/cleanup",
+        "file":  "admin-live-class-manage-routes.ts"
+    },
+    {
+        "method":  "DELETE",
+        "path":  "/api/admin/notifications/:id",
+        "file":  "admin-notification-routes.ts"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/admin/notifications/:id",
+        "file":  "admin-notification-routes.ts"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/admin/notifications/:id/hide",
+        "file":  "admin-notification-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/admin/notifications/history",
+        "file":  "admin-notification-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/admin/notifications/send",
+        "file":  "admin-notification-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/admin/questions",
+        "file":  "admin-test-routes.ts"
+    },
+    {
+        "method":  "DELETE",
+        "path":  "/api/admin/questions/:id",
+        "file":  "admin-test-management-routes.ts"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/admin/questions/:id",
+        "file":  "admin-test-management-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/admin/questions/bulk-pdf",
+        "file":  "admin-question-bulk-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/admin/questions/bulk-save",
+        "file":  "admin-question-bulk-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/admin/questions/bulk-text",
+        "file":  "admin-question-bulk-routes.ts"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/admin/site-settings",
+        "file":  "site-settings-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/admin/standalone-folders",
+        "file":  "standalone-folder-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/admin/standalone-folders",
+        "file":  "standalone-folder-routes.ts"
+    },
+    {
+        "method":  "DELETE",
+        "path":  "/api/admin/standalone-folders/:id",
+        "file":  "standalone-folder-routes.ts"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/admin/standalone-folders/:id",
+        "file":  "standalone-folder-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/admin/study-materials",
+        "file":  "admin-users-and-content-routes.ts"
+    },
+    {
+        "method":  "DELETE",
+        "path":  "/api/admin/study-materials/:id",
+        "file":  "admin-live-class-manage-routes.ts"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/admin/study-materials/:id",
+        "file":  "admin-live-class-manage-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/admin/support/conversations",
+        "file":  "support-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/admin/support/messages/:userId",
+        "file":  "support-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/admin/support/messages/:userId",
+        "file":  "support-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/admin/tests",
+        "file":  "admin-test-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/admin/tests",
+        "file":  "admin-test-routes.ts"
+    },
+    {
+        "method":  "DELETE",
+        "path":  "/api/admin/tests/:id",
+        "file":  "admin-test-management-routes.ts"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/admin/tests/:id",
+        "file":  "admin-test-management-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/admin/tests/:id/questions",
+        "file":  "admin-test-management-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/admin/users",
+        "file":  "admin-users-and-content-routes.ts"
+    },
+    {
+        "method":  "DELETE",
+        "path":  "/api/admin/users/:id",
+        "file":  "admin-users-and-content-routes.ts"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/admin/users/:id/block",
+        "file":  "admin-users-and-content-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/attempts/:attemptId/detail",
+        "file":  "test-attempt-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/auth/change-password",
+        "file":  "auth-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/auth/email-login",
+        "file":  "auth-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/auth/firebase-login",
+        "file":  "auth-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/auth/logout",
+        "file":  "auth-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/auth/me",
+        "file":  "auth-routes.ts"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/auth/profile",
+        "file":  "auth-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/auth/send-otp",
+        "file":  "auth-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/auth/verify-firebase",
+        "file":  "auth-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/auth/verify-otp",
+        "file":  "auth-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/books",
+        "file":  "book-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/books/create-order",
+        "file":  "book-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/books/track-click",
+        "file":  "book-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/books/verify-payment",
+        "file":  "book-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/courses",
+        "file":  "course-access-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/courses/:id",
+        "file":  "course-access-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/courses/:id/enroll",
+        "file":  "course-access-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/courses/:id/folders",
+        "file":  "course-access-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/daily-mission",
+        "file":  "student-mission-material-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/daily-mission/:id/complete",
+        "file":  "student-mission-material-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/daily-missions",
+        "file":  "student-mission-material-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/doubts",
+        "file":  "doubt-notification-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/doubts",
+        "file":  "doubt-notification-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/download-proxy",
+        "file":  "course-access-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/download-url",
+        "file":  "course-access-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/lectures/:id",
+        "file":  "lecture-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/lectures/:id/progress",
+        "file":  "lecture-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/lectures/:id/progress",
+        "file":  "lecture-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/live-classes",
+        "file":  "live-class-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/live-classes/:id",
+        "file":  "live-class-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/live-classes/:id/chat",
+        "file":  "live-chat-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/live-classes/:id/chat",
+        "file":  "live-chat-routes.ts"
+    },
+    {
+        "method":  "DELETE",
+        "path":  "/api/live-classes/:id/raise-hand",
+        "file":  "live-class-engagement-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/live-classes/:id/raise-hand",
+        "file":  "live-class-engagement-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/live-classes/:id/viewers",
+        "file":  "live-class-engagement-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/live-classes/:id/viewers/heartbeat",
+        "file":  "live-class-engagement-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/media/:folder/:filename",
+        "file":  "media-stream-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/media-token",
+        "file":  "course-access-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/my-attempts",
+        "file":  "test-attempt-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/my-attempts/summary",
+        "file":  "test-attempt-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/my-books",
+        "file":  "book-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/my-courses",
+        "file":  "course-access-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/my-downloads",
+        "file":  "course-access-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/my-downloads",
+        "file":  "course-access-routes.ts"
+    },
+    {
+        "method":  "DELETE",
+        "path":  "/api/my-downloads/:itemType/:itemId",
+        "file":  "course-access-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/my-payments",
+        "file":  "course-access-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/notifications",
+        "file":  "doubt-notification-routes.ts"
+    },
+    {
+        "method":  "PUT",
+        "path":  "/api/notifications/:id/read",
+        "file":  "doubt-notification-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/payments/create-order",
+        "file":  "payment-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/payments/track-click",
+        "file":  "payment-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/payments/verify",
+        "file":  "payment-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/pdf-proxy",
+        "file":  "pdf-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/pdf-viewer",
+        "file":  "pdf-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/questions/:id/report",
+        "file":  "test-attempt-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/site-settings",
+        "file":  "site-settings-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/study-materials",
+        "file":  "student-mission-material-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/study-materials/:id",
+        "file":  "student-mission-material-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/study-materials/folder/:folderName",
+        "file":  "student-mission-material-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/support/messages",
+        "file":  "support-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/support/messages",
+        "file":  "support-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/test-folders",
+        "file":  "test-folder-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/test-folders/:id",
+        "file":  "test-folder-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/test-folders/:id/enroll",
+        "file":  "test-folder-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/tests",
+        "file":  "test-core-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/tests/:id",
+        "file":  "test-core-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/tests/:id/analysis/:attemptId",
+        "file":  "test-attempt-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/tests/:id/attempt",
+        "file":  "test-core-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/tests/:id/leaderboard",
+        "file":  "test-attempt-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/tests/:id/my_attempts",
+        "file":  "test-attempt-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/tests/:id/my-attempts",
+        "file":  "test-attempt-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/tests/:id/purchased",
+        "file":  "payment-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/tests/create-order",
+        "file":  "payment-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/tests/verify-payment",
+        "file":  "payment-routes.ts"
+    },
+    {
+        "method":  "GET",
+        "path":  "/api/upcoming-classes",
+        "file":  "live-class-routes.ts"
+    },
+    {
+        "method":  "DELETE",
+        "path":  "/api/upload/file",
+        "file":  "upload-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/upload/presign",
+        "file":  "upload-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/upload/presign-profile",
+        "file":  "upload-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/upload/to-r2",
+        "file":  "upload-routes.ts"
+    }
+]

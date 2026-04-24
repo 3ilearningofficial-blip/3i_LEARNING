@@ -94,7 +94,6 @@ export function useDownloadManager(): UseDownloadManagerReturn {
           {
             headers: {
               Authorization: `Bearer ${user.sessionToken}`,
-              'X-User-Id': String(user.id),
             },
           }
         );
@@ -150,7 +149,6 @@ export function useDownloadManager(): UseDownloadManagerReturn {
           headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${user.sessionToken}`,
-            'X-User-Id': String(user.id),
           },
           body: JSON.stringify({ itemType, itemId, localFilename: uuid }),
         });
@@ -194,7 +192,6 @@ export function useDownloadManager(): UseDownloadManagerReturn {
           method: 'DELETE',
           headers: {
             Authorization: `Bearer ${user.sessionToken}`,
-            'X-User-Id': String(user.id),
           },
         });
 
@@ -279,7 +276,6 @@ export function useDownloadManager(): UseDownloadManagerReturn {
       const res = await fetch(`${baseUrl}/my-downloads`, {
         headers: {
           Authorization: `Bearer ${user.sessionToken}`,
-          'X-User-Id': String(user.id),
         },
       });
 

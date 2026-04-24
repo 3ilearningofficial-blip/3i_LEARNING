@@ -15,7 +15,6 @@ import { registerRoutes } from "./routes";
 import * as fs from "fs";
 
 const app = express();
-app.use(express.static(path.resolve(process.cwd(), "dist")));
 const log = console.log;
 
 declare module "http" {
@@ -27,28 +26,26 @@ declare module "http" {
 import cors from "cors";
 
 function setupCors(app: express.Application) {
-  const allowedOrigins = [
+  const defaultAllowedOrigins = [
     "https://3ilearning.in",
+    // Keep www variant for compatibility.
     "https://www.3ilearning.in",
-    "https://api.3ilearning.in",
   ];
+  const envOrigins = (process.env.CORS_ORIGINS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const allowedOrigins = new Set([...defaultAllowedOrigins, ...envOrigins]);
 
   const corsOptions = {
-    origin: function (
-      origin: string | undefined,
-      callback: (err: Error | null, allow?: boolean) => void
-    ) {
+    origin(origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) {
+      // Allow non-browser clients (curl/mobile/native fetch without Origin header).
       if (!origin) return callback(null, true);
-      if (origin.includes("vercel.app") || origin.includes("3ilearning")) {
-        return callback(null, true);
-      }
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
+      if (allowedOrigins.has(origin)) return callback(null, true);
       return callback(new Error("Not allowed by CORS"));
     },
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-User-Id", "X-Requested-With"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
     credentials: true,
     preflightContinue: false,
     optionsSuccessStatus: 204,
@@ -82,6 +79,61 @@ function setupRequestLogging(app: express.Application) {
         log(`${req.method} ${reqPath} ${res.statusCode} in ${duration}ms`);
       }
     });
+    next();
+  });
+}
+
+function setupApiResponseFormat(app: express.Application) {
+  app.use("/api", (req: Request, res: Response, next: NextFunction) => {
+    const originalJson = res.json.bind(res);
+
+    (res as any).json = (payload: any) => {
+      const statusCode = res.statusCode || 200;
+
+      // If already standardized, pass through unchanged.
+      if (
+        payload &&
+        typeof payload === "object" &&
+        typeof payload.success === "boolean" &&
+        ("data" in payload || "message" in payload || "error" in payload)
+      ) {
+        return originalJson(payload);
+      }
+
+      if (statusCode >= 400) {
+        const fallback =
+          typeof payload === "string"
+            ? payload
+            : payload?.error || payload?.message || "Request failed";
+
+        return originalJson({
+          success: false,
+          error: String(fallback),
+          message: typeof payload?.message === "string" ? payload.message : undefined,
+          data:
+            payload &&
+            typeof payload === "object" &&
+            payload.data !== undefined
+              ? payload.data
+              : undefined,
+        });
+      }
+
+      // Success responses
+      if (payload === undefined || payload === null) {
+        return originalJson({ success: true });
+      }
+
+      if (typeof payload === "object" && !Array.isArray(payload)) {
+        if (Object.keys(payload).length === 1 && typeof payload.message === "string") {
+          return originalJson({ success: true, message: payload.message });
+        }
+        return originalJson({ success: true, data: payload });
+      }
+
+      return originalJson({ success: true, data: payload });
+    };
+
     next();
   });
 }
@@ -242,19 +294,16 @@ function setupErrorHandler(app: express.Application) {
 }
 
 (async () => {
+  // 1) CORS
   setupCors(app);
-  // Gzip all responses — reduces bandwidth by ~70% for JSON
-  app.use(compression());
-  setupBodyParsing(app);
-  setupRequestLogging(app);
 
-  app.get("/firebase-phone-auth", (_req: Request, res: Response) => {
-    const firebaseAuthPath = path.resolve(process.cwd(), "server", "templates", "firebase-phone-auth.html");
-    if (fs.existsSync(firebaseAuthPath)) {
-      return res.type("html").sendFile(firebaseAuthPath);
-    }
-    res.status(404).send("Not found");
-  });
+  // 2) Body parsers
+  setupBodyParsing(app);
+  setupApiResponseFormat(app);
+
+  // Cross-cutting middleware for responses/logging
+  app.use(compression());
+  setupRequestLogging(app);
 
   const isProduction = process.env.NODE_ENV === "production";
   app.set("trust proxy", 1);
@@ -294,6 +343,7 @@ function setupErrorHandler(app: express.Application) {
     });
   }
 
+  // 3) Auth/session and API protection middleware
   app.use(session(sessionConfig));
 
   const otpSendLimiter = rateLimit({
@@ -302,9 +352,8 @@ function setupErrorHandler(app: express.Application) {
     message: { message: "Too many requests, please try again later" },
     standardHeaders: true,
     legacyHeaders: false,
-    validate: { xForwardedForHeader: false, ip: false },
     keyGenerator: (req: any) => {
-      return req.body?.identifier || "global";
+      return `${req.ip}:${req.body?.identifier || "global"}`;
     },
   });
   const otpVerifyLimiter = rateLimit({
@@ -313,9 +362,8 @@ function setupErrorHandler(app: express.Application) {
     message: { message: "Too many requests, please try again later" },
     standardHeaders: true,
     legacyHeaders: false,
-    validate: { xForwardedForHeader: false, ip: false },
     keyGenerator: (req: any) => {
-      return req.body?.identifier || "global";
+      return `${req.ip}:${req.body?.identifier || "global"}`;
     },
   });
   app.use("/api/auth/send-otp", otpSendLimiter);
@@ -332,10 +380,20 @@ function setupErrorHandler(app: express.Application) {
   });
   app.use("/api", globalApiLimiter);
 
-  configureExpoAndLanding(app);
-
+  // 4) API routes
   const server = await registerRoutes(app);
 
+  // Non-API pages/assets and landing routes
+  app.get("/firebase-phone-auth", (_req: Request, res: Response) => {
+    const firebaseAuthPath = path.resolve(process.cwd(), "server", "templates", "firebase-phone-auth.html");
+    if (fs.existsSync(firebaseAuthPath)) {
+      return res.type("html").sendFile(firebaseAuthPath);
+    }
+    res.status(404).send("Not found");
+  });
+  configureExpoAndLanding(app);
+
+  // 5) Error handler (must be last)
   setupErrorHandler(app);
 
   const port = parseInt(process.env.PORT || "5000", 10);

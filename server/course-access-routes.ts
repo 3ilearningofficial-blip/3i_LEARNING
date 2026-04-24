@@ -1,0 +1,466 @@
+import type { Express, Request, Response } from "express";
+
+type DbQueryResult = {
+  rows: any[];
+  rowCount?: number;
+};
+
+type DbClient = {
+  query: (text: string, params?: unknown[]) => Promise<DbQueryResult>;
+};
+
+type AuthUser = {
+  id: number;
+  role: string;
+};
+
+type RegisterCourseAccessRoutesDeps = {
+  app: Express;
+  db: DbClient;
+  getAuthUser: (req: Request) => Promise<AuthUser | null>;
+  generateSecureToken: () => string;
+  cacheInvalidate: (prefix: string) => void;
+  getR2Client: () => Promise<any>;
+};
+
+export function registerCourseAccessRoutes({
+  app,
+  db,
+  getAuthUser,
+  generateSecureToken,
+  cacheInvalidate,
+  getR2Client,
+}: RegisterCourseAccessRoutesDeps): void {
+  app.post("/api/media-token", async (req: Request, res: Response) => {
+    try {
+      const user = await getAuthUser(req);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+      const { fileKey } = req.body;
+      if (!fileKey || typeof fileKey !== "string") return res.status(400).json({ message: "fileKey required" });
+      const token = generateSecureToken();
+      const expiresAt = Date.now() + 10 * 60 * 1000;
+      await db.query("INSERT INTO media_tokens (token, user_id, file_key, expires_at) VALUES ($1, $2, $3, $4)", [token, user.id, fileKey, expiresAt]);
+      db.query("DELETE FROM media_tokens WHERE expires_at < $1", [Date.now()]).catch(() => {});
+      res.json({ token, expiresAt });
+    } catch {
+      res.status(500).json({ message: "Failed to generate token" });
+    }
+  });
+
+  app.get("/api/courses", async (req: Request, res: Response) => {
+    try {
+      const user = await getAuthUser(req);
+      console.log(`[Courses] auth user=${user?.id || "none"}`);
+      const { category, search } = req.query;
+      let query =
+        user?.role === "admin"
+          ? "SELECT c.*, (SELECT COUNT(*) FROM study_materials sm WHERE sm.course_id = c.id) AS total_materials FROM courses c WHERE 1=1"
+          : "SELECT c.*, (SELECT COUNT(*) FROM study_materials sm WHERE sm.course_id = c.id) AS total_materials FROM courses c WHERE c.is_published = TRUE";
+      const params: unknown[] = [];
+
+      if (search) {
+        params.push(`%${search}%`);
+        query += ` AND (title ILIKE $${params.length} OR description ILIKE $${params.length})`;
+      }
+      if (category && category !== "All") {
+        params.push(category);
+        query += ` AND category = $${params.length}`;
+      }
+      query += " ORDER BY created_at DESC";
+
+      const result = await db.query(query, params);
+      let courses: any[] = result.rows;
+
+      if (user) {
+        const enrollResult = await db.query("SELECT course_id, progress_percent FROM enrollments WHERE user_id = $1 AND (status = 'active' OR status IS NULL)", [user.id]);
+        const enrollMap = new Map<number, number>();
+        enrollResult.rows.forEach((e: { course_id: number; progress_percent: number }) => {
+          enrollMap.set(Number(e.course_id), Number(e.progress_percent) || 0);
+        });
+        courses = courses.map((c: Record<string, unknown>) => ({
+          ...c,
+          isEnrolled: enrollMap.has(Number(c.id)),
+          progress: enrollMap.get(Number(c.id)) ?? 0,
+        }));
+        console.log(`[Courses] user ${user.id} progress map:`, JSON.stringify(Object.fromEntries(enrollMap)));
+      }
+
+      res.set("Cache-Control", "private, no-store");
+      if (user) {
+        const enrolledCourses = courses.filter((c: any) => c.isEnrolled);
+        void enrolledCourses;
+      }
+      res.json(courses);
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ message: "Failed to fetch courses" });
+    }
+  });
+
+  app.get("/api/courses/:id/folders", async (req: Request, res: Response) => {
+    try {
+      const result = await db.query("SELECT * FROM course_folders WHERE course_id = $1 AND is_hidden = FALSE ORDER BY created_at ASC", [req.params.id]);
+      res.json(result.rows);
+    } catch {
+      res.status(500).json({ message: "Failed to fetch folders" });
+    }
+  });
+
+  app.get("/api/courses/:id", async (req: Request, res: Response) => {
+    try {
+      let user = await getAuthUser(req);
+      if (!user && req.query._uid) {
+        const uid = parseInt(String(req.query._uid));
+        if (uid > 0) {
+          try {
+            const r = await db.query("SELECT id, name, email, phone, role FROM users WHERE id = $1", [uid]);
+            if (r.rows.length > 0) user = r.rows[0];
+          } catch (_e) {}
+        }
+      }
+      const courseResult = await db.query("SELECT * FROM courses WHERE id = $1", [req.params.id]);
+      if (courseResult.rows.length === 0) return res.status(404).json({ message: "Course not found" });
+
+      const course = courseResult.rows[0];
+      const lecturesResult = await db.query("SELECT * FROM lectures WHERE course_id = $1 ORDER BY order_index", [req.params.id]);
+      const testsResult = await db.query("SELECT * FROM tests WHERE course_id = $1 AND is_published = TRUE", [req.params.id]);
+      const materialsResult = await db.query("SELECT * FROM study_materials WHERE course_id = $1", [req.params.id]);
+
+      if (user) {
+        const enroll = await db.query("SELECT * FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [user.id, req.params.id]);
+        (course as any).isEnrolled = enroll.rows.length > 0;
+        (course as any).progress = enroll.rows[0]?.progress_percent || 0;
+        (course as any).lastLectureId = enroll.rows[0]?.last_lecture_id;
+
+        if ((course as any).isEnrolled) {
+          const lpResult = await db.query("SELECT * FROM lecture_progress WHERE user_id = $1", [user.id]);
+          const lpMap: Record<number, boolean> = {};
+          lpResult.rows.forEach((lp: { lecture_id: number; is_completed: boolean }) => {
+            lpMap[lp.lecture_id] = lp.is_completed;
+          });
+          lecturesResult.rows.forEach((l: Record<string, unknown>) => {
+            l.isCompleted = lpMap[l.id as number] || false;
+          });
+        }
+      }
+
+      res.json({
+        ...course,
+        total_materials: materialsResult.rows.length,
+        lectures: lecturesResult.rows,
+        tests: testsResult.rows,
+        materials: materialsResult.rows,
+      });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ message: "Failed to fetch course" });
+    }
+  });
+
+  app.post("/api/courses/:id/enroll", async (req: Request, res: Response) => {
+    try {
+      const requester = await getAuthUser(req);
+      let user = requester;
+
+      if (!user && req.body.userId) {
+        const uid = parseInt(req.body.userId);
+        if (uid > 0) {
+          const r = await db.query("SELECT id, name, role FROM users WHERE id = $1", [uid]);
+          if (r.rows.length > 0) user = r.rows[0];
+        }
+      }
+
+      const isAdminGrant = requester?.role === "admin" && req.body.userId && requester.id !== parseInt(req.body.userId);
+      if (isAdminGrant) {
+        const uid = parseInt(req.body.userId);
+        const r = await db.query("SELECT id, name, role FROM users WHERE id = $1", [uid]);
+        if (r.rows.length > 0) user = r.rows[0];
+      } else if (user && req.body.userId && user.id !== parseInt(req.body.userId)) {
+        const uid = parseInt(req.body.userId);
+        if (uid > 0) {
+          const r = await db.query("SELECT id, name, role FROM users WHERE id = $1", [uid]);
+          if (r.rows.length > 0) {
+            console.log(`[Enroll] Token user ${user.id} != body userId ${uid}, using body userId`);
+            user = r.rows[0];
+          }
+        }
+      }
+
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+
+      const courseResult = await db.query("SELECT id, is_free FROM courses WHERE id = $1", [req.params.id]);
+      if (courseResult.rows.length === 0) return res.status(404).json({ message: "Course not found" });
+
+      if (!courseResult.rows[0].is_free && !isAdminGrant) return res.status(403).json({ message: "This course requires payment" });
+
+      const existing = await db.query("SELECT id, status FROM enrollments WHERE user_id = $1 AND course_id = $2", [user.id, req.params.id]);
+      if (existing.rows.length > 0) {
+        if (existing.rows[0].status === "inactive" && isAdminGrant) {
+          await db.query("UPDATE enrollments SET status = 'active' WHERE id = $1", [existing.rows[0].id]);
+          return res.json({ success: true, reactivated: true });
+        }
+        return res.json({ success: true, alreadyEnrolled: true });
+      }
+
+      await db.query("INSERT INTO enrollments (user_id, course_id, enrolled_at) VALUES ($1, $2, $3)", [user.id, req.params.id, Date.now()]);
+      await db.query("UPDATE courses SET total_students = COALESCE(total_students, 0) + 1 WHERE id = $1", [req.params.id]);
+      cacheInvalidate("courses:");
+      res.json({ success: true });
+    } catch (err) {
+      console.error("Enroll error:", err);
+      res.status(500).json({ message: "Failed to enroll" });
+    }
+  });
+
+  app.get("/api/my-courses", async (req: Request, res: Response) => {
+    try {
+      const user = await getAuthUser(req);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+      const result = await db.query(
+        `SELECT c.*, e.progress_percent, e.enrolled_at FROM courses c 
+         JOIN enrollments e ON c.id = e.course_id 
+         WHERE e.user_id = $1 ORDER BY e.enrolled_at DESC`,
+        [user.id]
+      );
+      res.json(result.rows);
+    } catch {
+      res.status(500).json({ message: "Failed to fetch enrolled courses" });
+    }
+  });
+
+  app.get("/api/my-downloads", async (req: Request, res: Response) => {
+    try {
+      const user = await getAuthUser(req);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+
+      const materialsResult = await db.query(
+        `SELECT sm.id, sm.title, sm.file_url, sm.file_type, sm.section_title, sm.download_allowed,
+                c.title AS course_title, 'material' AS type, ud.downloaded_at, ud.local_filename
+         FROM user_downloads ud
+         JOIN study_materials sm ON ud.item_id = sm.id
+         LEFT JOIN courses c ON sm.course_id = c.id
+         LEFT JOIN enrollments e ON e.user_id = ud.user_id AND e.course_id = c.id
+         WHERE ud.user_id = $1 AND ud.item_type = 'material' AND sm.download_allowed = TRUE
+         AND (e.valid_until IS NULL OR e.valid_until > $2 OR c.id IS NULL)
+         ORDER BY ud.downloaded_at DESC`,
+        [user.id, Date.now()]
+      );
+
+      const lecturesResult = await db.query(
+        `SELECT l.id, l.title, COALESCE(l.video_url, l.pdf_url) AS file_url,
+                CASE WHEN l.video_url IS NOT NULL AND l.video_url != '' THEN 'video' ELSE 'pdf' END AS file_type,
+                l.section_title,
+                c.title AS course_title, 'lecture' AS type, ud.downloaded_at, ud.local_filename
+         FROM user_downloads ud
+         JOIN lectures l ON ud.item_id = l.id
+         JOIN courses c ON l.course_id = c.id
+         LEFT JOIN enrollments e ON e.user_id = ud.user_id AND e.course_id = c.id
+         WHERE ud.user_id = $1 AND ud.item_type = 'lecture' AND l.download_allowed = TRUE
+         AND (e.valid_until IS NULL OR e.valid_until > $2)
+         ORDER BY ud.downloaded_at DESC`,
+        [user.id, Date.now()]
+      );
+
+      res.json({ materials: materialsResult.rows, lectures: lecturesResult.rows });
+    } catch {
+      res.status(500).json({ message: "Failed to fetch downloads" });
+    }
+  });
+
+  app.post("/api/my-downloads", async (req: Request, res: Response) => {
+    try {
+      const user = await getAuthUser(req);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+      const { itemType, itemId, localFilename } = req.body;
+      if (!itemType || !itemId) return res.status(400).json({ message: "itemType and itemId required" });
+      await db.query(
+        "INSERT INTO user_downloads (user_id, item_type, item_id, local_filename) VALUES ($1, $2, $3, $4) ON CONFLICT (user_id, item_type, item_id) DO UPDATE SET downloaded_at = EXTRACT(EPOCH FROM NOW()) * 1000, local_filename = EXCLUDED.local_filename",
+        [user.id, itemType, itemId, localFilename || null]
+      );
+      res.json({ success: true });
+    } catch {
+      res.status(500).json({ message: "Failed to track download" });
+    }
+  });
+
+  app.delete("/api/my-downloads/:itemType/:itemId", async (req: Request, res: Response) => {
+    try {
+      const user = await getAuthUser(req);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+      const { itemType, itemId } = req.params;
+      const result = await db.query("DELETE FROM user_downloads WHERE user_id = $1 AND item_type = $2 AND item_id = $3", [user.id, itemType, itemId]);
+      if ((result.rowCount || 0) === 0) return res.status(404).json({ message: "Download record not found" });
+      res.json({ success: true });
+    } catch {
+      res.status(500).json({ message: "Failed to delete download" });
+    }
+  });
+
+  app.get("/api/download-url", async (req: Request, res: Response) => {
+    try {
+      const user = await getAuthUser(req);
+      if (!user || user.role !== "student") {
+        return res.status(401).json({ message: "Not authenticated" });
+      }
+
+      const { itemType, itemId } = req.query;
+      if (!itemType || !itemId || !["lecture", "material"].includes(String(itemType))) {
+        return res.status(400).json({ message: "Valid itemType (lecture|material) and itemId required" });
+      }
+
+      const id = parseInt(String(itemId));
+      if (isNaN(id)) return res.status(400).json({ message: "Invalid itemId" });
+
+      let courseId: number | null = null;
+      let downloadAllowed = false;
+      let r2Key: string | null = null;
+
+      if (itemType === "lecture") {
+        const lectureResult = await db.query("SELECT course_id, download_allowed, video_url FROM lectures WHERE id = $1", [id]);
+        if (lectureResult.rows.length === 0) {
+          return res.status(404).json({ message: "Lecture not found" });
+        }
+        const lecture = lectureResult.rows[0];
+        courseId = lecture.course_id;
+        downloadAllowed = lecture.download_allowed;
+        r2Key = lecture.video_url;
+      } else if (itemType === "material") {
+        const materialResult = await db.query("SELECT course_id, download_allowed, file_url FROM study_materials WHERE id = $1", [id]);
+        if (materialResult.rows.length === 0) {
+          return res.status(404).json({ message: "Material not found" });
+        }
+        const material = materialResult.rows[0];
+        courseId = material.course_id;
+        downloadAllowed = material.download_allowed;
+        r2Key = material.file_url;
+      }
+
+      if (!downloadAllowed) {
+        return res.status(403).json({ message: "Download not allowed for this item" });
+      }
+
+      if (!r2Key) {
+        return res.status(404).json({ message: "File URL not found" });
+      }
+
+      if (courseId) {
+        const enrollmentResult = await db.query(
+          "SELECT id, valid_until FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)",
+          [user.id, courseId]
+        );
+        if (enrollmentResult.rows.length === 0) {
+          return res.status(403).json({ message: "Not enrolled in this course" });
+        }
+        const enrollment = enrollmentResult.rows[0];
+        if (enrollment.valid_until && enrollment.valid_until < Date.now()) {
+          return res.status(403).json({ message: "Course access has expired" });
+        }
+      }
+
+      let cleanR2Key = r2Key;
+      if (r2Key.startsWith("http")) {
+        try {
+          const url = new URL(r2Key);
+          cleanR2Key = url.pathname.substring(1);
+        } catch (_e) {
+          cleanR2Key = r2Key;
+        }
+      }
+
+      const { randomUUID } = await import("crypto");
+      const token = randomUUID();
+      const createdAt = Date.now();
+      const expiresAt = createdAt + 30000;
+
+      await db.query("INSERT INTO download_tokens (token, user_id, item_type, item_id, r2_key, created_at, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7)", [
+        token,
+        user.id,
+        itemType,
+        id,
+        cleanR2Key,
+        createdAt,
+        expiresAt,
+      ]);
+
+      res.json({ token, expiresAt });
+    } catch (err) {
+      console.error("[download-url] Error:", err);
+      res.status(500).json({ message: "Failed to generate download token" });
+    }
+  });
+
+  app.get("/api/download-proxy", async (req: Request, res: Response) => {
+    try {
+      const { token } = req.query;
+      if (!token || typeof token !== "string") {
+        return res.status(400).json({ message: "Token required" });
+      }
+
+      const tokenResult = await db.query("SELECT * FROM download_tokens WHERE token = $1 AND used = FALSE AND expires_at > $2", [token, Date.now()]);
+      if (tokenResult.rows.length === 0) {
+        return res.status(403).json({ message: "Token invalid, expired, or already used" });
+      }
+      const tokenData = tokenResult.rows[0];
+      await db.query("UPDATE download_tokens SET used = TRUE WHERE token = $1", [token]);
+
+      const { GetObjectCommand } = await import("@aws-sdk/client-s3");
+      const r2 = await getR2Client();
+      const command = new GetObjectCommand({
+        Bucket: process.env.R2_BUCKET_NAME,
+        Key: tokenData.r2_key,
+      });
+      const r2Response = await r2.send(command);
+
+      if (!r2Response.Body) {
+        return res.status(404).json({ message: "File not found in storage" });
+      }
+
+      const { createHmac } = await import("crypto");
+      const timestamp = Date.now();
+      const watermarkData = `${tokenData.user_id}:${timestamp}`;
+      const hmac = createHmac("sha256", process.env.SESSION_SECRET || "default-secret").update(watermarkData).digest("hex");
+      const watermarkToken = `${watermarkData}:${hmac}`;
+
+      res.setHeader("Content-Type", r2Response.ContentType || "application/octet-stream");
+      res.setHeader("Content-Disposition", "attachment");
+      res.setHeader("X-Watermark-Token", watermarkToken);
+      if (r2Response.ContentLength) {
+        res.setHeader("Content-Length", r2Response.ContentLength);
+      }
+
+      const stream = r2Response.Body as any;
+      stream.pipe(res);
+      stream.on("error", (err: Error) => {
+        console.error("[download-proxy] Stream error:", err);
+        if (!res.headersSent) {
+          res.status(500).json({ message: "Stream error" });
+        }
+      });
+    } catch (err) {
+      console.error("[download-proxy] Error:", err);
+      if (!res.headersSent) {
+        res.status(500).json({ message: "Failed to download file" });
+      }
+    }
+  });
+
+  app.get("/api/my-payments", async (req: Request, res: Response) => {
+    try {
+      const user = await getAuthUser(req);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+      const result = await db.query(
+        `SELECT p.id, p.amount, p.currency, p.status, p.created_at,
+                c.title AS course_title, c.price AS course_price
+         FROM payments p
+         JOIN courses c ON p.course_id = c.id
+         WHERE p.user_id = $1 AND p.status = 'paid'
+         ORDER BY p.created_at DESC`,
+        [user.id]
+      );
+      res.json(result.rows);
+    } catch {
+      res.status(500).json({ message: "Failed to fetch payments" });
+    }
+  });
+}
+

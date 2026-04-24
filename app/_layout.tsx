@@ -62,7 +62,7 @@ function RootLayoutNav() {
 
   useEffect(() => {
     if (isLoading) return;
-    if (!segments || segments.length === 0) return;
+    if (!segments[0]) return;
     const inAuthGroup = segments[0] === "(auth)";
     const inProfileSetup = segments[0] === "profile-setup";
     const inWelcome = segments[0] === "welcome";

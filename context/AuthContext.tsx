@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, useEffect, ReactNode, useMe
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Alert, Platform } from "react-native";
 import { router } from "expo-router";
-import { apiRequest, getApiUrl } from "@/lib/query-client";
+import { apiRequest, getApiUrl, getStoredToken, setUnauthorizedHandler } from "@/lib/query-client";
 import { fetch } from "expo/fetch";
 
 interface AuthUser {
@@ -69,11 +69,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const baseUrl = getApiUrl();
       const url = new URL("/api/auth/me", baseUrl);
-      // Send stored token as Bearer header for cross-origin dev support
-      const stored = Platform.OS === "web" && typeof localStorage !== "undefined"
-        ? localStorage.getItem("user")
-        : null;
-      const token = stored ? JSON.parse(stored)?.sessionToken : null;
+      // Send stored token so auth works consistently on web + native.
+      const token = await getStoredToken();
       const headers: Record<string, string> = {};
       if (token) headers["Authorization"] = `Bearer ${token}`;
       const res = await fetch(url.toString(), { credentials: "include", headers });
@@ -131,6 +128,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setIsLoading(false);
     };
     init();
+  }, []);
+
+  useEffect(() => {
+    setUnauthorizedHandler(async () => {
+      setUser(null);
+      await removeStoredUser();
+      if (Platform.OS === "web") {
+        router.replace("/(auth)/login");
+      }
+    });
+    return () => setUnauthorizedHandler(null);
   }, []);
 
   // Web: redirect to OTP after 1 hour of inactivity (don't fully logout)
