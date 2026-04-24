@@ -360,16 +360,29 @@ async function generateAIAnswer(question: string, topic?: string): Promise<strin
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // Run first: live-classes and other routes SELECT these columns. Without them Postgres errors
-  // when ALLOW_RUNTIME_SCHEMA_SYNC is false (typical on EC2).
+  // Run first: admin create/update and live-classes SELECT/INSERT need these. Without them Postgres errors
+  // when ALLOW_RUNTIME_SCHEMA_SYNC is false (Vercel → api.3ilearning.in / EC2 + Neon with an old `courses` row shape).
   try {
     await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_free BOOLEAN DEFAULT FALSE");
     await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS original_price DECIMAL(10, 2) DEFAULT 0");
     await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS validity_months NUMERIC(8, 2) DEFAULT NULL");
+    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_published BOOLEAN DEFAULT TRUE");
+    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS course_type TEXT DEFAULT 'live'");
+    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS subject TEXT DEFAULT ''");
+    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS start_date TEXT");
+    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS end_date TEXT");
+    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS total_students INTEGER DEFAULT 0");
+    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS total_materials INTEGER DEFAULT 0").catch(() => {});
+    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS pyq_count INTEGER DEFAULT 0");
+    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS mock_count INTEGER DEFAULT 0");
+    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS practice_count INTEGER DEFAULT 0");
+    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS thumbnail TEXT");
+    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS cover_color TEXT");
+    await db.query("ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active'");
     await db.query("ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS valid_until BIGINT");
-    console.log("[DB] Critical columns ensured: courses.is_free, original_price, validity_months; enrollments.valid_until");
+    console.log("[DB] courses + enrollments columns ensured (admin + live APIs)");
   } catch (err) {
-    console.error("[DB] CRITICAL: could not ensure course/enrollment columns. Run SQL on the DB (see deploy docs). Error:", err);
+    console.error("[DB] CRITICAL: could not ensure course/enrollment columns. Run SQL in Neon (same branch as DATABASE_URL). Error:", err);
   }
 
   const allowRuntimeSchemaSync = process.env.ALLOW_RUNTIME_SCHEMA_SYNC === "true";
