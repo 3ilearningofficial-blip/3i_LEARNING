@@ -13,6 +13,10 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Pool } from 'pg';
 import { randomUUID } from 'crypto';
 
+const TEST_DB_URL = process.env.TEST_DATABASE_URL || process.env.DATABASE_URL;
+const RUN_DB_TESTS = process.env.RUN_DB_TESTS === 'true' && Boolean(TEST_DB_URL);
+const describeDb = RUN_DB_TESTS ? describe : describe.skip;
+
 let db: Pool;
 
 // Test data IDs
@@ -24,7 +28,7 @@ let testEnrollmentId: number;
 
 beforeAll(async () => {
   db = new Pool({
-    connectionString: process.env.DATABASE_URL,
+    connectionString: TEST_DB_URL,
   });
 
   // Create test tables if they don't exist
@@ -54,6 +58,9 @@ beforeAll(async () => {
       download_allowed BOOLEAN DEFAULT FALSE
     )
   `);
+  await db.query(`ALTER TABLE lectures ADD COLUMN IF NOT EXISTS download_allowed BOOLEAN DEFAULT FALSE`);
+  await db.query(`ALTER TABLE lectures ADD COLUMN IF NOT EXISTS video_url TEXT`);
+  await db.query(`ALTER TABLE lectures ADD COLUMN IF NOT EXISTS course_id INTEGER`);
 
   await db.query(`
     CREATE TABLE IF NOT EXISTS study_materials (
@@ -64,6 +71,9 @@ beforeAll(async () => {
       download_allowed BOOLEAN DEFAULT FALSE
     )
   `);
+  await db.query(`ALTER TABLE study_materials ADD COLUMN IF NOT EXISTS download_allowed BOOLEAN DEFAULT FALSE`);
+  await db.query(`ALTER TABLE study_materials ADD COLUMN IF NOT EXISTS file_url TEXT`);
+  await db.query(`ALTER TABLE study_materials ADD COLUMN IF NOT EXISTS course_id INTEGER`);
 
   await db.query(`
     CREATE TABLE IF NOT EXISTS enrollments (
@@ -74,6 +84,10 @@ beforeAll(async () => {
       valid_until BIGINT
     )
   `);
+  await db.query(`ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active'`);
+  await db.query(`ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS valid_until BIGINT`);
+  await db.query(`ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS user_id INTEGER`);
+  await db.query(`ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS course_id INTEGER`);
 
   await db.query(`
     CREATE TABLE IF NOT EXISTS download_tokens (
@@ -88,6 +102,14 @@ beforeAll(async () => {
       expires_at BIGINT NOT NULL
     )
   `);
+  await db.query(`ALTER TABLE download_tokens ADD COLUMN IF NOT EXISTS token TEXT`);
+  await db.query(`ALTER TABLE download_tokens ADD COLUMN IF NOT EXISTS user_id INTEGER`);
+  await db.query(`ALTER TABLE download_tokens ADD COLUMN IF NOT EXISTS item_type TEXT`);
+  await db.query(`ALTER TABLE download_tokens ADD COLUMN IF NOT EXISTS item_id INTEGER`);
+  await db.query(`ALTER TABLE download_tokens ADD COLUMN IF NOT EXISTS r2_key TEXT`);
+  await db.query(`ALTER TABLE download_tokens ADD COLUMN IF NOT EXISTS used BOOLEAN DEFAULT FALSE`);
+  await db.query(`ALTER TABLE download_tokens ADD COLUMN IF NOT EXISTS created_at BIGINT`);
+  await db.query(`ALTER TABLE download_tokens ADD COLUMN IF NOT EXISTS expires_at BIGINT`);
 
   await db.query(`
     CREATE TABLE IF NOT EXISTS user_downloads (
@@ -100,6 +122,10 @@ beforeAll(async () => {
       UNIQUE(user_id, item_type, item_id)
     )
   `);
+  await db.query(`ALTER TABLE user_downloads ADD COLUMN IF NOT EXISTS user_id INTEGER`);
+  await db.query(`ALTER TABLE user_downloads ADD COLUMN IF NOT EXISTS item_type TEXT`);
+  await db.query(`ALTER TABLE user_downloads ADD COLUMN IF NOT EXISTS item_id INTEGER`);
+  await db.query(`ALTER TABLE user_downloads ADD COLUMN IF NOT EXISTS local_filename TEXT`);
 });
 
 afterAll(async () => {
@@ -156,7 +182,7 @@ beforeEach(async () => {
   testEnrollmentId = enrollmentResult.rows[0].id;
 });
 
-describe('Integration Test 16.1 & 16.2: End-to-End Download Flow', () => {
+describeDb('Integration Test 16.1 & 16.2: End-to-End Download Flow', () => {
   it('should complete full download flow: token generation → proxy download → user_downloads record', async () => {
     // Step 1: Generate download token (simulates GET /api/download-url)
     const token = randomUUID();
@@ -237,7 +263,7 @@ describe('Integration Test 16.1 & 16.2: End-to-End Download Flow', () => {
   });
 });
 
-describe('Integration Test 16.3: Offline Playback', () => {
+describeDb('Integration Test 16.3: Offline Playback', () => {
   it('should retrieve user_downloads records for offline playback', async () => {
     // Create download records
     const lectureFilename = randomUUID();
@@ -277,7 +303,7 @@ describe('Integration Test 16.3: Offline Playback', () => {
   });
 });
 
-describe('Integration Test 16.4: Auto-Deletion on Unenrollment', () => {
+describeDb('Integration Test 16.4: Auto-Deletion on Unenrollment', () => {
   it('should remove user_downloads records when enrollment is deleted', async () => {
     // Create download records
     await db.query(
@@ -345,7 +371,7 @@ describe('Integration Test 16.4: Auto-Deletion on Unenrollment', () => {
   });
 });
 
-describe('Integration Test 16.5: Auto-Deletion on Enrollment Expiry', () => {
+describeDb('Integration Test 16.5: Auto-Deletion on Enrollment Expiry', () => {
   it('should exclude downloads from expired enrollments in GET /api/my-downloads', async () => {
     // Create download records
     await db.query(
@@ -419,7 +445,7 @@ describe('Integration Test 16.5: Auto-Deletion on Enrollment Expiry', () => {
   });
 });
 
-describe('Integration Test: Token Expiry and Cleanup', () => {
+describeDb('Integration Test: Token Expiry and Cleanup', () => {
   it('should reject expired tokens', async () => {
     const token = randomUUID();
     const createdAt = Date.now() - 60000; // 1 minute ago
@@ -483,7 +509,7 @@ describe('Integration Test: Token Expiry and Cleanup', () => {
   });
 });
 
-describe('Integration Test: Student Blocking', () => {
+describeDb('Integration Test: Student Blocking', () => {
   it('should remove all downloads when student is blocked', async () => {
     // Create download records
     await db.query(
@@ -521,7 +547,7 @@ describe('Integration Test: Student Blocking', () => {
   });
 });
 
-describe('Integration Test: Course Deletion', () => {
+describeDb('Integration Test: Course Deletion', () => {
   it('should remove all downloads when course is deleted', async () => {
     // Create another user with downloads from the same course
     const user2Result = await db.query(

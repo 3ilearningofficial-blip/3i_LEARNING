@@ -13,9 +13,11 @@
     "db:push": "drizzle-kit push",
     "start": "npx expo start",
     "test": "node --env-file=.env node_modules/vitest/vitest.mjs --run",
+    "test:db": "cross-env RUN_DB_TESTS=true node --env-file=.env node_modules/vitest/vitest.mjs --run",
     "test:watch": "vitest",
     "lint": "npx expo lint",
-    "lint:fix": "npx expo lint --fix"
+    "lint:fix": "npx expo lint --fix",
+    "quality": "npm run lint && npx tsc --noEmit && npm run test"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1028.0",

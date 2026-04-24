@@ -5,5 +5,7 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     pool: 'forks',
+    fileParallelism: false,
+    maxWorkers: 1,
   },
 });

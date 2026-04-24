@@ -218,7 +218,6 @@ export default function BroadcastPage() {
         webrtc.cleanup();
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Auto-record when screen share starts (Task 7.2)
@@ -229,7 +228,6 @@ export default function BroadcastPage() {
     if (!webrtc.isScreenSharing && recorder.isRecording) {
       recorder.stopRecording().catch(() => {});
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [webrtc.isScreenSharing, webrtc.screenStream]);
 
   const handleScreenShare = useCallback(async () => {

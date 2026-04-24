@@ -119,7 +119,6 @@ export default function StudioSetupPage() {
     return () => {
       webrtc.cleanup();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Create Cloudflare Stream live input when switching to cloudflare mode

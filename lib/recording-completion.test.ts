@@ -2,6 +2,10 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import * as fc from 'fast-check';
 import { Pool } from 'pg';
 
+const TEST_DB_URL = process.env.TEST_DATABASE_URL || process.env.DATABASE_URL;
+const RUN_DB_TESTS = process.env.RUN_DB_TESTS === 'true' && Boolean(TEST_DB_URL);
+const describeDb = RUN_DB_TESTS ? describe : describe.skip;
+
 /**
  * Feature: professional-live-class-studio
  * Property 3: Recording completion creates lecture and updates state
@@ -11,7 +15,7 @@ import { Pool } from 'pg';
 
 // Database connection pool for testing
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString: TEST_DB_URL,
   max: 5,
 });
 
@@ -76,12 +80,56 @@ async function completeRecording(liveClassId: number, recordingUrl: string, sect
   }
 }
 
-describe('Recording Completion - Property-Based Tests', () => {
+describeDb('Recording Completion - Property-Based Tests', () => {
   let testCourseId: number;
   let createdLiveClassIds: number[] = [];
   let createdLectureIds: number[] = [];
 
   beforeAll(async () => {
+    // Ensure required schema exists even if other test files dropped tables.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS courses (
+        id SERIAL PRIMARY KEY,
+        title TEXT NOT NULL,
+        description TEXT,
+        teacher_name TEXT,
+        price TEXT,
+        category TEXT,
+        is_published BOOLEAN DEFAULT FALSE,
+        total_lectures INTEGER DEFAULT 0,
+        created_at BIGINT
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS live_classes (
+        id SERIAL PRIMARY KEY,
+        title TEXT NOT NULL,
+        description TEXT,
+        course_id INTEGER,
+        is_live BOOLEAN DEFAULT FALSE,
+        is_completed BOOLEAN DEFAULT FALSE,
+        recording_url TEXT,
+        created_at BIGINT
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS lectures (
+        id SERIAL PRIMARY KEY,
+        course_id INTEGER,
+        title TEXT NOT NULL,
+        description TEXT,
+        video_url TEXT,
+        video_type TEXT,
+        duration_minutes INTEGER,
+        order_index INTEGER,
+        is_free_preview BOOLEAN DEFAULT FALSE,
+        section_title TEXT,
+        created_at BIGINT
+      )
+    `);
+
     // Create a test course for all tests
     try {
       const courseResult = await pool.query(

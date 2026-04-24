@@ -2,6 +2,10 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import * as fc from 'fast-check';
 import { Pool } from 'pg';
 
+const TEST_DB_URL = process.env.TEST_DATABASE_URL || process.env.DATABASE_URL;
+const RUN_DB_TESTS = process.env.RUN_DB_TESTS === 'true' && Boolean(TEST_DB_URL);
+const describeDb = RUN_DB_TESTS ? describe : describe.skip;
+
 /**
  * Feature: secure-offline-downloads
  * Property 8: Enrollment verification gates all signed URL issuance
@@ -113,7 +117,7 @@ async function simulateDownloadUrlRequest(
 beforeAll(async () => {
   // Initialize test database connection
   db = new Pool({
-    connectionString: process.env.DATABASE_URL,
+    connectionString: TEST_DB_URL,
   });
 
   // Create test tables if they don't exist
@@ -142,6 +146,9 @@ beforeAll(async () => {
       download_allowed BOOLEAN DEFAULT FALSE
     )
   `);
+  await db.query(`ALTER TABLE lectures ADD COLUMN IF NOT EXISTS course_id INTEGER`);
+  await db.query(`ALTER TABLE lectures ADD COLUMN IF NOT EXISTS video_url TEXT`);
+  await db.query(`ALTER TABLE lectures ADD COLUMN IF NOT EXISTS download_allowed BOOLEAN DEFAULT FALSE`);
 
   await db.query(`
     CREATE TABLE IF NOT EXISTS study_materials (
@@ -152,6 +159,9 @@ beforeAll(async () => {
       download_allowed BOOLEAN DEFAULT FALSE
     )
   `);
+  await db.query(`ALTER TABLE study_materials ADD COLUMN IF NOT EXISTS course_id INTEGER`);
+  await db.query(`ALTER TABLE study_materials ADD COLUMN IF NOT EXISTS file_url TEXT`);
+  await db.query(`ALTER TABLE study_materials ADD COLUMN IF NOT EXISTS download_allowed BOOLEAN DEFAULT FALSE`);
 
   await db.query(`
     CREATE TABLE IF NOT EXISTS enrollments (
@@ -162,6 +172,10 @@ beforeAll(async () => {
       valid_until BIGINT
     )
   `);
+  await db.query(`ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS user_id INTEGER`);
+  await db.query(`ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS course_id INTEGER`);
+  await db.query(`ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active'`);
+  await db.query(`ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS valid_until BIGINT`);
 
   await db.query(`
     CREATE TABLE IF NOT EXISTS download_tokens (
@@ -176,6 +190,14 @@ beforeAll(async () => {
       expires_at BIGINT NOT NULL
     )
   `);
+  await db.query(`ALTER TABLE download_tokens ADD COLUMN IF NOT EXISTS token TEXT`);
+  await db.query(`ALTER TABLE download_tokens ADD COLUMN IF NOT EXISTS user_id INTEGER`);
+  await db.query(`ALTER TABLE download_tokens ADD COLUMN IF NOT EXISTS item_type TEXT`);
+  await db.query(`ALTER TABLE download_tokens ADD COLUMN IF NOT EXISTS item_id INTEGER`);
+  await db.query(`ALTER TABLE download_tokens ADD COLUMN IF NOT EXISTS r2_key TEXT`);
+  await db.query(`ALTER TABLE download_tokens ADD COLUMN IF NOT EXISTS used BOOLEAN DEFAULT FALSE`);
+  await db.query(`ALTER TABLE download_tokens ADD COLUMN IF NOT EXISTS created_at BIGINT`);
+  await db.query(`ALTER TABLE download_tokens ADD COLUMN IF NOT EXISTS expires_at BIGINT`);
 });
 
 afterAll(async () => {
@@ -199,7 +221,7 @@ beforeEach(async () => {
   await db.query('DELETE FROM users');
 });
 
-describe('GET /api/download-url - Property-Based Tests', () => {
+describeDb('GET /api/download-url - Property-Based Tests', () => {
   it('Property 8: Enrollment verification gates all signed URL issuance', { timeout: 30000 }, async () => {
     // Arbitraries for generating test data
     const userIdArbitrary = fc.integer({ min: 1, max: 1000 });
