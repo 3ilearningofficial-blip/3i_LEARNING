@@ -360,6 +360,18 @@ async function generateAIAnswer(question: string, topic?: string): Promise<strin
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Run first: live-classes and other routes SELECT these columns. Without them Postgres errors
+  // when ALLOW_RUNTIME_SCHEMA_SYNC is false (typical on EC2).
+  try {
+    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_free BOOLEAN DEFAULT FALSE");
+    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS original_price DECIMAL(10, 2) DEFAULT 0");
+    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS validity_months NUMERIC(8, 2) DEFAULT NULL");
+    await db.query("ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS valid_until BIGINT");
+    console.log("[DB] Critical columns ensured: courses.is_free, original_price, validity_months; enrollments.valid_until");
+  } catch (err) {
+    console.error("[DB] CRITICAL: could not ensure course/enrollment columns. Run SQL on the DB (see deploy docs). Error:", err);
+  }
+
   const allowRuntimeSchemaSync = process.env.ALLOW_RUNTIME_SCHEMA_SYNC === "true";
   if (allowRuntimeSchemaSync) {
     // ==================== BASE TABLE CREATION ====================
@@ -1063,16 +1075,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   } else {
     console.log("[DB] Runtime schema sync skipped (ALLOW_RUNTIME_SCHEMA_SYNC != true)");
-  }
-
-  // Columns referenced by live API routes must exist even when full runtime sync is off (e.g. production EC2).
-  try {
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_free BOOLEAN DEFAULT FALSE");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS original_price DECIMAL(10, 2) DEFAULT 0");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS validity_months NUMERIC(8, 2) DEFAULT NULL");
-    await db.query("ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS valid_until BIGINT");
-  } catch (err) {
-    console.error("[DB] ensure critical course/enrollment columns failed:", err);
   }
 
   // ==================== LIVE CLASS NOTIFICATION SCHEDULER ====================
