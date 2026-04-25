@@ -266,10 +266,7 @@ export default function AdminCourseScreen() {
     queryFn: async () => {
       const baseUrl = getApiUrl();
       const url = new URL(`/api/courses/${id}`, baseUrl);
-      const res = await fetch(url.toString(), {
-        credentials: "include",
-        headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
-      });
+      const res = await fetch(url.toString(), { credentials: "include" });
       const payload = await res.json().catch(() => null);
       if (!payload || typeof payload !== "object") {
         return {
@@ -300,10 +297,7 @@ export default function AdminCourseScreen() {
     queryFn: async () => {
       const baseUrl = getApiUrl();
       const url = new URL(`/api/live-classes?courseId=${id}&admin=true`, baseUrl);
-      const res = await fetch(url.toString(), {
-        credentials: "include",
-        headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
-      });
+      const res = await fetch(url.toString(), { credentials: "include" });
       if (!res.ok) return [];
       const payload = await res.json().catch(() => []);
       return Array.isArray(payload) ? payload : [];
