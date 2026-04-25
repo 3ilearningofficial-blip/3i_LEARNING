@@ -11,6 +11,14 @@ type RegisterAdminCourseManagementRoutesDeps = {
   updateCourseTestCounts: (courseId: string) => Promise<void>;
 };
 
+const COURSE_FOLDER_TYPES = new Set(["lecture", "material", "test"]);
+const MAX_FOLDER_NAME_LENGTH = 120;
+
+function normalizeFolderName(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return value.trim().replace(/\s+/g, " ");
+}
+
 export function registerAdminCourseManagementRoutes({
   app,
   db,
@@ -71,9 +79,27 @@ export function registerAdminCourseManagementRoutes({
   app.post("/api/admin/courses/:id/folders", requireAdmin, async (req: Request, res: Response) => {
     try {
       const { name, type } = req.body;
+      const normalizedName = normalizeFolderName(name);
+      const normalizedType = typeof type === "string" ? type.trim().toLowerCase() : "";
+      if (!normalizedName) return res.status(400).json({ message: "Folder name is required" });
+      if (normalizedName.length > MAX_FOLDER_NAME_LENGTH) return res.status(400).json({ message: "Folder name is too long" });
+      if (!COURSE_FOLDER_TYPES.has(normalizedType)) return res.status(400).json({ message: "Invalid folder type" });
+
+      const existing = await db.query(
+        "SELECT * FROM course_folders WHERE course_id = $1 AND type = $2 AND LOWER(name) = LOWER($3) LIMIT 1",
+        [req.params.id, normalizedType, normalizedName]
+      );
+      if (existing.rows.length > 0) {
+        const revived = await db.query(
+          "UPDATE course_folders SET is_hidden = FALSE WHERE id = $1 RETURNING *",
+          [existing.rows[0].id]
+        );
+        return res.json(revived.rows[0]);
+      }
+
       const result = await db.query(
-        "INSERT INTO course_folders (course_id, name, type) VALUES ($1, $2, $3) ON CONFLICT (course_id, name, type) DO UPDATE SET is_hidden = FALSE RETURNING *",
-        [req.params.id, name, type]
+        "INSERT INTO course_folders (course_id, name, type) VALUES ($1, $2, $3) RETURNING *",
+        [req.params.id, normalizedName, normalizedType]
       );
       res.json(result.rows[0]);
     } catch {
@@ -85,19 +111,51 @@ export function registerAdminCourseManagementRoutes({
     try {
       const { isHidden, name } = req.body;
       if (name !== undefined) {
-        const folder = await db.query("SELECT * FROM course_folders WHERE id = $1 AND course_id = $2", [req.params.folderId, req.params.id]);
-        if (folder.rows.length > 0) {
-          const oldName = folder.rows[0].name;
-          const folderType = folder.rows[0].type;
-          await db.query("UPDATE course_folders SET name = $1 WHERE id = $2 AND course_id = $3", [name, req.params.folderId, req.params.id]);
-          if (folderType === "lecture") {
-            await db.query("UPDATE lectures SET section_title = $1 WHERE course_id = $2 AND section_title = $3", [name, req.params.id, oldName]);
-          } else if (folderType === "material") {
-            await db.query("UPDATE study_materials SET section_title = $1 WHERE course_id = $2 AND section_title = $3", [name, req.params.id, oldName]);
-          } else if (folderType === "test") {
-            await db.query("UPDATE tests SET folder_name = $1 WHERE course_id = $2 AND folder_name = $3", [name, req.params.id, oldName]);
-          }
+        const normalizedName = normalizeFolderName(name);
+        if (!normalizedName) return res.status(400).json({ message: "Folder name is required" });
+        if (normalizedName.length > MAX_FOLDER_NAME_LENGTH) return res.status(400).json({ message: "Folder name is too long" });
+
+        const dup = await db.query(
+          "SELECT id FROM course_folders WHERE course_id = $1 AND type = (SELECT type FROM course_folders WHERE id = $2 AND course_id = $1) AND LOWER(name) = LOWER($3) AND id <> $2 LIMIT 1",
+          [req.params.id, req.params.folderId, normalizedName]
+        );
+        if (dup.rows.length > 0) {
+          return res.status(409).json({ message: "A folder with this name already exists for this type" });
         }
+
+        await db.query(
+          `WITH target AS (
+             SELECT id, name, type
+             FROM course_folders
+             WHERE id = $1 AND course_id = $2
+           ),
+           renamed AS (
+             UPDATE course_folders cf
+             SET name = $3
+             FROM target t
+             WHERE cf.id = t.id
+             RETURNING t.name AS old_name, t.type AS folder_type
+           ),
+           upd_lectures AS (
+             UPDATE lectures l
+             SET section_title = $3
+             FROM renamed r
+             WHERE r.folder_type = 'lecture' AND l.course_id = $2 AND l.section_title = r.old_name
+             RETURNING l.id
+           ),
+           upd_materials AS (
+             UPDATE study_materials sm
+             SET section_title = $3
+             FROM renamed r
+             WHERE r.folder_type = 'material' AND sm.course_id = $2 AND sm.section_title = r.old_name
+             RETURNING sm.id
+           )
+           UPDATE tests t
+           SET folder_name = $3
+           FROM renamed r
+           WHERE r.folder_type = 'test' AND t.course_id = $2 AND t.folder_name = r.old_name`,
+          [req.params.folderId, req.params.id, normalizedName]
+        );
       } else if (isHidden !== undefined) {
         await db.query("UPDATE course_folders SET is_hidden = $1 WHERE id = $2 AND course_id = $3", [isHidden, req.params.folderId, req.params.id]);
       }
@@ -109,15 +167,36 @@ export function registerAdminCourseManagementRoutes({
 
   app.delete("/api/admin/courses/:id/folders/:folderId", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const folder = await db.query("SELECT * FROM course_folders WHERE id = $1 AND course_id = $2", [req.params.folderId, req.params.id]);
-      if (folder.rows.length > 0) {
-        const { name, type } = folder.rows[0];
-        if (type === "lecture") await db.query("DELETE FROM lectures WHERE course_id = $1 AND section_title = $2", [req.params.id, name]);
-        else if (type === "test") await db.query("DELETE FROM tests WHERE course_id = $1 AND folder_name = $2", [req.params.id, name]);
-        else if (type === "material") await db.query("DELETE FROM study_materials WHERE course_id = $1 AND section_title = $2", [req.params.id, name]);
-        await db.query("DELETE FROM course_folders WHERE id = $1", [String(req.params.folderId)]);
-        await updateCourseTestCounts(String(req.params.id));
-      }
+      await db.query(
+        `WITH target AS (
+           SELECT id, name, type
+           FROM course_folders
+           WHERE id = $1 AND course_id = $2
+         ),
+         del_lectures AS (
+           DELETE FROM lectures l
+           USING target t
+           WHERE t.type = 'lecture' AND l.course_id = $2 AND l.section_title = t.name
+           RETURNING l.id
+         ),
+         del_tests AS (
+           DELETE FROM tests tt
+           USING target t
+           WHERE t.type = 'test' AND tt.course_id = $2 AND tt.folder_name = t.name
+           RETURNING tt.id
+         ),
+         del_materials AS (
+           DELETE FROM study_materials sm
+           USING target t
+           WHERE t.type = 'material' AND sm.course_id = $2 AND sm.section_title = t.name
+           RETURNING sm.id
+         )
+         DELETE FROM course_folders cf
+         USING target t
+         WHERE cf.id = t.id`,
+        [req.params.folderId, req.params.id]
+      );
+      await updateCourseTestCounts(String(req.params.id));
       res.json({ success: true });
     } catch {
       res.status(500).json({ message: "Failed to delete folder" });

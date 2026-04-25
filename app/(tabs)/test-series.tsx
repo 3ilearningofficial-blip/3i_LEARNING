@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable,
   Platform, ActivityIndicator, FlatList, Alert, Modal,
@@ -41,16 +41,10 @@ const TEST_TYPE_COLORS: Record<string, string> = {
   mock: "#DC2626", practice: "#1A56DB", test: "#059669", pyq: "#F59E0B", chapter: "#059669", weekly: "#7C3AED",
 };
 
-function ScheduledTestCard({ test, onStart }: { test: Test; onStart: () => void }) {
+function ScheduledTestCard({ test, onStart, now }: { test: Test; onStart: () => void; now: number }) {
   const scheduledMs = Number(test.scheduled_at);
   const durationMs = (test.duration_minutes || 60) * 60 * 1000;
   const endMs = scheduledMs + durationMs;
-  const [now, setNow] = useState(Date.now());
-
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, []);
 
   const diff = scheduledMs - now;
   const isLive = now >= scheduledMs && now < endMs;
@@ -139,31 +133,24 @@ function ScheduledTestCard({ test, onStart }: { test: Test; onStart: () => void 
   );
 }
 
-function TestCard({ test, attempt, onPress, paymentLoading }: { test: Test; attempt?: any; onPress: () => void; paymentLoading?: boolean }) {
+function TestCard({ test, attempt, onPress, paymentLoading, now }: { test: Test; attempt?: any; onPress: () => void; paymentLoading?: boolean; now: number }) {
   const color = TEST_TYPE_COLORS[test.test_type] || Colors.light.primary;
   const hours = Math.floor(test.duration_minutes / 60);
   const mins = test.duration_minutes % 60;
   const durationStr = hours > 0 ? `${hours}h ${mins > 0 ? `${mins}m` : ""}` : `${mins}m`;
   const scheduledMs = test.scheduled_at ? Number(test.scheduled_at) : null;
-  const isUpcoming = scheduledMs ? scheduledMs > Date.now() : false;
+  const diff = scheduledMs ? scheduledMs - now : 0;
+  const isUpcoming = scheduledMs ? diff > 0 : false;
   const isLocked = !!test.isLocked;
   const isPaid = !test.isLocked && (test.price ?? 0) > 0; // standalone paid test
-  const [countdown, setCountdown] = React.useState("");
-  React.useEffect(() => {
-    if (!scheduledMs || !isUpcoming) return;
-    const tick = () => {
-      const diff = scheduledMs - Date.now();
-      if (diff <= 0) { setCountdown(""); return; }
-      const d = Math.floor(diff / 86400000);
-      const h = Math.floor((diff % 86400000) / 3600000);
-      const m = Math.floor((diff % 3600000) / 60000);
-      const s = Math.floor((diff % 60000) / 1000);
-      setCountdown(d > 0 ? `${d}d ${h}h ${m}m` : h > 0 ? `${h}h ${m}m ${s}s` : `${m}m ${s}s`);
-    };
-    tick();
-    const t = setInterval(tick, 1000);
-    return () => clearInterval(t);
-  }, [scheduledMs]);
+  const countdown = (() => {
+    if (!scheduledMs || !isUpcoming) return "";
+    const d = Math.floor(diff / 86400000);
+    const h = Math.floor((diff % 86400000) / 3600000);
+    const m = Math.floor((diff % 3600000) / 60000);
+    const s = Math.floor((diff % 60000) / 1000);
+    return d > 0 ? `${d}d ${h}h ${m}m` : h > 0 ? `${h}h ${m}m ${s}s` : `${m}m ${s}s`;
+  })();
 
   return (
     <Pressable
@@ -317,6 +304,12 @@ export default function TestSeriesScreen() {
   const [paymentPending, setPaymentPending] = useState(false);
   const [payingTestId, setPayingTestId] = useState<number | null>(null);
   const pendingTestIdRef = useRef<number | null>(null);
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   const clearTestPaymentUi = () => {
     setPaymentPending(false);
@@ -403,8 +396,13 @@ export default function TestSeriesScreen() {
     staleTime: 0,
   });
 
-  const myTestSeries = allCourses.filter(
-    (c) => c.course_type === "test_series" && c.isEnrolled
+  const myTestSeries = useMemo(
+    () => allCourses.filter((c) => c.course_type === "test_series" && c.isEnrolled),
+    [allCourses]
+  );
+  const allTestSeries = useMemo(
+    () => allCourses.filter((c: any) => c.course_type === "test_series"),
+    [allCourses]
   );
 
   const { data: tests = [], isLoading } = useQuery<Test[]>({
@@ -457,6 +455,27 @@ export default function TestSeriesScreen() {
       router.push(`/test/${test.id}`);
     }
   };
+
+  const scheduledActiveTests = useMemo(
+    () =>
+      tests.filter((t) => {
+        if (!t.scheduled_at) return false;
+        const ms = Number(t.scheduled_at);
+        const endMs = ms + (t.duration_minutes || 60) * 60 * 1000;
+        return now < endMs;
+      }),
+    [tests, now]
+  );
+
+  const regularTests = useMemo(
+    () =>
+      tests.filter((t) => {
+        if (!t.scheduled_at) return true;
+        const endMs = Number(t.scheduled_at) + (t.duration_minutes || 60) * 60000;
+        return now >= endMs;
+      }),
+    [tests, now]
+  );
 
   return (
     <View style={styles.container}>
@@ -535,72 +554,68 @@ export default function TestSeriesScreen() {
           </View>
         )}
         {/* Browse Test Series (all — enrolled shows badge, unenrolled shows price) */}
-        {(() => {
-          const allTS = allCourses.filter((c: any) => c.course_type === "test_series");
-          if (allTS.length === 0) return null;
-          return (
-            <View style={[styles.section, { marginTop: myTestSeries.length > 0 ? 20 : 0 }]}>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                <View style={{ width: 4, height: 20, backgroundColor: "#F59E0B", borderRadius: 2 }} />
-                <Text style={styles.sectionTitle}>Test Series</Text>
-              </View>
-              <View style={{ gap: 10 }}>
-                {allTS.map((course: any) => {
-                  const discount = course.original_price && parseFloat(course.original_price) > 0
-                    ? Math.round((1 - parseFloat(course.price) / parseFloat(course.original_price)) * 100) : 0;
-                  return (
-                    <Pressable key={course.id} style={styles.testCard}
-                      onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push(`/course/${course.id}`); }}>
-                      <View style={{ width: 6, backgroundColor: course.isEnrolled ? "#22C55E" : "#F59E0B", borderTopLeftRadius: 16, borderBottomLeftRadius: 16 }} />
-                      <View style={{ flex: 1, padding: 14, gap: 8 }}>
-                        <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-                          <View style={{ width: 42, height: 42, borderRadius: 12, backgroundColor: course.isEnrolled ? "#DCFCE7" : "#F59E0B18", alignItems: "center", justifyContent: "center" }}>
-                            <Ionicons name="clipboard-outline" size={22} color={course.isEnrolled ? "#16A34A" : "#F59E0B"} />
-                          </View>
-                          <View style={{ flex: 1, gap: 2 }}>
-                            <Text style={{ fontSize: 15, fontFamily: "Inter_700Bold", color: Colors.light.text }} numberOfLines={2}>{course.title}</Text>
-                            <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                              {course.category && (
-                                <View style={{ backgroundColor: "#EEF2FF", borderRadius: 5, paddingHorizontal: 8, paddingVertical: 3 }}>
-                                  <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>{course.category}</Text>
+        {allTestSeries.length > 0 && (
+          <View style={[styles.section, { marginTop: myTestSeries.length > 0 ? 20 : 0 }]}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <View style={{ width: 4, height: 20, backgroundColor: "#F59E0B", borderRadius: 2 }} />
+              <Text style={styles.sectionTitle}>Test Series</Text>
+            </View>
+            <View style={{ gap: 10 }}>
+              {allTestSeries.map((course: any) => {
+                const discount = course.original_price && parseFloat(course.original_price) > 0
+                  ? Math.round((1 - parseFloat(course.price) / parseFloat(course.original_price)) * 100) : 0;
+                return (
+                  <Pressable key={course.id} style={styles.testCard}
+                    onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push(`/course/${course.id}`); }}>
+                    <View style={{ width: 6, backgroundColor: course.isEnrolled ? "#22C55E" : "#F59E0B", borderTopLeftRadius: 16, borderBottomLeftRadius: 16 }} />
+                    <View style={{ flex: 1, padding: 14, gap: 8 }}>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                        <View style={{ width: 42, height: 42, borderRadius: 12, backgroundColor: course.isEnrolled ? "#DCFCE7" : "#F59E0B18", alignItems: "center", justifyContent: "center" }}>
+                          <Ionicons name="clipboard-outline" size={22} color={course.isEnrolled ? "#16A34A" : "#F59E0B"} />
+                        </View>
+                        <View style={{ flex: 1, gap: 2 }}>
+                          <Text style={{ fontSize: 15, fontFamily: "Inter_700Bold", color: Colors.light.text }} numberOfLines={2}>{course.title}</Text>
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                            {course.category && (
+                              <View style={{ backgroundColor: "#EEF2FF", borderRadius: 5, paddingHorizontal: 8, paddingVertical: 3 }}>
+                                <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>{course.category}</Text>
+                              </View>
+                            )}
+                            {course.isEnrolled ? (
+                              <View style={{ backgroundColor: "#DCFCE7", borderRadius: 5, paddingHorizontal: 8, paddingVertical: 3, flexDirection: "row", alignItems: "center", gap: 3 }}>
+                                <Ionicons name="checkmark-circle" size={12} color="#16A34A" />
+                                <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: "#16A34A" }}>Enrolled</Text>
+                              </View>
+                            ) : (
+                              <>
+                                <View style={{ backgroundColor: course.is_free ? "#DCFCE7" : "#FEF3C7", borderRadius: 5, paddingHorizontal: 8, paddingVertical: 3 }}>
+                                  <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: course.is_free ? "#16A34A" : "#D97706" }}>
+                                    {course.is_free ? "FREE" : `₹${parseFloat(course.price || "0").toFixed(0)}`}
+                                  </Text>
                                 </View>
-                              )}
-                              {course.isEnrolled ? (
-                                <View style={{ backgroundColor: "#DCFCE7", borderRadius: 5, paddingHorizontal: 8, paddingVertical: 3, flexDirection: "row", alignItems: "center", gap: 3 }}>
-                                  <Ionicons name="checkmark-circle" size={12} color="#16A34A" />
-                                  <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: "#16A34A" }}>Enrolled</Text>
-                                </View>
-                              ) : (
-                                <>
-                                  <View style={{ backgroundColor: course.is_free ? "#DCFCE7" : "#FEF3C7", borderRadius: 5, paddingHorizontal: 8, paddingVertical: 3 }}>
-                                    <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: course.is_free ? "#16A34A" : "#D97706" }}>
-                                      {course.is_free ? "FREE" : `₹${parseFloat(course.price || "0").toFixed(0)}`}
-                                    </Text>
-                                  </View>
-                                  {discount > 0 && !course.is_free && (
-                                    <Text style={{ fontSize: 10, fontFamily: "Inter_500Medium", color: "#EF4444", textDecorationLine: "line-through" }}>₹{parseFloat(course.original_price).toFixed(0)}</Text>
-                                  )}
-                                </>
-                              )}
-                            </View>
-                          </View>
-                          <View style={{ alignItems: "center", gap: 2 }}>
-                            <Text style={{ fontSize: 18, fontFamily: "Inter_700Bold", color: course.isEnrolled ? "#16A34A" : "#F59E0B" }}>{course.total_tests || 0}</Text>
-                            <Text style={{ fontSize: 10, fontFamily: "Inter_500Medium", color: Colors.light.textMuted }}>Tests</Text>
+                                {discount > 0 && !course.is_free && (
+                                  <Text style={{ fontSize: 10, fontFamily: "Inter_500Medium", color: "#EF4444", textDecorationLine: "line-through" }}>₹{parseFloat(course.original_price).toFixed(0)}</Text>
+                                )}
+                              </>
+                            )}
                           </View>
                         </View>
+                        <View style={{ alignItems: "center", gap: 2 }}>
+                          <Text style={{ fontSize: 18, fontFamily: "Inter_700Bold", color: course.isEnrolled ? "#16A34A" : "#F59E0B" }}>{course.total_tests || 0}</Text>
+                          <Text style={{ fontSize: 10, fontFamily: "Inter_500Medium", color: Colors.light.textMuted }}>Tests</Text>
+                        </View>
                       </View>
-                    </Pressable>
-                  );
-                })}
-              </View>
+                    </View>
+                  </Pressable>
+                );
+              })}
             </View>
-          );
-        })()}
+          </View>
+        )}
         <View style={[styles.section, { marginTop: myTestSeries.length > 0 ? 20 : 0 }]}>
           <Text style={styles.sectionTitle}>
             {selectedType === "All" ? "All Tests" : TEST_TYPE_LABELS[selectedType]}
-            <Text style={styles.testCount}> ({tests.filter((t) => !t.scheduled_at || Number(t.scheduled_at) + (t.duration_minutes || 60) * 60000 <= Date.now()).length})</Text>
+            <Text style={styles.testCount}> ({regularTests.length})</Text>
           </Text>
 
           {isLoading ? (
@@ -610,47 +625,30 @@ export default function TestSeriesScreen() {
           ) : (
             <>
               {/* Scheduled tests (upcoming + currently live) */}
-              {tests.filter((t) => {
-                if (!t.scheduled_at) return false;
-                const ms = Number(t.scheduled_at);
-                const endMs = ms + (t.duration_minutes || 60) * 60 * 1000;
-                return Date.now() < endMs; // show until test duration ends
-              }).length > 0 && (
+              {scheduledActiveTests.length > 0 && (
                 <View style={{ marginBottom: 16 }}>
                   <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 10 }}>
                     <View style={{ width: 4, height: 20, backgroundColor: "#7C3AED", borderRadius: 2 }} />
                     <Text style={[styles.sectionTitle, { fontSize: 16 }]}>Scheduled Tests</Text>
                   </View>
-                  {tests.filter((t) => {
-                    if (!t.scheduled_at) return false;
-                    const ms = Number(t.scheduled_at);
-                    const endMs = ms + (t.duration_minutes || 60) * 60 * 1000;
-                    return Date.now() < endMs;
-                  }).map((test) => (
-                    <ScheduledTestCard key={test.id} test={test} onStart={() => handleStartTest(test)} />
+                  {scheduledActiveTests.map((test) => (
+                    <ScheduledTestCard key={test.id} test={test} now={now} onStart={() => handleStartTest(test)} />
                   ))}
                 </View>
               )}
               {/* Regular tests */}
-              {tests.filter((t) => {
-                if (!t.scheduled_at) return true;
-                const endMs = Number(t.scheduled_at) + (t.duration_minutes || 60) * 60000;
-                return Date.now() >= endMs; // only show in regular list after test window ends
-              }).length === 0 ? (
+              {regularTests.length === 0 ? (
                 <View style={styles.emptyState}>
                   <Ionicons name="document-text-outline" size={48} color={Colors.light.textMuted} />
                   <Text style={styles.emptyTitle}>No tests available</Text>
                   <Text style={styles.emptySubtitle}>Check back soon for new tests</Text>
                 </View>
               ) : (
-                tests.filter((t) => {
-                  if (!t.scheduled_at) return true;
-                  const endMs = Number(t.scheduled_at) + (t.duration_minutes || 60) * 60000;
-                  return Date.now() >= endMs;
-                }).map((test) => (
+                regularTests.map((test) => (
                   <TestCard
                     key={test.id}
                     test={test}
+                    now={now}
                     attempt={attemptSummary[test.id]}
                     paymentLoading={!!(paymentPending && payingTestId === test.id)}
                     onPress={() => ((test.price ?? 0) > 0 ? handleTestPayment(test) : handleStartTest(test))}

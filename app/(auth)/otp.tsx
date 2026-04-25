@@ -25,16 +25,38 @@ export default function OTPScreen() {
   const [canResend, setCanResend] = useState(false);
   const [resending, setResending] = useState(false);
   const inputs = useRef<(TextInput | null)[]>([]);
+  const countdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const { login } = useAuth();
 
-  useEffect(() => {
-    const timer = setInterval(() => {
+  const startResendCountdown = () => {
+    if (countdownTimerRef.current) {
+      clearInterval(countdownTimerRef.current);
+    }
+    setCountdown(30);
+    setCanResend(false);
+    countdownTimerRef.current = setInterval(() => {
       setCountdown((prev) => {
-        if (prev <= 1) { setCanResend(true); clearInterval(timer); return 0; }
+        if (prev <= 1) {
+          setCanResend(true);
+          if (countdownTimerRef.current) {
+            clearInterval(countdownTimerRef.current);
+            countdownTimerRef.current = null;
+          }
+          return 0;
+        }
         return prev - 1;
       });
     }, 1000);
-    return () => clearInterval(timer);
+  };
+
+  useEffect(() => {
+    startResendCountdown();
+    return () => {
+      if (countdownTimerRef.current) {
+        clearInterval(countdownTimerRef.current);
+        countdownTimerRef.current = null;
+      }
+    };
   }, []);
 
   // Show dev OTP box when SMS fails — user taps to fill
@@ -67,6 +89,7 @@ export default function OTPScreen() {
   };
 
   const handleVerify = async (otpValue?: string) => {
+    if (isLoading) return;
     const code = otpValue || otp.join("");
     if (code.length !== 6) { Alert.alert("Error", "Enter the 6-digit OTP"); return; }
     setIsLoading(true);
@@ -106,18 +129,12 @@ export default function OTPScreen() {
   };
 
   const handleResend = async () => {
+    if (resending) return;
     setResending(true);
     try {
       const res = await apiRequest("POST", "/api/auth/send-otp", { identifier: phone, type: "phone" });
       const data = await res.json();
-      setCountdown(30);
-      setCanResend(false);
-      const timer = setInterval(() => {
-        setCountdown((prev) => {
-          if (prev <= 1) { setCanResend(true); clearInterval(timer); return 0; }
-          return prev - 1;
-        });
-      }, 1000);
+      startResendCountdown();
       setOtp(["", "", "", "", "", ""]);
       inputs.current[0]?.focus();
       Alert.alert("OTP Sent", data.smsSent ? "A new OTP has been sent to your phone." : "OTP sent. If SMS is delayed, please wait and try again.");

@@ -139,10 +139,11 @@ export default function TestScreen() {
   }, [hasStarted, currentQ]);
   // Countdown — runs after timeLeft is initialised (> 0)
   useEffect(() => {
-    if (!hasStarted || timeLeft <= 0) return;
+    if (!hasStarted) return;
     if (timerRef.current) clearInterval(timerRef.current);
     timerRef.current = setInterval(() => {
       setTimeLeft((prev) => {
+        if (prev <= 0) return 0;
         if (prev <= 1) {
           clearInterval(timerRef.current!);
           if (!submitCalledRef.current) {
@@ -155,7 +156,7 @@ export default function TestScreen() {
       });
     }, 1000);
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [hasStarted, timeLeft]);
+  }, [hasStarted]);
   const recordCurrentQTime = (qId: number) => {
     const elapsed = Math.round((Date.now() - qStartTimeRef.current) / 1000);
     setQuestionTimes((prev) => {

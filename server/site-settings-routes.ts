@@ -15,9 +15,23 @@ export function registerSiteSettingsRoutes({
   db,
   requireAdmin,
 }: RegisterSiteSettingsRoutesDeps): void {
+  let ensureSiteSettingsTablePromise: Promise<void> | null = null;
+  const ensureSiteSettingsTable = async () => {
+    if (!ensureSiteSettingsTablePromise) {
+      ensureSiteSettingsTablePromise = db
+        .query("CREATE TABLE IF NOT EXISTS site_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at BIGINT)")
+        .then(() => undefined)
+        .catch((err) => {
+          ensureSiteSettingsTablePromise = null;
+          throw err;
+        });
+    }
+    await ensureSiteSettingsTablePromise;
+  };
+
   app.get("/api/site-settings", async (_req: Request, res: Response) => {
     try {
-      await db.query("CREATE TABLE IF NOT EXISTS site_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at BIGINT)").catch(() => {});
+      await ensureSiteSettingsTable();
       const result = await db.query("SELECT key, value FROM site_settings");
       const settings: Record<string, string> = {};
       for (const row of result.rows) settings[row.key] = row.value;
@@ -32,7 +46,7 @@ export function registerSiteSettingsRoutes({
     try {
       const { settings } = req.body;
       if (!settings || typeof settings !== "object") return res.status(400).json({ message: "Settings object required" });
-      await db.query("CREATE TABLE IF NOT EXISTS site_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at BIGINT)").catch(() => {});
+      await ensureSiteSettingsTable();
       for (const [key, value] of Object.entries(settings)) {
         await db.query(
           "INSERT INTO site_settings (key, value, updated_at) VALUES ($1, $2, $3) ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = $3",

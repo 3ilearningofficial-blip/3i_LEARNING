@@ -359,38 +359,48 @@ async function generateAIAnswer(question: string, topic?: string): Promise<strin
   return answers.default;
 }
 
+async function ensureCoreLearningSchemaColumns(): Promise<void> {
+  const requiredStatements = [
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_free BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS price DECIMAL(10, 2) DEFAULT 0",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'Mathematics'",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS level TEXT DEFAULT 'Beginner'",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS duration_hours DECIMAL(5, 1) DEFAULT 0",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS total_lectures INTEGER DEFAULT 0",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS total_tests INTEGER DEFAULT 0",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS original_price DECIMAL(10, 2) DEFAULT 0",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS validity_months NUMERIC(8, 2) DEFAULT NULL",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_published BOOLEAN DEFAULT TRUE",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS course_type TEXT DEFAULT 'live'",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS subject TEXT DEFAULT ''",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS start_date TEXT",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS end_date TEXT",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS total_students INTEGER DEFAULT 0",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS total_materials INTEGER DEFAULT 0",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS pyq_count INTEGER DEFAULT 0",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS mock_count INTEGER DEFAULT 0",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS practice_count INTEGER DEFAULT 0",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS thumbnail TEXT",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS cover_color TEXT",
+    "ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active'",
+    "ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS valid_until BIGINT",
+    "ALTER TABLE lectures ADD COLUMN IF NOT EXISTS download_allowed BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE lectures ADD COLUMN IF NOT EXISTS section_title TEXT",
+    "ALTER TABLE study_materials ADD COLUMN IF NOT EXISTS download_allowed BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE study_materials ADD COLUMN IF NOT EXISTS section_title TEXT",
+    "ALTER TABLE user_downloads ADD COLUMN IF NOT EXISTS local_filename TEXT",
+  ];
+
+  for (const statement of requiredStatements) {
+    await db.query(statement).catch(() => {});
+  }
+}
+
 export async function registerRoutes(app: Express): Promise<Server> {
   // Run first: admin create/update and live-classes SELECT/INSERT need these. Without them Postgres errors
   // when ALLOW_RUNTIME_SCHEMA_SYNC is false (Vercel → api.3ilearning.in / EC2 + Neon with an old `courses` row shape).
   try {
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_free BOOLEAN DEFAULT FALSE");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS price DECIMAL(10, 2) DEFAULT 0");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'Mathematics'");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS level TEXT DEFAULT 'Beginner'");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS duration_hours DECIMAL(5, 1) DEFAULT 0");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS total_lectures INTEGER DEFAULT 0");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS total_tests INTEGER DEFAULT 0");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS original_price DECIMAL(10, 2) DEFAULT 0");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS validity_months NUMERIC(8, 2) DEFAULT NULL");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_published BOOLEAN DEFAULT TRUE");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS course_type TEXT DEFAULT 'live'");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS subject TEXT DEFAULT ''");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS start_date TEXT");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS end_date TEXT");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS total_students INTEGER DEFAULT 0");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS total_materials INTEGER DEFAULT 0").catch(() => {});
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS pyq_count INTEGER DEFAULT 0");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS mock_count INTEGER DEFAULT 0");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS practice_count INTEGER DEFAULT 0");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS thumbnail TEXT");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS cover_color TEXT");
-    await db.query("ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active'");
-    await db.query("ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS valid_until BIGINT");
-    await db.query("ALTER TABLE lectures ADD COLUMN IF NOT EXISTS download_allowed BOOLEAN DEFAULT FALSE").catch(() => {});
-    await db.query("ALTER TABLE lectures ADD COLUMN IF NOT EXISTS section_title TEXT").catch(() => {});
-    await db.query("ALTER TABLE study_materials ADD COLUMN IF NOT EXISTS download_allowed BOOLEAN DEFAULT FALSE").catch(() => {});
-    await db.query("ALTER TABLE study_materials ADD COLUMN IF NOT EXISTS section_title TEXT").catch(() => {});
-    await db.query("ALTER TABLE user_downloads ADD COLUMN IF NOT EXISTS local_filename TEXT").catch(() => {});
+    await ensureCoreLearningSchemaColumns();
     console.log("[DB] courses + enrollments columns ensured (admin + live APIs)");
   } catch (err) {
     console.error("[DB] CRITICAL: could not ensure course/enrollment columns. Run SQL in Neon (same branch as DATABASE_URL). Error:", err);
@@ -707,30 +717,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN DEFAULT FALSE");
     await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active_at BIGINT");
     await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT");
-    await db.query("ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active'");
-    // Ensure courses table has all required columns
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_free BOOLEAN DEFAULT FALSE");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS price DECIMAL(10, 2) DEFAULT 0");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'Mathematics'");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS level TEXT DEFAULT 'Beginner'");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS duration_hours DECIMAL(5, 1) DEFAULT 0");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS total_lectures INTEGER DEFAULT 0");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS total_tests INTEGER DEFAULT 0");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS original_price DECIMAL(10, 2) DEFAULT 0");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS validity_months NUMERIC(8, 2) DEFAULT NULL");
-    await db.query("ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS valid_until BIGINT");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_published BOOLEAN DEFAULT TRUE");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS course_type TEXT DEFAULT 'live'");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS subject TEXT DEFAULT ''");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS start_date TEXT");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS end_date TEXT");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS total_students INTEGER DEFAULT 0");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS total_materials INTEGER DEFAULT 0").catch(() => {});
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS pyq_count INTEGER DEFAULT 0");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS mock_count INTEGER DEFAULT 0");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS practice_count INTEGER DEFAULT 0");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS thumbnail TEXT");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS cover_color TEXT");
+    await ensureCoreLearningSchemaColumns();
     await db.query("ALTER TABLE tests ADD COLUMN IF NOT EXISTS difficulty TEXT DEFAULT 'moderate'");
     await db.query("ALTER TABLE tests ADD COLUMN IF NOT EXISTS scheduled_at BIGINT");
     await db.query("ALTER TABLE tests ADD COLUMN IF NOT EXISTS is_published BOOLEAN DEFAULT TRUE");
