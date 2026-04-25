@@ -81,13 +81,8 @@ function RootLayoutNav() {
       return;
     }
 
-    if (inWelcome) {
-      router.replace("/(auth)/login");
-      return;
-    }
-
-    if (!inAuthGroup) {
-      router.replace("/(auth)/login");
+    if (!inAuthGroup && !inWelcome) {
+      router.replace("/welcome");
     }
   }, [user?.id, user?.profileComplete, isLoading, segments.join("/")]);
 

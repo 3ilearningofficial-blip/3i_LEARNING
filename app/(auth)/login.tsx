@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   View, Text, StyleSheet, TextInput, Pressable,
   ScrollView, KeyboardAvoidingView, Platform,
@@ -23,6 +23,31 @@ export default function LoginScreen() {
   const [isLoading, setIsLoading] = useState(false);
   const [isVerifying, setIsVerifying] = useState(false);
   const [error, setError] = useState("");
+  const [resendCountdown, setResendCountdown] = useState(0);
+  const resendTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const startResendCountdown = () => {
+    if (resendTimerRef.current) clearInterval(resendTimerRef.current);
+    setResendCountdown(60);
+    resendTimerRef.current = setInterval(() => {
+      setResendCountdown((prev) => {
+        if (prev <= 1) {
+          if (resendTimerRef.current) {
+            clearInterval(resendTimerRef.current);
+            resendTimerRef.current = null;
+          }
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (resendTimerRef.current) clearInterval(resendTimerRef.current);
+    };
+  }, []);
 
   const handleSendOTP = async () => {
     const trimmed = phone.trim();
@@ -41,14 +66,9 @@ export default function LoginScreen() {
       const data = await res.json();
 
       if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      router.push({
-        pathname: "/(auth)/otp",
-        params: {
-          phone: trimmed,
-          smsSent: data?.smsSent ? "1" : "0",
-          devOtp: data?.devOtp || "",
-        },
-      } as any);
+      setOtpSent(true);
+      setDevOtp(data.devOtp || "");
+      startResendCountdown();
     } catch (err: any) {
       const msg = (err?.message || "").replace(/^\d+:\s*/, "");
       setError(msg || "Could not send OTP. Please try again.");
@@ -151,8 +171,18 @@ export default function LoginScreen() {
                 {devOtp ? (
                   <Text style={{ fontSize: 12, fontFamily: "Inter_500Medium", color: "#22C55E", textAlign: "center" }}>Dev OTP: {devOtp}</Text>
                 ) : null}
-                <Pressable onPress={handleSendOTP} disabled={isLoading}>
-                  <Text style={{ fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.primary, textAlign: "center" }}>
+                <Text style={{ fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.textMuted, textAlign: "center" }}>
+                  {resendCountdown > 0 ? `Resend OTP in ${resendCountdown}s` : "Didn't receive OTP?"}
+                </Text>
+                <Pressable onPress={handleSendOTP} disabled={isLoading || resendCountdown > 0}>
+                  <Text
+                    style={{
+                      fontSize: 13,
+                      fontFamily: "Inter_500Medium",
+                      color: (isLoading || resendCountdown > 0) ? Colors.light.textMuted : Colors.light.primary,
+                      textAlign: "center",
+                    }}
+                  >
                     {isLoading ? "Sending..." : "Resend OTP"}
                   </Text>
                 </Pressable>

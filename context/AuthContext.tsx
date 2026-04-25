@@ -137,10 +137,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const init = async () => {
-      // Web requirement: force fresh login after browser refresh.
-      if (Platform.OS === "web") {
-        await removeStoredUser();
-      }
       await refreshUser();
       setIsLoading(false);
     };
@@ -152,13 +148,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(null);
       await removeStoredUser();
       if (Platform.OS === "web") {
-        router.replace("/(auth)/login");
+        router.replace("/welcome");
       }
     });
     return () => setUnauthorizedHandler(null);
   }, []);
 
-  // Web: redirect to OTP after 1 hour of inactivity (don't fully logout)
+  // Web: clear session and return to welcome after 1 hour inactivity.
   useEffect(() => {
     if (Platform.OS !== "web") return;
     const TIMEOUT = 60 * 60 * 1000; // 1 hour
@@ -168,9 +164,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearTimeout(timer);
       timer = setTimeout(async () => {
         if (user) {
-          // Don't logout — just redirect to OTP so they re-verify
-          // Keep user data so profile isn't lost
-          router.replace("/(auth)/login");
+          setUser(null);
+          await removeStoredUser();
+          router.replace("/welcome");
         }
       }, TIMEOUT);
     };
