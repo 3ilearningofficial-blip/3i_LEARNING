@@ -46,8 +46,23 @@ import { registerMediaStreamRoutes } from "./media-stream-routes";
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 const uploadLarge = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } });
 
+function normalizeDatabaseUrl(raw: string): string {
+  try {
+    const parsed = new URL(raw);
+    const sslMode = (parsed.searchParams.get("sslmode") || "").toLowerCase();
+    // Keep current strict behavior across pg major versions and silence warning.
+    if (!sslMode || sslMode === "require" || sslMode === "prefer" || sslMode === "verify-ca") {
+      parsed.searchParams.set("sslmode", "verify-full");
+    }
+    return parsed.toString();
+  } catch {
+    return raw;
+  }
+}
+
 // Larger pool for 1000 concurrent users
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrlRaw = process.env.DATABASE_URL;
+const databaseUrl = databaseUrlRaw ? normalizeDatabaseUrl(databaseUrlRaw) : undefined;
 if (!databaseUrl) {
   throw new Error("DATABASE_URL must be set");
 }

@@ -17,6 +17,19 @@ import * as fs from "fs";
 const app = express();
 const log = console.log;
 
+function normalizeDatabaseUrl(raw: string): string {
+  try {
+    const parsed = new URL(raw);
+    const sslMode = (parsed.searchParams.get("sslmode") || "").toLowerCase();
+    if (!sslMode || sslMode === "require" || sslMode === "prefer" || sslMode === "verify-ca") {
+      parsed.searchParams.set("sslmode", "verify-full");
+    }
+    return parsed.toString();
+  } catch {
+    return raw;
+  }
+}
+
 declare module "http" {
   interface IncomingMessage {
     rawBody: unknown;
@@ -371,7 +384,7 @@ function setupErrorHandler(app: express.Application) {
   if (isProduction && process.env.DATABASE_URL) {
     const PgSession = connectPgSimple(session);
     sessionConfig.store = new PgSession({
-      conString: process.env.DATABASE_URL,
+      conString: normalizeDatabaseUrl(process.env.DATABASE_URL),
       tableName: "session",
       createTableIfMissing: true,
     });
