@@ -34,7 +34,11 @@ export default function DownloadsScreen() {
       const baseUrl = getApiUrl();
       const res = await authFetch(new URL("/api/my-downloads", baseUrl).toString());
       if (!res.ok) return { materials: [], lectures: [] };
-      return res.json();
+      const payload = await res.json().catch(() => null);
+      return {
+        materials: Array.isArray(payload?.materials) ? payload.materials : [],
+        lectures: Array.isArray(payload?.lectures) ? payload.lectures : [],
+      };
     },
     staleTime: 0,
     gcTime: 0,
@@ -186,7 +190,9 @@ export default function DownloadsScreen() {
     );
   };
 
-  const activeItems = activeTab === "lectures" ? lectures : materials;
+  const activeItems = Array.isArray(activeTab === "lectures" ? lectures : materials)
+    ? (activeTab === "lectures" ? lectures : materials)
+    : [];
 
   return (
     <View style={[styles.container, { paddingTop: Platform.OS === "web" ? 16 : insets.top }]}>

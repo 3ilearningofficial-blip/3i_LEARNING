@@ -257,7 +257,25 @@ export default function AdminCourseScreen() {
       const baseUrl = getApiUrl();
       const url = new URL(`/api/courses/${id}`, baseUrl);
       const res = await fetch(url.toString(), { credentials: "include" });
-      return res.json();
+      const payload = await res.json().catch(() => null);
+      if (!payload || typeof payload !== "object") {
+        return {
+          id: Number(id) || 0,
+          title: "",
+          is_free: false,
+          total_lectures: 0,
+          total_tests: 0,
+          lectures: [],
+          tests: [],
+          materials: [],
+        } as CourseDetail;
+      }
+      return {
+        ...payload,
+        lectures: Array.isArray((payload as any).lectures) ? (payload as any).lectures : [],
+        tests: Array.isArray((payload as any).tests) ? (payload as any).tests : [],
+        materials: Array.isArray((payload as any).materials) ? (payload as any).materials : [],
+      } as CourseDetail;
     },
     enabled: isValidId,
   });
@@ -269,7 +287,8 @@ export default function AdminCourseScreen() {
       const url = new URL(`/api/live-classes?courseId=${id}&admin=true`, baseUrl);
       const res = await fetch(url.toString(), { credentials: "include" });
       if (!res.ok) return [];
-      return res.json();
+      const payload = await res.json().catch(() => []);
+      return Array.isArray(payload) ? payload : [];
     },
     enabled: isValidId && activeTab === "live",
     refetchInterval: activeTab === "live" ? 10000 : false,
@@ -281,7 +300,8 @@ export default function AdminCourseScreen() {
       const baseUrl = getApiUrl();
       const res = await authFetch(new URL(`/api/admin/courses/${id}/folders`, baseUrl).toString());
       if (!res.ok) return [];
-      return res.json();
+      const payload = await res.json().catch(() => []);
+      return Array.isArray(payload) ? payload : [];
     },
     enabled: isValidId,
   });
@@ -292,8 +312,9 @@ export default function AdminCourseScreen() {
       const baseUrl = getApiUrl();
       const res = await authFetch(new URL(`/api/admin/courses/${id}/enrollments`, baseUrl).toString());
       if (!res.ok) return [];
-      const data = await res.json();
-      return data.map((s: any) => ({
+      const data = await res.json().catch(() => []);
+      const rows = Array.isArray(data) ? data : [];
+      return rows.map((s: any) => ({
         ...s,
         name: s.user_name || s.name || "Unknown",
         email: s.user_email || s.email || "",
@@ -302,6 +323,11 @@ export default function AdminCourseScreen() {
     },
     enabled: isValidId && activeTab === "enrolled",
   });
+
+  const courseLectures = Array.isArray(course?.lectures) ? course.lectures : [];
+  const courseTests = Array.isArray(course?.tests) ? course.tests : [];
+  const courseMaterials = Array.isArray(course?.materials) ? course.materials : [];
+  const safeFolders = Array.isArray(dbFolders) ? dbFolders : [];
 
   const createFolderMutation = useMutation({
     mutationFn: async ({ name, type }: { name: string; type: string }) => {
@@ -667,7 +693,7 @@ export default function AdminCourseScreen() {
         {effectiveTab === "lectures" && !isTestSeries && (
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Lectures ({course.lectures?.length || 0})</Text>
+              <Text style={styles.sectionTitle}>Lectures ({courseLectures.length})</Text>
               <View style={{ flexDirection: "row", gap: 8 }}>
                 <Pressable style={[styles.addBtn, { backgroundColor: "#7C3AED" }]} onPress={() => setShowFolderPicker("lecture")}>
                   <Ionicons name="folder-open" size={16} color="#fff" />
@@ -685,11 +711,11 @@ export default function AdminCourseScreen() {
             </View>
             {/* Folder cards */}
             {[...new Set([
-              ...(course.lectures || []).map((l: any) => l.section_title).filter(Boolean),
-              ...dbFolders.filter((f: any) => f.type === "lecture").map((f: any) => f.name),
+              ...courseLectures.map((l: any) => l.section_title).filter(Boolean),
+              ...safeFolders.filter((f: any) => f.type === "lecture").map((f: any) => f.name),
             ])].map((folderName: any) => {
-              const count = (course.lectures || []).filter((l: any) => l.section_title === folderName).length;
-              const folder = dbFolders.find((f: any) => f.name === folderName && f.type === "lecture");
+              const count = courseLectures.filter((l: any) => l.section_title === folderName).length;
+              const folder = safeFolders.find((f: any) => f.name === folderName && f.type === "lecture");
               return (
                 <View key={folderName} style={[styles.itemCard, { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: folder?.is_hidden ? "#F3F4F6" : "#EEF2FF" }]}>
                   <Pressable style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 12 }}
@@ -704,7 +730,7 @@ export default function AdminCourseScreen() {
                     <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
                   </Pressable>
                   <Pressable style={{ padding: 8 }} onPress={async () => {
-                    let f = dbFolders.find((df: any) => df.name === folderName && df.type === "lecture");
+                    let f = safeFolders.find((df: any) => df.name === folderName && df.type === "lecture");
                     if (!f) { const r = await apiRequest("POST", `/api/admin/courses/${id}/folders`, { name: folderName, type: "lecture" }); f = await r.json(); refetchFolders(); }
                     setFolderActionSheet(f);
                   }}>
@@ -714,7 +740,7 @@ export default function AdminCourseScreen() {
               );
             })}
             {/* Lectures without folder */}
-            {course.lectures?.filter((l: any) => !l.section_title).map((lecture) => (
+            {courseLectures.filter((l: any) => !l.section_title).map((lecture) => (
               <View key={lecture.id} style={styles.itemCard}>
                 {lecture.section_title && (
                   <View style={styles.itemSectionBadge}>
@@ -757,7 +783,7 @@ export default function AdminCourseScreen() {
         {effectiveTab === "tests" && (
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Tests ({course.tests?.length || 0})</Text>
+              <Text style={styles.sectionTitle}>Tests ({courseTests.length})</Text>
               <View style={{ flexDirection: "row", gap: 8 }}>
                 <Pressable style={[styles.addBtn, { backgroundColor: "#7C3AED" }]} onPress={() => setShowFolderPicker("test")}>
                   <Ionicons name="folder-open" size={16} color="#fff" />
@@ -771,11 +797,11 @@ export default function AdminCourseScreen() {
             </View>
             {/* Folder cards for tests */}
             {[...new Set([
-              ...(course.tests || []).map((t: any) => t.folder_name).filter(Boolean),
-              ...dbFolders.filter((f: any) => f.type === "test").map((f: any) => f.name),
+              ...courseTests.map((t: any) => t.folder_name).filter(Boolean),
+              ...safeFolders.filter((f: any) => f.type === "test").map((f: any) => f.name),
             ])].map((folderName: any) => {
-              const count = (course.tests || []).filter((t: any) => t.folder_name === folderName).length;
-              const folder = dbFolders.find((f: any) => f.name === folderName && f.type === "test");
+              const count = courseTests.filter((t: any) => t.folder_name === folderName).length;
+              const folder = safeFolders.find((f: any) => f.name === folderName && f.type === "test");
               return (
                 <View key={folderName} style={[styles.itemCard, { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: folder?.is_hidden ? "#F3F4F6" : "#EEF2FF" }]}>
                   <Pressable style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 12 }}
@@ -790,7 +816,7 @@ export default function AdminCourseScreen() {
                     <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
                   </Pressable>
                   <Pressable style={{ padding: 8 }} onPress={async () => {
-                    let f = dbFolders.find((df: any) => df.name === folderName && df.type === "test");
+                    let f = safeFolders.find((df: any) => df.name === folderName && df.type === "test");
                     if (!f) { const r = await apiRequest("POST", `/api/admin/courses/${id}/folders`, { name: folderName, type: "test" }); f = await r.json(); refetchFolders(); }
                     setFolderActionSheet(f);
                   }}>
@@ -799,7 +825,7 @@ export default function AdminCourseScreen() {
                 </View>
               );
             })}
-            {course.tests?.filter((test: any) => !test.folder_name)?.map((test) => (
+            {courseTests.filter((test: any) => !test.folder_name).map((test) => (
               <View key={test.id} style={styles.testCard}>
                 <View style={styles.testCardRow}>
                   <Text style={styles.testCardTitle}>{test.title}</Text>
@@ -844,7 +870,7 @@ export default function AdminCourseScreen() {
         {effectiveTab === "materials" && (
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Materials ({course.materials?.length || 0})</Text>
+              <Text style={styles.sectionTitle}>Materials ({courseMaterials.length})</Text>
               <View style={{ flexDirection: "row", gap: 8 }}>
                 <Pressable style={[styles.addBtn, { backgroundColor: "#7C3AED" }]} onPress={() => setShowFolderPicker("material")}>
                   <Ionicons name="folder-open" size={16} color="#fff" />
@@ -862,11 +888,11 @@ export default function AdminCourseScreen() {
             </View>
             {/* Folder cards for materials */}
             {[...new Set([
-              ...(course.materials || []).map((m: any) => m.section_title).filter(Boolean),
-              ...dbFolders.filter((f: any) => f.type === "material").map((f: any) => f.name),
+              ...courseMaterials.map((m: any) => m.section_title).filter(Boolean),
+              ...safeFolders.filter((f: any) => f.type === "material").map((f: any) => f.name),
             ])].map((folderName: any) => {
-              const count = (course.materials || []).filter((m: any) => m.section_title === folderName).length;
-              const folder = dbFolders.find((f: any) => f.name === folderName && f.type === "material");
+              const count = courseMaterials.filter((m: any) => m.section_title === folderName).length;
+              const folder = safeFolders.find((f: any) => f.name === folderName && f.type === "material");
               return (
                 <View key={folderName} style={[styles.itemCard, { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: folder?.is_hidden ? "#F3F4F6" : "#FFF1F2" }]}>
                   <Pressable style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 12 }}
@@ -881,7 +907,7 @@ export default function AdminCourseScreen() {
                     <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
                   </Pressable>
                   <Pressable style={{ padding: 8 }} onPress={async () => {
-                    let f = dbFolders.find((df: any) => df.name === folderName && df.type === "material");
+                    let f = safeFolders.find((df: any) => df.name === folderName && df.type === "material");
                     if (!f) { const r = await apiRequest("POST", `/api/admin/courses/${id}/folders`, { name: folderName, type: "material" }); f = await r.json(); refetchFolders(); }
                     setFolderActionSheet(f);
                   }}>
@@ -890,7 +916,7 @@ export default function AdminCourseScreen() {
                 </View>
               );
             })}
-            {course.materials?.filter((m: any) => !m.section_title).map((mat) => (
+            {courseMaterials.filter((m: any) => !m.section_title).map((mat) => (
               <View key={mat.id} style={styles.itemCard}>
                 {mat.section_title && (
                   <View style={styles.itemSectionBadge}>
