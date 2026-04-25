@@ -21,29 +21,39 @@ export function registerAdminLectureRoutes({
     try {
       const { courseId, title, description, videoUrl, videoType, pdfUrl, durationMinutes, orderIndex, isFreePreview, sectionTitle, downloadAllowed } =
         req.body;
+      const parsedCourseId = Number(courseId);
+      if (!Number.isFinite(parsedCourseId)) {
+        return res.status(400).json({ message: "Invalid courseId" });
+      }
+      if (!title || !String(title).trim()) {
+        return res.status(400).json({ message: "Lecture title is required" });
+      }
+      if (!videoUrl && !pdfUrl) {
+        return res.status(400).json({ message: "Either videoUrl or pdfUrl is required" });
+      }
       const result = await db.query(
         `INSERT INTO lectures (course_id, title, description, video_url, video_type, pdf_url, duration_minutes, order_index, is_free_preview, section_title, download_allowed, created_at) 
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
         [
-          courseId,
-          title,
+          parsedCourseId,
+          String(title).trim(),
           description,
-          videoUrl,
+          videoUrl || null,
           videoType || "youtube",
-          pdfUrl,
-          durationMinutes || 0,
-          orderIndex || 0,
+          pdfUrl || null,
+          Number(durationMinutes) || 0,
+          Number(orderIndex) || 0,
           isFreePreview || false,
           sectionTitle || null,
           downloadAllowed || false,
           Date.now(),
         ]
       );
-      await db.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [courseId]);
+      await db.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [parsedCourseId]);
       res.json(result.rows[0]);
     } catch (err) {
       console.error(err);
-      res.status(500).json({ message: "Failed to add lecture" });
+      res.status(500).json({ message: "Failed to add lecture", detail: err instanceof Error ? err.message : "unknown_error" });
     }
   });
 

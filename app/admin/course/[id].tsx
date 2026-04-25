@@ -340,6 +340,7 @@ export default function AdminCourseScreen() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/courses", id] });
+      refetchFolders();
       setShowAddLecture(false); setFolderAddModal(false); setNewLecture(emptyLecture);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       Alert.alert("Success", "Lecture added!");
@@ -375,6 +376,7 @@ export default function AdminCourseScreen() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/courses", id] });
+      refetchFolders();
       setShowAddTest(false); setFolderAddModal(false); setNewTest(emptyTest);
       Alert.alert("Success", "Test created!");
     },
@@ -422,6 +424,7 @@ export default function AdminCourseScreen() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/courses", id] });
       qc.invalidateQueries({ queryKey: ["/api/courses"] });
+      refetchFolders();
       setShowAddMaterial(false); setFolderAddModal(false); setNewMaterial(emptyMaterial);
       Alert.alert("Success", "Material added!");
     },
@@ -477,6 +480,7 @@ export default function AdminCourseScreen() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/live-classes", id, "admin"] });
+      qc.invalidateQueries({ queryKey: ["/api/live-classes"] });
       setShowAddLiveClass(false); setNewLiveClass(emptyLiveClass);
       Alert.alert("Success", "Live class added!");
     },

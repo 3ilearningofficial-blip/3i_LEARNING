@@ -96,6 +96,13 @@ export function registerPaymentRoutes({
         receipt: `course_${courseId}_user_${user.id}_${Date.now()}`,
         notes: { courseId: courseId.toString(), userId: user.id.toString(), courseTitle: course.title },
       });
+      console.log("[Payments] create-order success", {
+        userId: user.id,
+        courseId,
+        orderId: order.id,
+        amount: order.amount,
+        currency: order.currency,
+      });
 
       const existingPayment = await db.query(
         "SELECT id FROM payments WHERE user_id = $1 AND course_id = $2 AND status = 'created' ORDER BY created_at DESC LIMIT 1",
@@ -138,17 +145,50 @@ export function registerPaymentRoutes({
       }
 
       const isValid = verifyPaymentSignature(razorpay_order_id, razorpay_payment_id, razorpay_signature);
-      if (!isValid) return res.status(400).json({ message: "Invalid payment signature" });
+      if (!isValid) {
+        console.warn("[Payments] verify failed: invalid signature", {
+          userId: user.id,
+          orderId: razorpay_order_id,
+          paymentId: razorpay_payment_id,
+          courseId: courseId ?? null,
+        });
+        return res.status(400).json({ message: "Invalid payment signature" });
+      }
 
       const paymentRecord = await db.query(
         "SELECT * FROM payments WHERE razorpay_order_id = $1 AND user_id = $2",
         [razorpay_order_id, user.id]
       );
-      if (paymentRecord.rows.length === 0) return res.status(400).json({ message: "Payment order not found" });
-      if (paymentRecord.rows[0].status === "paid") return res.status(400).json({ message: "Payment already processed" });
+      if (paymentRecord.rows.length === 0) {
+        console.warn("[Payments] verify failed: order not found", {
+          userId: user.id,
+          orderId: razorpay_order_id,
+          paymentId: razorpay_payment_id,
+          courseId: courseId ?? null,
+        });
+        return res.status(400).json({ message: "Payment order not found" });
+      }
+      if (paymentRecord.rows[0].status === "paid") {
+        console.log("[Payments] verify skipped: already paid", {
+          userId: user.id,
+          orderId: razorpay_order_id,
+          paymentId: razorpay_payment_id,
+          courseId: paymentRecord.rows[0].course_id,
+        });
+        return res.status(400).json({ message: "Payment already processed" });
+      }
 
       const paymentCourseId = paymentRecord.rows[0].course_id;
-      if (courseId && paymentCourseId !== courseId) return res.status(400).json({ message: "Course mismatch" });
+      if (courseId && paymentCourseId !== courseId) {
+        console.warn("[Payments] verify failed: course mismatch", {
+          userId: user.id,
+          orderId: razorpay_order_id,
+          paymentId: razorpay_payment_id,
+          requestedCourseId: courseId,
+          paymentCourseId,
+        });
+        return res.status(400).json({ message: "Course mismatch" });
+      }
 
       const paidCourseResult = await db.query("SELECT * FROM courses WHERE id = $1", [paymentCourseId]);
       const paidCourse = paidCourseResult.rows[0];
@@ -181,6 +221,12 @@ export function registerPaymentRoutes({
         );
       }
       cacheInvalidate?.("courses:");
+      console.log("[Payments] verify success", {
+        userId: user.id,
+        courseId: paymentCourseId,
+        orderId: razorpay_order_id,
+        paymentId: razorpay_payment_id,
+      });
       res.json({ success: true, message: "Payment verified and enrolled successfully" });
     } catch (err) {
       console.error("Verify payment error:", err);

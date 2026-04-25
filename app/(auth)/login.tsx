@@ -41,8 +41,14 @@ export default function LoginScreen() {
       const data = await res.json();
 
       if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      setOtpSent(true);
-      setDevOtp(data.devOtp || "");
+      router.push({
+        pathname: "/(auth)/otp",
+        params: {
+          phone: trimmed,
+          smsSent: data?.smsSent ? "1" : "0",
+          devOtp: data?.devOtp || "",
+        },
+      } as any);
     } catch (err: any) {
       const msg = (err?.message || "").replace(/^\d+:\s*/, "");
       setError(msg || "Could not send OTP. Please try again.");

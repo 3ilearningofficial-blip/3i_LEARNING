@@ -43,7 +43,7 @@ export default function WelcomeScreen() {
 
   const handleLogin = () => {
     if (user) router.replace("/(tabs)");
-    else router.push("/(auth)/email-login" as any);
+    else router.push("/(auth)/login" as any);
   };
 
   const googlePlayUrl = s("welcome_google_play_url", "https://play.google.com/store/apps/details?id=com.learning.threeI");
@@ -55,7 +55,7 @@ export default function WelcomeScreen() {
 
   const handleOpenWebApp = () => {
     if (user) router.replace("/(tabs)");
-    else router.push("/(auth)/email-login" as any);
+    else router.push("/(auth)/login" as any);
   };
 
   return (

@@ -110,27 +110,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         } else if (errorData?.message === "account_deleted") {
           setUser(null);
           await removeStoredUser();
+        } else if (Platform.OS === "web") {
+          setUser(null);
+          await removeStoredUser();
+        } else if (stored) {
+          // Native fallback keeps offline usability when transient auth errors happen.
+          setUser(stored);
         } else {
-          // 401 with stale token — fall back to stored user so app stays usable
-          if (stored) {
-            setUser(stored);
-          } else {
-            setUser(null);
-            await removeStoredUser();
-          }
+          setUser(null);
+          await removeStoredUser();
         }
       }
     } catch {
-      // Network error — use stored user as fallback
-      const stored = await getStoredUser();
-      if (stored) {
-        setUser(stored);
+      if (Platform.OS === "web") {
+        setUser(null);
+        await removeStoredUser();
+      } else {
+        // Network error — use stored user as fallback on native.
+        const stored = await getStoredUser();
+        if (stored) {
+          setUser(stored);
+        }
       }
     }
   };
 
   useEffect(() => {
     const init = async () => {
+      // Web requirement: force fresh login after browser refresh.
+      if (Platform.OS === "web") {
+        await removeStoredUser();
+      }
       await refreshUser();
       setIsLoading(false);
     };

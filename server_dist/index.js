@@ -1,21 +1,15 @@
-// server/index.ts
-import dotenv from "dotenv";
-import * as path from "path";
-import express from "express";
-import session from "express-session";
-import connectPgSimple from "connect-pg-simple";
-import rateLimit from "express-rate-limit";
-import compression from "compression";
-
-// server/routes.ts
-import { createServer } from "node:http";
-import { Pool } from "pg";
-import multer from "multer";
-import { createRequire as createRequire2 } from "module";
+var __defProp = Object.defineProperty;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __esm = (fn, res) => function __init() {
+  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+};
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
 
 // server/firebase.ts
 import * as admin from "firebase-admin";
-var firebaseApp = null;
 function getFirebaseAdmin() {
   if (firebaseApp) return firebaseApp;
   const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
@@ -38,12 +32,17 @@ async function verifyFirebaseToken(idToken) {
   const app2 = getFirebaseAdmin();
   return admin.auth(app2).verifyIdToken(idToken);
 }
+var firebaseApp;
+var init_firebase = __esm({
+  "server/firebase.ts"() {
+    "use strict";
+    firebaseApp = null;
+  }
+});
 
 // server/razorpay.ts
 import crypto from "crypto";
 import { createRequire } from "module";
-var require2 = createRequire(import.meta.url);
-var Razorpay = require2("razorpay");
 function getRazorpay() {
   const keyId = process.env.RAZORPAY_KEY_ID;
   const keySecret = process.env.RAZORPAY_KEY_SECRET;
@@ -62,6 +61,14 @@ function verifyPaymentSignature(orderId, paymentId, signature) {
   const expectedSignature = crypto.createHmac("sha256", keySecret).update(body).digest("hex");
   return expectedSignature === signature;
 }
+var require2, Razorpay;
+var init_razorpay = __esm({
+  "server/razorpay.ts"() {
+    "use strict";
+    require2 = createRequire(import.meta.url);
+    Razorpay = require2("razorpay");
+  }
+});
 
 // server/security-utils.ts
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
@@ -85,6 +92,11 @@ function verifyOtpValue(storedOtp, providedOtp) {
   }
   return storedOtp === providedOtp;
 }
+var init_security_utils = __esm({
+  "server/security-utils.ts"() {
+    "use strict";
+  }
+});
 
 // server/auth-utils.ts
 async function getAuthUserFromRequest(req, db2) {
@@ -118,13 +130,15 @@ async function getAuthUserFromRequest(req, db2) {
     return null;
   }
 }
+var init_auth_utils = __esm({
+  "server/auth-utils.ts"() {
+    "use strict";
+  }
+});
 
 // server/password-utils.ts
 import { randomBytes as randomBytes2, pbkdf2 as pbkdf2Cb, timingSafeEqual as timingSafeEqual2, createHash } from "crypto";
 import { promisify } from "util";
-var pbkdf2Async = promisify(pbkdf2Cb);
-var PBKDF2_ITERATIONS = 21e4;
-var KEY_LEN = 64;
 function toHex(input) {
   return Buffer.isBuffer(input) ? input.toString("hex") : Buffer.from(input).toString("hex");
 }
@@ -157,6 +171,15 @@ function verifyLegacySha256(password, userId, storedHash) {
   const plain = createHash("sha256").update(password).digest("hex");
   return storedHash === withUserId || storedHash === plain;
 }
+var pbkdf2Async, PBKDF2_ITERATIONS, KEY_LEN;
+var init_password_utils = __esm({
+  "server/password-utils.ts"() {
+    "use strict";
+    pbkdf2Async = promisify(pbkdf2Cb);
+    PBKDF2_ITERATIONS = 21e4;
+    KEY_LEN = 64;
+  }
+});
 
 // server/auth-routes.ts
 function registerAuthRoutes({
@@ -520,6 +543,12 @@ function registerAuthRoutes({
     }
   });
 }
+var init_auth_routes = __esm({
+  "server/auth-routes.ts"() {
+    "use strict";
+    init_password_utils();
+  }
+});
 
 // server/pdf-routes.ts
 import * as http from "node:http";
@@ -539,7 +568,6 @@ function registerPdfRoutes({ app: app2, db: db2 }) {
     }
     const origin = `${req.headers["x-forwarded-proto"] || req.protocol}://${req.headers["x-forwarded-host"] || req.headers.host}`;
     const pdfUrl = `${origin}/api/media/${key}?token=${token}`;
-    const pdfTitle = String(key).split("/").pop() || "Document";
     const html = `<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
@@ -550,24 +578,17 @@ function registerPdfRoutes({ app: app2, db: db2 }) {
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{width:100%;height:100%;background:#2a2a2a;overflow:auto;font-family:-apple-system,sans-serif;-webkit-overflow-scrolling:touch;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
-#topbar{position:fixed;top:0;left:0;right:0;height:44px;background:#1a1a1a;display:flex;align-items:center;padding:0 12px;gap:12px;z-index:100;border-bottom:1px solid #333}
-#backbtn{background:rgba(255,255,255,0.1);border:none;color:#fff;padding:6px 14px;border-radius:8px;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:6px}
-#pdftitle{color:#ccc;font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#viewer{width:100%;display:flex;flex-direction:column;align-items:center;gap:8px;padding:52px 0 16px}
+#viewer{width:100%;display:flex;flex-direction:column;align-items:center;gap:8px;padding:12px 0 16px}
 .page-canvas{display:block;max-width:100%;height:auto;box-shadow:0 2px 8px rgba(0,0,0,0.3);background:#fff;pointer-events:none}
 .loading{position:fixed;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;color:#ccc;background:#2a2a2a;z-index:10}
 .spinner{width:40px;height:40px;border:3px solid rgba(255,255,255,0.1);border-top:3px solid #1A56DB;border-radius:50%;animation:spin 0.8s linear infinite}
 .page-info{color:#888;font-size:12px;padding:4px 0}
-.error{position:fixed;top:44px;left:0;width:100%;height:calc(100% - 44px);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;color:#ccc;padding:32px;text-align:center;background:#2a2a2a;z-index:20}
+.error{position:fixed;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;color:#ccc;padding:32px;text-align:center;background:#2a2a2a;z-index:20}
 .error h3{font-size:18px;color:#fff}.error p{font-size:13px;color:#999;line-height:1.5}
 @keyframes spin{to{transform:rotate(360deg)}}
 @media print{body{display:none!important}}
 </style>
 </head><body>
-<div id="topbar">
-  <button id="backbtn" onclick="history.back()">&#8592; Back</button>
-  <span id="pdftitle">${pdfTitle}</span>
-</div>
 <div id="loading" class="loading"><div class="spinner"></div><p>Loading PDF...</p></div>
 <div id="viewer"></div>
 <script>
@@ -691,6 +712,42 @@ pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/p
     proxyReq.end();
   });
 }
+var init_pdf_routes = __esm({
+  "server/pdf-routes.ts"() {
+    "use strict";
+  }
+});
+
+// server/course-access-utils.ts
+function computeEnrollmentValidUntil(course, enrolledAtMs) {
+  const cands = [];
+  if (course.end_date != null && String(course.end_date).trim() !== "") {
+    const t = Date.parse(String(course.end_date).trim());
+    if (Number.isFinite(t)) cands.push(t);
+  }
+  const vm = course.validity_months;
+  if (vm != null && String(vm) !== "" && !Number.isNaN(Number(vm))) {
+    const months = Number(vm);
+    if (months > 0) {
+      const d = new Date(enrolledAtMs);
+      d.setUTCMonth(d.getUTCMonth() + months);
+      cands.push(d.getTime());
+    }
+  }
+  if (cands.length === 0) return null;
+  return Math.min(...cands);
+}
+function isEnrollmentExpired(row) {
+  if (!row) return true;
+  const vu = row.valid_until;
+  if (vu == null) return false;
+  return Number(vu) < Date.now();
+}
+var init_course_access_utils = __esm({
+  "server/course-access-utils.ts"() {
+    "use strict";
+  }
+});
 
 // server/payment-routes.ts
 function registerPaymentRoutes({
@@ -749,6 +806,10 @@ function registerPaymentRoutes({
       if (courseResult.rows.length === 0) return res.status(404).json({ message: "Course not found" });
       const course = courseResult.rows[0];
       if (course.is_free) return res.status(400).json({ message: "This course is free, no payment needed" });
+      const endTs = course.end_date != null && String(course.end_date).trim() !== "" ? Date.parse(String(course.end_date).trim()) : null;
+      if (Number.isFinite(endTs) && endTs < Date.now()) {
+        return res.status(400).json({ message: "This course has ended" });
+      }
       const existingEnrollment = await db2.query("SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2", [user.id, courseId]);
       if (existingEnrollment.rows.length > 0) return res.status(400).json({ message: "Already enrolled" });
       const amount = Math.round(parseFloat(course.price) * 100);
@@ -805,6 +866,13 @@ function registerPaymentRoutes({
       if (paymentRecord.rows[0].status === "paid") return res.status(400).json({ message: "Payment already processed" });
       const paymentCourseId = paymentRecord.rows[0].course_id;
       if (courseId && paymentCourseId !== courseId) return res.status(400).json({ message: "Course mismatch" });
+      const paidCourseResult = await db2.query("SELECT * FROM courses WHERE id = $1", [paymentCourseId]);
+      const paidCourse = paidCourseResult.rows[0];
+      if (!paidCourse) return res.status(400).json({ message: "Course not found" });
+      const endTsPaid = paidCourse.end_date != null && String(paidCourse.end_date).trim() !== "" ? Date.parse(String(paidCourse.end_date).trim()) : null;
+      if (Number.isFinite(endTsPaid) && endTsPaid < Date.now()) {
+        return res.status(400).json({ message: "This course has ended" });
+      }
       await db2.query(
         "UPDATE payments SET razorpay_payment_id = $1, razorpay_signature = $2, status = $3 WHERE razorpay_order_id = $4 AND user_id = $5",
         [razorpay_payment_id, razorpay_signature, "paid", razorpay_order_id, user.id]
@@ -814,9 +882,11 @@ function registerPaymentRoutes({
         [user.id, paymentCourseId]
       );
       if (alreadyEnrolled.rows.length === 0) {
+        const at = Date.now();
+        const vu = computeEnrollmentValidUntil(paidCourse, at);
         await db2.query(
-          "INSERT INTO enrollments (user_id, course_id, enrolled_at) VALUES ($1, $2, $3)",
-          [user.id, paymentCourseId, Date.now()]
+          "INSERT INTO enrollments (user_id, course_id, enrolled_at, valid_until) VALUES ($1, $2, $3, $4)",
+          [user.id, paymentCourseId, at, vu]
         );
         await db2.query(
           "UPDATE courses SET total_students = COALESCE(total_students, 0) + 1 WHERE id = $1",
@@ -878,6 +948,12 @@ function registerPaymentRoutes({
     }
   });
 }
+var init_payment_routes = __esm({
+  "server/payment-routes.ts"() {
+    "use strict";
+    init_course_access_utils();
+  }
+});
 
 // server/support-routes.ts
 function registerSupportRoutes({
@@ -964,6 +1040,34 @@ function registerSupportRoutes({
     }
   });
 }
+var init_support_routes = __esm({
+  "server/support-routes.ts"() {
+    "use strict";
+  }
+});
+
+// server/live-class-access.ts
+function sqlEnrollmentExistsForLiveList(userIdParam, nowParam) {
+  return `EXISTS (SELECT 1 FROM enrollments e WHERE e.course_id = lc.course_id AND e.user_id = $${userIdParam} AND (e.status = 'active' OR e.status IS NULL) AND (e.valid_until IS NULL OR e.valid_until >= $${nowParam}))`;
+}
+async function userCanAccessLiveClassContent(db2, user, lc) {
+  if (user?.role === "admin") return true;
+  if (!lc.course_id) return true;
+  if (lc.is_free_preview) return true;
+  if (!user) return false;
+  const enroll = await db2.query(
+    "SELECT * FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)",
+    [user.id, lc.course_id]
+  );
+  if (enroll.rows.length === 0 || isEnrollmentExpired(enroll.rows[0])) return false;
+  return true;
+}
+var init_live_class_access = __esm({
+  "server/live-class-access.ts"() {
+    "use strict";
+    init_course_access_utils();
+  }
+});
 
 // server/live-chat-routes.ts
 async function checkLiveClassAccess(req, res, db2, getAuthUser2, liveClassId) {
@@ -973,19 +1077,14 @@ async function checkLiveClassAccess(req, res, db2, getAuthUser2, liveClassId) {
     return false;
   }
   const liveClass = lc.rows[0];
-  if (liveClass.is_public || !liveClass.course_id) return true;
   const reqUser = req.user;
   const user = reqUser || await getAuthUser2(req);
   if (!user) {
     res.status(401).json({ message: "Login required" });
     return false;
   }
-  if (user.role === "admin") return true;
-  const enrolled = await db2.query(
-    "SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)",
-    [user.id, liveClass.course_id]
-  );
-  if (enrolled.rows.length === 0) {
+  const allow = await userCanAccessLiveClassContent(db2, user, liveClass);
+  if (!allow) {
     res.status(403).json({ message: "Not enrolled" });
     return false;
   }
@@ -1042,6 +1141,12 @@ function registerLiveChatRoutes({
     }
   });
 }
+var init_live_chat_routes = __esm({
+  "server/live-chat-routes.ts"() {
+    "use strict";
+    init_live_class_access();
+  }
+});
 
 // server/live-class-engagement-routes.ts
 function registerLiveClassEngagementRoutes({
@@ -1053,6 +1158,11 @@ function registerLiveClassEngagementRoutes({
   app2.post("/api/live-classes/:id/viewers/heartbeat", requireAuth, async (req, res) => {
     try {
       const user = req.user;
+      const lcResult = await db2.query("SELECT course_id, is_free_preview FROM live_classes WHERE id = $1", [req.params.id]);
+      if (lcResult.rows.length === 0) return res.status(404).json({ message: "Live class not found" });
+      if (!await userCanAccessLiveClassContent(db2, user, lcResult.rows[0])) {
+        return res.status(403).json({ message: "Access denied" });
+      }
       await db2.query(
         `INSERT INTO live_class_viewers (live_class_id, user_id, user_name, last_heartbeat)
          VALUES ($1, $2, $3, $4)
@@ -1085,6 +1195,11 @@ function registerLiveClassEngagementRoutes({
   app2.post("/api/live-classes/:id/raise-hand", requireAuth, async (req, res) => {
     try {
       const user = req.user;
+      const lcResult = await db2.query("SELECT course_id, is_free_preview FROM live_classes WHERE id = $1", [req.params.id]);
+      if (lcResult.rows.length === 0) return res.status(404).json({ message: "Live class not found" });
+      if (!await userCanAccessLiveClassContent(db2, user, lcResult.rows[0])) {
+        return res.status(403).json({ message: "Access denied" });
+      }
       await db2.query(
         `INSERT INTO live_class_hand_raises (live_class_id, user_id, user_name, raised_at)
          VALUES ($1, $2, $3, $4)
@@ -1100,6 +1215,11 @@ function registerLiveClassEngagementRoutes({
   app2.delete("/api/live-classes/:id/raise-hand", requireAuth, async (req, res) => {
     try {
       const user = req.user;
+      const lcResult = await db2.query("SELECT course_id, is_free_preview FROM live_classes WHERE id = $1", [req.params.id]);
+      if (lcResult.rows.length === 0) return res.status(404).json({ message: "Live class not found" });
+      if (!await userCanAccessLiveClassContent(db2, user, lcResult.rows[0])) {
+        return res.status(403).json({ message: "Access denied" });
+      }
       await db2.query("DELETE FROM live_class_hand_raises WHERE live_class_id = $1 AND user_id = $2", [req.params.id, user.id]);
       res.json({ success: true });
     } catch (err) {
@@ -1129,6 +1249,12 @@ function registerLiveClassEngagementRoutes({
     }
   });
 }
+var init_live_class_engagement_routes = __esm({
+  "server/live-class-engagement-routes.ts"() {
+    "use strict";
+    init_live_class_access();
+  }
+});
 
 // server/live-stream-routes.ts
 function registerLiveStreamRoutes({
@@ -1294,6 +1420,11 @@ function registerLiveStreamRoutes({
     }
   });
 }
+var init_live_stream_routes = __esm({
+  "server/live-stream-routes.ts"() {
+    "use strict";
+  }
+});
 
 // server/site-settings-routes.ts
 function registerSiteSettingsRoutes({
@@ -1333,6 +1464,11 @@ function registerSiteSettingsRoutes({
     }
   });
 }
+var init_site_settings_routes = __esm({
+  "server/site-settings-routes.ts"() {
+    "use strict";
+  }
+});
 
 // server/admin-course-import-routes.ts
 function registerAdminCourseImportRoutes({
@@ -1426,6 +1562,11 @@ function registerAdminCourseImportRoutes({
     }
   });
 }
+var init_admin_course_import_routes = __esm({
+  "server/admin-course-import-routes.ts"() {
+    "use strict";
+  }
+});
 
 // server/admin-course-management-routes.ts
 function registerAdminCourseManagementRoutes({
@@ -1535,6 +1676,11 @@ function registerAdminCourseManagementRoutes({
     }
   });
 }
+var init_admin_course_management_routes = __esm({
+  "server/admin-course-management-routes.ts"() {
+    "use strict";
+  }
+});
 
 // server/admin-analytics-routes.ts
 function registerAdminAnalyticsRoutes({
@@ -1698,6 +1844,11 @@ function registerAdminAnalyticsRoutes({
     }
   });
 }
+var init_admin_analytics_routes = __esm({
+  "server/admin-analytics-routes.ts"() {
+    "use strict";
+  }
+});
 
 // server/admin-enrollment-routes.ts
 function registerAdminEnrollmentRoutes({
@@ -1767,6 +1918,11 @@ function registerAdminEnrollmentRoutes({
     }
   });
 }
+var init_admin_enrollment_routes = __esm({
+  "server/admin-enrollment-routes.ts"() {
+    "use strict";
+  }
+});
 
 // server/admin-lecture-routes.ts
 function registerAdminLectureRoutes({
@@ -1865,6 +2021,11 @@ function registerAdminLectureRoutes({
     }
   });
 }
+var init_admin_lecture_routes = __esm({
+  "server/admin-lecture-routes.ts"() {
+    "use strict";
+  }
+});
 
 // server/admin-test-routes.ts
 function registerAdminTestRoutes({
@@ -1949,6 +2110,11 @@ function registerAdminTestRoutes({
     }
   });
 }
+var init_admin_test_routes = __esm({
+  "server/admin-test-routes.ts"() {
+    "use strict";
+  }
+});
 
 // server/admin-question-bulk-routes.ts
 function parseQuestionsFromText(text) {
@@ -2148,6 +2314,11 @@ function registerAdminQuestionBulkRoutes({
     }
   });
 }
+var init_admin_question_bulk_routes = __esm({
+  "server/admin-question-bulk-routes.ts"() {
+    "use strict";
+  }
+});
 
 // server/admin-users-and-content-routes.ts
 function registerAdminUsersAndContentRoutes({
@@ -2242,6 +2413,11 @@ function registerAdminUsersAndContentRoutes({
     }
   });
 }
+var init_admin_users_and_content_routes = __esm({
+  "server/admin-users-and-content-routes.ts"() {
+    "use strict";
+  }
+});
 
 // server/admin-test-management-routes.ts
 function registerAdminTestManagementRoutes({
@@ -2320,6 +2496,11 @@ function registerAdminTestManagementRoutes({
     }
   });
 }
+var init_admin_test_management_routes = __esm({
+  "server/admin-test-management-routes.ts"() {
+    "use strict";
+  }
+});
 
 // server/admin-daily-mission-routes.ts
 function registerAdminDailyMissionRoutes({
@@ -2396,6 +2577,11 @@ function registerAdminDailyMissionRoutes({
     }
   });
 }
+var init_admin_daily_mission_routes = __esm({
+  "server/admin-daily-mission-routes.ts"() {
+    "use strict";
+  }
+});
 
 // server/admin-notification-routes.ts
 function registerAdminNotificationRoutes({
@@ -2488,6 +2674,11 @@ function registerAdminNotificationRoutes({
     }
   });
 }
+var init_admin_notification_routes = __esm({
+  "server/admin-notification-routes.ts"() {
+    "use strict";
+  }
+});
 
 // server/admin-course-crud-routes.ts
 function registerAdminCourseCrudRoutes({
@@ -2498,13 +2689,14 @@ function registerAdminCourseCrudRoutes({
 }) {
   app2.post("/api/admin/courses", requireAdmin, async (req, res) => {
     try {
-      const { title, description, teacherName, price, originalPrice, category, isFree, level, durationHours, courseType, subject, startDate, endDate, thumbnail, coverColor } = req.body;
+      const { title, description, teacherName, price, originalPrice, category, isFree, level, durationHours, courseType, subject, startDate, endDate, validityMonths, thumbnail, coverColor } = req.body;
       const COVER_COLORS = ["#1A56DB", "#7C3AED", "#DC2626", "#059669", "#D97706", "#0891B2", "#DB2777", "#EA580C"];
       const autoColor = COVER_COLORS[Math.floor(Math.random() * COVER_COLORS.length)];
+      const vm = validityMonths != null && String(validityMonths).trim() !== "" ? Math.max(0, parseFloat(String(validityMonths)) || 0) || null : null;
       const result = await db2.query(
-        `INSERT INTO courses (title, description, teacher_name, price, original_price, category, is_free, level, duration_hours, course_type, subject, start_date, end_date, thumbnail, cover_color, is_published, created_at) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, TRUE, $16) RETURNING *`,
-        [title, description, teacherName || "3i Learning", price || 0, originalPrice || 0, category || "Mathematics", isFree || false, level || "Beginner", durationHours || 0, courseType || "live", subject || "", startDate || null, endDate || null, thumbnail || null, coverColor || autoColor, Date.now()]
+        `INSERT INTO courses (title, description, teacher_name, price, original_price, category, is_free, level, duration_hours, course_type, subject, start_date, end_date, validity_months, thumbnail, cover_color, is_published, created_at) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, TRUE, $17) RETURNING *`,
+        [title, description, teacherName || "3i Learning", price || 0, originalPrice || 0, category || "Mathematics", isFree || false, level || "Beginner", durationHours || 0, courseType || "live", subject || "", startDate || null, endDate || null, vm, thumbnail || null, coverColor || autoColor, Date.now()]
       );
       cacheInvalidate2("courses:");
       res.json(result.rows[0]);
@@ -2515,10 +2707,11 @@ function registerAdminCourseCrudRoutes({
   });
   app2.put("/api/admin/courses/:id", requireAdmin, async (req, res) => {
     try {
-      const { title, description, teacherName, price, originalPrice, category, isFree, level, durationHours, isPublished, totalTests, subject, courseType, startDate, endDate, thumbnail, coverColor } = req.body;
+      const { title, description, teacherName, price, originalPrice, category, isFree, level, durationHours, isPublished, totalTests, subject, courseType, startDate, endDate, validityMonths, thumbnail, coverColor } = req.body;
+      const vm = validityMonths != null && String(validityMonths).trim() !== "" ? Math.max(0, parseFloat(String(validityMonths)) || 0) || null : null;
       await db2.query(
-        `UPDATE courses SET title=$1, description=$2, teacher_name=$3, price=$4, original_price=$5, category=$6, is_free=$7, level=$8, duration_hours=$9, is_published=$10, total_tests=COALESCE($11, total_tests), subject=COALESCE($12, subject), course_type=COALESCE($13, course_type), start_date=COALESCE($14, start_date), end_date=COALESCE($15, end_date), thumbnail=COALESCE($16, thumbnail), cover_color=COALESCE($17, cover_color) WHERE id=$18`,
-        [title, description, teacherName, price, originalPrice, category, isFree, level, durationHours, isPublished, totalTests, subject, courseType, startDate, endDate, thumbnail ?? null, coverColor ?? null, req.params.id]
+        `UPDATE courses SET title=$1, description=$2, teacher_name=$3, price=$4, original_price=$5, category=$6, is_free=$7, level=$8, duration_hours=$9, is_published=$10, total_tests=COALESCE($11, total_tests), subject=COALESCE($12, subject), course_type=COALESCE($13, course_type), start_date=COALESCE($14, start_date), end_date=COALESCE($15, end_date), validity_months=COALESCE($16, validity_months), thumbnail=COALESCE($17, thumbnail), cover_color=COALESCE($18, cover_color) WHERE id=$19`,
+        [title, description, teacherName, price, originalPrice, category, isFree, level, durationHours, isPublished, totalTests, subject, courseType, startDate, endDate, vm, thumbnail ?? null, coverColor ?? null, req.params.id]
       );
       cacheInvalidate2("courses:");
       res.json({ success: true });
@@ -2527,6 +2720,11 @@ function registerAdminCourseCrudRoutes({
     }
   });
 }
+var init_admin_course_crud_routes = __esm({
+  "server/admin-course-crud-routes.ts"() {
+    "use strict";
+  }
+});
 
 // server/book-routes.ts
 function registerBookRoutes({
@@ -2695,6 +2893,11 @@ function registerBookRoutes({
     }
   });
 }
+var init_book_routes = __esm({
+  "server/book-routes.ts"() {
+    "use strict";
+  }
+});
 
 // server/standalone-folder-routes.ts
 function registerStandaloneFolderRoutes({
@@ -2777,6 +2980,11 @@ function registerStandaloneFolderRoutes({
     }
   });
 }
+var init_standalone_folder_routes = __esm({
+  "server/standalone-folder-routes.ts"() {
+    "use strict";
+  }
+});
 
 // server/doubt-notification-routes.ts
 function registerDoubtNotificationRoutes({
@@ -2840,6 +3048,11 @@ function registerDoubtNotificationRoutes({
     }
   });
 }
+var init_doubt_notification_routes = __esm({
+  "server/doubt-notification-routes.ts"() {
+    "use strict";
+  }
+});
 
 // server/student-mission-material-routes.ts
 function registerStudentMissionMaterialRoutes({
@@ -2950,12 +3163,32 @@ function registerStudentMissionMaterialRoutes({
     try {
       const result = await db2.query("SELECT * FROM study_materials WHERE id = $1", [req.params.id]);
       if (result.rows.length === 0) return res.status(404).json({ message: "Material not found" });
+      const m = result.rows[0];
+      if (m.course_id) {
+        const user = await getAuthUser2(req);
+        if (!user) return res.status(401).json({ message: "Not authenticated" });
+        if (user.role !== "admin" && !m.is_free) {
+          const e = await db2.query(
+            "SELECT * FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)",
+            [user.id, m.course_id]
+          );
+          if (e.rows.length === 0 || isEnrollmentExpired(e.rows[0])) {
+            return res.status(403).json({ message: "Access denied" });
+          }
+        }
+      }
       res.json(result.rows[0]);
     } catch {
       res.status(500).json({ message: "Failed to fetch material" });
     }
   });
 }
+var init_student_mission_material_routes = __esm({
+  "server/student-mission-material-routes.ts"() {
+    "use strict";
+    init_course_access_utils();
+  }
+});
 
 // server/lecture-routes.ts
 function registerLectureRoutes({
@@ -2979,8 +3212,8 @@ function registerLectureRoutes({
       const lecture = result.rows[0];
       if (user.role !== "admin" && !lecture.is_free_preview) {
         if (lecture.course_id) {
-          const enrolled = await db2.query("SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [user.id, lecture.course_id]);
-          if (enrolled.rows.length === 0) {
+          const enrolled = await db2.query("SELECT * FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [user.id, lecture.course_id]);
+          if (enrolled.rows.length === 0 || isEnrollmentExpired(enrolled.rows[0])) {
             return res.status(403).json({ message: "Enrollment required to access this lecture" });
           }
         }
@@ -3022,6 +3255,12 @@ function registerLectureRoutes({
     }
   });
 }
+var init_lecture_routes = __esm({
+  "server/lecture-routes.ts"() {
+    "use strict";
+    init_course_access_utils();
+  }
+});
 
 // server/test-folder-routes.ts
 function registerTestFolderRoutes({
@@ -3091,6 +3330,43 @@ function registerTestFolderRoutes({
     }
   });
 }
+var init_test_folder_routes = __esm({
+  "server/test-folder-routes.ts"() {
+    "use strict";
+  }
+});
+
+// server/test-access-guards.ts
+async function assertTestAccess(db2, user, test, testId) {
+  if (user.role === "admin") return { ok: true };
+  if (test.course_id) {
+    if (test.course_is_free) return { ok: true };
+    const enrolled = await db2.query(
+      "SELECT * FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)",
+      [user.id, test.course_id]
+    );
+    if (enrolled.rows.length === 0 || isEnrollmentExpired(enrolled.rows[0])) {
+      return { ok: false, message: "Enrollment required for this test" };
+    }
+    return { ok: true };
+  }
+  if (test.mini_course_id && !test.folder_is_free) {
+    const purchased = await db2.query("SELECT id FROM folder_purchases WHERE user_id = $1 AND folder_id = $2", [user.id, test.mini_course_id]);
+    if (purchased.rows.length === 0) return { ok: false, message: "Purchase required to access this test" };
+    return { ok: true };
+  }
+  if (test.price && parseFloat(String(test.price)) > 0) {
+    const purchased = await db2.query("SELECT id FROM test_purchases WHERE user_id = $1 AND test_id = $2", [user.id, testId]);
+    if (purchased.rows.length === 0) return { ok: false, message: "Purchase required to access this test" };
+  }
+  return { ok: true };
+}
+var init_test_access_guards = __esm({
+  "server/test-access-guards.ts"() {
+    "use strict";
+    init_course_access_utils();
+  }
+});
 
 // server/test-core-routes.ts
 function registerTestCoreRoutes({
@@ -3119,11 +3395,14 @@ function registerTestCoreRoutes({
       const result = await db2.query(query, params);
       let tests = result.rows;
       if (user) {
-        const enrollResult = await db2.query("SELECT course_id FROM enrollments WHERE user_id = $1", [user.id]);
-        const enrolledIds = new Set(enrollResult.rows.map((e) => Number(e.course_id)));
+        const enrollResult = await db2.query("SELECT course_id, valid_until FROM enrollments WHERE user_id = $1", [user.id]);
+        const courseUnlocked = /* @__PURE__ */ new Set();
+        for (const e of enrollResult.rows) {
+          if (!isEnrollmentExpired(e)) courseUnlocked.add(Number(e.course_id));
+        }
         tests = tests.map((t) => ({
           ...t,
-          isLocked: t.course_id && !t.course_is_free && !enrolledIds.has(Number(t.course_id))
+          isLocked: !!(t.course_id && !t.course_is_free && !courseUnlocked.has(Number(t.course_id)))
         }));
       } else {
         tests = tests.map((t) => ({
@@ -3133,7 +3412,8 @@ function registerTestCoreRoutes({
       }
       res.set("Cache-Control", "private, no-store");
       res.json(tests);
-    } catch {
+    } catch (err) {
+      console.error("[api/tests] list error:", err);
       res.status(500).json({ message: "Failed to fetch tests" });
     }
   });
@@ -3152,22 +3432,8 @@ function registerTestCoreRoutes({
       if (testResult.rows.length === 0) return res.status(404).json({ message: "Test not found" });
       const test = testResult.rows[0];
       if (user.role !== "admin") {
-        if (test.course_id) {
-          const enrolled = await db2.query("SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [user.id, test.course_id]);
-          if (enrolled.rows.length === 0) {
-            return res.status(403).json({ message: "Enrollment required to access this test" });
-          }
-        } else if (test.mini_course_id && !test.folder_is_free) {
-          const purchased = await db2.query("SELECT id FROM folder_purchases WHERE user_id = $1 AND folder_id = $2", [user.id, test.mini_course_id]);
-          if (purchased.rows.length === 0) {
-            return res.status(403).json({ message: "Purchase required to access this test" });
-          }
-        } else if (test.price && parseFloat(test.price) > 0) {
-          const purchased = await db2.query("SELECT id FROM test_purchases WHERE user_id = $1 AND test_id = $2", [user.id, req.params.id]);
-          if (purchased.rows.length === 0) {
-            return res.status(403).json({ message: "Purchase required to access this test" });
-          }
-        }
+        const a = await assertTestAccess(db2, user, test, String(req.params.id));
+        if (!a.ok) return res.status(403).json({ message: a.message });
       }
       const questionsResult = await db2.query("SELECT * FROM questions WHERE test_id = $1 ORDER BY order_index", [req.params.id]);
       res.json({ ...test, questions: questionsResult.rows });
@@ -3193,18 +3459,8 @@ function registerTestCoreRoutes({
       if (testResult.rows.length === 0) return res.status(404).json({ message: "Test not found" });
       const test = testResult.rows[0];
       if (user.role !== "admin") {
-        if (test.course_id) {
-          const enrolled = await db2.query("SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [user.id, test.course_id]);
-          if (enrolled.rows.length === 0) return res.status(403).json({ message: "Enrollment required to attempt this test" });
-        } else if (test.mini_course_id) {
-          if (!test.folder_is_free) {
-            const purchased = await db2.query("SELECT id FROM folder_purchases WHERE user_id = $1 AND folder_id = $2", [user.id, test.mini_course_id]);
-            if (purchased.rows.length === 0) return res.status(403).json({ message: "Purchase required to attempt this test" });
-          }
-        } else if (test.price && parseFloat(test.price) > 0) {
-          const purchased = await db2.query("SELECT id FROM test_purchases WHERE user_id = $1 AND test_id = $2", [user.id, req.params.id]);
-          if (purchased.rows.length === 0) return res.status(403).json({ message: "Purchase required to attempt this test" });
-        }
+        const a = await assertTestAccess(db2, user, test, String(req.params.id));
+        if (!a.ok) return res.status(403).json({ message: a.message });
       }
       const questionsResult = await db2.query("SELECT * FROM questions WHERE test_id = $1", [req.params.id]);
       const questions = questionsResult.rows;
@@ -3280,6 +3536,13 @@ function registerTestCoreRoutes({
     }
   });
 }
+var init_test_core_routes = __esm({
+  "server/test-core-routes.ts"() {
+    "use strict";
+    init_test_access_guards();
+    init_course_access_utils();
+  }
+});
 
 // server/test-attempt-routes.ts
 function registerTestAttemptRoutes({
@@ -3417,6 +3680,25 @@ function registerTestAttemptRoutes({
   });
   app2.get("/api/tests/:id/leaderboard", async (req, res) => {
     try {
+      const testResult = await db2.query(
+        `SELECT t.*, c.is_free AS course_is_free, sf.is_free AS folder_is_free
+         FROM tests t
+         LEFT JOIN courses c ON t.course_id = c.id
+         LEFT JOIN standalone_folders sf ON t.mini_course_id = sf.id
+         WHERE t.id = $1`,
+        [req.params.id]
+      );
+      if (testResult.rows.length === 0) return res.status(404).json({ message: "Test not found" });
+      const test = testResult.rows[0];
+      const user = await getAuthUser2(req);
+      if (user?.role !== "admin") {
+        const needsGate = !!test.course_id || !!test.mini_course_id && !test.folder_is_free || test.price && parseFloat(String(test.price)) > 0;
+        if (needsGate) {
+          if (!user) return res.status(401).json({ message: "Not authenticated" });
+          const a = await assertTestAccess(db2, user, test, String(req.params.id));
+          if (!a.ok) return res.status(403).json({ message: a.message });
+        }
+      }
       const result = await db2.query(
         `SELECT DISTINCT ON (ta.user_id)
            ta.score, ta.percentage, ta.time_taken_seconds, u.name, u.id as user_id
@@ -3519,6 +3801,12 @@ function registerTestAttemptRoutes({
     }
   });
 }
+var init_test_attempt_routes = __esm({
+  "server/test-attempt-routes.ts"() {
+    "use strict";
+    init_test_access_guards();
+  }
+});
 
 // server/live-class-routes.ts
 function registerLiveClassRoutes({
@@ -3542,19 +3830,27 @@ function registerLiveClassRoutes({
         const result2 = await db2.query("SELECT lc.*, c.title as course_title FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id ORDER BY lc.scheduled_at DESC");
         return res.json(result2.rows);
       }
+      const ex23 = sqlEnrollmentExistsForLiveList(2, 3);
+      const now = Date.now();
       if (cid && user) {
         const result2 = await db2.query(
           `SELECT lc.*, c.title as course_title, c.is_free as course_is_free,
-            EXISTS(SELECT 1 FROM enrollments e WHERE e.course_id = lc.course_id AND e.user_id = $2 AND (e.status = 'active' OR e.status IS NULL)) as is_enrolled
+            ${ex23} as is_enrolled
            FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
            WHERE (lc.course_id = $1 OR lc.course_id IS NULL)
            AND (
              (lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE)
-             OR (lc.is_live = TRUE AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE OR lc.course_id IS NULL OR EXISTS (SELECT 1 FROM enrollments e WHERE e.course_id = lc.course_id AND e.user_id = $2 AND (e.status = 'active' OR e.status IS NULL))))
-             OR (lc.is_completed = TRUE AND (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL) AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE OR lc.course_id IS NULL OR EXISTS (SELECT 1 FROM enrollments e WHERE e.course_id = lc.course_id AND e.user_id = $2 AND (e.status = 'active' OR e.status IS NULL))))
+             OR (lc.is_live = TRUE AND (
+                 (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
+                 OR (lc.course_id = $1 AND (lc.is_free_preview = TRUE OR ${ex23}))
+             ))
+             OR (lc.is_completed = TRUE AND (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL) AND (
+                 (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
+                 OR (lc.course_id = $1 AND (lc.is_free_preview = TRUE OR ${ex23}))
+             ))
            )
            ORDER BY lc.scheduled_at DESC`,
-          [cid, user.id]
+          [cid, user.id, now]
         );
         return res.json(result2.rows);
       }
@@ -3565,26 +3861,39 @@ function registerLiveClassRoutes({
            WHERE (lc.course_id = $1 OR lc.course_id IS NULL)
            AND (
              (lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE)
-             OR (lc.is_live = TRUE AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE OR lc.course_id IS NULL))
-             OR (lc.is_completed = TRUE AND (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL) AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE OR lc.course_id IS NULL))
+             OR (lc.is_live = TRUE AND (
+                 (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
+                 OR (lc.course_id = $1 AND lc.is_free_preview = TRUE)
+             ))
+             OR (lc.is_completed = TRUE AND (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL) AND (
+                 (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
+                 OR (lc.course_id = $1 AND lc.is_free_preview = TRUE)
+             ))
            )
            ORDER BY lc.scheduled_at DESC`,
           [cid]
         );
         return res.json(result2.rows);
       }
+      const ex12 = sqlEnrollmentExistsForLiveList(1, 2);
       if (user) {
         const result2 = await db2.query(
           `SELECT lc.*, c.title as course_title, c.is_free as course_is_free,
-            EXISTS(SELECT 1 FROM enrollments e WHERE e.course_id = lc.course_id AND e.user_id = $1 AND (e.status = 'active' OR e.status IS NULL)) as is_enrolled
+            ${ex12} as is_enrolled
            FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
            WHERE (
              (lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE)
-             OR (lc.is_live = TRUE AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE OR lc.course_id IS NULL OR EXISTS (SELECT 1 FROM enrollments e WHERE e.course_id = lc.course_id AND e.user_id = $1 AND (e.status = 'active' OR e.status IS NULL))))
-             OR (lc.is_completed = TRUE AND (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL) AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE OR lc.course_id IS NULL OR EXISTS (SELECT 1 FROM enrollments e WHERE e.course_id = lc.course_id AND e.user_id = $1 AND (e.status = 'active' OR e.status IS NULL))))
+             OR (lc.is_live = TRUE AND (
+                 (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
+                 OR (lc.course_id IS NOT NULL AND (lc.is_free_preview = TRUE OR ${ex12}))
+             ))
+             OR (lc.is_completed = TRUE AND (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL) AND (
+                 (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
+                 OR (lc.course_id IS NOT NULL AND (lc.is_free_preview = TRUE OR ${ex12}))
+             ))
            )
            ORDER BY lc.scheduled_at DESC`,
-          [user.id]
+          [user.id, now]
         );
         return res.json(result2.rows);
       }
@@ -3593,14 +3902,21 @@ function registerLiveClassRoutes({
          FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
          WHERE (
            (lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE)
-           OR (lc.is_live = TRUE AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE OR lc.course_id IS NULL))
-           OR (lc.is_completed = TRUE AND (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL) AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE OR lc.course_id IS NULL))
+           OR (lc.is_live = TRUE AND (
+                (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
+                OR (lc.course_id IS NOT NULL AND lc.is_free_preview = TRUE)
+           ))
+           OR (lc.is_completed = TRUE AND (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL) AND (
+                (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
+                OR (lc.course_id IS NOT NULL AND lc.is_free_preview = TRUE)
+           ))
          )
          ORDER BY lc.scheduled_at DESC`
       );
       res.json(result.rows);
-    } catch {
-      res.status(500).json({ message: "Failed to fetch live classes" });
+    } catch (err) {
+      console.error("[LiveClasses] list error:", err);
+      res.json([]);
     }
   });
   app2.get("/api/upcoming-classes", async (_req, res) => {
@@ -3619,7 +3935,7 @@ function registerLiveClassRoutes({
       res.json(result.rows);
     } catch (err) {
       console.error("[UpcomingClasses] error:", err);
-      res.status(500).json({ message: "Failed to fetch upcoming classes" });
+      res.json([]);
     }
   });
   app2.get("/api/live-classes/:id", async (req, res) => {
@@ -3630,16 +3946,23 @@ function registerLiveClassRoutes({
       const lc = result.rows[0];
       let isEnrolled = false;
       if (user && lc.course_id) {
-        const enroll = await db2.query("SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [user.id, lc.course_id]);
-        isEnrolled = enroll.rows.length > 0;
+        const enroll = await db2.query("SELECT * FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [user.id, lc.course_id]);
+        isEnrolled = enroll.rows.length > 0 && !isEnrollmentExpired(enroll.rows[0]);
       }
-      const hasAccess = !lc.course_id || lc.is_public || lc.is_free_preview || isEnrolled || user?.role === "admin";
+      const hasAccess = await userCanAccessLiveClassContent(db2, user, lc);
       res.json({ ...lc, is_enrolled: isEnrolled, has_access: hasAccess });
     } catch {
       res.status(500).json({ message: "Failed to fetch live class" });
     }
   });
 }
+var init_live_class_routes = __esm({
+  "server/live-class-routes.ts"() {
+    "use strict";
+    init_course_access_utils();
+    init_live_class_access();
+  }
+});
 
 // server/admin-live-class-manage-routes.ts
 function registerAdminLiveClassManageRoutes({
@@ -3867,6 +4190,11 @@ function registerAdminLiveClassManageRoutes({
     }
   });
 }
+var init_admin_live_class_manage_routes = __esm({
+  "server/admin-live-class-manage-routes.ts"() {
+    "use strict";
+  }
+});
 
 // server/course-access-routes.ts
 function registerCourseAccessRoutes({
@@ -3959,14 +4287,24 @@ function registerCourseAccessRoutes({
       const courseResult = await db2.query("SELECT * FROM courses WHERE id = $1", [req.params.id]);
       if (courseResult.rows.length === 0) return res.status(404).json({ message: "Course not found" });
       const course = courseResult.rows[0];
+      const endTs = course.end_date != null && String(course.end_date).trim() !== "" ? Date.parse(String(course.end_date).trim()) : null;
+      if (Number.isFinite(endTs) && endTs < Date.now()) {
+        course.courseEnded = true;
+      } else {
+        course.courseEnded = false;
+      }
       const lecturesResult = await db2.query("SELECT * FROM lectures WHERE course_id = $1 ORDER BY order_index", [req.params.id]);
       const testsResult = await db2.query("SELECT * FROM tests WHERE course_id = $1 AND is_published = TRUE", [req.params.id]);
       const materialsResult = await db2.query("SELECT * FROM study_materials WHERE course_id = $1", [req.params.id]);
       if (user) {
         const enroll = await db2.query("SELECT * FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [user.id, req.params.id]);
-        course.isEnrolled = enroll.rows.length > 0;
-        course.progress = enroll.rows[0]?.progress_percent || 0;
-        course.lastLectureId = enroll.rows[0]?.last_lecture_id;
+        const row = enroll.rows[0];
+        const accessExpired = row && isEnrollmentExpired(row);
+        course.isEnrolled = enroll.rows.length > 0 && !accessExpired;
+        course.accessExpired = accessExpired || false;
+        course.enrollmentValidUntil = row && row.valid_until != null ? row.valid_until : null;
+        course.progress = row && !accessExpired ? row?.progress_percent || 0 : 0;
+        course.lastLectureId = row && !accessExpired ? row?.last_lecture_id : null;
         if (course.isEnrolled) {
           const lpResult = await db2.query("SELECT * FROM lecture_progress WHERE user_id = $1", [user.id]);
           const lpMap = {};
@@ -4017,9 +4355,10 @@ function registerCourseAccessRoutes({
         }
       }
       if (!user) return res.status(401).json({ message: "Not authenticated" });
-      const courseResult = await db2.query("SELECT id, is_free FROM courses WHERE id = $1", [req.params.id]);
+      const courseResult = await db2.query("SELECT * FROM courses WHERE id = $1", [req.params.id]);
       if (courseResult.rows.length === 0) return res.status(404).json({ message: "Course not found" });
-      if (!courseResult.rows[0].is_free && !isAdminGrant) return res.status(403).json({ message: "This course requires payment" });
+      const courseRow = courseResult.rows[0];
+      if (!courseRow.is_free && !isAdminGrant) return res.status(403).json({ message: "This course requires payment" });
       const existing = await db2.query("SELECT id, status FROM enrollments WHERE user_id = $1 AND course_id = $2", [user.id, req.params.id]);
       if (existing.rows.length > 0) {
         if (existing.rows[0].status === "inactive" && isAdminGrant) {
@@ -4028,7 +4367,9 @@ function registerCourseAccessRoutes({
         }
         return res.json({ success: true, alreadyEnrolled: true });
       }
-      await db2.query("INSERT INTO enrollments (user_id, course_id, enrolled_at) VALUES ($1, $2, $3)", [user.id, req.params.id, Date.now()]);
+      const at = Date.now();
+      const vu = computeEnrollmentValidUntil(courseRow, at);
+      await db2.query("INSERT INTO enrollments (user_id, course_id, enrolled_at, valid_until) VALUES ($1, $2, $3, $4)", [user.id, req.params.id, at, vu]);
       await db2.query("UPDATE courses SET total_students = COALESCE(total_students, 0) + 1 WHERE id = $1", [req.params.id]);
       cacheInvalidate2("courses:");
       res.json({ success: true });
@@ -4262,6 +4603,12 @@ function registerCourseAccessRoutes({
     }
   });
 }
+var init_course_access_routes = __esm({
+  "server/course-access-routes.ts"() {
+    "use strict";
+    init_course_access_utils();
+  }
+});
 
 // server/upload-routes.ts
 function registerUploadRoutes({
@@ -4367,6 +4714,11 @@ function registerUploadRoutes({
     }
   });
 }
+var init_upload_routes = __esm({
+  "server/upload-routes.ts"() {
+    "use strict";
+  }
+});
 
 // server/media-stream-routes.ts
 function registerMediaStreamRoutes({
@@ -4399,16 +4751,16 @@ function registerMediaStreamRoutes({
         if (matResult.rows.length > 0) {
           const mat = matResult.rows[0];
           if (mat.course_id && !mat.is_free) {
-            const enrolled = await db2.query("SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [userId, mat.course_id]);
-            if (enrolled.rows.length === 0) return res.status(403).json({ message: "Enrollment required" });
+            const enrolled = await db2.query("SELECT * FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [userId, mat.course_id]);
+            if (enrolled.rows.length === 0 || isEnrollmentExpired(enrolled.rows[0])) return res.status(403).json({ message: "Enrollment required" });
           }
         } else {
           const lecResult = await db2.query("SELECT course_id, is_free_preview FROM lectures WHERE video_url LIKE $1 OR pdf_url LIKE $1", [`%${key}%`]);
           if (lecResult.rows.length > 0) {
             const lec = lecResult.rows[0];
             if (lec.course_id && !lec.is_free_preview) {
-              const enrolled = await db2.query("SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [userId, lec.course_id]);
-              if (enrolled.rows.length === 0) return res.status(403).json({ message: "Enrollment required" });
+              const enrolled = await db2.query("SELECT * FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [userId, lec.course_id]);
+              if (enrolled.rows.length === 0 || isEnrollmentExpired(enrolled.rows[0])) return res.status(403).json({ message: "Enrollment required" });
             }
           }
         }
@@ -4462,31 +4814,22 @@ function registerMediaStreamRoutes({
     }
   });
 }
+var init_media_stream_routes = __esm({
+  "server/media-stream-routes.ts"() {
+    "use strict";
+    init_course_access_utils();
+  }
+});
 
 // server/routes.ts
-var require3 = createRequire2(import.meta.url);
-var { PDFParse } = require3("pdf-parse");
-var upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
-var uploadLarge = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } });
-var databaseUrl = process.env.DATABASE_URL;
-if (!databaseUrl) {
-  throw new Error("DATABASE_URL must be set");
-}
-var pool = new Pool({
-  connectionString: databaseUrl,
-  ssl: {
-    rejectUnauthorized: false
-  },
-  max: 10,
-  min: 1,
-  connectionTimeoutMillis: 1e4,
-  idleTimeoutMillis: 1e4,
-  // release idle connections quickly (Neon closes them anyway)
-  statement_timeout: 25e3
+var routes_exports = {};
+__export(routes_exports, {
+  registerRoutes: () => registerRoutes
 });
-pool.on("error", (err) => {
-  console.error("[Pool] Idle client error (connection dropped by Neon):", err.message);
-});
+import { createServer } from "node:http";
+import { Pool } from "pg";
+import multer from "multer";
+import { createRequire as createRequire2 } from "module";
 async function dbQuery(text, params) {
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
@@ -4502,21 +4845,11 @@ async function dbQuery(text, params) {
     }
   }
 }
-var db = {
-  query: (text, params) => dbQuery(text, params)
-};
-var cache = /* @__PURE__ */ new Map();
 function cacheInvalidate(pattern) {
   for (const key of cache.keys()) {
     if (key.startsWith(pattern)) cache.delete(key);
   }
 }
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, entry] of cache.entries()) {
-    if (now > entry.expiresAt) cache.delete(key);
-  }
-}, 5 * 60 * 1e3);
 function generateOTP() {
   return Math.floor(1e5 + Math.random() * 9e5).toString();
 }
@@ -4585,8 +4918,6 @@ async function sendOTPviaSMS(phone, otp) {
   }
   return false;
 }
-var ADMIN_EMAILS = ["3ilearningofficial@gmail.com"];
-var ADMIN_PHONES = ["9997198068"];
 async function updateCourseTestCounts(courseId) {
   const id = String(courseId);
   await db.query(`
@@ -4684,6 +5015,29 @@ For "${question.slice(0, 50)}...", the key is to understand the underlying mathe
   return answers.default;
 }
 async function registerRoutes(app2) {
+  try {
+    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_free BOOLEAN DEFAULT FALSE");
+    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS original_price DECIMAL(10, 2) DEFAULT 0");
+    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS validity_months NUMERIC(8, 2) DEFAULT NULL");
+    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_published BOOLEAN DEFAULT TRUE");
+    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS course_type TEXT DEFAULT 'live'");
+    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS subject TEXT DEFAULT ''");
+    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS start_date TEXT");
+    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS end_date TEXT");
+    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS total_students INTEGER DEFAULT 0");
+    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS total_materials INTEGER DEFAULT 0").catch(() => {
+    });
+    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS pyq_count INTEGER DEFAULT 0");
+    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS mock_count INTEGER DEFAULT 0");
+    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS practice_count INTEGER DEFAULT 0");
+    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS thumbnail TEXT");
+    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS cover_color TEXT");
+    await db.query("ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active'");
+    await db.query("ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS valid_until BIGINT");
+    console.log("[DB] courses + enrollments columns ensured (admin + live APIs)");
+  } catch (err) {
+    console.error("[DB] CRITICAL: could not ensure course/enrollment columns. Run SQL in Neon (same branch as DATABASE_URL). Error:", err);
+  }
   const allowRuntimeSchemaSync = process.env.ALLOW_RUNTIME_SCHEMA_SYNC === "true";
   if (allowRuntimeSchemaSync) {
     try {
@@ -4709,6 +5063,7 @@ async function registerRoutes(app2) {
         teacher_name TEXT NOT NULL DEFAULT '3i Learning',
         price DECIMAL(10, 2) DEFAULT 0,
         original_price DECIMAL(10, 2) DEFAULT 0,
+        validity_months NUMERIC(8, 2) DEFAULT NULL,
         category TEXT DEFAULT 'Mathematics',
         thumbnail TEXT,
         is_free BOOLEAN DEFAULT FALSE,
@@ -4970,6 +5325,10 @@ async function registerRoutes(app2) {
       await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active_at BIGINT");
       await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT");
       await db.query("ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active'");
+      await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_free BOOLEAN DEFAULT FALSE");
+      await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS original_price DECIMAL(10, 2) DEFAULT 0");
+      await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS validity_months NUMERIC(8, 2) DEFAULT NULL");
+      await db.query("ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS valid_until BIGINT");
       await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_published BOOLEAN DEFAULT TRUE");
       await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS course_type TEXT DEFAULT 'live'");
       await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS subject TEXT DEFAULT ''");
@@ -5671,8 +6030,94 @@ async function registerRoutes(app2) {
   const httpServer = createServer(app2);
   return httpServer;
 }
+var require3, PDFParse, upload, uploadLarge, databaseUrl, pool, db, cache, ADMIN_EMAILS, ADMIN_PHONES;
+var init_routes = __esm({
+  "server/routes.ts"() {
+    "use strict";
+    init_firebase();
+    init_razorpay();
+    init_security_utils();
+    init_auth_utils();
+    init_auth_routes();
+    init_pdf_routes();
+    init_payment_routes();
+    init_support_routes();
+    init_live_chat_routes();
+    init_live_class_engagement_routes();
+    init_live_stream_routes();
+    init_site_settings_routes();
+    init_admin_course_import_routes();
+    init_admin_course_management_routes();
+    init_admin_analytics_routes();
+    init_admin_enrollment_routes();
+    init_admin_lecture_routes();
+    init_admin_test_routes();
+    init_admin_question_bulk_routes();
+    init_admin_users_and_content_routes();
+    init_admin_test_management_routes();
+    init_admin_daily_mission_routes();
+    init_admin_notification_routes();
+    init_admin_course_crud_routes();
+    init_book_routes();
+    init_standalone_folder_routes();
+    init_doubt_notification_routes();
+    init_student_mission_material_routes();
+    init_lecture_routes();
+    init_test_folder_routes();
+    init_test_core_routes();
+    init_test_attempt_routes();
+    init_live_class_routes();
+    init_admin_live_class_manage_routes();
+    init_course_access_routes();
+    init_upload_routes();
+    init_media_stream_routes();
+    require3 = createRequire2(import.meta.url);
+    ({ PDFParse } = require3("pdf-parse"));
+    upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+    uploadLarge = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } });
+    databaseUrl = process.env.DATABASE_URL;
+    if (!databaseUrl) {
+      throw new Error("DATABASE_URL must be set");
+    }
+    pool = new Pool({
+      connectionString: databaseUrl,
+      ssl: {
+        rejectUnauthorized: false
+      },
+      max: 10,
+      min: 1,
+      connectionTimeoutMillis: 1e4,
+      idleTimeoutMillis: 1e4,
+      // release idle connections quickly (Neon closes them anyway)
+      statement_timeout: 25e3
+    });
+    pool.on("error", (err) => {
+      console.error("[Pool] Idle client error (connection dropped by Neon):", err.message);
+    });
+    db = {
+      query: (text, params) => dbQuery(text, params)
+    };
+    cache = /* @__PURE__ */ new Map();
+    setInterval(() => {
+      const now = Date.now();
+      for (const [key, entry] of cache.entries()) {
+        if (now > entry.expiresAt) cache.delete(key);
+      }
+    }, 5 * 60 * 1e3);
+    ADMIN_EMAILS = ["3ilearningofficial@gmail.com"];
+    ADMIN_PHONES = ["9997198068"];
+  }
+});
 
 // server/index.ts
+import dotenv from "dotenv";
+import * as path from "path";
+import express from "express";
+import session from "express-session";
+import connectPgSimple from "connect-pg-simple";
+import rateLimit from "express-rate-limit";
+import { ipKeyGenerator } from "express-rate-limit";
+import compression from "compression";
 import * as fs from "fs";
 import cors from "cors";
 dotenv.config({
@@ -5681,17 +6126,38 @@ dotenv.config({
 var app = express();
 var log = console.log;
 function setupCors(app2) {
+  const normalizeOrigin = (value) => {
+    const trimmed = value.trim();
+    if (!trimmed) return "";
+    try {
+      return new URL(trimmed).origin.toLowerCase();
+    } catch {
+      return trimmed.replace(/\/+$/, "").toLowerCase();
+    }
+  };
+  const originMatchesPattern = (origin, pattern) => {
+    if (!pattern.includes("*")) return origin === pattern;
+    const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+    return new RegExp(`^${escaped}$`, "i").test(origin);
+  };
   const defaultAllowedOrigins = [
     "https://3ilearning.in",
     // Keep www variant for compatibility.
     "https://www.3ilearning.in"
   ];
-  const envOrigins = (process.env.CORS_ORIGINS || "").split(",").map((s) => s.trim()).filter(Boolean);
-  const allowedOrigins = /* @__PURE__ */ new Set([...defaultAllowedOrigins, ...envOrigins]);
+  const envOrigins = (process.env.CORS_ORIGINS || "").split(",").map((s) => normalizeOrigin(s)).filter(Boolean);
+  const allowedOriginPatterns = [
+    ...defaultAllowedOrigins.map((origin) => normalizeOrigin(origin)),
+    ...envOrigins
+  ];
   const corsOptions = {
     origin(origin, callback) {
       if (!origin) return callback(null, true);
-      if (allowedOrigins.has(origin)) return callback(null, true);
+      const normalizedOrigin = normalizeOrigin(origin);
+      if (allowedOriginPatterns.some((pattern) => originMatchesPattern(normalizedOrigin, pattern))) {
+        return callback(null, true);
+      }
+      console.warn(`[CORS] blocked origin: ${origin}`);
       return callback(new Error("Not allowed by CORS"));
     },
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
@@ -5854,6 +6320,7 @@ function setupErrorHandler(app2) {
   });
 }
 (async () => {
+  const { registerRoutes: registerRoutes2 } = await Promise.resolve().then(() => (init_routes(), routes_exports));
   setupCors(app);
   setupBodyParsing(app);
   setupApiResponseFormat(app);
@@ -5861,9 +6328,15 @@ function setupErrorHandler(app2) {
   setupRequestLogging(app);
   const isProduction = process.env.NODE_ENV === "production";
   app.set("trust proxy", 1);
-  app.use((_req, res, next) => {
+  app.use((req, res, next) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
-    res.setHeader("X-Frame-Options", "SAMEORIGIN");
+    const p = req.path || "";
+    const allowEmbed = p.startsWith("/api/pdf-viewer") || p.startsWith("/api/media");
+    if (allowEmbed) {
+      res.setHeader("Content-Security-Policy", "frame-ancestors *");
+    } else {
+      res.setHeader("X-Frame-Options", "SAMEORIGIN");
+    }
     res.setHeader("X-XSS-Protection", "1; mode=block");
     res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
     if (isProduction) {
@@ -5902,7 +6375,7 @@ function setupErrorHandler(app2) {
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req) => {
-      return `${req.ip}:${req.body?.identifier || "global"}`;
+      return `${ipKeyGenerator(req.ip || "")}:${req.body?.identifier || "global"}`;
     }
   });
   const otpVerifyLimiter = rateLimit({
@@ -5912,7 +6385,7 @@ function setupErrorHandler(app2) {
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req) => {
-      return `${req.ip}:${req.body?.identifier || "global"}`;
+      return `${ipKeyGenerator(req.ip || "")}:${req.body?.identifier || "global"}`;
     }
   });
   app.use("/api/auth/send-otp", otpSendLimiter);
@@ -5927,7 +6400,7 @@ function setupErrorHandler(app2) {
     skip: (req) => req.path.startsWith("/api/auth/send-otp") || req.path.startsWith("/api/auth/verify-otp")
   });
   app.use("/api", globalApiLimiter);
-  const server = await registerRoutes(app);
+  const server = await registerRoutes2(app);
   app.get("/firebase-phone-auth", (_req, res) => {
     const firebaseAuthPath = path.resolve(process.cwd(), "server", "templates", "firebase-phone-auth.html");
     if (fs.existsSync(firebaseAuthPath)) {

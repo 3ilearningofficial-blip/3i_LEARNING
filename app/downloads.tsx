@@ -40,8 +40,8 @@ export default function DownloadsScreen() {
     gcTime: 0,
   });
 
-  const lectures = data?.lectures || [];
-  const materials = data?.materials || [];
+  const lectures = Array.isArray(data?.lectures) ? data.lectures : [];
+  const materials = Array.isArray(data?.materials) ? data.materials : [];
 
   // Calculate total storage used
   useEffect(() => {

@@ -275,9 +275,14 @@ export function registerCourseAccessRoutes({
         [user.id, Date.now()]
       );
 
-      res.json({ materials: materialsResult.rows, lectures: lecturesResult.rows });
-    } catch {
-      res.status(500).json({ message: "Failed to fetch downloads" });
+      res.json({
+        materials: Array.isArray(materialsResult.rows) ? materialsResult.rows : [],
+        lectures: Array.isArray(lecturesResult.rows) ? lecturesResult.rows : [],
+      });
+    } catch (err) {
+      console.error("[Downloads] fetch error:", err);
+      // Keep downloads screen resilient instead of surfacing a hard 500 to clients.
+      res.json({ materials: [], lectures: [] });
     }
   });
 
