@@ -26,6 +26,77 @@ export function registerPaymentRoutes({
   verifyPaymentSignature,
   cacheInvalidate,
 }: RegisterPaymentRoutesDeps): void {
+  const completeCoursePaymentByOrder = async ({
+    orderId,
+    paymentId,
+    signature,
+    expectedUserId,
+    expectedCourseId,
+  }: {
+    orderId: string;
+    paymentId: string;
+    signature: string;
+    expectedUserId?: number;
+    expectedCourseId?: number;
+  }) => {
+    const isValid = verifyPaymentSignature(orderId, paymentId, signature);
+    if (!isValid) {
+      throw new Error("Invalid payment signature");
+    }
+
+    const paymentRecord = await db.query(
+      "SELECT * FROM payments WHERE razorpay_order_id = $1",
+      [orderId]
+    );
+    if (paymentRecord.rows.length === 0) {
+      throw new Error("Payment order not found");
+    }
+
+    const paymentRow = paymentRecord.rows[0];
+    if (expectedUserId && paymentRow.user_id !== expectedUserId) {
+      throw new Error("Payment does not belong to this user");
+    }
+    if (expectedCourseId && paymentRow.course_id !== expectedCourseId) {
+      throw new Error("Course mismatch");
+    }
+
+    if (paymentRow.status !== "paid") {
+      const paidCourseResult = await db.query("SELECT * FROM courses WHERE id = $1", [paymentRow.course_id]);
+      const paidCourse = paidCourseResult.rows[0];
+      if (!paidCourse) throw new Error("Course not found");
+      const endTsPaid = paidCourse.end_date != null && String(paidCourse.end_date).trim() !== ""
+        ? Date.parse(String(paidCourse.end_date).trim()) : null;
+      if (Number.isFinite(endTsPaid) && (endTsPaid as number) < Date.now()) {
+        throw new Error("This course has ended");
+      }
+
+      await db.query(
+        "UPDATE payments SET razorpay_payment_id = $1, razorpay_signature = $2, status = $3 WHERE razorpay_order_id = $4",
+        [paymentId, signature, "paid", orderId]
+      );
+
+      const alreadyEnrolled = await db.query(
+        "SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2",
+        [paymentRow.user_id, paymentRow.course_id]
+      );
+      if (alreadyEnrolled.rows.length === 0) {
+        const at = Date.now();
+        const vu = computeEnrollmentValidUntil(paidCourse, at);
+        await db.query(
+          "INSERT INTO enrollments (user_id, course_id, enrolled_at, valid_until) VALUES ($1, $2, $3, $4)",
+          [paymentRow.user_id, paymentRow.course_id, at, vu]
+        );
+        await db.query(
+          "UPDATE courses SET total_students = COALESCE(total_students, 0) + 1 WHERE id = $1",
+          [paymentRow.course_id]
+        );
+      }
+    }
+
+    cacheInvalidate?.("courses:");
+    return { userId: paymentRow.user_id, courseId: paymentRow.course_id };
+  };
+
   app.post("/api/payments/track-click", async (req: Request, res: Response) => {
     try {
       const user = await getAuthUser(req);
@@ -144,86 +215,16 @@ export function registerPaymentRoutes({
         return res.status(400).json({ message: "Payment details are required" });
       }
 
-      const isValid = verifyPaymentSignature(razorpay_order_id, razorpay_payment_id, razorpay_signature);
-      if (!isValid) {
-        console.warn("[Payments] verify failed: invalid signature", {
-          userId: user.id,
-          orderId: razorpay_order_id,
-          paymentId: razorpay_payment_id,
-          courseId: courseId ?? null,
-        });
-        return res.status(400).json({ message: "Invalid payment signature" });
-      }
-
-      const paymentRecord = await db.query(
-        "SELECT * FROM payments WHERE razorpay_order_id = $1 AND user_id = $2",
-        [razorpay_order_id, user.id]
-      );
-      if (paymentRecord.rows.length === 0) {
-        console.warn("[Payments] verify failed: order not found", {
-          userId: user.id,
-          orderId: razorpay_order_id,
-          paymentId: razorpay_payment_id,
-          courseId: courseId ?? null,
-        });
-        return res.status(400).json({ message: "Payment order not found" });
-      }
-      if (paymentRecord.rows[0].status === "paid") {
-        console.log("[Payments] verify skipped: already paid", {
-          userId: user.id,
-          orderId: razorpay_order_id,
-          paymentId: razorpay_payment_id,
-          courseId: paymentRecord.rows[0].course_id,
-        });
-        return res.status(400).json({ message: "Payment already processed" });
-      }
-
-      const paymentCourseId = paymentRecord.rows[0].course_id;
-      if (courseId && paymentCourseId !== courseId) {
-        console.warn("[Payments] verify failed: course mismatch", {
-          userId: user.id,
-          orderId: razorpay_order_id,
-          paymentId: razorpay_payment_id,
-          requestedCourseId: courseId,
-          paymentCourseId,
-        });
-        return res.status(400).json({ message: "Course mismatch" });
-      }
-
-      const paidCourseResult = await db.query("SELECT * FROM courses WHERE id = $1", [paymentCourseId]);
-      const paidCourse = paidCourseResult.rows[0];
-      if (!paidCourse) return res.status(400).json({ message: "Course not found" });
-      const endTsPaid = paidCourse.end_date != null && String(paidCourse.end_date).trim() !== ""
-        ? Date.parse(String(paidCourse.end_date).trim()) : null;
-      if (Number.isFinite(endTsPaid) && (endTsPaid as number) < Date.now()) {
-        return res.status(400).json({ message: "This course has ended" });
-      }
-
-      await db.query(
-        "UPDATE payments SET razorpay_payment_id = $1, razorpay_signature = $2, status = $3 WHERE razorpay_order_id = $4 AND user_id = $5",
-        [razorpay_payment_id, razorpay_signature, "paid", razorpay_order_id, user.id]
-      );
-
-      const alreadyEnrolled = await db.query(
-        "SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2",
-        [user.id, paymentCourseId]
-      );
-      if (alreadyEnrolled.rows.length === 0) {
-        const at = Date.now();
-        const vu = computeEnrollmentValidUntil(paidCourse, at);
-        await db.query(
-          "INSERT INTO enrollments (user_id, course_id, enrolled_at, valid_until) VALUES ($1, $2, $3, $4)",
-          [user.id, paymentCourseId, at, vu]
-        );
-        await db.query(
-          "UPDATE courses SET total_students = COALESCE(total_students, 0) + 1 WHERE id = $1",
-          [paymentCourseId]
-        );
-      }
-      cacheInvalidate?.("courses:");
+      const result = await completeCoursePaymentByOrder({
+        orderId: razorpay_order_id,
+        paymentId: razorpay_payment_id,
+        signature: razorpay_signature,
+        expectedUserId: user.id,
+        expectedCourseId: courseId,
+      });
       console.log("[Payments] verify success", {
-        userId: user.id,
-        courseId: paymentCourseId,
+        userId: result.userId,
+        courseId: result.courseId,
         orderId: razorpay_order_id,
         paymentId: razorpay_payment_id,
       });
@@ -231,6 +232,31 @@ export function registerPaymentRoutes({
     } catch (err) {
       console.error("Verify payment error:", err);
       res.status(500).json({ message: "Payment verification failed" });
+    }
+  });
+
+  // iOS mobile web is more reliable with Razorpay redirect callback than popup handler callbacks.
+  app.post("/api/payments/verify-redirect", async (req: Request, res: Response) => {
+    const frontendBase = process.env.FRONTEND_URL || "https://3ilearning.in";
+    const fail = `${frontendBase}/store?payment=failed`;
+    try {
+      const {
+        razorpay_order_id,
+        razorpay_payment_id,
+        razorpay_signature,
+      } = req.body || {};
+      if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+        return res.redirect(fail);
+      }
+      const result = await completeCoursePaymentByOrder({
+        orderId: razorpay_order_id,
+        paymentId: razorpay_payment_id,
+        signature: razorpay_signature,
+      });
+      return res.redirect(`${frontendBase}/course/${result.courseId}?payment=success`);
+    } catch (err) {
+      console.error("[Payments] redirect verify failed:", err);
+      return res.redirect(fail);
     }
   });
 
@@ -247,11 +273,45 @@ export function registerPaymentRoutes({
       if (existing.rows.length > 0) return res.json({ alreadyPurchased: true });
       const amount = Math.round(parseFloat(test.price) * 100);
       const razorpay = getRazorpay();
-      const order = await razorpay.orders.create({ amount, currency: "INR", receipt: `test_${testId}_user_${user.id}_${Date.now()}` });
+      const order = await razorpay.orders.create({
+        amount,
+        currency: "INR",
+        receipt: `test_${testId}_user_${user.id}_${Date.now()}`,
+        notes: { testId: String(testId), userId: String(user.id), kind: "test" },
+      });
       res.json({ orderId: order.id, amount, currency: "INR", keyId: process.env.RAZORPAY_KEY_ID, testName: test.title });
     } catch (err) {
       console.error("Test create-order error:", err);
       res.status(500).json({ message: "Failed to create payment order" });
+    }
+  });
+
+  // Mobile web redirect (iOS / Android): same pattern as course payment
+  app.post("/api/tests/verify-redirect", async (req: Request, res: Response) => {
+    const frontendBase = process.env.FRONTEND_URL || "https://3ilearning.in";
+    const fail = `${frontendBase}/test-series?payment=failed`;
+    try {
+      const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body || {};
+      if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+        return res.redirect(fail);
+      }
+      const isValid = verifyPaymentSignature(razorpay_order_id, razorpay_payment_id, razorpay_signature);
+      if (!isValid) return res.redirect(fail);
+      const razorpay = getRazorpay();
+      const order: { notes?: Record<string, string> } = await razorpay.orders.fetch(razorpay_order_id);
+      const n = order.notes || {};
+      if (n.kind !== "test") return res.redirect(fail);
+      const testId = parseInt(n.testId || "0", 10);
+      const userId = parseInt(n.userId || "0", 10);
+      if (!testId || !userId) return res.redirect(fail);
+      await db.query(
+        "INSERT INTO test_purchases (user_id, test_id, razorpay_order_id, razorpay_payment_id, created_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (user_id, test_id) DO NOTHING",
+        [userId, testId, razorpay_order_id, razorpay_payment_id, Date.now()]
+      );
+      return res.redirect(`${frontendBase}/test-series?payment=success&testId=${testId}`);
+    } catch (err) {
+      console.error("[Tests] verify-redirect failed:", err);
+      return res.redirect(fail);
     }
   });
 

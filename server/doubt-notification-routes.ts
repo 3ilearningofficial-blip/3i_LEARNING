@@ -54,6 +54,7 @@ export function registerDoubtNotificationRoutes({
         `SELECT * FROM notifications WHERE user_id = $1
          AND (source IS NULL OR source != 'support')
          AND (is_hidden IS NOT TRUE)
+         AND (is_read IS NOT TRUE)
          AND (expires_at IS NULL OR expires_at > $2)
          AND title NOT ILIKE 'New message from%'
          AND title NOT ILIKE 'New reply from Support%'

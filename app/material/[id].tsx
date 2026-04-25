@@ -19,6 +19,9 @@ import { isAndroidWeb } from "@/lib/useAndroidWebGate";
 import AndroidWebGate from "@/components/AndroidWebGate";
 import { DownloadButton } from "@/components/DownloadButton";
 
+const mediaTokenCache = new Map<string, { token: string; expiresAt: number }>();
+const MEDIA_TOKEN_TTL_MS = 50 * 1000;
+
 function getIconName(fileType: string): keyof typeof Ionicons.glyphMap {
   switch (fileType) {
     case "pdf": return "document-text";
@@ -395,11 +398,19 @@ export default function MaterialViewerScreen() {
   useEffect(() => {
     if (!fileKey || !material) return;
     if (isGDrive || isYouTube) return; // not needed for these
+    const cached = mediaTokenCache.get(fileKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      setMediaToken(cached.token);
+      return;
+    }
     let cancelled = false;
     apiRequest("POST", "/api/media-token", { fileKey })
       .then(r => r.json())
       .then(d => {
-        if (!cancelled && d.token) setMediaToken(d.token);
+        if (!cancelled && d.token) {
+          setMediaToken(d.token);
+          mediaTokenCache.set(fileKey, { token: d.token, expiresAt: Date.now() + MEDIA_TOKEN_TTL_MS });
+        }
       })
       .catch(() => {}); // silently fail — fallback to direct URL
     return () => {
@@ -542,29 +553,14 @@ export default function MaterialViewerScreen() {
                     onLoad={() => setLoading(false)}
                   />
                 ) : isPdf && fileUrl && material ? (
-                  (pdfViewerUrl || !fileKey) ? (() => {
-                    // On mobile web, navigate directly to pdf-viewer page (same tab)
-                    // On desktop, use inline iframe
-                    // Both use the same server-rendered pdf.js page — no browser controls
-                    if (screenWidth < 768 && pdfViewerUrl && typeof window !== "undefined") {
-                      // Navigate immediately when token is ready
-                      window.location.href = pdfViewerUrl;
-                      return (
-                        <View style={styles.centered}>
-                          <ActivityIndicator size="large" color={Colors.light.primary} />
-                          <Text style={styles.loadingText}>Opening PDF...</Text>
-                        </View>
-                      );
-                    }
-                    return (
-                      <iframe
-                        src={pdfViewerUrl || fileUrl}
-                        style={{ width: "100%", height: "100%", border: "none" } as any}
-                        title={material.title}
-                        onLoad={() => setLoading(false)}
-                      />
-                    );
-                  })() : (
+                  (pdfViewerUrl || !fileKey) ? (
+                    <iframe
+                      src={pdfViewerUrl || fileUrl}
+                      style={{ width: "100%", height: "100%", border: "none" } as any}
+                      title={material.title}
+                      onLoad={() => setLoading(false)}
+                    />
+                  ) : (
                     <View style={styles.centered}>
                       <ActivityIndicator size="large" color={Colors.light.primary} />
                       <Text style={styles.loadingText}>Loading PDF...</Text>
@@ -583,7 +579,7 @@ export default function MaterialViewerScreen() {
                       controls
                       autoPlay
                       playsInline
-                      controlsList="nodownload noplaybackrate"
+                      controlsList="nodownload noplaybackrate noremoteplayback"
                       disablePictureInPicture
                       style={{ width: "100%", height: "100%", objectFit: "contain", backgroundColor: "#000" } as any}
                       onLoadedData={() => setLoading(false)}

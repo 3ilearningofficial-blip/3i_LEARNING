@@ -162,13 +162,47 @@ export function registerBookRoutes({
         amount,
         currency: "INR",
         receipt: `book_${bookId}_user_${user.id}_${Date.now()}`,
-        notes: { bookId: bookId.toString(), userId: user.id.toString(), bookTitle: book.title },
+        notes: {
+          bookId: String(bookId),
+          userId: String(user.id),
+          bookTitle: book.title,
+          kind: "book",
+        },
       });
       console.log(`[BookOrder] created orderId=${order.id} amount=${amount}`);
       res.json({ orderId: order.id, amount: order.amount, currency: order.currency, keyId: process.env.RAZORPAY_KEY_ID, bookTitle: book.title, bookId });
     } catch (err) {
       console.error("Book create-order error:", err);
       res.status(500).json({ message: "Failed to create payment order" });
+    }
+  });
+
+  app.post("/api/books/verify-redirect", async (req: Request, res: Response) => {
+    const frontendBase = process.env.FRONTEND_URL || "https://3ilearning.in";
+    const fail = `${frontendBase}/store?payment=failed`;
+    try {
+      const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body || {};
+      if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+        return res.redirect(fail);
+      }
+      const isValid = verifyPaymentSignature(razorpay_order_id, razorpay_payment_id, razorpay_signature);
+      if (!isValid) return res.redirect(fail);
+      const razorpay = getRazorpay();
+      const order: { notes?: Record<string, string> } = await razorpay.orders.fetch(razorpay_order_id);
+      const n = order.notes || {};
+      if (n.kind !== "book") return res.redirect(fail);
+      const bookId = parseInt(n.bookId || "0", 10);
+      const userId = parseInt(n.userId || "0", 10);
+      if (!bookId || !userId) return res.redirect(fail);
+      await db.query(
+        "INSERT INTO book_purchases (user_id, book_id, purchased_at) VALUES ($1, $2, $3) ON CONFLICT (user_id, book_id) DO NOTHING",
+        [userId, bookId, Date.now()]
+      );
+      await db.query("DELETE FROM book_click_tracking WHERE user_id = $1 AND book_id = $2", [userId, bookId]).catch(() => {});
+      return res.redirect(`${frontendBase}/store?payment=success&bookId=${bookId}`);
+    } catch (err) {
+      console.error("Book verify-redirect error:", err);
+      return res.redirect(fail);
     }
   });
 

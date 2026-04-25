@@ -55,7 +55,7 @@ video { width: 100%; height: 100%; object-fit: contain; background: #000; }
 </style>
 </head>
 <body>
-<video id="v" autoplay controls playsinline></video>
+<video id="v" autoplay controls playsinline controlsList="nodownload noplaybackrate noremoteplayback" disablePictureInPicture></video>
 <div id="overlay">
   <div class="spinner"></div>
   <div class="msg" id="msg">OBS is streaming...<br><small style="color:#666">Waiting for Cloudflare to process stream<br>(takes 15–30 seconds)</small></div>

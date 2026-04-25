@@ -94,6 +94,9 @@ export default function LoginScreen() {
 
       // If profile not complete → go to profile setup
       if (!data.user.profileComplete && data.user.role !== "admin") {
+        if (Platform.OS === "web" && typeof window !== "undefined") {
+          (window as any).__allowProfileSetupOnce = "1";
+        }
         router.replace("/profile-setup");
       } else {
         router.replace("/(tabs)");

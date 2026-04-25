@@ -24,19 +24,37 @@ type ChatMode = "public" | "private";
 export default function StudioSetupPage() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const liveClassId = id;
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // Fetch live class data — poll every 5s to detect when stream goes live
   const { data: liveClass, isLoading: isLoadingClass } = useQuery<any>({
     queryKey: ["/api/live-classes", liveClassId],
     queryFn: async () => {
       const baseUrl = getApiUrl();
-      const res = await authFetch(`${baseUrl}/api/live-classes/${liveClassId}`);
-      if (!res.ok) throw new Error("Failed to fetch live class");
-      return res.json();
+      const safeId = encodeURIComponent(String(liveClassId || ""));
+      const res = await authFetch(`${baseUrl}/api/live-classes/${safeId}`);
+      if (!res.ok) {
+        const msg = res.status === 404 ? "Live class not found or deleted." : "Failed to fetch live class";
+        setLoadError(msg);
+        throw new Error(msg);
+      }
+      const payload = await res.json();
+      const normalized = payload && typeof payload === "object" && "data" in payload ? (payload as any).data : payload;
+      if (!normalized || typeof normalized !== "object") {
+        const msg = "Invalid live class response";
+        setLoadError(msg);
+        throw new Error(msg);
+      }
+      setLoadError(null);
+      return normalized;
     },
     enabled: !!liveClassId,
-    refetchInterval: 5000,
+    refetchInterval: (q) => {
+      if (q.state.status === "error") return false;
+      return 5000;
+    },
     staleTime: 0,
+    retry: false,
   });
 
   // State — restore from localStorage on refresh
@@ -200,6 +218,21 @@ export default function StudioSetupPage() {
     );
   }
 
+  if (!liveClass) {
+    return (
+      <View style={styles.loadingContainer}>
+        <Ionicons name="alert-circle-outline" size={42} color={Colors.light.error} />
+        <Text style={styles.loadingText}>{loadError || "Unable to open studio."}</Text>
+        <Pressable
+          style={{ marginTop: 14, backgroundColor: Colors.light.primary, borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10 }}
+          onPress={() => router.back()}
+        >
+          <Text style={{ color: "#fff", fontFamily: "Inter_600SemiBold" }}>Go Back</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
   const classTitle = liveClass?.title || "Live Class";
 
   return (
@@ -275,7 +308,7 @@ export default function StudioSetupPage() {
               ) : cfStreamInfo?.playbackHls && Platform.OS === "web" ? (
                 // Show HLS preview once OBS starts streaming
                 <iframe
-                  srcDoc={`<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><style>*{margin:0;padding:0;box-sizing:border-box}html,body{width:100%;height:100%;background:#000;overflow:hidden}video{width:100%;height:100%;object-fit:contain;background:#000}#ov{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#0a0a0a;color:#fff;font-family:sans-serif;gap:12px}#ov.h{display:none}.sp{width:36px;height:36px;border:3px solid #333;border-top-color:#F6821F;border-radius:50%;animation:spin 0.8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.msg{font-size:13px;color:#aaa;text-align:center}.lb{background:#ef4444;color:#fff;font-size:11px;font-weight:700;padding:3px 10px;border-radius:4px;letter-spacing:1px;display:none;position:absolute;top:10px;left:10px}.lb.s{display:block}.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#fff;margin-right:5px;animation:blink 1s infinite}@keyframes blink{0%,100%{opacity:1}50%{opacity:0.3}}</style></head><body><video id="v" autoplay controls playsinline></video><div id="ov"><div class="sp"></div><div class="msg" id="msg">OBS streaming...<br><small style="color:#666">Waiting for Cloudflare (15-30s)</small></div></div><div class="lb" id="lb"><span class="dot"></span>LIVE</div><script src="https://cdn.jsdelivr.net/npm/hls.js@latest/dist/hls.min.js"></script><script>var v=document.getElementById('v'),ov=document.getElementById('ov'),msg=document.getElementById('msg'),lb=document.getElementById('lb'),url='${cfStreamInfo.playbackHls}',r=0;function show(){ov.classList.add('h');lb.classList.add('s');}function load(){if(r>60)return;if(Hls.isSupported()){var h=new Hls({liveSyncDurationCount:2,liveMaxLatencyDurationCount:6});h.loadSource(url);h.attachMedia(v);h.on(Hls.Events.MANIFEST_PARSED,function(){v.play().then(show).catch(function(){v.muted=true;v.play().then(show);});});h.on(Hls.Events.ERROR,function(e,d){if(d.fatal){r++;msg.innerHTML='OBS streaming...<br><small style="color:#666">Waiting ('+r*5+'s)</small>';setTimeout(load,5000);}});}else if(v.canPlayType('application/vnd.apple.mpegurl')){v.src=url;v.addEventListener('loadedmetadata',show);v.play().catch(function(){setTimeout(load,5000);});}}load();</script></body></html>`}
+                  srcDoc={`<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><style>*{margin:0;padding:0;box-sizing:border-box}html,body{width:100%;height:100%;background:#000;overflow:hidden}video{width:100%;height:100%;object-fit:contain;background:#000}#ov{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#0a0a0a;color:#fff;font-family:sans-serif;gap:12px}#ov.h{display:none}.sp{width:36px;height:36px;border:3px solid #333;border-top-color:#F6821F;border-radius:50%;animation:spin 0.8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.msg{font-size:13px;color:#aaa;text-align:center}.lb{background:#ef4444;color:#fff;font-size:11px;font-weight:700;padding:3px 10px;border-radius:4px;letter-spacing:1px;display:none;position:absolute;top:10px;left:10px}.lb.s{display:block}.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#fff;margin-right:5px;animation:blink 1s infinite}@keyframes blink{0%,100%{opacity:1}50%{opacity:0.3}}</style></head><body><video id="v" autoplay controls playsinline controlsList="nodownload noplaybackrate noremoteplayback" disablePictureInPicture></video><div id="ov"><div class="sp"></div><div class="msg" id="msg">OBS streaming...<br><small style="color:#666">Waiting for Cloudflare (15-30s)</small></div></div><div class="lb" id="lb"><span class="dot"></span>LIVE</div><script src="https://cdn.jsdelivr.net/npm/hls.js@latest/dist/hls.min.js"></script><script>var v=document.getElementById('v'),ov=document.getElementById('ov'),msg=document.getElementById('msg'),lb=document.getElementById('lb'),url='${cfStreamInfo.playbackHls}',r=0;function show(){ov.classList.add('h');lb.classList.add('s');}function load(){if(r>60)return;if(Hls.isSupported()){var h=new Hls({liveSyncDurationCount:2,liveMaxLatencyDurationCount:6});h.loadSource(url);h.attachMedia(v);h.on(Hls.Events.MANIFEST_PARSED,function(){v.play().then(show).catch(function(){v.muted=true;v.play().then(show);});});h.on(Hls.Events.ERROR,function(e,d){if(d.fatal){r++;msg.innerHTML='OBS streaming...<br><small style="color:#666">Waiting ('+r*5+'s)</small>';setTimeout(load,5000);}});}else if(v.canPlayType('application/vnd.apple.mpegurl')){v.src=url;v.addEventListener('loadedmetadata',show);v.play().catch(function(){setTimeout(load,5000);});}}load();</script></body></html>`}
                   style={{ position: "absolute" as any, top: 0, left: 0, width: "100%", height: "100%", border: "none" }}
                   allow="autoplay; fullscreen"
                 />

@@ -19,6 +19,9 @@ import AndroidWebGate from "@/components/AndroidWebGate";
 import { DownloadButton } from "@/components/DownloadButton";
 import { VideoWatermark } from "@/components/VideoWatermark";
 
+const mediaTokenCache = new Map<string, { token: string; expiresAt: number }>();
+const MEDIA_TOKEN_TTL_MS = 50 * 1000;
+
 function getYouTubeVideoId(url: string): string {
   if (!url) return "";
   let decoded = url;
@@ -152,7 +155,7 @@ video { width: 100%; height: 100%; object-fit: contain; background: #000; }
 </style>
 </head>
 <body>
-<video controls autoplay playsinline controlsList="nodownload noplaybackrate" disablePictureInPicture>
+<video controls autoplay playsinline controlsList="nodownload noplaybackrate noremoteplayback" disablePictureInPicture>
   <source src="${url}" type="video/mp4">
 </video>
 <script>
@@ -342,7 +345,7 @@ function WebDirectVideoPlayer({ url, onReady }: { url: string; onReady: () => vo
       controls
       autoPlay
       playsInline
-      controlsList="nodownload noplaybackrate"
+      controlsList="nodownload noplaybackrate noremoteplayback"
       disablePictureInPicture
       style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "contain", backgroundColor: "#000" } as any}
       onContextMenu={(e: any) => e.preventDefault()}
@@ -396,6 +399,7 @@ export default function LectureScreen() {
 
   const rawVideoUrl = lectureData?.video_url || paramVideoUrl || "";
   const baseUrl = getBaseUrl();
+  const [mediaToken, setMediaToken] = useState<string | null>(null);
   let videoUrl = rawVideoUrl;
 
   if (!rawVideoUrl.startsWith('file://')) {
@@ -411,6 +415,40 @@ export default function LectureScreen() {
     }
   }
   videoUrl = toHttpsMediaUrl(videoUrl);
+  const fileKey = (() => {
+    if (!rawVideoUrl || !rawVideoUrl.includes("/api/media/")) return null;
+    const path = rawVideoUrl.startsWith("/") ? rawVideoUrl : rawVideoUrl.replace(/^https?:\/\/[^/]+/, "");
+    return path.replace(/^\/api\/media\//, "");
+  })();
+  useEffect(() => {
+    if (!fileKey) {
+      setMediaToken(null);
+      return;
+    }
+    const cached = mediaTokenCache.get(fileKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      setMediaToken(cached.token);
+      return;
+    }
+    let cancelled = false;
+    apiRequest("POST", "/api/media-token", { fileKey })
+      .then(r => r.json())
+      .then(d => {
+        if (!cancelled && d.token) {
+          setMediaToken(d.token);
+          mediaTokenCache.set(fileKey, { token: d.token, expiresAt: Date.now() + MEDIA_TOKEN_TTL_MS });
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [fileKey]);
+  const authenticatedVideoUrl = toHttpsMediaUrl(
+    fileKey && mediaToken
+      ? `${baseUrl}/api/media/${fileKey}?token=${mediaToken}`
+      : videoUrl,
+  ) || videoUrl;
 
   const title = lectureData?.title || paramTitle || "Lecture";
 
@@ -418,14 +456,14 @@ export default function LectureScreen() {
   const bottomPadding = Platform.OS === "web" ? 34 : insets.bottom;
 
   // Determine video type and prepare appropriate HTML
-  const videoId = getYouTubeVideoId(videoUrl);
-  const isStreamId = !videoId && isCloudflareStreamId(videoUrl);
-  const isDirect = !videoId && !isStreamId && isDirectVideoUrl(videoUrl);
+  const videoId = getYouTubeVideoId(authenticatedVideoUrl);
+  const isStreamId = !videoId && isCloudflareStreamId(authenticatedVideoUrl);
+  const isDirect = !videoId && !isStreamId && isDirectVideoUrl(authenticatedVideoUrl);
   
   const youtubeHtml = videoId ? buildYouTubeHtml(videoId) : "";
   const nativeYouTubeHtml = videoId ? buildNativeYouTubeHtml(videoId) : "";
-  const streamHtml = isStreamId ? buildCloudflareStreamHtml(videoUrl) : "";
-  const directVideoHtml = isDirect ? buildDirectVideoHtml(videoUrl) : "";
+  const streamHtml = isStreamId ? buildCloudflareStreamHtml(authenticatedVideoUrl) : "";
+  const directVideoHtml = isDirect ? buildDirectVideoHtml(authenticatedVideoUrl) : "";
 
   const handleMarkComplete = async () => {
     try {

@@ -806,6 +806,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     await db.query("ALTER TABLE standalone_folders ADD COLUMN IF NOT EXISTS original_price NUMERIC(10,2) DEFAULT 0").catch(() => {});
     await db.query("ALTER TABLE standalone_folders ADD COLUMN IF NOT EXISTS is_free BOOLEAN DEFAULT TRUE").catch(() => {});
     await db.query("ALTER TABLE standalone_folders ADD COLUMN IF NOT EXISTS description TEXT").catch(() => {});
+    await db.query("ALTER TABLE standalone_folders ADD COLUMN IF NOT EXISTS validity_months NUMERIC(8,2) DEFAULT NULL").catch(() => {});
     // Test folder purchases table
     await db.query(`CREATE TABLE IF NOT EXISTS folder_purchases (
       id SERIAL PRIMARY KEY,
@@ -1148,37 +1149,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const thirtyMinFromNow = now + 30 * 60 * 1000;
       // Get all scheduled (not live, not completed) classes with notify_bell = true
       const classes = await db.query(
-        "SELECT lc.id, lc.title, lc.course_id, lc.scheduled_at, lc.notify_bell FROM live_classes lc WHERE lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE AND lc.notify_bell = TRUE AND lc.scheduled_at IS NOT NULL"
+        "SELECT lc.id, lc.title, lc.course_id, lc.scheduled_at, lc.notify_bell, lc.is_free_preview, lc.is_public FROM live_classes lc WHERE lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE AND lc.notify_bell = TRUE AND lc.scheduled_at IS NOT NULL"
       );
       for (const lc of classes.rows) {
         const scheduledAt = parseInt(lc.scheduled_at);
         if (isNaN(scheduledAt)) continue;
         const diff = scheduledAt - now;
+        const recipients =
+          (!lc.course_id || lc.is_free_preview === true || lc.is_public === true)
+            ? await db.query("SELECT id AS user_id FROM users WHERE role = 'student'")
+            : await db.query("SELECT user_id FROM enrollments WHERE course_id = $1", [lc.course_id]);
+        const expiresAt = now + 6 * 3600000;
         // 30 min before (between 29-31 min window)
         const key30 = `30min_${lc.id}`;
         if (diff > 0 && diff <= 31 * 60 * 1000 && diff >= 29 * 60 * 1000 && !sentNotifications.has(key30)) {
           sentNotifications.add(key30);
-          const enrolled = await db.query("SELECT user_id FROM enrollments WHERE course_id = $1", [lc.course_id]);
-          for (const e of enrolled.rows) {
+          for (const e of recipients.rows) {
             await db.query(
               "INSERT INTO notifications (user_id, title, message, type, created_at, expires_at) VALUES ($1, $2, $3, $4, $5, $6)",
-              [e.user_id, "⏰ Live Class in 30 minutes!", `"${lc.title}" starts in 30 minutes. Get ready!`, "info", now, scheduledAt]
+              [e.user_id, "⏰ Live Class in 30 minutes!", `"${lc.title}" starts in 30 minutes. Get ready!`, "info", now, expiresAt]
             );
           }
-          console.log(`[LiveNotif] 30min reminder sent for "${lc.title}" to ${enrolled.rows.length} students`);
+          console.log(`[LiveNotif] 30min reminder sent for "${lc.title}" to ${recipients.rows.length} students`);
         }
         // At start time (within 2 min window)
         const keyStart = `start_${lc.id}`;
         if (diff <= 0 && diff >= -2 * 60 * 1000 && !sentNotifications.has(keyStart)) {
           sentNotifications.add(keyStart);
-          const enrolled = await db.query("SELECT user_id FROM enrollments WHERE course_id = $1", [lc.course_id]);
-          for (const e of enrolled.rows) {
+          for (const e of recipients.rows) {
             await db.query(
               "INSERT INTO notifications (user_id, title, message, type, created_at, expires_at) VALUES ($1, $2, $3, $4, $5, $6)",
-              [e.user_id, "🔴 Live Class Starting Now!", `"${lc.title}" is about to start. Join now!`, "info", now, now + 12 * 3600000]
+              [e.user_id, "🔴 Live Class Starting Now!", `"${lc.title}" is about to start. Join now!`, "info", now, expiresAt]
             );
           }
-          console.log(`[LiveNotif] Start reminder sent for "${lc.title}" to ${enrolled.rows.length} students`);
+          console.log(`[LiveNotif] Start reminder sent for "${lc.title}" to ${recipients.rows.length} students`);
         }
       }
       // Clean up old keys (older than 1 hour)

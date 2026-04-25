@@ -347,6 +347,20 @@ export default function HomeScreen() {
   const topPadding = Platform.OS === "web" ? 16 : insets.top;
   const bottomPadding = Platform.OS === "web" ? 16 : insets.bottom;
 
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof MutationObserver === "undefined") return;
+    const observer = new MutationObserver(() => {
+      const activeElement = document.activeElement as HTMLElement | null;
+      if (activeElement?.closest('[aria-hidden="true"]')) activeElement.blur();
+    });
+    observer.observe(document.body, {
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["aria-hidden"],
+    });
+    return () => observer.disconnect();
+  }, []);
+
   const { data: allCourses = [], refetch: refetchCourses, isLoading } = useQuery<Course[]>({
     queryKey: ["/api/courses", user?.id ?? "guest"],
     queryFn: async () => {
@@ -605,7 +619,10 @@ export default function HomeScreen() {
 
             {/* Scheduled Live Classes */}
             {(() => {
-              const scheduled = liveClasses.filter((lc: any) => !lc.is_live && (!lc.is_completed) && lc.scheduled_at);
+              const now = Date.now();
+              const scheduled = liveClasses
+                .filter((lc: any) => !lc.is_live && !lc.is_completed && lc.scheduled_at && Number(lc.scheduled_at) > now)
+                .sort((a: any, b: any) => Number(a.scheduled_at) - Number(b.scheduled_at));
               if (scheduled.length === 0) return null;
               const visible = showAllScheduled ? scheduled : scheduled.slice(0, 2);
               return (

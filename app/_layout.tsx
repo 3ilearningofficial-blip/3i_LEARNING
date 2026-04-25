@@ -70,13 +70,26 @@ function RootLayoutNav() {
     const inWelcome = currentSegment === "welcome";
 
     if (user) {
-      const target = user.profileComplete ? "/(tabs)" : "/profile-setup";
+      // Do not force web refreshes into profile-setup; keep onboarding via explicit login/OTP flow.
+      const target = user.profileComplete ? "/(tabs)" : "/(auth)/login";
       if (inAuthGroup || inWelcome) {
         router.replace(target);
         return;
       }
-      if (!user.profileComplete && !inProfileSetup) {
-        router.replace("/profile-setup");
+      if (!user.profileComplete) {
+        if (inProfileSetup) {
+          if (Platform.OS === "web" && typeof window !== "undefined") {
+            const allowProfileSetupOnce = (window as any).__allowProfileSetupOnce === "1";
+            if (allowProfileSetupOnce) {
+              (window as any).__allowProfileSetupOnce = "0";
+              return;
+            }
+            router.replace("/(auth)/login");
+            return;
+          }
+          return;
+        }
+        router.replace("/(auth)/login");
       }
       return;
     }

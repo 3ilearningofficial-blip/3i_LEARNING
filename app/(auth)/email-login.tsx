@@ -38,6 +38,9 @@ export default function EmailLoginScreen() {
       login(data.user);
       // All users including admin must complete profile before accessing the app
       if (!data.user.profileComplete) {
+        if (Platform.OS === "web" && typeof window !== "undefined") {
+          (window as any).__allowProfileSetupOnce = "1";
+        }
         router.replace("/profile-setup");
       } else {
         router.replace("/(tabs)");

@@ -42,7 +42,7 @@ export function registerStandaloneFolderRoutes({
 
   app.post("/api/admin/standalone-folders", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { name, type, category, price, originalPrice, isFree, description } = req.body;
+      const { name, type, category, price, originalPrice, isFree, description, validityMonths } = req.body;
       const normalizedName = normalizeStandaloneFolderName(name);
       const normalizedType = typeof type === "string" ? type.trim().toLowerCase() : "";
       if (!normalizedName) return res.status(400).json({ message: "Folder name is required" });
@@ -61,10 +61,14 @@ export function registerStandaloneFolderRoutes({
         return res.json(revived.rows[0]);
       }
 
-      if (normalizedType === "test" && category) {
+      if (normalizedType === "test") {
+        const vm =
+          validityMonths != null && String(validityMonths).trim() !== ""
+            ? Math.max(0, parseFloat(String(validityMonths)) || 0) || null
+            : null;
         const result = await db.query(
-          "INSERT INTO standalone_folders (name, type, category, price, original_price, is_free, description) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *",
-          [normalizedName, normalizedType, category || null, parseFloat(price) || 0, parseFloat(originalPrice) || 0, isFree !== false, description || null]
+          "INSERT INTO standalone_folders (name, type, category, price, original_price, is_free, description, validity_months) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *",
+          [normalizedName, normalizedType, category || null, parseFloat(price) || 0, parseFloat(originalPrice) || 0, isFree !== false, description || null, vm]
         );
         return res.json(result.rows[0]);
       }
@@ -80,7 +84,7 @@ export function registerStandaloneFolderRoutes({
 
   app.put("/api/admin/standalone-folders/:id", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { name, isHidden, category, price, originalPrice, isFree, description } = req.body;
+      const { name, isHidden, category, price, originalPrice, isFree, description, validityMonths } = req.body;
       if (name !== undefined) {
         const normalizedName = normalizeStandaloneFolderName(name);
         if (!normalizedName) return res.status(400).json({ message: "Folder name is required" });
@@ -132,6 +136,13 @@ export function registerStandaloneFolderRoutes({
       if (originalPrice !== undefined) await db.query("UPDATE standalone_folders SET original_price = $1 WHERE id = $2", [parseFloat(originalPrice) || 0, req.params.id]);
       if (isFree !== undefined) await db.query("UPDATE standalone_folders SET is_free = $1 WHERE id = $2", [isFree, req.params.id]);
       if (description !== undefined) await db.query("UPDATE standalone_folders SET description = $1 WHERE id = $2", [description || null, req.params.id]);
+      if (validityMonths !== undefined) {
+        const vm =
+          validityMonths != null && String(validityMonths).trim() !== ""
+            ? Math.max(0, parseFloat(String(validityMonths)) || 0) || null
+            : null;
+        await db.query("UPDATE standalone_folders SET validity_months = $1 WHERE id = $2", [vm, req.params.id]);
+      }
       res.json({ success: true });
     } catch {
       res.status(500).json({ message: "Failed to update folder" });

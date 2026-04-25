@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable,
   Platform, ActivityIndicator, Alert, Image, Linking, Modal,
@@ -8,7 +8,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { authFetch, getApiUrl, apiRequest } from "@/lib/query-client";
+import { authFetch, getApiUrl, getBaseUrl, apiRequest } from "@/lib/query-client";
 import Colors from "@/constants/colors";
 import { useScreenProtection } from "@/lib/useScreenProtection";
 import { isAndroidWeb } from "@/lib/useAndroidWebGate";
@@ -124,6 +124,25 @@ export default function StoreScreen() {
   const { user } = useAuth();
   const qc = useQueryClient();
 
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof window === "undefined") return;
+    const sp = new URLSearchParams(window.location.search);
+    const p = sp.get("payment");
+    if (!p) return;
+    if (p === "success") {
+      Alert.alert("Success!", "Payment successful! You can read this book in My Books.");
+      qc.invalidateQueries({ queryKey: ["/api/my-books"] });
+      qc.invalidateQueries({ queryKey: ["/api/books"] });
+    } else if (p === "failed") {
+      Alert.alert("Payment", "We could not complete the payment. Please try again.");
+    }
+    const url = new URL(window.location.href);
+    url.searchParams.delete("payment");
+    url.searchParams.delete("bookId");
+    const next = url.pathname + (url.search || "") + url.hash;
+    window.history.replaceState({}, document.title, next);
+  }, [qc]);
+
   const { data: books = [], isLoading } = useQuery<Book[]>({
     queryKey: ["/api/books"],
     queryFn: async () => {
@@ -158,6 +177,8 @@ export default function StoreScreen() {
           document.head.appendChild(s);
           await new Promise((resolve) => { s.onload = resolve; });
         }
+        const ua = typeof navigator !== "undefined" ? navigator.userAgent || "" : "";
+        const useRedirectCheckout = /iPhone|iPad|iPod|Android/i.test(ua);
         const options = {
           key: orderData.keyId, amount: orderData.amount, currency: orderData.currency,
           name: "3i Learning", description: `Purchase: ${orderData.bookTitle}`,
@@ -181,6 +202,12 @@ export default function StoreScreen() {
           },
           prefill: { contact: user?.phone ? `+91${user.phone}` : "" },
           theme: { color: "#1A56DB" },
+          ...(useRedirectCheckout
+            ? {
+                redirect: true,
+                callback_url: `${getBaseUrl()}/api/books/verify-redirect`,
+              }
+            : {}),
           modal: {
             ondismiss: () => {
               setPayingBookId(null);
@@ -188,6 +215,16 @@ export default function StoreScreen() {
           },
         };
         const rzp = new (window as any).Razorpay(options);
+        if (!useRedirectCheckout) {
+          rzp.on("payment.failed", (response: { error?: { description?: string; code?: string } }) => {
+            setPayingBookId(null);
+            const err =
+              response?.error?.description ||
+              response?.error?.code ||
+              "Payment could not be completed.";
+            Alert.alert("Payment failed", String(err));
+          });
+        }
         rzp.open();
       } else {
         const checkoutHtml = `<!DOCTYPE html>

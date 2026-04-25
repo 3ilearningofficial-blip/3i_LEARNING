@@ -26,7 +26,7 @@ export function registerLiveClassRoutes({
       if (admin === "true" && user?.role === "admin") {
         if (cid) {
           const result = await db.query(
-            "SELECT lc.*, c.title as course_title FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id WHERE lc.course_id = $1 OR lc.course_id IS NULL ORDER BY lc.scheduled_at DESC",
+            "SELECT lc.*, c.title as course_title FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id WHERE lc.course_id = $1 ORDER BY lc.scheduled_at DESC",
             [cid]
           );
           res.set("Cache-Control", "private, no-store");
@@ -44,15 +44,15 @@ export function registerLiveClassRoutes({
           `SELECT lc.*, c.title as course_title, c.is_free as course_is_free,
             ${ex23} as is_enrolled
            FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
-           WHERE (lc.course_id = $1 OR lc.course_id IS NULL)
+           WHERE (lc.course_id = $1)
            AND (
-             (lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE)
+             (lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE AND (
+                (lc.course_id = $1 AND (lc.is_free_preview = TRUE OR ${ex23}))
+             ))
              OR (lc.is_live = TRUE AND (
-                 (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
                  OR (lc.course_id = $1 AND (lc.is_free_preview = TRUE OR ${ex23}))
              ))
              OR (lc.is_completed = TRUE AND (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL) AND (
-                 (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
                  OR (lc.course_id = $1 AND (lc.is_free_preview = TRUE OR ${ex23}))
              ))
            )
@@ -66,15 +66,15 @@ export function registerLiveClassRoutes({
         const result = await db.query(
           `SELECT lc.*, c.title as course_title, c.is_free as course_is_free, FALSE as is_enrolled
            FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
-           WHERE (lc.course_id = $1 OR lc.course_id IS NULL)
+           WHERE (lc.course_id = $1)
            AND (
-             (lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE)
+             (lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE AND (
+                (lc.course_id = $1 AND lc.is_free_preview = TRUE)
+             ))
              OR (lc.is_live = TRUE AND (
-                 (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
                  OR (lc.course_id = $1 AND lc.is_free_preview = TRUE)
              ))
              OR (lc.is_completed = TRUE AND (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL) AND (
-                 (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
                  OR (lc.course_id = $1 AND lc.is_free_preview = TRUE)
              ))
            )
@@ -91,7 +91,10 @@ export function registerLiveClassRoutes({
             ${ex12} as is_enrolled
            FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
            WHERE (
-             (lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE)
+             (lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE AND (
+                 (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
+                 OR (lc.course_id IS NOT NULL AND (lc.is_free_preview = TRUE OR ${ex12}))
+             ))
              OR (lc.is_live = TRUE AND (
                  (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
                  OR (lc.course_id IS NOT NULL AND (lc.is_free_preview = TRUE OR ${ex12}))
@@ -111,7 +114,10 @@ export function registerLiveClassRoutes({
         `SELECT lc.*, c.title as course_title, c.is_free as course_is_free, FALSE as is_enrolled
          FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
          WHERE (
-           (lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE)
+           (lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE AND (
+                (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
+                OR (lc.course_id IS NOT NULL AND lc.is_free_preview = TRUE)
+           ))
            OR (lc.is_live = TRUE AND (
                 (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
                 OR (lc.course_id IS NOT NULL AND lc.is_free_preview = TRUE)

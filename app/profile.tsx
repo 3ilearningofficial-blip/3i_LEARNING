@@ -331,7 +331,7 @@ export default function ProfileScreen() {
               <DetailRow icon="person-outline" label="Full Name" value={profile?.name} />
               <DetailRow icon="call-outline" label="Phone" value={profile?.phone ? `+91 ${profile.phone}` : undefined} locked />
               <DetailRow icon="mail-outline" label="Email" value={profile?.email} locked={!isAdmin} />
-              <DetailRow icon="calendar-outline" label="Date of Birth" value={profile?.date_of_birth} locked />
+              <DetailRow icon="calendar-outline" label="Date of Birth" value={profile?.date_of_birth || user?.date_of_birth || "Not set"} locked />
             </>
           )}
         </View>

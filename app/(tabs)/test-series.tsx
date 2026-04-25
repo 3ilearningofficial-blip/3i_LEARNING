@@ -10,7 +10,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
-import { getApiUrl, authFetch, apiRequest } from "@/lib/query-client";
+import { getApiUrl, getBaseUrl, authFetch, apiRequest } from "@/lib/query-client";
 import { useAuth } from "@/context/AuthContext";
 import { WebView } from "react-native-webview";
 
@@ -311,6 +311,25 @@ export default function TestSeriesScreen() {
     return () => clearInterval(timer);
   }, []);
 
+  // After Razorpay redirect (iOS / Android web), show result and clean URL
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof window === "undefined") return;
+    const sp = new URLSearchParams(window.location.search);
+    const p = sp.get("payment");
+    if (!p) return;
+    if (p === "success") {
+      Alert.alert("Success!", "Payment successful! You can now attempt this test.");
+      qc.invalidateQueries({ queryKey: ["/api/tests"] });
+    } else if (p === "failed") {
+      Alert.alert("Payment", "We could not complete the payment. Please try again.");
+    }
+    const url = new URL(window.location.href);
+    url.searchParams.delete("payment");
+    url.searchParams.delete("testId");
+    const next = url.pathname + (url.search || "") + url.hash;
+    window.history.replaceState({}, document.title, next);
+  }, [qc]);
+
   const clearTestPaymentUi = () => {
     setPaymentPending(false);
     setPayingTestId(null);
@@ -332,6 +351,8 @@ export default function TestSeriesScreen() {
         return;
       }
       if (Platform.OS === "web") {
+        const ua = typeof navigator !== "undefined" ? navigator.userAgent || "" : "";
+        const useRedirectCheckout = /iPhone|iPad|iPod|Android/i.test(ua);
         const script = document.querySelector('script[src="https://checkout.razorpay.com/v1/checkout.js"]');
         if (!script) {
           const s = document.createElement("script");
@@ -361,13 +382,30 @@ export default function TestSeriesScreen() {
           },
           prefill: { contact: user?.phone ? `+91${user.phone}` : "" },
           theme: { color: "#1A56DB" },
+          ...(useRedirectCheckout
+            ? {
+                redirect: true,
+                callback_url: `${getBaseUrl()}/api/tests/verify-redirect`,
+              }
+            : {}),
           modal: {
             ondismiss: () => {
               clearTestPaymentUi();
             },
           },
         };
-        new (window as any).Razorpay(options).open();
+        const rzp = new (window as any).Razorpay(options);
+        if (!useRedirectCheckout) {
+          rzp.on("payment.failed", (response: { error?: { description?: string; code?: string } }) => {
+            clearTestPaymentUi();
+            const err =
+              response?.error?.description ||
+              response?.error?.code ||
+              "Payment could not be completed.";
+            Alert.alert("Payment failed", String(err));
+          });
+        }
+        rzp.open();
         return;
       }
       const html = `<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><script src="https://checkout.razorpay.com/v1/checkout.js"></script><style>body{margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#0A1628;color:#fff;font-family:sans-serif}.spinner{border:3px solid rgba(255,255,255,0.2);border-top:3px solid #1A56DB;border-radius:50%;width:40px;height:40px;animation:spin 0.8s linear infinite;margin:0 auto 16px}@keyframes spin{to{transform:rotate(360deg)}}</style></head><body><div style="text-align:center"><div class="spinner"></div><p>Opening payment...</p></div><script>setTimeout(function(){var rzp=new Razorpay({key:"${orderData.keyId}",amount:${orderData.amount},currency:"${orderData.currency}",name:"3i Learning",description:"Purchase: ${(orderData.testName || "").replace(/"/g, '\\"')}",order_id:"${orderData.orderId}",handler:function(r){window.ReactNativeWebView.postMessage(JSON.stringify({type:"payment_success",razorpay_order_id:r.razorpay_order_id,razorpay_payment_id:r.razorpay_payment_id,razorpay_signature:r.razorpay_signature}))},prefill:{contact:"${user?.phone ? `+91${user.phone}` : ""}"},theme:{color:"#1A56DB"},modal:{ondismiss:function(){window.ReactNativeWebView.postMessage(JSON.stringify({type:"payment_dismissed"}))}}});rzp.on("payment.failed",function(e){window.ReactNativeWebView.postMessage(JSON.stringify({type:"payment_failed",error:e.error.description}))});rzp.open()},0);</script></body></html>`;

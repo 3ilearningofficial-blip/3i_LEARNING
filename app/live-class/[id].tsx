@@ -18,6 +18,9 @@ import { isAndroidWeb } from "@/lib/useAndroidWebGate";
 import AndroidWebGate from "@/components/AndroidWebGate";
 import { VideoWatermark } from "@/components/VideoWatermark";
 
+const mediaTokenCache = new Map<string, { token: string; expiresAt: number }>();
+const MEDIA_TOKEN_TTL_MS = 50 * 1000;
+
 function getYouTubeVideoId(url: string): string {
   if (!url) return "";
   let decoded = url;
@@ -160,7 +163,7 @@ video { width: 100%; height: 100%; object-fit: contain; background: #000; }
 </style>
 </head>
 <body>
-<video id="v" autoplay controls playsinline></video>
+<video id="v" autoplay controls playsinline controlsList="nodownload noplaybackrate noremoteplayback" disablePictureInPicture></video>
 <div id="overlay"><div class="spinner"></div><div class="msg" id="msg">Connecting to live stream...</div></div>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@latest/dist/hls.min.js"></script>
 <script>
@@ -381,11 +384,19 @@ export default function LiveClassScreen() {
       setRecordingToken(null);
       return;
     }
+    const cached = mediaTokenCache.get(recordingFileKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      setRecordingToken(cached.token);
+      return;
+    }
     let cancelled = false;
     apiRequest("POST", "/api/media-token", { fileKey: recordingFileKey })
       .then(r => r.json())
       .then(d => {
-        if (!cancelled && d.token) setRecordingToken(d.token);
+        if (!cancelled && d.token) {
+          setRecordingToken(d.token);
+          mediaTokenCache.set(recordingFileKey, { token: d.token, expiresAt: Date.now() + MEDIA_TOKEN_TTL_MS });
+        }
       })
       .catch(() => {});
     return () => {
@@ -639,7 +650,7 @@ export default function LiveClassScreen() {
                 controls
                 autoPlay
                 playsInline
-                controlsList="nodownload noplaybackrate"
+                controlsList="nodownload noplaybackrate noremoteplayback"
                 disablePictureInPicture
                 style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "contain", backgroundColor: "#000" } as any}
                 onLoadedData={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }}

@@ -29,6 +29,7 @@ interface Course {
   course_type?: string;
   start_date?: string;
   end_date?: string;
+  validity_months?: number | null;
 }
 
 interface UserRecord {
@@ -668,10 +669,12 @@ export default function AdminDashboard() {
   const [openFolderView, setOpenFolderView] = useState<{ folder: any; type: "test" | "material" } | null>(null);
   const [showCreateFolderModal, setShowCreateFolderModal] = useState<"test" | "material" | null>(null);
   const [newFolderNameInput, setNewFolderNameInput] = useState("");
+  const [newFolderValidityMonths, setNewFolderValidityMonths] = useState("");
   // Folder action sheet (same as course admin)
   const [standalonefolderActionSheet, setStandaloneFolderActionSheet] = useState<any>(null);
   const [editStandaloneFolderModal, setEditStandaloneFolderModal] = useState(false);
   const [editStandaloneFolderName, setEditStandaloneFolderName] = useState("");
+  const [editStandaloneFolderValidityMonths, setEditStandaloneFolderValidityMonths] = useState("");
   const [editingStandaloneFolderId, setEditingStandaloneFolderId] = useState<number | null>(null);
 
   const [showCourseTypeChoice, setShowCourseTypeChoice] = useState(false);
@@ -1136,7 +1139,7 @@ export default function AdminDashboard() {
   });
 
   const createStandaloneFolderMutation = useMutation({
-    mutationFn: async (data: { name: string; type: string; category?: string; price?: string; originalPrice?: string; isFree?: boolean; description?: string }) => {
+    mutationFn: async (data: { name: string; type: string; category?: string; price?: string; originalPrice?: string; isFree?: boolean; description?: string; validityMonths?: string }) => {
       const res = await apiRequest("POST", "/api/admin/standalone-folders", data);
       return res.json();
     },
@@ -1154,8 +1157,8 @@ export default function AdminDashboard() {
   });
 
   const renameStandaloneFolderMutation = useMutation({
-    mutationFn: async ({ id, name }: { id: number; name: string }) => {
-      await apiRequest("PUT", `/api/admin/standalone-folders/${id}`, { name });
+    mutationFn: async ({ id, name, validityMonths }: { id: number; name: string; validityMonths?: string }) => {
+      await apiRequest("PUT", `/api/admin/standalone-folders/${id}`, { name, validityMonths });
     },
     onSuccess: () => {
       refetchTestFolders(); refetchMaterialFolders();
@@ -2192,7 +2195,7 @@ export default function AdminDashboard() {
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>Free Study Materials ({freeMaterials.length})</Text>
               <View style={{ flexDirection: "row", gap: 8 }}>
-                <Pressable style={[styles.addBtn, { backgroundColor: "#DC2626" }]} onPress={() => { setNewFolderNameInput(""); setShowCreateFolderModal("material"); }}>
+                <Pressable style={[styles.addBtn, { backgroundColor: "#DC2626" }]} onPress={() => { setNewFolderNameInput(""); setNewFolderValidityMonths(""); setShowCreateFolderModal("material"); }}>
                   <Ionicons name="folder-open" size={16} color="#fff" />
                   <Text style={styles.addBtnText}>Folder</Text>
                 </Pressable>
@@ -2776,7 +2779,7 @@ export default function AdminDashboard() {
                   <Ionicons name="albums" size={16} color="#fff" />
                   <Text style={styles.addBtnText}>Test Series</Text>
                 </Pressable>
-                <Pressable style={[styles.addBtn, { backgroundColor: "#7C3AED" }]} onPress={() => { setNewFolderNameInput(""); setShowCreateFolderModal("test"); }}>
+                <Pressable style={[styles.addBtn, { backgroundColor: "#7C3AED" }]} onPress={() => { setNewFolderNameInput(""); setNewFolderValidityMonths(""); setShowCreateFolderModal("test"); }}>
                   <Ionicons name="folder-open" size={16} color="#fff" />
                   <Text style={styles.addBtnText}>Folder</Text>
                 </Pressable>
@@ -2802,6 +2805,7 @@ export default function AdminDashboard() {
                         <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 2 }}>
                           {course.category && <View style={{ backgroundColor: "#EEF2FF", borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1 }}><Text style={{ fontSize: 9, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>{course.category}</Text></View>}
                           <View style={{ backgroundColor: course.is_free ? "#DCFCE7" : "#FEF3C7", borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1 }}><Text style={{ fontSize: 9, fontFamily: "Inter_700Bold", color: course.is_free ? "#16A34A" : "#D97706" }}>{course.is_free ? "FREE" : `₹${parseFloat(course.price || "0").toFixed(0)}`}</Text></View>
+                          {!!course.validity_months && <View style={{ backgroundColor: "#EDE9FE", borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1 }}><Text style={{ fontSize: 9, fontFamily: "Inter_700Bold", color: "#6D28D9" }}>{course.validity_months}m validity</Text></View>}
                           <Text style={{ fontSize: 11, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>{course.total_tests || 0} tests</Text>
                           {!course.is_published && <View style={{ backgroundColor: "#FEF3C7", borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1 }}><Text style={{ fontSize: 9, fontFamily: "Inter_700Bold", color: "#D97706" }}>UNPUBLISHED</Text></View>}
                         </View>
@@ -4738,7 +4742,7 @@ export default function AdminDashboard() {
       {/* Create Folder Modal (Tests & Materials) — DB-backed */}
       <Modal visible={!!showCreateFolderModal} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16, maxHeight: 260 }]}>
+          <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16, maxHeight: 320 }]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Create Folder</Text>
               <Pressable onPress={() => setShowCreateFolderModal(null)}><Ionicons name="close" size={24} color={Colors.light.text} /></Pressable>
@@ -4748,15 +4752,33 @@ export default function AdminDashboard() {
               <Text style={styles.formLabel}>Folder Name *</Text>
               <TextInput style={styles.formInput} placeholder="e.g., Chapter 1, Algebra" placeholderTextColor={Colors.light.textMuted} value={newFolderNameInput} onChangeText={setNewFolderNameInput} autoFocus />
             </View>
+            {showCreateFolderModal === "test" && (
+              <View style={styles.formField}>
+                <Text style={styles.formLabel}>Validity (months)</Text>
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="e.g., 6"
+                  placeholderTextColor={Colors.light.textMuted}
+                  value={newFolderValidityMonths}
+                  onChangeText={setNewFolderValidityMonths}
+                  keyboardType="numeric"
+                />
+              </View>
+            )}
             </ScrollView>
             <Pressable
               style={[styles.createBtn, !newFolderNameInput.trim() && styles.createBtnDisabled]}
               disabled={!newFolderNameInput.trim() || createStandaloneFolderMutation.isPending}
               onPress={async () => {
                 if (!newFolderNameInput.trim() || !showCreateFolderModal) return;
-                await createStandaloneFolderMutation.mutateAsync({ name: newFolderNameInput.trim(), type: showCreateFolderModal });
+                await createStandaloneFolderMutation.mutateAsync({
+                  name: newFolderNameInput.trim(),
+                  type: showCreateFolderModal,
+                  validityMonths: showCreateFolderModal === "test" ? newFolderValidityMonths : undefined,
+                });
                 setShowCreateFolderModal(null);
                 setNewFolderNameInput("");
+                setNewFolderValidityMonths("");
               }}
             >
               <LinearGradient colors={showCreateFolderModal === "test" ? [Colors.light.primary, Colors.light.primaryDark] : ["#DC2626", "#B91C1C"]} style={styles.createBtnGrad}>
@@ -4782,6 +4804,7 @@ export default function AdminDashboard() {
                   <Pressable style={{ flexDirection: "row", alignItems: "center", gap: 12, padding: 16, borderRadius: 12, backgroundColor: "#EEF2FF", marginBottom: 8 }}
                     onPress={() => {
                       setEditStandaloneFolderName(standalonefolderActionSheet?.name || "");
+                      setEditStandaloneFolderValidityMonths(String(standalonefolderActionSheet?.validity_months ?? ""));
                       setEditingStandaloneFolderId(standalonefolderActionSheet?.id ?? null);
                       setEditStandaloneFolderModal(true);
                       setStandaloneFolderActionSheet(null);
@@ -4851,7 +4874,7 @@ export default function AdminDashboard() {
       {/* Rename Folder Modal */}
       <Modal visible={editStandaloneFolderModal} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16, maxHeight: 240 }]}>
+          <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16, maxHeight: 300 }]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Rename Folder</Text>
               <Pressable onPress={() => setEditStandaloneFolderModal(false)}><Ionicons name="close" size={24} color={Colors.light.text} /></Pressable>
@@ -4860,10 +4883,21 @@ export default function AdminDashboard() {
               <Text style={styles.formLabel}>Folder Name *</Text>
               <TextInput style={styles.formInput} value={editStandaloneFolderName} onChangeText={setEditStandaloneFolderName} placeholder="Folder name" placeholderTextColor={Colors.light.textMuted} autoFocus />
             </View>
+            <View style={styles.formField}>
+              <Text style={styles.formLabel}>Validity (months)</Text>
+              <TextInput
+                style={styles.formInput}
+                value={editStandaloneFolderValidityMonths}
+                onChangeText={setEditStandaloneFolderValidityMonths}
+                placeholder="e.g., 6"
+                placeholderTextColor={Colors.light.textMuted}
+                keyboardType="numeric"
+              />
+            </View>
             <Pressable
               style={[styles.createBtn, !editStandaloneFolderName.trim() && styles.createBtnDisabled]}
               disabled={!editStandaloneFolderName.trim() || renameStandaloneFolderMutation.isPending}
-              onPress={() => editingStandaloneFolderId && renameStandaloneFolderMutation.mutate({ id: editingStandaloneFolderId, name: editStandaloneFolderName.trim() })}
+              onPress={() => editingStandaloneFolderId && renameStandaloneFolderMutation.mutate({ id: editingStandaloneFolderId, name: editStandaloneFolderName.trim(), validityMonths: editStandaloneFolderValidityMonths })}
             >
               <LinearGradient colors={[Colors.light.primary, Colors.light.primaryDark]} style={styles.createBtnGrad}>
                 {renameStandaloneFolderMutation.isPending ? <ActivityIndicator color="#fff" /> : <Text style={styles.createBtnText}>Save</Text>}

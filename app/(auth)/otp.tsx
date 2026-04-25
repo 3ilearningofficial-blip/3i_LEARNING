@@ -107,6 +107,9 @@ export default function OTPScreen() {
       console.log("[OTP] user:", JSON.stringify({ id: data.user.id, role: data.user.role, profileComplete: data.user.profileComplete, name: data.user.name }));
       // Route based on profile completion — applies to all roles including admin
       if (!data.user.profileComplete) {
+        if (Platform.OS === "web" && typeof window !== "undefined") {
+          (window as any).__allowProfileSetupOnce = "1";
+        }
         console.log("[OTP] → profile-setup");
         router.replace("/profile-setup");
       } else {

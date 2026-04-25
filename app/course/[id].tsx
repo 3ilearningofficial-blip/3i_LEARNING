@@ -1,4 +1,4 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable,
   Platform, ActivityIndicator, Alert, Modal, Image,
@@ -9,7 +9,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
-import { apiRequest, getApiUrl, authFetch } from "@/lib/query-client";
+import { apiRequest, getApiUrl, getBaseUrl, authFetch } from "@/lib/query-client";
 import Colors from "@/constants/colors";
 import { useScreenProtection } from "@/lib/useScreenProtection";
 import { fetch } from "expo/fetch";
@@ -130,6 +130,25 @@ export default function CourseDetailScreen() {
   const [testTypeFilter, setTestTypeFilter] = useState<string>("all");
   const [folderTestTypeFilter, setFolderTestTypeFilter] = useState<string>("all");
   const [isPaymentPending, setIsPaymentPending] = useState(false);
+
+  // After Razorpay redirect (iOS / Android web), show result and clean URL
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof window === "undefined") return;
+    const sp = new URLSearchParams(window.location.search);
+    const p = sp.get("payment");
+    if (!p) return;
+    if (p === "success") {
+      Alert.alert("Success!", "Payment successful! You are now enrolled.");
+      qc.invalidateQueries({ queryKey: ["/api/courses", id] });
+      qc.invalidateQueries({ queryKey: ["/api/courses"] });
+    } else if (p === "failed") {
+      Alert.alert("Payment", "We could not complete the payment. Please try again.");
+    }
+    const url = new URL(window.location.href);
+    url.searchParams.delete("payment");
+    const next = url.pathname + (url.search || "") + url.hash;
+    window.history.replaceState({}, document.title, next);
+  }, [id, qc]);
   const [enrollError, setEnrollError] = useState("");
   const [enrollSuccess, setEnrollSuccess] = useState(false);
   const [studentActionStudent, setStudentActionStudent] = useState<any>(null);
@@ -295,6 +314,9 @@ export default function CourseDetailScreen() {
       const orderData = await orderRes.json();
 
       if (Platform.OS === "web") {
+        const ua = typeof navigator !== "undefined" ? navigator.userAgent || "" : "";
+        // iOS + Android phone/tablet web: use hosted redirect (Safari/Chrome in-app are flaky with inline handler)
+        const useRedirectCheckout = /iPhone|iPad|iPod|Android/i.test(ua);
         const script = document.querySelector('script[src="https://checkout.razorpay.com/v1/checkout.js"]');
         if (!script) {
           const s = document.createElement("script");
@@ -332,6 +354,12 @@ export default function CourseDetailScreen() {
             contact: user?.phone ? `+91${user.phone}` : "",
           },
           theme: { color: "#1A56DB" },
+          ...(useRedirectCheckout
+            ? {
+                redirect: true,
+                callback_url: `${getBaseUrl()}/api/payments/verify-redirect`,
+              }
+            : {}),
           modal: {
             ondismiss: () => {
               setIsPaymentPending(false);
@@ -340,6 +368,16 @@ export default function CourseDetailScreen() {
         };
 
         const rzp = new (window as any).Razorpay(options);
+        if (!useRedirectCheckout) {
+          rzp.on("payment.failed", (response: { error?: { description?: string; code?: string } }) => {
+            setIsPaymentPending(false);
+            const err =
+              response?.error?.description ||
+              response?.error?.code ||
+              "Payment could not be completed.";
+            Alert.alert("Payment failed", String(err));
+          });
+        }
         rzp.open();
         return;
       } else {

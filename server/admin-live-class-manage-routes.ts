@@ -73,9 +73,12 @@ export function registerAdminLiveClassManageRoutes({
       const liveClass = result.rows[0];
 
       if (isLive === true && liveClass.course_id) {
-        const enrolled = await db.query("SELECT user_id FROM enrollments WHERE course_id = $1", [liveClass.course_id]);
-        const expiresAt = Date.now() + 12 * 3600000;
-        for (const e of enrolled.rows) {
+        const recipients =
+          (liveClass.is_free_preview === true || liveClass.is_public === true)
+            ? await db.query("SELECT id AS user_id FROM users WHERE role = 'student'")
+            : await db.query("SELECT user_id FROM enrollments WHERE course_id = $1", [liveClass.course_id]);
+        const expiresAt = Date.now() + 6 * 3600000;
+        for (const e of recipients.rows) {
           await db.query("INSERT INTO notifications (user_id, title, message, type, created_at, expires_at) VALUES ($1, $2, $3, $4, $5, $6)", [
             e.user_id,
             "🔴 Live Class Started!",
@@ -85,7 +88,7 @@ export function registerAdminLiveClassManageRoutes({
             expiresAt,
           ]);
         }
-        console.log("[GoLive] Notification sent for '" + liveClass.title + "' to " + enrolled.rows.length + " students");
+        console.log("[GoLive] Notification sent for '" + liveClass.title + "' to " + recipients.rows.length + " students");
       }
 
       if (isLive === true) {
