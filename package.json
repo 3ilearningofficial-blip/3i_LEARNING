@@ -16,6 +16,8 @@
     "test:env": "node --env-file=.env node_modules/vitest/vitest.mjs --run",
     "test:db": "cross-env RUN_DB_TESTS=true node --env-file=.env node_modules/vitest/vitest.mjs --run",
     "test:watch": "vitest",
+    "loadtest:smoke": "node scripts/loadtest-smoke.mjs --base http://localhost:5000 --concurrency 20 --duration 20",
+    "maintenance:check": "node scripts/maintenance-check.mjs",
     "lint": "npx expo lint",
     "lint:fix": "npx expo lint --fix",
     "quality": "npm run lint && npx tsc --noEmit && npm run test"

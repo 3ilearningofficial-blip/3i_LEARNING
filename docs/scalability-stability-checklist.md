@@ -8,6 +8,8 @@ Use this checklist before major production releases.
 
 ## Load testing
 - Run load tests against staging first.
+- Quick smoke check command:
+  - `npm run loadtest:smoke`
 - Cover at minimum:
   - `POST /api/auth/email-login`
   - `GET /api/courses`
@@ -31,6 +33,12 @@ Use this checklist before major production releases.
 - Keep runtime schema sync disabled in production by default.
 - Enable `ALLOW_RUNTIME_SCHEMA_SYNC=true` only for controlled one-time schema sync.
 - Monitor process restarts and memory growth under PM2.
+- Run weekly maintenance check:
+  - `npm run maintenance:check`
+
+## Rollback readiness
+- Keep rollback script ready:
+  - `bash scripts/rollback-last.sh 5`
 
 ## Release gate
 - Required checks:

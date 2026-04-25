@@ -907,7 +907,7 @@ export default function AdminDashboard() {
       return res.json();
     },
     enabled: activeTab === "support",
-    refetchInterval: activeTab === "support" ? 8000 : false,
+    refetchInterval: activeTab === "support" ? 15000 : false,
   });
 
   const [supportUserId, setSupportUserId] = useState<number | null>(null);

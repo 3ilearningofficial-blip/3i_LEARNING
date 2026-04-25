@@ -87,10 +87,19 @@ pool.on("error", (err) => {
 
 // Retry wrapper for transient connection errors
 async function dbQuery(text: string, params?: unknown[]): Promise<any> {
+  const slowQueryThresholdMs = Number(process.env.DB_SLOW_QUERY_MS || "300");
   for (let attempt = 1; attempt <= 3; attempt++) {
+    const startedAt = Date.now();
     try {
-      return await pool.query(text, params);
+      const result = await pool.query(text, params);
+      const elapsedMs = Date.now() - startedAt;
+      if (elapsedMs >= slowQueryThresholdMs) {
+        const compactSql = text.replace(/\s+/g, " ").trim().slice(0, 220);
+        console.warn("[DB] Slow query", { elapsedMs, attempt, sql: compactSql });
+      }
+      return result;
     } catch (err: any) {
+      const elapsedMs = Date.now() - startedAt;
       const isTransient = err.message?.includes("Connection terminated") ||
         err.message?.includes("connection timeout") ||
         err.code === "ECONNRESET" ||
@@ -100,6 +109,12 @@ async function dbQuery(text: string, params?: unknown[]): Promise<any> {
         await new Promise(r => setTimeout(r, 200 * attempt));
         continue;
       }
+      console.error("[DB] Query failed", {
+        elapsedMs,
+        attempt,
+        code: err?.code,
+        message: err?.message,
+      });
       throw err;
     }
   }
@@ -411,11 +426,26 @@ async function ensureCoreLearningSchemaColumns(): Promise<void> {
   }
 }
 
+async function ensureCoreLearningPerformanceIndexes(): Promise<void> {
+  const indexStatements = [
+    "CREATE INDEX IF NOT EXISTS idx_enrollments_user_course_status_valid_until ON enrollments(user_id, course_id, status, valid_until)",
+    "CREATE INDEX IF NOT EXISTS idx_lectures_course_section ON lectures(course_id, section_title)",
+    "CREATE INDEX IF NOT EXISTS idx_materials_course_section ON study_materials(course_id, section_title)",
+    "CREATE INDEX IF NOT EXISTS idx_live_classes_course_scheduled ON live_classes(course_id, scheduled_at)",
+    "CREATE INDEX IF NOT EXISTS idx_download_tokens_token_used_expires ON download_tokens(token, used, expires_at)",
+  ];
+
+  for (const statement of indexStatements) {
+    await db.query(statement).catch(() => {});
+  }
+}
+
 export async function registerRoutes(app: Express): Promise<Server> {
   // Run first: admin create/update and live-classes SELECT/INSERT need these. Without them Postgres errors
   // when ALLOW_RUNTIME_SCHEMA_SYNC is false (Vercel → api.3ilearning.in / EC2 + Neon with an old `courses` row shape).
   try {
     await ensureCoreLearningSchemaColumns();
+    await ensureCoreLearningPerformanceIndexes();
     console.log("[DB] courses + enrollments columns ensured (admin + live APIs)");
   } catch (err) {
     console.error("[DB] CRITICAL: could not ensure course/enrollment columns. Run SQL in Neon (same branch as DATABASE_URL). Error:", err);

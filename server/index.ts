@@ -186,6 +186,16 @@ function getAppName(): string {
   }
 }
 
+function getBackendVersion() {
+  return {
+    service: "backend",
+    env: process.env.NODE_ENV || "development",
+    commit: process.env.GIT_COMMIT || process.env.COMMIT_SHA || "unknown",
+    version: process.env.npm_package_version || "unknown",
+    now: Date.now(),
+  };
+}
+
 function serveExpoManifest(platform: string, res: Response) {
   const manifestPath = path.resolve(
     process.cwd(),
@@ -392,6 +402,11 @@ function setupErrorHandler(app: express.Application) {
 
   // 3) Auth/session and API protection middleware
   app.use(session(sessionConfig));
+
+  // Lightweight version/health endpoint for deploy consistency checks.
+  app.get("/api/health/version", (_req: Request, res: Response) => {
+    res.json(getBackendVersion());
+  });
 
   const otpSendLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,

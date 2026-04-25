@@ -20,7 +20,7 @@ function ChatTabIcon({ color, focused }: { color: string; focused: boolean }) {
       } catch { return []; }
     },
     enabled: !!user,
-    refetchInterval: 10000,
+    refetchInterval: 20000,
     staleTime: 5000,
   });
 

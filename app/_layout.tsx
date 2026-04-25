@@ -12,7 +12,7 @@ import React, { useEffect } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { queryClient } from "@/lib/query-client";
+import { getApiUrl, queryClient } from "@/lib/query-client";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { StatusBar } from "expo-status-bar";
 import * as ScreenOrientation from "expo-screen-orientation";
@@ -122,6 +122,22 @@ export default function RootLayout() {
       SplashScreen.hideAsync();
     }
   }, [fontsLoaded, fontError]);
+
+  useEffect(() => {
+    if (Platform.OS !== "web") return;
+    const apiBase = getApiUrl();
+    const appCommit = process.env.EXPO_PUBLIC_APP_COMMIT || "";
+    fetch(new URL("/api/health/version", apiBase).toString(), { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((payload) => {
+        if (!payload) return;
+        const backendCommit = String(payload.commit || "");
+        if (appCommit && backendCommit && appCommit !== backendCommit) {
+          console.warn("[VersionCheck] frontend/backend commit mismatch", { appCommit, backendCommit });
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   if (!fontsLoaded && !fontError) return null;
 

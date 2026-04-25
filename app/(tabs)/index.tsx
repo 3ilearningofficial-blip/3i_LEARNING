@@ -356,8 +356,8 @@ export default function HomeScreen() {
       url.searchParams.set("_t", String(Date.now()));
       const res = await authFetch(url.toString());
       if (!res.ok) throw new Error(`${res.status}`);
-      const data = await res.json();
-      return data;
+      const data = await res.json().catch(() => []);
+      return Array.isArray(data) ? data : [];
     },
     staleTime: 0,
     gcTime: 0,
@@ -410,9 +410,12 @@ export default function HomeScreen() {
       const url = new URL("/api/study-materials", baseUrl);
       url.searchParams.set("free", "true");
       const res = await authFetch(url.toString());
-      const data = await res.json();
+      const data = await res.json().catch(() => ({ materials: [], folders: [] }));
       if (Array.isArray(data)) return { materials: data, folders: [] };
-      return data;
+      return {
+        materials: Array.isArray((data as any)?.materials) ? (data as any).materials : [],
+        folders: Array.isArray((data as any)?.folders) ? (data as any).folders : [],
+      };
     },
   });
   const freeMaterials = freeMaterialsData?.materials || [];
@@ -424,9 +427,10 @@ export default function HomeScreen() {
       const baseUrl = getApiUrl();
       const url = new URL("/api/live-classes", baseUrl);
       const res = await authFetch(url.toString());
-      return res.json();
+      const data = await res.json().catch(() => []);
+      return Array.isArray(data) ? data : [];
     },
-    refetchInterval: 15000,
+    refetchInterval: 30000,
   });
 
   const { data: homeNotifications = [] } = useQuery<any[]>({
