@@ -198,6 +198,16 @@ export default function AdminCourseScreen() {
   const [folderEditMaterial, setFolderEditMaterial] = useState<any>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const courseIdNum = Number(id);
+
+  const inferLectureVideoType = (url: string): string => {
+    const u = (url || "").trim().toLowerCase();
+    if (!u) return "youtube";
+    if (u.includes("youtube.com") || u.includes("youtu.be")) return "youtube";
+    if (u.includes("drive.google.com")) return "gdrive";
+    if (u.includes("/api/media/") || u.includes("r2.dev") || u.includes("cdn.") || u.endsWith(".mp4") || u.endsWith(".mov") || u.endsWith(".mkv")) return "r2";
+    return "upload";
+  };
 
   const pickFileAndUpload = async (folder: "lectures" | "materials" | "images", accept: string, onDone: (url: string) => void) => {
     try {
@@ -331,8 +341,17 @@ export default function AdminCourseScreen() {
 
   const addLectureMutation = useMutation({
     mutationFn: async (data: NewLecture) => {
+      if (!Number.isFinite(courseIdNum) || courseIdNum <= 0) throw new Error("Invalid course id");
+      const title = (data.title || "").trim();
+      const videoUrl = (data.videoUrl || "").trim();
+      if (!title) throw new Error("Lecture title is required");
+      if (!videoUrl) throw new Error("Video URL is required");
       await apiRequest("POST", "/api/admin/lectures", {
-        ...data, courseId: parseInt(id),
+        ...data,
+        courseId: courseIdNum,
+        title,
+        videoUrl,
+        videoType: inferLectureVideoType(videoUrl),
         durationMinutes: parseInt(data.durationMinutes) || 0,
         orderIndex: parseInt(data.orderIndex) || 0,
         sectionTitle: data.sectionTitle || null,
@@ -345,7 +364,7 @@ export default function AdminCourseScreen() {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       Alert.alert("Success", "Lecture added!");
     },
-    onError: () => Alert.alert("Error", "Failed to add lecture"),
+    onError: (err: any) => Alert.alert("Error", err?.message?.replace(/^\S+\s->\s\d+:\s*/, "") || "Failed to add lecture"),
   });
 
   const deleteLectureMutation = useMutation({
@@ -416,8 +435,16 @@ export default function AdminCourseScreen() {
 
   const addMaterialMutation = useMutation({
     mutationFn: async (data: NewMaterial) => {
+      if (!Number.isFinite(courseIdNum) || courseIdNum <= 0) throw new Error("Invalid course id");
+      const title = (data.title || "").trim();
+      const fileUrl = (data.fileUrl || "").trim();
+      if (!title) throw new Error("Material title is required");
+      if (!fileUrl) throw new Error("File URL is required");
       await apiRequest("POST", "/api/admin/study-materials", {
-        ...data, courseId: parseInt(id),
+        ...data,
+        courseId: courseIdNum,
+        title,
+        fileUrl,
         sectionTitle: data.sectionTitle || null,
       });
     },
@@ -428,7 +455,7 @@ export default function AdminCourseScreen() {
       setShowAddMaterial(false); setFolderAddModal(false); setNewMaterial(emptyMaterial);
       Alert.alert("Success", "Material added!");
     },
-    onError: () => Alert.alert("Error", "Failed to add material"),
+    onError: (err: any) => Alert.alert("Error", err?.message?.replace(/^\S+\s->\s\d+:\s*/, "") || "Failed to add material"),
   });
 
   const deleteMaterialMutation = useMutation({
@@ -1705,7 +1732,7 @@ export default function AdminCourseScreen() {
                 <Switch value={newMaterial.downloadAllowed} onValueChange={(v) => setNewMaterial(p => ({ ...p, downloadAllowed: v }))} trackColor={{ false: Colors.light.border, true: "#22C55E" }} thumbColor="#fff" />
               </View>
             </ScrollView>
-            <ActionButton label="Add Material" onPress={() => addMaterialMutation.mutate(newMaterial)} disabled={!newMaterial.title} loading={addMaterialMutation.isPending} />
+            <ActionButton label="Add Material" onPress={() => addMaterialMutation.mutate(newMaterial)} disabled={!newMaterial.title || !(newMaterial.fileUrl || "").trim()} loading={addMaterialMutation.isPending} />
           </View>
         </View>
       </Modal>
@@ -2108,7 +2135,7 @@ export default function AdminCourseScreen() {
                       <Text style={{ fontSize: 14, fontFamily: "Inter_500Medium", color: Colors.light.text }}>Allow Download</Text>
                     </View>
                   </ScrollView>
-                  <ActionButton label="Add Material" onPress={() => { addMaterialMutation.mutate({ ...newMaterial, sectionTitle: openAdminFolder!.name }); setFolderAddModal(false); }} disabled={!newMaterial.title} loading={addMaterialMutation.isPending} />
+                  <ActionButton label="Add Material" onPress={() => { addMaterialMutation.mutate({ ...newMaterial, sectionTitle: openAdminFolder!.name }); setFolderAddModal(false); }} disabled={!newMaterial.title || !(newMaterial.fileUrl || "").trim()} loading={addMaterialMutation.isPending} />
                 </View>
               </View>
             </Modal>

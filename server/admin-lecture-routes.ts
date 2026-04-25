@@ -17,30 +17,46 @@ export function registerAdminLectureRoutes({
   requireAdmin,
   getR2Client,
 }: RegisterAdminLectureRoutesDeps): void {
+  const inferLectureVideoType = (url: string): string => {
+    const u = (url || "").trim().toLowerCase();
+    if (!u) return "youtube";
+    if (u.includes("youtube.com") || u.includes("youtu.be")) return "youtube";
+    if (u.includes("drive.google.com")) return "gdrive";
+    if (u.includes("/api/media/") || u.includes("r2.dev") || u.includes("cdn.") || u.endsWith(".mp4") || u.endsWith(".mov") || u.endsWith(".mkv")) return "r2";
+    return "upload";
+  };
+
   app.post("/api/admin/lectures", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { courseId, title, description, videoUrl, videoType, pdfUrl, durationMinutes, orderIndex, isFreePreview, sectionTitle, downloadAllowed } =
+      const { courseId, title, description, videoUrl, fileUrl, videoType, pdfUrl, durationMinutes, orderIndex, isFreePreview, sectionTitle, downloadAllowed } =
         req.body;
       const parsedCourseId = Number(courseId);
-      if (!Number.isFinite(parsedCourseId)) {
+      if (!Number.isFinite(parsedCourseId) || parsedCourseId <= 0) {
         return res.status(400).json({ message: "Invalid courseId" });
+      }
+      const courseCheck = await db.query("SELECT id FROM courses WHERE id = $1 LIMIT 1", [parsedCourseId]);
+      if (courseCheck.rows.length === 0) {
+        return res.status(404).json({ message: "Course not found" });
       }
       if (!title || !String(title).trim()) {
         return res.status(400).json({ message: "Lecture title is required" });
       }
-      if (!videoUrl && !pdfUrl) {
+      const normalizedVideoUrl = String(videoUrl || fileUrl || "").trim();
+      const normalizedPdfUrl = String(pdfUrl || "").trim();
+      if (!normalizedVideoUrl && !normalizedPdfUrl) {
         return res.status(400).json({ message: "Either videoUrl or pdfUrl is required" });
       }
+      const effectiveVideoType = String(videoType || "").trim() || inferLectureVideoType(normalizedVideoUrl);
       const result = await db.query(
         `INSERT INTO lectures (course_id, title, description, video_url, video_type, pdf_url, duration_minutes, order_index, is_free_preview, section_title, download_allowed, created_at) 
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
         [
           parsedCourseId,
           String(title).trim(),
-          description,
-          videoUrl || null,
-          videoType || "youtube",
-          pdfUrl || null,
+          description || "",
+          normalizedVideoUrl || null,
+          effectiveVideoType,
+          normalizedPdfUrl || null,
           Number(durationMinutes) || 0,
           Number(orderIndex) || 0,
           isFreePreview || false,
@@ -52,7 +68,17 @@ export function registerAdminLectureRoutes({
       await db.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [parsedCourseId]);
       res.json(result.rows[0]);
     } catch (err) {
-      console.error(err);
+      console.error("[AdminLectures] create failed", {
+        body: {
+          courseId: req.body?.courseId,
+          title: req.body?.title,
+          videoType: req.body?.videoType,
+          hasVideoUrl: !!req.body?.videoUrl,
+          hasFileUrl: !!req.body?.fileUrl,
+          hasPdfUrl: !!req.body?.pdfUrl,
+        },
+        error: err instanceof Error ? err.message : err,
+      });
       res.status(500).json({ message: "Failed to add lecture", detail: err instanceof Error ? err.message : "unknown_error" });
     }
   });

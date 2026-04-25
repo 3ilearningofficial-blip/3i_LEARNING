@@ -20,17 +20,48 @@ export function registerAdminUsersAndContentRoutes({
   app.post("/api/admin/study-materials", requireAdmin, async (req: Request, res: Response) => {
     try {
       const { title, description, fileUrl, fileType, courseId, isFree, sectionTitle, downloadAllowed } = req.body;
+      const normalizedTitle = typeof title === "string" ? title.trim() : "";
+      const normalizedFileUrl = typeof fileUrl === "string" ? fileUrl.trim() : "";
+      const parsedCourseId = courseId == null ? null : Number(courseId);
+      if (!normalizedTitle) return res.status(400).json({ message: "Material title is required" });
+      if (!normalizedFileUrl) return res.status(400).json({ message: "File URL is required" });
+      if (parsedCourseId != null && (!Number.isFinite(parsedCourseId) || parsedCourseId <= 0)) {
+        return res.status(400).json({ message: "Invalid courseId" });
+      }
+      if (parsedCourseId != null) {
+        const courseCheck = await db.query("SELECT id FROM courses WHERE id = $1 LIMIT 1", [parsedCourseId]);
+        if (courseCheck.rows.length === 0) return res.status(404).json({ message: "Course not found" });
+      }
       const result = await db.query(
         `INSERT INTO study_materials (title, description, file_url, file_type, course_id, is_free, section_title, download_allowed, created_at) 
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-        [title, description, fileUrl, fileType || "pdf", courseId || null, courseId ? false : isFree !== false, sectionTitle || null, downloadAllowed || false, Date.now()]
+        [
+          normalizedTitle,
+          description || "",
+          normalizedFileUrl,
+          fileType || "pdf",
+          parsedCourseId,
+          parsedCourseId ? false : isFree !== false,
+          sectionTitle || null,
+          downloadAllowed || false,
+          Date.now(),
+        ]
       );
-      if (courseId) {
-        await db.query("UPDATE courses SET total_materials = (SELECT COUNT(*) FROM study_materials WHERE course_id = $1) WHERE id = $1", [courseId]);
+      if (parsedCourseId) {
+        await db.query("UPDATE courses SET total_materials = (SELECT COUNT(*) FROM study_materials WHERE course_id = $1) WHERE id = $1", [parsedCourseId]);
       }
       res.json(result.rows[0]);
-    } catch {
-      res.status(500).json({ message: "Failed to add material" });
+    } catch (err) {
+      console.error("[AdminMaterials] create failed", {
+        body: {
+          courseId: req.body?.courseId,
+          title: req.body?.title,
+          fileType: req.body?.fileType,
+          hasFileUrl: !!req.body?.fileUrl,
+        },
+        error: err instanceof Error ? err.message : err,
+      });
+      res.status(500).json({ message: "Failed to add material", detail: err instanceof Error ? err.message : "unknown_error" });
     }
   });
 
