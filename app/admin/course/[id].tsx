@@ -260,6 +260,17 @@ export default function AdminCourseScreen() {
   const bottomPadding = Platform.OS === "web" ? 34 : insets.bottom;
 
   const isValidId = !!id && id !== "undefined" && id !== "null";
+  const unwrapPayload = (raw: any) => {
+    if (
+      raw &&
+      typeof raw === "object" &&
+      typeof raw.success === "boolean" &&
+      "data" in raw
+    ) {
+      return raw.success ? raw.data : null;
+    }
+    return raw;
+  };
 
   const { data: course, isLoading } = useQuery<CourseDetail>({
     queryKey: ["/api/courses", id],
@@ -267,7 +278,8 @@ export default function AdminCourseScreen() {
       const baseUrl = getApiUrl();
       const url = new URL(`/api/courses/${id}`, baseUrl);
       const res = await fetch(url.toString(), { credentials: "include" });
-      const payload = await res.json().catch(() => null);
+      const raw = await res.json().catch(() => null);
+      const payload = unwrapPayload(raw);
       if (!payload || typeof payload !== "object") {
         return {
           id: Number(id) || 0,
@@ -299,7 +311,8 @@ export default function AdminCourseScreen() {
       const url = new URL(`/api/live-classes?courseId=${id}&admin=true`, baseUrl);
       const res = await fetch(url.toString(), { credentials: "include" });
       if (!res.ok) return [];
-      const payload = await res.json().catch(() => []);
+      const raw = await res.json().catch(() => []);
+      const payload = unwrapPayload(raw);
       return Array.isArray(payload) ? payload : [];
     },
     enabled: isValidId && activeTab === "live",
@@ -680,7 +693,7 @@ export default function AdminCourseScreen() {
           <View style={styles.headerContent}>
             <Text style={styles.headerTitle} numberOfLines={1}>{course.title}</Text>
             <Text style={styles.headerSub}>
-              {isTestSeries ? "Test Series" : `${course.total_lectures} lectures`} · {course.total_tests} tests
+              {isTestSeries ? "Test Series" : `${Number(course.total_lectures) || courseLectures.length} lectures`} · {Number(course.total_tests) || courseTests.length} tests
             </Text>
           </View>
           <Pressable style={styles.editCourseBtn} onPress={openEditCourse}>
