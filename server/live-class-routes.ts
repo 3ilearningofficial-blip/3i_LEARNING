@@ -29,9 +29,11 @@ export function registerLiveClassRoutes({
             "SELECT lc.*, c.title as course_title FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id WHERE lc.course_id = $1 OR lc.course_id IS NULL ORDER BY lc.scheduled_at DESC",
             [cid]
           );
+          res.set("Cache-Control", "private, no-store");
           return res.json(result.rows);
         }
         const result = await db.query("SELECT lc.*, c.title as course_title FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id ORDER BY lc.scheduled_at DESC");
+        res.set("Cache-Control", "private, no-store");
         return res.json(result.rows);
       }
 
@@ -57,6 +59,7 @@ export function registerLiveClassRoutes({
            ORDER BY lc.scheduled_at DESC`,
           [cid, user.id, now]
         );
+        res.set("Cache-Control", "private, no-store");
         return res.json(result.rows);
       }
       if (cid) {
@@ -78,6 +81,7 @@ export function registerLiveClassRoutes({
            ORDER BY lc.scheduled_at DESC`,
           [cid]
         );
+        res.set("Cache-Control", "private, no-store");
         return res.json(result.rows);
       }
       const ex12 = sqlEnrollmentExistsForLiveList(1, 2);
@@ -100,6 +104,7 @@ export function registerLiveClassRoutes({
            ORDER BY lc.scheduled_at DESC`,
           [user.id, now]
         );
+        res.set("Cache-Control", "private, no-store");
         return res.json(result.rows);
       }
       const result = await db.query(
@@ -118,10 +123,12 @@ export function registerLiveClassRoutes({
          )
          ORDER BY lc.scheduled_at DESC`
       );
+      res.set("Cache-Control", "private, no-store");
       res.json(result.rows);
     } catch (err) {
       console.error("[LiveClasses] list error:", err);
       // Keep login/home resilient even if this auxiliary feed fails.
+      res.set("Cache-Control", "private, no-store");
       res.json([]);
     }
   });
@@ -139,9 +146,11 @@ export function registerLiveClassRoutes({
         LIMIT 50
       `);
       console.log(`[UpcomingClasses] returning ${result.rows.length} classes`);
+      res.set("Cache-Control", "private, no-store");
       res.json(result.rows);
     } catch (err) {
       console.error("[UpcomingClasses] error:", err);
+      res.set("Cache-Control", "private, no-store");
       res.json([]);
     }
   });
@@ -161,6 +170,7 @@ export function registerLiveClassRoutes({
 
       const hasAccess = await userCanAccessLiveClassContent(db, user, lc);
 
+      res.set("Cache-Control", "private, no-store");
       res.json({ ...lc, is_enrolled: isEnrolled, has_access: hasAccess });
     } catch {
       res.status(500).json({ message: "Failed to fetch live class" });

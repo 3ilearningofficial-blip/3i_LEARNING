@@ -61,6 +61,7 @@ export function registerLiveChatRoutes({
       }
       query += " ORDER BY created_at ASC LIMIT 200";
       const result = await db.query(query, params);
+      res.set("Cache-Control", "private, no-store");
       res.json(result.rows);
     } catch {
       res.status(500).json({ message: "Failed to fetch chat" });

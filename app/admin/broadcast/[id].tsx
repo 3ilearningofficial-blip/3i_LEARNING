@@ -145,7 +145,7 @@ iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border:
 <div class="wrapper">
 <div class="cover-tl"></div>
 <div class="cover-tr"></div>
-<iframe src="https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&mute=0&playsinline=1&rel=0&modestbranding=1&showinfo=0&iv_load_policy=3&cc_load_policy=0&fs=1&disablekb=0&controls=1" allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; fullscreen" allowfullscreen></iframe>
+<iframe src="https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&mute=0&playsinline=1&rel=0&modestbranding=1&showinfo=0&iv_load_policy=3&cc_load_policy=0&fs=1&disablekb=0&controls=1" allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; fullscreen"></iframe>
 <div class="cover-bl"></div>
 <div class="cover-fs"></div>
 <div class="cover-br"></div>
@@ -447,7 +447,6 @@ export default function BroadcastPage() {
                     top: 0, left: 0, width: "100%", height: "100%", border: "none",
                   }}
                   allow="autoplay; fullscreen"
-                  allowFullScreen
                 />
               ) : (
                 <View style={styles.noWebrtc}>
@@ -476,7 +475,6 @@ export default function BroadcastPage() {
                     border: "none",
                   }}
                   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
-                  allowFullScreen
                 />
               ) : (
                 <View style={styles.noWebrtc}>

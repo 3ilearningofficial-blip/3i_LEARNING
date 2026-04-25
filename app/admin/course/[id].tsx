@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable, TextInput,
   Platform, ActivityIndicator, Alert, Modal, Switch, Image, Linking,
@@ -149,6 +149,16 @@ const emptyMaterial: NewMaterial = { title: "", description: "", fileUrl: "", fi
 const emptyLiveClass: NewLiveClass = { title: "", description: "", youtubeUrl: "", scheduledAt: "", isLive: false, isPublic: false };
 
 export default function AdminCourseScreen() {
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof MutationObserver === "undefined") return;
+    const observer = new MutationObserver(() => {
+      const activeElement = document.activeElement as HTMLElement | null;
+      if (activeElement?.closest('[aria-hidden="true"]')) activeElement.blur();
+    });
+    observer.observe(document.body, { subtree: true, attributes: true, attributeFilter: ["aria-hidden"] });
+    return () => observer.disconnect();
+  }, []);
+
   const { id } = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
@@ -256,7 +266,10 @@ export default function AdminCourseScreen() {
     queryFn: async () => {
       const baseUrl = getApiUrl();
       const url = new URL(`/api/courses/${id}`, baseUrl);
-      const res = await fetch(url.toString(), { credentials: "include" });
+      const res = await fetch(url.toString(), {
+        credentials: "include",
+        headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
+      });
       const payload = await res.json().catch(() => null);
       if (!payload || typeof payload !== "object") {
         return {
@@ -278,6 +291,8 @@ export default function AdminCourseScreen() {
       } as CourseDetail;
     },
     enabled: isValidId,
+    staleTime: 0,
+    refetchInterval: ["lectures", "tests", "materials"].includes(activeTab) ? 10000 : false,
   });
 
   const { data: courseLiveClasses = [] } = useQuery<LiveClassItem[]>({
@@ -285,12 +300,16 @@ export default function AdminCourseScreen() {
     queryFn: async () => {
       const baseUrl = getApiUrl();
       const url = new URL(`/api/live-classes?courseId=${id}&admin=true`, baseUrl);
-      const res = await fetch(url.toString(), { credentials: "include" });
+      const res = await fetch(url.toString(), {
+        credentials: "include",
+        headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
+      });
       if (!res.ok) return [];
       const payload = await res.json().catch(() => []);
       return Array.isArray(payload) ? payload : [];
     },
     enabled: isValidId && activeTab === "live",
+    staleTime: 0,
     refetchInterval: activeTab === "live" ? 10000 : false,
   });
 

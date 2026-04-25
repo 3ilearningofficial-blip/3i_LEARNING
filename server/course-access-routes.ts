@@ -131,7 +131,7 @@ export function registerCourseAccessRoutes({
         (course as any).courseEnded = false;
       }
       const lecturesResult = await db.query("SELECT * FROM lectures WHERE course_id = $1 ORDER BY order_index", [req.params.id]);
-      const testsResult = await db.query("SELECT * FROM tests WHERE course_id = $1 AND is_published = TRUE", [req.params.id]);
+      const testsResult = await db.query("SELECT * FROM tests WHERE course_id = $1 AND is_published = TRUE ORDER BY created_at DESC, id DESC", [req.params.id]);
       const materialsResult = await db.query("SELECT * FROM study_materials WHERE course_id = $1", [req.params.id]);
 
       if (user) {
@@ -156,6 +156,7 @@ export function registerCourseAccessRoutes({
         }
       }
 
+      res.set("Cache-Control", "private, no-store");
       res.json({
         ...course,
         total_materials: materialsResult.rows.length,

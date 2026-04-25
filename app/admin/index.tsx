@@ -563,6 +563,16 @@ function WelcomeSettingsTab() {
 }
 
 export default function AdminDashboard() {
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof MutationObserver === "undefined") return;
+    const observer = new MutationObserver(() => {
+      const activeElement = document.activeElement as HTMLElement | null;
+      if (activeElement?.closest('[aria-hidden="true"]')) activeElement.blur();
+    });
+    observer.observe(document.body, { subtree: true, attributes: true, attributeFilter: ["aria-hidden"] });
+    return () => observer.disconnect();
+  }, []);
+
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
   const { user, isAdmin, logout } = useAuth();
@@ -1000,7 +1010,7 @@ export default function AdminDashboard() {
     queryFn: async () => {
       const baseUrl = getApiUrl();
       const url = new URL("/api/study-materials?free=true", baseUrl);
-      const res = await authFetch(url.toString());
+      const res = await authFetch(url.toString(), { cache: "no-store" });
       if (!res.ok) return [];
       return res.json();
     },
@@ -1010,6 +1020,8 @@ export default function AdminDashboard() {
       return [];
     },
     enabled: activeTab === "materials",
+    staleTime: 0,
+    refetchInterval: activeTab === "materials" ? 10000 : false,
   });
 
   const addFreeMaterialMutation = useMutation({
@@ -1203,13 +1215,14 @@ export default function AdminDashboard() {
     queryFn: async () => {
       const baseUrl = getApiUrl();
       const url = new URL("/api/admin/tests", baseUrl);
-      const res = await authFetch(url.toString());
+      const res = await authFetch(url.toString(), { cache: "no-store" });
       if (!res.ok) return [];
       return res.json();
     },
     enabled: activeTab === "tests",
     staleTime: 0,
     gcTime: 0,
+    refetchInterval: activeTab === "tests" ? 10000 : false,
   });
 
   const createTestMutation = useMutation({
@@ -1349,7 +1362,7 @@ export default function AdminDashboard() {
     queryKey: ["/api/upcoming-classes"],
     queryFn: async () => {
       const baseUrl = getApiUrl();
-      const res = await authFetch(new URL("/api/upcoming-classes", baseUrl).toString());
+      const res = await authFetch(new URL("/api/upcoming-classes", baseUrl).toString(), { cache: "no-store" });
       if (!res.ok) {
         console.warn("[UpcomingClasses] fetch failed:", res.status);
         return [];
@@ -1359,7 +1372,7 @@ export default function AdminDashboard() {
       return data;
     },
     staleTime: 0,
-    refetchInterval: 15000,
+    refetchInterval: 10000,
   });
 
   const handleScheduleLiveClass = async () => {

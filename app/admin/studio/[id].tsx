@@ -308,7 +308,6 @@ export default function StudioSetupPage() {
                     src={`https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&mute=1&playsinline=1&rel=0&modestbranding=1&showinfo=0&iv_load_policy=3&cc_load_policy=0&fs=1&controls=1`}
                     style={{ position: "absolute" as any, top: 0, left: 0, width: "100%", height: "100%", border: "none", borderRadius: 12 }}
                     allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; fullscreen"
-                    allowFullScreen
                   />
                 );
               }

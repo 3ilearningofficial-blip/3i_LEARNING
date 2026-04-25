@@ -26,6 +26,7 @@ export function registerAdminTestRoutes({
         WHERE t.course_id IS NULL
         ORDER BY t.created_at DESC
       `);
+      res.set("Cache-Control", "private, no-store");
       res.json(result.rows);
     } catch {
       res.status(500).json({ message: "Failed to fetch tests" });

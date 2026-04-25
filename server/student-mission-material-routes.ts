@@ -105,6 +105,7 @@ export function registerStudentMissionMaterialRoutes({
         const foldersResult = await db.query("SELECT * FROM standalone_folders WHERE type = 'material' AND (is_hidden = FALSE OR is_hidden IS NULL) ORDER BY created_at ASC");
         folders = foldersResult.rows;
       }
+      res.set("Cache-Control", "private, no-store");
       res.json({ materials: result.rows, folders });
     } catch {
       res.status(500).json({ message: "Failed to fetch materials" });

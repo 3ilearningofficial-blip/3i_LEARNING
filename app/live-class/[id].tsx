@@ -71,7 +71,6 @@ iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border:
 <iframe
   src="https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&mute=0&playsinline=1&rel=0&modestbranding=1&showinfo=0&iv_load_policy=3&cc_load_policy=0&fs=1&disablekb=0&controls=1&color=white"
   allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; fullscreen"
-  allowfullscreen
 ></iframe>
 <div class="cover-bl"></div>
 <div class="cover-br"></div>
@@ -252,7 +251,6 @@ function WebYouTubePlayer({ videoId, onReady }: { videoId: string; onReady: () =
       srcDoc={buildYouTubeHtml(videoId)}
       style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" } as any}
       allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
-      allowFullScreen
     />
   );
 }
@@ -416,17 +414,20 @@ export default function LiveClassScreen() {
   const { data: chatMessages = [], refetch: refetchChat } = useQuery<ChatMsg[]>({
     queryKey: [`/api/live-classes/${id}/chat`],
     refetchInterval: 3000,
+    staleTime: 0,
   });
 
   const { data: viewerData } = useQuery<{ count: number; viewers: any[]; visible: boolean }>({
     queryKey: [`/api/live-classes/${id}/viewers`],
     refetchInterval: 10000,
+    staleTime: 0,
   });
 
   const { data: raisedHands = [], refetch: refetchHands } = useQuery<HandRaise[]>({
     queryKey: [`/api/admin/live-classes/${id}/raised-hands`],
     enabled: isAdmin,
     refetchInterval: 5000,
+    staleTime: 0,
   });
 
   useEffect(() => {
@@ -629,7 +630,6 @@ export default function LiveClassScreen() {
                 srcDoc={buildCfHlsPlayerHtml(cfHlsUrl)}
                 style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" } as any}
                 allow="autoplay; fullscreen"
-                allowFullScreen
                 onLoad={() => setIsVideoLoading(false)}
               />
             ) : !videoId && !isCfHls && !isStreamId && authenticatedVideoUrl && Platform.OS === "web" ? (
