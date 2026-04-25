@@ -37,6 +37,8 @@ export function useDownloadManager(): UseDownloadManagerReturn {
   }, [stateMap]);
 
   const getKey = (itemType: string, itemId: number) => `${itemType}:${itemId}`;
+  const getLocalEncryptedPath = (localFilename: string) =>
+    `${(FileSystem as any).documentDirectory}${localFilename}.enc`;
 
   const loadState = async () => {
     try {
@@ -76,6 +78,14 @@ export function useDownloadManager(): UseDownloadManagerReturn {
     });
   };
 
+  const removeStateEntry = useCallback((itemType: string, itemId: number) => {
+    setStateMap(prev => {
+      const map = new Map(prev);
+      map.delete(getKey(itemType, itemId));
+      return map;
+    });
+  }, []);
+
   // ================= DOWNLOAD =================
 
   const startDownload = useCallback(
@@ -105,59 +115,69 @@ export function useDownloadManager(): UseDownloadManagerReturn {
         const { token } = await tokenRes.json();
 
         // STEP 2: download file
+        if (!token || typeof token !== 'string') {
+          throw new Error('Invalid download token response');
+        }
+
         const downloadUrl = `${baseUrl}/download-proxy?token=${token}`;
         const tempPath = `${(FileSystem as any).cacheDirectory}temp_${Date.now()}`;
 
-        const download = FileSystem.createDownloadResumable(
-          downloadUrl,
-          tempPath,
-          {},
-          (p) => {
-            const progress = Math.round((p.totalBytesWritten / p.totalBytesExpectedToWrite) * 100);
-            updateState(itemType, itemId, { progress });
-          }
-        );
+        let result: Awaited<ReturnType<ReturnType<typeof FileSystem.createDownloadResumable>["downloadAsync"]>> | null = null;
+        try {
+          const download = FileSystem.createDownloadResumable(
+            downloadUrl,
+            tempPath,
+            {},
+            (p) => {
+              if (p.totalBytesExpectedToWrite > 0) {
+                const progress = Math.round((p.totalBytesWritten / p.totalBytesExpectedToWrite) * 100);
+                updateState(itemType, itemId, { progress });
+              }
+            }
+          );
 
-        const result = await download.downloadAsync();
-        if (!result) throw new Error('Download failed');
+          result = await download.downloadAsync();
+          if (!result) throw new Error('Download failed');
 
-        // STEP 3: read file
-        const fileData = await FileSystem.readAsStringAsync(result.uri, {
-          encoding: (FileSystem as any).EncodingType.Base64,
-        });
+          // STEP 3: read file
+          const fileData = await FileSystem.readAsStringAsync(result.uri, {
+            encoding: (FileSystem as any).EncodingType.Base64,
+          });
 
-        // STEP 4: encrypt
-        const encrypted = await encryptionService.encryptBuffer(
-          fileData,
-          user.sessionToken,
-          user.deviceId || 'default'
-        );
+          // STEP 4: encrypt
+          const encrypted = await encryptionService.encryptBuffer(
+            fileData,
+            user.sessionToken,
+            user.deviceId || 'default'
+          );
 
-        // STEP 5: save encrypted
-        const { randomUUID } = await import('expo-crypto');
-        const uuid = randomUUID();
-        const finalPath = `${(FileSystem as any).documentDirectory}${uuid}.enc`;
+          // STEP 5: save encrypted
+          const { randomUUID } = await import('expo-crypto');
+          const uuid = randomUUID();
+          const finalPath = getLocalEncryptedPath(uuid);
 
-        await FileSystem.writeAsStringAsync(finalPath, encrypted);
+          await FileSystem.writeAsStringAsync(finalPath, encrypted);
 
-        // cleanup
-        await FileSystem.deleteAsync(result.uri, { idempotent: true });
+          // STEP 6: notify server
+          await fetch(`${baseUrl}/my-downloads`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${user.sessionToken}`,
+            },
+            body: JSON.stringify({ itemType, itemId, localFilename: uuid }),
+          });
 
-        // STEP 6: notify server
-        await fetch(`${baseUrl}/my-downloads`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${user.sessionToken}`,
-          },
-          body: JSON.stringify({ itemType, itemId, localFilename: uuid }),
-        });
-
-        updateState(itemType, itemId, {
-          status: 'downloaded',
-          progress: 100,
-          localFilename: uuid,
-        });
+          updateState(itemType, itemId, {
+            status: 'downloaded',
+            progress: 100,
+            localFilename: uuid,
+          });
+        } finally {
+          // Best-effort cleanup of temp file regardless of success/failure.
+          const cleanupPath = result?.uri || tempPath;
+          await FileSystem.deleteAsync(cleanupPath, { idempotent: true }).catch(() => {});
+        }
 
       } catch (err: any) {
         console.error(err);
@@ -183,10 +203,7 @@ export function useDownloadManager(): UseDownloadManagerReturn {
       const baseUrl = getApiUrl();
 
       try {
-        await FileSystem.deleteAsync(
-          `${(FileSystem as any).documentDirectory}${state.localFilename}.enc`,
-          { idempotent: true }
-        );
+        await FileSystem.deleteAsync(getLocalEncryptedPath(state.localFilename), { idempotent: true });
 
         await fetch(`${baseUrl}/my-downloads/${itemType}/${itemId}`, {
           method: 'DELETE',
@@ -195,11 +212,7 @@ export function useDownloadManager(): UseDownloadManagerReturn {
           },
         });
 
-        setStateMap(prev => {
-          const map = new Map(prev);
-          map.delete(getKey(itemType, itemId));
-          return map;
-        });
+        removeStateEntry(itemType, itemId);
 
       } catch (err: any) {
         updateState(itemType, itemId, {
@@ -209,7 +222,7 @@ export function useDownloadManager(): UseDownloadManagerReturn {
         throw err;
       }
     },
-    [user, getDownloadState]
+    [user, getDownloadState, removeStateEntry]
   );
 
   // ================= GET FILE =================
@@ -222,7 +235,7 @@ export function useDownloadManager(): UseDownloadManagerReturn {
       if (!state.localFilename) return null;
 
       try {
-        const encPath = `${(FileSystem as any).documentDirectory}${state.localFilename}.enc`;
+        const encPath = getLocalEncryptedPath(state.localFilename);
 
         const exists = await FileSystem.getInfoAsync(encPath);
         if (!exists.exists) return null;
@@ -291,14 +304,18 @@ export function useDownloadManager(): UseDownloadManagerReturn {
       for (const key of stateMap.keys()) {
         if (!serverKeys.has(key)) {
           const [type, id] = key.split(':');
-          await deleteDownload(type, Number(id));
+          const state = stateMap.get(key);
+          if (state?.localFilename) {
+            await FileSystem.deleteAsync(getLocalEncryptedPath(state.localFilename), { idempotent: true }).catch(() => {});
+          }
+          removeStateEntry(type, Number(id));
         }
       }
 
     } catch (e) {
       console.error(e);
     }
-  }, [user, stateMap, deleteDownload]);
+  }, [user, stateMap, removeStateEntry]);
 
   return {
     getDownloadState,

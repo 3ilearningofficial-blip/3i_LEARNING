@@ -24,11 +24,11 @@ function WebDownloadButton({ itemType, itemId }: { itemType: string; itemId: num
     setProgress(0);
 
     try {
-      const baseUrl = getApiUrl();
+      const apiUrl = getApiUrl();
 
       // Step 1: Get single-use download token
       const tokenRes = await fetch(
-        `${baseUrl}/api/download-url?itemType=${itemType}&itemId=${itemId}`,
+        `${apiUrl}/download-url?itemType=${itemType}&itemId=${itemId}`,
         {
           headers: {
             Authorization: `Bearer ${user?.sessionToken}`,
@@ -42,7 +42,7 @@ function WebDownloadButton({ itemType, itemId }: { itemType: string; itemId: num
       }
 
       const { token } = await tokenRes.json();
-      const downloadUrl = `${baseUrl}/api/download-proxy?token=${token}`;
+      const downloadUrl = `${apiUrl}/download-proxy?token=${token}`;
 
       // Step 2: Download with XHR for progress tracking
       await new Promise<void>((resolve, reject) => {

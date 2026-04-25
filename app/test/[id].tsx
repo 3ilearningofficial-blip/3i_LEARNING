@@ -155,7 +155,7 @@ export default function TestScreen() {
       });
     }, 1000);
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [timeLeft > 0 && hasStarted]);
+  }, [hasStarted, timeLeft]);
   const recordCurrentQTime = (qId: number) => {
     const elapsed = Math.round((Date.now() - qStartTimeRef.current) / 1000);
     setQuestionTimes((prev) => {

@@ -14,7 +14,6 @@ import { useScreenProtection } from "@/lib/useScreenProtection";
 import { isAndroidWeb } from "@/lib/useAndroidWebGate";
 import AndroidWebGate from "@/components/AndroidWebGate";
 import { getApiUrl } from "@/lib/query-client";
-import { fetch } from "expo/fetch";
 import { authFetch } from "@/lib/query-client";
 
 interface LeaderboardEntry {
@@ -58,7 +57,8 @@ export default function TestResultScreen() {
     queryFn: async () => {
       const baseUrl = getApiUrl();
       const url = new URL(`/api/tests/${id}/leaderboard`, baseUrl);
-      const res = await fetch(url.toString(), { credentials: "include" });
+      const res = await authFetch(url.toString());
+      if (!res.ok) return [];
       return res.json();
     },
     enabled: activeTab === "leaderboard",
@@ -101,7 +101,7 @@ export default function TestResultScreen() {
   const attemptsNum = youData != null
     ? (correctNum + incorrectNum)  // attempted = correct + wrong
     : parseInt(totalAttempts || "0", 10);
-  const unattemptedNum = totalQNum > 0 ? totalQNum - attemptsNum : 0;
+  const unattemptedNum = totalQNum > 0 ? Math.max(0, totalQNum - attemptsNum) : 0;
   const avgTimePerQ = attemptsNum > 0 ? Math.round(timeTakenNum / attemptsNum) : 0;
   const weakTopicList = weakTopics ? weakTopics.split(",").filter(Boolean) : [];
 

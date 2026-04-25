@@ -396,22 +396,28 @@ export default function MaterialViewerScreen() {
   useEffect(() => {
     if (!fileKey || !material) return;
     if (isGDrive || isYouTube) return; // not needed for these
+    let cancelled = false;
     apiRequest("POST", "/api/media-token", { fileKey })
       .then(r => r.json())
-      .then(d => { if (d.token) setMediaToken(d.token); })
+      .then(d => {
+        if (!cancelled && d.token) setMediaToken(d.token);
+      })
       .catch(() => {}); // silently fail — fallback to direct URL
-  }, [fileKey, material?.id]);
+    return () => {
+      cancelled = true;
+    };
+  }, [fileKey, material?.id, isGDrive, isYouTube]);
 
   // Authenticated URL with token (always use API base — never the Vercel preview origin on web)
   const tokenizedUrl = toHttpsMediaUrl(
     mediaToken && fileKey
-      ? `${getBaseUrl()}/api/media/${fileKey}?token=${mediaToken}`
+      ? `${apiBaseUrl}/api/media/${fileKey}?token=${mediaToken}`
       : (fileUrl || "")
   ) || fileUrl;
 
   // PDF viewer URL — server-rendered page with pdf.js (no browser PDF controls)
   const pdfViewerUrl = mediaToken && fileKey
-    ? `${getBaseUrl()}/api/pdf-viewer?key=${encodeURIComponent(fileKey)}&token=${mediaToken}`
+    ? `${apiBaseUrl}/api/pdf-viewer?key=${encodeURIComponent(fileKey)}&token=${mediaToken}`
     : null;
 
   return (

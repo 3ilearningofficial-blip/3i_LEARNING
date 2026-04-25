@@ -246,7 +246,7 @@ function WebYouTubePlayer({ videoId, onReady }: { videoId: string; onReady: () =
   const calledRef = useRef(false);
   useEffect(() => {
     if (!calledRef.current) { calledRef.current = true; onReady(); }
-  }, []);
+  }, [onReady]);
   return (
     <iframe
       srcDoc={buildYouTubeHtml(videoId)}
@@ -379,11 +379,20 @@ export default function LiveClassScreen() {
     return path.replace(/^\/api\/media\//, "");
   })();
   useEffect(() => {
-    if (!recordingFileKey) return;
+    if (!recordingFileKey) {
+      setRecordingToken(null);
+      return;
+    }
+    let cancelled = false;
     apiRequest("POST", "/api/media-token", { fileKey: recordingFileKey })
       .then(r => r.json())
-      .then(d => { if (d.token) setRecordingToken(d.token); })
+      .then(d => {
+        if (!cancelled && d.token) setRecordingToken(d.token);
+      })
       .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, [recordingFileKey]);
 
   const authenticatedVideoUrl = (() => {
@@ -421,13 +430,17 @@ export default function LiveClassScreen() {
   });
 
   useEffect(() => {
+    let scrollTimer: ReturnType<typeof setTimeout> | null = null;
     if (chatMessages.length > 0) {
       const latestTime = Number(chatMessages[chatMessages.length - 1].created_at);
       if (latestTime > lastMsgTimeRef.current) {
         lastMsgTimeRef.current = latestTime;
-        setTimeout(() => chatListRef.current?.scrollToEnd({ animated: true }), 100);
+        scrollTimer = setTimeout(() => chatListRef.current?.scrollToEnd({ animated: true }), 100);
       }
     }
+    return () => {
+      if (scrollTimer) clearTimeout(scrollTimer);
+    };
   }, [chatMessages]);
 
   const sendMsgMutation = useMutation({

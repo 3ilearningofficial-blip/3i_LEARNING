@@ -133,6 +133,7 @@ export default function CourseDetailScreen() {
   const [enrollError, setEnrollError] = useState("");
   const [enrollSuccess, setEnrollSuccess] = useState(false);
   const [studentActionStudent, setStudentActionStudent] = useState<any>(null);
+  const courseIdNum = Number(id);
 
   const trackDownload = async (itemType: "material" | "lecture", itemId: number) => {
     try {
@@ -243,6 +244,7 @@ export default function CourseDetailScreen() {
 
   const enrollMutation = useMutation({
     mutationFn: async () => {
+      if (!Number.isFinite(courseIdNum)) throw new Error("Invalid course id");
       const res = await apiRequest("POST", `/api/courses/${id}/enroll`, { userId: user?.id });
       return res.json();
     },
@@ -257,7 +259,7 @@ export default function CourseDetailScreen() {
       // Also update the courses list cache optimistically
       qc.setQueriesData({ queryKey: ["/api/courses"] }, (old: any) => {
         if (!Array.isArray(old)) return old;
-        return old.map((c: any) => c.id === parseInt(id as string) ? { ...c, isEnrolled: true } : c);
+        return old.map((c: any) => c.id === courseIdNum ? { ...c, isEnrolled: true } : c);
       });
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       // Show non-blocking success message
@@ -283,9 +285,13 @@ export default function CourseDetailScreen() {
 
   const handleRazorpayPayment = async () => {
     if (isPaymentPending) return;
+    if (!Number.isFinite(courseIdNum)) {
+      Alert.alert("Error", "Invalid course. Please reopen this page.");
+      return;
+    }
     setIsPaymentPending(true);
     try {
-      const orderRes = await apiRequest("POST", "/api/payments/create-order", { courseId: parseInt(id as string) });
+      const orderRes = await apiRequest("POST", "/api/payments/create-order", { courseId: courseIdNum });
       const orderData = await orderRes.json();
 
       if (Platform.OS === "web") {
@@ -310,7 +316,7 @@ export default function CourseDetailScreen() {
                 razorpay_order_id: response.razorpay_order_id,
                 razorpay_payment_id: response.razorpay_payment_id,
                 razorpay_signature: response.razorpay_signature,
-                courseId: parseInt(id as string),
+                courseId: courseIdNum,
               });
               qc.invalidateQueries({ queryKey: ["/api/courses", id] });
               qc.invalidateQueries({ queryKey: ["/api/courses"] });

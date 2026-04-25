@@ -300,7 +300,7 @@ function WebYouTubePlayer({ videoId, onReady }: { videoId: string; onReady: () =
       calledRef.current = true;
       onReady();
     }
-  }, []);
+  }, [onReady]);
   return (
     <iframe
       srcDoc={buildYouTubeHtml(videoId)}
@@ -318,7 +318,7 @@ function WebCloudflareStreamPlayer({ videoId, onReady }: { videoId: string; onRe
       calledRef.current = true;
       onReady();
     }
-  }, []);
+  }, [onReady]);
   return (
     <iframe
       srcDoc={buildCloudflareStreamHtml(videoId)}
@@ -337,7 +337,7 @@ function WebDirectVideoPlayer({ url, onReady }: { url: string; onReady: () => vo
       calledRef.current = true;
       onReady();
     }
-  }, []);
+  }, [onReady]);
   return (
     <video
       ref={videoRef as any}

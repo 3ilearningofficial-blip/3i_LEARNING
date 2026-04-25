@@ -62,29 +62,26 @@ function RootLayoutNav() {
 
   useEffect(() => {
     if (isLoading) return;
-    if (!segments[0]) return;
-    const inAuthGroup = segments[0] === "(auth)";
-    const inProfileSetup = segments[0] === "profile-setup";
-    const inWelcome = segments[0] === "welcome";
+    const currentSegment = segments[0];
+    if (!currentSegment) return;
 
-    if (user && inAuthGroup) {
-      // Just completed OTP/login — check profile
-      if (!user.profileComplete) {
-        router.replace("/profile-setup");
-      } else {
-        router.replace("/(tabs)");
+    const inAuthGroup = currentSegment === "(auth)";
+    const inProfileSetup = currentSegment === "profile-setup";
+    const inWelcome = currentSegment === "welcome";
+
+    if (user) {
+      const target = user.profileComplete ? "/(tabs)" : "/profile-setup";
+      if (inAuthGroup || inWelcome) {
+        router.replace(target);
+        return;
       }
-    } else if (user && inWelcome) {
-      // Logged-in user on welcome page
-      if (!user.profileComplete) {
+      if (!user.profileComplete && !inProfileSetup) {
         router.replace("/profile-setup");
-      } else {
-        router.replace("/(tabs)");
       }
-    } else if (user && !inAuthGroup && !inProfileSetup && !inWelcome && !user.profileComplete) {
-      // Already logged in but profile incomplete
-      router.replace("/profile-setup");
-    } else if (!user && !inAuthGroup && !inWelcome) {
+      return;
+    }
+
+    if (!inAuthGroup && !inWelcome) {
       router.replace("/welcome");
     }
   }, [user?.id, user?.profileComplete, isLoading, segments.join("/")]);

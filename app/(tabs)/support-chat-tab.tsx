@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable, TextInput,
-  ActivityIndicator, Platform, KeyboardAvoidingView, Modal,
+  ActivityIndicator, Platform, KeyboardAvoidingView, Modal, Alert,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
@@ -59,9 +59,13 @@ export default function SupportChatTab() {
   });
 
   useEffect(() => {
+    let scrollTimer: ReturnType<typeof setTimeout> | null = null;
     if (adminMessages.length > 0) {
-      setTimeout(() => adminScrollRef.current?.scrollToEnd({ animated: true }), 100);
+      scrollTimer = setTimeout(() => adminScrollRef.current?.scrollToEnd({ animated: true }), 100);
     }
+    return () => {
+      if (scrollTimer) clearTimeout(scrollTimer);
+    };
   }, [adminMessages.length]);
 
   const sendAdminReply = async () => {
@@ -69,15 +73,20 @@ export default function SupportChatTab() {
     setAdminReplying(true);
     try {
       const baseUrl = getApiUrl();
-      await authFetch(new URL(`/api/admin/support/messages/${adminSelectedUserId}`, baseUrl).toString(), {
+      const res = await authFetch(new URL(`/api/admin/support/messages/${adminSelectedUserId}`, baseUrl).toString(), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: adminReply.trim() }),
       });
+      if (!res.ok) {
+        throw new Error("Failed to send reply");
+      }
       setAdminReply("");
       qc.invalidateQueries({ queryKey: ["/api/admin/support/messages", adminSelectedUserId] });
       qc.invalidateQueries({ queryKey: ["/api/admin/support/conversations"] });
-    } catch (_e) {} finally {
+    } catch (_e) {
+      Alert.alert("Error", "Failed to send reply. Please try again.");
+    } finally {
       setAdminReplying(false);
     }
   };
@@ -227,9 +236,13 @@ export default function SupportChatTab() {
   });
 
   useEffect(() => {
+    let scrollTimer: ReturnType<typeof setTimeout> | null = null;
     if (messages.length > 0) {
-      setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
+      scrollTimer = setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
     }
+    return () => {
+      if (scrollTimer) clearTimeout(scrollTimer);
+    };
   }, [messages.length]);
 
   const formatTime = (ts: number | string) => {

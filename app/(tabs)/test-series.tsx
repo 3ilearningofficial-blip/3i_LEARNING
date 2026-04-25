@@ -414,6 +414,7 @@ export default function TestSeriesScreen() {
       const url = new URL("/api/tests", baseUrl);
       if (selectedType !== "All") url.searchParams.set("type", selectedType);
       const res = await authFetch(url.toString());
+      if (!res.ok) return [];
       return res.json();
     },
   });
