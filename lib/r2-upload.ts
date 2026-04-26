@@ -6,7 +6,9 @@ export type UploadFolder =
   | "materials"
   | "books"
   | "images"
-  | "uploads";
+  | "uploads"
+  /** R2 path prefix `live-class-recording/` (optional chapter subfolder via `subfolder`) */
+  | "live-class-recording";
 
 export interface UploadResult {
   publicUrl: string;
@@ -19,7 +21,9 @@ export async function uploadToR2(
   contentType: string,
   folder: UploadFolder = "uploads",
   onProgress?: (pct: number) => void,
-  presignEndpoint: string = "/api/upload/presign"
+  presignEndpoint: string = "/api/upload/presign",
+  /** For `folder === "live-class-recording"` only: chapter/sort subfolder in R2 (e.g. "chapter-1") */
+  subfolder?: string
 ): Promise<UploadResult> {
   let presignRes;
 
@@ -27,11 +31,15 @@ export async function uploadToR2(
   // 🔑 STEP 1: Get presigned URL
   // =========================
   try {
-    presignRes = await apiRequest("POST", presignEndpoint, {
+    const body: Record<string, string> = {
       filename,
       contentType,
       folder,
-    });
+    };
+    if (folder === "live-class-recording" && subfolder && String(subfolder).trim() !== "") {
+      body.subfolder = String(subfolder).trim();
+    }
+    presignRes = await apiRequest("POST", presignEndpoint, body);
   } catch (err: any) {
     throw new Error(`Presign failed: ${err?.message || "Unknown error"}`);
   }

@@ -123,8 +123,8 @@ function ScheduledLiveCard({ lc }: { lc: any }) {
         <View style={{ alignItems: "center", gap: 2 }}>
           {status === "waiting" ? (
             <View style={{ backgroundColor: "#FEF3C7", borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4, alignItems: "center" }}>
-              <Text style={{ fontSize: 10, fontFamily: "Inter_700Bold", color: "#D97706" }}>Starting</Text>
-              <Text style={{ fontSize: 9, fontFamily: "Inter_500Medium", color: "#D97706" }}>soon</Text>
+              <Text style={{ fontSize: 10, fontFamily: "Inter_700Bold", color: "#D97706" }}>Not</Text>
+              <Text style={{ fontSize: 9, fontFamily: "Inter_500Medium", color: "#D97706" }}>live yet</Text>
             </View>
           ) : (
             <View style={{ backgroundColor: "#FEE2E2", borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4, alignItems: "center" }}>
@@ -619,9 +619,9 @@ export default function HomeScreen() {
 
             {/* Scheduled Live Classes */}
             {(() => {
-              const now = Date.now();
+              // Show until teacher actually goes live (is_live) or class ends — not only before scheduled_at
               const scheduled = liveClasses
-                .filter((lc: any) => !lc.is_live && !lc.is_completed && lc.scheduled_at && Number(lc.scheduled_at) > now)
+                .filter((lc: any) => !lc.is_live && !lc.is_completed && lc.scheduled_at)
                 .sort((a: any, b: any) => Number(a.scheduled_at) - Number(b.scheduled_at));
               if (scheduled.length === 0) return null;
               const visible = showAllScheduled ? scheduled : scheduled.slice(0, 2);

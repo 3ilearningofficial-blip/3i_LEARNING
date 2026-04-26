@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { LIVE_CLASS_RECORDING_ROOT, sanitizeLiveRecordingSubfolder } from "./r2-path-utils";
 
 type RegisterUploadRoutesDeps = {
   app: Express;
@@ -7,6 +8,28 @@ type RegisterUploadRoutesDeps = {
   getR2Client: () => Promise<any>;
   uploadLarge: any;
 };
+
+function buildPresignedObjectKey(
+  body: { filename: string; folder?: string; subfolder?: string }
+): { key: string } | { error: string } {
+  const { filename, folder: rawFolder = "uploads", subfolder: rawSub } = body;
+  if (!filename) return { error: "filename required" };
+  const ext = String(filename).split(".").pop() || "";
+  const unique = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+
+  if (String(rawFolder) === LIVE_CLASS_RECORDING_ROOT) {
+    const hasSub = rawSub !== undefined && rawSub !== null && String(rawSub).trim() !== "";
+    const sub = hasSub ? sanitizeLiveRecordingSubfolder(rawSub) : null;
+    if (hasSub && !sub) return { error: "Invalid recording subfolder" };
+    const key = sub ? `${LIVE_CLASS_RECORDING_ROOT}/${sub}/${unique}` : `${LIVE_CLASS_RECORDING_ROOT}/${unique}`;
+    return { key };
+  }
+
+  if (String(rawFolder).includes("/") || String(rawFolder).includes("..")) {
+    return { error: "Invalid folder" };
+  }
+  return { key: `${rawFolder}/${unique}` };
+}
 
 export function registerUploadRoutes({
   app,
@@ -40,9 +63,67 @@ export function registerUploadRoutes({
     }
   });
 
+  app.get("/api/admin/upload/live-class-recording-folders", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      if (!process.env.R2_BUCKET_NAME) return res.status(500).json({ message: "R2 not configured" });
+      const { ListObjectsV2Command } = await import("@aws-sdk/client-s3");
+      const r2 = await getR2Client();
+      const prefix = `${LIVE_CLASS_RECORDING_ROOT}/`;
+      const out = await r2.send(
+        new ListObjectsV2Command({
+          Bucket: process.env.R2_BUCKET_NAME,
+          Prefix: prefix,
+          Delimiter: "/",
+          MaxKeys: 1000,
+        })
+      );
+      const fromPrefixes = (out.CommonPrefixes || [])
+        .map((c: { Prefix?: string }) => c.Prefix?.replace(prefix, "").replace(/\/$/, "") || "")
+        .filter(Boolean);
+      const fromKeys = (out.Contents || [])
+        .map((c: { Key?: string }) => c.Key)
+        .filter((k: string | undefined): k is string => !!k)
+        .map((k: string) => {
+          const rest = k.replace(prefix, "");
+          const i = rest.indexOf("/");
+          if (i <= 0) return null;
+          return rest.slice(0, i);
+        })
+        .filter((x: string | null): x is string => !!x);
+      const names = [...new Set([...fromPrefixes, ...fromKeys])].sort();
+      res.json({ folders: names });
+    } catch (err) {
+      console.error("[R2] List subfolders error:", err);
+      res.status(500).json({ message: "Failed to list folders" });
+    }
+  });
+
+  app.post("/api/admin/upload/live-class-recording-folders", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      if (!process.env.R2_BUCKET_NAME) return res.status(500).json({ message: "R2 not configured" });
+      const name = sanitizeLiveRecordingSubfolder((req.body as { name?: string }).name);
+      if (!name) return res.status(400).json({ message: "Invalid folder name" });
+      const { PutObjectCommand } = await import("@aws-sdk/client-s3");
+      const r2 = await getR2Client();
+      const key = `${LIVE_CLASS_RECORDING_ROOT}/${name}/.keep`;
+      await r2.send(
+        new PutObjectCommand({
+          Bucket: process.env.R2_BUCKET_NAME,
+          Key: key,
+          Body: new Uint8Array(0),
+          ContentType: "text/plain; charset=utf-8",
+        })
+      );
+      res.json({ success: true, name });
+    } catch (err) {
+      console.error("[R2] Create subfolder error:", err);
+      res.status(500).json({ message: "Failed to create folder" });
+    }
+  });
+
   app.post("/api/upload/presign", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { filename, contentType, folder = "uploads" } = req.body;
+      const { filename, contentType, folder, subfolder } = req.body;
       if (!filename || !contentType) return res.status(400).json({ message: "filename and contentType required" });
       if (!process.env.R2_ACCOUNT_ID || !process.env.R2_ACCESS_KEY_ID || !process.env.R2_SECRET_ACCESS_KEY) {
         return res.status(500).json({ message: "R2 credentials not configured. Check .env file." });
@@ -50,8 +131,11 @@ export function registerUploadRoutes({
       const { PutObjectCommand } = await import("@aws-sdk/client-s3");
       const { getSignedUrl } = await import("@aws-sdk/s3-request-presigner");
       const r2 = await getR2Client();
-      const ext = filename.split(".").pop() || "";
-      const key = `${folder}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+      const keyResult = buildPresignedObjectKey({ filename, folder, subfolder });
+      if ("error" in keyResult) {
+        return res.status(400).json({ message: keyResult.error });
+      }
+      const { key } = keyResult;
       const command = new PutObjectCommand({
         Bucket: process.env.R2_BUCKET_NAME,
         Key: key,
@@ -74,13 +158,17 @@ export function registerUploadRoutes({
       if (!(req as any).file) return res.status(400).json({ message: "No file uploaded" });
       const file = (req as any).file;
       const folder = req.body.folder || "uploads";
+      const subfolder = req.body.subfolder;
       if (!process.env.R2_ACCOUNT_ID || !process.env.R2_ACCESS_KEY_ID || !process.env.R2_SECRET_ACCESS_KEY) {
         return res.status(500).json({ message: "R2 credentials not configured." });
       }
       const { PutObjectCommand } = await import("@aws-sdk/client-s3");
       const r2 = await getR2Client();
-      const ext = file.originalname.split(".").pop() || "";
-      const key = `${folder}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+      const keyResult = buildPresignedObjectKey({ filename: file.originalname, folder, subfolder });
+      if ("error" in keyResult) {
+        return res.status(400).json({ message: keyResult.error });
+      }
+      const { key } = keyResult;
       await r2.send(
         new PutObjectCommand({
           Bucket: process.env.R2_BUCKET_NAME,

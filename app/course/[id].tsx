@@ -599,8 +599,8 @@ setTimeout(function() {
   const TABS = isTestSeriesCourse
     ? (isAdmin ? ["About", "Tests", "Enrolled"] : ["About", "Tests"])
     : isAdmin
-    ? ["About", "Lectures", "Tests", "Materials", "Live", "Enrolled"]
-    : ["About", "Lectures", "Tests", "Materials", "Live"];
+    ? ["About", "Live", "Lectures", "Tests", "Materials", "Enrolled"]
+    : ["About", "Live", "Lectures", "Tests", "Materials"];
 
   const discount = course.original_price && parseFloat(course.original_price) > 0
     ? Math.round((1 - parseFloat(course.price) / parseFloat(course.original_price)) * 100)

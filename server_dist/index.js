@@ -833,11 +833,12 @@ function registerPaymentRoutes({
           [user.id, courseId]
         );
         if (paid.rows.length === 0) {
+          const pricePaisa = Math.round(parseFloat(String(price)) * 100);
           await db2.query(
             `INSERT INTO payments (user_id, course_id, amount, status, click_count, created_at)
              VALUES ($1, $2, $3, 'created', 1, $4)
              ON CONFLICT (user_id, course_id) DO UPDATE SET click_count = payments.click_count + 1`,
-            [user.id, courseId, price, Date.now()]
+            [user.id, courseId, pricePaisa, Date.now()]
           );
         }
       }
@@ -884,12 +885,12 @@ function registerPaymentRoutes({
       if (existingPayment.rows.length > 0) {
         await db2.query(
           "UPDATE payments SET razorpay_order_id = $1, amount = $2 WHERE id = $3",
-          [order.id, course.price, existingPayment.rows[0].id]
+          [order.id, amount, existingPayment.rows[0].id]
         );
       } else {
         await db2.query(
           "INSERT INTO payments (user_id, course_id, razorpay_order_id, amount, status, click_count, created_at) VALUES ($1, $2, $3, $4, 'created', 1, $5)",
-          [user.id, courseId, order.id, course.price, Date.now()]
+          [user.id, courseId, order.id, amount, Date.now()]
         );
       }
       res.json({
@@ -1920,8 +1921,6 @@ function registerAdminAnalyticsRoutes({
       const enrollWhere = range ? " AND e.enrolled_at >= $1 AND e.enrolled_at < $2" : "";
       const bookWhere = range ? " AND bp.purchased_at >= $1 AND bp.purchased_at < $2" : "";
       const enrollJoin = range ? " AND e.enrolled_at >= $1 AND e.enrolled_at < $2" : "";
-      const paymentJoin = range ? " AND p.created_at >= $3 AND p.created_at < $4" : "";
-      const courseJoinParams = range ? [range.start, range.endExclusive, range.start, range.endExclusive] : [];
       const [
         revenueResult,
         enrollResult,
@@ -1936,22 +1935,63 @@ function registerAdminAnalyticsRoutes({
         testPurchases,
         lifetimeTestRevenue
       ] = await Promise.all([
-        db2.query(`SELECT COALESCE(SUM(p.amount), 0) as total_revenue FROM payments p WHERE p.status = 'paid'${paymentWhere}`, rangeParams),
+        db2.query(
+          `SELECT COALESCE(SUM(
+              (CASE
+                WHEN p.amount IS NOT NULL AND c.price IS NOT NULL
+                  AND p.amount::numeric = c.price::numeric
+                THEN (ROUND(c.price::numeric * 100))::integer
+                ELSE p.amount
+              END)
+            ), 0) / 100.0 as total_revenue
+           FROM payments p
+           JOIN courses c ON c.id = p.course_id
+           WHERE p.status = 'paid'${paymentWhere}`,
+          rangeParams
+        ),
         db2.query(`SELECT COUNT(*) as total_enrollments FROM enrollments e WHERE 1=1${enrollWhere}`, rangeParams),
-        db2.query(`SELECT COALESCE(SUM(amount), 0) as lifetime_revenue FROM payments WHERE status = 'paid'`),
+        db2.query(
+          `SELECT COALESCE(SUM(
+              (CASE
+                WHEN p.amount IS NOT NULL AND c.price IS NOT NULL
+                  AND p.amount::numeric = c.price::numeric
+                THEN (ROUND(c.price::numeric * 100))::integer
+                ELSE p.amount
+              END)
+            ), 0) / 100.0 as lifetime_revenue
+           FROM payments p
+           JOIN courses c ON c.id = p.course_id
+           WHERE p.status = 'paid'`
+        ),
         db2.query(`SELECT COUNT(*) as cnt FROM enrollments`),
         db2.query(`
           SELECT c.id, c.title, c.category, c.price, c.is_free, c.course_type,
                  COUNT(DISTINCT e.id) as enrollment_count,
-                 COALESCE(SUM(p.amount), 0) as revenue
+                 (COALESCE((
+                    SELECT SUM(
+                      (CASE
+                        WHEN p2.amount IS NOT NULL AND c2.price IS NOT NULL
+                          AND p2.amount::numeric = c2.price::numeric
+                        THEN (ROUND(c2.price::numeric * 100))::integer
+                        ELSE p2.amount
+                      END)
+                    ) FROM payments p2
+                    JOIN courses c2 ON c2.id = p2.course_id
+                    WHERE p2.course_id = c.id AND p2.status = 'paid'${range ? " AND p2.created_at >= $1 AND p2.created_at < $2" : ""}
+                 ), 0) / 100.0) as revenue
           FROM courses c
           LEFT JOIN enrollments e ON e.course_id = c.id${enrollJoin}
-          LEFT JOIN payments p ON p.course_id = c.id AND p.status = 'paid'${paymentJoin}
           GROUP BY c.id, c.title, c.category, c.price, c.is_free, c.course_type
           ORDER BY enrollment_count DESC
-        `, courseJoinParams),
+        `, range ? rangeParams : []),
         db2.query(`
-          SELECT p.id, p.created_at, p.amount,
+          SELECT p.id, p.created_at,
+                 (CASE
+                    WHEN p.amount IS NOT NULL AND c.price IS NOT NULL
+                      AND p.amount::numeric = c.price::numeric
+                    THEN (ROUND(c.price::numeric * 100))::integer
+                    ELSE p.amount
+                  END) / 100.0 as amount,
                  u.name as user_name, u.phone as user_phone, u.email as user_email,
                  c.title as course_title, c.category
           FROM payments p
@@ -4217,10 +4257,10 @@ function registerLiveClassRoutes({
                 (lc.course_id = $1 AND (lc.is_free_preview = TRUE OR ${ex23}))
              ))
              OR (lc.is_live = TRUE AND (
-                 OR (lc.course_id = $1 AND (lc.is_free_preview = TRUE OR ${ex23}))
+                 (lc.course_id = $1 AND (lc.is_free_preview = TRUE OR ${ex23}))
              ))
              OR (lc.is_completed = TRUE AND (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL) AND (
-                 OR (lc.course_id = $1 AND (lc.is_free_preview = TRUE OR ${ex23}))
+                 (lc.course_id = $1 AND (lc.is_free_preview = TRUE OR ${ex23}))
              ))
            )
            ORDER BY lc.scheduled_at DESC`,
@@ -4239,10 +4279,10 @@ function registerLiveClassRoutes({
                 (lc.course_id = $1 AND lc.is_free_preview = TRUE)
              ))
              OR (lc.is_live = TRUE AND (
-                 OR (lc.course_id = $1 AND lc.is_free_preview = TRUE)
+                 (lc.course_id = $1 AND lc.is_free_preview = TRUE)
              ))
              OR (lc.is_completed = TRUE AND (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL) AND (
-                 OR (lc.course_id = $1 AND lc.is_free_preview = TRUE)
+                 (lc.course_id = $1 AND lc.is_free_preview = TRUE)
              ))
            )
            ORDER BY lc.scheduled_at DESC`,
@@ -4982,7 +5022,14 @@ function registerCourseAccessRoutes({
       const user = await getAuthUser2(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const result = await db2.query(
-        `SELECT p.id, p.amount, p.currency, p.status, p.created_at,
+        `SELECT p.id,
+                (CASE
+                  WHEN p.amount IS NOT NULL AND c.price IS NOT NULL
+                    AND p.amount::numeric = c.price::numeric
+                  THEN (ROUND(c.price::numeric * 100))::integer
+                  ELSE p.amount
+                END) AS amount,
+                p.currency, p.status, p.created_at,
                 c.title AS course_title, c.price AS course_price
          FROM payments p
          JOIN courses c ON p.course_id = c.id

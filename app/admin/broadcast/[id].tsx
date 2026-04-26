@@ -7,9 +7,11 @@ import {
   ActivityIndicator,
   Platform,
   Alert,
+  TextInput,
+  ScrollView,
 } from "react-native";
 import { useLocalSearchParams, router } from "expo-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
 import { useWebRTCStream } from "@/lib/useWebRTCStream";
 import { useMediaRecorder } from "@/lib/useMediaRecorder";
@@ -159,9 +161,9 @@ export default function BroadcastPage() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const params = useLocalSearchParams<{ id: string; streamType: string }>();
   const liveClassId = id;
-  const { user } = useAuth();
+  useAuth();
+  const queryClient = useQueryClient();
 
-  // Fetch live class data — poll every 5s so cfPlaybackHls updates when stream goes live
   const { data: liveClass, isLoading } = useQuery<any>({
     queryKey: ["/api/live-classes", liveClassId],
     queryFn: async () => {
@@ -180,6 +182,26 @@ export default function BroadcastPage() {
   const showViewerCount = liveClass?.show_viewer_count ?? true;
   const youtubeUrl = liveClass?.youtube_url || "";
   const cfPlaybackHls = liveClass?.cf_playback_hls || "";
+  const courseId = liveClass?.course_id;
+  const lcRecSubStorageKey = courseId != null ? `lcRecSub_${courseId}` : "lcRecSub";
+
+  const { data: liveRecordingFolders = { folders: [] as string[] } } = useQuery({
+    queryKey: ["/api/admin/upload/live-class-recording-folders"],
+    queryFn: async () => {
+      const r = await apiRequest("GET", "/api/admin/upload/live-class-recording-folders");
+      return (await r.json()) as { folders: string[] };
+    },
+  });
+
+  const createLiveRecordingFolderM = useMutation({
+    mutationFn: async (name: string) => {
+      const r = await apiRequest("POST", "/api/admin/upload/live-class-recording-folders", { name });
+      return r.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/upload/live-class-recording-folders"] });
+    },
+  });
 
   // Side panel tab
   const [activeTab, setActiveTab] = useState<SideTab>("chat");
@@ -190,6 +212,31 @@ export default function BroadcastPage() {
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const retainedBlobRef = useRef<Blob | null>(null);
+  /** Optional chapter/section for R2 path under `live-class-recording/<slug>/` */
+  const [recordingSubfolder, setRecordingSubfolder] = useState("");
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const { default: AsyncStorage } = await import("@react-native-async-storage/async-storage");
+        const v = await AsyncStorage.getItem(lcRecSubStorageKey);
+        if (v != null) setRecordingSubfolder(v);
+      } catch { /* no-op */ }
+    })();
+  }, [lcRecSubStorageKey]);
+
+  const persistRecordingSubfolder = useCallback(
+    (v: string) => {
+      setRecordingSubfolder(v);
+      void (async () => {
+        try {
+          const { default: AsyncStorage } = await import("@react-native-async-storage/async-storage");
+          await AsyncStorage.setItem(lcRecSubStorageKey, v);
+        } catch { /* no-op */ }
+      })();
+    },
+    [lcRecSubStorageKey]
+  );
 
   // WebRTC
   const webrtc = useWebRTCStream();
@@ -242,6 +289,24 @@ export default function BroadcastPage() {
     }
   }, [webrtc]);
 
+  const handleCreateRecordingFolder = useCallback(() => {
+    const raw = recordingSubfolder.trim();
+    if (!raw) {
+      if (Platform.OS === "web") window.alert("Type a folder name in the field (e.g. Unit 1), then create.");
+      else Alert.alert("Folder name", "Type a name in the field, then create.");
+      return;
+    }
+    createLiveRecordingFolderM.mutate(raw, {
+      onSuccess: (data: { success?: boolean; name?: string }) => {
+        if (data?.name) persistRecordingSubfolder(data.name);
+      },
+      onError: (e: any) => {
+        if (Platform.OS === "web") window.alert(e?.message || "Failed to create folder");
+        else Alert.alert("Error", e?.message || "Failed to create folder");
+      },
+    });
+  }, [recordingSubfolder, createLiveRecordingFolderM, persistRecordingSubfolder]);
+
   const uploadRecordingAndFinish = useCallback(async (blob: Blob) => {
     setUploadStatus("Uploading recording...");
     setUploadProgress(0);
@@ -251,12 +316,15 @@ export default function BroadcastPage() {
       const filename = `recording-${Date.now()}.webm`;
       const fileUri = URL.createObjectURL(blob);
 
+      const sub = recordingSubfolder.trim();
       const { publicUrl } = await uploadToR2(
         fileUri,
         filename,
         "video/webm",
-        "lectures",
+        "live-class-recording",
         (pct) => setUploadProgress(pct),
+        "/api/upload/presign",
+        sub || undefined
       );
 
       URL.revokeObjectURL(fileUri);
@@ -278,7 +346,7 @@ export default function BroadcastPage() {
       setUploadStatus(null);
       setIsEnding(false);
     }
-  }, [liveClassId, webrtc]);
+  }, [liveClassId, webrtc, recordingSubfolder]);
 
   const handleRetryUpload = useCallback(() => {
     const blob = retainedBlobRef.current;
@@ -545,6 +613,63 @@ export default function BroadcastPage() {
             )}
           </View>
 
+          {streamType === "webrtc" && (
+            <View style={styles.recordingFolderBlock}>
+              <Text style={styles.recordingFolderTitle}>Recording in R2</Text>
+              <Text style={styles.recordingFolderHint}>
+                All WebM files use the folder {`live-class-recording`}. Set an optional subfolder to group by
+                chapter (e.g. same section as in the course).
+              </Text>
+              <TextInput
+                value={recordingSubfolder}
+                onChangeText={persistRecordingSubfolder}
+                placeholder="Subfolder (optional), e.g. unit-1 or chapter-2"
+                placeholderTextColor="#6b7280"
+                style={styles.recordingFolderInput}
+                autoCapitalize="none"
+                autoCorrect={false}
+                editable={!uploadStatus}
+              />
+              <View style={styles.recordingFolderActions}>
+                <Pressable
+                  style={[styles.createFolderButton, (!recordingSubfolder.trim() || createLiveRecordingFolderM.isPending) && styles.createFolderButtonDisabled]}
+                  onPress={handleCreateRecordingFolder}
+                  disabled={!recordingSubfolder.trim() || createLiveRecordingFolderM.isPending}
+                >
+                  {createLiveRecordingFolderM.isPending ? (
+                    <ActivityIndicator size="small" color="#e5e7eb" />
+                  ) : (
+                    <Text style={styles.createFolderButtonText}>Create empty folder</Text>
+                  )}
+                </Pressable>
+              </View>
+              {liveRecordingFolders.folders.length > 0 && (
+                <View style={styles.chipRow}>
+                  <Text style={styles.chipLabel}>Pick:</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipScroll}>
+                    {liveRecordingFolders.folders.map((name) => (
+                      <Pressable
+                        key={name}
+                        style={[styles.chip, recordingSubfolder.trim() === name && styles.chipActive]}
+                        onPress={() => persistRecordingSubfolder(name)}
+                      >
+                        <Text
+                          style={[
+                            styles.chipText,
+                            recordingSubfolder.trim() === name && styles.chipTextActive,
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {name}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+                </View>
+              )}
+            </View>
+          )}
+
           {/* End Class button / Upload progress */}
           <View style={styles.endClassContainer}>
             {uploadError && (
@@ -721,6 +846,83 @@ const styles = StyleSheet.create({
   // Tab content
   tabContent: {
     flex: 1,
+  },
+
+  recordingFolderBlock: {
+    padding: 10,
+    borderTopWidth: 1,
+    borderTopColor: Colors.light.border,
+    maxHeight: 200,
+  },
+  recordingFolderTitle: {
+    fontSize: 12,
+    fontFamily: "Inter_700Bold",
+    color: Colors.light.text,
+    marginBottom: 4,
+  },
+  recordingFolderHint: {
+    fontSize: 10,
+    color: Colors.light.textMuted,
+    marginBottom: 8,
+    lineHeight: 14,
+  },
+  recordingFolderInput: {
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    fontSize: 13,
+    color: Colors.light.text,
+    backgroundColor: "#f9fafb",
+  },
+  recordingFolderActions: {
+    marginTop: 8,
+  },
+  createFolderButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: "#374151",
+    borderRadius: 8,
+    alignItems: "center",
+  },
+  createFolderButtonDisabled: {
+    opacity: 0.4,
+  },
+  createFolderButtonText: {
+    color: "#f3f4f6",
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  chipRow: {
+    marginTop: 10,
+  },
+  chipLabel: {
+    fontSize: 10,
+    color: Colors.light.textMuted,
+    marginBottom: 6,
+  },
+  chipScroll: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+  },
+  chip: {
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    backgroundColor: "#EEF2FF",
+    borderRadius: 6,
+    maxWidth: 140,
+  },
+  chipActive: {
+    backgroundColor: Colors.light.primary,
+  },
+  chipText: {
+    fontSize: 11,
+    color: Colors.light.text,
+  },
+  chipTextActive: {
+    color: "#fff",
   },
 
   // End Class

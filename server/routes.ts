@@ -1141,12 +1141,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   }
 
   // ==================== LIVE CLASS NOTIFICATION SCHEDULER ====================
-  // Runs every 60 seconds — sends notifications 30 min before and at start time
+  // Runs every 60s — 30 min reminder only. "Live now" is sent when admin goes live in studio (PUT is_live + admin-live-class-manage).
   const sentNotifications = new Set<string>(); // track sent to avoid duplicates
   setInterval(async () => {
     try {
       const now = Date.now();
-      const thirtyMinFromNow = now + 30 * 60 * 1000;
       // Get all scheduled (not live, not completed) classes with notify_bell = true
       const classes = await db.query(
         "SELECT lc.id, lc.title, lc.course_id, lc.scheduled_at, lc.notify_bell, lc.is_free_preview, lc.is_public FROM live_classes lc WHERE lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE AND lc.notify_bell = TRUE AND lc.scheduled_at IS NOT NULL"
@@ -1171,18 +1170,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
             );
           }
           console.log(`[LiveNotif] 30min reminder sent for "${lc.title}" to ${recipients.rows.length} students`);
-        }
-        // At start time (within 2 min window)
-        const keyStart = `start_${lc.id}`;
-        if (diff <= 0 && diff >= -2 * 60 * 1000 && !sentNotifications.has(keyStart)) {
-          sentNotifications.add(keyStart);
-          for (const e of recipients.rows) {
-            await db.query(
-              "INSERT INTO notifications (user_id, title, message, type, created_at, expires_at) VALUES ($1, $2, $3, $4, $5, $6)",
-              [e.user_id, "🔴 Live Class Starting Now!", `"${lc.title}" is about to start. Join now!`, "info", now, expiresAt]
-            );
-          }
-          console.log(`[LiveNotif] Start reminder sent for "${lc.title}" to ${recipients.rows.length} students`);
         }
       }
       // Clean up old keys (older than 1 hour)

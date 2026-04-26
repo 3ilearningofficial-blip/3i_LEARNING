@@ -155,13 +155,23 @@ video { width: 100%; height: 100%; object-fit: contain; background: #000; }
 </style>
 </head>
 <body>
-<video controls autoplay playsinline controlsList="nodownload noplaybackrate noremoteplayback" disablePictureInPicture>
+<video controls playsinline controlsList="nodownload noplaybackrate noremoteplayback" disablePictureInPicture>
   <source src="${url}" type="video/mp4">
 </video>
 <script>
 document.addEventListener('contextmenu', function(e) { e.preventDefault(); });
 // Disable long-press save on mobile
-document.querySelector('video').addEventListener('contextmenu', function(e) { e.preventDefault(); return false; });
+var v0 = document.querySelector('video');
+if (v0) v0.addEventListener('contextmenu', function(e) { e.preventDefault(); return false; });
+// Muted + programmatic play — reliable autoplay on mobile / in-app webviews
+(function(){
+  var v = document.querySelector('video');
+  if (!v) return;
+  v.muted = true;
+  var tryUnmute = function() { v.muted = false; };
+  var p = v.play();
+  if (p && p.then) p.then(tryUnmute).catch(function() { v.muted = true; v.play().catch(function() {}); });
+})();
 </script>
 </body>
 </html>`;
@@ -332,6 +342,10 @@ function WebCloudflareStreamPlayer({ videoId, onReady }: { videoId: string; onRe
 function WebDirectVideoPlayer({ url, onReady }: { url: string; onReady: () => void }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const calledRef = useRef(false);
+  const didAutoplay = useRef(false);
+  useEffect(() => {
+    didAutoplay.current = false;
+  }, [url]);
   useEffect(() => {
     if (!calledRef.current) {
       calledRef.current = true;
@@ -343,12 +357,25 @@ function WebDirectVideoPlayer({ url, onReady }: { url: string; onReady: () => vo
       ref={videoRef as any}
       src={url}
       controls
-      autoPlay
       playsInline
       controlsList="nodownload noplaybackrate noremoteplayback"
       disablePictureInPicture
       style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "contain", backgroundColor: "#000" } as any}
       onContextMenu={(e: any) => e.preventDefault()}
+      onCanPlay={(e) => {
+        if (didAutoplay.current) return;
+        didAutoplay.current = true;
+        const v = e.currentTarget;
+        v.muted = true;
+        v.play()
+          .then(() => {
+            v.muted = false;
+          })
+          .catch(() => {
+            v.muted = true;
+            v.play().catch(() => {});
+          });
+      }}
     />
   );
 }

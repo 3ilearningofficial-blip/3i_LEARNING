@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
 import {
   View, Text, StyleSheet, Pressable, Platform,
   ActivityIndicator, TextInput, FlatList, KeyboardAvoidingView,
-  Dimensions, Alert,
+  Alert,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { WebView } from "react-native-webview";
@@ -44,36 +44,51 @@ function getYouTubeVideoId(url: string): string {
   return "";
 }
 
+const YT_EMBED_ORIGIN = "https://3ilearning.in";
+
 function buildYouTubeHtml(videoId: string): string {
+  // mute=1 is required for autoplay in most mobile browsers; user can unmute in the player.
+  const q = new URLSearchParams({
+    autoplay: "1",
+    mute: "1",
+    playsinline: "1",
+    rel: "0",
+    modestbranding: "1",
+    iv_load_policy: "3",
+    cc_load_policy: "0",
+    fs: "0",
+    disablekb: "1",
+    controls: "1",
+    color: "white",
+    origin: YT_EMBED_ORIGIN,
+  });
   return `<!DOCTYPE html>
 <html>
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="referrer" content="no-referrer-when-downgrade">
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { width: 100%; height: 100%; background: #000; overflow: hidden; -webkit-user-select: none; user-select: none; }
 .wrapper { position: relative; width: 100%; height: 100%; overflow: hidden; }
 iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; }
-/* Cover YouTube branding only — minimal, non-intrusive */
-.cover-tl { position: absolute; top: 0; left: 0; width: 120px; height: 42px; background: #000; z-index: 9999; pointer-events: none; }
-.cover-tr { position: absolute; top: 0; right: 0; width: 120px; height: 42px; background: #000; z-index: 9999; pointer-events: none; }
-.cover-bl { position: absolute; bottom: 0; left: 0; width: 60px; height: 50px; background: #000; z-index: 9999; pointer-events: none; }
-.cover-br { position: absolute; bottom: 0; right: 0; width: 220px; height: 50px; background: #000; z-index: 9999; pointer-events: none; }
+/* Block YouTube chrome: full top band (channel / share / menu), bottom corners (logo / fullscreen). Center video stays interactive. */
+.cover-top { position: absolute; top: 0; left: 0; right: 0; height: 52px; background: #000; z-index: 9999; pointer-events: auto; }
+.cover-bl { position: absolute; bottom: 0; left: 0; width: 110px; height: 62px; background: #000; z-index: 9999; pointer-events: auto; }
+.cover-br { position: absolute; bottom: 0; right: 0; width: 140px; height: 62px; background: #000; z-index: 9999; pointer-events: auto; }
 @media (max-width: 600px) {
-  .cover-tl { width: 50%; }
-  .cover-tr { display: none; }
-  .cover-br { width: 100%; right: 0; }
+  .cover-top { height: 48px; }
+  .cover-br { width: 120px; height: 60px; }
 }
 @media print { body { display: none !important; } }
 </style>
 </head>
 <body>
 <div class="wrapper">
-<div class="cover-tl"></div>
-<div class="cover-tr"></div>
+<div class="cover-top"></div>
 <iframe
-  src="https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&mute=0&playsinline=1&rel=0&modestbranding=1&showinfo=0&iv_load_policy=3&cc_load_policy=0&fs=1&disablekb=0&controls=1&color=white"
-  allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+  src="https://www.youtube-nocookie.com/embed/${videoId}?${q.toString()}"
+  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
 ></iframe>
 <div class="cover-bl"></div>
 <div class="cover-br"></div>
@@ -182,15 +197,20 @@ function tryLoad() {
     hls.loadSource(hlsUrl);
     hls.attachMedia(video);
     hls.on(Hls.Events.MANIFEST_PARSED, function() {
-      video.play().then(showLive).catch(function() { video.muted = true; video.play().then(showLive); });
+      video.muted = true;
+      video.play().then(showLive).catch(function() { video.play().then(showLive).catch(showLive); });
     });
     hls.on(Hls.Events.ERROR, function(e, d) {
       if (d.fatal) { retryCount++; msg.textContent = 'Connecting... (' + retryCount + ')'; setTimeout(tryLoad, 5000); }
     });
   } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    video.muted = true;
     video.src = hlsUrl;
-    video.addEventListener('loadedmetadata', showLive);
-    video.play().catch(function() { setTimeout(tryLoad, 5000); });
+    video.addEventListener('loadedmetadata', function once() {
+      video.removeEventListener('loadedmetadata', once);
+      video.play().then(showLive).catch(function() { showLive(); });
+    });
+    video.addEventListener('error', function() { setTimeout(tryLoad, 5000); });
   }
 }
 tryLoad();
@@ -253,7 +273,7 @@ function WebYouTubePlayer({ videoId, onReady }: { videoId: string; onReady: () =
     <iframe
       srcDoc={buildYouTubeHtml(videoId)}
       style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" } as any}
-      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
     />
   );
 }
@@ -313,6 +333,14 @@ export default function LiveClassScreen() {
   const [countdown, setCountdown] = useState<string | null>(null);
   const chatListRef = useRef<FlatList>(null);
   const lastMsgTimeRef = useRef<number>(0);
+  const didAutoplayDirectRecording = useRef(false);
+  // Web (esp. iOS Safari): lock video height to first full window so the on-screen keyboard does not squish the player.
+  const [webVideoHeight] = useState(() => {
+    if (Platform.OS !== "web" || typeof window === "undefined") return 0;
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    return Math.max(200, Math.min(380, Math.round(Math.min((w * 9) / 16, h * 0.42))));
+  });
 
   const { data: liveClassData } = useQuery<{ youtube_url: string; title: string; is_completed: boolean; is_live: boolean; show_viewer_count: boolean; cf_playback_hls?: string; stream_type?: string; recording_url?: string; duration_minutes?: number; scheduled_at?: number; has_access?: boolean; is_enrolled?: boolean; course_id?: number; is_public?: boolean }>({
     queryKey: [`/api/live-classes/${id}`],
@@ -358,9 +386,7 @@ export default function LiveClassScreen() {
   const title = liveClassData?.title || paramTitle || "Live Class";
   const topPadding = Platform.OS === "web" ? 16 : insets.top;
   const bottomPadding = Platform.OS === "web" ? 34 : insets.bottom;
-  const screenHeight = Dimensions.get("window").height;
-  const videoHeight = Math.min(screenHeight * 0.35, 280);
-  
+
   const streamType = liveClassData?.stream_type;
   const cfHlsUrl = liveClassData?.cf_playback_hls || "";
   const recordingUrl = liveClassData?.recording_url || "";
@@ -412,6 +438,9 @@ export default function LiveClassScreen() {
     }
     return toHttpsMediaUrl(videoUrl);
   })();
+  useEffect(() => {
+    didAutoplayDirectRecording.current = false;
+  }, [authenticatedVideoUrl]);
   const videoId = getYouTubeVideoId(videoUrl);
   const isStreamId = !videoId && isCloudflareStreamId(videoUrl);
   // Cloudflare HLS live stream or recording (m3u8 URL)
@@ -563,8 +592,8 @@ export default function LiveClassScreen() {
     </View>
   ), [isAdmin]);
 
-  return (
-    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === "ios" ? "padding" : undefined} keyboardVerticalOffset={0}>
+  const screenBody = (
+    <>
       <View style={[styles.header, { paddingTop: topPadding + 4 }]}>
         <Pressable style={styles.backBtn} onPress={() => router.back()}>
           <Ionicons name="arrow-back" size={20} color="#fff" />
@@ -610,8 +639,15 @@ export default function LiveClassScreen() {
           </Pressable>
         </View>
       ) : (
-        <>
-          <View style={[styles.playerContainer, { height: videoHeight }]}>
+        <View style={styles.mainContent}>
+          <View
+            style={[
+              styles.playerContainer,
+              Platform.OS === "web" && webVideoHeight > 0
+                ? { flex: 0, flexGrow: 0, flexShrink: 0, height: webVideoHeight }
+                : { flex: 3, minHeight: 0, flexShrink: 0 },
+            ]}
+          >
             <VideoWatermark isPlaying={isVideoPlaying} />
             {!liveClassData?.is_live && !liveClassData?.is_completed && (
               <View style={styles.waitingOverlay}>
@@ -640,21 +676,37 @@ export default function LiveClassScreen() {
               <iframe
                 srcDoc={buildCfHlsPlayerHtml(cfHlsUrl)}
                 style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" } as any}
-                allow="autoplay; fullscreen"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                 onLoad={() => setIsVideoLoading(false)}
               />
             ) : !videoId && !isCfHls && !isStreamId && authenticatedVideoUrl && Platform.OS === "web" ? (
-              // Direct video file (recording from /api/media/) — use <video> tag on web
+              // Direct recording / upload — programmatic play for browser autoplay policies
               <video
                 src={authenticatedVideoUrl}
                 controls
-                autoPlay
                 playsInline
                 controlsList="nodownload noplaybackrate noremoteplayback"
                 disablePictureInPicture
                 style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "contain", backgroundColor: "#000" } as any}
-                onLoadedData={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }}
-                onContextMenu={(e: any) => e.preventDefault()}
+                onLoadedData={() => setIsVideoLoading(false)}
+                onCanPlay={(e) => {
+                  if (didAutoplayDirectRecording.current) return;
+                  didAutoplayDirectRecording.current = true;
+                  const v = e.currentTarget;
+                  v.muted = true;
+                  v.play()
+                    .then(() => {
+                      v.muted = false;
+                      setIsVideoPlaying(true);
+                    })
+                    .catch(() => {
+                      v.muted = true;
+                      v.play().then(() => setIsVideoPlaying(true)).catch(() => {});
+                    });
+                }}
+                onPlay={() => setIsVideoPlaying(true)}
+                onPause={() => setIsVideoPlaying(false)}
+                onContextMenu={(ev: any) => ev.preventDefault()}
               />
             ) : isCfHls && Platform.OS !== "web" ? (
               <WebView
@@ -768,6 +820,8 @@ export default function LiveClassScreen() {
                   style={styles.chatList}
                   contentContainerStyle={styles.chatListContent}
                   showsVerticalScrollIndicator={false}
+                  keyboardShouldPersistTaps="handled"
+                  keyboardDismissMode="on-drag"
                   ListEmptyComponent={
                     <View style={styles.emptyChat}>
                       <Ionicons name="chatbubble-ellipses-outline" size={28} color="#ccc" />
@@ -808,21 +862,36 @@ export default function LiveClassScreen() {
               </>
             )}
           </View>
-        </>
+        </View>
       )}
+    </>
+  );
+
+  if (Platform.OS === "web") {
+    return <View style={styles.container}>{screenBody}</View>;
+  }
+  return (
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      keyboardVerticalOffset={0}
+    >
+      {screenBody}
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#000" },
-  header: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 14, paddingBottom: 8, backgroundColor: "#0A1628" },
+  header: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 14, paddingBottom: 8, backgroundColor: "#0A1628", flexShrink: 0, zIndex: 2 },
   backBtn: { width: 36, height: 36, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.12)", alignItems: "center", justifyContent: "center" },
   headerCenter: { flex: 1, flexDirection: "row", alignItems: "center", gap: 10 },
   liveIndicator: { flexDirection: "row", alignItems: "center", gap: 5, backgroundColor: "#DC2626", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
   liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: "#fff" },
   liveText: { fontSize: 10, fontFamily: "Inter_700Bold", color: "#fff", letterSpacing: 1 },
   headerTitle: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: "#fff", flex: 1 },
+  mainContent: { flex: 1, flexDirection: "column", minHeight: 0, minWidth: 0, overflow: "hidden" },
+  /* Native: flex height share. Web: height set inline (fixed) so keyboard does not squish the player. */
   playerContainer: { width: "100%", backgroundColor: "#000", position: "relative", overflow: "hidden" },
   loadingOverlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "#000", alignItems: "center", justifyContent: "center", zIndex: 10 },
   waitingOverlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "#0A1628", alignItems: "center", justifyContent: "center", gap: 6, zIndex: 10, padding: 20 },
@@ -842,7 +911,7 @@ const styles = StyleSheet.create({
   recordingInfo: { flex: 1, alignItems: "center", justifyContent: "center", gap: 10, padding: 24 },
   recordingInfoTitle: { fontSize: 18, fontFamily: "Inter_700Bold", color: Colors.light.text },
   recordingInfoSubtitle: { fontSize: 14, fontFamily: "Inter_400Regular", color: Colors.light.textMuted, textAlign: "center" },
-  chatContainer: { flex: 1, backgroundColor: Colors.light.background },
+  chatContainer: { flex: 1, minHeight: 0, minWidth: 0, backgroundColor: Colors.light.background },
   chatHeader: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: Colors.light.border },
   chatHeaderText: { fontSize: 15, fontFamily: "Inter_600SemiBold", color: Colors.light.text, flex: 1 },
   viewerCountBadge: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: Colors.light.secondary, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 },
