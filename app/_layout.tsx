@@ -75,7 +75,8 @@ function RootLayoutNav() {
     const inAuthGroup = currentSegment === "(auth)";
     const inProfileSetup = currentSegment === "profile-setup";
     const inWelcome = currentSegment === "welcome";
-    const authChild = segments[1];
+    // useSegments() is typed as a length-1 tuple; avoid segments[1] (TS tuple index error in CI)
+    const authChild = (segments as readonly string[]).at(1);
     // Allow all auth sub-routes (password login, phone OTP, OTP verify) without forcing a jump.
     const inAuthSubScreen = inAuthGroup && (authChild === "email-login" || authChild === "login" || authChild === "otp");
     // Incomplete profile: still allow browsing/purchase flows (e.g. return from Razorpay to /course/...?payment=success)
