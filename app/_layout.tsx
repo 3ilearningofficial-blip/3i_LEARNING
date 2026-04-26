@@ -63,7 +63,14 @@ function RootLayoutNav() {
   useEffect(() => {
     if (isLoading) return;
     const currentSegment = segments[0];
-    if (!currentSegment) return;
+    if (!currentSegment) {
+      if (user) {
+        router.replace(user.profileComplete ? "/(tabs)" : "/(auth)/login");
+      } else {
+        router.replace("/welcome");
+      }
+      return;
+    }
 
     const inAuthGroup = currentSegment === "(auth)";
     const inProfileSetup = currentSegment === "profile-setup";

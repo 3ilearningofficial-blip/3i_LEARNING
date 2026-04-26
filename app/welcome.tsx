@@ -46,6 +46,11 @@ export default function WelcomeScreen() {
     else router.push("/(auth)/email-login" as any);
   };
 
+  const handleSignup = () => {
+    if (user) router.replace("/(tabs)");
+    else router.push("/(auth)/login" as any);
+  };
+
   const googlePlayUrl = s("welcome_google_play_url", "https://play.google.com/store/apps/details?id=com.learning.threeI");
 
   const handleGooglePlay = () => {
@@ -83,6 +88,12 @@ export default function WelcomeScreen() {
                   <Ionicons name="log-in-outline" size={18} color="#fff" />
                   <Text style={styles.loginText}>{s("welcome_login_btn", "Login — It's Free")}</Text>
                 </LinearGradient>
+              </Pressable>
+            </View>
+            <View style={styles.secondaryCtaRow}>
+              <Pressable style={({ pressed }) => [styles.signupBtn, pressed && { opacity: 0.9 }]} onPress={handleSignup}>
+                <Ionicons name="person-add-outline" size={18} color="#fff" />
+                <Text style={styles.signupText}>Sign Up</Text>
               </Pressable>
             </View>
           </View>
@@ -173,6 +184,20 @@ const styles = StyleSheet.create({
   loginBtn: { flex: 1, borderRadius: 14, overflow: "hidden" },
   loginGradient: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, paddingVertical: 16 },
   loginText: { fontSize: 16, fontFamily: "Inter_700Bold", color: "#fff" },
+  secondaryCtaRow: { flexDirection: "row", width: "100%" },
+  signupBtn: {
+    flex: 1,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.35)",
+    backgroundColor: "rgba(255,255,255,0.1)",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    paddingVertical: 14,
+  },
+  signupText: { fontSize: 15, fontFamily: "Inter_600SemiBold", color: "#fff" },
   featuresGrid: { gap: 12 },
   featuresGridWide: { flexDirection: "row", flexWrap: "wrap" },
   featureCard: {
