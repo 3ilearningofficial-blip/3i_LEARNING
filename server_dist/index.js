@@ -182,6 +182,20 @@ var init_password_utils = __esm({
 });
 
 // server/auth-routes.ts
+function buildSessionUserFromRow(row, opts) {
+  return {
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    phone: row.phone,
+    role: row.role,
+    deviceId: opts.deviceId,
+    sessionToken: opts.sessionToken,
+    profileComplete: !!row.profile_complete,
+    date_of_birth: row.date_of_birth ?? null,
+    photo_url: row.photo_url ?? null
+  };
+}
 function registerAuthRoutes({
   app: app2,
   db: db2,
@@ -263,16 +277,7 @@ function registerAuthRoutes({
       if (Date.now() > Number(user.otp_expires_at)) return res.status(400).json({ message: "OTP expired" });
       const sessionToken = generateSecureToken2();
       await db2.query("UPDATE users SET otp = NULL, otp_expires_at = NULL, device_id = $1, session_token = $2, last_active_at = $3 WHERE id = $4", [deviceId || null, sessionToken, Date.now(), user.id]);
-      const sessionUser = {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        role: user.role,
-        deviceId,
-        sessionToken,
-        profileComplete: !!user.profile_complete
-      };
+      const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: deviceId || null });
       req.session.user = sessionUser;
       res.json({ success: true, user: sessionUser });
     } catch (err) {
@@ -301,15 +306,7 @@ function registerAuthRoutes({
       const user = result.rows[0];
       const sessionToken = generateSecureToken2();
       await db2.query("UPDATE users SET otp = NULL, otp_expires_at = NULL, device_id = $1, session_token = $2, last_active_at = $3 WHERE id = $4", [deviceId || null, sessionToken, Date.now(), user.id]);
-      const sessionUser = {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        role: user.role,
-        deviceId,
-        sessionToken
-      };
+      const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: deviceId || null });
       req.session.user = sessionUser;
       res.json({ success: true, user: sessionUser });
     } catch (err) {
@@ -404,16 +401,7 @@ function registerAuthRoutes({
       const user = result.rows[0];
       const sessionToken = generateSecureToken2();
       await db2.query("UPDATE users SET device_id = $1, session_token = $2 WHERE id = $3", [deviceId || null, sessionToken, user.id]);
-      const sessionUser = {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        role: user.role,
-        deviceId,
-        sessionToken,
-        profileComplete: user.profile_complete || false
-      };
+      const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: deviceId || null });
       req.session.user = sessionUser;
       res.json({ success: true, user: sessionUser });
     } catch (err) {
@@ -464,15 +452,7 @@ function registerAuthRoutes({
       if (!matched) return res.status(401).json({ message: "Incorrect password. Try again or use Phone OTP." });
       const sessionToken = generateSecureToken2();
       await db2.query("UPDATE users SET session_token = $1, last_active_at = $2 WHERE id = $3", [sessionToken, Date.now(), user.id]);
-      const sessionUser = {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        role: user.role,
-        sessionToken,
-        profileComplete: !!user.profile_complete
-      };
+      const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: null });
       req.session.user = sessionUser;
       res.json({ success: true, user: sessionUser });
     } catch (err) {
@@ -511,7 +491,15 @@ function registerAuthRoutes({
       updates.push("profile_complete = TRUE");
       params.push(user.id);
       await db2.query(`UPDATE users SET ${updates.join(", ")} WHERE id = $${params.length}`, params);
-      const updated = { ...user, name, profileComplete: true };
+      const full = await db2.query(
+        "SELECT id, name, email, phone, role, session_token, profile_complete, date_of_birth, photo_url FROM users WHERE id = $1",
+        [user.id]
+      );
+      const row = full.rows[0];
+      if (!row) {
+        return res.status(500).json({ message: "Failed to load profile after update" });
+      }
+      const updated = buildSessionUserFromRow(row, { sessionToken: row.session_token, deviceId: user.deviceId });
       req.session.user = updated;
       res.json({ success: true, user: updated });
     } catch {

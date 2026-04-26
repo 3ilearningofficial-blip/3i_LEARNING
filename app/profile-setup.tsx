@@ -16,7 +16,7 @@ import Colors from "@/constants/colors";
 
 export default function ProfileSetupScreen() {
   const insets = useSafeAreaInsets();
-  const { user, updateUser } = useAuth();
+  const { user, updateUser, login } = useAuth();
 
   const [name, setName] = useState(
     // Pre-fill if name is already a real name (not the auto-generated "StudentXXXX")
@@ -112,15 +112,20 @@ export default function ProfileSetupScreen() {
 
     setIsLoading(true);
     try {
-      await apiRequest("PUT", "/api/auth/profile", {
+      const res = await apiRequest("PUT", "/api/auth/profile", {
         name: trimmedName,
         dateOfBirth: trimmedDob,
         email: trimmedEmail,
         photoUrl: photoUri || undefined,
         password,
       });
+      const data = await res.json();
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      updateUser({ name: trimmedName, email: trimmedEmail, profileComplete: true });
+      if (data?.user) {
+        login(data.user);
+      } else {
+        updateUser({ name: trimmedName, email: trimmedEmail, profileComplete: true, date_of_birth: trimmedDob });
+      }
       // Go directly to home after profile setup
       router.replace("/(tabs)");
     } catch (err: any) {

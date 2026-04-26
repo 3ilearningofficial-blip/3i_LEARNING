@@ -29,6 +29,25 @@ type RegisterAuthRoutesDeps = {
   adminPhones: string[];
 };
 
+/** Same fields as GET /api/auth/me so the client can show DOB, photo, etc. without a second fetch. */
+function buildSessionUserFromRow(
+  row: Record<string, any>,
+  opts: { sessionToken: string; deviceId?: string | null }
+) {
+  return {
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    phone: row.phone,
+    role: row.role,
+    deviceId: opts.deviceId,
+    sessionToken: opts.sessionToken,
+    profileComplete: !!(row.profile_complete),
+    date_of_birth: row.date_of_birth ?? null,
+    photo_url: row.photo_url ?? null,
+  };
+}
+
 export function registerAuthRoutes({
   app,
   db,
@@ -123,12 +142,7 @@ export function registerAuthRoutes({
       const sessionToken = generateSecureToken();
       await db.query("UPDATE users SET otp = NULL, otp_expires_at = NULL, device_id = $1, session_token = $2, last_active_at = $3 WHERE id = $4", [deviceId || null, sessionToken, Date.now(), user.id]);
 
-      const sessionUser = {
-        id: user.id, name: user.name, email: user.email,
-        phone: user.phone, role: user.role,
-        deviceId, sessionToken,
-        profileComplete: !!(user.profile_complete),
-      };
+      const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: deviceId || null });
       (req.session as any).user = sessionUser;
       res.json({ success: true, user: sessionUser });
     } catch (err) {
@@ -162,11 +176,7 @@ export function registerAuthRoutes({
       const sessionToken = generateSecureToken();
       await db.query("UPDATE users SET otp = NULL, otp_expires_at = NULL, device_id = $1, session_token = $2, last_active_at = $3 WHERE id = $4", [deviceId || null, sessionToken, Date.now(), user.id]);
 
-      const sessionUser = {
-        id: user.id, name: user.name, email: user.email,
-        phone: user.phone, role: user.role,
-        deviceId, sessionToken,
-      };
+      const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: deviceId || null });
       (req.session as any).user = sessionUser;
       res.json({ success: true, user: sessionUser });
     } catch (err) {
@@ -263,16 +273,7 @@ export function registerAuthRoutes({
       const sessionToken = generateSecureToken();
       await db.query("UPDATE users SET device_id = $1, session_token = $2 WHERE id = $3", [deviceId || null, sessionToken, user.id]);
 
-      const sessionUser = {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        role: user.role,
-        deviceId: deviceId,
-        sessionToken: sessionToken,
-        profileComplete: user.profile_complete || false,
-      };
+      const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: deviceId || null });
       (req.session as any).user = sessionUser;
       res.json({ success: true, user: sessionUser });
     } catch (err: any) {
@@ -330,11 +331,7 @@ export function registerAuthRoutes({
 
       const sessionToken = generateSecureToken();
       await db.query("UPDATE users SET session_token = $1, last_active_at = $2 WHERE id = $3", [sessionToken, Date.now(), user.id]);
-      const sessionUser = {
-        id: user.id, name: user.name, email: user.email,
-        phone: user.phone, role: user.role,
-        sessionToken, profileComplete: !!(user.profile_complete),
-      };
+      const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: null });
       (req.session as any).user = sessionUser;
       res.json({ success: true, user: sessionUser });
     } catch (err) {
@@ -365,7 +362,15 @@ export function registerAuthRoutes({
       params.push(user.id);
       await db.query(`UPDATE users SET ${updates.join(", ")} WHERE id = $${params.length}`, params);
 
-      const updated = { ...(user as object), name, profileComplete: true };
+      const full = await db.query(
+        "SELECT id, name, email, phone, role, session_token, profile_complete, date_of_birth, photo_url FROM users WHERE id = $1",
+        [user.id]
+      );
+      const row = full.rows[0];
+      if (!row) {
+        return res.status(500).json({ message: "Failed to load profile after update" });
+      }
+      const updated = buildSessionUserFromRow(row, { sessionToken: row.session_token, deviceId: (user as { deviceId?: string }).deviceId });
       (req.session as any).user = updated;
       res.json({ success: true, user: updated });
     } catch {
