@@ -30,10 +30,9 @@ export default function StudioSetupPage() {
   const { data: liveClass, isLoading: isLoadingClass } = useQuery<any>({
     queryKey: ["/api/live-classes", liveClassId],
     queryFn: async () => {
-      const baseUrl = getApiUrl();
       const safeId = encodeURIComponent(String(liveClassId || ""));
-      // getApiUrl() is .../api; join path segments (do not use new URL("/live-...", base) — a leading / strips /api)
-      const res = await authFetch(`${baseUrl.replace(/\/$/, "")}/live-classes/${safeId}`);
+      // getApiUrl() is .../api; join paths (new URL("/live-...", getApiUrl()) wrongly drops /api on absolute paths)
+      const res = await authFetch(`${getApiUrl()}/live-classes/${safeId}`);
       if (!res.ok) {
         const msg = res.status === 404 ? "Live class not found or deleted." : "Failed to fetch live class";
         setLoadError(msg);

@@ -165,9 +165,8 @@ export default function BroadcastPage() {
   const { data: liveClass, isLoading } = useQuery<any>({
     queryKey: ["/api/live-classes", liveClassId],
     queryFn: async () => {
-      const baseUrl = getApiUrl();
       const safeLcId = encodeURIComponent(String(liveClassId || ""));
-      const res = await authFetch(`${baseUrl.replace(/\/$/, "")}/live-classes/${safeLcId}`);
+      const res = await authFetch(`${getApiUrl()}/live-classes/${safeLcId}`);
       if (!res.ok) throw new Error("Failed to fetch live class");
       return res.json();
     },
