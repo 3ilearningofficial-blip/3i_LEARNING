@@ -758,6 +758,26 @@ function registerPaymentRoutes({
   verifyPaymentSignature: verifyPaymentSignature2,
   cacheInvalidate: cacheInvalidate2
 }) {
+  const ensureCourseEnrollment = async (paymentRow) => {
+    const paidCourseResult = await db2.query("SELECT * FROM courses WHERE id = $1", [paymentRow.course_id]);
+    const paidCourse = paidCourseResult.rows[0];
+    if (!paidCourse) throw new Error("Course not found");
+    const alreadyEnrolled = await db2.query(
+      "SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2",
+      [paymentRow.user_id, paymentRow.course_id]
+    );
+    if (alreadyEnrolled.rows.length > 0) return;
+    const at = Date.now();
+    const vu = computeEnrollmentValidUntil(paidCourse, at);
+    await db2.query(
+      "INSERT INTO enrollments (user_id, course_id, enrolled_at, valid_until) VALUES ($1, $2, $3, $4)",
+      [paymentRow.user_id, paymentRow.course_id, at, vu]
+    );
+    await db2.query(
+      "UPDATE courses SET total_students = COALESCE(total_students, 0) + 1 WHERE id = $1",
+      [paymentRow.course_id]
+    );
+  };
   const completeCoursePaymentByOrder = async ({
     orderId,
     paymentId,
@@ -795,23 +815,8 @@ function registerPaymentRoutes({
         "UPDATE payments SET razorpay_payment_id = $1, razorpay_signature = $2, status = $3 WHERE razorpay_order_id = $4",
         [paymentId, signature, "paid", orderId]
       );
-      const alreadyEnrolled = await db2.query(
-        "SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2",
-        [paymentRow.user_id, paymentRow.course_id]
-      );
-      if (alreadyEnrolled.rows.length === 0) {
-        const at = Date.now();
-        const vu = computeEnrollmentValidUntil(paidCourse, at);
-        await db2.query(
-          "INSERT INTO enrollments (user_id, course_id, enrolled_at, valid_until) VALUES ($1, $2, $3, $4)",
-          [paymentRow.user_id, paymentRow.course_id, at, vu]
-        );
-        await db2.query(
-          "UPDATE courses SET total_students = COALESCE(total_students, 0) + 1 WHERE id = $1",
-          [paymentRow.course_id]
-        );
-      }
     }
+    await ensureCourseEnrollment(paymentRow);
     cacheInvalidate2?.("courses:");
     return { userId: paymentRow.user_id, courseId: paymentRow.course_id };
   };
@@ -937,6 +942,29 @@ function registerPaymentRoutes({
     } catch (err) {
       console.error("Verify payment error:", err);
       res.status(500).json({ message: "Payment verification failed" });
+    }
+  });
+  app2.post("/api/payments/sync-enrollment", async (req, res) => {
+    try {
+      const user = await getAuthUser2(req);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+      const courseId = Number(req.body?.courseId);
+      if (!Number.isFinite(courseId)) {
+        return res.status(400).json({ message: "courseId is required" });
+      }
+      const pay = await db2.query(
+        "SELECT * FROM payments WHERE user_id = $1 AND course_id = $2 AND status = 'paid' ORDER BY created_at DESC LIMIT 1",
+        [user.id, courseId]
+      );
+      if (pay.rows.length === 0) {
+        return res.json({ ok: true, fixed: false, message: "No paid order for this course" });
+      }
+      await ensureCourseEnrollment(pay.rows[0]);
+      cacheInvalidate2?.("courses:");
+      return res.json({ ok: true, fixed: true, message: "Enrollment synced" });
+    } catch (err) {
+      console.error("sync-enrollment error:", err);
+      res.status(500).json({ message: "Failed to sync enrollment" });
     }
   });
   app2.post("/api/payments/verify-redirect", async (req, res) => {

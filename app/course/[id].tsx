@@ -153,6 +153,11 @@ export default function CourseDetailScreen() {
   const [enrollSuccess, setEnrollSuccess] = useState(false);
   const [studentActionStudent, setStudentActionStudent] = useState<any>(null);
   const courseIdNum = Number(id);
+  const enrollmentSyncAttempted = useRef(false);
+
+  useEffect(() => {
+    enrollmentSyncAttempted.current = false;
+  }, [id]);
 
   const trackDownload = async (itemType: "material" | "lecture", itemId: number) => {
     try {
@@ -188,6 +193,25 @@ export default function CourseDetailScreen() {
     staleTime: 0,
     refetchInterval: 30000,
   });
+
+  // Repair paid-but-not-enrolled (legacy server bug). Idempotent; no-op if no paid row.
+  useEffect(() => {
+    if (!user || !course || course.isEnrolled || isAdmin) return;
+    if (enrollmentSyncAttempted.current) return;
+    enrollmentSyncAttempted.current = true;
+    apiRequest("POST", "/api/payments/sync-enrollment", { courseId: courseIdNum })
+      .then(async (res) => {
+        if (!res.ok) return;
+        const j = await res.json();
+        if (j?.fixed) {
+          qc.invalidateQueries({ queryKey: ["/api/courses", id] });
+          qc.invalidateQueries({ queryKey: ["/api/courses"] });
+        }
+      })
+      .catch(() => {
+        enrollmentSyncAttempted.current = false;
+      });
+  }, [user?.id, course?.isEnrolled, courseIdNum, isAdmin, id, qc, course]);
 
   const { data: liveClasses = [] } = useQuery<LiveClass[]>({
     queryKey: ["/api/live-classes", id],
