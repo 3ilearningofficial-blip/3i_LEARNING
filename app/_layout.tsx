@@ -65,7 +65,7 @@ function RootLayoutNav() {
     const currentSegment = segments[0];
     if (!currentSegment) {
       if (user) {
-        router.replace(user.profileComplete ? "/(tabs)" : "/(auth)/login");
+        router.replace(user.profileComplete ? "/(tabs)" : "/(auth)/email-login");
       } else {
         router.replace("/welcome");
       }
@@ -75,29 +75,41 @@ function RootLayoutNav() {
     const inAuthGroup = currentSegment === "(auth)";
     const inProfileSetup = currentSegment === "profile-setup";
     const inWelcome = currentSegment === "welcome";
+    const authChild = segments[1];
+    // Allow all auth sub-routes (password login, phone OTP, OTP verify) without forcing a jump.
+    const inAuthSubScreen = inAuthGroup && (authChild === "email-login" || authChild === "login" || authChild === "otp");
 
     if (user) {
-      // Do not force web refreshes into profile-setup; keep onboarding via explicit login/OTP flow.
-      const target = user.profileComplete ? "/(tabs)" : "/(auth)/login";
-      if (inAuthGroup || inWelcome) {
-        router.replace(target);
+      if (user.profileComplete) {
+        if (inAuthGroup || inWelcome) {
+          router.replace("/(tabs)");
+        }
         return;
       }
-      if (!user.profileComplete) {
-        if (inProfileSetup) {
-          if (Platform.OS === "web" && typeof window !== "undefined") {
-            const allowProfileSetupOnce = (window as any).__allowProfileSetupOnce === "1";
-            if (allowProfileSetupOnce) {
-              (window as any).__allowProfileSetupOnce = "0";
-              return;
-            }
-            router.replace("/(auth)/login");
+
+      // Incomplete profile: default to email+password screen; do not yank off email-login onto phone OTP.
+      if (inWelcome) {
+        router.replace("/(auth)/email-login");
+        return;
+      }
+      if (inAuthGroup) {
+        if (inAuthSubScreen) return;
+        router.replace("/(auth)/email-login");
+        return;
+      }
+      if (inProfileSetup) {
+        if (Platform.OS === "web" && typeof window !== "undefined") {
+          const allowProfileSetupOnce = (window as any).__allowProfileSetupOnce === "1";
+          if (allowProfileSetupOnce) {
+            (window as any).__allowProfileSetupOnce = "0";
             return;
           }
+          router.replace("/(auth)/email-login");
           return;
         }
-        router.replace("/(auth)/login");
+        return;
       }
+      router.replace("/(auth)/email-login");
       return;
     }
 
