@@ -9,6 +9,7 @@ type RegisterAdminLiveClassManageRoutesDeps = {
   db: DbClient;
   requireAdmin: (req: Request, res: Response, next: () => void) => any;
   getR2Client: () => Promise<any>;
+  recomputeAllEnrollmentsProgressForCourse: (courseId: number | string) => Promise<void>;
 };
 
 export function registerAdminLiveClassManageRoutes({
@@ -16,6 +17,7 @@ export function registerAdminLiveClassManageRoutes({
   db,
   requireAdmin,
   getR2Client,
+  recomputeAllEnrollmentsProgressForCourse,
 }: RegisterAdminLiveClassManageRoutesDeps): void {
   app.post("/api/admin/live-classes/cleanup", requireAdmin, async (_req: Request, res: Response) => {
     try {
@@ -145,16 +147,21 @@ export function registerAdminLiveClassManageRoutes({
         }
       }
 
-      if (isCompleted && convertToLecture && liveClass.youtube_url && liveClass.course_id) {
+      if (isCompleted && convertToLecture && liveClass.youtube_url) {
         await db
           .query("DELETE FROM notifications WHERE title IN ('🔴 Live Class Started!', '🔴 Live Class Starting Now!', '⏰ Live Class in 30 minutes!') AND message ILIKE $1", ['%' + liveClass.title + '%'])
           .catch(() => {});
-        const maxOrder = await db.query("SELECT COALESCE(MAX(order_index), 0) + 1 as next_order FROM lectures WHERE course_id = $1", [liveClass.course_id]);
-        await db.query(
-          "INSERT INTO lectures (course_id, title, description, video_url, video_type, duration_minutes, order_index, is_free_preview, section_title, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
-          [liveClass.course_id, liveClass.title, liveClass.description || "", liveClass.youtube_url, "youtube", 0, maxOrder.rows[0].next_order, false, sectionTitle || "Live Class Recordings", Date.now()]
-        );
-        await db.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [liveClass.course_id]);
+        const sameTitle = await db.query("SELECT * FROM live_classes WHERE title = $1", [liveClass.title]);
+        for (const peer of sameTitle.rows) {
+          if (!peer.course_id) continue;
+          const maxOrder = await db.query("SELECT COALESCE(MAX(order_index), 0) + 1 as next_order FROM lectures WHERE course_id = $1", [peer.course_id]);
+          await db.query(
+            "INSERT INTO lectures (course_id, title, description, video_url, video_type, duration_minutes, order_index, is_free_preview, section_title, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+            [peer.course_id, peer.title, peer.description || "", liveClass.youtube_url, "youtube", 0, maxOrder.rows[0].next_order, false, sectionTitle || "Live Class Recordings", Date.now()]
+          );
+          await db.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [peer.course_id]);
+          await recomputeAllEnrollmentsProgressForCourse(peer.course_id);
+        }
       }
       if (isCompleted && !convertToLecture && liveClass.title) {
         await db

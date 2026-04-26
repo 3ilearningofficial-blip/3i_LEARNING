@@ -301,7 +301,6 @@ async function updateCourseProgress(userId: number, courseId: number | string) {
     // Count total items
     const totalLec = await db.query("SELECT COUNT(*) FROM lectures WHERE course_id = $1", [cid]);
     const totalTests = await db.query("SELECT COUNT(*) FROM tests WHERE course_id = $1 AND is_published = TRUE", [cid]);
-    const totalLive = await db.query("SELECT COUNT(*) FROM live_classes WHERE course_id = $1 AND is_completed = TRUE", [cid]);
 
     // Count completed items by user
     const completedLec = await db.query(
@@ -327,6 +326,19 @@ async function updateCourseProgress(userId: number, courseId: number | string) {
     );
   } catch (err) {
     console.error("[Progress] Failed to update:", err);
+  }
+}
+
+/** Re-run progress for every enrolled user when lecture/test counts change (e.g. new lecture added). */
+async function recomputeAllEnrollmentsProgressForCourse(courseId: number | string) {
+  const cid = String(courseId);
+  try {
+    const enr = await db.query("SELECT user_id FROM enrollments WHERE course_id = $1 AND (status = 'active' OR status IS NULL)", [cid]);
+    for (const row of enr.rows) {
+      await updateCourseProgress(row.user_id, courseId);
+    }
+  } catch (err) {
+    console.error("[Progress] recomputeAllEnrollmentsProgressForCourse failed:", err);
   }
 }
 
@@ -1346,6 +1358,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     db,
     requireAdmin,
     getR2Client,
+    recomputeAllEnrollmentsProgressForCourse,
   });
 
   registerCourseAccessRoutes({
@@ -1355,6 +1368,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     generateSecureToken,
     cacheInvalidate: (prefix?: string) => cacheInvalidate(prefix ?? ""),
     getR2Client,
+    updateCourseProgress,
   });
 
   registerUploadRoutes({
@@ -1390,6 +1404,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     db,
     requireAdmin,
     updateCourseTestCounts,
+    recomputeAllEnrollmentsProgressForCourse,
   });
 
   registerAdminCourseManagementRoutes({
@@ -1419,6 +1434,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     db,
     requireAdmin,
     getR2Client,
+    recomputeAllEnrollmentsProgressForCourse,
   });
 
   registerAdminTestRoutes({
@@ -1481,6 +1497,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     app,
     db,
     requireAdmin,
+    recomputeAllEnrollmentsProgressForCourse,
   });
 
   registerPdfRoutes({ app, db });

@@ -9,6 +9,7 @@ type RegisterAdminCourseImportRoutesDeps = {
   db: DbClient;
   requireAdmin: (req: Request, res: Response, next: () => void) => any;
   updateCourseTestCounts: (courseId: string) => Promise<void>;
+  recomputeAllEnrollmentsProgressForCourse: (courseId: number | string) => Promise<void>;
 };
 
 export function registerAdminCourseImportRoutes({
@@ -16,10 +17,11 @@ export function registerAdminCourseImportRoutes({
   db,
   requireAdmin,
   updateCourseTestCounts,
+  recomputeAllEnrollmentsProgressForCourse,
 }: RegisterAdminCourseImportRoutesDeps): void {
   app.post("/api/admin/courses/:id/import-lectures", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const targetCourseId = req.params.id;
+      const targetCourseId = String(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id);
       const { lectureIds, sectionTitle } = req.body;
       if (!lectureIds || !Array.isArray(lectureIds) || lectureIds.length === 0) {
         return res.status(400).json({ message: "No lectures selected" });
@@ -38,6 +40,7 @@ export function registerAdminCourseImportRoutes({
         }
       }
       await db.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [targetCourseId]);
+      await recomputeAllEnrollmentsProgressForCourse(targetCourseId);
       res.json({ success: true, imported: lectureIds.length });
     } catch (err) {
       console.error("Import lectures error:", err);

@@ -8,12 +8,14 @@ type RegisterLiveStreamRoutesDeps = {
   app: Express;
   db: DbClient;
   requireAdmin: (req: Request, res: Response, next: () => void) => any;
+  recomputeAllEnrollmentsProgressForCourse: (courseId: number | string) => Promise<void>;
 };
 
 export function registerLiveStreamRoutes({
   app,
   db,
   requireAdmin,
+  recomputeAllEnrollmentsProgressForCourse,
 }: RegisterLiveStreamRoutesDeps): void {
   app.post("/api/admin/live-classes/:id/stream/create", requireAdmin, async (req: Request, res: Response) => {
     try {
@@ -63,10 +65,19 @@ export function registerLiveStreamRoutes({
       const streamKey = input.rtmps?.streamKey || uid;
       const playbackHls = `https://videodelivery.net/${uid}/manifest/video.m3u8`;
 
-      await db.query(
-        "UPDATE live_classes SET cf_stream_uid = $1, cf_stream_key = $2, cf_stream_rtmp_url = $3, cf_playback_hls = $4 WHERE id = $5",
-        [uid, streamKey, rtmpUrl, playbackHls, req.params.id]
-      );
+      const titleResult = await db.query("SELECT title FROM live_classes WHERE id = $1", [req.params.id]);
+      const lcTitle = titleResult.rows[0]?.title;
+      if (lcTitle) {
+        await db.query(
+          "UPDATE live_classes SET cf_stream_uid = $1, cf_stream_key = $2, cf_stream_rtmp_url = $3, cf_playback_hls = $4 WHERE title = $5",
+          [uid, streamKey, rtmpUrl, playbackHls, lcTitle]
+        );
+      } else {
+        await db.query(
+          "UPDATE live_classes SET cf_stream_uid = $1, cf_stream_key = $2, cf_stream_rtmp_url = $3, cf_playback_hls = $4 WHERE id = $5",
+          [uid, streamKey, rtmpUrl, playbackHls, req.params.id]
+        );
+      }
 
       console.log(`[CF Stream] Created live input uid=${uid} for live class ${req.params.id}`);
       res.json({ uid, rtmpUrl, streamKey, playbackHls });
@@ -138,60 +149,58 @@ export function registerLiveStreamRoutes({
         return res.status(404).json({ message: "Live class not found" });
       }
       const liveClass = lcResult.rows[0];
+      const title = liveClass.title as string;
 
+      const peers = await db.query("SELECT * FROM live_classes WHERE title = $1 ORDER BY id", [title]);
       const endedAt = Date.now();
-      await db.query(
-        `UPDATE live_classes 
+      const lectureIds: number[] = [];
+
+      for (const row of peers.rows) {
+        const durationMins = row.started_at
+          ? Math.max(1, Math.round((endedAt - Number(row.started_at)) / 60000))
+          : 0;
+        await db.query(
+          `UPDATE live_classes 
          SET recording_url = $1, is_completed = TRUE, is_live = FALSE, ended_at = $2,
              duration_minutes = CASE 
                WHEN started_at IS NOT NULL 
-               THEN GREATEST(1, ROUND(($2 - started_at) / 60000.0)::INTEGER)
-               ELSE 0 
+               THEN GREATEST(1, ROUND(($2::bigint - started_at) / 60000.0)::INTEGER)
+               ELSE 0
              END
          WHERE id = $3`,
-        [recordingUrl, endedAt, req.params.id]
-      );
-
-      let lectureId = null;
-      if (liveClass.course_id) {
-        const durationMins = liveClass.started_at
-          ? Math.max(1, Math.round((Date.now() - Number(liveClass.started_at)) / 60000))
-          : 0;
-        const maxOrder = await db.query(
-          "SELECT COALESCE(MAX(order_index), 0) + 1 as next_order FROM lectures WHERE course_id = $1",
-          [liveClass.course_id]
+          [recordingUrl, endedAt, row.id]
         );
-        const lectureResult = await db.query(
-          `INSERT INTO lectures (course_id, title, description, video_url, video_type, duration_minutes, order_index, is_free_preview, section_title, created_at)
+
+        if (row.course_id) {
+          const maxOrder = await db.query(
+            "SELECT COALESCE(MAX(order_index), 0) + 1 as next_order FROM lectures WHERE course_id = $1",
+            [row.course_id]
+          );
+          const lectureResult = await db.query(
+            `INSERT INTO lectures (course_id, title, description, video_url, video_type, duration_minutes, order_index, is_free_preview, section_title, created_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
-          [
-            liveClass.course_id,
-            liveClass.title,
-            liveClass.description || "",
-            recordingUrl,
-            "r2",
-            durationMins,
-            maxOrder.rows[0].next_order,
-            false,
-            sectionTitle || "Live Class Recordings",
-            Date.now(),
-          ]
-        );
-        lectureId = lectureResult.rows[0].id;
-
-        await db.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [
-          liveClass.course_id,
-        ]);
+            [
+              row.course_id,
+              row.title,
+              row.description || "",
+              recordingUrl,
+              "r2",
+              durationMins,
+              maxOrder.rows[0].next_order,
+              false,
+              sectionTitle || "Live Class Recordings",
+              Date.now(),
+            ]
+          );
+          lectureIds.push(lectureResult.rows[0].id);
+          await db.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [
+            row.course_id,
+          ]);
+          await recomputeAllEnrollmentsProgressForCourse(row.course_id);
+        }
       }
 
-      await db.query(
-        `UPDATE live_classes 
-         SET is_completed = TRUE, is_live = FALSE
-         WHERE id != $1 AND title = $2 AND (is_live = TRUE OR is_completed IS NOT TRUE)`,
-        [req.params.id, liveClass.title]
-      ).catch(() => {});
-
-      res.json({ success: true, lectureId });
+      res.json({ success: true, lectureId: lectureIds[0] ?? null, lectureIds });
     } catch (err) {
       console.error("Recording completion error:", err);
       res.status(500).json({ message: "Failed to save recording" });

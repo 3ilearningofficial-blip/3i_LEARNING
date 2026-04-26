@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable,
   Platform, ActivityIndicator, Alert, Modal, Image,
@@ -30,6 +30,8 @@ interface Lecture {
   isCompleted?: boolean;
   pdf_url?: string;
   download_allowed?: boolean;
+  /** Set when row is from DB (e.g. recording added at) */
+  created_at?: number;
 }
 
 interface CourseTest {
@@ -60,6 +62,7 @@ interface LiveClass {
   is_live: boolean;
   is_completed: boolean;
   scheduled_at: number;
+  ended_at?: number;
   duration_minutes?: number;
   section_title?: string;
 }
@@ -225,6 +228,15 @@ export default function CourseDetailScreen() {
     enabled: activeTab === "Live",
     refetchInterval: activeTab === "Live" ? 10000 : false,
   });
+
+  /** Live tab: show upcoming + currently live only; recordings live under Lectures → Live Class Recordings. */
+  const liveClassesForTab = useMemo(() => {
+    return (liveClasses || []).filter((lc) => {
+      if (lc.is_live) return true;
+      if (lc.is_completed) return false;
+      return true;
+    });
+  }, [liveClasses]);
 
   const { data: attemptSummary = {} } = useQuery<Record<number, any>>({
     queryKey: ["/api/my-attempts/summary"],
@@ -986,7 +998,17 @@ setTimeout(function() {
                               <View style={styles.testItemIcon}><Ionicons name="videocam" size={22} color="#1A56DB" /></View>
                               <View style={styles.testItemInfo}>
                                 <Text style={styles.testItemTitle}>{lec.title}</Text>
-                                <Text style={styles.testItemMeta}>{lec.duration_minutes || 0}min{lec.is_free_preview ? " · Free Preview" : ""}{lec.download_allowed ? " · Download" : ""}</Text>
+                                <Text style={styles.testItemMeta}>
+                                  {lec.section_title === "Live Class Recordings" && lec.created_at
+                                    ? `${new Date(Number(lec.created_at)).toLocaleDateString(undefined, {
+                                        year: "numeric",
+                                        month: "short",
+                                        day: "numeric",
+                                      })} · ${lec.duration_minutes || 0} min`
+                                    : `${lec.duration_minutes || 0} min`}
+                                  {lec.is_free_preview ? " · Free Preview" : ""}
+                                  {lec.download_allowed ? " · Download" : ""}
+                                </Text>
                               </View>
                               {!canAccess ? <Ionicons name="lock-closed" size={18} color={Colors.light.textMuted} /> : <Ionicons name="play-circle" size={20} color="#1A56DB" />}
                             </Pressable>
@@ -1196,17 +1218,19 @@ setTimeout(function() {
 
         {currentActiveTab === "Live" && (
           <View style={styles.list}>
-            {liveClasses.length === 0 ? (
+            {liveClassesForTab.length === 0 ? (
               <View style={styles.emptyState}>
                 <Ionicons name="videocam-outline" size={40} color={Colors.light.textMuted} />
-                <Text style={styles.emptyText}>No live classes scheduled</Text>
-                <Text style={styles.emptySubText}>Check back soon for upcoming live sessions</Text>
+                <Text style={styles.emptyText}>No upcoming or live sessions</Text>
+                <Text style={styles.emptySubText}>
+                  Recordings from ended classes are under Lectures → Live Class Recordings
+                </Text>
               </View>
             ) : (
               (() => {
                 // Group by section_title
                 const folderMap = new Map<string, LiveClass[]>();
-                for (const lc of liveClasses) {
+                for (const lc of liveClassesForTab) {
                   const key = (lc as any).section_title || "__default__";
                   if (!folderMap.has(key)) folderMap.set(key, []);
                   folderMap.get(key)!.push(lc);
@@ -1283,14 +1307,26 @@ setTimeout(function() {
                             <Text style={styles.liveClassTitle}>{lc.title}</Text>
                             {lc.description ? <Text style={styles.liveClassDesc} numberOfLines={1}>{lc.description}</Text> : null}
                             <Text style={styles.liveClassTime}>
-                              {lc.is_live ? "Happening now" : lc.is_completed ? "Recording available" : new Date(Number(lc.scheduled_at)).toLocaleString()}
+                              {lc.is_live
+                                ? "Happening now"
+                                : (() => {
+                                    const d = new Date(Number(lc.scheduled_at));
+                                    const dateStr = d.toLocaleDateString(undefined, {
+                                      year: "numeric",
+                                      month: "short",
+                                      day: "numeric",
+                                    });
+                                    const timeStr = d.toLocaleTimeString(undefined, {
+                                      hour: "numeric",
+                                      minute: "2-digit",
+                                    });
+                                    const dur =
+                                      lc.duration_minutes && lc.duration_minutes > 0
+                                        ? ` · ${lc.duration_minutes} min`
+                                        : "";
+                                    return `${dateStr} · ${timeStr}${dur}`;
+                                  })()}
                             </Text>
-                            {lc.is_completed && lc.duration_minutes && lc.duration_minutes > 0 && (
-                              <View style={styles.lectureMetaRow}>
-                                <Ionicons name="time-outline" size={12} color={Colors.light.textMuted} />
-                                <Text style={styles.lectureMeta}>{lc.duration_minutes}min</Text>
-                              </View>
-                            )}
                           </View>
                           <Ionicons name={lc.is_live || lc.is_completed ? "play-circle" : "calendar"} size={24} color={lc.is_live ? "#DC2626" : lc.is_completed ? Colors.light.primary : Colors.light.textMuted} />
                         </Pressable>
@@ -1527,7 +1563,17 @@ setTimeout(function() {
                       <Text style={styles.lectureTitle}>{lecture.title}</Text>
                       <View style={styles.lectureMetaRow}>
                         <Ionicons name="time-outline" size={12} color={Colors.light.textMuted} />
-                        <Text style={styles.lectureMeta}>{lecture.duration_minutes > 0 ? `${lecture.duration_minutes}min` : "—"}</Text>
+                        <Text style={styles.lectureMeta}>
+                          {lecture.section_title === "Live Class Recordings" && lecture.created_at
+                            ? `${new Date(Number(lecture.created_at)).toLocaleDateString(undefined, {
+                                year: "numeric",
+                                month: "short",
+                                day: "numeric",
+                              })} · ${lecture.duration_minutes > 0 ? `${lecture.duration_minutes} min` : "—"}`
+                            : lecture.duration_minutes > 0
+                              ? `${lecture.duration_minutes} min`
+                              : "—"}
+                        </Text>
                         {lecture.is_free_preview && <View style={styles.previewBadge}><Text style={styles.previewBadgeText}>Preview</Text></View>}
                       </View>
                     </View>

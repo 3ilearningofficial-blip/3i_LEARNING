@@ -22,6 +22,7 @@ type RegisterCourseAccessRoutesDeps = {
   generateSecureToken: () => string;
   cacheInvalidate: (prefix: string) => void;
   getR2Client: () => Promise<any>;
+  updateCourseProgress: (userId: number, courseId: number | string) => Promise<void>;
 };
 
 export function registerCourseAccessRoutes({
@@ -31,6 +32,7 @@ export function registerCourseAccessRoutes({
   generateSecureToken,
   cacheInvalidate,
   getR2Client,
+  updateCourseProgress,
 }: RegisterCourseAccessRoutesDeps): void {
   app.post("/api/media-token", async (req: Request, res: Response) => {
     try {
@@ -119,7 +121,8 @@ export function registerCourseAccessRoutes({
           } catch (_e) {}
         }
       }
-      const courseResult = await db.query("SELECT * FROM courses WHERE id = $1", [req.params.id]);
+      const courseIdParam = String(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id);
+      const courseResult = await db.query("SELECT * FROM courses WHERE id = $1", [courseIdParam]);
       if (courseResult.rows.length === 0) return res.status(404).json({ message: "Course not found" });
 
       const course = courseResult.rows[0];
@@ -130,19 +133,26 @@ export function registerCourseAccessRoutes({
       } else {
         (course as any).courseEnded = false;
       }
-      const lecturesResult = await db.query("SELECT * FROM lectures WHERE course_id = $1 ORDER BY order_index", [req.params.id]);
-      const testsResult = await db.query("SELECT * FROM tests WHERE course_id = $1 AND is_published = TRUE ORDER BY created_at DESC, id DESC", [req.params.id]);
-      const materialsResult = await db.query("SELECT * FROM study_materials WHERE course_id = $1", [req.params.id]);
+      const lecturesResult = await db.query("SELECT * FROM lectures WHERE course_id = $1 ORDER BY order_index", [courseIdParam]);
+      const testsResult = await db.query("SELECT * FROM tests WHERE course_id = $1 AND is_published = TRUE ORDER BY created_at DESC, id DESC", [courseIdParam]);
+      const materialsResult = await db.query("SELECT * FROM study_materials WHERE course_id = $1", [courseIdParam]);
 
       if (user) {
-        const enroll = await db.query("SELECT * FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [user.id, req.params.id]);
+        const enroll = await db.query("SELECT * FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [user.id, courseIdParam]);
         const row = enroll.rows[0];
         const accessExpired = row && isEnrollmentExpired(row);
         (course as any).isEnrolled = enroll.rows.length > 0 && !accessExpired;
         (course as any).accessExpired = accessExpired || false;
         (course as any).enrollmentValidUntil = row && row.valid_until != null ? row.valid_until : null;
-        (course as any).progress = row && !accessExpired ? (row?.progress_percent || 0) : 0;
-        (course as any).lastLectureId = row && !accessExpired ? row?.last_lecture_id : null;
+
+        let progressRow = row;
+        if ((course as any).isEnrolled) {
+          await updateCourseProgress(user.id, courseIdParam);
+          const enrollFresh = await db.query("SELECT * FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [user.id, courseIdParam]);
+          progressRow = enrollFresh.rows[0] || row;
+        }
+        (course as any).progress = progressRow && !accessExpired ? (progressRow?.progress_percent || 0) : 0;
+        (course as any).lastLectureId = progressRow && !accessExpired ? progressRow?.last_lecture_id : null;
 
         if ((course as any).isEnrolled) {
           const lpResult = await db.query("SELECT * FROM lecture_progress WHERE user_id = $1", [user.id]);

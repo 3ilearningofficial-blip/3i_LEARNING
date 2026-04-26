@@ -9,6 +9,7 @@ type RegisterAdminLectureRoutesDeps = {
   db: DbClient;
   requireAdmin: (req: Request, res: Response, next: () => void) => any;
   getR2Client: () => Promise<any>;
+  recomputeAllEnrollmentsProgressForCourse: (courseId: number | string) => Promise<void>;
 };
 
 export function registerAdminLectureRoutes({
@@ -16,6 +17,7 @@ export function registerAdminLectureRoutes({
   db,
   requireAdmin,
   getR2Client,
+  recomputeAllEnrollmentsProgressForCourse,
 }: RegisterAdminLectureRoutesDeps): void {
   const inferLectureVideoType = (url: string): string => {
     const u = (url || "").trim().toLowerCase();
@@ -66,6 +68,7 @@ export function registerAdminLectureRoutes({
         ]
       );
       await db.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [parsedCourseId]);
+      await recomputeAllEnrollmentsProgressForCourse(parsedCourseId);
       res.json(result.rows[0]);
     } catch (err) {
       console.error("[AdminLectures] create failed", {
