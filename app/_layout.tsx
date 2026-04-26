@@ -78,6 +78,21 @@ function RootLayoutNav() {
     const authChild = segments[1];
     // Allow all auth sub-routes (password login, phone OTP, OTP verify) without forcing a jump.
     const inAuthSubScreen = inAuthGroup && (authChild === "email-login" || authChild === "login" || authChild === "otp");
+    // Incomplete profile: still allow browsing/purchase flows (e.g. return from Razorpay to /course/...?payment=success)
+    const incompleteUserAllowedTopSegments = new Set([
+      "course",
+      "store",
+      "lecture",
+      "test",
+      "test-result",
+      "test-folder",
+      "test-verify",
+      "material",
+      "material-folder",
+      "live-class",
+      "notifications",
+      "downloads",
+    ]);
 
     if (user) {
       if (user.profileComplete) {
@@ -107,6 +122,9 @@ function RootLayoutNav() {
           router.replace("/(auth)/email-login");
           return;
         }
+        return;
+      }
+      if (incompleteUserAllowedTopSegments.has(currentSegment)) {
         return;
       }
       router.replace("/(auth)/email-login");
