@@ -469,7 +469,14 @@ export function registerCourseAccessRoutes({
       const user = await getAuthUser(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const result = await db.query(
-        `SELECT p.id, p.amount, p.currency, p.status, p.created_at,
+        `SELECT p.id,
+                (CASE
+                  WHEN p.amount IS NOT NULL AND c.price IS NOT NULL
+                    AND p.amount::numeric = c.price::numeric
+                  THEN (ROUND(c.price::numeric * 100))::integer
+                  ELSE p.amount
+                END) AS amount,
+                p.currency, p.status, p.created_at,
                 c.title AS course_title, c.price AS course_price
          FROM payments p
          JOIN courses c ON p.course_id = c.id

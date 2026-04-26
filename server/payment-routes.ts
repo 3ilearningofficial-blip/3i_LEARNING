@@ -132,11 +132,12 @@ export function registerPaymentRoutes({
           [user.id, courseId]
         );
         if (paid.rows.length === 0) {
-          await db.query(
+          const pricePaisa = Math.round(parseFloat(String(price)) * 100);
+        await db.query(
             `INSERT INTO payments (user_id, course_id, amount, status, click_count, created_at)
              VALUES ($1, $2, $3, 'created', 1, $4)
              ON CONFLICT (user_id, course_id) DO UPDATE SET click_count = payments.click_count + 1`,
-            [user.id, courseId, price, Date.now()]
+            [user.id, courseId, pricePaisa, Date.now()]
           );
         }
       }
@@ -191,12 +192,12 @@ export function registerPaymentRoutes({
       if (existingPayment.rows.length > 0) {
         await db.query(
           "UPDATE payments SET razorpay_order_id = $1, amount = $2 WHERE id = $3",
-          [order.id, course.price, existingPayment.rows[0].id]
+          [order.id, amount, existingPayment.rows[0].id]
         );
       } else {
         await db.query(
           "INSERT INTO payments (user_id, course_id, razorpay_order_id, amount, status, click_count, created_at) VALUES ($1, $2, $3, $4, 'created', 1, $5)",
-          [user.id, courseId, order.id, course.price, Date.now()]
+          [user.id, courseId, order.id, amount, Date.now()]
         );
       }
 

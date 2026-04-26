@@ -55,8 +55,8 @@ export function registerAdminAnalyticsRoutes({
       const enrollWhere = range ? " AND e.enrolled_at >= $1 AND e.enrolled_at < $2" : "";
       const bookWhere = range ? " AND bp.purchased_at >= $1 AND bp.purchased_at < $2" : "";
       const enrollJoin = range ? " AND e.enrolled_at >= $1 AND e.enrolled_at < $2" : "";
-      const paymentJoin = range ? " AND p.created_at >= $3 AND p.created_at < $4" : "";
-      const courseJoinParams = range ? [range.start, range.endExclusive, range.start, range.endExclusive] : [];
+      // Course revenue must not JOIN payments next to enrollments (cartesian = doubled sums).
+      // Payouts are stored in paise (Razorpay); response amounts use rupees for this API.
 
       const [
         revenueResult,
@@ -72,22 +72,63 @@ export function registerAdminAnalyticsRoutes({
         testPurchases,
         lifetimeTestRevenue,
       ] = await Promise.all([
-        db.query(`SELECT COALESCE(SUM(p.amount), 0) as total_revenue FROM payments p WHERE p.status = 'paid'${paymentWhere}`, rangeParams),
+        db.query(
+          `SELECT COALESCE(SUM(
+              (CASE
+                WHEN p.amount IS NOT NULL AND c.price IS NOT NULL
+                  AND p.amount::numeric = c.price::numeric
+                THEN (ROUND(c.price::numeric * 100))::integer
+                ELSE p.amount
+              END)
+            ), 0) / 100.0 as total_revenue
+           FROM payments p
+           JOIN courses c ON c.id = p.course_id
+           WHERE p.status = 'paid'${paymentWhere}`,
+          rangeParams
+        ),
         db.query(`SELECT COUNT(*) as total_enrollments FROM enrollments e WHERE 1=1${enrollWhere}`, rangeParams),
-        db.query(`SELECT COALESCE(SUM(amount), 0) as lifetime_revenue FROM payments WHERE status = 'paid'`),
+        db.query(
+          `SELECT COALESCE(SUM(
+              (CASE
+                WHEN p.amount IS NOT NULL AND c.price IS NOT NULL
+                  AND p.amount::numeric = c.price::numeric
+                THEN (ROUND(c.price::numeric * 100))::integer
+                ELSE p.amount
+              END)
+            ), 0) / 100.0 as lifetime_revenue
+           FROM payments p
+           JOIN courses c ON c.id = p.course_id
+           WHERE p.status = 'paid'`
+        ),
         db.query(`SELECT COUNT(*) as cnt FROM enrollments`),
         db.query(`
           SELECT c.id, c.title, c.category, c.price, c.is_free, c.course_type,
                  COUNT(DISTINCT e.id) as enrollment_count,
-                 COALESCE(SUM(p.amount), 0) as revenue
+                 (COALESCE((
+                    SELECT SUM(
+                      (CASE
+                        WHEN p2.amount IS NOT NULL AND c2.price IS NOT NULL
+                          AND p2.amount::numeric = c2.price::numeric
+                        THEN (ROUND(c2.price::numeric * 100))::integer
+                        ELSE p2.amount
+                      END)
+                    ) FROM payments p2
+                    JOIN courses c2 ON c2.id = p2.course_id
+                    WHERE p2.course_id = c.id AND p2.status = 'paid'${range ? " AND p2.created_at >= $1 AND p2.created_at < $2" : ""}
+                 ), 0) / 100.0) as revenue
           FROM courses c
           LEFT JOIN enrollments e ON e.course_id = c.id${enrollJoin}
-          LEFT JOIN payments p ON p.course_id = c.id AND p.status = 'paid'${paymentJoin}
           GROUP BY c.id, c.title, c.category, c.price, c.is_free, c.course_type
           ORDER BY enrollment_count DESC
-        `, courseJoinParams),
+        `, range ? rangeParams : []),
         db.query(`
-          SELECT p.id, p.created_at, p.amount,
+          SELECT p.id, p.created_at,
+                 (CASE
+                    WHEN p.amount IS NOT NULL AND c.price IS NOT NULL
+                      AND p.amount::numeric = c.price::numeric
+                    THEN (ROUND(c.price::numeric * 100))::integer
+                    ELSE p.amount
+                  END) / 100.0 as amount,
                  u.name as user_name, u.phone as user_phone, u.email as user_email,
                  c.title as course_title, c.category
           FROM payments p

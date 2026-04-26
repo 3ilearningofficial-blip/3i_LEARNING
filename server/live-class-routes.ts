@@ -50,10 +50,10 @@ export function registerLiveClassRoutes({
                 (lc.course_id = $1 AND (lc.is_free_preview = TRUE OR ${ex23}))
              ))
              OR (lc.is_live = TRUE AND (
-                 OR (lc.course_id = $1 AND (lc.is_free_preview = TRUE OR ${ex23}))
+                 (lc.course_id = $1 AND (lc.is_free_preview = TRUE OR ${ex23}))
              ))
              OR (lc.is_completed = TRUE AND (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL) AND (
-                 OR (lc.course_id = $1 AND (lc.is_free_preview = TRUE OR ${ex23}))
+                 (lc.course_id = $1 AND (lc.is_free_preview = TRUE OR ${ex23}))
              ))
            )
            ORDER BY lc.scheduled_at DESC`,
@@ -72,10 +72,10 @@ export function registerLiveClassRoutes({
                 (lc.course_id = $1 AND lc.is_free_preview = TRUE)
              ))
              OR (lc.is_live = TRUE AND (
-                 OR (lc.course_id = $1 AND lc.is_free_preview = TRUE)
+                 (lc.course_id = $1 AND lc.is_free_preview = TRUE)
              ))
              OR (lc.is_completed = TRUE AND (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL) AND (
-                 OR (lc.course_id = $1 AND lc.is_free_preview = TRUE)
+                 (lc.course_id = $1 AND lc.is_free_preview = TRUE)
              ))
            )
            ORDER BY lc.scheduled_at DESC`,
