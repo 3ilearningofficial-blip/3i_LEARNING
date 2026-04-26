@@ -32,7 +32,8 @@ export default function StudioSetupPage() {
     queryFn: async () => {
       const baseUrl = getApiUrl();
       const safeId = encodeURIComponent(String(liveClassId || ""));
-      const res = await authFetch(new URL(`/live-classes/${safeId}`, baseUrl).toString());
+      // getApiUrl() is .../api; join path segments (do not use new URL("/live-...", base) — a leading / strips /api)
+      const res = await authFetch(`${baseUrl.replace(/\/$/, "")}/live-classes/${safeId}`);
       if (!res.ok) {
         const msg = res.status === 404 ? "Live class not found or deleted." : "Failed to fetch live class";
         setLoadError(msg);

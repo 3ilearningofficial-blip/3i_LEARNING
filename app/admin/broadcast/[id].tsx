@@ -167,7 +167,7 @@ export default function BroadcastPage() {
     queryFn: async () => {
       const baseUrl = getApiUrl();
       const safeLcId = encodeURIComponent(String(liveClassId || ""));
-      const res = await authFetch(new URL(`/live-classes/${safeLcId}`, baseUrl).toString());
+      const res = await authFetch(`${baseUrl.replace(/\/$/, "")}/live-classes/${safeLcId}`);
       if (!res.ok) throw new Error("Failed to fetch live class");
       return res.json();
     },
