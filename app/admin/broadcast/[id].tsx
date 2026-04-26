@@ -22,6 +22,7 @@ import LiveStudentsPanel from "@/components/LiveStudentsPanel";
 import Colors from "@/constants/colors";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "@/context/AuthContext";
+import { buildRecordingLectureSectionTitle } from "@/lib/recordingSection";
 
 type StreamType = "webrtc" | "rtmp" | "cloudflare";
 
@@ -184,8 +185,11 @@ export default function BroadcastPage() {
   const cfPlaybackHls = liveClass?.cf_playback_hls || "";
   const courseId = liveClass?.course_id;
   const lcRecSubStorageKey = courseId != null ? `lcRecSub_${courseId}` : "lcRecSub";
-  const recordingSection =
-    (liveClass?.lecture_section_title && String(liveClass.lecture_section_title).trim()) || "Live Class Recordings";
+  const recordingSection = buildRecordingLectureSectionTitle(
+    liveClass?.lecture_section_title,
+    liveClass?.lecture_subfolder_title,
+    null
+  );
 
   const { data: liveRecordingFolders = { folders: [] as string[] } } = useQuery({
     queryKey: ["/api/admin/upload/live-class-recording-folders"],

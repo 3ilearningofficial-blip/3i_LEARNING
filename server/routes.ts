@@ -431,6 +431,8 @@ async function ensureCoreLearningSchemaColumns(): Promise<void> {
     "ALTER TABLE study_materials ADD COLUMN IF NOT EXISTS download_allowed BOOLEAN DEFAULT FALSE",
     "ALTER TABLE study_materials ADD COLUMN IF NOT EXISTS section_title TEXT",
     "ALTER TABLE user_downloads ADD COLUMN IF NOT EXISTS local_filename TEXT",
+    "ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS lecture_section_title TEXT",
+    "ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS lecture_subfolder_title TEXT",
   ];
 
   for (const statement of requiredStatements) {
@@ -915,6 +917,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS cf_stream_rtmp_url TEXT").catch(() => {});
     await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS cf_playback_hls TEXT").catch(() => {});
     await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS lecture_section_title TEXT").catch(() => {});
+    await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS lecture_subfolder_title TEXT").catch(() => {});
     // Live class viewers tracking (student presence via heartbeats)
     await db.query(`CREATE TABLE IF NOT EXISTS live_class_viewers (
       id SERIAL PRIMARY KEY,

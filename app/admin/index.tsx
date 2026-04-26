@@ -16,6 +16,7 @@ import Colors from "@/constants/colors";
 import { useAuth } from "@/context/AuthContext";
 import { fetch } from "expo/fetch";
 import BulkUploadModal from "@/components/BulkUploadModal";
+import { buildRecordingLectureSectionTitle, prefillLiveRecordingFormFields } from "@/lib/recordingSection";
 
 interface Course {
   id: number;
@@ -694,8 +695,9 @@ export default function AdminDashboard() {
   const [liveFreePreview, setLiveFreePreview] = useState(false);
   const [liveIsNow, setLiveIsNow] = useState(true);
   const [liveSubmitting, setLiveSubmitting] = useState(false);
-  /** Optional — matches course lecture folder name for auto-saved recording */
-  const [liveLectureSection, setLiveLectureSection] = useState("");
+  /** Main section + optional subfolder — combined when saving the recording (see `buildRecordingLectureSectionTitle`). */
+  const [liveLectureMain, setLiveLectureMain] = useState("");
+  const [liveLectureSubfolder, setLiveLectureSubfolder] = useState("");
   const [lessonTitle, setLessonTitle] = useState("");
   const [lessonVideoUrl, setLessonVideoUrl] = useState("");
   const [lessonSelectedCourses, setLessonSelectedCourses] = useState<number[]>([]);
@@ -1398,7 +1400,8 @@ export default function AdminDashboard() {
             isPublic: liveFreePreview,
             chatMode: liveChatMode,
             showViewerCount: liveShowViewerCount,
-            lectureSectionTitle: liveLectureSection.trim() || null,
+            lectureSectionTitle: liveLectureMain.trim() || null,
+            lectureSubfolderTitle: liveLectureSubfolder.trim() || null,
           }).catch(() => {});
         }
       } else {
@@ -1417,7 +1420,8 @@ export default function AdminDashboard() {
             streamType: 'rtmp',
             chatMode: liveChatMode,
             showViewerCount: liveShowViewerCount,
-            lectureSectionTitle: liveLectureSection.trim() || null,
+            lectureSectionTitle: liveLectureMain.trim() || null,
+            lectureSubfolderTitle: liveLectureSubfolder.trim() || null,
           });
           if (!createdId) {
             const body = await res.json();
@@ -1436,7 +1440,8 @@ export default function AdminDashboard() {
           setLiveChatMode('public'); setLiveShowViewerCount(true);
           setLiveScheduleDate(""); setLiveScheduleTime(""); setLiveNotifyEmail(false);
           setLiveNotifyBell(false); setLiveFreePreview(false); setLiveIsNow(true);
-          setLiveLectureSection("");
+          setLiveLectureMain("");
+          setLiveLectureSubfolder("");
           setLiveSubmitting(false);
           router.push(`/admin/studio/${createdId}`);
           return;
@@ -1452,7 +1457,8 @@ export default function AdminDashboard() {
       setLiveChatMode('public'); setLiveShowViewerCount(true);
       setLiveScheduleDate(""); setLiveScheduleTime(""); setLiveNotifyEmail(false);
       setLiveNotifyBell(false); setLiveFreePreview(false); setLiveIsNow(true);
-      setLiveLectureSection("");
+      setLiveLectureMain("");
+      setLiveLectureSubfolder("");
       Alert.alert("Success", editingLiveClass ? "Live class updated!" : "Live class scheduled!");
     } catch (err: any) {
       Alert.alert("Error", "Failed to schedule live class.");
@@ -1995,15 +2001,29 @@ export default function AdminDashboard() {
                       </ScrollView>
                     </View>
                     <View style={{ gap: 4 }}>
-                      <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Recording folder (optional)</Text>
-                      <Text style={{ fontSize: 10, fontFamily: "Inter_400Regular", color: Colors.light.textMuted }}>Must match a lecture section name, e.g. &quot;Live Class Recordings&quot;</Text>
+                      <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Recording section (optional)</Text>
+                      <Text style={{ fontSize: 10, fontFamily: "Inter_400Regular", color: Colors.light.textMuted }}>Main folder name — default is &quot;Live Class Recordings&quot; if left empty when saving.</Text>
                       <TextInput
                         style={styles.formInput}
                         placeholder="Live Class Recordings"
                         placeholderTextColor={Colors.light.textMuted}
-                        value={liveLectureSection}
-                        onChangeText={setLiveLectureSection}
+                        value={liveLectureMain}
+                        onChangeText={setLiveLectureMain}
                       />
+                    </View>
+                    <View style={{ gap: 4 }}>
+                      <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Subfolder (optional)</Text>
+                      <Text style={{ fontSize: 10, fontFamily: "Inter_400Regular", color: Colors.light.textMuted }}>e.g. chapter or topic — groups recordings with the same name under the section above.</Text>
+                      <TextInput
+                        style={styles.formInput}
+                        placeholder="e.g. Chapter 1 — Algebra"
+                        placeholderTextColor={Colors.light.textMuted}
+                        value={liveLectureSubfolder}
+                        onChangeText={setLiveLectureSubfolder}
+                      />
+                      <Text style={{ fontSize: 10, fontFamily: "Inter_500Medium", color: Colors.light.textMuted }} numberOfLines={2}>
+                        Saves as: {buildRecordingLectureSectionTitle(liveLectureMain, liveLectureSubfolder, null)}
+                      </Text>
                     </View>
                     <View style={{ gap: 6 }}>
                       <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>When</Text>
@@ -2076,6 +2096,9 @@ export default function AdminDashboard() {
                       style={{ padding: 14, borderRadius: 14, borderWidth: 1.5, borderColor: "#DC2626", backgroundColor: "#DC262608", gap: 6 }}
                       onPress={() => {
                         setShowCreateClassChoice(false);
+                        setEditingLiveClass(null);
+                        setLiveLectureMain("");
+                        setLiveLectureSubfolder("");
                         setShowScheduleLiveClass(true);
                       }}
                     >
@@ -2092,7 +2115,7 @@ export default function AdminDashboard() {
                   <View style={{ gap: 10 }}>
                     {(() => {
                       // Group by title + scheduled_at to merge multi-course schedules into one card
-                      const groups: { key: string; title: string; scheduledAt: string; isLive: boolean; ids: number[]; courseNames: string[]; streamType?: string; lecture_section_title?: string | null }[] = [];
+                      const groups: { key: string; title: string; scheduledAt: string; isLive: boolean; ids: number[]; courseNames: string[]; streamType?: string; lecture_section_title?: string | null; lecture_subfolder_title?: string | null }[] = [];
                       for (const lc of upcomingClasses) {
                         const key = `${lc.title}_${lc.scheduled_at}`;
                         const existing = groups.find(g => g.key === key);
@@ -2102,8 +2125,9 @@ export default function AdminDashboard() {
                           if (lc.is_live) existing.isLive = true;
                           if (lc.stream_type) existing.streamType = lc.stream_type;
                           if (!existing.lecture_section_title && lc.lecture_section_title) existing.lecture_section_title = lc.lecture_section_title;
+                          if (!existing.lecture_subfolder_title && lc.lecture_subfolder_title) existing.lecture_subfolder_title = lc.lecture_subfolder_title;
                         } else {
-                          groups.push({ key, title: lc.title, scheduledAt: lc.scheduled_at, isLive: !!lc.is_live, ids: [lc.id], courseNames: lc.course_title ? [lc.course_title] : [], streamType: lc.stream_type, lecture_section_title: lc.lecture_section_title || null });
+                          groups.push({ key, title: lc.title, scheduledAt: lc.scheduled_at, isLive: !!lc.is_live, ids: [lc.id], courseNames: lc.course_title ? [lc.course_title] : [], streamType: lc.stream_type, lecture_section_title: lc.lecture_section_title || null, lecture_subfolder_title: lc.lecture_subfolder_title || null });
                         }
                       }
                       if (groups.length === 0) {
@@ -3759,7 +3783,9 @@ export default function AdminDashboard() {
                 setLiveScheduleDate(g.scheduledAt ? new Date(parseInt(g.scheduledAt)).toISOString().split("T")[0] : "");
                 setLiveScheduleTime(g.scheduledAt ? new Date(parseInt(g.scheduledAt)).toTimeString().slice(0, 5) : "");
                 setLiveIsNow(false);
-                setLiveLectureSection(typeof g.lecture_section_title === "string" ? g.lecture_section_title : "");
+                const pf = prefillLiveRecordingFormFields(g.lecture_section_title, g.lecture_subfolder_title);
+                setLiveLectureMain(pf.main);
+                setLiveLectureSubfolder(pf.sub);
                 setShowScheduleLiveClass(true);
                 setEditingLiveClass(g);
               }}>

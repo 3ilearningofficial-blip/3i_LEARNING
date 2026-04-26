@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { buildRecordingLectureSectionTitle } from "./recordingSection";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -42,7 +43,7 @@ export function registerAdminLiveClassManageRoutes({
 
   app.put("/api/admin/live-classes/:id", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { isLive, isCompleted, youtubeUrl, title, description, convertToLecture, sectionTitle, scheduledAt, notifyEmail, notifyBell, isFreePreview, streamType, chatMode, showViewerCount, recordingUrl, cfStreamUid, lectureSectionTitle } = req.body;
+      const { isLive, isCompleted, youtubeUrl, title, description, convertToLecture, sectionTitle, scheduledAt, notifyEmail, notifyBell, isFreePreview, streamType, chatMode, showViewerCount, recordingUrl, cfStreamUid, lectureSectionTitle, lectureSubfolderTitle } = req.body;
       const updates: string[] = [];
       const params: unknown[] = [];
       const add = (col: string, val: unknown) => {
@@ -66,6 +67,7 @@ export function registerAdminLiveClassManageRoutes({
       if (recordingUrl !== undefined) add("recording_url", recordingUrl);
       if (cfStreamUid !== undefined) add("cf_stream_uid", cfStreamUid);
       if (lectureSectionTitle !== undefined) add("lecture_section_title", typeof lectureSectionTitle === "string" && lectureSectionTitle.trim() === "" ? null : lectureSectionTitle);
+      if (lectureSubfolderTitle !== undefined) add("lecture_subfolder_title", typeof lectureSubfolderTitle === "string" && lectureSubfolderTitle.trim() === "" ? null : lectureSubfolderTitle);
       const { isPublic: isPublicVal } = req.body;
       if (isPublicVal !== undefined) add("is_public", isPublicVal);
       if (updates.length === 0) {
@@ -103,6 +105,11 @@ export function registerAdminLiveClassManageRoutes({
                   : liveClassOnly.duration_minutes != null
                     ? Number(liveClassOnly.duration_minutes)
                     : 0;
+            const sectionForLecture = buildRecordingLectureSectionTitle(
+              peer.lecture_section_title,
+              peer.lecture_subfolder_title,
+              st
+            );
             await db.query(
               "INSERT INTO lectures (course_id, title, description, video_url, video_type, duration_minutes, order_index, is_free_preview, section_title, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
               [
@@ -114,9 +121,7 @@ export function registerAdminLiveClassManageRoutes({
                 durationMins,
                 maxOrder.rows[0].next_order,
                 false,
-                (st && String(st).trim()) ||
-                  (peer.lecture_section_title && String(peer.lecture_section_title).trim()) ||
-                  "Live Class Recordings",
+                sectionForLecture,
                 Date.now(),
               ]
             );
@@ -236,10 +241,11 @@ export function registerAdminLiveClassManageRoutes({
                 : liveClass.duration_minutes != null
                   ? Number(liveClass.duration_minutes)
                   : 0;
-          const targetSection =
-            (sectionTitle && String(sectionTitle).trim()) ||
-            (peer.lecture_section_title && String(peer.lecture_section_title).trim()) ||
-            "Live Class Recordings";
+          const targetSection = buildRecordingLectureSectionTitle(
+            peer.lecture_section_title,
+            peer.lecture_subfolder_title,
+            sectionTitle
+          );
           await db.query(
             "INSERT INTO lectures (course_id, title, description, video_url, video_type, duration_minutes, order_index, is_free_preview, section_title, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
             [

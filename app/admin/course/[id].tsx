@@ -15,6 +15,7 @@ import { uploadToR2, getMimeType } from "@/lib/r2-upload";
 import Colors from "@/constants/colors";
 import { fetch } from "expo/fetch";
 import BulkUploadModal from "@/components/BulkUploadModal";
+import { DEFAULT_LIVE_RECORDING_SECTION } from "@/lib/recordingSection";
 
 interface Lecture {
   id: number;
@@ -131,8 +132,10 @@ interface NewMaterial {
 interface NewLiveClass {
   title: string; description: string; youtubeUrl: string;
   scheduledAt: string; isLive: boolean; isPublic: boolean;
-  /** Optional lecture section name (matches course folder) for auto-saved recording */
+  /** Main section (e.g. "Live Class Recordings") for auto-saved recording */
   lectureSectionTitle: string;
+  /** Optional subfolder segment (e.g. "Chapter 1") — full path = main + " / " + sub */
+  lectureSubfolderTitle: string;
 }
 
 type AdminCourseTab = "lectures" | "tests" | "materials" | "live" | "enrolled";
@@ -150,7 +153,7 @@ const TEST_TYPES = ["practice", "test", "pyq", "mock"];
 const emptyTest: NewTestForm = { title: "", description: "", durationMinutes: "60", totalMarks: "100", testType: "practice", folderName: "", difficulty: "moderate", scheduledAt: "" };
 const emptyQuestion: NewQuestion = { questionText: "", optionA: "", optionB: "", optionC: "", optionD: "", correctOption: "A", explanation: "", topic: "", marks: "4", negativeMarks: "1", imageUrl: "", solutionImageUrl: "", difficulty: "moderate" };
 const emptyMaterial: NewMaterial = { title: "", description: "", fileUrl: "", fileType: "pdf", isFree: false, sectionTitle: "", downloadAllowed: false };
-const emptyLiveClass: NewLiveClass = { title: "", description: "", youtubeUrl: "", scheduledAt: "", isLive: false, isPublic: false, lectureSectionTitle: "" };
+const emptyLiveClass: NewLiveClass = { title: "", description: "", youtubeUrl: "", scheduledAt: "", isLive: false, isPublic: false, lectureSectionTitle: "Live Class Recordings", lectureSubfolderTitle: "" };
 
 export default function AdminCourseScreen() {
   useEffect(() => {
@@ -193,6 +196,9 @@ export default function AdminCourseScreen() {
   const [showFolderPicker, setShowFolderPicker] = useState<"lecture" | "test" | "material" | null>(null);
   const [newFolderName, setNewFolderName] = useState("");
   const [openAdminFolder, setOpenAdminFolder] = useState<{ name: string; type: "lecture" | "test" | "material" } | null>(null);
+  /** Create "parent / child" lecture folder name (matches lecture section_title for recordings) */
+  const [showLectureSubfolderModal, setShowLectureSubfolderModal] = useState(false);
+  const [lectureSubfolderLeafName, setLectureSubfolderLeafName] = useState("");
   const [folderAddMode, setFolderAddMode] = useState(false);
   const [folderAddModal, setFolderAddModal] = useState(false); // modal-based add inside folder
   const [folderEditItem, setFolderEditItem] = useState<any>(null); // inline edit inside folder
@@ -359,12 +365,16 @@ export default function AdminCourseScreen() {
   const courseMaterials = Array.isArray(course?.materials) ? course.materials : [];
   const safeFolders = Array.isArray(dbFolders) ? dbFolders : [];
 
+  const MAX_FOLDER_NAME_LEN = 120;
   const createFolderMutation = useMutation({
     mutationFn: async ({ name, type }: { name: string; type: string }) => {
       const res = await apiRequest("POST", `/api/admin/courses/${id}/folders`, { name, type });
       return res.json();
     },
-    onSuccess: () => refetchFolders(),
+    onSuccess: () => {
+      refetchFolders();
+      qc.invalidateQueries({ queryKey: ["/api/courses", id] });
+    },
     onError: (e: any) => console.error("Create folder error:", e),
   });
 
@@ -560,6 +570,7 @@ export default function AdminCourseScreen() {
         courseId: parseInt(id),
         scheduledAt: data.scheduledAt ? new Date(data.scheduledAt).getTime() : Date.now(),
         lectureSectionTitle: (data.lectureSectionTitle || "").trim() || undefined,
+        lectureSubfolderTitle: (data.lectureSubfolderTitle || "").trim() || undefined,
       });
     },
     onSuccess: () => {
@@ -1825,10 +1836,16 @@ export default function AdminCourseScreen() {
               <FormField label="Description" placeholder="What will be covered" value={newLiveClass.description} onChangeText={(v) => setNewLiveClass(p => ({ ...p, description: v }))} />
               <FormField label="Scheduled Date & Time" placeholder="2026-03-15 18:00" value={newLiveClass.scheduledAt} onChangeText={(v) => setNewLiveClass(p => ({ ...p, scheduledAt: v }))} />
               <FormField
-                label="Recording folder (optional)"
-                placeholder='e.g. Live Class Recordings — default if empty'
+                label="Main recording section"
+                placeholder="Default: Live Class Recordings"
                 value={newLiveClass.lectureSectionTitle}
                 onChangeText={(v) => setNewLiveClass(p => ({ ...p, lectureSectionTitle: v }))}
+              />
+              <FormField
+                label="Subfolder (optional, e.g. chapter)"
+                placeholder='e.g. Chapter 1 — saved under "Main / Subfolder"'
+                value={newLiveClass.lectureSubfolderTitle}
+                onChangeText={(v) => setNewLiveClass(p => ({ ...p, lectureSubfolderTitle: v }))}
               />
               <View style={styles.formField}>
                 <Text style={styles.formLabel}>Accessible to All Students</Text>
@@ -1976,18 +1993,18 @@ export default function AdminCourseScreen() {
               </Text>
             </View>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexShrink: 0 }}>
-              {openAdminFolder?.type === "lecture" && (
+              {openAdminFolder?.type === "lecture" &&
+                (openAdminFolder.name === DEFAULT_LIVE_RECORDING_SECTION ||
+                  openAdminFolder.name.startsWith(`${DEFAULT_LIVE_RECORDING_SECTION} /`)) && (
                 <Pressable
                   style={{ flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "rgba(255,255,255,0.12)", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7, borderWidth: 1, borderColor: "rgba(255,255,255,0.25)" }}
                   onPress={() => {
-                    setOpenAdminFolder(null);
-                    setFolderAddModal(false);
-                    setNewFolderName("");
-                    setShowFolderPicker("lecture");
+                    setLectureSubfolderLeafName("");
+                    setShowLectureSubfolderModal(true);
                   }}
                 >
                   <Ionicons name="folder-open" size={16} color="#fff" />
-                  <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#fff" }}>Add Folder</Text>
+                  <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#fff" }}>Add Subfolder</Text>
                 </Pressable>
               )}
               <Pressable
@@ -2341,6 +2358,77 @@ export default function AdminCourseScreen() {
                   </View>
                 </ScrollView>
                 <ActionButton label="Save Changes" onPress={() => folderEditMaterial && updateMaterialMutation.mutate({ id: folderEditMaterial.id, title: folderEditMaterial.title, description: folderEditMaterial.description || "", fileUrl: folderEditMaterial.file_url || folderEditMaterial.fileUrl, fileType: folderEditMaterial.file_type || folderEditMaterial.fileType || "pdf", isFree: folderEditMaterial.is_free || false, sectionTitle: folderEditMaterial.sectionTitle || folderEditMaterial.section_title || null, downloadAllowed: folderEditMaterial.downloadAllowed || folderEditMaterial.download_allowed || false })} disabled={!folderEditMaterial?.title} loading={updateMaterialMutation.isPending} />
+              </View>
+            </View>
+          </Modal>
+
+          <Modal visible={showLectureSubfolderModal} animationType="fade" transparent onRequestClose={() => setShowLectureSubfolderModal(false)}>
+            <View style={styles.modalOverlay}>
+              <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>New subfolder</Text>
+                  <Pressable onPress={() => setShowLectureSubfolderModal(false)}>
+                    <Ionicons name="close" size={24} color={Colors.light.text} />
+                  </Pressable>
+                </View>
+                <Text style={{ fontSize: 12, fontFamily: "Inter_400Regular", color: Colors.light.textMuted, marginBottom: 8 }}>
+                  Creates a nested path under the current folder so you can group chapter live classes (e.g. {DEFAULT_LIVE_RECORDING_SECTION} / Chapter 1).
+                </Text>
+                <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: Colors.light.textMuted, marginBottom: 6 }} numberOfLines={2}>
+                  Parent: {openAdminFolder?.name || "—"}
+                </Text>
+                <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text, marginBottom: 4 }}>Subfolder name *</Text>
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="e.g. Chapter 1 — Trigonometry"
+                  placeholderTextColor={Colors.light.textMuted}
+                  value={lectureSubfolderLeafName}
+                  onChangeText={setLectureSubfolderLeafName}
+                />
+                {openAdminFolder ? (
+                  <Text style={{ fontSize: 11, fontFamily: "Inter_400Regular", color: Colors.light.textMuted, marginTop: 8 }} numberOfLines={2}>
+                    Full path:{" "}
+                    <Text style={{ fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>
+                      {lectureSubfolderLeafName.trim()
+                        ? `${openAdminFolder.name} / ${lectureSubfolderLeafName.trim()}`
+                        : openAdminFolder.name}
+                    </Text>
+                  </Text>
+                ) : null}
+                <ActionButton
+                  label="Create subfolder"
+                  loading={createFolderMutation.isPending}
+                  onPress={async () => {
+                    const parent = openAdminFolder?.name;
+                    if (!parent) return;
+                    const leaf = lectureSubfolderLeafName.trim();
+                    if (!leaf) {
+                      if (Platform.OS === "web") window.alert("Enter a subfolder name");
+                      else Alert.alert("Required", "Enter a subfolder name");
+                      return;
+                    }
+                    if (leaf.includes(" / ")) {
+                      if (Platform.OS === "web") window.alert('Subfolder name cannot contain " / "');
+                      else Alert.alert("Invalid", 'Use a single segment (no " / " in the name).');
+                      return;
+                    }
+                    const full = `${parent} / ${leaf}`;
+                    if (full.length > MAX_FOLDER_NAME_LEN) {
+                      if (Platform.OS === "web") window.alert(`Path is too long (max ${MAX_FOLDER_NAME_LEN} characters).`);
+                      else Alert.alert("Too long", `Path is too long (max ${MAX_FOLDER_NAME_LEN} characters).`);
+                      return;
+                    }
+                    try {
+                      await createFolderMutation.mutateAsync({ name: full, type: "lecture" });
+                      setOpenAdminFolder({ name: full, type: "lecture" });
+                      setShowLectureSubfolderModal(false);
+                      setLectureSubfolderLeafName("");
+                    } catch {
+                      if (Platform.OS === "web") window.alert("Could not create folder. It may already exist.");
+                      else Alert.alert("Error", "Could not create folder. It may already exist.");
+                    }
+                  }}
+                />
               </View>
             </View>
           </Modal>
