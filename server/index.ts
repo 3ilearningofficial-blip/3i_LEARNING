@@ -60,6 +60,9 @@ function setupCors(app: express.Application) {
     "https://3ilearning.in",
     // Keep www variant for compatibility.
     "https://www.3ilearning.in",
+    // Razorpay Standard Checkout: redirect/callback POSTs to our API from these origins.
+    "https://api.razorpay.com",
+    "https://checkout.razorpay.com",
   ];
   const envOrigins = (process.env.CORS_ORIGINS || "")
     .split(",")

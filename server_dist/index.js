@@ -758,6 +758,63 @@ function registerPaymentRoutes({
   verifyPaymentSignature: verifyPaymentSignature2,
   cacheInvalidate: cacheInvalidate2
 }) {
+  const completeCoursePaymentByOrder = async ({
+    orderId,
+    paymentId,
+    signature,
+    expectedUserId,
+    expectedCourseId
+  }) => {
+    const isValid = verifyPaymentSignature2(orderId, paymentId, signature);
+    if (!isValid) {
+      throw new Error("Invalid payment signature");
+    }
+    const paymentRecord = await db2.query(
+      "SELECT * FROM payments WHERE razorpay_order_id = $1",
+      [orderId]
+    );
+    if (paymentRecord.rows.length === 0) {
+      throw new Error("Payment order not found");
+    }
+    const paymentRow = paymentRecord.rows[0];
+    if (expectedUserId && paymentRow.user_id !== expectedUserId) {
+      throw new Error("Payment does not belong to this user");
+    }
+    if (expectedCourseId && paymentRow.course_id !== expectedCourseId) {
+      throw new Error("Course mismatch");
+    }
+    if (paymentRow.status !== "paid") {
+      const paidCourseResult = await db2.query("SELECT * FROM courses WHERE id = $1", [paymentRow.course_id]);
+      const paidCourse = paidCourseResult.rows[0];
+      if (!paidCourse) throw new Error("Course not found");
+      const endTsPaid = paidCourse.end_date != null && String(paidCourse.end_date).trim() !== "" ? Date.parse(String(paidCourse.end_date).trim()) : null;
+      if (Number.isFinite(endTsPaid) && endTsPaid < Date.now()) {
+        throw new Error("This course has ended");
+      }
+      await db2.query(
+        "UPDATE payments SET razorpay_payment_id = $1, razorpay_signature = $2, status = $3 WHERE razorpay_order_id = $4",
+        [paymentId, signature, "paid", orderId]
+      );
+      const alreadyEnrolled = await db2.query(
+        "SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2",
+        [paymentRow.user_id, paymentRow.course_id]
+      );
+      if (alreadyEnrolled.rows.length === 0) {
+        const at = Date.now();
+        const vu = computeEnrollmentValidUntil(paidCourse, at);
+        await db2.query(
+          "INSERT INTO enrollments (user_id, course_id, enrolled_at, valid_until) VALUES ($1, $2, $3, $4)",
+          [paymentRow.user_id, paymentRow.course_id, at, vu]
+        );
+        await db2.query(
+          "UPDATE courses SET total_students = COALESCE(total_students, 0) + 1 WHERE id = $1",
+          [paymentRow.course_id]
+        );
+      }
+    }
+    cacheInvalidate2?.("courses:");
+    return { userId: paymentRow.user_id, courseId: paymentRow.course_id };
+  };
   app2.post("/api/payments/track-click", async (req, res) => {
     try {
       const user = await getAuthUser2(req);
@@ -820,6 +877,13 @@ function registerPaymentRoutes({
         receipt: `course_${courseId}_user_${user.id}_${Date.now()}`,
         notes: { courseId: courseId.toString(), userId: user.id.toString(), courseTitle: course.title }
       });
+      console.log("[Payments] create-order success", {
+        userId: user.id,
+        courseId,
+        orderId: order.id,
+        amount: order.amount,
+        currency: order.currency
+      });
       const existingPayment = await db2.query(
         "SELECT id FROM payments WHERE user_id = $1 AND course_id = $2 AND status = 'created' ORDER BY created_at DESC LIMIT 1",
         [user.id, courseId]
@@ -856,48 +920,46 @@ function registerPaymentRoutes({
       if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
         return res.status(400).json({ message: "Payment details are required" });
       }
-      const isValid = verifyPaymentSignature2(razorpay_order_id, razorpay_payment_id, razorpay_signature);
-      if (!isValid) return res.status(400).json({ message: "Invalid payment signature" });
-      const paymentRecord = await db2.query(
-        "SELECT * FROM payments WHERE razorpay_order_id = $1 AND user_id = $2",
-        [razorpay_order_id, user.id]
-      );
-      if (paymentRecord.rows.length === 0) return res.status(400).json({ message: "Payment order not found" });
-      if (paymentRecord.rows[0].status === "paid") return res.status(400).json({ message: "Payment already processed" });
-      const paymentCourseId = paymentRecord.rows[0].course_id;
-      if (courseId && paymentCourseId !== courseId) return res.status(400).json({ message: "Course mismatch" });
-      const paidCourseResult = await db2.query("SELECT * FROM courses WHERE id = $1", [paymentCourseId]);
-      const paidCourse = paidCourseResult.rows[0];
-      if (!paidCourse) return res.status(400).json({ message: "Course not found" });
-      const endTsPaid = paidCourse.end_date != null && String(paidCourse.end_date).trim() !== "" ? Date.parse(String(paidCourse.end_date).trim()) : null;
-      if (Number.isFinite(endTsPaid) && endTsPaid < Date.now()) {
-        return res.status(400).json({ message: "This course has ended" });
-      }
-      await db2.query(
-        "UPDATE payments SET razorpay_payment_id = $1, razorpay_signature = $2, status = $3 WHERE razorpay_order_id = $4 AND user_id = $5",
-        [razorpay_payment_id, razorpay_signature, "paid", razorpay_order_id, user.id]
-      );
-      const alreadyEnrolled = await db2.query(
-        "SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2",
-        [user.id, paymentCourseId]
-      );
-      if (alreadyEnrolled.rows.length === 0) {
-        const at = Date.now();
-        const vu = computeEnrollmentValidUntil(paidCourse, at);
-        await db2.query(
-          "INSERT INTO enrollments (user_id, course_id, enrolled_at, valid_until) VALUES ($1, $2, $3, $4)",
-          [user.id, paymentCourseId, at, vu]
-        );
-        await db2.query(
-          "UPDATE courses SET total_students = COALESCE(total_students, 0) + 1 WHERE id = $1",
-          [paymentCourseId]
-        );
-      }
-      cacheInvalidate2?.("courses:");
+      const result = await completeCoursePaymentByOrder({
+        orderId: razorpay_order_id,
+        paymentId: razorpay_payment_id,
+        signature: razorpay_signature,
+        expectedUserId: user.id,
+        expectedCourseId: courseId
+      });
+      console.log("[Payments] verify success", {
+        userId: result.userId,
+        courseId: result.courseId,
+        orderId: razorpay_order_id,
+        paymentId: razorpay_payment_id
+      });
       res.json({ success: true, message: "Payment verified and enrolled successfully" });
     } catch (err) {
       console.error("Verify payment error:", err);
       res.status(500).json({ message: "Payment verification failed" });
+    }
+  });
+  app2.post("/api/payments/verify-redirect", async (req, res) => {
+    const frontendBase = process.env.FRONTEND_URL || "https://3ilearning.in";
+    const fail = `${frontendBase}/store?payment=failed`;
+    try {
+      const {
+        razorpay_order_id,
+        razorpay_payment_id,
+        razorpay_signature
+      } = req.body || {};
+      if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+        return res.redirect(fail);
+      }
+      const result = await completeCoursePaymentByOrder({
+        orderId: razorpay_order_id,
+        paymentId: razorpay_payment_id,
+        signature: razorpay_signature
+      });
+      return res.redirect(`${frontendBase}/course/${result.courseId}?payment=success`);
+    } catch (err) {
+      console.error("[Payments] redirect verify failed:", err);
+      return res.redirect(fail);
     }
   });
   app2.post("/api/tests/create-order", async (req, res) => {
@@ -913,11 +975,43 @@ function registerPaymentRoutes({
       if (existing.rows.length > 0) return res.json({ alreadyPurchased: true });
       const amount = Math.round(parseFloat(test.price) * 100);
       const razorpay = getRazorpay2();
-      const order = await razorpay.orders.create({ amount, currency: "INR", receipt: `test_${testId}_user_${user.id}_${Date.now()}` });
+      const order = await razorpay.orders.create({
+        amount,
+        currency: "INR",
+        receipt: `test_${testId}_user_${user.id}_${Date.now()}`,
+        notes: { testId: String(testId), userId: String(user.id), kind: "test" }
+      });
       res.json({ orderId: order.id, amount, currency: "INR", keyId: process.env.RAZORPAY_KEY_ID, testName: test.title });
     } catch (err) {
       console.error("Test create-order error:", err);
       res.status(500).json({ message: "Failed to create payment order" });
+    }
+  });
+  app2.post("/api/tests/verify-redirect", async (req, res) => {
+    const frontendBase = process.env.FRONTEND_URL || "https://3ilearning.in";
+    const fail = `${frontendBase}/test-series?payment=failed`;
+    try {
+      const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body || {};
+      if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+        return res.redirect(fail);
+      }
+      const isValid = verifyPaymentSignature2(razorpay_order_id, razorpay_payment_id, razorpay_signature);
+      if (!isValid) return res.redirect(fail);
+      const razorpay = getRazorpay2();
+      const order = await razorpay.orders.fetch(razorpay_order_id);
+      const n = order.notes || {};
+      if (n.kind !== "test") return res.redirect(fail);
+      const testId = parseInt(n.testId || "0", 10);
+      const userId = parseInt(n.userId || "0", 10);
+      if (!testId || !userId) return res.redirect(fail);
+      await db2.query(
+        "INSERT INTO test_purchases (user_id, test_id, razorpay_order_id, razorpay_payment_id, created_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (user_id, test_id) DO NOTHING",
+        [userId, testId, razorpay_order_id, razorpay_payment_id, Date.now()]
+      );
+      return res.redirect(`${frontendBase}/test-series?payment=success&testId=${testId}`);
+    } catch (err) {
+      console.error("[Tests] verify-redirect failed:", err);
+      return res.redirect(fail);
     }
   });
   app2.post("/api/tests/verify-payment", async (req, res) => {
@@ -1110,6 +1204,7 @@ function registerLiveChatRoutes({
       }
       query += " ORDER BY created_at ASC LIMIT 200";
       const result = await db2.query(query, params);
+      res.set("Cache-Control", "private, no-store");
       res.json(result.rows);
     } catch {
       res.status(500).json({ message: "Failed to fetch chat" });
@@ -1432,10 +1527,19 @@ function registerSiteSettingsRoutes({
   db: db2,
   requireAdmin
 }) {
+  let ensureSiteSettingsTablePromise = null;
+  const ensureSiteSettingsTable = async () => {
+    if (!ensureSiteSettingsTablePromise) {
+      ensureSiteSettingsTablePromise = db2.query("CREATE TABLE IF NOT EXISTS site_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at BIGINT)").then(() => void 0).catch((err) => {
+        ensureSiteSettingsTablePromise = null;
+        throw err;
+      });
+    }
+    await ensureSiteSettingsTablePromise;
+  };
   app2.get("/api/site-settings", async (_req, res) => {
     try {
-      await db2.query("CREATE TABLE IF NOT EXISTS site_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at BIGINT)").catch(() => {
-      });
+      await ensureSiteSettingsTable();
       const result = await db2.query("SELECT key, value FROM site_settings");
       const settings = {};
       for (const row of result.rows) settings[row.key] = row.value;
@@ -1449,8 +1553,7 @@ function registerSiteSettingsRoutes({
     try {
       const { settings } = req.body;
       if (!settings || typeof settings !== "object") return res.status(400).json({ message: "Settings object required" });
-      await db2.query("CREATE TABLE IF NOT EXISTS site_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at BIGINT)").catch(() => {
-      });
+      await ensureSiteSettingsTable();
       for (const [key, value] of Object.entries(settings)) {
         await db2.query(
           "INSERT INTO site_settings (key, value, updated_at) VALUES ($1, $2, $3) ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = $3",
@@ -1569,6 +1672,10 @@ var init_admin_course_import_routes = __esm({
 });
 
 // server/admin-course-management-routes.ts
+function normalizeFolderName(value) {
+  if (typeof value !== "string") return "";
+  return value.trim().replace(/\s+/g, " ");
+}
 function registerAdminCourseManagementRoutes({
   app: app2,
   db: db2,
@@ -1625,9 +1732,25 @@ function registerAdminCourseManagementRoutes({
   app2.post("/api/admin/courses/:id/folders", requireAdmin, async (req, res) => {
     try {
       const { name, type } = req.body;
+      const normalizedName = normalizeFolderName(name);
+      const normalizedType = typeof type === "string" ? type.trim().toLowerCase() : "";
+      if (!normalizedName) return res.status(400).json({ message: "Folder name is required" });
+      if (normalizedName.length > MAX_FOLDER_NAME_LENGTH) return res.status(400).json({ message: "Folder name is too long" });
+      if (!COURSE_FOLDER_TYPES.has(normalizedType)) return res.status(400).json({ message: "Invalid folder type" });
+      const existing = await db2.query(
+        "SELECT * FROM course_folders WHERE course_id = $1 AND type = $2 AND LOWER(name) = LOWER($3) LIMIT 1",
+        [req.params.id, normalizedType, normalizedName]
+      );
+      if (existing.rows.length > 0) {
+        const revived = await db2.query(
+          "UPDATE course_folders SET is_hidden = FALSE WHERE id = $1 RETURNING *",
+          [existing.rows[0].id]
+        );
+        return res.json(revived.rows[0]);
+      }
       const result = await db2.query(
-        "INSERT INTO course_folders (course_id, name, type) VALUES ($1, $2, $3) ON CONFLICT (course_id, name, type) DO UPDATE SET is_hidden = FALSE RETURNING *",
-        [req.params.id, name, type]
+        "INSERT INTO course_folders (course_id, name, type) VALUES ($1, $2, $3) RETURNING *",
+        [req.params.id, normalizedName, normalizedType]
       );
       res.json(result.rows[0]);
     } catch {
@@ -1638,19 +1761,49 @@ function registerAdminCourseManagementRoutes({
     try {
       const { isHidden, name } = req.body;
       if (name !== void 0) {
-        const folder = await db2.query("SELECT * FROM course_folders WHERE id = $1 AND course_id = $2", [req.params.folderId, req.params.id]);
-        if (folder.rows.length > 0) {
-          const oldName = folder.rows[0].name;
-          const folderType = folder.rows[0].type;
-          await db2.query("UPDATE course_folders SET name = $1 WHERE id = $2 AND course_id = $3", [name, req.params.folderId, req.params.id]);
-          if (folderType === "lecture") {
-            await db2.query("UPDATE lectures SET section_title = $1 WHERE course_id = $2 AND section_title = $3", [name, req.params.id, oldName]);
-          } else if (folderType === "material") {
-            await db2.query("UPDATE study_materials SET section_title = $1 WHERE course_id = $2 AND section_title = $3", [name, req.params.id, oldName]);
-          } else if (folderType === "test") {
-            await db2.query("UPDATE tests SET folder_name = $1 WHERE course_id = $2 AND folder_name = $3", [name, req.params.id, oldName]);
-          }
+        const normalizedName = normalizeFolderName(name);
+        if (!normalizedName) return res.status(400).json({ message: "Folder name is required" });
+        if (normalizedName.length > MAX_FOLDER_NAME_LENGTH) return res.status(400).json({ message: "Folder name is too long" });
+        const dup = await db2.query(
+          "SELECT id FROM course_folders WHERE course_id = $1 AND type = (SELECT type FROM course_folders WHERE id = $2 AND course_id = $1) AND LOWER(name) = LOWER($3) AND id <> $2 LIMIT 1",
+          [req.params.id, req.params.folderId, normalizedName]
+        );
+        if (dup.rows.length > 0) {
+          return res.status(409).json({ message: "A folder with this name already exists for this type" });
         }
+        await db2.query(
+          `WITH target AS (
+             SELECT id, name, type
+             FROM course_folders
+             WHERE id = $1 AND course_id = $2
+           ),
+           renamed AS (
+             UPDATE course_folders cf
+             SET name = $3
+             FROM target t
+             WHERE cf.id = t.id
+             RETURNING t.name AS old_name, t.type AS folder_type
+           ),
+           upd_lectures AS (
+             UPDATE lectures l
+             SET section_title = $3
+             FROM renamed r
+             WHERE r.folder_type = 'lecture' AND l.course_id = $2 AND l.section_title = r.old_name
+             RETURNING l.id
+           ),
+           upd_materials AS (
+             UPDATE study_materials sm
+             SET section_title = $3
+             FROM renamed r
+             WHERE r.folder_type = 'material' AND sm.course_id = $2 AND sm.section_title = r.old_name
+             RETURNING sm.id
+           )
+           UPDATE tests t
+           SET folder_name = $3
+           FROM renamed r
+           WHERE r.folder_type = 'test' AND t.course_id = $2 AND t.folder_name = r.old_name`,
+          [req.params.folderId, req.params.id, normalizedName]
+        );
       } else if (isHidden !== void 0) {
         await db2.query("UPDATE course_folders SET is_hidden = $1 WHERE id = $2 AND course_id = $3", [isHidden, req.params.folderId, req.params.id]);
       }
@@ -1661,24 +1814,48 @@ function registerAdminCourseManagementRoutes({
   });
   app2.delete("/api/admin/courses/:id/folders/:folderId", requireAdmin, async (req, res) => {
     try {
-      const folder = await db2.query("SELECT * FROM course_folders WHERE id = $1 AND course_id = $2", [req.params.folderId, req.params.id]);
-      if (folder.rows.length > 0) {
-        const { name, type } = folder.rows[0];
-        if (type === "lecture") await db2.query("DELETE FROM lectures WHERE course_id = $1 AND section_title = $2", [req.params.id, name]);
-        else if (type === "test") await db2.query("DELETE FROM tests WHERE course_id = $1 AND folder_name = $2", [req.params.id, name]);
-        else if (type === "material") await db2.query("DELETE FROM study_materials WHERE course_id = $1 AND section_title = $2", [req.params.id, name]);
-        await db2.query("DELETE FROM course_folders WHERE id = $1", [String(req.params.folderId)]);
-        await updateCourseTestCounts2(String(req.params.id));
-      }
+      await db2.query(
+        `WITH target AS (
+           SELECT id, name, type
+           FROM course_folders
+           WHERE id = $1 AND course_id = $2
+         ),
+         del_lectures AS (
+           DELETE FROM lectures l
+           USING target t
+           WHERE t.type = 'lecture' AND l.course_id = $2 AND l.section_title = t.name
+           RETURNING l.id
+         ),
+         del_tests AS (
+           DELETE FROM tests tt
+           USING target t
+           WHERE t.type = 'test' AND tt.course_id = $2 AND tt.folder_name = t.name
+           RETURNING tt.id
+         ),
+         del_materials AS (
+           DELETE FROM study_materials sm
+           USING target t
+           WHERE t.type = 'material' AND sm.course_id = $2 AND sm.section_title = t.name
+           RETURNING sm.id
+         )
+         DELETE FROM course_folders cf
+         USING target t
+         WHERE cf.id = t.id`,
+        [req.params.folderId, req.params.id]
+      );
+      await updateCourseTestCounts2(String(req.params.id));
       res.json({ success: true });
     } catch {
       res.status(500).json({ message: "Failed to delete folder" });
     }
   });
 }
+var COURSE_FOLDER_TYPES, MAX_FOLDER_NAME_LENGTH;
 var init_admin_course_management_routes = __esm({
   "server/admin-course-management-routes.ts"() {
     "use strict";
+    COURSE_FOLDER_TYPES = /* @__PURE__ */ new Set(["lecture", "material", "test"]);
+    MAX_FOLDER_NAME_LENGTH = 120;
   }
 });
 
@@ -1931,32 +2108,67 @@ function registerAdminLectureRoutes({
   requireAdmin,
   getR2Client
 }) {
+  const inferLectureVideoType = (url) => {
+    const u = (url || "").trim().toLowerCase();
+    if (!u) return "youtube";
+    if (u.includes("youtube.com") || u.includes("youtu.be")) return "youtube";
+    if (u.includes("drive.google.com")) return "gdrive";
+    if (u.includes("/api/media/") || u.includes("r2.dev") || u.includes("cdn.") || u.endsWith(".mp4") || u.endsWith(".mov") || u.endsWith(".mkv")) return "r2";
+    return "upload";
+  };
   app2.post("/api/admin/lectures", requireAdmin, async (req, res) => {
     try {
-      const { courseId, title, description, videoUrl, videoType, pdfUrl, durationMinutes, orderIndex, isFreePreview, sectionTitle, downloadAllowed } = req.body;
+      const { courseId, title, description, videoUrl, fileUrl, videoType, pdfUrl, durationMinutes, orderIndex, isFreePreview, sectionTitle, downloadAllowed } = req.body;
+      const parsedCourseId = Number(courseId);
+      if (!Number.isFinite(parsedCourseId) || parsedCourseId <= 0) {
+        return res.status(400).json({ message: "Invalid courseId" });
+      }
+      const courseCheck = await db2.query("SELECT id FROM courses WHERE id = $1 LIMIT 1", [parsedCourseId]);
+      if (courseCheck.rows.length === 0) {
+        return res.status(404).json({ message: "Course not found" });
+      }
+      if (!title || !String(title).trim()) {
+        return res.status(400).json({ message: "Lecture title is required" });
+      }
+      const normalizedVideoUrl = String(videoUrl || fileUrl || "").trim();
+      const normalizedPdfUrl = String(pdfUrl || "").trim();
+      if (!normalizedVideoUrl && !normalizedPdfUrl) {
+        return res.status(400).json({ message: "Either videoUrl or pdfUrl is required" });
+      }
+      const effectiveVideoType = String(videoType || "").trim() || inferLectureVideoType(normalizedVideoUrl);
       const result = await db2.query(
         `INSERT INTO lectures (course_id, title, description, video_url, video_type, pdf_url, duration_minutes, order_index, is_free_preview, section_title, download_allowed, created_at) 
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
         [
-          courseId,
-          title,
-          description,
-          videoUrl,
-          videoType || "youtube",
-          pdfUrl,
-          durationMinutes || 0,
-          orderIndex || 0,
+          parsedCourseId,
+          String(title).trim(),
+          description || "",
+          normalizedVideoUrl || null,
+          effectiveVideoType,
+          normalizedPdfUrl || null,
+          Number(durationMinutes) || 0,
+          Number(orderIndex) || 0,
           isFreePreview || false,
           sectionTitle || null,
           downloadAllowed || false,
           Date.now()
         ]
       );
-      await db2.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [courseId]);
+      await db2.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [parsedCourseId]);
       res.json(result.rows[0]);
     } catch (err) {
-      console.error(err);
-      res.status(500).json({ message: "Failed to add lecture" });
+      console.error("[AdminLectures] create failed", {
+        body: {
+          courseId: req.body?.courseId,
+          title: req.body?.title,
+          videoType: req.body?.videoType,
+          hasVideoUrl: !!req.body?.videoUrl,
+          hasFileUrl: !!req.body?.fileUrl,
+          hasPdfUrl: !!req.body?.pdfUrl
+        },
+        error: err instanceof Error ? err.message : err
+      });
+      res.status(500).json({ message: "Failed to add lecture", detail: err instanceof Error ? err.message : "unknown_error" });
     }
   });
   app2.put("/api/admin/lectures/:id", requireAdmin, async (req, res) => {
@@ -2043,6 +2255,7 @@ function registerAdminTestRoutes({
         WHERE t.course_id IS NULL
         ORDER BY t.created_at DESC
       `);
+      res.set("Cache-Control", "private, no-store");
       res.json(result.rows);
     } catch {
       res.status(500).json({ message: "Failed to fetch tests" });
@@ -2330,17 +2543,48 @@ function registerAdminUsersAndContentRoutes({
   app2.post("/api/admin/study-materials", requireAdmin, async (req, res) => {
     try {
       const { title, description, fileUrl, fileType, courseId, isFree, sectionTitle, downloadAllowed } = req.body;
+      const normalizedTitle = typeof title === "string" ? title.trim() : "";
+      const normalizedFileUrl = typeof fileUrl === "string" ? fileUrl.trim() : "";
+      const parsedCourseId = courseId == null ? null : Number(courseId);
+      if (!normalizedTitle) return res.status(400).json({ message: "Material title is required" });
+      if (!normalizedFileUrl) return res.status(400).json({ message: "File URL is required" });
+      if (parsedCourseId != null && (!Number.isFinite(parsedCourseId) || parsedCourseId <= 0)) {
+        return res.status(400).json({ message: "Invalid courseId" });
+      }
+      if (parsedCourseId != null) {
+        const courseCheck = await db2.query("SELECT id FROM courses WHERE id = $1 LIMIT 1", [parsedCourseId]);
+        if (courseCheck.rows.length === 0) return res.status(404).json({ message: "Course not found" });
+      }
       const result = await db2.query(
         `INSERT INTO study_materials (title, description, file_url, file_type, course_id, is_free, section_title, download_allowed, created_at) 
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-        [title, description, fileUrl, fileType || "pdf", courseId || null, courseId ? false : isFree !== false, sectionTitle || null, downloadAllowed || false, Date.now()]
+        [
+          normalizedTitle,
+          description || "",
+          normalizedFileUrl,
+          fileType || "pdf",
+          parsedCourseId,
+          parsedCourseId ? false : isFree !== false,
+          sectionTitle || null,
+          downloadAllowed || false,
+          Date.now()
+        ]
       );
-      if (courseId) {
-        await db2.query("UPDATE courses SET total_materials = (SELECT COUNT(*) FROM study_materials WHERE course_id = $1) WHERE id = $1", [courseId]);
+      if (parsedCourseId) {
+        await db2.query("UPDATE courses SET total_materials = (SELECT COUNT(*) FROM study_materials WHERE course_id = $1) WHERE id = $1", [parsedCourseId]);
       }
       res.json(result.rows[0]);
-    } catch {
-      res.status(500).json({ message: "Failed to add material" });
+    } catch (err) {
+      console.error("[AdminMaterials] create failed", {
+        body: {
+          courseId: req.body?.courseId,
+          title: req.body?.title,
+          fileType: req.body?.fileType,
+          hasFileUrl: !!req.body?.fileUrl
+        },
+        error: err instanceof Error ? err.message : err
+      });
+      res.status(500).json({ message: "Failed to add material", detail: err instanceof Error ? err.message : "unknown_error" });
     }
   });
   app2.post("/api/admin/live-classes", requireAdmin, async (req, res) => {
@@ -2867,13 +3111,47 @@ function registerBookRoutes({
         amount,
         currency: "INR",
         receipt: `book_${bookId}_user_${user.id}_${Date.now()}`,
-        notes: { bookId: bookId.toString(), userId: user.id.toString(), bookTitle: book.title }
+        notes: {
+          bookId: String(bookId),
+          userId: String(user.id),
+          bookTitle: book.title,
+          kind: "book"
+        }
       });
       console.log(`[BookOrder] created orderId=${order.id} amount=${amount}`);
       res.json({ orderId: order.id, amount: order.amount, currency: order.currency, keyId: process.env.RAZORPAY_KEY_ID, bookTitle: book.title, bookId });
     } catch (err) {
       console.error("Book create-order error:", err);
       res.status(500).json({ message: "Failed to create payment order" });
+    }
+  });
+  app2.post("/api/books/verify-redirect", async (req, res) => {
+    const frontendBase = process.env.FRONTEND_URL || "https://3ilearning.in";
+    const fail = `${frontendBase}/store?payment=failed`;
+    try {
+      const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body || {};
+      if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+        return res.redirect(fail);
+      }
+      const isValid = verifyPaymentSignature2(razorpay_order_id, razorpay_payment_id, razorpay_signature);
+      if (!isValid) return res.redirect(fail);
+      const razorpay = getRazorpay2();
+      const order = await razorpay.orders.fetch(razorpay_order_id);
+      const n = order.notes || {};
+      if (n.kind !== "book") return res.redirect(fail);
+      const bookId = parseInt(n.bookId || "0", 10);
+      const userId = parseInt(n.userId || "0", 10);
+      if (!bookId || !userId) return res.redirect(fail);
+      await db2.query(
+        "INSERT INTO book_purchases (user_id, book_id, purchased_at) VALUES ($1, $2, $3) ON CONFLICT (user_id, book_id) DO NOTHING",
+        [userId, bookId, Date.now()]
+      );
+      await db2.query("DELETE FROM book_click_tracking WHERE user_id = $1 AND book_id = $2", [userId, bookId]).catch(() => {
+      });
+      return res.redirect(`${frontendBase}/store?payment=success&bookId=${bookId}`);
+    } catch (err) {
+      console.error("Book verify-redirect error:", err);
+      return res.redirect(fail);
     }
   });
   app2.post("/api/books/verify-payment", async (req, res) => {
@@ -2900,6 +3178,10 @@ var init_book_routes = __esm({
 });
 
 // server/standalone-folder-routes.ts
+function normalizeStandaloneFolderName(value) {
+  if (typeof value !== "string") return "";
+  return value.trim().replace(/\s+/g, " ");
+}
 function registerStandaloneFolderRoutes({
   app: app2,
   db: db2,
@@ -2923,17 +3205,34 @@ function registerStandaloneFolderRoutes({
   });
   app2.post("/api/admin/standalone-folders", requireAdmin, async (req, res) => {
     try {
-      const { name, type, category, price, originalPrice, isFree, description } = req.body;
-      if (type === "test" && category) {
+      const { name, type, category, price, originalPrice, isFree, description, validityMonths } = req.body;
+      const normalizedName = normalizeStandaloneFolderName(name);
+      const normalizedType = typeof type === "string" ? type.trim().toLowerCase() : "";
+      if (!normalizedName) return res.status(400).json({ message: "Folder name is required" });
+      if (normalizedName.length > MAX_STANDALONE_FOLDER_NAME_LENGTH) return res.status(400).json({ message: "Folder name is too long" });
+      if (!STANDALONE_FOLDER_TYPES.has(normalizedType)) return res.status(400).json({ message: "Invalid folder type" });
+      const existing = await db2.query(
+        "SELECT * FROM standalone_folders WHERE type = $1 AND LOWER(name) = LOWER($2) LIMIT 1",
+        [normalizedType, normalizedName]
+      );
+      if (existing.rows.length > 0) {
+        const revived = await db2.query(
+          "UPDATE standalone_folders SET is_hidden = FALSE WHERE id = $1 RETURNING *",
+          [existing.rows[0].id]
+        );
+        return res.json(revived.rows[0]);
+      }
+      if (normalizedType === "test") {
+        const vm = validityMonths != null && String(validityMonths).trim() !== "" ? Math.max(0, parseFloat(String(validityMonths)) || 0) || null : null;
         const result2 = await db2.query(
-          "INSERT INTO standalone_folders (name, type, category, price, original_price, is_free, description) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (name, type) DO UPDATE SET is_hidden = FALSE, category = $3, price = $4, original_price = $5, is_free = $6, description = $7 RETURNING *",
-          [name, type, category || null, parseFloat(price) || 0, parseFloat(originalPrice) || 0, isFree !== false, description || null]
+          "INSERT INTO standalone_folders (name, type, category, price, original_price, is_free, description, validity_months) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *",
+          [normalizedName, normalizedType, category || null, parseFloat(price) || 0, parseFloat(originalPrice) || 0, isFree !== false, description || null, vm]
         );
         return res.json(result2.rows[0]);
       }
       const result = await db2.query(
-        "INSERT INTO standalone_folders (name, type) VALUES ($1, $2) ON CONFLICT (name, type) DO UPDATE SET is_hidden = FALSE RETURNING *",
-        [name, type]
+        "INSERT INTO standalone_folders (name, type) VALUES ($1, $2) RETURNING *",
+        [normalizedName, normalizedType]
       );
       res.json(result.rows[0]);
     } catch {
@@ -2942,16 +3241,48 @@ function registerStandaloneFolderRoutes({
   });
   app2.put("/api/admin/standalone-folders/:id", requireAdmin, async (req, res) => {
     try {
-      const { name, isHidden, category, price, originalPrice, isFree, description } = req.body;
+      const { name, isHidden, category, price, originalPrice, isFree, description, validityMonths } = req.body;
       if (name !== void 0) {
-        const folder = await db2.query("SELECT * FROM standalone_folders WHERE id = $1", [req.params.id]);
-        if (folder.rows.length > 0) {
-          const oldName = folder.rows[0].name;
-          const folderType = folder.rows[0].type;
-          await db2.query("UPDATE standalone_folders SET name = $1 WHERE id = $2", [name, req.params.id]);
-          if (folderType === "test") await db2.query("UPDATE tests SET folder_name = $1 WHERE folder_name = $2 AND course_id IS NULL", [name, oldName]);
-          else if (folderType === "material") await db2.query("UPDATE study_materials SET section_title = $1 WHERE section_title = $2 AND course_id IS NULL", [name, oldName]);
+        const normalizedName = normalizeStandaloneFolderName(name);
+        if (!normalizedName) return res.status(400).json({ message: "Folder name is required" });
+        if (normalizedName.length > MAX_STANDALONE_FOLDER_NAME_LENGTH) return res.status(400).json({ message: "Folder name is too long" });
+        const current = await db2.query("SELECT id, type FROM standalone_folders WHERE id = $1", [req.params.id]);
+        if (current.rows.length > 0) {
+          const folderType = current.rows[0].type;
+          const dup = await db2.query(
+            "SELECT id FROM standalone_folders WHERE type = $1 AND LOWER(name) = LOWER($2) AND id <> $3 LIMIT 1",
+            [folderType, normalizedName, req.params.id]
+          );
+          if (dup.rows.length > 0) {
+            return res.status(409).json({ message: "A folder with this name already exists for this type" });
+          }
         }
+        await db2.query(
+          `WITH target AS (
+             SELECT id, name, type
+             FROM standalone_folders
+             WHERE id = $1
+           ),
+           renamed AS (
+             UPDATE standalone_folders sf
+             SET name = $2
+             FROM target t
+             WHERE sf.id = t.id
+             RETURNING t.name AS old_name, t.type AS folder_type
+           ),
+           upd_tests AS (
+             UPDATE tests tt
+             SET folder_name = $2
+             FROM renamed r
+             WHERE r.folder_type = 'test' AND tt.folder_name = r.old_name AND tt.course_id IS NULL
+             RETURNING tt.id
+           )
+           UPDATE study_materials sm
+           SET section_title = $2
+           FROM renamed r
+           WHERE r.folder_type = 'material' AND sm.section_title = r.old_name AND sm.course_id IS NULL`,
+          [req.params.id, normalizedName]
+        );
       } else if (isHidden !== void 0) {
         await db2.query("UPDATE standalone_folders SET is_hidden = $1 WHERE id = $2", [isHidden, req.params.id]);
       }
@@ -2960,6 +3291,10 @@ function registerStandaloneFolderRoutes({
       if (originalPrice !== void 0) await db2.query("UPDATE standalone_folders SET original_price = $1 WHERE id = $2", [parseFloat(originalPrice) || 0, req.params.id]);
       if (isFree !== void 0) await db2.query("UPDATE standalone_folders SET is_free = $1 WHERE id = $2", [isFree, req.params.id]);
       if (description !== void 0) await db2.query("UPDATE standalone_folders SET description = $1 WHERE id = $2", [description || null, req.params.id]);
+      if (validityMonths !== void 0) {
+        const vm = validityMonths != null && String(validityMonths).trim() !== "" ? Math.max(0, parseFloat(String(validityMonths)) || 0) || null : null;
+        await db2.query("UPDATE standalone_folders SET validity_months = $1 WHERE id = $2", [vm, req.params.id]);
+      }
       res.json({ success: true });
     } catch {
       res.status(500).json({ message: "Failed to update folder" });
@@ -2967,22 +3302,41 @@ function registerStandaloneFolderRoutes({
   });
   app2.delete("/api/admin/standalone-folders/:id", requireAdmin, async (req, res) => {
     try {
-      const folder = await db2.query("SELECT * FROM standalone_folders WHERE id = $1", [req.params.id]);
-      if (folder.rows.length > 0) {
-        const { name, type } = folder.rows[0];
-        if (type === "test") await db2.query("DELETE FROM tests WHERE folder_name = $1 AND course_id IS NULL", [name]);
-        else if (type === "material") await db2.query("DELETE FROM study_materials WHERE section_title = $1 AND course_id IS NULL", [name]);
-        await db2.query("DELETE FROM standalone_folders WHERE id = $1", [req.params.id]);
-      }
+      await db2.query(
+        `WITH target AS (
+           SELECT id, name, type
+           FROM standalone_folders
+           WHERE id = $1
+         ),
+         del_tests AS (
+           DELETE FROM tests tt
+           USING target t
+           WHERE t.type = 'test' AND tt.folder_name = t.name AND tt.course_id IS NULL
+           RETURNING tt.id
+         ),
+         del_materials AS (
+           DELETE FROM study_materials sm
+           USING target t
+           WHERE t.type = 'material' AND sm.section_title = t.name AND sm.course_id IS NULL
+           RETURNING sm.id
+         )
+         DELETE FROM standalone_folders sf
+         USING target t
+         WHERE sf.id = t.id`,
+        [req.params.id]
+      );
       res.json({ success: true });
     } catch {
       res.status(500).json({ message: "Failed to delete folder" });
     }
   });
 }
+var STANDALONE_FOLDER_TYPES, MAX_STANDALONE_FOLDER_NAME_LENGTH;
 var init_standalone_folder_routes = __esm({
   "server/standalone-folder-routes.ts"() {
     "use strict";
+    STANDALONE_FOLDER_TYPES = /* @__PURE__ */ new Set(["test", "material", "mini_course"]);
+    MAX_STANDALONE_FOLDER_NAME_LENGTH = 120;
   }
 });
 
@@ -3028,6 +3382,7 @@ function registerDoubtNotificationRoutes({
         `SELECT * FROM notifications WHERE user_id = $1
          AND (source IS NULL OR source != 'support')
          AND (is_hidden IS NOT TRUE)
+         AND (is_read IS NOT TRUE)
          AND (expires_at IS NULL OR expires_at > $2)
          AND title NOT ILIKE 'New message from%'
          AND title NOT ILIKE 'New reply from Support%'
@@ -3144,6 +3499,7 @@ function registerStudentMissionMaterialRoutes({
         const foldersResult = await db2.query("SELECT * FROM standalone_folders WHERE type = 'material' AND (is_hidden = FALSE OR is_hidden IS NULL) ORDER BY created_at ASC");
         folders = foldersResult.rows;
       }
+      res.set("Cache-Control", "private, no-store");
       res.json({ materials: result.rows, folders });
     } catch {
       res.status(500).json({ message: "Failed to fetch materials" });
@@ -3822,12 +4178,14 @@ function registerLiveClassRoutes({
       if (admin2 === "true" && user?.role === "admin") {
         if (cid) {
           const result3 = await db2.query(
-            "SELECT lc.*, c.title as course_title FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id WHERE lc.course_id = $1 OR lc.course_id IS NULL ORDER BY lc.scheduled_at DESC",
+            "SELECT lc.*, c.title as course_title FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id WHERE lc.course_id = $1 ORDER BY lc.scheduled_at DESC",
             [cid]
           );
+          res.set("Cache-Control", "private, no-store");
           return res.json(result3.rows);
         }
         const result2 = await db2.query("SELECT lc.*, c.title as course_title FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id ORDER BY lc.scheduled_at DESC");
+        res.set("Cache-Control", "private, no-store");
         return res.json(result2.rows);
       }
       const ex23 = sqlEnrollmentExistsForLiveList(2, 3);
@@ -3837,42 +4195,44 @@ function registerLiveClassRoutes({
           `SELECT lc.*, c.title as course_title, c.is_free as course_is_free,
             ${ex23} as is_enrolled
            FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
-           WHERE (lc.course_id = $1 OR lc.course_id IS NULL)
+           WHERE (lc.course_id = $1)
            AND (
-             (lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE)
+             (lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE AND (
+                (lc.course_id = $1 AND (lc.is_free_preview = TRUE OR ${ex23}))
+             ))
              OR (lc.is_live = TRUE AND (
-                 (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
                  OR (lc.course_id = $1 AND (lc.is_free_preview = TRUE OR ${ex23}))
              ))
              OR (lc.is_completed = TRUE AND (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL) AND (
-                 (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
                  OR (lc.course_id = $1 AND (lc.is_free_preview = TRUE OR ${ex23}))
              ))
            )
            ORDER BY lc.scheduled_at DESC`,
           [cid, user.id, now]
         );
+        res.set("Cache-Control", "private, no-store");
         return res.json(result2.rows);
       }
       if (cid) {
         const result2 = await db2.query(
           `SELECT lc.*, c.title as course_title, c.is_free as course_is_free, FALSE as is_enrolled
            FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
-           WHERE (lc.course_id = $1 OR lc.course_id IS NULL)
+           WHERE (lc.course_id = $1)
            AND (
-             (lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE)
+             (lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE AND (
+                (lc.course_id = $1 AND lc.is_free_preview = TRUE)
+             ))
              OR (lc.is_live = TRUE AND (
-                 (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
                  OR (lc.course_id = $1 AND lc.is_free_preview = TRUE)
              ))
              OR (lc.is_completed = TRUE AND (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL) AND (
-                 (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
                  OR (lc.course_id = $1 AND lc.is_free_preview = TRUE)
              ))
            )
            ORDER BY lc.scheduled_at DESC`,
           [cid]
         );
+        res.set("Cache-Control", "private, no-store");
         return res.json(result2.rows);
       }
       const ex12 = sqlEnrollmentExistsForLiveList(1, 2);
@@ -3882,7 +4242,10 @@ function registerLiveClassRoutes({
             ${ex12} as is_enrolled
            FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
            WHERE (
-             (lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE)
+             (lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE AND (
+                 (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
+                 OR (lc.course_id IS NOT NULL AND (lc.is_free_preview = TRUE OR ${ex12}))
+             ))
              OR (lc.is_live = TRUE AND (
                  (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
                  OR (lc.course_id IS NOT NULL AND (lc.is_free_preview = TRUE OR ${ex12}))
@@ -3895,13 +4258,17 @@ function registerLiveClassRoutes({
            ORDER BY lc.scheduled_at DESC`,
           [user.id, now]
         );
+        res.set("Cache-Control", "private, no-store");
         return res.json(result2.rows);
       }
       const result = await db2.query(
         `SELECT lc.*, c.title as course_title, c.is_free as course_is_free, FALSE as is_enrolled
          FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
          WHERE (
-           (lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE)
+           (lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE AND (
+                (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
+                OR (lc.course_id IS NOT NULL AND lc.is_free_preview = TRUE)
+           ))
            OR (lc.is_live = TRUE AND (
                 (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
                 OR (lc.course_id IS NOT NULL AND lc.is_free_preview = TRUE)
@@ -3913,9 +4280,11 @@ function registerLiveClassRoutes({
          )
          ORDER BY lc.scheduled_at DESC`
       );
+      res.set("Cache-Control", "private, no-store");
       res.json(result.rows);
     } catch (err) {
       console.error("[LiveClasses] list error:", err);
+      res.set("Cache-Control", "private, no-store");
       res.json([]);
     }
   });
@@ -3932,9 +4301,11 @@ function registerLiveClassRoutes({
         LIMIT 50
       `);
       console.log(`[UpcomingClasses] returning ${result.rows.length} classes`);
+      res.set("Cache-Control", "private, no-store");
       res.json(result.rows);
     } catch (err) {
       console.error("[UpcomingClasses] error:", err);
+      res.set("Cache-Control", "private, no-store");
       res.json([]);
     }
   });
@@ -3950,6 +4321,7 @@ function registerLiveClassRoutes({
         isEnrolled = enroll.rows.length > 0 && !isEnrollmentExpired(enroll.rows[0]);
       }
       const hasAccess = await userCanAccessLiveClassContent(db2, user, lc);
+      res.set("Cache-Control", "private, no-store");
       res.json({ ...lc, is_enrolled: isEnrolled, has_access: hasAccess });
     } catch {
       res.status(500).json({ message: "Failed to fetch live class" });
@@ -4025,9 +4397,9 @@ function registerAdminLiveClassManageRoutes({
       const result = await db2.query(sql, params);
       const liveClass = result.rows[0];
       if (isLive === true && liveClass.course_id) {
-        const enrolled = await db2.query("SELECT user_id FROM enrollments WHERE course_id = $1", [liveClass.course_id]);
-        const expiresAt = Date.now() + 12 * 36e5;
-        for (const e of enrolled.rows) {
+        const recipients = liveClass.is_free_preview === true || liveClass.is_public === true ? await db2.query("SELECT id AS user_id FROM users WHERE role = 'student'") : await db2.query("SELECT user_id FROM enrollments WHERE course_id = $1", [liveClass.course_id]);
+        const expiresAt = Date.now() + 6 * 36e5;
+        for (const e of recipients.rows) {
           await db2.query("INSERT INTO notifications (user_id, title, message, type, created_at, expires_at) VALUES ($1, $2, $3, $4, $5, $6)", [
             e.user_id,
             "\u{1F534} Live Class Started!",
@@ -4037,7 +4409,7 @@ function registerAdminLiveClassManageRoutes({
             expiresAt
           ]);
         }
-        console.log("[GoLive] Notification sent for '" + liveClass.title + "' to " + enrolled.rows.length + " students");
+        console.log("[GoLive] Notification sent for '" + liveClass.title + "' to " + recipients.rows.length + " students");
       }
       if (isLive === true) {
         const syncUpdates = [];
@@ -4294,7 +4666,7 @@ function registerCourseAccessRoutes({
         course.courseEnded = false;
       }
       const lecturesResult = await db2.query("SELECT * FROM lectures WHERE course_id = $1 ORDER BY order_index", [req.params.id]);
-      const testsResult = await db2.query("SELECT * FROM tests WHERE course_id = $1 AND is_published = TRUE", [req.params.id]);
+      const testsResult = await db2.query("SELECT * FROM tests WHERE course_id = $1 AND is_published = TRUE ORDER BY created_at DESC, id DESC", [req.params.id]);
       const materialsResult = await db2.query("SELECT * FROM study_materials WHERE course_id = $1", [req.params.id]);
       if (user) {
         const enroll = await db2.query("SELECT * FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [user.id, req.params.id]);
@@ -4316,6 +4688,7 @@ function registerCourseAccessRoutes({
           });
         }
       }
+      res.set("Cache-Control", "private, no-store");
       res.json({
         ...course,
         total_materials: materialsResult.rows.length,
@@ -4423,9 +4796,13 @@ function registerCourseAccessRoutes({
          ORDER BY ud.downloaded_at DESC`,
         [user.id, Date.now()]
       );
-      res.json({ materials: materialsResult.rows, lectures: lecturesResult.rows });
-    } catch {
-      res.status(500).json({ message: "Failed to fetch downloads" });
+      res.json({
+        materials: Array.isArray(materialsResult.rows) ? materialsResult.rows : [],
+        lectures: Array.isArray(lecturesResult.rows) ? lecturesResult.rows : []
+      });
+    } catch (err) {
+      console.error("[Downloads] fetch error:", err);
+      res.json({ materials: [], lectures: [] });
     }
   });
   app2.post("/api/my-downloads", async (req, res) => {
@@ -4830,17 +5207,44 @@ import { createServer } from "node:http";
 import { Pool } from "pg";
 import multer from "multer";
 import { createRequire as createRequire2 } from "module";
+function normalizeDatabaseUrl(raw) {
+  try {
+    const parsed = new URL(raw);
+    const sslMode = (parsed.searchParams.get("sslmode") || "").toLowerCase();
+    if (!sslMode || sslMode === "require" || sslMode === "prefer" || sslMode === "verify-ca") {
+      parsed.searchParams.set("sslmode", "verify-full");
+    }
+    return parsed.toString();
+  } catch {
+    return raw;
+  }
+}
 async function dbQuery(text, params) {
+  const slowQueryThresholdMs = Number(process.env.DB_SLOW_QUERY_MS || "300");
   for (let attempt = 1; attempt <= 3; attempt++) {
+    const startedAt = Date.now();
     try {
-      return await pool.query(text, params);
+      const result = await pool.query(text, params);
+      const elapsedMs = Date.now() - startedAt;
+      if (elapsedMs >= slowQueryThresholdMs) {
+        const compactSql = text.replace(/\s+/g, " ").trim().slice(0, 220);
+        console.warn("[DB] Slow query", { elapsedMs, attempt, sql: compactSql });
+      }
+      return result;
     } catch (err) {
+      const elapsedMs = Date.now() - startedAt;
       const isTransient = err.message?.includes("Connection terminated") || err.message?.includes("connection timeout") || err.code === "ECONNRESET" || err.code === "ECONNREFUSED";
       if (isTransient && attempt < 3) {
         console.warn("[DB] Transient error on attempt " + attempt + ", retrying...");
         await new Promise((r) => setTimeout(r, 200 * attempt));
         continue;
       }
+      console.error("[DB] Query failed", {
+        elapsedMs,
+        attempt,
+        code: err?.code,
+        message: err?.message
+      });
       throw err;
     }
   }
@@ -5014,26 +5418,59 @@ For "${question.slice(0, 50)}...", the key is to understand the underlying mathe
   }
   return answers.default;
 }
+async function ensureCoreLearningSchemaColumns() {
+  const requiredStatements = [
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_free BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS price DECIMAL(10, 2) DEFAULT 0",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'Mathematics'",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS level TEXT DEFAULT 'Beginner'",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS duration_hours DECIMAL(5, 1) DEFAULT 0",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS total_lectures INTEGER DEFAULT 0",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS total_tests INTEGER DEFAULT 0",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS original_price DECIMAL(10, 2) DEFAULT 0",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS validity_months NUMERIC(8, 2) DEFAULT NULL",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_published BOOLEAN DEFAULT TRUE",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS course_type TEXT DEFAULT 'live'",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS subject TEXT DEFAULT ''",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS start_date TEXT",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS end_date TEXT",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS total_students INTEGER DEFAULT 0",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS total_materials INTEGER DEFAULT 0",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS pyq_count INTEGER DEFAULT 0",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS mock_count INTEGER DEFAULT 0",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS practice_count INTEGER DEFAULT 0",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS thumbnail TEXT",
+    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS cover_color TEXT",
+    "ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active'",
+    "ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS valid_until BIGINT",
+    "ALTER TABLE lectures ADD COLUMN IF NOT EXISTS download_allowed BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE lectures ADD COLUMN IF NOT EXISTS section_title TEXT",
+    "ALTER TABLE study_materials ADD COLUMN IF NOT EXISTS download_allowed BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE study_materials ADD COLUMN IF NOT EXISTS section_title TEXT",
+    "ALTER TABLE user_downloads ADD COLUMN IF NOT EXISTS local_filename TEXT"
+  ];
+  for (const statement of requiredStatements) {
+    await db.query(statement).catch(() => {
+    });
+  }
+}
+async function ensureCoreLearningPerformanceIndexes() {
+  const indexStatements = [
+    "CREATE INDEX IF NOT EXISTS idx_enrollments_user_course_status_valid_until ON enrollments(user_id, course_id, status, valid_until)",
+    "CREATE INDEX IF NOT EXISTS idx_lectures_course_section ON lectures(course_id, section_title)",
+    "CREATE INDEX IF NOT EXISTS idx_materials_course_section ON study_materials(course_id, section_title)",
+    "CREATE INDEX IF NOT EXISTS idx_live_classes_course_scheduled ON live_classes(course_id, scheduled_at)",
+    "CREATE INDEX IF NOT EXISTS idx_download_tokens_token_used_expires ON download_tokens(token, used, expires_at)"
+  ];
+  for (const statement of indexStatements) {
+    await db.query(statement).catch(() => {
+    });
+  }
+}
 async function registerRoutes(app2) {
   try {
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_free BOOLEAN DEFAULT FALSE");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS original_price DECIMAL(10, 2) DEFAULT 0");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS validity_months NUMERIC(8, 2) DEFAULT NULL");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_published BOOLEAN DEFAULT TRUE");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS course_type TEXT DEFAULT 'live'");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS subject TEXT DEFAULT ''");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS start_date TEXT");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS end_date TEXT");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS total_students INTEGER DEFAULT 0");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS total_materials INTEGER DEFAULT 0").catch(() => {
-    });
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS pyq_count INTEGER DEFAULT 0");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS mock_count INTEGER DEFAULT 0");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS practice_count INTEGER DEFAULT 0");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS thumbnail TEXT");
-    await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS cover_color TEXT");
-    await db.query("ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active'");
-    await db.query("ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS valid_until BIGINT");
+    await ensureCoreLearningSchemaColumns();
+    await ensureCoreLearningPerformanceIndexes();
     console.log("[DB] courses + enrollments columns ensured (admin + live APIs)");
   } catch (err) {
     console.error("[DB] CRITICAL: could not ensure course/enrollment columns. Run SQL in Neon (same branch as DATABASE_URL). Error:", err);
@@ -5324,24 +5761,7 @@ async function registerRoutes(app2) {
       await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN DEFAULT FALSE");
       await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active_at BIGINT");
       await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT");
-      await db.query("ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active'");
-      await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_free BOOLEAN DEFAULT FALSE");
-      await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS original_price DECIMAL(10, 2) DEFAULT 0");
-      await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS validity_months NUMERIC(8, 2) DEFAULT NULL");
-      await db.query("ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS valid_until BIGINT");
-      await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_published BOOLEAN DEFAULT TRUE");
-      await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS course_type TEXT DEFAULT 'live'");
-      await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS subject TEXT DEFAULT ''");
-      await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS start_date TEXT");
-      await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS end_date TEXT");
-      await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS total_students INTEGER DEFAULT 0");
-      await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS total_materials INTEGER DEFAULT 0").catch(() => {
-      });
-      await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS pyq_count INTEGER DEFAULT 0");
-      await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS mock_count INTEGER DEFAULT 0");
-      await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS practice_count INTEGER DEFAULT 0");
-      await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS thumbnail TEXT");
-      await db.query("ALTER TABLE courses ADD COLUMN IF NOT EXISTS cover_color TEXT");
+      await ensureCoreLearningSchemaColumns();
       await db.query("ALTER TABLE tests ADD COLUMN IF NOT EXISTS difficulty TEXT DEFAULT 'moderate'");
       await db.query("ALTER TABLE tests ADD COLUMN IF NOT EXISTS scheduled_at BIGINT");
       await db.query("ALTER TABLE tests ADD COLUMN IF NOT EXISTS is_published BOOLEAN DEFAULT TRUE");
@@ -5391,6 +5811,8 @@ async function registerRoutes(app2) {
       await db.query("ALTER TABLE standalone_folders ADD COLUMN IF NOT EXISTS is_free BOOLEAN DEFAULT TRUE").catch(() => {
       });
       await db.query("ALTER TABLE standalone_folders ADD COLUMN IF NOT EXISTS description TEXT").catch(() => {
+      });
+      await db.query("ALTER TABLE standalone_folders ADD COLUMN IF NOT EXISTS validity_months NUMERIC(8,2) DEFAULT NULL").catch(() => {
       });
       await db.query(`CREATE TABLE IF NOT EXISTS folder_purchases (
       id SERIAL PRIMARY KEY,
@@ -5732,35 +6154,35 @@ async function registerRoutes(app2) {
       const now = Date.now();
       const thirtyMinFromNow = now + 30 * 60 * 1e3;
       const classes = await db.query(
-        "SELECT lc.id, lc.title, lc.course_id, lc.scheduled_at, lc.notify_bell FROM live_classes lc WHERE lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE AND lc.notify_bell = TRUE AND lc.scheduled_at IS NOT NULL"
+        "SELECT lc.id, lc.title, lc.course_id, lc.scheduled_at, lc.notify_bell, lc.is_free_preview, lc.is_public FROM live_classes lc WHERE lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE AND lc.notify_bell = TRUE AND lc.scheduled_at IS NOT NULL"
       );
       for (const lc of classes.rows) {
         const scheduledAt = parseInt(lc.scheduled_at);
         if (isNaN(scheduledAt)) continue;
         const diff = scheduledAt - now;
+        const recipients = !lc.course_id || lc.is_free_preview === true || lc.is_public === true ? await db.query("SELECT id AS user_id FROM users WHERE role = 'student'") : await db.query("SELECT user_id FROM enrollments WHERE course_id = $1", [lc.course_id]);
+        const expiresAt = now + 6 * 36e5;
         const key30 = `30min_${lc.id}`;
         if (diff > 0 && diff <= 31 * 60 * 1e3 && diff >= 29 * 60 * 1e3 && !sentNotifications.has(key30)) {
           sentNotifications.add(key30);
-          const enrolled = await db.query("SELECT user_id FROM enrollments WHERE course_id = $1", [lc.course_id]);
-          for (const e of enrolled.rows) {
+          for (const e of recipients.rows) {
             await db.query(
               "INSERT INTO notifications (user_id, title, message, type, created_at, expires_at) VALUES ($1, $2, $3, $4, $5, $6)",
-              [e.user_id, "\u23F0 Live Class in 30 minutes!", `"${lc.title}" starts in 30 minutes. Get ready!`, "info", now, scheduledAt]
+              [e.user_id, "\u23F0 Live Class in 30 minutes!", `"${lc.title}" starts in 30 minutes. Get ready!`, "info", now, expiresAt]
             );
           }
-          console.log(`[LiveNotif] 30min reminder sent for "${lc.title}" to ${enrolled.rows.length} students`);
+          console.log(`[LiveNotif] 30min reminder sent for "${lc.title}" to ${recipients.rows.length} students`);
         }
         const keyStart = `start_${lc.id}`;
         if (diff <= 0 && diff >= -2 * 60 * 1e3 && !sentNotifications.has(keyStart)) {
           sentNotifications.add(keyStart);
-          const enrolled = await db.query("SELECT user_id FROM enrollments WHERE course_id = $1", [lc.course_id]);
-          for (const e of enrolled.rows) {
+          for (const e of recipients.rows) {
             await db.query(
               "INSERT INTO notifications (user_id, title, message, type, created_at, expires_at) VALUES ($1, $2, $3, $4, $5, $6)",
-              [e.user_id, "\u{1F534} Live Class Starting Now!", `"${lc.title}" is about to start. Join now!`, "info", now, now + 12 * 36e5]
+              [e.user_id, "\u{1F534} Live Class Starting Now!", `"${lc.title}" is about to start. Join now!`, "info", now, expiresAt]
             );
           }
-          console.log(`[LiveNotif] Start reminder sent for "${lc.title}" to ${enrolled.rows.length} students`);
+          console.log(`[LiveNotif] Start reminder sent for "${lc.title}" to ${recipients.rows.length} students`);
         }
       }
       if (sentNotifications.size > 500) sentNotifications.clear();
@@ -6030,7 +6452,7 @@ async function registerRoutes(app2) {
   const httpServer = createServer(app2);
   return httpServer;
 }
-var require3, PDFParse, upload, uploadLarge, databaseUrl, pool, db, cache, ADMIN_EMAILS, ADMIN_PHONES;
+var require3, PDFParse, upload, uploadLarge, databaseUrlRaw, databaseUrl, pool, db, cache, ADMIN_EMAILS, ADMIN_PHONES;
 var init_routes = __esm({
   "server/routes.ts"() {
     "use strict";
@@ -6075,7 +6497,8 @@ var init_routes = __esm({
     ({ PDFParse } = require3("pdf-parse"));
     upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
     uploadLarge = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } });
-    databaseUrl = process.env.DATABASE_URL;
+    databaseUrlRaw = process.env.DATABASE_URL;
+    databaseUrl = databaseUrlRaw ? normalizeDatabaseUrl(databaseUrlRaw) : void 0;
     if (!databaseUrl) {
       throw new Error("DATABASE_URL must be set");
     }
@@ -6125,6 +6548,18 @@ dotenv.config({
 });
 var app = express();
 var log = console.log;
+function normalizeDatabaseUrl2(raw) {
+  try {
+    const parsed = new URL(raw);
+    const sslMode = (parsed.searchParams.get("sslmode") || "").toLowerCase();
+    if (!sslMode || sslMode === "require" || sslMode === "prefer" || sslMode === "verify-ca") {
+      parsed.searchParams.set("sslmode", "verify-full");
+    }
+    return parsed.toString();
+  } catch {
+    return raw;
+  }
+}
 function setupCors(app2) {
   const normalizeOrigin = (value) => {
     const trimmed = value.trim();
@@ -6143,7 +6578,10 @@ function setupCors(app2) {
   const defaultAllowedOrigins = [
     "https://3ilearning.in",
     // Keep www variant for compatibility.
-    "https://www.3ilearning.in"
+    "https://www.3ilearning.in",
+    // Razorpay Standard Checkout: redirect/callback POSTs to our API from these origins.
+    "https://api.razorpay.com",
+    "https://checkout.razorpay.com"
   ];
   const envOrigins = (process.env.CORS_ORIGINS || "").split(",").map((s) => normalizeOrigin(s)).filter(Boolean);
   const allowedOriginPatterns = [
@@ -6234,6 +6672,15 @@ function getAppName() {
   } catch {
     return "App Landing Page";
   }
+}
+function getBackendVersion() {
+  return {
+    service: "backend",
+    env: process.env.NODE_ENV || "development",
+    commit: process.env.GIT_COMMIT || process.env.COMMIT_SHA || "unknown",
+    version: process.env.npm_package_version || "unknown",
+    now: Date.now()
+  };
 }
 function serveExpoManifest(platform, res) {
   const manifestPath = path.resolve(
@@ -6362,12 +6809,15 @@ function setupErrorHandler(app2) {
   if (isProduction && process.env.DATABASE_URL) {
     const PgSession = connectPgSimple(session);
     sessionConfig.store = new PgSession({
-      conString: process.env.DATABASE_URL,
+      conString: normalizeDatabaseUrl2(process.env.DATABASE_URL),
       tableName: "session",
       createTableIfMissing: true
     });
   }
   app.use(session(sessionConfig));
+  app.get("/api/health/version", (_req, res) => {
+    res.json(getBackendVersion());
+  });
   const otpSendLimiter = rateLimit({
     windowMs: 15 * 60 * 1e3,
     max: 200,
