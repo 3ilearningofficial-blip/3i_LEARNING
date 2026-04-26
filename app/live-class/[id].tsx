@@ -335,22 +335,27 @@ export default function LiveClassScreen() {
   const lastMsgTimeRef = useRef<number>(0);
   const didAutoplayDirectRecording = useRef(false);
   // Web: fixed player height so the keyboard does not squish. Measure after mount so SSR/placeholder never leaves height 0.
-  const [webVideoHeight, setWebVideoHeight] = useState(0);
-  const computeWebVideoHeight = useCallback(() => {
-    if (Platform.OS !== "web" || typeof window === "undefined") return 0;
-    const w = window.innerWidth;
+  const [webChatMaxHeight, setWebChatMaxHeight] = useState(320);
+  const computeWebLayout = useCallback(() => {
+    if (Platform.OS !== "web" || typeof window === "undefined") return { chatMax: 320 };
     const h = window.innerHeight;
-    return Math.max(200, Math.min(380, Math.round(Math.min((w * 9) / 16, h * 0.42))));
+    const reserved = 140;
+    const avail = Math.max(320, h - reserved);
+    // Smaller live-chat band: ~34% of usable height, max 380px so the player gets the rest.
+    const chatMax = Math.min(380, Math.round(avail * 0.34));
+    return { chatMax };
   }, []);
   useLayoutEffect(() => {
     if (Platform.OS !== "web") return;
-    setWebVideoHeight(computeWebVideoHeight());
+    const apply = () => {
+      const { chatMax } = computeWebLayout();
+      setWebChatMaxHeight(chatMax);
+    };
+    apply();
     if (typeof window === "undefined") return;
-    const onResize = () => setWebVideoHeight(computeWebVideoHeight());
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, [computeWebVideoHeight]);
-  const webPlayerBoxHeight = Platform.OS === "web" ? Math.max(webVideoHeight || 280, 200) : 0;
+    window.addEventListener("resize", apply);
+    return () => window.removeEventListener("resize", apply);
+  }, [computeWebLayout]);
 
   const { data: liveClassData } = useQuery<{ youtube_url: string; title: string; is_completed: boolean; is_live: boolean; show_viewer_count: boolean; cf_playback_hls?: string; stream_type?: string; recording_url?: string; duration_minutes?: number; scheduled_at?: number; has_access?: boolean; is_enrolled?: boolean; course_id?: number; is_public?: boolean }>({
     queryKey: [`/api/live-classes/${id}`],
@@ -663,7 +668,7 @@ export default function LiveClassScreen() {
             style={[
               styles.playerContainer,
               Platform.OS === "web"
-                ? { flex: 0, flexGrow: 0, flexShrink: 0, height: webPlayerBoxHeight, minHeight: 200 }
+                ? { flex: 1, minHeight: 260, minWidth: 0, flexShrink: 1 }
                 : { flex: 3, minHeight: 0, flexShrink: 0 },
             ]}
           >
@@ -784,7 +789,17 @@ export default function LiveClassScreen() {
             )}
           </View>
 
-          <View style={styles.chatContainer}>
+          <View
+            style={[
+              styles.chatContainer,
+              Platform.OS === "web" && {
+                flex: 0,
+                height: webChatMaxHeight,
+                maxHeight: webChatMaxHeight,
+                width: "100%" as const,
+              },
+            ]}
+          >
             {liveClassData?.is_completed && !isAdmin ? (
               <View style={styles.recordingInfo}>
                 <Ionicons name="film-outline" size={32} color={Colors.light.textMuted} />

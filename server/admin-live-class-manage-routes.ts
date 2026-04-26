@@ -42,7 +42,7 @@ export function registerAdminLiveClassManageRoutes({
 
   app.put("/api/admin/live-classes/:id", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { isLive, isCompleted, youtubeUrl, title, description, convertToLecture, sectionTitle, scheduledAt, notifyEmail, notifyBell, isFreePreview, streamType, chatMode, showViewerCount, recordingUrl, cfStreamUid } = req.body;
+      const { isLive, isCompleted, youtubeUrl, title, description, convertToLecture, sectionTitle, scheduledAt, notifyEmail, notifyBell, isFreePreview, streamType, chatMode, showViewerCount, recordingUrl, cfStreamUid, lectureSectionTitle } = req.body;
       const updates: string[] = [];
       const params: unknown[] = [];
       const add = (col: string, val: unknown) => {
@@ -65,6 +65,7 @@ export function registerAdminLiveClassManageRoutes({
       if (showViewerCount !== undefined) add("show_viewer_count", showViewerCount);
       if (recordingUrl !== undefined) add("recording_url", recordingUrl);
       if (cfStreamUid !== undefined) add("cf_stream_uid", cfStreamUid);
+      if (lectureSectionTitle !== undefined) add("lecture_section_title", typeof lectureSectionTitle === "string" && lectureSectionTitle.trim() === "" ? null : lectureSectionTitle);
       const { isPublic: isPublicVal } = req.body;
       if (isPublicVal !== undefined) add("is_public", isPublicVal);
       if (updates.length === 0) {
@@ -113,7 +114,9 @@ export function registerAdminLiveClassManageRoutes({
                 durationMins,
                 maxOrder.rows[0].next_order,
                 false,
-                st || "Live Class Recordings",
+                (st && String(st).trim()) ||
+                  (peer.lecture_section_title && String(peer.lecture_section_title).trim()) ||
+                  "Live Class Recordings",
                 Date.now(),
               ]
             );
@@ -233,6 +236,10 @@ export function registerAdminLiveClassManageRoutes({
                 : liveClass.duration_minutes != null
                   ? Number(liveClass.duration_minutes)
                   : 0;
+          const targetSection =
+            (sectionTitle && String(sectionTitle).trim()) ||
+            (peer.lecture_section_title && String(peer.lecture_section_title).trim()) ||
+            "Live Class Recordings";
           await db.query(
             "INSERT INTO lectures (course_id, title, description, video_url, video_type, duration_minutes, order_index, is_free_preview, section_title, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
             [
@@ -244,7 +251,7 @@ export function registerAdminLiveClassManageRoutes({
               durationMins,
               maxOrder.rows[0].next_order,
               false,
-              sectionTitle || "Live Class Recordings",
+              targetSection,
               Date.now(),
             ]
           );

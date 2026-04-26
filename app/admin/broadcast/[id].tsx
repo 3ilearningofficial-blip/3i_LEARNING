@@ -184,6 +184,8 @@ export default function BroadcastPage() {
   const cfPlaybackHls = liveClass?.cf_playback_hls || "";
   const courseId = liveClass?.course_id;
   const lcRecSubStorageKey = courseId != null ? `lcRecSub_${courseId}` : "lcRecSub";
+  const recordingSection =
+    (liveClass?.lecture_section_title && String(liveClass.lecture_section_title).trim()) || "Live Class Recordings";
 
   const { data: liveRecordingFolders = { folders: [] as string[] } } = useQuery({
     queryKey: ["/api/admin/upload/live-class-recording-folders"],
@@ -333,7 +335,7 @@ export default function BroadcastPage() {
 
       await apiRequest("POST", `/api/admin/live-classes/${liveClassId}/recording`, {
         recordingUrl: publicUrl,
-        sectionTitle: "Live Class Recordings",
+        sectionTitle: recordingSection,
       });
 
       retainedBlobRef.current = null;
@@ -346,7 +348,7 @@ export default function BroadcastPage() {
       setUploadStatus(null);
       setIsEnding(false);
     }
-  }, [liveClassId, webrtc, recordingSubfolder]);
+  }, [liveClassId, webrtc, recordingSubfolder, recordingSection]);
 
   const handleRetryUpload = useCallback(() => {
     const blob = retainedBlobRef.current;
@@ -385,7 +387,7 @@ export default function BroadcastPage() {
         if (cfPlaybackHls) {
           await apiRequest("POST", `/api/admin/live-classes/${liveClassId}/recording`, {
             recordingUrl: cfPlaybackHls,
-            sectionTitle: "Live Class Recordings",
+            sectionTitle: recordingSection,
           });
         } else {
           await apiRequest("PUT", `/api/admin/live-classes/${liveClassId}`, { isLive: false, isCompleted: true });
@@ -394,7 +396,7 @@ export default function BroadcastPage() {
       } else {
         await apiRequest("POST", `/api/admin/live-classes/${liveClassId}/recording`, {
           recordingUrl: youtubeUrl,
-          sectionTitle: "Live Class Recordings",
+          sectionTitle: recordingSection,
         });
         router.replace("/admin" as any);
       }
@@ -403,7 +405,7 @@ export default function BroadcastPage() {
       else Alert.alert("Error", err?.message || "Failed to end class. Please try again.");
       setIsEnding(false);
     }
-  }, [liveClassId, streamType, webrtc, recorder, youtubeUrl, cfPlaybackHls, uploadRecordingAndFinish]);
+  }, [liveClassId, streamType, webrtc, recorder, youtubeUrl, cfPlaybackHls, uploadRecordingAndFinish, recordingSection]);
 
   if (isLoading) {
     return (

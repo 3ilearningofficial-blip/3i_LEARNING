@@ -67,11 +67,13 @@ export function registerAdminUsersAndContentRoutes({
 
   app.post("/api/admin/live-classes", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { title, description, courseId, youtubeUrl, scheduledAt, isLive, isPublic, notifyEmail, notifyBell, isFreePreview, streamType, chatMode, showViewerCount } = req.body;
+      const { title, description, courseId, youtubeUrl, scheduledAt, isLive, isPublic, notifyEmail, notifyBell, isFreePreview, streamType, chatMode, showViewerCount, lectureSectionTitle } = req.body;
+      const section =
+        typeof lectureSectionTitle === "string" && lectureSectionTitle.trim() !== "" ? lectureSectionTitle.trim() : null;
       const result = await db.query(
-        `INSERT INTO live_classes (title, description, course_id, youtube_url, scheduled_at, is_live, is_public, notify_email, notify_bell, is_free_preview, stream_type, chat_mode, show_viewer_count, created_at) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *`,
-        [title, description, courseId || null, youtubeUrl || null, scheduledAt, isLive || false, isPublic || false, notifyEmail || false, notifyBell || false, isFreePreview || false, streamType || "rtmp", chatMode || "public", showViewerCount !== false, Date.now()]
+        `INSERT INTO live_classes (title, description, course_id, youtube_url, scheduled_at, is_live, is_public, notify_email, notify_bell, is_free_preview, stream_type, chat_mode, show_viewer_count, lecture_section_title, created_at) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *`,
+        [title, description, courseId || null, youtubeUrl || null, scheduledAt, isLive || false, isPublic || false, notifyEmail || false, notifyBell || false, isFreePreview || false, streamType || "rtmp", chatMode || "public", showViewerCount !== false, section, Date.now()]
       );
       console.log(`[LiveClass] created id=${result.rows[0]?.id} title="${title}" courseId=${courseId} scheduledAt=${scheduledAt} isLive=${isLive}`);
       res.json(result.rows[0]);

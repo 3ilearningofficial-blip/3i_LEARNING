@@ -131,6 +131,8 @@ interface NewMaterial {
 interface NewLiveClass {
   title: string; description: string; youtubeUrl: string;
   scheduledAt: string; isLive: boolean; isPublic: boolean;
+  /** Optional lecture section name (matches course folder) for auto-saved recording */
+  lectureSectionTitle: string;
 }
 
 type AdminCourseTab = "lectures" | "tests" | "materials" | "live" | "enrolled";
@@ -148,7 +150,7 @@ const TEST_TYPES = ["practice", "test", "pyq", "mock"];
 const emptyTest: NewTestForm = { title: "", description: "", durationMinutes: "60", totalMarks: "100", testType: "practice", folderName: "", difficulty: "moderate", scheduledAt: "" };
 const emptyQuestion: NewQuestion = { questionText: "", optionA: "", optionB: "", optionC: "", optionD: "", correctOption: "A", explanation: "", topic: "", marks: "4", negativeMarks: "1", imageUrl: "", solutionImageUrl: "", difficulty: "moderate" };
 const emptyMaterial: NewMaterial = { title: "", description: "", fileUrl: "", fileType: "pdf", isFree: false, sectionTitle: "", downloadAllowed: false };
-const emptyLiveClass: NewLiveClass = { title: "", description: "", youtubeUrl: "", scheduledAt: "", isLive: false, isPublic: false };
+const emptyLiveClass: NewLiveClass = { title: "", description: "", youtubeUrl: "", scheduledAt: "", isLive: false, isPublic: false, lectureSectionTitle: "" };
 
 export default function AdminCourseScreen() {
   useEffect(() => {
@@ -557,6 +559,7 @@ export default function AdminCourseScreen() {
         ...data,
         courseId: parseInt(id),
         scheduledAt: data.scheduledAt ? new Date(data.scheduledAt).getTime() : Date.now(),
+        lectureSectionTitle: (data.lectureSectionTitle || "").trim() || undefined,
       });
     },
     onSuccess: () => {
@@ -1821,6 +1824,12 @@ export default function AdminCourseScreen() {
               <FormField label="YouTube Live/Stream URL *" placeholder="Paste YouTube live stream share link here" value={newLiveClass.youtubeUrl} onChangeText={(v) => setNewLiveClass(p => ({ ...p, youtubeUrl: v }))} />
               <FormField label="Description" placeholder="What will be covered" value={newLiveClass.description} onChangeText={(v) => setNewLiveClass(p => ({ ...p, description: v }))} />
               <FormField label="Scheduled Date & Time" placeholder="2026-03-15 18:00" value={newLiveClass.scheduledAt} onChangeText={(v) => setNewLiveClass(p => ({ ...p, scheduledAt: v }))} />
+              <FormField
+                label="Recording folder (optional)"
+                placeholder='e.g. Live Class Recordings — default if empty'
+                value={newLiveClass.lectureSectionTitle}
+                onChangeText={(v) => setNewLiveClass(p => ({ ...p, lectureSectionTitle: v }))}
+              />
               <View style={styles.formField}>
                 <Text style={styles.formLabel}>Accessible to All Students</Text>
                 <Text style={{ fontSize: 11, color: Colors.light.textMuted, marginBottom: 4, fontFamily: "Inter_400Regular" }}>If ON, all students can watch. If OFF, only enrolled students can access.</Text>
@@ -1960,26 +1969,42 @@ export default function AdminCourseScreen() {
             <Pressable style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" }} onPress={() => { setOpenAdminFolder(null); setFolderAddModal(false); }}>
               <Ionicons name="arrow-back" size={20} color="#fff" />
             </Pressable>
-            <View style={{ flex: 1 }}>
+            <View style={{ flex: 1, minWidth: 0 }}>
               <Text style={{ fontSize: 17, fontFamily: "Inter_700Bold", color: "#fff" }} numberOfLines={1}>{openAdminFolder?.name}</Text>
               <Text style={{ fontSize: 12, color: "rgba(255,255,255,0.6)", fontFamily: "Inter_400Regular" }}>
                 {openAdminFolder?.type === "test" ? "Test Folder" : openAdminFolder?.type === "lecture" ? "Lecture Folder" : "Material Folder"}
               </Text>
             </View>
-            <Pressable
-              style={{ flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "rgba(255,255,255,0.15)", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 }}
-              onPress={() => {
-                if (openAdminFolder?.type === "test") setNewTest({ ...emptyTest, folderName: openAdminFolder!.name });
-                else if (openAdminFolder?.type === "lecture") setNewLecture({ ...emptyLecture, sectionTitle: openAdminFolder!.name });
-                else if (openAdminFolder?.type === "material") setNewMaterial({ ...emptyMaterial, sectionTitle: openAdminFolder!.name });
-                setFolderAddModal(true);
-              }}
-            >
-              <Ionicons name="add" size={18} color="#fff" />
-              <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: "#fff" }}>
-                {openAdminFolder?.type === "test" ? "Add Test" : openAdminFolder?.type === "lecture" ? "Add Lecture" : "Add Material"}
-              </Text>
-            </Pressable>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexShrink: 0 }}>
+              {openAdminFolder?.type === "lecture" && (
+                <Pressable
+                  style={{ flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "rgba(255,255,255,0.12)", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7, borderWidth: 1, borderColor: "rgba(255,255,255,0.25)" }}
+                  onPress={() => {
+                    setOpenAdminFolder(null);
+                    setFolderAddModal(false);
+                    setNewFolderName("");
+                    setShowFolderPicker("lecture");
+                  }}
+                >
+                  <Ionicons name="folder-open" size={16} color="#fff" />
+                  <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#fff" }}>Add Folder</Text>
+                </Pressable>
+              )}
+              <Pressable
+                style={{ flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "rgba(255,255,255,0.15)", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 }}
+                onPress={() => {
+                  if (openAdminFolder?.type === "test") setNewTest({ ...emptyTest, folderName: openAdminFolder!.name });
+                  else if (openAdminFolder?.type === "lecture") setNewLecture({ ...emptyLecture, sectionTitle: openAdminFolder!.name });
+                  else if (openAdminFolder?.type === "material") setNewMaterial({ ...emptyMaterial, sectionTitle: openAdminFolder!.name });
+                  setFolderAddModal(true);
+                }}
+              >
+                <Ionicons name="add" size={18} color="#fff" />
+                <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: "#fff" }}>
+                  {openAdminFolder?.type === "test" ? "Add Test" : openAdminFolder?.type === "lecture" ? "Add Lecture" : "Add Material"}
+                </Text>
+              </Pressable>
+            </View>
           </LinearGradient>
           <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: bottomPadding + 40 }}>
               {openAdminFolder?.type === "test" && (

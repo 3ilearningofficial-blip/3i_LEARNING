@@ -176,6 +176,10 @@ export function registerLiveStreamRoutes({
             "SELECT COALESCE(MAX(order_index), 0) + 1 as next_order FROM lectures WHERE course_id = $1",
             [row.course_id]
           );
+          const recordSection =
+            (sectionTitle && String(sectionTitle).trim()) ||
+            (row.lecture_section_title && String(row.lecture_section_title).trim()) ||
+            "Live Class Recordings";
           const lectureResult = await db.query(
             `INSERT INTO lectures (course_id, title, description, video_url, video_type, duration_minutes, order_index, is_free_preview, section_title, created_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
@@ -188,7 +192,7 @@ export function registerLiveStreamRoutes({
               durationMins,
               maxOrder.rows[0].next_order,
               false,
-              sectionTitle || "Live Class Recordings",
+              recordSection,
               Date.now(),
             ]
           );
