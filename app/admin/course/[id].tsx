@@ -1042,10 +1042,15 @@ export default function AdminCourseScreen() {
                     <Pressable
                       style={{ flexDirection: "row", alignItems: "center", gap: 5, backgroundColor: "#DCFCE7", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 }}
                       onPress={() => {
-                        Alert.alert("Convert to Lecture", "Save this recording as a lecture in the Lectures tab?", [
-                          { text: "Cancel", style: "cancel" },
-                          { text: "Convert", onPress: () => updateLiveClassMutation.mutate({ lcId: lc.id, convertToLecture: true, sectionTitle: "Live Class Recordings" }) },
-                        ]);
+                        const run = () => updateLiveClassMutation.mutate({ lcId: lc.id, convertToLecture: true, sectionTitle: "Live Class Recordings" });
+                        if (Platform.OS === "web") {
+                          if (window.confirm("Save this recording as a lecture under Lectures → Live Class Recordings?")) run();
+                        } else {
+                          Alert.alert("Convert to Lecture", "Save this recording as a lecture in the Lectures tab?", [
+                            { text: "Cancel", style: "cancel" },
+                            { text: "Convert", onPress: run },
+                          ]);
+                        }
                       }}
                     >
                       <Ionicons name="swap-horizontal" size={14} color="#16A34A" />
@@ -1055,10 +1060,14 @@ export default function AdminCourseScreen() {
                     <Pressable
                       style={{ flexDirection: "row", alignItems: "center", gap: 5, backgroundColor: "#FEE2E2", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 }}
                       onPress={() => {
-                        Alert.alert("Delete", "Delete this live class?", [
-                          { text: "Cancel", style: "cancel" },
-                          { text: "Delete", style: "destructive", onPress: () => deleteLiveClassMutation.mutate(lc.id) },
-                        ]);
+                        if (Platform.OS === "web") {
+                          if (window.confirm("Delete this live class? This cannot be undone.")) deleteLiveClassMutation.mutate(lc.id);
+                        } else {
+                          Alert.alert("Delete", "Delete this live class?", [
+                            { text: "Cancel", style: "cancel" },
+                            { text: "Delete", style: "destructive", onPress: () => deleteLiveClassMutation.mutate(lc.id) },
+                          ]);
+                        }
                       }}
                     >
                       <Ionicons name="trash" size={14} color="#DC2626" />
@@ -1090,10 +1099,14 @@ export default function AdminCourseScreen() {
                     <Pressable
                       style={{ flexDirection: "row", alignItems: "center", gap: 5, backgroundColor: "#FEE2E2", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 }}
                       onPress={() => {
-                        Alert.alert("Delete", "Delete this live class?", [
-                          { text: "Cancel", style: "cancel" },
-                          { text: "Delete", style: "destructive", onPress: () => deleteLiveClassMutation.mutate(lc.id) },
-                        ]);
+                        if (Platform.OS === "web") {
+                          if (window.confirm("Delete this live class? This cannot be undone.")) deleteLiveClassMutation.mutate(lc.id);
+                        } else {
+                          Alert.alert("Delete", "Delete this live class?", [
+                            { text: "Cancel", style: "cancel" },
+                            { text: "Delete", style: "destructive", onPress: () => deleteLiveClassMutation.mutate(lc.id) },
+                          ]);
+                        }
                       }}
                     >
                       <Ionicons name="trash" size={14} color="#DC2626" />

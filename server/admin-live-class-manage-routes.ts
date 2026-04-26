@@ -67,7 +67,63 @@ export function registerAdminLiveClassManageRoutes({
       if (cfStreamUid !== undefined) add("cf_stream_uid", cfStreamUid);
       const { isPublic: isPublicVal } = req.body;
       if (isPublicVal !== undefined) add("is_public", isPublicVal);
-      if (updates.length === 0) return res.status(400).json({ message: "No fields to update" });
+      if (updates.length === 0) {
+        // "Save as Lecture" may send only { convertToLecture: true } — allow without a no-op column write.
+        if (convertToLecture === true) {
+          const only = await db.query("SELECT * FROM live_classes WHERE id = $1", [req.params.id]);
+          if (only.rows.length === 0) return res.status(404).json({ message: "Live class not found" });
+          const liveClassOnly = only.rows[0];
+          const st = sectionTitle;
+          const canConvert =
+            liveClassOnly.is_completed === true && !!(liveClassOnly.youtube_url || liveClassOnly.recording_url);
+          if (!canConvert) {
+            return res.status(400).json({ message: "Class must be completed with a YouTube or R2 recording URL to save as a lecture." });
+          }
+          await db
+            .query("DELETE FROM notifications WHERE title IN ('🔴 Live Class Started!', '🔴 Live Class Starting Now!', '⏰ Live Class in 30 minutes!') AND message ILIKE $1", ['%' + liveClassOnly.title + '%'])
+            .catch(() => {});
+          const sameTitle = await db.query("SELECT * FROM live_classes WHERE title = $1", [liveClassOnly.title]);
+          for (const peer of sameTitle.rows) {
+            if (!peer.course_id) continue;
+            const urlForPeer = String(peer.recording_url || peer.youtube_url || liveClassOnly.recording_url || liveClassOnly.youtube_url || "").trim();
+            if (!urlForPeer) continue;
+            const vType = urlForPeer.includes("youtube.com") || urlForPeer.includes("youtu.be") ? "youtube" : "r2";
+            const exists = await db.query(
+              "SELECT 1 FROM lectures WHERE course_id = $1 AND title = $2 AND video_url = $3 LIMIT 1",
+              [peer.course_id, peer.title, urlForPeer]
+            );
+            if (exists.rows.length > 0) continue;
+            const maxOrder = await db.query("SELECT COALESCE(MAX(order_index), 0) + 1 as next_order FROM lectures WHERE course_id = $1", [peer.course_id]);
+            const durationMins =
+              peer.started_at && peer.ended_at
+                ? Math.max(1, Math.round((Number(peer.ended_at) - Number(peer.started_at)) / 60000))
+                : peer.duration_minutes != null
+                  ? Number(peer.duration_minutes)
+                  : liveClassOnly.duration_minutes != null
+                    ? Number(liveClassOnly.duration_minutes)
+                    : 0;
+            await db.query(
+              "INSERT INTO lectures (course_id, title, description, video_url, video_type, duration_minutes, order_index, is_free_preview, section_title, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+              [
+                peer.course_id,
+                peer.title,
+                peer.description || "",
+                urlForPeer,
+                vType,
+                durationMins,
+                maxOrder.rows[0].next_order,
+                false,
+                st || "Live Class Recordings",
+                Date.now(),
+              ]
+            );
+            await db.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [peer.course_id]);
+            await recomputeAllEnrollmentsProgressForCourse(peer.course_id);
+          }
+          return res.json(liveClassOnly);
+        }
+        return res.status(400).json({ message: "No fields to update" });
+      }
       params.push(req.params.id);
       const whereIdx = "$" + params.length;
       const sql = "UPDATE live_classes SET " + updates.join(", ") + " WHERE id = " + whereIdx + " RETURNING *";
@@ -147,17 +203,50 @@ export function registerAdminLiveClassManageRoutes({
         }
       }
 
-      if (isCompleted && convertToLecture && liveClass.youtube_url) {
+      // "Save as Lecture" from admin: was broken when class was already completed because the handler only
+      // ran when `isCompleted` was sent in the same PUT body. Also allow `recording_url` (R2) when youtube_url is empty.
+      const shouldConvertToLecture =
+        convertToLecture === true &&
+        (isCompleted === true || liveClass.is_completed === true) &&
+        (liveClass.youtube_url || liveClass.recording_url);
+      if (shouldConvertToLecture) {
         await db
           .query("DELETE FROM notifications WHERE title IN ('🔴 Live Class Started!', '🔴 Live Class Starting Now!', '⏰ Live Class in 30 minutes!') AND message ILIKE $1", ['%' + liveClass.title + '%'])
           .catch(() => {});
         const sameTitle = await db.query("SELECT * FROM live_classes WHERE title = $1", [liveClass.title]);
         for (const peer of sameTitle.rows) {
           if (!peer.course_id) continue;
+          const urlForPeer = String(peer.recording_url || peer.youtube_url || liveClass.recording_url || liveClass.youtube_url || "").trim();
+          if (!urlForPeer) continue;
+          const vType = urlForPeer.includes("youtube.com") || urlForPeer.includes("youtu.be") ? "youtube" : "r2";
+          const exists = await db.query(
+            "SELECT 1 FROM lectures WHERE course_id = $1 AND title = $2 AND video_url = $3 LIMIT 1",
+            [peer.course_id, peer.title, urlForPeer]
+          );
+          if (exists.rows.length > 0) continue;
           const maxOrder = await db.query("SELECT COALESCE(MAX(order_index), 0) + 1 as next_order FROM lectures WHERE course_id = $1", [peer.course_id]);
+          const durationMins =
+            peer.started_at && peer.ended_at
+              ? Math.max(1, Math.round((Number(peer.ended_at) - Number(peer.started_at)) / 60000))
+              : peer.duration_minutes != null
+                ? Number(peer.duration_minutes)
+                : liveClass.duration_minutes != null
+                  ? Number(liveClass.duration_minutes)
+                  : 0;
           await db.query(
             "INSERT INTO lectures (course_id, title, description, video_url, video_type, duration_minutes, order_index, is_free_preview, section_title, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
-            [peer.course_id, peer.title, peer.description || "", liveClass.youtube_url, "youtube", 0, maxOrder.rows[0].next_order, false, sectionTitle || "Live Class Recordings", Date.now()]
+            [
+              peer.course_id,
+              peer.title,
+              peer.description || "",
+              urlForPeer,
+              vType,
+              durationMins,
+              maxOrder.rows[0].next_order,
+              false,
+              sectionTitle || "Live Class Recordings",
+              Date.now(),
+            ]
           );
           await db.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [peer.course_id]);
           await recomputeAllEnrollmentsProgressForCourse(peer.course_id);

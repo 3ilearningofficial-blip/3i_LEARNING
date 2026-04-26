@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
 import {
   View, Text, StyleSheet, Pressable, Platform,
   ActivityIndicator, TextInput, FlatList, KeyboardAvoidingView,
@@ -334,13 +334,23 @@ export default function LiveClassScreen() {
   const chatListRef = useRef<FlatList>(null);
   const lastMsgTimeRef = useRef<number>(0);
   const didAutoplayDirectRecording = useRef(false);
-  // Web (esp. iOS Safari): lock video height to first full window so the on-screen keyboard does not squish the player.
-  const [webVideoHeight] = useState(() => {
+  // Web: fixed player height so the keyboard does not squish. Measure after mount so SSR/placeholder never leaves height 0.
+  const [webVideoHeight, setWebVideoHeight] = useState(0);
+  const computeWebVideoHeight = useCallback(() => {
     if (Platform.OS !== "web" || typeof window === "undefined") return 0;
     const w = window.innerWidth;
     const h = window.innerHeight;
     return Math.max(200, Math.min(380, Math.round(Math.min((w * 9) / 16, h * 0.42))));
-  });
+  }, []);
+  useLayoutEffect(() => {
+    if (Platform.OS !== "web") return;
+    setWebVideoHeight(computeWebVideoHeight());
+    if (typeof window === "undefined") return;
+    const onResize = () => setWebVideoHeight(computeWebVideoHeight());
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [computeWebVideoHeight]);
+  const webPlayerBoxHeight = Platform.OS === "web" ? Math.max(webVideoHeight || 280, 200) : 0;
 
   const { data: liveClassData } = useQuery<{ youtube_url: string; title: string; is_completed: boolean; is_live: boolean; show_viewer_count: boolean; cf_playback_hls?: string; stream_type?: string; recording_url?: string; duration_minutes?: number; scheduled_at?: number; has_access?: boolean; is_enrolled?: boolean; course_id?: number; is_public?: boolean }>({
     queryKey: [`/api/live-classes/${id}`],
@@ -606,10 +616,19 @@ export default function LiveClassScreen() {
                 Recording{liveClassData.duration_minutes ? ` · ${liveClassData.duration_minutes}m` : ""}
               </Text>
             </View>
-          ) : (
+          ) : !liveClassData ? (
+            <View style={[styles.liveIndicator, { backgroundColor: "rgba(255,255,255,0.12)" }]}>
+              <Text style={styles.liveText}>…</Text>
+            </View>
+          ) : liveClassData.is_live ? (
             <View style={styles.liveIndicator}>
               <View style={styles.liveDot} />
               <Text style={styles.liveText}>LIVE</Text>
+            </View>
+          ) : (
+            <View style={styles.scheduledPill}>
+              <Ionicons name="time-outline" size={10} color="#FCD34D" />
+              <Text style={styles.scheduledPillText}>SCHEDULED</Text>
             </View>
           )}
           <Text style={styles.headerTitle} numberOfLines={1}>{title || "Live Class"}</Text>
@@ -643,8 +662,8 @@ export default function LiveClassScreen() {
           <View
             style={[
               styles.playerContainer,
-              Platform.OS === "web" && webVideoHeight > 0
-                ? { flex: 0, flexGrow: 0, flexShrink: 0, height: webVideoHeight }
+              Platform.OS === "web"
+                ? { flex: 0, flexGrow: 0, flexShrink: 0, height: webPlayerBoxHeight, minHeight: 200 }
                 : { flex: 3, minHeight: 0, flexShrink: 0 },
             ]}
           >
@@ -672,6 +691,9 @@ export default function LiveClassScreen() {
             )}
             {(liveClassData?.is_live || liveClassData?.is_completed) && videoId && Platform.OS === "web" ? (
               <WebYouTubePlayer videoId={videoId} onReady={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }} />
+            ) : /* Web: do not use RN WebView for YouTube before go-live — it often collapses; show black stage + waiting overlay. */
+            Platform.OS === "web" && videoId && !liveClassData?.is_live && !liveClassData?.is_completed ? (
+              <View style={styles.webScheduledVideoSlot} />
             ) : isCfHls && Platform.OS === "web" ? (
               <iframe
                 srcDoc={buildCfHlsPlayerHtml(cfHlsUrl)}
@@ -742,7 +764,7 @@ export default function LiveClassScreen() {
                 javaScriptEnabled domStorageEnabled mixedContentMode="compatibility"
                 originWhitelist={["*"]}
               />
-            ) : youtubeHtml ? (
+            ) : youtubeHtml && Platform.OS !== "web" ? (
               <WebView
                 source={{ html: buildNativeYouTubeHtml(videoId), baseUrl: "https://www.youtube.com" }}
                 style={{ flex: 1, backgroundColor: "#000" }}
@@ -887,12 +909,15 @@ const styles = StyleSheet.create({
   backBtn: { width: 36, height: 36, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.12)", alignItems: "center", justifyContent: "center" },
   headerCenter: { flex: 1, flexDirection: "row", alignItems: "center", gap: 10 },
   liveIndicator: { flexDirection: "row", alignItems: "center", gap: 5, backgroundColor: "#DC2626", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
+  scheduledPill: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "rgba(180, 83, 9, 0.35)", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, borderWidth: 1, borderColor: "rgba(252, 211, 77, 0.4)" },
+  scheduledPillText: { fontSize: 9, fontFamily: "Inter_700Bold", color: "#FCD34D", letterSpacing: 0.5 },
   liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: "#fff" },
   liveText: { fontSize: 10, fontFamily: "Inter_700Bold", color: "#fff", letterSpacing: 1 },
   headerTitle: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: "#fff", flex: 1 },
   mainContent: { flex: 1, flexDirection: "column", minHeight: 0, minWidth: 0, overflow: "hidden" },
   /* Native: flex height share. Web: height set inline (fixed) so keyboard does not squish the player. */
   playerContainer: { width: "100%", backgroundColor: "#000", position: "relative", overflow: "hidden" },
+  webScheduledVideoSlot: { position: "absolute" as const, top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "#000" },
   loadingOverlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "#000", alignItems: "center", justifyContent: "center", zIndex: 10 },
   waitingOverlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "#0A1628", alignItems: "center", justifyContent: "center", gap: 6, zIndex: 10, padding: 20 },
   waitingDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: "#EF4444", marginBottom: 4 },
