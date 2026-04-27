@@ -364,6 +364,32 @@ export default function AdminCourseScreen() {
   const courseTests = Array.isArray(course?.tests) ? course.tests : [];
   const courseMaterials = Array.isArray(course?.materials) ? course.materials : [];
   const safeFolders = Array.isArray(dbFolders) ? dbFolders : [];
+  const LIVE_ROOT = DEFAULT_LIVE_RECORDING_SECTION;
+  const getLectureRootName = (name: string) =>
+    name.startsWith(`${LIVE_ROOT} /`) ? LIVE_ROOT : name;
+  const getDirectLectureSubfolders = (parentName: string): string[] => {
+    const prefix = `${parentName} / `;
+    const fromLectures = courseLectures
+      .map((l: any) => l.section_title)
+      .filter((n: any) => typeof n === "string" && n.startsWith(prefix))
+      .map((n: string) => {
+        const rest = n.slice(prefix.length);
+        const head = rest.split(" / ")[0]?.trim();
+        return head ? `${parentName} / ${head}` : "";
+      })
+      .filter(Boolean);
+    const fromFolders = safeFolders
+      .filter((f: any) => f.type === "lecture")
+      .map((f: any) => f.name)
+      .filter((n: any) => typeof n === "string" && n.startsWith(prefix))
+      .map((n: string) => {
+        const rest = n.slice(prefix.length);
+        const head = rest.split(" / ")[0]?.trim();
+        return head ? `${parentName} / ${head}` : "";
+      })
+      .filter(Boolean);
+    return [...new Set([...fromLectures, ...fromFolders])];
+  };
 
   const MAX_FOLDER_NAME_LEN = 120;
   const createFolderMutation = useMutation({
@@ -757,8 +783,11 @@ export default function AdminCourseScreen() {
             {[...new Set([
               ...courseLectures.map((l: any) => l.section_title).filter(Boolean),
               ...safeFolders.filter((f: any) => f.type === "lecture").map((f: any) => f.name),
-            ])].map((folderName: any) => {
-              const count = courseLectures.filter((l: any) => l.section_title === folderName).length;
+            ].map((n: string) => getLectureRootName(n)))].map((folderName: any) => {
+              const count = courseLectures.filter((l: any) => {
+                const sec = typeof l.section_title === "string" ? l.section_title : "";
+                return sec === folderName || sec.startsWith(`${folderName} /`);
+              }).length;
               const folder = safeFolders.find((f: any) => f.name === folderName && f.type === "lecture");
               return (
                 <View key={folderName} style={[styles.itemCard, { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: folder?.is_hidden ? "#F3F4F6" : "#EEF2FF" }]}>
@@ -1983,7 +2012,19 @@ export default function AdminCourseScreen() {
       <Modal visible={openAdminFolder !== null} animationType="slide" transparent={false}>
         <View style={{ flex: 1, backgroundColor: Colors.light.background }}>
           <LinearGradient colors={["#0A1628", "#1A2E50"]} style={{ paddingTop: topPadding + 8, paddingHorizontal: 16, paddingBottom: 14, flexDirection: "row", alignItems: "center", gap: 12 }}>
-            <Pressable style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" }} onPress={() => { setOpenAdminFolder(null); setFolderAddModal(false); }}>
+            <Pressable
+              style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" }}
+              onPress={() => {
+                if (openAdminFolder?.type === "lecture" && openAdminFolder.name.includes(" / ")) {
+                  const parent = openAdminFolder.name.split(" / ").slice(0, -1).join(" / ");
+                  setOpenAdminFolder({ name: parent, type: "lecture" });
+                  setFolderAddModal(false);
+                  return;
+                }
+                setOpenAdminFolder(null);
+                setFolderAddModal(false);
+              }}
+            >
               <Ionicons name="arrow-back" size={20} color="#fff" />
             </Pressable>
             <View style={{ flex: 1, minWidth: 0 }}>
@@ -2073,7 +2114,33 @@ export default function AdminCourseScreen() {
               )}
               {openAdminFolder?.type === "lecture" && (
                 <>
-                  {course?.lectures?.filter((l: any) => l.section_title === openAdminFolder.name).length === 0 && !folderAddModal && (
+                  {getDirectLectureSubfolders(openAdminFolder.name).map((childName) => {
+                    const childCount = course?.lectures?.filter((l: any) => l.section_title === childName).length || 0;
+                    return (
+                      <View key={childName} style={[styles.itemCard, { marginBottom: 8 }]}>
+                        <Pressable
+                          style={{ flexDirection: "row", alignItems: "center", gap: 12 }}
+                          onPress={() => setOpenAdminFolder({ name: childName, type: "lecture" })}
+                        >
+                          <View style={{ width: 40, height: 40, borderRadius: 10, backgroundColor: Colors.light.primary + "20", alignItems: "center", justifyContent: "center" }}>
+                            <Ionicons name="folder" size={22} color={Colors.light.primary} />
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <Text style={{ fontSize: 14, fontFamily: "Inter_700Bold", color: Colors.light.text }}>
+                              {childName.replace(`${openAdminFolder.name} / `, "")}
+                            </Text>
+                            <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>
+                              {childCount} lecture{childCount !== 1 ? "s" : ""}
+                            </Text>
+                          </View>
+                          <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
+                        </Pressable>
+                      </View>
+                    );
+                  })}
+                  {course?.lectures?.filter((l: any) => l.section_title === openAdminFolder.name).length === 0 &&
+                    getDirectLectureSubfolders(openAdminFolder.name).length === 0 &&
+                    !folderAddModal && (
                     <View style={[styles.infoCard, { marginBottom: 12 }]}>
                       <Ionicons name="folder-open-outline" size={16} color={Colors.light.primary} />
                       <Text style={styles.infoText}>This folder is empty. Tap "Add Lecture" to add lectures.</Text>

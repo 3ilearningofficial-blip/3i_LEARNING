@@ -1,8 +1,8 @@
-import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
+import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import {
   View, Text, StyleSheet, Pressable, Platform,
   ActivityIndicator, TextInput, FlatList, KeyboardAvoidingView,
-  Alert,
+  Alert, useWindowDimensions,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { WebView } from "react-native-webview";
@@ -17,6 +17,8 @@ import { useScreenProtection } from "@/lib/useScreenProtection";
 import { isAndroidWeb } from "@/lib/useAndroidWebGate";
 import AndroidWebGate from "@/components/AndroidWebGate";
 import { VideoWatermark } from "@/components/VideoWatermark";
+import LiveStudentsPanel from "@/components/LiveStudentsPanel";
+import { filterChatMessages } from "@/lib/chat-utils";
 
 const mediaTokenCache = new Map<string, { token: string; expiresAt: number }>();
 const MEDIA_TOKEN_TTL_MS = 50 * 1000;
@@ -326,6 +328,11 @@ export default function LiveClassScreen() {
   const insets = useSafeAreaInsets();
   const { user, isAdmin } = useAuth();
   const qc = useQueryClient();
+  const { width: windowWidth } = useWindowDimensions();
+  const isWeb = Platform.OS === "web";
+  const isWebWide = isWeb && windowWidth >= 960;
+  const isNarrowWeb = isWeb && !isWebWide;
+  const [mobileAdminTab, setMobileAdminTab] = useState<"chat" | "students">("chat");
   const [chatMsg, setChatMsg] = useState("");
   const [isVideoLoading, setIsVideoLoading] = useState(true);
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
@@ -334,30 +341,7 @@ export default function LiveClassScreen() {
   const chatListRef = useRef<FlatList>(null);
   const lastMsgTimeRef = useRef<number>(0);
   const didAutoplayDirectRecording = useRef(false);
-  // Web: fixed player height so the keyboard does not squish. Measure after mount so SSR/placeholder never leaves height 0.
-  const [webChatMaxHeight, setWebChatMaxHeight] = useState(320);
-  const computeWebLayout = useCallback(() => {
-    if (Platform.OS !== "web" || typeof window === "undefined") return { chatMax: 320 };
-    const h = window.innerHeight;
-    const reserved = 140;
-    const avail = Math.max(320, h - reserved);
-    // Smaller live-chat band: ~34% of usable height, max 380px so the player gets the rest.
-    const chatMax = Math.min(380, Math.round(avail * 0.34));
-    return { chatMax };
-  }, []);
-  useLayoutEffect(() => {
-    if (Platform.OS !== "web") return;
-    const apply = () => {
-      const { chatMax } = computeWebLayout();
-      setWebChatMaxHeight(chatMax);
-    };
-    apply();
-    if (typeof window === "undefined") return;
-    window.addEventListener("resize", apply);
-    return () => window.removeEventListener("resize", apply);
-  }, [computeWebLayout]);
-
-  const { data: liveClassData } = useQuery<{ youtube_url: string; title: string; is_completed: boolean; is_live: boolean; show_viewer_count: boolean; cf_playback_hls?: string; stream_type?: string; recording_url?: string; duration_minutes?: number; scheduled_at?: number; has_access?: boolean; is_enrolled?: boolean; course_id?: number; is_public?: boolean }>({
+  const { data: liveClassData } = useQuery<{ youtube_url: string; title: string; is_completed: boolean; is_live: boolean; show_viewer_count: boolean; cf_playback_hls?: string; stream_type?: string; recording_url?: string; duration_minutes?: number; scheduled_at?: number; has_access?: boolean; is_enrolled?: boolean; course_id?: number; is_public?: boolean; chat_mode?: string }>({
     queryKey: [`/api/live-classes/${id}`],
     refetchInterval: 5000,
     staleTime: 0,
@@ -472,6 +456,19 @@ export default function LiveClassScreen() {
     staleTime: 0,
   });
 
+  const chatMode: "public" | "private" =
+    liveClassData?.chat_mode === "private" ? "private" : "public";
+  const displayMessages = useMemo(
+    () =>
+      filterChatMessages(
+        chatMessages as any,
+        user?.id ?? 0,
+        !!isAdmin,
+        chatMode
+      ) as ChatMsg[],
+    [chatMessages, user?.id, isAdmin, chatMode]
+  );
+
   const { data: viewerData } = useQuery<{ count: number; viewers: any[]; visible: boolean }>({
     queryKey: [`/api/live-classes/${id}/viewers`],
     refetchInterval: 10000,
@@ -487,8 +484,8 @@ export default function LiveClassScreen() {
 
   useEffect(() => {
     let scrollTimer: ReturnType<typeof setTimeout> | null = null;
-    if (chatMessages.length > 0) {
-      const latestTime = Number(chatMessages[chatMessages.length - 1].created_at);
+    if (displayMessages.length > 0) {
+      const latestTime = Number(displayMessages[displayMessages.length - 1].created_at);
       if (latestTime > lastMsgTimeRef.current) {
         lastMsgTimeRef.current = latestTime;
         scrollTimer = setTimeout(() => chatListRef.current?.scrollToEnd({ animated: true }), 100);
@@ -497,7 +494,7 @@ export default function LiveClassScreen() {
     return () => {
       if (scrollTimer) clearTimeout(scrollTimer);
     };
-  }, [chatMessages]);
+  }, [displayMessages]);
 
   const sendMsgMutation = useMutation({
     mutationFn: (msg: string) => apiRequest("POST", `/api/live-classes/${id}/chat`, { message: msg }),
@@ -662,16 +659,9 @@ export default function LiveClassScreen() {
             <Text style={styles.enrollGateBtnText}>View Course</Text>
           </Pressable>
         </View>
-      ) : (
-        <View style={styles.mainContent}>
-          <View
-            style={[
-              styles.playerContainer,
-              Platform.OS === "web"
-                ? { flex: 1, minHeight: 260, minWidth: 0, flexShrink: 1 }
-                : { flex: 3, minHeight: 0, flexShrink: 0 },
-            ]}
-          >
+      ) : isWebWide ? (
+        <View style={styles.webDesktopRow}>
+          <View style={[styles.playerContainer, styles.webPlayerWide]}>
             <VideoWatermark isPlaying={isVideoPlaying} />
             {!liveClassData?.is_live && !liveClassData?.is_completed && (
               <View style={styles.waitingOverlay}>
@@ -789,30 +779,27 @@ export default function LiveClassScreen() {
             )}
           </View>
 
-          <View
-            style={[
-              styles.chatContainer,
-              Platform.OS === "web" && {
-                flex: 0,
-                height: webChatMaxHeight,
-                maxHeight: webChatMaxHeight,
-                width: "100%" as const,
-              },
-            ]}
-          >
-            {liveClassData?.is_completed && !isAdmin ? (
-              <View style={styles.recordingInfo}>
-                <Ionicons name="film-outline" size={32} color={Colors.light.textMuted} />
-                <Text style={styles.recordingInfoTitle}>Class Recording</Text>
-                <Text style={styles.recordingInfoSubtitle}>
-                  {liveClassData.duration_minutes ? `Duration: ${liveClassData.duration_minutes} minutes` : "Watch the full class recording above"}
-                </Text>
+          <View style={styles.webSidebar}>
+            {isAdmin && (
+              <View style={styles.webStudentsWrap}>
+                <LiveStudentsPanel
+                  liveClassId={String(id)}
+                  showViewerCount={liveClassData?.show_viewer_count ?? true}
+                />
               </View>
-            ) : (
-              <>
+            )}
+            <View style={styles.webChatWrap}>
+              <View style={styles.chatContainer}>
                 <View style={styles.chatHeader}>
                   <Ionicons name="chatbubbles" size={18} color={Colors.light.primary} />
-                  <Text style={styles.chatHeaderText}>Live Chat</Text>
+                  <Text style={styles.chatHeaderText}>
+                    {liveClassData?.is_completed ? "Class chat" : "Live Chat"}
+                  </Text>
+                  {liveClassData?.is_completed && (
+                    <View style={styles.recordingPill}>
+                      <Text style={styles.recordingPillText}>Recording</Text>
+                    </View>
+                  )}
                   {viewerData?.visible && (
                     <View style={styles.viewerCountBadge}>
                       <Ionicons name="people" size={13} color={Colors.light.primary} />
@@ -851,7 +838,7 @@ export default function LiveClassScreen() {
                 )}
                 <FlatList
                   ref={chatListRef}
-                  data={chatMessages}
+                  data={displayMessages}
                   keyExtractor={(item) => item.id.toString()}
                   renderItem={renderChatItem}
                   style={styles.chatList}
@@ -896,9 +883,262 @@ export default function LiveClassScreen() {
                     {sendMsgMutation.isPending ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="send" size={18} color="#fff" />}
                   </Pressable>
                 </View>
-              </>
+              </View>
+            </View>
+          </View>
+        </View>
+      ) : (
+        <View style={styles.mainContent}>
+          <View
+            style={[
+              styles.playerContainer,
+              isNarrowWeb && { aspectRatio: 16 / 9, flexGrow: 0, width: "100%" as const },
+              Platform.OS !== "web" && { flex: 3, minHeight: 0, flexShrink: 0 },
+            ]}
+          >
+            <VideoWatermark isPlaying={isVideoPlaying} />
+            {!liveClassData?.is_live && !liveClassData?.is_completed && (
+              <View style={styles.waitingOverlay}>
+                <View style={styles.waitingDot} />
+                {countdown ? (
+                  <>
+                    <Text style={styles.waitingTitle}>Class starts in</Text>
+                    <Text style={styles.waitingCountdown}>{countdown}</Text>
+                    <Text style={styles.waitingSubtitle}>Get ready! Class will begin shortly.</Text>
+                  </>
+                ) : (
+                  <>
+                    <Text style={styles.waitingTitle}>Starting Soon</Text>
+                    <Text style={styles.waitingSubtitle}>Waiting for teacher to start the class...</Text>
+                    <ActivityIndicator size="small" color="rgba(255,255,255,0.5)" style={{ marginTop: 8 }} />
+                  </>
+                )}
+              </View>
+            )}
+            {isVideoLoading && liveClassData?.is_live && (
+              <View style={styles.loadingOverlay}><ActivityIndicator size="large" color={Colors.light.primary} /></View>
+            )}
+            {(liveClassData?.is_live || liveClassData?.is_completed) && videoId && Platform.OS === "web" ? (
+              <WebYouTubePlayer videoId={videoId} onReady={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }} />
+            ) : Platform.OS === "web" && videoId && !liveClassData?.is_live && !liveClassData?.is_completed ? (
+              <View style={styles.webScheduledVideoSlot} />
+            ) : isCfHls && Platform.OS === "web" ? (
+              <iframe
+                srcDoc={buildCfHlsPlayerHtml(cfHlsUrl)}
+                style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" } as any}
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                onLoad={() => setIsVideoLoading(false)}
+              />
+            ) : !videoId && !isCfHls && !isStreamId && authenticatedVideoUrl && Platform.OS === "web" ? (
+              <video
+                src={authenticatedVideoUrl}
+                controls
+                playsInline
+                controlsList="nodownload noplaybackrate noremoteplayback"
+                disablePictureInPicture
+                style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "contain", backgroundColor: "#000" } as any}
+                onLoadedData={() => setIsVideoLoading(false)}
+                onCanPlay={(e) => {
+                  if (didAutoplayDirectRecording.current) return;
+                  didAutoplayDirectRecording.current = true;
+                  const v = e.currentTarget;
+                  v.muted = true;
+                  v.play()
+                    .then(() => {
+                      v.muted = false;
+                      setIsVideoPlaying(true);
+                    })
+                    .catch(() => {
+                      v.muted = true;
+                      v.play().then(() => setIsVideoPlaying(true)).catch(() => {});
+                    });
+                }}
+                onPlay={() => setIsVideoPlaying(true)}
+                onPause={() => setIsVideoPlaying(false)}
+                onContextMenu={(ev: any) => ev.preventDefault()}
+              />
+            ) : isCfHls && Platform.OS !== "web" ? (
+              <WebView
+                source={{ html: buildCfHlsPlayerHtml(cfHlsUrl) }}
+                style={{ flex: 1, backgroundColor: "#000" }}
+                onLoad={() => setIsVideoLoading(false)}
+                onMessage={handleWebViewMessage}
+                allowsFullscreenVideo mediaPlaybackRequiresUserAction={false}
+                allowsInlineMediaPlayback scrollEnabled={false}
+                javaScriptEnabled domStorageEnabled mixedContentMode="compatibility"
+                originWhitelist={["*"]}
+              />
+            ) : isStreamId && streamHtml ? (
+              <WebView
+                source={{ html: streamHtml, baseUrl: "https://cloudflarestream.com" }}
+                style={{ flex: 1, backgroundColor: "#000" }}
+                onLoad={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }}
+                onMessage={handleWebViewMessage}
+                allowsFullscreenVideo mediaPlaybackRequiresUserAction={false}
+                allowsInlineMediaPlayback scrollEnabled={false}
+                javaScriptEnabled domStorageEnabled mixedContentMode="compatibility"
+                originWhitelist={["*"]}
+              />
+            ) : !videoId && !isCfHls && !isStreamId && videoUrl && Platform.OS !== "web" ? (
+              <WebView
+                source={{ uri: videoUrl }}
+                style={{ flex: 1, backgroundColor: "#000" }}
+                onLoad={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }}
+                onMessage={handleWebViewMessage}
+                allowsFullscreenVideo mediaPlaybackRequiresUserAction={false}
+                allowsInlineMediaPlayback scrollEnabled={false}
+                javaScriptEnabled domStorageEnabled mixedContentMode="compatibility"
+                originWhitelist={["*"]}
+              />
+            ) : youtubeHtml && Platform.OS !== "web" ? (
+              <WebView
+                source={{ html: buildNativeYouTubeHtml(videoId), baseUrl: "https://www.youtube.com" }}
+                style={{ flex: 1, backgroundColor: "#000" }}
+                onLoad={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }}
+                onMessage={handleWebViewMessage}
+                injectedJavaScript={preventScreenCapture}
+                allowsFullscreenVideo={false} mediaPlaybackRequiresUserAction={false}
+                allowsInlineMediaPlayback scrollEnabled={false}
+                javaScriptEnabled domStorageEnabled mixedContentMode="compatibility"
+                setSupportMultipleWindows={false} originWhitelist={["*"]}
+              />
+            ) : (
+              <View style={styles.noVideoOverlay}>
+                <Ionicons name="videocam-off-outline" size={32} color="#666" />
+                <Text style={styles.noVideoText}>No video available</Text>
+              </View>
             )}
           </View>
+
+          {isAdmin && isNarrowWeb && (
+            <View style={styles.mobileAdminTabBar}>
+              <Pressable
+                style={[styles.mobileAdminTab, mobileAdminTab === "chat" && styles.mobileAdminTabActive]}
+                onPress={() => setMobileAdminTab("chat")}
+              >
+                <Ionicons name="chatbubbles" size={16} color={mobileAdminTab === "chat" ? "#fff" : Colors.light.textMuted} />
+                <Text style={[styles.mobileAdminTabText, mobileAdminTab === "chat" && styles.mobileAdminTabTextActive]}>Chat</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.mobileAdminTab, mobileAdminTab === "students" && styles.mobileAdminTabActive]}
+                onPress={() => setMobileAdminTab("students")}
+              >
+                <Ionicons name="people" size={16} color={mobileAdminTab === "students" ? "#fff" : Colors.light.textMuted} />
+                <Text style={[styles.mobileAdminTabText, mobileAdminTab === "students" && styles.mobileAdminTabTextActive]}>Students</Text>
+              </Pressable>
+            </View>
+          )}
+
+          {isAdmin && isNarrowWeb && mobileAdminTab === "students" ? (
+            <View style={[styles.chatContainer, { flex: 1, minHeight: 0, backgroundColor: Colors.light.background }]}>
+              <LiveStudentsPanel
+                liveClassId={String(id)}
+                showViewerCount={liveClassData?.show_viewer_count ?? true}
+              />
+            </View>
+          ) : (
+            <View
+              style={[
+                styles.chatContainer,
+                isNarrowWeb && { flex: 1, minHeight: 0, width: "100%" as const },
+                Platform.OS !== "web" && { flex: 1, minHeight: 0 },
+              ]}
+            >
+                <View style={styles.chatHeader}>
+                  <Ionicons name="chatbubbles" size={18} color={Colors.light.primary} />
+                  <Text style={styles.chatHeaderText}>
+                    {liveClassData?.is_completed ? "Class chat" : "Live Chat"}
+                  </Text>
+                  {liveClassData?.is_completed && (
+                    <View style={styles.recordingPill}>
+                      <Text style={styles.recordingPillText}>Recording</Text>
+                    </View>
+                  )}
+                  {viewerData?.visible && (
+                    <View style={styles.viewerCountBadge}>
+                      <Ionicons name="people" size={13} color={Colors.light.primary} />
+                      <Text style={styles.viewerCountText}>{viewerData.count} online</Text>
+                    </View>
+                  )}
+                  {isAdmin && raisedHands.length > 0 && (
+                    <View style={styles.raisedHandsBadge}>
+                      <Text style={styles.raisedHandsText}>✋ {raisedHands.length}</Text>
+                    </View>
+                  )}
+                  {isAdmin && (
+                    <Pressable
+                      style={styles.adminToggleBtn}
+                      onPress={() => toggleViewerCountMutation.mutate(!(liveClassData?.show_viewer_count ?? true))}
+                    >
+                      <Ionicons
+                        name={(liveClassData?.show_viewer_count ?? true) ? "eye" : "eye-off"}
+                        size={16} color={Colors.light.textMuted}
+                      />
+                    </Pressable>
+                  )}
+                </View>
+                {isAdmin && raisedHands.length > 0 && (
+                  <View style={styles.raisedHandsList}>
+                    <Text style={styles.raisedHandsTitle}>Raised Hands</Text>
+                    {raisedHands.map((h) => (
+                      <View key={h.id} style={styles.raisedHandItem}>
+                        <Text style={styles.raisedHandName}>✋ {h.user_name}</Text>
+                        <Pressable style={styles.resolveBtn} onPress={() => resolveHandMutation.mutate(h.user_id)}>
+                          <Text style={styles.resolveBtnText}>Dismiss</Text>
+                        </Pressable>
+                      </View>
+                    ))}
+                  </View>
+                )}
+                <FlatList
+                  ref={chatListRef}
+                  data={displayMessages}
+                  keyExtractor={(item) => item.id.toString()}
+                  renderItem={renderChatItem}
+                  style={styles.chatList}
+                  contentContainerStyle={styles.chatListContent}
+                  showsVerticalScrollIndicator={false}
+                  keyboardShouldPersistTaps="handled"
+                  keyboardDismissMode="on-drag"
+                  ListEmptyComponent={
+                    <View style={styles.emptyChat}>
+                      <Ionicons name="chatbubble-ellipses-outline" size={28} color="#ccc" />
+                      <Text style={styles.emptyChatText}>No messages yet. Say hello!</Text>
+                    </View>
+                  }
+                />
+                <View style={[styles.inputRow, { paddingBottom: Math.max(bottomPadding, 8) }]}>
+                  <Pressable style={[styles.iconBtn, handRaised && styles.iconBtnActive]} onPress={handleHandRaise}>
+                    <Text style={{ fontSize: 18 }}>✋</Text>
+                  </Pressable>
+                  <TextInput
+                    style={styles.chatInput}
+                    value={chatMsg}
+                    onChangeText={setChatMsg}
+                    placeholder="Ask a doubt or say hi..."
+                    placeholderTextColor="#999"
+                    maxLength={500}
+                    returnKeyType="send"
+                    onSubmitEditing={handleSend}
+                  />
+                  {Platform.OS === "web" && (
+                    <Pressable
+                      style={[styles.iconBtn, isListening && styles.iconBtnActive]}
+                      onPress={isListening ? stopListening : startListening}
+                    >
+                      <Ionicons name={isListening ? "mic" : "mic-outline"} size={20} color={isListening ? "#EF4444" : Colors.light.textMuted} />
+                    </Pressable>
+                  )}
+                  <Pressable
+                    style={[styles.sendBtn, !chatMsg.trim() && styles.sendBtnDisabled]}
+                    onPress={handleSend}
+                    disabled={!chatMsg.trim() || sendMsgMutation.isPending}
+                  >
+                    {sendMsgMutation.isPending ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="send" size={18} color="#fff" />}
+                  </Pressable>
+                </View>
+            </View>
+          )}
         </View>
       )}
     </>
@@ -930,7 +1170,49 @@ const styles = StyleSheet.create({
   liveText: { fontSize: 10, fontFamily: "Inter_700Bold", color: "#fff", letterSpacing: 1 },
   headerTitle: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: "#fff", flex: 1 },
   mainContent: { flex: 1, flexDirection: "column", minHeight: 0, minWidth: 0, overflow: "hidden" },
-  /* Native: flex height share. Web: height set inline (fixed) so keyboard does not squish the player. */
+  webDesktopRow: { flex: 1, flexDirection: "row", minHeight: 0, minWidth: 0, backgroundColor: "#000" },
+  webPlayerWide: { flex: 1.9, minWidth: 0, minHeight: 0 },
+  webSidebar: {
+    flex: 1,
+    minWidth: 280,
+    maxWidth: 520,
+    backgroundColor: Colors.light.background,
+    borderLeftWidth: 1,
+    borderLeftColor: Colors.light.border,
+    flexDirection: "column",
+  },
+  webStudentsWrap: { height: 200, minHeight: 100, maxHeight: 240, borderBottomWidth: 1, borderBottomColor: Colors.light.border, overflow: "hidden" },
+  webChatWrap: { flex: 1, minHeight: 0 },
+  mobileAdminTabBar: {
+    flexDirection: "row",
+    backgroundColor: Colors.light.background,
+    borderTopWidth: 1,
+    borderTopColor: Colors.light.border,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    gap: 8,
+  },
+  mobileAdminTab: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: Colors.light.secondary,
+  },
+  mobileAdminTabActive: { backgroundColor: Colors.light.primary },
+  mobileAdminTabText: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
+  mobileAdminTabTextActive: { color: "#fff" },
+  recordingPill: {
+    backgroundColor: "rgba(26,86,219,0.2)",
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  recordingPillText: { fontSize: 10, fontFamily: "Inter_700Bold", color: "#3B82F6" },
+  /* Native: flex height share. */
   playerContainer: { width: "100%", backgroundColor: "#000", position: "relative", overflow: "hidden" },
   webScheduledVideoSlot: { position: "absolute" as const, top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "#000" },
   loadingOverlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "#000", alignItems: "center", justifyContent: "center", zIndex: 10 },

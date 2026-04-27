@@ -165,12 +165,14 @@ export default function StudioSetupPage() {
 
   const handleGoLive = useCallback(async () => {
     setValidationError(null);
+    // Prefer typed URL; fall back to server value so a brief empty state right after "Go Live" still works
+    const effectiveYoutube = (youtubeUrl || liveClass?.youtube_url || "").trim();
 
     if (streamType === "rtmp") {
-      const videoId = getYouTubeVideoId(youtubeUrl);
+      const videoId = getYouTubeVideoId(effectiveYoutube);
       if (!videoId) {
         setValidationError(
-          "Please enter a valid YouTube URL (e.g. https://youtube.com/live/...)"
+          "Please enter a valid YouTube Live or watch URL (e.g. https://www.youtube.com/watch?v=... or /live/...)"
         );
         return;
       }
@@ -190,7 +192,7 @@ export default function StudioSetupPage() {
         showViewerCount: showViewerCount,
       };
       if (streamType === "rtmp") {
-        body.youtubeUrl = youtubeUrl.trim();
+        body.youtubeUrl = (youtubeUrl || liveClass?.youtube_url || "").trim();
       }
 
       await apiRequest("PUT", `/api/admin/live-classes/${liveClassId}`, body);
@@ -207,7 +209,7 @@ export default function StudioSetupPage() {
       setValidationError(err?.message || "Failed to go live. Please try again.");
       setIsGoingLive(false);
     }
-  }, [streamType, youtubeUrl, chatMode, showViewerCount, liveClassId, webrtc]);
+  }, [streamType, youtubeUrl, liveClass?.youtube_url, chatMode, showViewerCount, liveClassId, webrtc, liveClass]);
 
   if (isLoadingClass) {
     return (

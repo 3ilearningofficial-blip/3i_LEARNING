@@ -16,6 +16,7 @@ import { fetch } from "expo/fetch";
 import { useAuth } from "@/context/AuthContext";
 import { WebView } from "react-native-webview";
 import { DownloadButton } from "@/components/DownloadButton";
+import { DEFAULT_LIVE_RECORDING_SECTION } from "@/lib/recordingSection";
 
 interface Lecture {
   id: number;
@@ -260,6 +261,32 @@ export default function CourseDetailScreen() {
     },
     enabled: !!id && id !== "undefined",
   });
+  const LIVE_ROOT = DEFAULT_LIVE_RECORDING_SECTION;
+  const getLectureRootName = (name: string) =>
+    name.startsWith(`${LIVE_ROOT} /`) ? LIVE_ROOT : name;
+  const getDirectLectureSubfolders = (parentName: string): string[] => {
+    const prefix = `${parentName} / `;
+    const fromLectures = (course?.lectures || [])
+      .map((l: any) => l.section_title)
+      .filter((n: any) => typeof n === "string" && n.startsWith(prefix))
+      .map((n: string) => {
+        const rest = n.slice(prefix.length);
+        const head = rest.split(" / ")[0]?.trim();
+        return head ? `${parentName} / ${head}` : "";
+      })
+      .filter(Boolean);
+    const fromFolders = (courseFolders || [])
+      .filter((f: any) => f.type === "lecture")
+      .map((f: any) => f.name)
+      .filter((n: any) => typeof n === "string" && n.startsWith(prefix))
+      .map((n: string) => {
+        const rest = n.slice(prefix.length);
+        const head = rest.split(" / ")[0]?.trim();
+        return head ? `${parentName} / ${head}` : "";
+      })
+      .filter(Boolean);
+    return [...new Set([...fromLectures, ...fromFolders])];
+  };
 
   const { data: enrolledStudents = [] } = useQuery<EnrolledStudent[]>({
     queryKey: ["/api/admin/courses", id, "enrollments"],
@@ -949,15 +976,17 @@ setTimeout(function() {
                   const unfolderedLectures: Lecture[] = [];
                   for (const lec of sorted) {
                     if (lec.section_title) {
-                      if (!folderMap.has(lec.section_title)) folderMap.set(lec.section_title, []);
-                      folderMap.get(lec.section_title)!.push(lec);
+                      const rootName = getLectureRootName(lec.section_title);
+                      if (!folderMap.has(rootName)) folderMap.set(rootName, []);
+                      folderMap.get(rootName)!.push(lec);
                     } else {
                       unfolderedLectures.push(lec);
                     }
                   }
                   // Also include empty DB folders
                   for (const f of courseFolders.filter((f: any) => f.type === "lecture")) {
-                    if (!folderMap.has(f.name)) folderMap.set(f.name, []);
+                    const rootName = getLectureRootName(f.name);
+                    if (!folderMap.has(rootName)) folderMap.set(rootName, []);
                   }
                   const folders = Array.from(folderMap.entries());
                   return (
@@ -1523,7 +1552,21 @@ setTimeout(function() {
         <View style={{ flex: 1, backgroundColor: Colors.light.background }}>
           {/* Header */}
           <LinearGradient colors={["#0A1628", "#1A2E50"]} style={{ paddingTop: topPadding + 8, paddingHorizontal: 16, paddingBottom: 14, flexDirection: "row", alignItems: "center", gap: 12 }}>
-            <Pressable style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" }} onPress={() => setOpenFolder(null)}>
+            <Pressable
+              style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" }}
+              onPress={() => {
+                if (openFolder?.type === "lectures" && openFolder.name.includes(" / ")) {
+                  const parent = openFolder.name.split(" / ").slice(0, -1).join(" / ");
+                  const parentItems = (course?.lectures || []).filter((l: any) => {
+                    const sec = typeof l.section_title === "string" ? l.section_title : "";
+                    return sec === parent || sec.startsWith(`${parent} /`);
+                  });
+                  setOpenFolder({ name: parent, type: "lectures", color: openFolder.color, items: parentItems });
+                  return;
+                }
+                setOpenFolder(null);
+              }}
+            >
               <Ionicons name="arrow-back" size={20} color="#fff" />
             </Pressable>
             <View style={{ flex: 1 }}>
@@ -1548,7 +1591,27 @@ setTimeout(function() {
           )}
           {/* Content */}
           <ScrollView contentContainerStyle={{ paddingBottom: bottomPadding + 20 }}>
-            {openFolder?.type === "lectures" && openFolder.items.map((lecture: any, idx: number) => {
+            {openFolder?.type === "lectures" && getDirectLectureSubfolders(openFolder.name).map((childName) => {
+              const childItems = (course?.lectures || []).filter((l: any) => l.section_title === childName);
+              return (
+                <Pressable
+                  key={childName}
+                  style={[styles.testSectionCard, { marginHorizontal: 12, marginTop: 12, borderLeftColor: openFolder.color }]}
+                  onPress={() => setOpenFolder({ name: childName, type: "lectures", color: openFolder.color, items: childItems })}
+                >
+                  <View style={[styles.testSectionIconWrap, { backgroundColor: openFolder.color + "18" }]}>
+                    <Ionicons name="folder" size={22} color={openFolder.color} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.testSectionTitle}>{childName.replace(`${openFolder.name} / `, "")}</Text>
+                    <Text style={styles.testSectionCount}>{childItems.length} {childItems.length === 1 ? "video" : "videos"}</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={20} color={Colors.light.textMuted} />
+                </Pressable>
+              );
+            })}
+            {openFolder?.type === "lectures" &&
+              openFolder.items.filter((l: any) => l.section_title === openFolder.name).map((lecture: any, idx: number) => {
               const isLocked = course && !course.isEnrolled && !course.is_free && !lecture.is_free_preview;
               return (
                 <View key={lecture.id} style={styles.lectureItem}>

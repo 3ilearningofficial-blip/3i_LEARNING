@@ -560,8 +560,19 @@ export default function BroadcastPage() {
               )
             ) : (
               <View style={styles.noWebrtc}>
-                <Ionicons name="alert-circle-outline" size={48} color="#666" />
-                <Text style={styles.noWebrtcText}>No YouTube URL configured</Text>
+                {youtubeUrl?.trim() ? (
+                  <>
+                    <ActivityIndicator size="large" color="#FF0000" />
+                    <Text style={styles.noWebrtcText}>Loading YouTube stream…</Text>
+                  </>
+                ) : (
+                  <>
+                    <Ionicons name="alert-circle-outline" size={48} color="#666" />
+                    <Text style={styles.noWebrtcText}>
+                      No YouTube URL on this class yet. Open Studio, paste your YouTube Live watch or /live/ URL, then tap Go Live.
+                    </Text>
+                  </>
+                )}
               </View>
             )
           )}
