@@ -111,16 +111,7 @@ export function registerCourseAccessRoutes({
 
   app.get("/api/courses/:id", async (req: Request, res: Response) => {
     try {
-      let user = await getAuthUser(req);
-      if (!user && req.query._uid) {
-        const uid = parseInt(String(req.query._uid));
-        if (uid > 0) {
-          try {
-            const r = await db.query("SELECT id, name, email, phone, role FROM users WHERE id = $1", [uid]);
-            if (r.rows.length > 0) user = r.rows[0];
-          } catch (_e) {}
-        }
-      }
+      const user = await getAuthUser(req);
       const courseIdParam = String(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id);
       const courseResult = await db.query("SELECT * FROM courses WHERE id = $1", [courseIdParam]);
       if (courseResult.rows.length === 0) return res.status(404).json({ message: "Course not found" });
@@ -183,33 +174,17 @@ export function registerCourseAccessRoutes({
   app.post("/api/courses/:id/enroll", async (req: Request, res: Response) => {
     try {
       const requester = await getAuthUser(req);
+      if (!requester) return res.status(401).json({ message: "Not authenticated" });
       let user = requester;
-
-      if (!user && req.body.userId) {
-        const uid = parseInt(req.body.userId);
-        if (uid > 0) {
-          const r = await db.query("SELECT id, name, role FROM users WHERE id = $1", [uid]);
-          if (r.rows.length > 0) user = r.rows[0];
-        }
-      }
 
       const isAdminGrant = requester?.role === "admin" && req.body.userId && requester.id !== parseInt(req.body.userId);
       if (isAdminGrant) {
         const uid = parseInt(req.body.userId);
         const r = await db.query("SELECT id, name, role FROM users WHERE id = $1", [uid]);
         if (r.rows.length > 0) user = r.rows[0];
-      } else if (user && req.body.userId && user.id !== parseInt(req.body.userId)) {
-        const uid = parseInt(req.body.userId);
-        if (uid > 0) {
-          const r = await db.query("SELECT id, name, role FROM users WHERE id = $1", [uid]);
-          if (r.rows.length > 0) {
-            console.log(`[Enroll] Token user ${user.id} != body userId ${uid}, using body userId`);
-            user = r.rows[0];
-          }
-        }
+      } else if (req.body.userId && user.id !== parseInt(req.body.userId)) {
+        return res.status(403).json({ message: "Cannot enroll another user" });
       }
-
-      if (!user) return res.status(401).json({ message: "Not authenticated" });
 
       const courseResult = await db.query("SELECT * FROM courses WHERE id = $1", [req.params.id]);
       if (courseResult.rows.length === 0) return res.status(404).json({ message: "Course not found" });

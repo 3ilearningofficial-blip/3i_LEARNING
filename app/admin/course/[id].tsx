@@ -1202,8 +1202,8 @@ export default function AdminCourseScreen() {
         )}
       </ScrollView>
 
-      {/* Folder Action Sheet */}
-      <Modal visible={folderActionSheet !== null} animationType="slide" transparent>
+      {/* Folder Action Sheet (root course view only) */}
+      <Modal visible={folderActionSheet !== null && openAdminFolder === null} animationType="slide" transparent>
         <Pressable style={styles.modalOverlay} onPress={() => setFolderActionSheet(null)}>
           <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
             <View style={styles.modalHeader}>
@@ -2515,6 +2515,77 @@ export default function AdminCourseScreen() {
               </View>
             </View>
           </Modal>
+
+          {/* Folder Action Sheet (inside open folder modal) */}
+          {folderActionSheet !== null && openAdminFolder !== null && (
+            <Pressable style={styles.modalOverlay} onPress={() => setFolderActionSheet(null)}>
+              <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle} numberOfLines={1}>{folderActionSheet?.name}</Text>
+                  <Pressable onPress={() => setFolderActionSheet(null)}>
+                    <Ionicons name="close" size={24} color={Colors.light.text} />
+                  </Pressable>
+                </View>
+                <Pressable
+                  style={{ flexDirection: "row", alignItems: "center", gap: 12, padding: 16, borderRadius: 12, backgroundColor: "#EEF2FF", marginBottom: 8 }}
+                  onPress={() => {
+                    setEditFolderName(folderActionSheet?.name || "");
+                    setEditingFolderId(folderActionSheet?.id ?? null);
+                    setEditFolderModal(true);
+                    setFolderActionSheet(null);
+                  }}
+                >
+                  <Ionicons name="pencil" size={20} color={Colors.light.primary} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 15, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Edit Folder</Text>
+                    <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>Rename this folder</Text>
+                  </View>
+                </Pressable>
+                <Pressable
+                  style={{ flexDirection: "row", alignItems: "center", gap: 12, padding: 16, borderRadius: 12, backgroundColor: Colors.light.background, marginBottom: 8 }}
+                  onPress={async () => {
+                    if (!folderActionSheet) return;
+                    await updateFolderMutation.mutateAsync({ folderId: folderActionSheet.id, isHidden: !folderActionSheet.is_hidden });
+                    setFolderActionSheet(null);
+                  }}
+                >
+                  <Ionicons name={folderActionSheet?.is_hidden ? "eye" : "eye-off"} size={20} color={Colors.light.primary} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 15, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>
+                      {folderActionSheet?.is_hidden ? "Show Folder" : "Hide Folder"}
+                    </Text>
+                    <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>
+                      {folderActionSheet?.is_hidden ? "Make visible to students" : "Hide from students (admin can still see it)"}
+                    </Text>
+                  </View>
+                </Pressable>
+                <Pressable
+                  style={{ flexDirection: "row", alignItems: "center", gap: 12, padding: 16, borderRadius: 12, backgroundColor: "#FEE2E2" }}
+                  onPress={() => {
+                    if (!folderActionSheet) return;
+                    const doDelete = async () => {
+                      await deleteFolderMutation.mutateAsync(folderActionSheet.id);
+                      setFolderActionSheet(null);
+                    };
+                    if (Platform.OS === "web") {
+                      if (window.confirm(`Delete folder "${folderActionSheet.name}" and all its content?`)) doDelete();
+                    } else {
+                      Alert.alert("Delete Folder", `Delete "${folderActionSheet.name}" and all its content permanently?`, [
+                        { text: "Cancel", style: "cancel" },
+                        { text: "Delete", style: "destructive", onPress: doDelete },
+                      ]);
+                    }
+                  }}
+                >
+                  <Ionicons name="trash" size={20} color="#EF4444" />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 15, fontFamily: "Inter_600SemiBold", color: "#EF4444" }}>Delete Folder</Text>
+                    <Text style={{ fontSize: 12, color: "#EF4444", fontFamily: "Inter_400Regular", opacity: 0.7 }}>Permanently deletes folder and all content inside</Text>
+                  </View>
+                </Pressable>
+              </View>
+            </Pressable>
+          )}
         </View>
       </Modal>
     </View>

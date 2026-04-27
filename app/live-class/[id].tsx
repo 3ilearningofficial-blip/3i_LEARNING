@@ -49,19 +49,19 @@ function getYouTubeVideoId(url: string): string {
 const YT_EMBED_ORIGIN = "https://3ilearning.in";
 
 function buildYouTubeHtml(videoId: string): string {
-  // mute=1 is required for autoplay in most mobile browsers; user can unmute in the player.
+  // Use the same proven lecture-style masking geometry to avoid hiding center video content.
   const q = new URLSearchParams({
     autoplay: "1",
     mute: "1",
     playsinline: "1",
     rel: "0",
     modestbranding: "1",
+    showinfo: "0",
     iv_load_policy: "3",
     cc_load_policy: "0",
-    fs: "0",
-    disablekb: "1",
+    fs: "1",
+    disablekb: "0",
     controls: "1",
-    color: "white",
     origin: YT_EMBED_ORIGIN,
   });
   return `<!DOCTYPE html>
@@ -74,25 +74,30 @@ function buildYouTubeHtml(videoId: string): string {
 html, body { width: 100%; height: 100%; background: #000; overflow: hidden; -webkit-user-select: none; user-select: none; }
 .wrapper { position: relative; width: 100%; height: 100%; overflow: hidden; }
 iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; }
-/* Block YouTube chrome: full top band (channel / share / menu), bottom corners (logo / fullscreen). Center video stays interactive. */
-.cover-top { position: absolute; top: 0; left: 0; right: 0; height: 52px; background: #000; z-index: 9999; pointer-events: auto; }
-.cover-bl { position: absolute; bottom: 0; left: 0; width: 110px; height: 62px; background: #000; z-index: 9999; pointer-events: auto; }
-.cover-br { position: absolute; bottom: 0; right: 0; width: 220px; height: 62px; background: #000; z-index: 9999; pointer-events: auto; }
+.cover-tl { position: absolute; top: 0; left: 0; width: 25%; height: 56px; background: #000; z-index: 9999; pointer-events: auto; }
+.cover-tr { position: absolute; top: 0; right: 0; width: 130px; height: 56px; background: #000; z-index: 9999; pointer-events: auto; }
+.cover-bl { position: absolute; bottom: 0; left: 0; width: 70px; height: 60px; background: #000; z-index: 9999; pointer-events: auto; }
+.cover-fs { position: absolute; bottom: 78px; right: 0; width: 90px; height: 50px; background: #000; z-index: 9999; pointer-events: auto; }
+.cover-br { position: absolute; bottom: 0; right: 50px; width: 280px; height: 60px; background: #000; z-index: 9999; pointer-events: auto; }
 @media (max-width: 600px) {
-  .cover-top { height: 48px; }
-  .cover-br { width: 180px; height: 76px; }
+  .cover-tl { width: 55%; }
+  .cover-tr { display: none; }
+  .cover-fs { display: none; }
+  .cover-br { width: 100%; right: 0; }
 }
 @media print { body { display: none !important; } }
 </style>
 </head>
 <body>
 <div class="wrapper">
-<div class="cover-top"></div>
+<div class="cover-tl"></div>
+<div class="cover-tr"></div>
 <iframe
   src="https://www.youtube-nocookie.com/embed/${videoId}?${q.toString()}"
-  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
 ></iframe>
 <div class="cover-bl"></div>
+<div class="cover-fs"></div>
 <div class="cover-br"></div>
 </div>
 <script>document.addEventListener('contextmenu', function(e) { e.preventDefault(); });</script>

@@ -13,9 +13,13 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Pool } from 'pg';
 import { randomUUID } from 'crypto';
 
-const TEST_DB_URL = process.env.TEST_DATABASE_URL || process.env.DATABASE_URL;
+const TEST_DB_URL = process.env.TEST_DATABASE_URL;
 const RUN_DB_TESTS = process.env.RUN_DB_TESTS === 'true' && Boolean(TEST_DB_URL);
 const describeDb = RUN_DB_TESTS ? describe : describe.skip;
+
+if (process.env.RUN_DB_TESTS === 'true' && !TEST_DB_URL) {
+  throw new Error("RUN_DB_TESTS=true requires TEST_DATABASE_URL (DATABASE_URL fallback is disabled for safety)");
+}
 
 let db: Pool;
 

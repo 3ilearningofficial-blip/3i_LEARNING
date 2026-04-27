@@ -1156,62 +1156,64 @@ export async function registerRoutes(app: Express): Promise<Server> {
     console.log("[DB] Runtime schema sync skipped (ALLOW_RUNTIME_SCHEMA_SYNC != true)");
   }
 
-  // ==================== LIVE CLASS NOTIFICATION SCHEDULER ====================
-  // Runs every 60s — 30 min reminder only. "Live now" is sent when admin goes live in studio (PUT is_live + admin-live-class-manage).
-  const sentNotifications = new Set<string>(); // track sent to avoid duplicates
-  setInterval(async () => {
-    try {
-      const now = Date.now();
-      // Get all scheduled (not live, not completed) classes with notify_bell = true
-      const classes = await db.query(
-        "SELECT lc.id, lc.title, lc.course_id, lc.scheduled_at, lc.notify_bell, lc.is_free_preview, lc.is_public FROM live_classes lc WHERE lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE AND lc.notify_bell = TRUE AND lc.scheduled_at IS NOT NULL"
-      );
-      for (const lc of classes.rows) {
-        const scheduledAt = parseInt(lc.scheduled_at);
-        if (isNaN(scheduledAt)) continue;
-        const diff = scheduledAt - now;
-        const recipients =
-          (!lc.course_id || lc.is_free_preview === true || lc.is_public === true)
-            ? await db.query("SELECT id AS user_id FROM users WHERE role = 'student'")
-            : await db.query("SELECT user_id FROM enrollments WHERE course_id = $1", [lc.course_id]);
-        const expiresAt = now + 6 * 3600000;
-        // 30 min before (between 29-31 min window)
-        const key30 = `30min_${lc.id}`;
-        if (diff > 0 && diff <= 31 * 60 * 1000 && diff >= 29 * 60 * 1000 && !sentNotifications.has(key30)) {
-          sentNotifications.add(key30);
-          for (const e of recipients.rows) {
-            await db.query(
-              "INSERT INTO notifications (user_id, title, message, type, created_at, expires_at) VALUES ($1, $2, $3, $4, $5, $6)",
-              [e.user_id, "⏰ Live Class in 30 minutes!", `"${lc.title}" starts in 30 minutes. Get ready!`, "info", now, expiresAt]
-            );
+  // ==================== LIVE CLASS NOTIFICATION + TOKEN CLEANUP SCHEDULERS ====================
+  // In multi-instance deployments, run schedulers on a single designated instance only.
+  const runBackgroundSchedulers = process.env.RUN_BACKGROUND_SCHEDULERS !== "false";
+  if (runBackgroundSchedulers) {
+    // Runs every 60s — 30 min reminder only. "Live now" is sent when admin goes live in studio.
+    const sentNotifications = new Set<string>(); // process-local dedupe
+    setInterval(async () => {
+      try {
+        const now = Date.now();
+        const classes = await db.query(
+          "SELECT lc.id, lc.title, lc.course_id, lc.scheduled_at, lc.notify_bell, lc.is_free_preview, lc.is_public FROM live_classes lc WHERE lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE AND lc.notify_bell = TRUE AND lc.scheduled_at IS NOT NULL"
+        );
+        for (const lc of classes.rows) {
+          const scheduledAt = parseInt(lc.scheduled_at);
+          if (isNaN(scheduledAt)) continue;
+          const diff = scheduledAt - now;
+          const recipients =
+            (!lc.course_id || lc.is_free_preview === true || lc.is_public === true)
+              ? await db.query("SELECT id AS user_id FROM users WHERE role = 'student'")
+              : await db.query("SELECT user_id FROM enrollments WHERE course_id = $1", [lc.course_id]);
+          const expiresAt = now + 6 * 3600000;
+          const key30 = `30min_${lc.id}`;
+          if (diff > 0 && diff <= 31 * 60 * 1000 && diff >= 29 * 60 * 1000 && !sentNotifications.has(key30)) {
+            sentNotifications.add(key30);
+            for (const e of recipients.rows) {
+              await db.query(
+                "INSERT INTO notifications (user_id, title, message, type, created_at, expires_at) VALUES ($1, $2, $3, $4, $5, $6)",
+                [e.user_id, "⏰ Live Class in 30 minutes!", `"${lc.title}" starts in 30 minutes. Get ready!`, "info", now, expiresAt]
+              );
+            }
+            console.log(`[LiveNotif] 30min reminder sent for "${lc.title}" to ${recipients.rows.length} students`);
           }
-          console.log(`[LiveNotif] 30min reminder sent for "${lc.title}" to ${recipients.rows.length} students`);
         }
+        if (sentNotifications.size > 500) sentNotifications.clear();
+      } catch (err) {
+        console.error("[LiveNotif] Scheduler error:", err);
       }
-      // Clean up old keys (older than 1 hour)
-      if (sentNotifications.size > 500) sentNotifications.clear();
-    } catch (err) {
-      console.error("[LiveNotif] Scheduler error:", err);
-    }
-  }, 60 * 1000); // every 60 seconds
-  console.log("[LiveNotif] Scheduler started — checks every 60s");
+    }, 60 * 1000);
+    console.log("[LiveNotif] Scheduler started — checks every 60s");
 
-  // ==================== DOWNLOAD TOKEN CLEANUP JOB ====================
-  // Runs every 5 minutes — deletes expired used tokens
-  setInterval(async () => {
-    try {
-      const result = await db.query(
-        "DELETE FROM download_tokens WHERE expires_at < $1 AND used = TRUE",
-        [Date.now()]
-      );
-      if (result.rowCount && result.rowCount > 0) {
-        console.log(`[TokenCleanup] Deleted ${result.rowCount} expired tokens`);
+    // Runs every 5 minutes — deletes expired used tokens.
+    setInterval(async () => {
+      try {
+        const result = await db.query(
+          "DELETE FROM download_tokens WHERE expires_at < $1 AND used = TRUE",
+          [Date.now()]
+        );
+        if (result.rowCount && result.rowCount > 0) {
+          console.log(`[TokenCleanup] Deleted ${result.rowCount} expired tokens`);
+        }
+      } catch (err) {
+        console.error("[TokenCleanup] Error:", err);
       }
-    } catch (err) {
-      console.error("[TokenCleanup] Error:", err);
-    }
-  }, 5 * 60 * 1000); // every 5 minutes
-  console.log("[TokenCleanup] Scheduler started — runs every 5 minutes");
+    }, 5 * 60 * 1000);
+    console.log("[TokenCleanup] Scheduler started — runs every 5 minutes");
+  } else {
+    console.log("[Schedulers] Background schedulers disabled (RUN_BACKGROUND_SCHEDULERS=false)");
+  }
 
   // ==================== AUTH ROUTES ====================
 
@@ -1221,7 +1223,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const authUser = await getAuthUser(req);
       const userId = authUser?.id || null;
       if (userId && userId > 0) {
-        db.query("UPDATE users SET last_active_at = $1 WHERE id = $2", [Date.now(), userId]).catch(() => {});
+        const now = Date.now();
+        // Throttle write amplification: update at most once every 5 minutes per user.
+        db.query(
+          "UPDATE users SET last_active_at = $1 WHERE id = $2 AND (last_active_at IS NULL OR last_active_at < $3)",
+          [now, userId, now - 5 * 60 * 1000]
+        ).catch(() => {});
       }
       next();
     } catch (_e) {

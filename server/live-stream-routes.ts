@@ -66,19 +66,10 @@ export function registerLiveStreamRoutes({
       const streamKey = input.rtmps?.streamKey || uid;
       const playbackHls = `https://videodelivery.net/${uid}/manifest/video.m3u8`;
 
-      const titleResult = await db.query("SELECT title FROM live_classes WHERE id = $1", [req.params.id]);
-      const lcTitle = titleResult.rows[0]?.title;
-      if (lcTitle) {
-        await db.query(
-          "UPDATE live_classes SET cf_stream_uid = $1, cf_stream_key = $2, cf_stream_rtmp_url = $3, cf_playback_hls = $4 WHERE title = $5",
-          [uid, streamKey, rtmpUrl, playbackHls, lcTitle]
-        );
-      } else {
-        await db.query(
-          "UPDATE live_classes SET cf_stream_uid = $1, cf_stream_key = $2, cf_stream_rtmp_url = $3, cf_playback_hls = $4 WHERE id = $5",
-          [uid, streamKey, rtmpUrl, playbackHls, req.params.id]
-        );
-      }
+      await db.query(
+        "UPDATE live_classes SET cf_stream_uid = $1, cf_stream_key = $2, cf_stream_rtmp_url = $3, cf_playback_hls = $4 WHERE id = $5",
+        [uid, streamKey, rtmpUrl, playbackHls, req.params.id]
+      );
 
       console.log(`[CF Stream] Created live input uid=${uid} for live class ${req.params.id}`);
       res.json({ uid, rtmpUrl, streamKey, playbackHls });
