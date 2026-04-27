@@ -110,6 +110,7 @@ function buildNativeYouTubeHtml(videoId: string): string {
 html,body{width:100%;height:100%;background:#000;overflow:hidden;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 #pw{position:relative;width:100%;height:100%}
 #player{position:absolute;top:0;left:0;width:100%;height:100%}
+.yt-mask-top{position:absolute;top:0;left:0;right:0;height:56px;background:#000;z-index:80;pointer-events:auto}
 .ctl{position:absolute;bottom:0;left:0;right:0;background:linear-gradient(transparent,rgba(0,0,0,0.9));padding:10px 14px 14px;z-index:100;display:flex;flex-direction:column;gap:8px;transition:opacity 0.3s}
 .ctl.h{opacity:0;pointer-events:none}
 .pr{display:flex;align-items:center;gap:10px}
@@ -125,9 +126,11 @@ html,body{width:100%;height:100%;background:#000;overflow:hidden;-webkit-user-se
 .bp.h{opacity:0;pointer-events:none}.bp svg{width:36px;height:36px;fill:#fff;margin-left:4px}
 .ld{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:44px;height:44px;border:3px solid rgba(255,255,255,0.2);border-top:3px solid #fff;border-radius:50%;animation:sp 0.8s linear infinite;z-index:50;display:none}
 @keyframes sp{to{transform:translate(-50%,-50%) rotate(360deg)}}
+@media (max-width: 600px){.yt-mask-top{height:52px}}
 </style></head><body>
 <div id="pw" ontouchstart="sc()">
 <div id="player"></div><div class="ld" id="ld"></div>
+<div class="yt-mask-top"></div>
 <div class="bp" id="bp" ontouchend="tp()"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
 <div class="ctl" id="ctl">
 <div class="pr"><div class="pb" id="pb" ontouchend="skT(event)"><div class="bf" id="bf"></div><div class="pf" id="pf"></div></div><span class="tt" id="tt">0:00 / 0:00</span></div>
