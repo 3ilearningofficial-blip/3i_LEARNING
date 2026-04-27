@@ -77,7 +77,7 @@ iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border:
 /* Block YouTube chrome: full top band (channel / share / menu), bottom corners (logo / fullscreen). Center video stays interactive. */
 .cover-top { position: absolute; top: 0; left: 0; right: 0; height: 52px; background: #000; z-index: 9999; pointer-events: auto; }
 .cover-bl { position: absolute; bottom: 0; left: 0; width: 110px; height: 62px; background: #000; z-index: 9999; pointer-events: auto; }
-.cover-br { position: absolute; bottom: 0; right: 0; width: 220px; height: 82px; background: #000; z-index: 9999; pointer-events: auto; }
+.cover-br { position: absolute; bottom: 0; right: 0; width: 220px; height: 62px; background: #000; z-index: 9999; pointer-events: auto; }
 @media (max-width: 600px) {
   .cover-top { height: 48px; }
   .cover-br { width: 180px; height: 76px; }

@@ -1408,6 +1408,14 @@ export default function AdminDashboard() {
         // CREATE new live class entries
         let createdId: number | null = null;
         for (const courseId of liveSelectedCourses) {
+          // Auto-create lecture folder bucket for recording path (main[/subfolder]) if missing.
+          const autoFolderName = buildRecordingLectureSectionTitle(liveLectureMain, liveLectureSubfolder, null).trim();
+          if (autoFolderName) {
+            await apiRequest("POST", `/api/admin/courses/${courseId}/folders`, {
+              name: autoFolderName,
+              type: "lecture",
+            }).catch(() => {});
+          }
           const res = await apiRequest("POST", "/api/admin/live-classes", {
             title: liveTitle,
             courseId,

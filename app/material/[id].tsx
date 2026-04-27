@@ -425,10 +425,9 @@ export default function MaterialViewerScreen() {
       : (fileUrl || "")
   ) || fileUrl;
 
-  // PDF viewer URL — server-rendered page with pdf.js (no browser PDF controls)
-  const pdfViewerUrl = mediaToken && fileKey
-    ? `${apiBaseUrl}/api/pdf-viewer?key=${encodeURIComponent(fileKey)}&token=${mediaToken}`
-    : null;
+  // Use direct tokenized PDF stream for fast open on large files.
+  // Browser/native viewers handle incremental loading much better than rendering all pages with pdf.js.
+  const fastPdfUrl = isPdf ? (tokenizedUrl || fileUrl) : null;
 
   return (
     <View style={styles.container}>
@@ -552,20 +551,13 @@ export default function MaterialViewerScreen() {
                     allow="autoplay"
                     onLoad={() => setLoading(false)}
                   />
-                ) : isPdf && fileUrl && material ? (
-                  (pdfViewerUrl || !fileKey) ? (
-                    <iframe
-                      src={pdfViewerUrl || fileUrl}
-                      style={{ width: "100%", height: "100%", border: "none" } as any}
-                      title={material.title}
-                      onLoad={() => setLoading(false)}
-                    />
-                  ) : (
-                    <View style={styles.centered}>
-                      <ActivityIndicator size="large" color={Colors.light.primary} />
-                      <Text style={styles.loadingText}>Loading PDF...</Text>
-                    </View>
-                  )
+                ) : isPdf && fastPdfUrl && material ? (
+                  <iframe
+                    src={fastPdfUrl}
+                    style={{ width: "100%", height: "100%", border: "none" } as any}
+                    title={material.title}
+                    onLoad={() => setLoading(false)}
+                  />
                 ) : isPdf && !fileUrl ? (
                   <View style={styles.centered}>
                     <Ionicons name="alert-circle-outline" size={48} color={Colors.light.accent} />
@@ -579,6 +571,7 @@ export default function MaterialViewerScreen() {
                       controls
                       autoPlay
                       playsInline
+                      preload="metadata"
                       controlsList="nodownload noplaybackrate noremoteplayback"
                       disablePictureInPicture
                       style={{ width: "100%", height: "100%", objectFit: "contain", backgroundColor: "#000" } as any}
@@ -606,8 +599,8 @@ export default function MaterialViewerScreen() {
                 source={
                   isGDrive && gDriveFileId
                     ? { html: buildGoogleDriveViewerHtml(gDriveFileId), baseUrl: "https://drive.google.com" }
-                    : isPdf && pdfViewerUrl
-                      ? { uri: pdfViewerUrl }
+                    : isPdf && fastPdfUrl
+                      ? { uri: fastPdfUrl }
                       : { uri: tokenizedUrl || fileUrl || "about:blank" }
                 }
                 style={styles.webview}

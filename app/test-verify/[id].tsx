@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable,
-  Platform, ActivityIndicator, Alert, Modal, TextInput, Image,
+  Platform, ActivityIndicator, Alert, Modal, TextInput, Image, Linking,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -46,13 +46,36 @@ export default function TestVerifyScreen() {
     mutationFn: async ({ questionId, reason, details }: { questionId: number; reason: string; details: string }) => {
       await apiRequest("POST", `/api/questions/${questionId}/report`, { reason, details });
     },
-    onSuccess: () => {
-      setReportQuestion(null); setReportReason(""); setReportDetails("");
-      if (Platform.OS === "web") window.alert("Report submitted. Thank you!");
-      else Alert.alert("Reported", "Thank you for your feedback!");
-    },
     onError: () => { if (Platform.OS === "web") window.alert("Failed."); else Alert.alert("Error", "Failed to submit report."); },
   });
+
+  const openReportEmailComposer = async (question: any, reason: string, details: string) => {
+    const to = "3ilearningofficial@gmail.com";
+    const subject = `Question Report: Test ${id} · Q${currentQ + 1}`;
+    const body = [
+      "Student question report",
+      "",
+      `Test ID: ${id}`,
+      `Attempt ID: ${attemptId || "N/A"}`,
+      `Question ID: ${question?.id ?? "N/A"}`,
+      `Reason: ${reason}`,
+      details?.trim() ? `Details: ${details.trim()}` : "Details: (none)",
+      "",
+      "Question:",
+      String(question?.question_text || "").slice(0, 1000),
+      "",
+      `Correct Option: ${question?.correct_option || "N/A"}`,
+      `Student Answer: ${question?.userAnswer || "Skipped"}`,
+    ].join("\n");
+    const mailto = `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    if (Platform.OS === "web" && typeof window !== "undefined") {
+      window.location.href = mailto;
+      return;
+    }
+    const canOpen = await Linking.canOpenURL(mailto);
+    if (canOpen) await Linking.openURL(mailto);
+    else Alert.alert("Email app not found", "Please set up an email app to send this report.");
+  };
 
   if (isLoading || !data) return <View style={styles.centered}><ActivityIndicator size="large" color={Colors.light.primary} /></View>;
 
@@ -273,7 +296,12 @@ export default function TestVerifyScreen() {
                 placeholder="Describe the issue..." placeholderTextColor={Colors.light.textMuted} value={reportDetails} onChangeText={setReportDetails} multiline />
             )}
             <Pressable style={{ backgroundColor: reportReason ? "#EF4444" : Colors.light.border, borderRadius: 12, padding: 14, alignItems: "center", opacity: reportReason ? 1 : 0.5 }}
-              onPress={() => { if (!reportReason || !reportQuestion) return; reportMutation.mutate({ questionId: reportQuestion.id, reason: reportReason, details: reportDetails }); }}
+              onPress={async () => {
+                if (!reportReason || !reportQuestion) return;
+                await reportMutation.mutateAsync({ questionId: reportQuestion.id, reason: reportReason, details: reportDetails });
+                setReportQuestion(null); setReportReason(""); setReportDetails("");
+                await openReportEmailComposer(reportQuestion, reportReason, reportDetails);
+              }}
               disabled={!reportReason || reportMutation.isPending}>
               {reportMutation.isPending ? <ActivityIndicator color="#fff" /> : <Text style={{ fontSize: 15, fontFamily: "Inter_600SemiBold", color: "#fff" }}>Submit Report</Text>}
             </Pressable>

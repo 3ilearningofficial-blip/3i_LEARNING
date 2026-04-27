@@ -226,8 +226,11 @@ export default function CourseDetailScreen() {
       if (!res.ok) return [];
       return res.json();
     },
-    enabled: activeTab === "Live",
-    refetchInterval: activeTab === "Live" ? 10000 : false,
+    // Keep this query warm even when user is on another tab so Live tab opens instantly.
+    enabled: !!id && id !== "undefined",
+    refetchInterval: activeTab === "Live" ? 10000 : 30000,
+    staleTime: 5000,
+    refetchOnMount: "always",
   });
 
   /** Live tab: show upcoming + currently live only; recordings live under Lectures → Live Class Recordings. */

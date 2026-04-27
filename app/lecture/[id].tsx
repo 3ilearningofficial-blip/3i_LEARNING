@@ -483,14 +483,15 @@ export default function LectureScreen() {
   const bottomPadding = Platform.OS === "web" ? 34 : insets.bottom;
 
   // Determine video type and prepare appropriate HTML
-  const videoId = getYouTubeVideoId(authenticatedVideoUrl);
-  const isStreamId = !videoId && isCloudflareStreamId(authenticatedVideoUrl);
-  const isDirect = !videoId && !isStreamId && isDirectVideoUrl(authenticatedVideoUrl);
+  const playbackUrl = authenticatedVideoUrl || videoUrl;
+  const videoId = getYouTubeVideoId(playbackUrl);
+  const isStreamId = !videoId && isCloudflareStreamId(playbackUrl);
+  const isDirect = !videoId && !isStreamId && isDirectVideoUrl(playbackUrl);
   
   const youtubeHtml = videoId ? buildYouTubeHtml(videoId) : "";
   const nativeYouTubeHtml = videoId ? buildNativeYouTubeHtml(videoId) : "";
-  const streamHtml = isStreamId ? buildCloudflareStreamHtml(authenticatedVideoUrl) : "";
-  const directVideoHtml = isDirect ? buildDirectVideoHtml(authenticatedVideoUrl) : "";
+  const streamHtml = isStreamId ? buildCloudflareStreamHtml(playbackUrl) : "";
+  const directVideoHtml = isDirect ? buildDirectVideoHtml(playbackUrl) : "";
 
   const handleMarkComplete = async () => {
     try {
@@ -619,7 +620,7 @@ export default function LectureScreen() {
         {!hasError && videoId && Platform.OS === "web" ? (
           <WebYouTubePlayer videoId={videoId} onReady={() => setIsLoading(false)} />
         ) : !hasError && isStreamId && Platform.OS === "web" ? (
-          <WebCloudflareStreamPlayer videoId={videoUrl} onReady={() => setIsLoading(false)} />
+          <WebCloudflareStreamPlayer videoId={playbackUrl} onReady={() => setIsLoading(false)} />
         ) : !hasError && videoId && nativeYouTubeHtml && Platform.OS !== "web" ? (
           <WebView
             source={{ html: nativeYouTubeHtml, baseUrl: "https://www.youtube.com" }}
@@ -656,7 +657,7 @@ export default function LectureScreen() {
             originWhitelist={["*"]}
           />
         ) : !hasError && isDirect && Platform.OS === "web" ? (
-          <WebDirectVideoPlayer url={videoUrl} onReady={() => setIsLoading(false)} />
+          <WebDirectVideoPlayer url={playbackUrl} onReady={() => setIsLoading(false)} />
         ) : !hasError && isDirect && Platform.OS !== "web" ? (
           <WebView
             source={{ html: directVideoHtml }}

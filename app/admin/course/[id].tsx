@@ -2118,23 +2118,39 @@ export default function AdminCourseScreen() {
                     const childCount = course?.lectures?.filter((l: any) => l.section_title === childName).length || 0;
                     return (
                       <View key={childName} style={[styles.itemCard, { marginBottom: 8 }]}>
-                        <Pressable
-                          style={{ flexDirection: "row", alignItems: "center", gap: 12 }}
-                          onPress={() => setOpenAdminFolder({ name: childName, type: "lecture" })}
-                        >
-                          <View style={{ width: 40, height: 40, borderRadius: 10, backgroundColor: Colors.light.primary + "20", alignItems: "center", justifyContent: "center" }}>
-                            <Ionicons name="folder" size={22} color={Colors.light.primary} />
-                          </View>
-                          <View style={{ flex: 1 }}>
-                            <Text style={{ fontSize: 14, fontFamily: "Inter_700Bold", color: Colors.light.text }}>
-                              {childName.replace(`${openAdminFolder.name} / `, "")}
-                            </Text>
-                            <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>
-                              {childCount} lecture{childCount !== 1 ? "s" : ""}
-                            </Text>
-                          </View>
-                          <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
-                        </Pressable>
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+                          <Pressable
+                            style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 12 }}
+                            onPress={() => setOpenAdminFolder({ name: childName, type: "lecture" })}
+                          >
+                            <View style={{ width: 40, height: 40, borderRadius: 10, backgroundColor: Colors.light.primary + "20", alignItems: "center", justifyContent: "center" }}>
+                              <Ionicons name="folder" size={22} color={Colors.light.primary} />
+                            </View>
+                            <View style={{ flex: 1 }}>
+                              <Text style={{ fontSize: 14, fontFamily: "Inter_700Bold", color: Colors.light.text }}>
+                                {childName.replace(`${openAdminFolder.name} / `, "")}
+                              </Text>
+                              <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>
+                                {childCount} lecture{childCount !== 1 ? "s" : ""}
+                              </Text>
+                            </View>
+                            <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
+                          </Pressable>
+                          <Pressable
+                            style={{ padding: 8 }}
+                            onPress={async () => {
+                              let f = safeFolders.find((df: any) => df.name === childName && df.type === "lecture");
+                              if (!f) {
+                                const r = await apiRequest("POST", `/api/admin/courses/${id}/folders`, { name: childName, type: "lecture" });
+                                f = await r.json();
+                                refetchFolders();
+                              }
+                              setFolderActionSheet(f);
+                            }}
+                          >
+                            <Ionicons name="ellipsis-vertical" size={18} color={Colors.light.textMuted} />
+                          </Pressable>
+                        </View>
                       </View>
                     );
                   })}
