@@ -266,14 +266,22 @@ interface HandRaise {
   id: number; live_class_id: number; user_id: number; user_name: string; raised_at: number;
 }
 
-function WebYouTubePlayer({ videoId, onReady }: { videoId: string; onReady: () => void }) {
+function WebYouTubePlayer({
+  videoId,
+  onReady,
+  compactMode = false,
+}: {
+  videoId: string;
+  onReady: () => void;
+  compactMode?: boolean;
+}) {
   const calledRef = useRef(false);
   useEffect(() => {
     if (!calledRef.current) { calledRef.current = true; onReady(); }
   }, [onReady]);
   return (
     <iframe
-      srcDoc={buildYouTubeHtml(videoId)}
+      srcDoc={compactMode ? buildNativeYouTubeHtml(videoId) : buildYouTubeHtml(videoId)}
       style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" } as any}
       allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
     />
@@ -343,7 +351,12 @@ export default function LiveClassScreen() {
   const didAutoplayDirectRecording = useRef(false);
   const { data: liveClassData } = useQuery<{ youtube_url: string; title: string; is_completed: boolean; is_live: boolean; show_viewer_count: boolean; cf_playback_hls?: string; stream_type?: string; recording_url?: string; duration_minutes?: number; scheduled_at?: number; has_access?: boolean; is_enrolled?: boolean; course_id?: number; is_public?: boolean; chat_mode?: string }>({
     queryKey: [`/api/live-classes/${id}`],
-    refetchInterval: 5000,
+    // Faster polling before teacher goes live helps students see live state in ~3-5s.
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      if (!data) return 2500;
+      return data.is_live || data.is_completed ? 5000 : 2500;
+    },
     staleTime: 0,
   });
 
@@ -685,7 +698,11 @@ export default function LiveClassScreen() {
               <View style={styles.loadingOverlay}><ActivityIndicator size="large" color={Colors.light.primary} /></View>
             )}
             {(liveClassData?.is_live || liveClassData?.is_completed) && videoId && Platform.OS === "web" ? (
-              <WebYouTubePlayer videoId={videoId} onReady={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }} />
+              <WebYouTubePlayer
+                videoId={videoId}
+                compactMode={isNarrowWeb}
+                onReady={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }}
+              />
             ) : /* Web: do not use RN WebView for YouTube before go-live — it often collapses; show black stage + waiting overlay. */
             Platform.OS === "web" && videoId && !liveClassData?.is_live && !liveClassData?.is_completed ? (
               <View style={styles.webScheduledVideoSlot} />
@@ -919,7 +936,11 @@ export default function LiveClassScreen() {
               <View style={styles.loadingOverlay}><ActivityIndicator size="large" color={Colors.light.primary} /></View>
             )}
             {(liveClassData?.is_live || liveClassData?.is_completed) && videoId && Platform.OS === "web" ? (
-              <WebYouTubePlayer videoId={videoId} onReady={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }} />
+              <WebYouTubePlayer
+                videoId={videoId}
+                compactMode={isNarrowWeb}
+                onReady={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }}
+              />
             ) : Platform.OS === "web" && videoId && !liveClassData?.is_live && !liveClassData?.is_completed ? (
               <View style={styles.webScheduledVideoSlot} />
             ) : isCfHls && Platform.OS === "web" ? (
