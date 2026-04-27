@@ -5529,14 +5529,15 @@ function normalizeDatabaseUrl(raw) {
     return raw;
   }
 }
-async function dbQuery(text, params) {
+async function dbQuery(text, params, options) {
   const slowQueryThresholdMs = Number(process.env.DB_SLOW_QUERY_MS || "300");
+  const shouldLogSlow = options?.logSlow !== false;
   for (let attempt = 1; attempt <= 3; attempt++) {
     const startedAt = Date.now();
     try {
       const result = await pool.query(text, params);
       const elapsedMs = Date.now() - startedAt;
-      if (elapsedMs >= slowQueryThresholdMs) {
+      if (shouldLogSlow && elapsedMs >= slowQueryThresholdMs) {
         const compactSql = text.replace(/\s+/g, " ").trim().slice(0, 220);
         console.warn("[DB] Slow query", { elapsedMs, attempt, sql: compactSql });
       }
@@ -5772,7 +5773,7 @@ async function ensureCoreLearningSchemaColumns() {
     "ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS lecture_subfolder_title TEXT"
   ];
   for (const statement of requiredStatements) {
-    await db.query(statement).catch(() => {
+    await db.query(statement, void 0, { logSlow: false }).catch(() => {
     });
   }
 }
@@ -5782,10 +5783,12 @@ async function ensureCoreLearningPerformanceIndexes() {
     "CREATE INDEX IF NOT EXISTS idx_lectures_course_section ON lectures(course_id, section_title)",
     "CREATE INDEX IF NOT EXISTS idx_materials_course_section ON study_materials(course_id, section_title)",
     "CREATE INDEX IF NOT EXISTS idx_live_classes_course_scheduled ON live_classes(course_id, scheduled_at)",
-    "CREATE INDEX IF NOT EXISTS idx_download_tokens_token_used_expires ON download_tokens(token, used, expires_at)"
+    "CREATE INDEX IF NOT EXISTS idx_download_tokens_token_used_expires ON download_tokens(token, used, expires_at)",
+    // Inbox: matches GET /api/notifications (user + unread + not hidden + non-support)
+    "CREATE INDEX IF NOT EXISTS idx_notifications_inbox_unread ON notifications (user_id, created_at DESC) WHERE (is_read IS NOT TRUE) AND (is_hidden IS NOT TRUE) AND (source IS DISTINCT FROM 'support')"
   ];
   for (const statement of indexStatements) {
-    await db.query(statement).catch(() => {
+    await db.query(statement, void 0, { logSlow: false }).catch(() => {
     });
   }
 }
@@ -6532,7 +6535,8 @@ async function registerRoutes(app2) {
         const now = Date.now();
         db.query(
           "UPDATE users SET last_active_at = $1 WHERE id = $2 AND (last_active_at IS NULL OR last_active_at < $3)",
-          [now, userId, now - 5 * 60 * 1e3]
+          [now, userId, now - 5 * 60 * 1e3],
+          { logSlow: false }
         ).catch(() => {
         });
       }
@@ -6846,7 +6850,7 @@ var init_routes = __esm({
       console.error("[Pool] Idle client error (connection dropped by Neon):", err.message);
     });
     db = {
-      query: (text, params) => dbQuery(text, params)
+      query: (text, params, options) => dbQuery(text, params, options)
     };
     cache = /* @__PURE__ */ new Map();
     setInterval(() => {

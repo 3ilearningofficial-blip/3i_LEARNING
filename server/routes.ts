@@ -85,15 +85,18 @@ pool.on("error", (err) => {
   console.error("[Pool] Idle client error (connection dropped by Neon):", err.message);
 });
 
+type DbQueryOptions = { logSlow?: boolean };
+
 // Retry wrapper for transient connection errors
-async function dbQuery(text: string, params?: unknown[]): Promise<any> {
+async function dbQuery(text: string, params?: unknown[], options?: DbQueryOptions): Promise<any> {
   const slowQueryThresholdMs = Number(process.env.DB_SLOW_QUERY_MS || "300");
+  const shouldLogSlow = options?.logSlow !== false;
   for (let attempt = 1; attempt <= 3; attempt++) {
     const startedAt = Date.now();
     try {
       const result = await pool.query(text, params);
       const elapsedMs = Date.now() - startedAt;
-      if (elapsedMs >= slowQueryThresholdMs) {
+      if (shouldLogSlow && elapsedMs >= slowQueryThresholdMs) {
         const compactSql = text.replace(/\s+/g, " ").trim().slice(0, 220);
         console.warn("[DB] Slow query", { elapsedMs, attempt, sql: compactSql });
       }
@@ -121,7 +124,7 @@ async function dbQuery(text: string, params?: unknown[]): Promise<any> {
 }
 
 const db = {
-  query: (text: string, params?: unknown[]) => dbQuery(text, params),
+  query: (text: string, params?: unknown[], options?: DbQueryOptions) => dbQuery(text, params, options),
 };
 
 // ==================== IN-MEMORY CACHE ====================
@@ -436,7 +439,7 @@ async function ensureCoreLearningSchemaColumns(): Promise<void> {
   ];
 
   for (const statement of requiredStatements) {
-    await db.query(statement).catch(() => {});
+    await db.query(statement, undefined, { logSlow: false }).catch(() => {});
   }
 }
 
@@ -447,10 +450,12 @@ async function ensureCoreLearningPerformanceIndexes(): Promise<void> {
     "CREATE INDEX IF NOT EXISTS idx_materials_course_section ON study_materials(course_id, section_title)",
     "CREATE INDEX IF NOT EXISTS idx_live_classes_course_scheduled ON live_classes(course_id, scheduled_at)",
     "CREATE INDEX IF NOT EXISTS idx_download_tokens_token_used_expires ON download_tokens(token, used, expires_at)",
+    // Inbox: matches GET /api/notifications (user + unread + not hidden + non-support)
+    "CREATE INDEX IF NOT EXISTS idx_notifications_inbox_unread ON notifications (user_id, created_at DESC) WHERE (is_read IS NOT TRUE) AND (is_hidden IS NOT TRUE) AND (source IS DISTINCT FROM 'support')",
   ];
 
   for (const statement of indexStatements) {
-    await db.query(statement).catch(() => {});
+    await db.query(statement, undefined, { logSlow: false }).catch(() => {});
   }
 }
 
@@ -1227,7 +1232,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Throttle write amplification: update at most once every 5 minutes per user.
         db.query(
           "UPDATE users SET last_active_at = $1 WHERE id = $2 AND (last_active_at IS NULL OR last_active_at < $3)",
-          [now, userId, now - 5 * 60 * 1000]
+          [now, userId, now - 5 * 60 * 1000],
+          { logSlow: false }
         ).catch(() => {});
       }
       next();

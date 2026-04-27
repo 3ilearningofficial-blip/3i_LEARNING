@@ -105,6 +105,44 @@ iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border:
 </html>`;
 }
 
+/** Laptop / wide web: full-frame embed only — no overlay masks (layout already fine). */
+function buildYouTubeHtmlWideWeb(videoId: string): string {
+  const q = new URLSearchParams({
+    autoplay: "1",
+    mute: "1",
+    playsinline: "1",
+    rel: "0",
+    modestbranding: "1",
+    showinfo: "0",
+    iv_load_policy: "3",
+    cc_load_policy: "0",
+    fs: "1",
+    disablekb: "0",
+    controls: "1",
+    origin: YT_EMBED_ORIGIN,
+  });
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="referrer" content="no-referrer-when-downgrade">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 100%; height: 100%; background: #000; overflow: hidden; -webkit-user-select: none; user-select: none; }
+iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; }
+@media print { body { display: none !important; } }
+</style>
+</head>
+<body>
+<iframe
+  src="https://www.youtube-nocookie.com/embed/${videoId}?${q.toString()}"
+  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+></iframe>
+<script>document.addEventListener('contextmenu', function(e) { e.preventDefault(); });</script>
+</body>
+</html>`;
+}
+
 // Native-only: YouTube IFrame API with custom controls (zero YouTube branding)
 function buildNativeYouTubeHtml(videoId: string): string {
   return `<!DOCTYPE html>
@@ -285,17 +323,21 @@ interface HandRaise {
 function WebYouTubePlayer({
   videoId,
   onReady,
+  /** Lecture-style 5-rectangle mask — use on narrow (phone) web only. */
+  brandingMask = true,
 }: {
   videoId: string;
   onReady: () => void;
+  brandingMask?: boolean;
 }) {
   const calledRef = useRef(false);
   useEffect(() => {
     if (!calledRef.current) { calledRef.current = true; onReady(); }
   }, [onReady]);
+  const srcDoc = brandingMask ? buildYouTubeHtml(videoId) : buildYouTubeHtmlWideWeb(videoId);
   return (
     <iframe
-      srcDoc={buildYouTubeHtml(videoId)}
+      srcDoc={srcDoc}
       style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" } as any}
       allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
     />
@@ -474,7 +516,7 @@ export default function LiveClassScreen() {
     videoUrl.includes('.m3u8') ||
     (streamType === "cloudflare" && cfHlsUrl && videoUrl === cfHlsUrl)
   );
-  const youtubeHtml = videoId ? buildYouTubeHtml(videoId) : "";
+  const hasYouTubeId = Boolean(videoId);
   const streamHtml = isStreamId ? buildCloudflareStreamHtml(videoUrl) : "";
 
   const { data: chatMessages = [], refetch: refetchChat } = useQuery<ChatMsg[]>({
@@ -714,6 +756,7 @@ export default function LiveClassScreen() {
             {(liveClassData?.is_live || liveClassData?.is_completed) && videoId && Platform.OS === "web" ? (
               <WebYouTubePlayer
                 videoId={videoId}
+                brandingMask={false}
                 onReady={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }}
               />
             ) : /* Web: do not use RN WebView for YouTube before go-live — it often collapses; show black stage + waiting overlay. */
@@ -789,7 +832,7 @@ export default function LiveClassScreen() {
                 javaScriptEnabled domStorageEnabled mixedContentMode="compatibility"
                 originWhitelist={["*"]}
               />
-            ) : youtubeHtml && Platform.OS !== "web" ? (
+            ) : hasYouTubeId && Platform.OS !== "web" ? (
               <WebView
                 source={{ html: buildNativeYouTubeHtml(videoId), baseUrl: "https://www.youtube.com" }}
                 style={{ flex: 1, backgroundColor: "#000" }}
@@ -951,6 +994,7 @@ export default function LiveClassScreen() {
             {(liveClassData?.is_live || liveClassData?.is_completed) && videoId && Platform.OS === "web" ? (
               <WebYouTubePlayer
                 videoId={videoId}
+                brandingMask
                 onReady={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }}
               />
             ) : Platform.OS === "web" && videoId && !liveClassData?.is_live && !liveClassData?.is_completed ? (
@@ -1023,7 +1067,7 @@ export default function LiveClassScreen() {
                 javaScriptEnabled domStorageEnabled mixedContentMode="compatibility"
                 originWhitelist={["*"]}
               />
-            ) : youtubeHtml && Platform.OS !== "web" ? (
+            ) : hasYouTubeId && Platform.OS !== "web" ? (
               <WebView
                 source={{ html: buildNativeYouTubeHtml(videoId), baseUrl: "https://www.youtube.com" }}
                 style={{ flex: 1, backgroundColor: "#000" }}
