@@ -109,8 +109,12 @@ function buildNativeYouTubeHtml(videoId: string): string {
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{width:100%;height:100%;background:#000;overflow:hidden;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 #pw{position:relative;width:100%;height:100%}
-#player{position:absolute;top:0;left:0;width:100%;height:100%}
-.yt-mask-top{position:absolute;top:0;left:0;right:0;height:56px;background:#000;z-index:80;pointer-events:auto}
+#player{position:absolute;top:52px;left:0;width:100%;height:calc(100% - 124px)}
+.yt-gap-top{position:absolute;top:0;left:0;right:0;height:52px;background:#000;z-index:70;pointer-events:auto}
+.yt-gap-bottom{position:absolute;left:0;right:0;bottom:0;height:72px;background:#000;z-index:70;pointer-events:auto}
+.yt-mask-top{position:absolute;top:52px;left:0;right:0;height:52px;background:#000;z-index:80;pointer-events:auto}
+.yt-mask-bottom-left{position:absolute;bottom:72px;left:0;width:120px;height:64px;background:#000;z-index:80;pointer-events:auto}
+.yt-mask-bottom-right{position:absolute;bottom:72px;right:0;width:230px;height:64px;background:#000;z-index:80;pointer-events:auto}
 .ctl{position:absolute;bottom:0;left:0;right:0;background:linear-gradient(transparent,rgba(0,0,0,0.9));padding:10px 14px 14px;z-index:100;display:flex;flex-direction:column;gap:8px;transition:opacity 0.3s}
 .ctl.h{opacity:0;pointer-events:none}
 .pr{display:flex;align-items:center;gap:10px}
@@ -124,13 +128,17 @@ html,body{width:100%;height:100%;background:#000;overflow:hidden;-webkit-user-se
 .sp{flex:1}
 .bp{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:70px;height:70px;background:rgba(0,0,0,0.5);border-radius:50%;display:flex;align-items:center;justify-content:center;z-index:50;transition:opacity 0.2s;-webkit-tap-highlight-color:transparent}
 .bp.h{opacity:0;pointer-events:none}.bp svg{width:36px;height:36px;fill:#fff;margin-left:4px}
-.ld{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:44px;height:44px;border:3px solid rgba(255,255,255,0.2);border-top:3px solid #fff;border-radius:50%;animation:sp 0.8s linear infinite;z-index:50;display:none}
+.ld{position:absolute;top:calc(50% - 10px);left:50%;transform:translate(-50%,-50%);width:44px;height:44px;border:3px solid rgba(255,255,255,0.2);border-top:3px solid #fff;border-radius:50%;animation:sp 0.8s linear infinite;z-index:50;display:none}
 @keyframes sp{to{transform:translate(-50%,-50%) rotate(360deg)}}
-@media (max-width: 600px){.yt-mask-top{height:52px}}
+@media (max-width: 600px){.yt-mask-top{height:48px}.yt-mask-bottom-right{width:190px}}
 </style></head><body>
 <div id="pw" ontouchstart="sc()">
+<div class="yt-gap-top"></div>
 <div id="player"></div><div class="ld" id="ld"></div>
 <div class="yt-mask-top"></div>
+<div class="yt-mask-bottom-left"></div>
+<div class="yt-mask-bottom-right"></div>
+<div class="yt-gap-bottom"></div>
 <div class="bp" id="bp" ontouchend="tp()"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
 <div class="ctl" id="ctl">
 <div class="pr"><div class="pb" id="pb" ontouchend="skT(event)"><div class="bf" id="bf"></div><div class="pf" id="pf"></div></div><span class="tt" id="tt">0:00 / 0:00</span></div>
@@ -272,11 +280,9 @@ interface HandRaise {
 function WebYouTubePlayer({
   videoId,
   onReady,
-  compactMode = false,
 }: {
   videoId: string;
   onReady: () => void;
-  compactMode?: boolean;
 }) {
   const calledRef = useRef(false);
   useEffect(() => {
@@ -284,9 +290,9 @@ function WebYouTubePlayer({
   }, [onReady]);
   return (
     <iframe
-      srcDoc={compactMode ? buildNativeYouTubeHtml(videoId) : buildYouTubeHtml(videoId)}
+      srcDoc={buildYouTubeHtml(videoId)}
       style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" } as any}
-      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
     />
   );
 }
@@ -703,7 +709,6 @@ export default function LiveClassScreen() {
             {(liveClassData?.is_live || liveClassData?.is_completed) && videoId && Platform.OS === "web" ? (
               <WebYouTubePlayer
                 videoId={videoId}
-                compactMode={isNarrowWeb}
                 onReady={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }}
               />
             ) : /* Web: do not use RN WebView for YouTube before go-live — it often collapses; show black stage + waiting overlay. */
@@ -941,7 +946,6 @@ export default function LiveClassScreen() {
             {(liveClassData?.is_live || liveClassData?.is_completed) && videoId && Platform.OS === "web" ? (
               <WebYouTubePlayer
                 videoId={videoId}
-                compactMode={isNarrowWeb}
                 onReady={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }}
               />
             ) : Platform.OS === "web" && videoId && !liveClassData?.is_live && !liveClassData?.is_completed ? (
