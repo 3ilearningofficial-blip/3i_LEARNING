@@ -4781,8 +4781,9 @@ function registerLiveClassRoutes({
         isEnrolled = enroll.rows.length > 0 && !isEnrollmentExpired(enroll.rows[0]);
       }
       const hasAccess = await userCanAccessLiveClassContent(db2, user, lc);
+      const canViewStreamSecrets = user?.role === "admin";
       res.set("Cache-Control", "private, no-store");
-      res.json({ ...sanitizeLiveClass(lc), is_enrolled: isEnrolled, has_access: hasAccess });
+      res.json({ ...canViewStreamSecrets ? lc : sanitizeLiveClass(lc), is_enrolled: isEnrolled, has_access: hasAccess });
     } catch {
       res.status(500).json({ message: "Failed to fetch live class" });
     }
