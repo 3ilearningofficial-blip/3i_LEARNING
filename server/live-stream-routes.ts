@@ -40,7 +40,7 @@ export function registerLiveStreamRoutes({
         `https://videodelivery.net/${recordingUid}/downloads/default.mp4`,
         configuredDownloadBase ? `${configuredDownloadBase}/${recordingUid}/downloads/default.mp4` : "",
       ].filter(Boolean);
-      let source: Response | null = null;
+      let source: globalThis.Response | null = null;
       let matchedUrl = "";
       for (const candidateUrl of candidateUrls) {
         const resp = await fetch(candidateUrl);
