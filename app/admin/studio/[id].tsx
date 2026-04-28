@@ -70,7 +70,7 @@ export default function StudioSetupPage() {
   };
   const savedState = getSavedState();
 
-  const [streamType, setStreamTypeState] = useState<StreamType>(savedState?.streamType || "webrtc");
+  const [streamType, setStreamTypeState] = useState<StreamType>(savedState?.streamType || "cloudflare");
   const [youtubeUrl, setYoutubeUrlState] = useState(savedState?.youtubeUrl || "");
   const [cfStreamInfo, setCfStreamInfo] = useState<{
     uid: string; rtmpUrl: string; streamKey: string; playbackHls: string;
@@ -192,7 +192,10 @@ export default function StudioSetupPage() {
         showViewerCount: showViewerCount,
       };
       if (streamType === "rtmp") {
-        body.youtubeUrl = (youtubeUrl || liveClass?.youtube_url || "").trim();
+        body.youtubeUrl = effectiveYoutube;
+      } else if (streamType === "cloudflare" && effectiveYoutube) {
+        // Optional mirror URL for admins who simulcast to YouTube.
+        body.youtubeUrl = effectiveYoutube;
       }
 
       await apiRequest("PUT", `/api/admin/live-classes/${liveClassId}`, body);
@@ -427,7 +430,7 @@ export default function StudioSetupPage() {
                     RTMP / YouTube
                   </Text>
                   <Text style={styles.radioDescription}>
-                    Stream via YouTube Live
+                    Stream directly to YouTube
                   </Text>
                 </View>
               </Pressable>
@@ -459,7 +462,7 @@ export default function StudioSetupPage() {
                     ☁️ Cloudflare Stream
                   </Text>
                   <Text style={styles.radioDescription}>
-                    Professional RTMP + HLS
+                    Primary source (recommended for student app)
                   </Text>
                 </View>
               </Pressable>
@@ -485,6 +488,23 @@ export default function StudioSetupPage() {
                     </View>
                     <Text style={styles.cfHint}>
                       Enter these in OBS or any RTMP encoder to start streaming.
+                    </Text>
+                    <Text style={[styles.sectionLabel, { marginTop: 12 }]}>Optional YouTube Mirror URL</Text>
+                    <TextInput
+                      style={styles.urlInput}
+                      placeholder="https://www.youtube.com/live/... (optional)"
+                      placeholderTextColor={Colors.light.textMuted}
+                      value={youtubeUrl}
+                      onChangeText={(text) => {
+                        setYoutubeUrl(text);
+                        if (validationError) setValidationError(null);
+                      }}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      keyboardType="url"
+                    />
+                    <Text style={styles.cfHint}>
+                      If you simulcast from OBS to YouTube, add the link here for admin reference. Students will still watch Cloudflare in-app.
                     </Text>
                   </>
                 ) : (
@@ -559,6 +579,12 @@ export default function StudioSetupPage() {
             {/* RTMP YouTube URL Input */}
             {streamType === "rtmp" && (
               <View style={styles.rtmpSection}>
+                <View style={styles.youtubeWarningBox}>
+                  <Ionicons name="warning-outline" size={16} color="#B45309" />
+                  <Text style={styles.youtubeWarningText}>
+                    YouTube embeds can show branding/controls on some phones. Use Cloudflare Stream for a fully professional in-app student view.
+                  </Text>
+                </View>
                 <Text style={styles.sectionLabel}>YouTube Live URL</Text>
                 <TextInput
                   style={styles.urlInput}
@@ -899,6 +925,24 @@ const styles = StyleSheet.create({
   // RTMP section
   rtmpSection: {
     marginBottom: 20,
+    gap: 10,
+  },
+  youtubeWarningBox: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    backgroundColor: "#FEF3C7",
+    borderWidth: 1,
+    borderColor: "#FCD34D",
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+  },
+  youtubeWarningText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 17,
+    color: "#92400E",
   },
 
   // Cloudflare Stream section

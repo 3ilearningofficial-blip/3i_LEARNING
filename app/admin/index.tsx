@@ -44,7 +44,7 @@ interface UserRecord {
   last_active_at: number;
 }
 
-type AdminTab = "courses" | "tests" | "materials" | "users" | "notifications" | "missions" | "books" | "support" | "analytics" | "welcome";
+type AdminTab = "courses" | "tests" | "materials" | "users" | "notifications" | "aiTutor" | "missions" | "books" | "support" | "analytics" | "welcome";
 
 const ADMIN_TABS: { key: AdminTab; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
   { key: "welcome", label: "Welcome", icon: "home" },
@@ -53,6 +53,7 @@ const ADMIN_TABS: { key: AdminTab; label: string; icon: keyof typeof Ionicons.gl
   { key: "materials", label: "Materials", icon: "folder-open" },
   { key: "missions", label: "Missions", icon: "flame" },
   { key: "notifications", label: "Notify", icon: "notifications" },
+  { key: "aiTutor", label: "AI Tutor", icon: "chatbox-ellipses" },
   { key: "books", label: "Books", icon: "storefront" },
   { key: "support", label: "Support", icon: "chatbubbles" },
   { key: "analytics", label: "Analytics", icon: "bar-chart" },
@@ -74,6 +75,35 @@ interface FreeMaterial {
   section_title?: string;
   download_allowed: boolean;
   created_at: number;
+}
+
+interface AdminDoubtRow {
+  id: number;
+  question: string;
+  answer: string;
+  topic: string;
+  status: string;
+  created_at: number;
+  user_name?: string;
+  user_phone?: string;
+  user_email?: string;
+}
+
+interface AdminDoubtPattern {
+  questionPattern: string;
+  sampleQuestion: string;
+  count: number;
+  latestAt: number;
+}
+
+interface AdminStudentInsight {
+  user_id: number;
+  name: string;
+  phone: string;
+  email: string;
+  doubtCount: number;
+  lastAskedAt: number;
+  topTopic: string;
 }
 
 function AnalyticsTab() {
@@ -579,6 +609,9 @@ export default function AdminDashboard() {
   const qc = useQueryClient();
   const { user, isAdmin, logout } = useAuth();
   const [activeTab, setActiveTab] = useState<AdminTab>("welcome");
+  const [aiDoubtDays, setAiDoubtDays] = useState<"all" | "7" | "30">("all");
+  const [aiDoubtTopic, setAiDoubtTopic] = useState<string>("all");
+  const [aiDoubtStudent, setAiDoubtStudent] = useState("");
   const [showAddCourse, setShowAddCourse] = useState(false);
   const [showNotification, setShowNotification] = useState(false);
   const [notifTitle, setNotifTitle] = useState("");
@@ -913,6 +946,30 @@ export default function AdminDashboard() {
     staleTime: 0,
     refetchOnMount: true,
     refetchOnWindowFocus: true,
+  });
+
+  const { data: adminDoubtData = { doubts: [] as AdminDoubtRow[], topTopics: [] as { topic: string; count: number }[], repeatedPatterns: [] as AdminDoubtPattern[], studentInsights: [] as AdminStudentInsight[], total: 0 }, isLoading: adminDoubtsLoading } = useQuery<{
+    doubts: AdminDoubtRow[];
+    topTopics: { topic: string; count: number }[];
+    repeatedPatterns: AdminDoubtPattern[];
+    studentInsights: AdminStudentInsight[];
+    total: number;
+  }>({
+    queryKey: ["/api/admin/doubts", aiDoubtDays, aiDoubtTopic, aiDoubtStudent],
+    queryFn: async () => {
+      const baseUrl = getApiUrl();
+      const qs = new URLSearchParams();
+      if (aiDoubtDays !== "all") qs.set("days", aiDoubtDays);
+      if (aiDoubtTopic !== "all") qs.set("topic", aiDoubtTopic);
+      if (aiDoubtStudent.trim()) qs.set("student", aiDoubtStudent.trim());
+      const path = `/api/admin/doubts${qs.toString() ? `?${qs.toString()}` : ""}`;
+      const res = await authFetch(new URL(path, baseUrl).toString());
+      if (!res.ok) return { doubts: [], topTopics: [], repeatedPatterns: [], studentInsights: [], total: 0 };
+      return res.json();
+    },
+    enabled: activeTab === "aiTutor",
+    refetchInterval: activeTab === "aiTutor" ? 20000 : false,
+    staleTime: 0,
   });
 
   const { data: supportConvos = [], isLoading: supportLoading, refetch: refetchSupport } = useQuery<any[]>({
@@ -2951,6 +3008,203 @@ export default function AdminDashboard() {
         )}
 
         {activeTab === "analytics" && <AnalyticsTab />}
+
+        {activeTab === "aiTutor" && (
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>AI Tutor Doubts ({adminDoubtData.total || 0})</Text>
+            </View>
+
+            <View style={[styles.adminCard, { marginBottom: 14, gap: 10 }]}>
+              <Text style={styles.adminCardTitle}>Filters</Text>
+              <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
+                {[
+                  { key: "all", label: "All Time" },
+                  { key: "7", label: "Last 7 Days" },
+                  { key: "30", label: "Last 30 Days" },
+                ].map((o) => (
+                  <Pressable
+                    key={o.key}
+                    style={[styles.typeSelectBtn, aiDoubtDays === (o.key as any) && styles.typeSelectActive]}
+                    onPress={() => setAiDoubtDays(o.key as any)}
+                  >
+                    <Text style={[styles.typeSelectText, aiDoubtDays === (o.key as any) && styles.typeSelectTextActive]}>{o.label}</Text>
+                  </Pressable>
+                ))}
+              </View>
+              <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
+                <Pressable
+                  style={[styles.typeSelectBtn, aiDoubtTopic === "all" && styles.typeSelectActive]}
+                  onPress={() => setAiDoubtTopic("all")}
+                >
+                  <Text style={[styles.typeSelectText, aiDoubtTopic === "all" && styles.typeSelectTextActive]}>All Topics</Text>
+                </Pressable>
+                {(adminDoubtData.topTopics || []).map((t) => (
+                  <Pressable
+                    key={t.topic}
+                    style={[styles.typeSelectBtn, aiDoubtTopic === t.topic && styles.typeSelectActive]}
+                    onPress={() => setAiDoubtTopic(t.topic)}
+                  >
+                    <Text style={[styles.typeSelectText, aiDoubtTopic === t.topic && styles.typeSelectTextActive]}>
+                      {t.topic}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+              <TextInput
+                style={styles.formInput}
+                placeholder="Search student name/phone/email or question..."
+                placeholderTextColor={Colors.light.textMuted}
+                value={aiDoubtStudent}
+                onChangeText={setAiDoubtStudent}
+              />
+            </View>
+
+            {adminDoubtsLoading ? (
+              <ActivityIndicator size="large" color={Colors.light.primary} style={{ marginTop: 20 }} />
+            ) : (
+              <>
+                <View style={[styles.adminCard, { marginBottom: 14 }]}>
+                  <Text style={[styles.adminCardTitle, { marginBottom: 8 }]}>Frequently Asked Topics</Text>
+                  {(adminDoubtData.topTopics || []).length === 0 ? (
+                    <Text style={styles.adminCardMetaText}>No topic data yet.</Text>
+                  ) : (
+                    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                      {adminDoubtData.topTopics.map((t) => (
+                        <View key={t.topic} style={{ backgroundColor: "#EEF2FF", borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6, borderWidth: 1, borderColor: "#C7D2FE" }}>
+                          <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>
+                            {t.topic} ({t.count})
+                          </Text>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                </View>
+
+                <View style={[styles.adminCard, { marginBottom: 14 }]}>
+                  <Text style={[styles.adminCardTitle, { marginBottom: 8 }]}>Repeated Question Patterns</Text>
+                  {(adminDoubtData.repeatedPatterns || []).length === 0 ? (
+                    <Text style={styles.adminCardMetaText}>No repeated patterns yet.</Text>
+                  ) : (
+                    <View style={{ gap: 8 }}>
+                      {adminDoubtData.repeatedPatterns.map((p, idx) => (
+                        <View key={`${p.questionPattern}-${idx}`} style={{ backgroundColor: "#F8FAFC", borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 10, padding: 10 }}>
+                          <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>
+                            {p.sampleQuestion}
+                          </Text>
+                          <Text style={[styles.adminCardMetaText, { marginTop: 4 }]}>
+                            repeated {p.count} times
+                          </Text>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                </View>
+
+                <View style={[styles.adminCard, { marginBottom: 14 }]}>
+                  <Text style={[styles.adminCardTitle, { marginBottom: 8 }]}>Per Student Insights</Text>
+                  {(adminDoubtData.studentInsights || []).length === 0 ? (
+                    <Text style={styles.adminCardMetaText}>No student insights yet.</Text>
+                  ) : (
+                    <View style={{ gap: 8 }}>
+                      {adminDoubtData.studentInsights.map((s) => (
+                        <View key={String(s.user_id)} style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10, backgroundColor: "#F8FAFC", borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 10, padding: 10 }}>
+                          <View style={{ flex: 1 }}>
+                            <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.text }} numberOfLines={1}>
+                              {s.name || s.phone || s.email || "Student"}
+                            </Text>
+                            <Text style={styles.adminCardMetaText}>
+                              Top topic: {s.topTopic}
+                            </Text>
+                          </View>
+                          <View style={{ alignItems: "flex-end" }}>
+                            <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>{s.doubtCount}</Text>
+                            <Text style={styles.adminCardMetaText}>doubts</Text>
+                          </View>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                </View>
+
+                {aiDoubtStudent.trim().length > 0 && (
+                  <View style={[styles.adminCard, { marginBottom: 14 }]}>
+                    <Text style={[styles.adminCardTitle, { marginBottom: 8 }]}>Student Ask Timeline</Text>
+                    {(() => {
+                      const rows = (adminDoubtData.doubts || []) as AdminDoubtRow[];
+                      if (!rows.length) return <Text style={styles.adminCardMetaText}>No matching student doubts found.</Text>;
+
+                      const byStudent: Record<string, { key: string; label: string; doubts: AdminDoubtRow[] }> = {};
+                      for (const d of rows) {
+                        const key = String(d.user_name || d.user_phone || d.user_email || "student");
+                        if (!byStudent[key]) {
+                          byStudent[key] = { key, label: key, doubts: [] };
+                        }
+                        byStudent[key].doubts.push(d);
+                      }
+                      const target = Object.values(byStudent).sort((a, b) => b.doubts.length - a.doubts.length)[0];
+                      const doubts = (target?.doubts || []).slice(0, 20);
+                      return (
+                        <View style={{ gap: 8 }}>
+                          <Text style={styles.adminCardMetaText}>
+                            Showing latest {doubts.length} doubts for: {target?.label || "Student"}
+                          </Text>
+                          {doubts.map((d) => (
+                            <View key={`student-doubt-${d.id}`} style={{ backgroundColor: "#F8FAFC", borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 10, padding: 10, gap: 5 }}>
+                              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                                <View style={styles.typeBadge}>
+                                  <Text style={{ fontSize: 10, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>{d.topic || "General"}</Text>
+                                </View>
+                                <Text style={styles.adminCardMetaText}>
+                                  {d.created_at ? new Date(Number(d.created_at)).toLocaleString("en-IN") : ""}
+                                </Text>
+                              </View>
+                              <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>
+                                Q: {d.question}
+                              </Text>
+                              <Text style={{ fontSize: 13, fontFamily: "Inter_400Regular", color: Colors.light.textSecondary, lineHeight: 20 }}>
+                                A: {d.answer}
+                              </Text>
+                            </View>
+                          ))}
+                        </View>
+                      );
+                    })()}
+                  </View>
+                )}
+
+                {(adminDoubtData.doubts || []).length === 0 ? (
+                  <View style={styles.infoCard}>
+                    <Ionicons name="chatbox-ellipses-outline" size={20} color={Colors.light.primary} />
+                    <Text style={styles.infoText}>No AI tutor doubts yet.</Text>
+                  </View>
+                ) : (
+                  adminDoubtData.doubts.map((d) => (
+                    <View key={d.id} style={[styles.adminCard, { gap: 10 }]}>
+                      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                        <Text style={styles.adminCardTitle} numberOfLines={1}>
+                          {d.user_name || d.user_phone || d.user_email || "Student"}
+                        </Text>
+                        <View style={styles.typeBadge}>
+                          <Text style={{ fontSize: 10, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>{d.topic || "General"}</Text>
+                        </View>
+                      </View>
+                      <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>
+                        Q: {d.question}
+                      </Text>
+                      <Text style={{ fontSize: 13, fontFamily: "Inter_400Regular", color: Colors.light.textSecondary, lineHeight: 20 }}>
+                        A: {d.answer}
+                      </Text>
+                      <Text style={styles.adminCardMetaText}>
+                        {d.created_at ? new Date(Number(d.created_at)).toLocaleString("en-IN") : ""}
+                      </Text>
+                    </View>
+                  ))
+                )}
+              </>
+            )}
+          </View>
+        )}
 
         {activeTab === "support" && (
           <View style={styles.section}>

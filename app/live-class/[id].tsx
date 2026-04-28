@@ -48,7 +48,7 @@ function getYouTubeVideoId(url: string): string {
 
 const YT_EMBED_ORIGIN = "https://3ilearning.in";
 
-function buildYouTubeHtml(videoId: string): string {
+function buildYouTubeHtml(videoId: string, clipSeconds?: number): string {
   // Use the same proven lecture-style masking geometry to avoid hiding center video content.
   const q = new URLSearchParams({
     autoplay: "1",
@@ -64,6 +64,9 @@ function buildYouTubeHtml(videoId: string): string {
     controls: "1",
     origin: YT_EMBED_ORIGIN,
   });
+  if (clipSeconds && clipSeconds > 0) {
+    q.set("end", String(Math.max(1, Math.floor(clipSeconds))));
+  }
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -80,7 +83,7 @@ iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border:
 .cover-fs { position: absolute; bottom: 78px; right: 0; width: 90px; height: 50px; background: #000; z-index: 9999; pointer-events: auto; }
 .cover-br { position: absolute; bottom: 0; right: 50px; width: 280px; height: 60px; background: #000; z-index: 9999; pointer-events: auto; }
 @media (max-width: 600px) {
-  .cover-tl { width: 55%; }
+  .cover-tl { width: 55%; height: 53px; }
   .cover-tr { display: none; }
   .cover-fs { display: none; }
   .cover-br { width: 100%; right: 0; }
@@ -106,7 +109,7 @@ iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border:
 }
 
 /** Laptop / wide web: hide YouTube branding while keeping volume/mute usable. */
-function buildYouTubeHtmlWideWeb(videoId: string): string {
+function buildYouTubeHtmlWideWeb(videoId: string, clipSeconds?: number): string {
   const q = new URLSearchParams({
     autoplay: "1",
     mute: "1",
@@ -121,6 +124,9 @@ function buildYouTubeHtmlWideWeb(videoId: string): string {
     controls: "1",
     origin: YT_EMBED_ORIGIN,
   });
+  if (clipSeconds && clipSeconds > 0) {
+    q.set("end", String(Math.max(1, Math.floor(clipSeconds))));
+  }
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -132,11 +138,15 @@ html, body { width: 100%; height: 100%; background: #000; overflow: hidden; -web
 .wrapper { position: relative; width: 100%; height: 100%; overflow: hidden; }
 iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; }
 /* Top overlays hide channel/title/share branding. */
-.cover-top-left { position: absolute; top: 0; left: 0; width: 58%; height: 58px; background: #000; z-index: 9999; pointer-events: auto; }
-.cover-top-right { position: absolute; top: 0; right: 0; width: 180px; height: 58px; background: #000; z-index: 9999; pointer-events: auto; }
+.cover-top-left { position: absolute; top: 0; left: 0; width: 84%; height: 53px; background: #000; z-index: 9999; pointer-events: auto; }
+.cover-top-right { position: absolute; top: 0; right: 0; width: 114px; height: 53px; background: #000; z-index: 9999; pointer-events: auto; }
+/* Band below top row: from end of top-left pad to start of top-right pad. */
+.cover-top-mid-under { position: absolute; top: 45px; left: 84%; right: 114px; height: 8px; background: #000; z-index: 9999; pointer-events: auto; }
 /* Bottom overlays hide branding but keep left controls (volume/mute) usable. */
 .cover-bottom-rest { position: absolute; bottom: 0; left: 140px; right: 0; height: 62px; background: #000; z-index: 9999; pointer-events: auto; }
-.cover-bottom-fs { position: absolute; bottom: 78px; right: 0; width: 92px; height: 50px; background: #000; z-index: 9999; pointer-events: auto; }
+.cover-bottom-fs { position: absolute; bottom: 82px; right: 0; width: 80px; height: 45px; background: #000; z-index: 9999; pointer-events: auto; }
+/* Hide bottom-left YouTube external link button. */
+.cover-bottom-left-link { position: absolute; bottom: 0; left: 0; width: 86px; height: 62px; background: #000; z-index: 9999; pointer-events: auto; }
 @media print { body { display: none !important; } }
 </style>
 </head>
@@ -144,10 +154,12 @@ iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border:
 <div class="wrapper">
   <div class="cover-top-left"></div>
   <div class="cover-top-right"></div>
+  <div class="cover-top-mid-under"></div>
   <iframe
     src="https://www.youtube-nocookie.com/embed/${videoId}?${q.toString()}"
     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
   ></iframe>
+  <div class="cover-bottom-left-link"></div>
   <div class="cover-bottom-fs"></div>
   <div class="cover-bottom-rest"></div>
 </div>
@@ -157,7 +169,13 @@ iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border:
 }
 
 // Native-only: YouTube IFrame API with custom controls (zero YouTube branding)
-function buildNativeYouTubeHtml(videoId: string): string {
+function buildNativeYouTubeHtml(videoId: string, clipSeconds?: number, phoneWeb = false): string {
+  const clipEnd = clipSeconds && clipSeconds > 0 ? Math.floor(clipSeconds) : null;
+  const topGap = phoneWeb ? 40 : 52;
+  const bottomGap = phoneWeb ? 58 : 72;
+  const topMaskHeight = phoneWeb ? 40 : 52;
+  const bottomMaskLeftWidth = phoneWeb ? 70 : 120;
+  const bottomMaskRightWidth = phoneWeb ? 190 : 230;
   return `<!DOCTYPE html>
 <html><head>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
@@ -165,12 +183,12 @@ function buildNativeYouTubeHtml(videoId: string): string {
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{width:100%;height:100%;background:#000;overflow:hidden;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 #pw{position:relative;width:100%;height:100%}
-#player{position:absolute;top:52px;left:0;width:100%;height:calc(100% - 124px)}
-.yt-gap-top{position:absolute;top:0;left:0;right:0;height:52px;background:#000;z-index:70;pointer-events:auto}
-.yt-gap-bottom{position:absolute;left:0;right:0;bottom:0;height:72px;background:#000;z-index:70;pointer-events:auto}
-.yt-mask-top{position:absolute;top:52px;left:0;right:0;height:52px;background:#000;z-index:80;pointer-events:auto}
-.yt-mask-bottom-left{position:absolute;bottom:72px;left:0;width:120px;height:64px;background:#000;z-index:80;pointer-events:auto}
-.yt-mask-bottom-right{position:absolute;bottom:72px;right:0;width:230px;height:64px;background:#000;z-index:80;pointer-events:auto}
+#player{position:absolute;top:${topGap}px;left:0;width:100%;height:calc(100% - ${topGap + bottomGap}px)}
+.yt-gap-top{position:absolute;top:0;left:0;right:0;height:${topGap}px;background:#000;z-index:70;pointer-events:auto}
+.yt-gap-bottom{position:absolute;left:0;right:0;bottom:0;height:${bottomGap}px;background:#000;z-index:70;pointer-events:auto}
+.yt-mask-top{position:absolute;top:${topGap}px;left:0;right:0;height:${topMaskHeight}px;background:#000;z-index:80;pointer-events:auto}
+.yt-mask-bottom-left{position:absolute;bottom:${bottomGap}px;left:0;width:${bottomMaskLeftWidth}px;height:64px;background:#000;z-index:80;pointer-events:auto}
+.yt-mask-bottom-right{position:absolute;bottom:${bottomGap}px;right:0;width:${bottomMaskRightWidth}px;height:64px;background:#000;z-index:80;pointer-events:auto}
 .ctl{position:absolute;bottom:0;left:0;right:0;background:linear-gradient(transparent,rgba(0,0,0,0.9));padding:10px 14px 14px;z-index:100;display:flex;flex-direction:column;gap:8px;transition:opacity 0.3s}
 .ctl.h{opacity:0;pointer-events:none}
 .pr{display:flex;align-items:center;gap:10px}
@@ -186,7 +204,7 @@ html,body{width:100%;height:100%;background:#000;overflow:hidden;-webkit-user-se
 .bp.h{opacity:0;pointer-events:none}.bp svg{width:36px;height:36px;fill:#fff;margin-left:4px}
 .ld{position:absolute;top:calc(50% - 10px);left:50%;transform:translate(-50%,-50%);width:44px;height:44px;border:3px solid rgba(255,255,255,0.2);border-top:3px solid #fff;border-radius:50%;animation:sp 0.8s linear infinite;z-index:50;display:none}
 @keyframes sp{to{transform:translate(-50%,-50%) rotate(360deg)}}
-@media (max-width: 600px){.yt-mask-top{height:48px}.yt-mask-bottom-right{width:190px}}
+@media (max-width: 600px){.yt-mask-top{height:${phoneWeb ? 40 : 48}px}.yt-mask-bottom-right{width:${phoneWeb ? 190 : 190}px}}
 </style></head><body>
 <div id="pw" ontouchstart="sc()">
 <div class="yt-gap-top"></div>
@@ -209,7 +227,7 @@ html,body{width:100%;height:100%;background:#000;overflow:hidden;-webkit-user-se
 <script>
 var tag=document.createElement('script');tag.src='https://www.youtube.com/iframe_api';document.head.appendChild(tag);
 var p,rdy=0,ht,spds=[0.5,0.75,1,1.25,1.5,2],si=2,isMuted=1;
-function onYouTubeIframeAPIReady(){p=new YT.Player('player',{videoId:'${videoId}',playerVars:{autoplay:1,mute:1,controls:0,modestbranding:1,rel:0,showinfo:0,iv_load_policy:3,cc_load_policy:0,playsinline:1,disablekb:1,fs:0},events:{onReady:function(e){rdy=1;e.target.playVideo();up();sc();},onStateChange:function(e){var s=e.data;document.getElementById('ld').style.display=s===3?'block':'none';document.getElementById('bp').className=(s===1||s===3)?'bp h':'bp';upi();}}});}
+function onYouTubeIframeAPIReady(){p=new YT.Player('player',{videoId:'${videoId}',playerVars:{autoplay:1,mute:1,controls:0,modestbranding:1,rel:0,showinfo:0,iv_load_policy:3,cc_load_policy:0,playsinline:1,disablekb:1,fs:0,${clipEnd ? `end:${clipEnd},` : ""}},events:{onReady:function(e){rdy=1;e.target.playVideo();up();sc();},onStateChange:function(e){var s=e.data;document.getElementById('ld').style.display=s===3?'block':'none';document.getElementById('bp').className=(s===1||s===3)?'bp h':'bp';upi();}}});}
 function tp(){if(!rdy)return;p.getPlayerState()===1?p.pauseVideo():p.playVideo();}
 function upi(){var pl=p&&p.getPlayerState()===1;document.getElementById('pli').innerHTML=pl?'<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>':'<path d="M8 5v14l11-7z"/>';}
 function fwd(s){if(!rdy)return;p.seekTo(Math.max(0,p.getCurrentTime()+s),true);}
@@ -247,7 +265,7 @@ video { width: 100%; height: 100%; object-fit: contain; background: #000; }
 </style>
 </head>
 <body>
-<video id="v" autoplay controls playsinline controlsList="nodownload noplaybackrate noremoteplayback" disablePictureInPicture></video>
+<video id="v" autoplay controls playsinline controlsList="nodownload noplaybackrate noremoteplayback nopictureinpicture" disablePictureInPicture disableRemotePlayback x-webkit-airplay="deny"></video>
 <div id="overlay"><div class="spinner"></div><div class="msg" id="msg">Connecting to live stream...</div></div>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@latest/dist/hls.min.js"></script>
 <script>
@@ -308,6 +326,8 @@ html, body { width: 100%; height: 100%; background: #000; overflow: hidden; -web
   controls
   autoplay
   preload="auto"
+  controlslist="nodownload noplaybackrate noremoteplayback"
+  disablepictureinpicture
 ></stream>
 <script>
 // Disable right-click and context menu
@@ -315,6 +335,15 @@ document.addEventListener('contextmenu', function(e) { e.preventDefault(); retur
 document.addEventListener('selectstart', function(e) { e.preventDefault(); return false; });
 
 const player = document.getElementById('player');
+var media = document.querySelector('video');
+if (media) {
+  media.setAttribute('controlsList', 'nodownload noplaybackrate noremoteplayback nopictureinpicture');
+  media.setAttribute('disablePictureInPicture', 'true');
+  media.setAttribute('disableRemotePlayback', 'true');
+  media.setAttribute('x-webkit-airplay', 'deny');
+  media.disablePictureInPicture = true;
+  media.disableRemotePlayback = true;
+}
 if (player && window.ReactNativeWebView) {
   player.addEventListener('loadstart', function() {
     window.ReactNativeWebView.postMessage('ready');
@@ -338,16 +367,22 @@ function WebYouTubePlayer({
   onReady,
   /** Lecture-style 5-rectangle mask — use on narrow (phone) web only. */
   brandingMask = true,
+  clipSeconds,
 }: {
   videoId: string;
   onReady: () => void;
   brandingMask?: boolean;
+  clipSeconds?: number;
 }) {
   const calledRef = useRef(false);
   useEffect(() => {
     if (!calledRef.current) { calledRef.current = true; onReady(); }
   }, [onReady]);
-  const srcDoc = brandingMask ? buildYouTubeHtml(videoId) : buildYouTubeHtmlWideWeb(videoId);
+  // Phone web: use same lecture-style masked embed logic.
+  // Laptop web: keep wide masked embed path.
+  const srcDoc = brandingMask
+    ? buildYouTubeHtml(videoId, clipSeconds)
+    : buildYouTubeHtmlWideWeb(videoId, clipSeconds);
   return (
     <iframe
       srcDoc={srcDoc}
@@ -423,8 +458,8 @@ export default function LiveClassScreen() {
     // Faster polling before teacher goes live helps students see live state in ~3-5s.
     refetchInterval: (query) => {
       const data = query.state.data;
-      if (!data) return 2500;
-      return data.is_live || data.is_completed ? 5000 : 2500;
+      if (!data) return 1800;
+      return data.is_live || data.is_completed ? 2500 : 1800;
     },
     staleTime: 0,
   });
@@ -487,9 +522,13 @@ export default function LiveClassScreen() {
   const recordingUrl = liveClassData?.recording_url || "";
   const isCompleted = liveClassData?.is_completed;
 
+  // Professional playback priority for students:
+  // 1) Saved recording URL (post-class)
+  // 2) Cloudflare HLS (live/no-branding player)
+  // 3) YouTube URL fallback
   const videoUrl = recordingUrl
     ? recordingUrl
-    : (streamType === "cloudflare" && cfHlsUrl)
+    : cfHlsUrl
       ? cfHlsUrl
       : (liveClassData?.youtube_url || paramVideoUrl || "");
 
@@ -543,12 +582,16 @@ export default function LiveClassScreen() {
     videoUrl.includes('.m3u8') ||
     (streamType === "cloudflare" && cfHlsUrl && videoUrl === cfHlsUrl)
   );
+  // Fallback sync for YouTube completed classes: clip playback length to app-recorded duration.
+  const completedClipSeconds = liveClassData?.is_completed && (liveClassData?.duration_minutes || 0) > 0
+    ? Number(liveClassData.duration_minutes) * 60
+    : undefined;
   const hasYouTubeId = Boolean(videoId);
   const streamHtml = isStreamId ? buildCloudflareStreamHtml(videoUrl) : "";
 
   const { data: chatMessages = [], refetch: refetchChat } = useQuery<ChatMsg[]>({
     queryKey: [`/api/live-classes/${id}/chat`],
-    refetchInterval: 3000,
+    refetchInterval: 2000,
     staleTime: 0,
   });
 
@@ -567,7 +610,7 @@ export default function LiveClassScreen() {
 
   const { data: viewerData } = useQuery<{ count: number; viewers: any[]; visible: boolean }>({
     queryKey: [`/api/live-classes/${id}/viewers`],
-    refetchInterval: 10000,
+    refetchInterval: 5000,
     staleTime: 0,
   });
 
@@ -784,6 +827,7 @@ export default function LiveClassScreen() {
               <WebYouTubePlayer
                 videoId={videoId}
                 brandingMask={false}
+                clipSeconds={completedClipSeconds}
                 onReady={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }}
               />
             ) : /* Web: do not use RN WebView for YouTube before go-live — it often collapses; show black stage + waiting overlay. */
@@ -802,8 +846,9 @@ export default function LiveClassScreen() {
                 src={authenticatedVideoUrl}
                 controls
                 playsInline
-                controlsList="nodownload noplaybackrate noremoteplayback"
+                controlsList="nodownload noplaybackrate noremoteplayback nopictureinpicture"
                 disablePictureInPicture
+                disableRemotePlayback
                 style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "contain", backgroundColor: "#000" } as any}
                 onLoadedData={() => setIsVideoLoading(false)}
                 onCanPlay={(e) => {
@@ -1022,6 +1067,7 @@ export default function LiveClassScreen() {
               <WebYouTubePlayer
                 videoId={videoId}
                 brandingMask
+                clipSeconds={completedClipSeconds}
                 onReady={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }}
               />
             ) : Platform.OS === "web" && videoId && !liveClassData?.is_live && !liveClassData?.is_completed ? (
@@ -1038,8 +1084,9 @@ export default function LiveClassScreen() {
                 src={authenticatedVideoUrl}
                 controls
                 playsInline
-                controlsList="nodownload noplaybackrate noremoteplayback"
+                controlsList="nodownload noplaybackrate noremoteplayback nopictureinpicture"
                 disablePictureInPicture
+                disableRemotePlayback
                 style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "contain", backgroundColor: "#000" } as any}
                 onLoadedData={() => setIsVideoLoading(false)}
                 onCanPlay={(e) => {
@@ -1144,7 +1191,7 @@ export default function LiveClassScreen() {
             <View
               style={[
                 styles.chatContainer,
-                isNarrowWeb && { flex: 1, minHeight: 0, width: "100%" as const },
+                isNarrowWeb && styles.phoneWebChatDock,
                 Platform.OS !== "web" && { flex: 1, minHeight: 0 },
               ]}
             >
@@ -1211,7 +1258,7 @@ export default function LiveClassScreen() {
                     </View>
                   }
                 />
-                <View style={[styles.inputRow, { paddingBottom: Math.max(bottomPadding, 8) }]}>
+                <View style={[styles.inputRow, { paddingBottom: isNarrowWeb ? 8 : Math.max(bottomPadding, 8) }]}>
                   <Pressable style={[styles.iconBtn, handRaised && styles.iconBtnActive]} onPress={handleHandRaise}>
                     <Text style={{ fontSize: 18 }}>✋</Text>
                   </Pressable>
@@ -1338,6 +1385,14 @@ const styles = StyleSheet.create({
   recordingInfoTitle: { fontSize: 18, fontFamily: "Inter_700Bold", color: Colors.light.text },
   recordingInfoSubtitle: { fontSize: 14, fontFamily: "Inter_400Regular", color: Colors.light.textMuted, textAlign: "center" },
   chatContainer: { flex: 1, minHeight: 0, minWidth: 0, backgroundColor: Colors.light.background },
+  phoneWebChatDock: {
+    flex: 1,
+    minHeight: 0,
+    width: "100%",
+    backgroundColor: Colors.light.background,
+    borderTopWidth: 1,
+    borderTopColor: Colors.light.border,
+  },
   chatHeader: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: Colors.light.border },
   chatHeaderText: { fontSize: 15, fontFamily: "Inter_600SemiBold", color: Colors.light.text, flex: 1 },
   viewerCountBadge: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: Colors.light.secondary, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 },

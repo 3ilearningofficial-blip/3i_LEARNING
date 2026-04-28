@@ -42,6 +42,7 @@ import { registerAdminLiveClassManageRoutes } from "./admin-live-class-manage-ro
 import { registerCourseAccessRoutes } from "./course-access-routes";
 import { registerUploadRoutes } from "./upload-routes";
 import { registerMediaStreamRoutes } from "./media-stream-routes";
+import { createGenerateAIAnswer } from "./ai-tutor-service";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 const uploadLarge = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } });
@@ -126,6 +127,7 @@ async function dbQuery(text: string, params?: unknown[], options?: DbQueryOption
 const db = {
   query: (text: string, params?: unknown[], options?: DbQueryOptions) => dbQuery(text, params, options),
 };
+const generateAIAnswer = createGenerateAIAnswer(db);
 
 // ==================== IN-MEMORY CACHE ====================
 interface CacheEntry { data: unknown; expiresAt: number; }
@@ -386,23 +388,6 @@ async function deleteDownloadsForCourse(courseId: number): Promise<void> {
   }
 }
 
-async function generateAIAnswer(question: string, topic?: string): Promise<string> {
-  const topicContext = topic ? `Topic: ${topic}. ` : "";
-  const answers: Record<string, string> = {
-    default: `${topicContext}Great question! Here's a step-by-step explanation:\n\n1. First, identify what's being asked\n2. Apply the relevant mathematical concepts\n3. Work through the solution systematically\n\nFor "${question.slice(0, 50)}...", the key is to understand the underlying mathematical principles. Practice similar problems to strengthen your understanding. If you need more clarity, try revisiting the concept notes or watching the related lecture video.`,
-  };
-  const lowerQ = question.toLowerCase();
-  if (lowerQ.includes("quadratic")) {
-    return "For quadratic equations: use factorisation, quadratic formula x=(-b\u00b1\u221a(b\u00b2-4ac))/2a, or completing the square. Check discriminant: D>0 two roots, D=0 equal roots, D<0 no real roots.";
-  }
-  if (lowerQ.includes("trigon")) {
-    return "Trigonometry: sin=P/H, cos=B/H, tan=P/B. Key identity: sin\u00b2\u03b8+cos\u00b2\u03b8=1. Standard values: sin30=1/2, sin45=1/\u221a2, sin60=\u221a3/2.";
-  }
-  if (lowerQ.includes("calculus") || lowerQ.includes("derivative") || lowerQ.includes("integral")) {
-    return "Calculus: d/dx(x\u207f)=nx\u207f\u207b\u00b9, d/dx(sinx)=cosx, d/dx(cosx)=-sinx. Integration is reverse of differentiation: \u222bx\u207f dx=x\u207f\u207a\u00b9/(n+1)+C.";
-  }
-  return answers.default;
-}
 
 async function ensureCoreLearningSchemaColumns(): Promise<void> {
   const requiredStatements = [
@@ -1330,6 +1315,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     app,
     db,
     getAuthUser,
+    requireAdmin,
     generateAIAnswer,
   });
 
@@ -1519,6 +1505,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     db,
     requireAdmin,
     recomputeAllEnrollmentsProgressForCourse,
+    getR2Client,
   });
 
   registerPdfRoutes({ app, db });

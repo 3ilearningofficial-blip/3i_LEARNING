@@ -50,6 +50,18 @@ function normalizeBaseUrl(url: string): string {
   return trimmed;
 }
 
+function isPrivateIpv4Host(host: string): boolean {
+  const m = host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (!m) return false;
+  const a = Number(m[1]);
+  const b = Number(m[2]);
+  if (a === 10) return true;
+  if (a === 127) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  return false;
+}
+
 // Returns base URL without /api suffix.
 export function getBaseUrl(): string {
   const explicit = process.env.EXPO_PUBLIC_API_BASE_URL || process.env.EXPO_PUBLIC_API_URL;
@@ -62,6 +74,11 @@ export function getBaseUrl(): string {
     }
     if (host === "localhost" || host === "127.0.0.1") {
       return "http://localhost:5000";
+    }
+    // LAN testing (phone web on same network): use same host with backend port.
+    if (isPrivateIpv4Host(host) || host.endsWith(".local")) {
+      const proto = window.location.protocol === "https:" ? "https" : "http";
+      return `${proto}://${host}:5000`;
     }
     // Never default to frontend origin in web deployments.
     // This avoids accidental /api calls hitting Vercel app routes.

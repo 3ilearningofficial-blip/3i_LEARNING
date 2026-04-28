@@ -1390,8 +1390,45 @@ function registerLiveStreamRoutes({
   app: app2,
   db: db2,
   requireAdmin,
-  recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse2
+  recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse2,
+  getR2Client
 }) {
+  const inferVideoType = (url) => {
+    const lower = String(url || "").toLowerCase();
+    if (lower.includes("youtube.com") || lower.includes("youtu.be")) return "youtube";
+    if (lower.includes("videodelivery.net") || lower.endsWith(".m3u8")) return "cloudflare";
+    return "r2";
+  };
+  const sleep = (ms) => new Promise((resolve2) => setTimeout(resolve2, ms));
+  const extractCloudflareRecordingUid = (url) => {
+    const m = String(url || "").match(/videodelivery\.net\/([^/]+)\/manifest\/video\.m3u8/i);
+    return m?.[1] ? String(m[1]) : null;
+  };
+  const toMediaApiPath = (key) => `/api/media/${key}`;
+  const archiveCloudflareRecordingToR2 = async (recordingUid) => {
+    try {
+      if (!process.env.R2_BUCKET_NAME) return null;
+      const mp4Url = `https://videodelivery.net/${recordingUid}/downloads/default.mp4`;
+      const source = await fetch(mp4Url);
+      if (!source.ok || !source.body) return null;
+      const { PutObjectCommand } = await import("@aws-sdk/client-s3");
+      const { Readable } = await import("stream");
+      const r2 = await getR2Client();
+      const key = `live-class-recording/cloudflare/${Date.now()}-${recordingUid}.mp4`;
+      await r2.send(
+        new PutObjectCommand({
+          Bucket: process.env.R2_BUCKET_NAME,
+          Key: key,
+          Body: Readable.fromWeb(source.body),
+          ContentType: "video/mp4"
+        })
+      );
+      return toMediaApiPath(key);
+    } catch (err) {
+      console.warn("[CF Stream] Failed to archive recording to R2:", err);
+      return null;
+    }
+  };
   app2.post("/api/admin/live-classes/:id/stream/create", requireAdmin, async (req, res) => {
     try {
       const accountId = process.env.CF_STREAM_ACCOUNT_ID || process.env.R2_ACCOUNT_ID;
@@ -1471,15 +1508,48 @@ function registerLiveStreamRoutes({
       const accountId = process.env.CF_STREAM_ACCOUNT_ID || process.env.R2_ACCOUNT_ID;
       const apiToken = process.env.CF_STREAM_API_TOKEN;
       if (!accountId || !apiToken) return res.status(500).json({ message: "CF Stream credentials not configured" });
+      if (!process.env.R2_BUCKET_NAME) return res.status(500).json({ message: "R2 bucket is not configured" });
       const lcResult = await db2.query("SELECT cf_stream_uid FROM live_classes WHERE id = $1", [req.params.id]);
       const uid = lcResult.rows[0]?.cf_stream_uid;
       if (!uid) return res.json({ success: true });
+      const getLatestRecording = async () => {
+        try {
+          const videosRes = await fetch(
+            `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/live_inputs/${uid}/videos`,
+            { headers: { Authorization: `Bearer ${apiToken}` } }
+          );
+          if (!videosRes.ok) return null;
+          const videosData = await videosRes.json();
+          const raw = videosData?.result;
+          const items = Array.isArray(raw) ? raw : Array.isArray(raw?.videos) ? raw.videos : [];
+          if (!items.length) return null;
+          const ready = items.find((v) => String(v?.status || "").toLowerCase() === "ready") || items[0];
+          const recordingUid = ready?.uid || ready?.id;
+          if (!recordingUid) return null;
+          return {
+            manifestUrl: `https://videodelivery.net/${recordingUid}/manifest/video.m3u8`,
+            recordingUid: String(recordingUid)
+          };
+        } catch {
+          return null;
+        }
+      };
       await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/live_inputs/${uid}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${apiToken}` }
       });
+      let recordingUrl = null;
+      for (let i = 0; i < 6; i += 1) {
+        const latest = await getLatestRecording();
+        if (latest) {
+          const archived = await archiveCloudflareRecordingToR2(latest.recordingUid);
+          recordingUrl = archived || latest.manifestUrl;
+          break;
+        }
+        await new Promise((resolve2) => setTimeout(resolve2, 2e3));
+      }
       console.log(`[CF Stream] Ended live input uid=${uid}`);
-      res.json({ success: true });
+      res.json({ success: true, recordingUrl });
     } catch (err) {
       console.error("[CF Stream] End error:", err);
       res.status(500).json({ message: "Failed to end stream" });
@@ -1531,7 +1601,7 @@ function registerLiveStreamRoutes({
               row.title,
               row.description || "",
               recordingUrl,
-              "r2",
+              inferVideoType(recordingUrl),
               durationMins,
               maxOrder.rows[0].next_order,
               false,
@@ -1552,6 +1622,46 @@ function registerLiveStreamRoutes({
       res.status(500).json({ message: "Failed to save recording" });
     }
   });
+  let isArchiveSweepRunning = false;
+  const runArchiveSweep = async () => {
+    if (isArchiveSweepRunning) return;
+    isArchiveSweepRunning = true;
+    try {
+      const pending = await db2.query(
+        `SELECT id, title, recording_url
+         FROM live_classes
+         WHERE stream_type = 'cloudflare'
+           AND is_completed = TRUE
+           AND recording_url ILIKE 'https://videodelivery.net/%/manifest/video.m3u8'
+         ORDER BY ended_at DESC NULLS LAST
+         LIMIT 20`
+      );
+      for (const row of pending.rows) {
+        const currentUrl = String(row.recording_url || "").trim();
+        const recordingUid = extractCloudflareRecordingUid(currentUrl);
+        if (!recordingUid) continue;
+        const archivedUrl = await archiveCloudflareRecordingToR2(recordingUid);
+        if (!archivedUrl) continue;
+        await db2.query("UPDATE live_classes SET recording_url = $1 WHERE id = $2", [archivedUrl, row.id]);
+        await db2.query(
+          "UPDATE lectures SET video_url = $1, video_type = 'r2' WHERE title = $2 AND video_url = $3",
+          [archivedUrl, row.title, currentUrl]
+        ).catch(() => {
+        });
+        console.log(`[CF Stream] Archived fallback recording to R2 for live class ${row.id}`);
+        await sleep(250);
+      }
+    } catch (err) {
+      console.warn("[CF Stream] Archive sweep error:", err);
+    } finally {
+      isArchiveSweepRunning = false;
+    }
+  };
+  const sweepIntervalMs = Math.max(3e4, Number(process.env.CF_ARCHIVE_SWEEP_MS || 12e4));
+  void runArchiveSweep();
+  setInterval(() => {
+    void runArchiveSweep();
+  }, sweepIntervalMs);
 }
 var init_live_stream_routes = __esm({
   "server/live-stream-routes.ts"() {
@@ -3447,6 +3557,7 @@ function registerDoubtNotificationRoutes({
   app: app2,
   db: db2,
   getAuthUser: getAuthUser2,
+  requireAdmin,
   generateAIAnswer: generateAIAnswer2
 }) {
   app2.post("/api/doubts", async (req, res) => {
@@ -3454,7 +3565,7 @@ function registerDoubtNotificationRoutes({
       const user = await getAuthUser2(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const { question, topic } = req.body;
-      const aiAnswer = await generateAIAnswer2(question, topic);
+      const aiAnswer = await generateAIAnswer2(question, topic, user.id);
       const result = await db2.query(
         "INSERT INTO doubts (user_id, question, answer, topic, status, created_at) VALUES ($1, $2, $3, $4, 'answered', $5) RETURNING *",
         [user.id, question, aiAnswer, topic, Date.now()]
@@ -3473,6 +3584,140 @@ function registerDoubtNotificationRoutes({
       res.json(result.rows);
     } catch {
       res.status(500).json({ message: "Failed to fetch doubts" });
+    }
+  });
+  app2.get("/api/admin/doubts", requireAdmin, async (req, res) => {
+    try {
+      const daysRaw = String(req.query.days || "").trim();
+      const topicFilter = String(req.query.topic || "").trim();
+      const studentQuery = String(req.query.student || "").trim();
+      const days = daysRaw === "7" || daysRaw === "30" ? Number(daysRaw) : 0;
+      const sinceTs = days > 0 ? Date.now() - days * 24 * 60 * 60 * 1e3 : 0;
+      const where = [];
+      const params = [];
+      if (sinceTs > 0) {
+        params.push(sinceTs);
+        where.push(`d.created_at >= $${params.length}`);
+      }
+      if (topicFilter) {
+        params.push(topicFilter);
+        where.push(`COALESCE(d.topic, 'General') = $${params.length}`);
+      }
+      if (studentQuery) {
+        params.push(`%${studentQuery}%`);
+        const textParamIdx = params.length;
+        const digitOnly = studentQuery.replace(/\D/g, "");
+        let digitClause = "";
+        if (digitOnly.length >= 4) {
+          params.push(`%${digitOnly}%`);
+          const digitParamIdx = params.length;
+          digitClause = ` OR regexp_replace(COALESCE(u.phone, ''), '\\D', '', 'g') LIKE $${digitParamIdx}`;
+        }
+        where.push(`(
+          COALESCE(u.name, '') ILIKE $${textParamIdx}
+          OR COALESCE(u.phone, '') ILIKE $${textParamIdx}
+          OR COALESCE(u.email, '') ILIKE $${textParamIdx}
+          OR COALESCE(d.question, '') ILIKE $${textParamIdx}
+          ${digitClause}
+        )`);
+      }
+      const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+      const baseSelect = `SELECT d.*, u.name as user_name, u.phone as user_phone, u.email as user_email
+         FROM doubts d
+         LEFT JOIN users u ON u.id = d.user_id`;
+      const result = await db2.query(
+        `${baseSelect}
+         ${whereSql}
+         ORDER BY d.created_at DESC
+         LIMIT 500`,
+        params
+      );
+      let rows = result.rows || [];
+      if (rows.length === 0 && studentQuery) {
+        const relaxedParams = [];
+        relaxedParams.push(`%${studentQuery}%`);
+        const textParamIdx = relaxedParams.length;
+        const digitOnly = studentQuery.replace(/\D/g, "");
+        let digitClause = "";
+        if (digitOnly.length >= 4) {
+          relaxedParams.push(`%${digitOnly}%`);
+          const digitParamIdx = relaxedParams.length;
+          digitClause = ` OR regexp_replace(COALESCE(u.phone, ''), '\\D', '', 'g') LIKE $${digitParamIdx}`;
+        }
+        const relaxedWhere = `WHERE (
+          COALESCE(u.name, '') ILIKE $${textParamIdx}
+          OR COALESCE(u.phone, '') ILIKE $${textParamIdx}
+          OR COALESCE(u.email, '') ILIKE $${textParamIdx}
+          OR COALESCE(d.question, '') ILIKE $${textParamIdx}
+          ${digitClause}
+        )`;
+        const relaxed = await db2.query(
+          `${baseSelect}
+           ${relaxedWhere}
+           ORDER BY d.created_at DESC
+           LIMIT 500`,
+          relaxedParams
+        );
+        rows = relaxed.rows || [];
+      }
+      const topicCounts = {};
+      for (const r of rows) {
+        const k = String(r.topic || "General").trim() || "General";
+        topicCounts[k] = (topicCounts[k] || 0) + 1;
+      }
+      const topTopics = Object.entries(topicCounts).map(([topic, count]) => ({ topic, count })).sort((a, b) => b.count - a.count).slice(0, 10);
+      const normalizeQuestion = (input) => String(input || "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\b(please|plz|sir|mam|maam|kindly|can|could|would|help|me|with|solve|question)\b/g, " ").replace(/\s+/g, " ").trim();
+      const patternCounts = {};
+      for (const r of rows) {
+        const normalized = normalizeQuestion(String(r.question || ""));
+        if (!normalized) continue;
+        const existing = patternCounts[normalized];
+        if (!existing) {
+          patternCounts[normalized] = {
+            questionPattern: normalized,
+            count: 1,
+            latestAt: Number(r.created_at || 0),
+            sampleQuestion: String(r.question || "")
+          };
+        } else {
+          existing.count += 1;
+          if (Number(r.created_at || 0) > existing.latestAt) {
+            existing.latestAt = Number(r.created_at || 0);
+            existing.sampleQuestion = String(r.question || existing.sampleQuestion);
+          }
+        }
+      }
+      const repeatedPatterns = Object.values(patternCounts).filter((p) => p.count >= 2).sort((a, b) => b.count - a.count || b.latestAt - a.latestAt).slice(0, 12);
+      const studentMap = {};
+      const perStudentTopicCounts = {};
+      for (const r of rows) {
+        const idKey = String(r.user_id || 0);
+        if (!studentMap[idKey]) {
+          studentMap[idKey] = {
+            user_id: Number(r.user_id || 0),
+            name: String(r.user_name || ""),
+            phone: String(r.user_phone || ""),
+            email: String(r.user_email || ""),
+            doubtCount: 0,
+            lastAskedAt: 0,
+            topTopic: "General"
+          };
+          perStudentTopicCounts[idKey] = {};
+        }
+        const s = studentMap[idKey];
+        s.doubtCount += 1;
+        s.lastAskedAt = Math.max(s.lastAskedAt, Number(r.created_at || 0));
+        const topic = String(r.topic || "General").trim() || "General";
+        perStudentTopicCounts[idKey][topic] = (perStudentTopicCounts[idKey][topic] || 0) + 1;
+      }
+      const studentInsights = Object.values(studentMap).map((s) => {
+        const topicCounter = perStudentTopicCounts[String(s.user_id)] || {};
+        const topTopicEntry = Object.entries(topicCounter).sort((a, b) => b[1] - a[1])[0];
+        return { ...s, topTopic: topTopicEntry?.[0] || "General" };
+      }).sort((a, b) => b.doubtCount - a.doubtCount || b.lastAskedAt - a.lastAskedAt).slice(0, 20);
+      res.json({ doubts: rows, topTopics, repeatedPatterns, studentInsights, total: rows.length });
+    } catch {
+      res.status(500).json({ message: "Failed to fetch admin doubts" });
     }
   });
   app2.get("/api/notifications", async (req, res) => {
@@ -4421,6 +4666,12 @@ function registerAdminLiveClassManageRoutes({
   getR2Client,
   recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse2
 }) {
+  const inferVideoType = (url) => {
+    const lower = String(url || "").toLowerCase();
+    if (lower.includes("youtube.com") || lower.includes("youtu.be")) return "youtube";
+    if (lower.includes("videodelivery.net") || lower.endsWith(".m3u8")) return "cloudflare";
+    return "r2";
+  };
   app2.post("/api/admin/live-classes/cleanup", requireAdmin, async (_req, res) => {
     try {
       console.log("[Cleanup] Starting live class cleanup...");
@@ -4487,7 +4738,7 @@ function registerAdminLiveClassManageRoutes({
             if (!peer.course_id) continue;
             const urlForPeer = String(peer.recording_url || peer.youtube_url || liveClassOnly.recording_url || liveClassOnly.youtube_url || "").trim();
             if (!urlForPeer) continue;
-            const vType = urlForPeer.includes("youtube.com") || urlForPeer.includes("youtu.be") ? "youtube" : "r2";
+            const vType = inferVideoType(urlForPeer);
             const exists = await db2.query(
               "SELECT 1 FROM lectures WHERE course_id = $1 AND title = $2 AND video_url = $3 LIMIT 1",
               [peer.course_id, peer.title, urlForPeer]
@@ -4598,7 +4849,7 @@ function registerAdminLiveClassManageRoutes({
           if (!peer.course_id) continue;
           const urlForPeer = String(peer.recording_url || peer.youtube_url || liveClass.recording_url || liveClass.youtube_url || "").trim();
           if (!urlForPeer) continue;
-          const vType = urlForPeer.includes("youtube.com") || urlForPeer.includes("youtu.be") ? "youtube" : "r2";
+          const vType = inferVideoType(urlForPeer);
           const exists = await db2.query(
             "SELECT 1 FROM lectures WHERE course_id = $1 AND title = $2 AND video_url = $3 LIMIT 1",
             [peer.course_id, peer.title, urlForPeer]
@@ -5516,6 +5767,226 @@ var init_media_stream_routes = __esm({
   }
 });
 
+// server/ai-tutor-service.ts
+function createGenerateAIAnswer(db2) {
+  return async function generateAIAnswer2(question, topic, userId) {
+    const q = String(question || "").trim();
+    const t = String(topic || "").trim();
+    if (!q) return "Please share your full question so I can help step by step.";
+    const tokenize = (text) => text.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w.length > 2);
+    const stop = /* @__PURE__ */ new Set([
+      "the",
+      "and",
+      "for",
+      "with",
+      "that",
+      "this",
+      "from",
+      "what",
+      "when",
+      "where",
+      "which",
+      "into",
+      "about",
+      "have",
+      "has",
+      "had",
+      "how",
+      "why",
+      "are",
+      "can",
+      "could",
+      "would",
+      "should",
+      "your",
+      "you",
+      "our",
+      "their",
+      "there",
+      "then",
+      "than",
+      "also",
+      "just",
+      "some",
+      "solve",
+      "find",
+      "show",
+      "math",
+      "question",
+      "doubt",
+      "topic"
+    ]);
+    const keywords = Array.from(new Set([...tokenize(q), ...tokenize(t)].filter((w) => !stop.has(w))));
+    const scoreSnippet = (text) => {
+      if (!keywords.length) return 0;
+      const lower = text.toLowerCase();
+      let score = 0;
+      for (const k of keywords) {
+        if (lower.includes(k)) score += 1;
+      }
+      return score;
+    };
+    const snippets = [];
+    try {
+      if (userId) {
+        const lectures = await db2.query(
+          `SELECT l.title, COALESCE(l.description, '') AS description, COALESCE(c.title, '') AS course_title
+           FROM lectures l
+           JOIN enrollments e ON e.course_id = l.course_id AND e.user_id = $1
+           LEFT JOIN courses c ON c.id = l.course_id
+           WHERE (e.status = 'active' OR e.status IS NULL)
+           ORDER BY l.created_at DESC
+           LIMIT 120`,
+          [userId]
+        );
+        for (const row of lectures.rows) {
+          const text = `${row.title}. ${row.description}`.trim();
+          snippets.push({
+            source: "lecture",
+            title: `${row.course_title || "Course"} - ${row.title || "Lecture"}`,
+            text,
+            score: scoreSnippet(text)
+          });
+        }
+        const materials = await db2.query(
+          `SELECT sm.title, COALESCE(sm.description, '') AS description, COALESCE(c.title, '') AS course_title
+           FROM study_materials sm
+           JOIN enrollments e ON e.course_id = sm.course_id AND e.user_id = $1
+           LEFT JOIN courses c ON c.id = sm.course_id
+           WHERE (e.status = 'active' OR e.status IS NULL)
+           ORDER BY sm.created_at DESC
+           LIMIT 120`,
+          [userId]
+        );
+        for (const row of materials.rows) {
+          const text = `${row.title}. ${row.description}`.trim();
+          snippets.push({
+            source: "material",
+            title: `${row.course_title || "Course"} - ${row.title || "Material"}`,
+            text,
+            score: scoreSnippet(text)
+          });
+        }
+        const questions = await db2.query(
+          `SELECT q.question_text, COALESCE(q.explanation, '') AS explanation, COALESCE(q.topic, '') AS topic,
+                  COALESCE(t.title, '') AS test_title, COALESCE(c.title, '') AS course_title
+           FROM questions q
+           JOIN tests t ON t.id = q.test_id
+           JOIN enrollments e ON e.course_id = t.course_id AND e.user_id = $1
+           LEFT JOIN courses c ON c.id = t.course_id
+           WHERE (e.status = 'active' OR e.status IS NULL)
+           ORDER BY q.id DESC
+           LIMIT 150`,
+          [userId]
+        );
+        for (const row of questions.rows) {
+          const text = `${row.topic}. ${row.question_text}. ${row.explanation}`.trim();
+          snippets.push({
+            source: "question",
+            title: `${row.course_title || "Course"} - ${row.test_title || "Test"} question`,
+            text,
+            score: scoreSnippet(text)
+          });
+        }
+      }
+    } catch (err) {
+      console.warn("[AI Tutor] context fetch failed:", err);
+    }
+    const selected = snippets.sort((a, b) => b.score - a.score).slice(0, 8).map((s, i) => `[${i + 1}] ${s.title} (${s.source})
+${s.text.slice(0, 450)}`);
+    const contextBlock = selected.length ? selected.join("\n\n") : "No specific class snippet found. Use general mathematics reasoning.";
+    const systemPrompt = "You are a rigorous math tutor for Indian competitive exam students. Give accurate, step-by-step solutions. If relevant context exists, use it. If context is insufficient, still solve using correct math methods. Do not fabricate references. Keep answer clear and practical.";
+    const userPrompt = `Student topic: ${t || "General"}
+Student question: ${q}
+
+Course context snippets:
+${contextBlock}
+
+Answer format:
+1) Short concept summary
+2) Step-by-step solution
+3) Final answer
+4) One similar practice question`;
+    const callGemini = async () => {
+      const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+      if (!apiKey) return null;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 18e3);
+      try {
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+          {
+            method: "POST",
+            signal: controller.signal,
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              systemInstruction: { parts: [{ text: systemPrompt }] },
+              contents: [{ role: "user", parts: [{ text: userPrompt }] }],
+              generationConfig: { temperature: 0.25, maxOutputTokens: 900 }
+            })
+          }
+        );
+        if (!res.ok) return null;
+        const data = await res.json();
+        const text = data?.candidates?.[0]?.content?.parts?.map((p) => p?.text || "").join("\n").trim();
+        return text || null;
+      } catch {
+        return null;
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+    const callOpenAI = async () => {
+      const apiKey = process.env.OPENAI_API_KEY;
+      if (!apiKey) return null;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 18e3);
+      try {
+        const res = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          signal: controller.signal,
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${apiKey}`
+          },
+          body: JSON.stringify({
+            model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+            temperature: 0.25,
+            max_tokens: 900,
+            messages: [
+              { role: "system", content: systemPrompt },
+              { role: "user", content: userPrompt }
+            ]
+          })
+        });
+        if (!res.ok) return null;
+        const data = await res.json();
+        return data?.choices?.[0]?.message?.content?.trim() || null;
+      } catch {
+        return null;
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+    const llmAnswer = await callGemini() || await callOpenAI();
+    if (llmAnswer) return llmAnswer;
+    const topicContext = t ? `Topic: ${t}. ` : "";
+    return `${topicContext}I could not reach the AI model right now, but here is a structured way to solve it:
+
+1. Identify the known values and what is asked.
+2. Write the core formula/concept used in this chapter.
+3. Substitute carefully and simplify step by step.
+4. Recheck units/signs and verify the final value.
+
+Question focus: "${q.slice(0, 80)}".`;
+  };
+}
+var init_ai_tutor_service = __esm({
+  "server/ai-tutor-service.ts"() {
+    "use strict";
+  }
+});
+
 // server/routes.ts
 var routes_exports = {};
 __export(routes_exports, {
@@ -5723,29 +6194,6 @@ async function deleteDownloadsForCourse(courseId) {
   } catch (err) {
     console.error("[Cleanup] Failed to delete course downloads:", err);
   }
-}
-async function generateAIAnswer(question, topic) {
-  const topicContext = topic ? `Topic: ${topic}. ` : "";
-  const answers = {
-    default: `${topicContext}Great question! Here's a step-by-step explanation:
-
-1. First, identify what's being asked
-2. Apply the relevant mathematical concepts
-3. Work through the solution systematically
-
-For "${question.slice(0, 50)}...", the key is to understand the underlying mathematical principles. Practice similar problems to strengthen your understanding. If you need more clarity, try revisiting the concept notes or watching the related lecture video.`
-  };
-  const lowerQ = question.toLowerCase();
-  if (lowerQ.includes("quadratic")) {
-    return "For quadratic equations: use factorisation, quadratic formula x=(-b\xB1\u221A(b\xB2-4ac))/2a, or completing the square. Check discriminant: D>0 two roots, D=0 equal roots, D<0 no real roots.";
-  }
-  if (lowerQ.includes("trigon")) {
-    return "Trigonometry: sin=P/H, cos=B/H, tan=P/B. Key identity: sin\xB2\u03B8+cos\xB2\u03B8=1. Standard values: sin30=1/2, sin45=1/\u221A2, sin60=\u221A3/2.";
-  }
-  if (lowerQ.includes("calculus") || lowerQ.includes("derivative") || lowerQ.includes("integral")) {
-    return "Calculus: d/dx(x\u207F)=nx\u207F\u207B\xB9, d/dx(sinx)=cosx, d/dx(cosx)=-sinx. Integration is reverse of differentiation: \u222Bx\u207F dx=x\u207F\u207A\xB9/(n+1)+C.";
-  }
-  return answers.default;
 }
 async function ensureCoreLearningSchemaColumns() {
   const requiredStatements = [
@@ -6628,6 +7076,7 @@ async function registerRoutes(app2) {
     app: app2,
     db,
     getAuthUser,
+    requireAdmin,
     generateAIAnswer
   });
   async function requireAuth(req, res, next) {
@@ -6790,13 +7239,14 @@ async function registerRoutes(app2) {
     app: app2,
     db,
     requireAdmin,
-    recomputeAllEnrollmentsProgressForCourse
+    recomputeAllEnrollmentsProgressForCourse,
+    getR2Client
   });
   registerPdfRoutes({ app: app2, db });
   const httpServer = createServer(app2);
   return httpServer;
 }
-var require3, PDFParse, upload, uploadLarge, databaseUrlRaw, databaseUrl, pool, db, cache, ADMIN_EMAILS, ADMIN_PHONES;
+var require3, PDFParse, upload, uploadLarge, databaseUrlRaw, databaseUrl, pool, db, generateAIAnswer, cache, ADMIN_EMAILS, ADMIN_PHONES;
 var init_routes = __esm({
   "server/routes.ts"() {
     "use strict";
@@ -6837,6 +7287,7 @@ var init_routes = __esm({
     init_course_access_routes();
     init_upload_routes();
     init_media_stream_routes();
+    init_ai_tutor_service();
     require3 = createRequire2(import.meta.url);
     ({ PDFParse } = require3("pdf-parse"));
     upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -6864,6 +7315,7 @@ var init_routes = __esm({
     db = {
       query: (text, params, options) => dbQuery(text, params, options)
     };
+    generateAIAnswer = createGenerateAIAnswer(db);
     cache = /* @__PURE__ */ new Map();
     setInterval(() => {
       const now = Date.now();
@@ -6919,10 +7371,36 @@ function setupCors(app2) {
     const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
     return new RegExp(`^${escaped}$`, "i").test(origin);
   };
+  const isPrivateLocalOrigin = (origin) => {
+    try {
+      const parsed = new URL(origin);
+      const host = parsed.hostname;
+      const isLocalhost = host === "localhost" || host === "127.0.0.1" || host.endsWith(".local");
+      if (isLocalhost) return true;
+      const m = host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+      if (!m) return false;
+      const a = Number(m[1]);
+      const b = Number(m[2]);
+      if (a === 10) return true;
+      if (a === 127) return true;
+      if (a === 192 && b === 168) return true;
+      if (a === 172 && b >= 16 && b <= 31) return true;
+      return false;
+    } catch {
+      return false;
+    }
+  };
   const defaultAllowedOrigins = [
     "https://3ilearning.in",
     // Keep www variant for compatibility.
     "https://www.3ilearning.in",
+    // Local web/dev origins for testing.
+    "http://localhost:8081",
+    "http://127.0.0.1:8081",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:19006",
+    "http://127.0.0.1:19006",
     // Razorpay Standard Checkout: redirect/callback POSTs to our API from these origins.
     "https://api.razorpay.com",
     "https://checkout.razorpay.com"
@@ -6936,6 +7414,9 @@ function setupCors(app2) {
     origin(origin, callback) {
       if (!origin) return callback(null, true);
       const normalizedOrigin = normalizeOrigin(origin);
+      if (process.env.NODE_ENV !== "production" && isPrivateLocalOrigin(normalizedOrigin)) {
+        return callback(null, true);
+      }
       if (allowedOriginPatterns.some((pattern) => originMatchesPattern(normalizedOrigin, pattern))) {
         return callback(null, true);
       }

@@ -72,6 +72,58 @@ function isCloudflareStreamId(str: string): boolean {
   return /^[a-f0-9]{32}$/i.test(str.trim());
 }
 
+function isHlsManifestUrl(url: string): boolean {
+  if (!url) return false;
+  const lower = url.toLowerCase();
+  if (/\.m3u8($|\?)/i.test(lower)) return true;
+  if (lower.includes("videodelivery.net/") && lower.includes("/manifest/")) return true;
+  return false;
+}
+
+function buildCfHlsPlayerHtml(hlsUrl: string): string {
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
+video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+</style>
+</head>
+<body>
+<video id="v" autoplay controls playsinline controlsList="nodownload noplaybackrate noremoteplayback nopictureinpicture" disablePictureInPicture disableRemotePlayback x-webkit-airplay="deny"></video>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest/dist/hls.min.js"></script>
+<script>
+var video = document.getElementById('v');
+var hlsUrl = '${hlsUrl}';
+function tryLoad() {
+  if (Hls.isSupported()) {
+    var hls = new Hls();
+    hls.loadSource(hlsUrl);
+    hls.attachMedia(video);
+    hls.on(Hls.Events.MANIFEST_PARSED, function() {
+      video.muted = true;
+      video.play().catch(function() {});
+      if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({ event: 'play' }));
+    });
+  } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    video.src = hlsUrl;
+    video.addEventListener('loadedmetadata', function once() {
+      video.removeEventListener('loadedmetadata', once);
+      video.muted = true;
+      video.play().catch(function() {});
+      if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({ event: 'play' }));
+    });
+  }
+}
+tryLoad();
+document.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+</script>
+</body>
+</html>`;
+}
+
 function buildCloudflareStreamHtml(videoId: string, signedUrl?: string): string {
   const streamUrl = signedUrl || `https://customer-${process.env.EXPO_PUBLIC_CLOUDFLARE_ACCOUNT_ID || ''}.cloudflarestream.com/${videoId}/manifest/video.m3u8`;
   
@@ -93,6 +145,8 @@ html, body { width: 100%; height: 100%; background: #000; overflow: hidden; -web
   controls
   autoplay
   preload="auto"
+  controlslist="nodownload noplaybackrate noremoteplayback"
+  disablepictureinpicture
   ${signedUrl ? `signed-url="${signedUrl}"` : ''}
 ></stream>
 <script>
@@ -104,6 +158,15 @@ document.addEventListener('selectstart', function(e) { e.preventDefault(); retur
 
 // Get player instance
 const player = document.getElementById('player');
+var media = document.querySelector('video');
+if (media) {
+  media.setAttribute('controlsList', 'nodownload noplaybackrate noremoteplayback nopictureinpicture');
+  media.setAttribute('disablePictureInPicture', 'true');
+  media.setAttribute('disableRemotePlayback', 'true');
+  media.setAttribute('x-webkit-airplay', 'deny');
+  media.disablePictureInPicture = true;
+  media.disableRemotePlayback = true;
+}
 
 // Notify React Native when ready
 if (player) {
@@ -155,7 +218,7 @@ video { width: 100%; height: 100%; object-fit: contain; background: #000; }
 </style>
 </head>
 <body>
-<video controls playsinline controlsList="nodownload noplaybackrate noremoteplayback" disablePictureInPicture>
+<video controls playsinline controlsList="nodownload noplaybackrate noremoteplayback nopictureinpicture" disablePictureInPicture disableRemotePlayback x-webkit-airplay="deny">
   <source src="${url}" type="video/mp4">
 </video>
 <script>
@@ -358,8 +421,9 @@ function WebDirectVideoPlayer({ url, onReady }: { url: string; onReady: () => vo
       src={url}
       controls
       playsInline
-      controlsList="nodownload noplaybackrate noremoteplayback"
+      controlsList="nodownload noplaybackrate noremoteplayback nopictureinpicture"
       disablePictureInPicture
+      disableRemotePlayback
       style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "contain", backgroundColor: "#000" } as any}
       onContextMenu={(e: any) => e.preventDefault()}
       onCanPlay={(e) => {
@@ -501,6 +565,7 @@ export default function LectureScreen() {
   const playbackUrl = authenticatedVideoUrl || videoUrl;
   const videoId = getYouTubeVideoId(playbackUrl);
   const isStreamId = !videoId && isCloudflareStreamId(playbackUrl);
+  const isCfHls = !videoId && !isStreamId && isHlsManifestUrl(playbackUrl);
   const isDirect = !videoId && !isStreamId && isDirectVideoUrl(playbackUrl);
   
   const youtubeHtml = videoId ? buildYouTubeHtml(videoId) : "";
@@ -636,6 +701,13 @@ export default function LectureScreen() {
           <WebYouTubePlayer videoId={videoId} onReady={() => setIsLoading(false)} />
         ) : !hasError && isStreamId && Platform.OS === "web" ? (
           <WebCloudflareStreamPlayer videoId={playbackUrl} onReady={() => setIsLoading(false)} />
+        ) : !hasError && isCfHls && Platform.OS === "web" ? (
+          <iframe
+            srcDoc={buildCfHlsPlayerHtml(playbackUrl)}
+            style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" } as any}
+            allow="autoplay; fullscreen"
+            onLoad={() => { setIsLoading(false); setIsVideoPlaying(true); }}
+          />
         ) : !hasError && videoId && nativeYouTubeHtml && Platform.OS !== "web" ? (
           <WebView
             source={{ html: nativeYouTubeHtml, baseUrl: "https://www.youtube.com" }}
@@ -671,6 +743,23 @@ export default function LectureScreen() {
             mixedContentMode="compatibility"
             originWhitelist={["*"]}
           />
+        ) : !hasError && isCfHls && Platform.OS !== "web" ? (
+          <WebView
+            source={{ html: buildCfHlsPlayerHtml(playbackUrl) }}
+            style={styles.webView}
+            onLoad={() => { setIsLoading(false); setIsVideoPlaying(true); }}
+            onError={() => { setIsLoading(false); setHasError(true); }}
+            onMessage={handleWebViewMessage}
+            allowsFullscreenVideo
+            mediaPlaybackRequiresUserAction={false}
+            injectedJavaScript={preventScreenCapture}
+            allowsInlineMediaPlayback
+            scrollEnabled={false}
+            javaScriptEnabled
+            domStorageEnabled
+            mixedContentMode="compatibility"
+            originWhitelist={["*"]}
+          />
         ) : !hasError && isDirect && Platform.OS === "web" ? (
           <WebDirectVideoPlayer url={playbackUrl} onReady={() => setIsLoading(false)} />
         ) : !hasError && isDirect && Platform.OS !== "web" ? (
@@ -690,7 +779,7 @@ export default function LectureScreen() {
             mixedContentMode="compatibility"
             originWhitelist={["*"]}
           />
-        ) : !hasError && !videoId && !isDirect && !isStreamId ? (
+        ) : !hasError && !videoId && !isDirect && !isStreamId && !isCfHls ? (
           <View style={styles.errorOverlay}>
             <Ionicons name="videocam-off-outline" size={40} color={Colors.light.textMuted} />
             <Text style={styles.errorTitle}>No video available</Text>

@@ -387,10 +387,12 @@ export default function BroadcastPage() {
           router.replace("/admin" as any);
         }
       } else if (streamType === "cloudflare") {
-        await apiRequest("POST", `/api/admin/live-classes/${liveClassId}/stream/end`, {});
-        if (cfPlaybackHls) {
+        const endRes = await apiRequest("POST", `/api/admin/live-classes/${liveClassId}/stream/end`, {});
+        const endData = await endRes.json().catch(() => ({} as any));
+        const recordingUrl = String(endData?.recordingUrl || cfPlaybackHls || "").trim();
+        if (recordingUrl) {
           await apiRequest("POST", `/api/admin/live-classes/${liveClassId}/recording`, {
-            recordingUrl: cfPlaybackHls,
+            recordingUrl,
             sectionTitle: recordingSection,
           });
         } else {
@@ -421,6 +423,10 @@ export default function BroadcastPage() {
   }
 
   const youtubeVideoId = getYouTubeVideoId(youtubeUrl);
+  const savedRecordingUrl = String(liveClass?.recording_url || "").trim();
+  const isCloudflareRecordingSaved =
+    !!savedRecordingUrl &&
+    (savedRecordingUrl.includes("videodelivery.net") || savedRecordingUrl.endsWith(".m3u8"));
 
   return (
     <View style={styles.container}>
@@ -689,6 +695,12 @@ export default function BroadcastPage() {
 
           {/* End Class button / Upload progress */}
           <View style={styles.endClassContainer}>
+            {isCloudflareRecordingSaved && (
+              <View style={styles.savedSourceBadge}>
+                <Ionicons name="cloud-done-outline" size={15} color="#065F46" />
+                <Text style={styles.savedSourceBadgeText}>Recording source: Cloudflare (saved)</Text>
+              </View>
+            )}
             {uploadError && (
               <View style={styles.uploadErrorContainer}>
                 <Text style={styles.uploadErrorText}>{uploadError}</Text>
@@ -947,6 +959,23 @@ const styles = StyleSheet.create({
     padding: 12,
     borderTopWidth: 1,
     borderTopColor: Colors.light.border,
+  },
+  savedSourceBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: 10,
+    backgroundColor: "#D1FAE5",
+    borderWidth: 1,
+    borderColor: "#6EE7B7",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  savedSourceBadgeText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#065F46",
   },
   endClassButton: {
     flexDirection: "row",

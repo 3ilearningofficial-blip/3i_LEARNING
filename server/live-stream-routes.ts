@@ -10,6 +10,7 @@ type RegisterLiveStreamRoutesDeps = {
   db: DbClient;
   requireAdmin: (req: Request, res: Response, next: () => void) => any;
   recomputeAllEnrollmentsProgressForCourse: (courseId: number | string) => Promise<void>;
+  getR2Client: () => Promise<any>;
 };
 
 export function registerLiveStreamRoutes({
@@ -17,7 +18,45 @@ export function registerLiveStreamRoutes({
   db,
   requireAdmin,
   recomputeAllEnrollmentsProgressForCourse,
+  getR2Client,
 }: RegisterLiveStreamRoutesDeps): void {
+  const inferVideoType = (url: string): "youtube" | "cloudflare" | "r2" => {
+    const lower = String(url || "").toLowerCase();
+    if (lower.includes("youtube.com") || lower.includes("youtu.be")) return "youtube";
+    if (lower.includes("videodelivery.net") || lower.endsWith(".m3u8")) return "cloudflare";
+    return "r2";
+  };
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const extractCloudflareRecordingUid = (url: string): string | null => {
+    const m = String(url || "").match(/videodelivery\.net\/([^/]+)\/manifest\/video\.m3u8/i);
+    return m?.[1] ? String(m[1]) : null;
+  };
+  const toMediaApiPath = (key: string): string => `/api/media/${key}`;
+  const archiveCloudflareRecordingToR2 = async (recordingUid: string): Promise<string | null> => {
+    try {
+      if (!process.env.R2_BUCKET_NAME) return null;
+      const mp4Url = `https://videodelivery.net/${recordingUid}/downloads/default.mp4`;
+      const source = await fetch(mp4Url);
+      if (!source.ok || !source.body) return null;
+      const { PutObjectCommand } = await import("@aws-sdk/client-s3");
+      const { Readable } = await import("stream");
+      const r2 = await getR2Client();
+      const key = `live-class-recording/cloudflare/${Date.now()}-${recordingUid}.mp4`;
+      await r2.send(
+        new PutObjectCommand({
+          Bucket: process.env.R2_BUCKET_NAME,
+          Key: key,
+          Body: Readable.fromWeb(source.body as any),
+          ContentType: "video/mp4",
+        })
+      );
+      return toMediaApiPath(key);
+    } catch (err) {
+      console.warn("[CF Stream] Failed to archive recording to R2:", err);
+      return null;
+    }
+  };
+
   app.post("/api/admin/live-classes/:id/stream/create", requireAdmin, async (req: Request, res: Response) => {
     try {
       const accountId = process.env.CF_STREAM_ACCOUNT_ID || process.env.R2_ACCOUNT_ID;
@@ -111,18 +150,54 @@ export function registerLiveStreamRoutes({
       const accountId = process.env.CF_STREAM_ACCOUNT_ID || process.env.R2_ACCOUNT_ID;
       const apiToken = process.env.CF_STREAM_API_TOKEN;
       if (!accountId || !apiToken) return res.status(500).json({ message: "CF Stream credentials not configured" });
+      if (!process.env.R2_BUCKET_NAME) return res.status(500).json({ message: "R2 bucket is not configured" });
 
       const lcResult = await db.query("SELECT cf_stream_uid FROM live_classes WHERE id = $1", [req.params.id]);
       const uid = lcResult.rows[0]?.cf_stream_uid;
       if (!uid) return res.json({ success: true });
+
+      const getLatestRecording = async (): Promise<{ manifestUrl: string; recordingUid: string } | null> => {
+        try {
+          const videosRes = await fetch(
+            `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/live_inputs/${uid}/videos`,
+            { headers: { Authorization: `Bearer ${apiToken}` } }
+          );
+          if (!videosRes.ok) return null;
+          const videosData = (await videosRes.json()) as any;
+          const raw = videosData?.result;
+          const items: any[] = Array.isArray(raw) ? raw : Array.isArray(raw?.videos) ? raw.videos : [];
+          if (!items.length) return null;
+          const ready = items.find((v) => String(v?.status || "").toLowerCase() === "ready") || items[0];
+          const recordingUid = ready?.uid || ready?.id;
+          if (!recordingUid) return null;
+          return {
+            manifestUrl: `https://videodelivery.net/${recordingUid}/manifest/video.m3u8`,
+            recordingUid: String(recordingUid),
+          };
+        } catch {
+          return null;
+        }
+      };
 
       await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/live_inputs/${uid}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${apiToken}` },
       });
 
+      // Cloudflare may need a few seconds to finalize VOD after ending live input.
+      let recordingUrl: string | null = null;
+      for (let i = 0; i < 6; i += 1) {
+        const latest = await getLatestRecording();
+        if (latest) {
+          const archived = await archiveCloudflareRecordingToR2(latest.recordingUid);
+          recordingUrl = archived || latest.manifestUrl;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+
       console.log(`[CF Stream] Ended live input uid=${uid}`);
-      res.json({ success: true });
+      res.json({ success: true, recordingUrl });
     } catch (err) {
       console.error("[CF Stream] End error:", err);
       res.status(500).json({ message: "Failed to end stream" });
@@ -181,7 +256,7 @@ export function registerLiveStreamRoutes({
               row.title,
               row.description || "",
               recordingUrl,
-              "r2",
+              inferVideoType(recordingUrl),
               durationMins,
               maxOrder.rows[0].next_order,
               false,
@@ -203,5 +278,45 @@ export function registerLiveStreamRoutes({
       res.status(500).json({ message: "Failed to save recording" });
     }
   });
+
+  let isArchiveSweepRunning = false;
+  const runArchiveSweep = async () => {
+    if (isArchiveSweepRunning) return;
+    isArchiveSweepRunning = true;
+    try {
+      const pending = await db.query(
+        `SELECT id, title, recording_url
+         FROM live_classes
+         WHERE stream_type = 'cloudflare'
+           AND is_completed = TRUE
+           AND recording_url ILIKE 'https://videodelivery.net/%/manifest/video.m3u8'
+         ORDER BY ended_at DESC NULLS LAST
+         LIMIT 20`
+      );
+      for (const row of pending.rows) {
+        const currentUrl = String(row.recording_url || "").trim();
+        const recordingUid = extractCloudflareRecordingUid(currentUrl);
+        if (!recordingUid) continue;
+        const archivedUrl = await archiveCloudflareRecordingToR2(recordingUid);
+        if (!archivedUrl) continue;
+        await db.query("UPDATE live_classes SET recording_url = $1 WHERE id = $2", [archivedUrl, row.id]);
+        await db.query(
+          "UPDATE lectures SET video_url = $1, video_type = 'r2' WHERE title = $2 AND video_url = $3",
+          [archivedUrl, row.title, currentUrl]
+        ).catch(() => {});
+        console.log(`[CF Stream] Archived fallback recording to R2 for live class ${row.id}`);
+        await sleep(250);
+      }
+    } catch (err) {
+      console.warn("[CF Stream] Archive sweep error:", err);
+    } finally {
+      isArchiveSweepRunning = false;
+    }
+  };
+  const sweepIntervalMs = Math.max(30000, Number(process.env.CF_ARCHIVE_SWEEP_MS || 120000));
+  void runArchiveSweep();
+  setInterval(() => {
+    void runArchiveSweep();
+  }, sweepIntervalMs);
 }
 

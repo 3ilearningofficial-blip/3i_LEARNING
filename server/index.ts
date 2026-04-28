@@ -56,10 +56,37 @@ function setupCors(app: express.Application) {
     return new RegExp(`^${escaped}$`, "i").test(origin);
   };
 
+  const isPrivateLocalOrigin = (origin: string): boolean => {
+    try {
+      const parsed = new URL(origin);
+      const host = parsed.hostname;
+      const isLocalhost = host === "localhost" || host === "127.0.0.1" || host.endsWith(".local");
+      if (isLocalhost) return true;
+      const m = host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+      if (!m) return false;
+      const a = Number(m[1]);
+      const b = Number(m[2]);
+      if (a === 10) return true;
+      if (a === 127) return true;
+      if (a === 192 && b === 168) return true;
+      if (a === 172 && b >= 16 && b <= 31) return true;
+      return false;
+    } catch {
+      return false;
+    }
+  };
+
   const defaultAllowedOrigins = [
     "https://3ilearning.in",
     // Keep www variant for compatibility.
     "https://www.3ilearning.in",
+    // Local web/dev origins for testing.
+    "http://localhost:8081",
+    "http://127.0.0.1:8081",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:19006",
+    "http://127.0.0.1:19006",
     // Razorpay Standard Checkout: redirect/callback POSTs to our API from these origins.
     "https://api.razorpay.com",
     "https://checkout.razorpay.com",
@@ -78,6 +105,9 @@ function setupCors(app: express.Application) {
       // Allow non-browser clients (curl/mobile/native fetch without Origin header).
       if (!origin) return callback(null, true);
       const normalizedOrigin = normalizeOrigin(origin);
+      if (process.env.NODE_ENV !== "production" && isPrivateLocalOrigin(normalizedOrigin)) {
+        return callback(null, true);
+      }
       if (allowedOriginPatterns.some((pattern) => originMatchesPattern(normalizedOrigin, pattern))) {
         return callback(null, true);
       }

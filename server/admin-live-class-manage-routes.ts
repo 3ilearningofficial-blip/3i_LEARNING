@@ -20,6 +20,13 @@ export function registerAdminLiveClassManageRoutes({
   getR2Client,
   recomputeAllEnrollmentsProgressForCourse,
 }: RegisterAdminLiveClassManageRoutesDeps): void {
+  const inferVideoType = (url: string): "youtube" | "cloudflare" | "r2" => {
+    const lower = String(url || "").toLowerCase();
+    if (lower.includes("youtube.com") || lower.includes("youtu.be")) return "youtube";
+    if (lower.includes("videodelivery.net") || lower.endsWith(".m3u8")) return "cloudflare";
+    return "r2";
+  };
+
   app.post("/api/admin/live-classes/cleanup", requireAdmin, async (_req: Request, res: Response) => {
     try {
       console.log("[Cleanup] Starting live class cleanup...");
@@ -90,7 +97,7 @@ export function registerAdminLiveClassManageRoutes({
             if (!peer.course_id) continue;
             const urlForPeer = String(peer.recording_url || peer.youtube_url || liveClassOnly.recording_url || liveClassOnly.youtube_url || "").trim();
             if (!urlForPeer) continue;
-            const vType = urlForPeer.includes("youtube.com") || urlForPeer.includes("youtu.be") ? "youtube" : "r2";
+            const vType = inferVideoType(urlForPeer);
             const exists = await db.query(
               "SELECT 1 FROM lectures WHERE course_id = $1 AND title = $2 AND video_url = $3 LIMIT 1",
               [peer.course_id, peer.title, urlForPeer]
@@ -226,7 +233,7 @@ export function registerAdminLiveClassManageRoutes({
           if (!peer.course_id) continue;
           const urlForPeer = String(peer.recording_url || peer.youtube_url || liveClass.recording_url || liveClass.youtube_url || "").trim();
           if (!urlForPeer) continue;
-          const vType = urlForPeer.includes("youtube.com") || urlForPeer.includes("youtu.be") ? "youtube" : "r2";
+          const vType = inferVideoType(urlForPeer);
           const exists = await db.query(
             "SELECT 1 FROM lectures WHERE course_id = $1 AND title = $2 AND video_url = $3 LIMIT 1",
             [peer.course_id, peer.title, urlForPeer]
