@@ -42,8 +42,9 @@ export function registerLectureRoutes({
     try {
       const user = await getAuthUser(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
+      const lectureId = String(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id);
 
-      const access = await canAccessLecture(user, req.params.id);
+      const access = await canAccessLecture(user, lectureId);
       if (!access.lecture) return res.status(404).json({ message: "Lecture not found" });
       if (!access.allowed) return res.status(403).json({ message: "Enrollment required to access this lecture" });
       const lecture = access.lecture;
@@ -70,8 +71,9 @@ export function registerLectureRoutes({
     try {
       const user = await getAuthUser(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
+      const lectureId = String(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id);
       const { watchPercent, isCompleted } = req.body;
-      const access = await canAccessLecture(user, req.params.id);
+      const access = await canAccessLecture(user, lectureId);
       if (!access.lecture) return res.status(404).json({ message: "Lecture not found" });
       if (!access.allowed) return res.status(403).json({ message: "Access denied for this lecture" });
       const lecture = access.lecture;
@@ -81,11 +83,11 @@ export function registerLectureRoutes({
         `INSERT INTO lecture_progress (user_id, lecture_id, watch_percent, is_completed, completed_at) 
          VALUES ($1, $2, $3, $4, $5) 
          ON CONFLICT (user_id, lecture_id) DO UPDATE SET watch_percent = $3, is_completed = $4, completed_at = $5`,
-        [user.id, req.params.id, normalizedWatchPercent, Boolean(isCompleted), isCompleted ? Date.now() : null]
+        [user.id, lectureId, normalizedWatchPercent, Boolean(isCompleted), isCompleted ? Date.now() : null]
       );
       if (courseId && isCompleted) {
         await updateCourseProgress(user.id, Number(courseId));
-        await db.query("UPDATE enrollments SET last_lecture_id = $1 WHERE user_id = $2 AND course_id = $3", [req.params.id, user.id, courseId]);
+        await db.query("UPDATE enrollments SET last_lecture_id = $1 WHERE user_id = $2 AND course_id = $3", [lectureId, user.id, courseId]);
       }
       res.json({ success: true });
     } catch {
