@@ -56,12 +56,18 @@ export function registerLiveStreamRoutes({
       const { Readable } = await import("stream");
       const r2 = await getR2Client();
       const key = `live-class-recording/cloudflare/${Date.now()}-${recordingUid}.mp4`;
+      const contentLengthHeader = source.headers.get("content-length");
+      const parsedContentLength = contentLengthHeader ? Number(contentLengthHeader) : NaN;
+      const contentLength = Number.isFinite(parsedContentLength) && parsedContentLength > 0
+        ? parsedContentLength
+        : undefined;
       await r2.send(
         new PutObjectCommand({
           Bucket: process.env.R2_BUCKET_NAME,
           Key: key,
           Body: Readable.fromWeb(source.body as any),
           ContentType: "video/mp4",
+          ...(contentLength ? { ContentLength: contentLength } : {}),
         })
       );
       console.log(`[CF Stream] Archived recording uid=${recordingUid} to R2 from ${matchedUrl || "unknown-source"}`);
