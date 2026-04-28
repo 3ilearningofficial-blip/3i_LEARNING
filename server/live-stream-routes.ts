@@ -135,7 +135,8 @@ export function registerLiveStreamRoutes({
         },
         body: JSON.stringify({
           meta: { name: liveClass.title },
-          recording: { mode: "automatic", timeoutSeconds: 60 },
+          // Lower timeout keeps very short classes from lingering too long as "live" after stop.
+          recording: { mode: "automatic", timeoutSeconds: 20 },
         }),
       });
 
@@ -201,6 +202,11 @@ export function registerLiveStreamRoutes({
 
       const lcResult = await db.query("SELECT cf_stream_uid FROM live_classes WHERE id = $1", [req.params.id]);
       const uid = lcResult.rows[0]?.cf_stream_uid;
+      const endedAtNow = Date.now();
+      await db.query(
+        "UPDATE live_classes SET is_live = FALSE, ended_at = COALESCE(ended_at, $1), is_completed = TRUE WHERE id = $2",
+        [endedAtNow, req.params.id]
+      ).catch(() => {});
       if (!uid) return res.json({ success: true });
 
       const getLatestRecording = async (): Promise<{ manifestUrl: string; recordingUid: string } | null> =>
@@ -247,10 +253,10 @@ export function registerLiveStreamRoutes({
       const title = liveClass.title as string;
 
       const peers = await db.query("SELECT * FROM live_classes WHERE title = $1 ORDER BY id", [title]);
-      const endedAt = Date.now();
       const lectureIds: number[] = [];
 
       for (const row of peers.rows) {
+        const endedAt = Number(row.ended_at || Date.now());
         const durationMins = row.started_at
           ? Math.max(1, Math.round((endedAt - Number(row.started_at)) / 60000))
           : 0;

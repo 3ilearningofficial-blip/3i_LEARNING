@@ -223,21 +223,28 @@ export function registerDoubtNotificationRoutes({
       const topicFilter = String(req.query.topic || "").trim();
       const studentQuery = String(req.query.student || "").trim();
       const { whereSql, params } = buildAdminDoubtFilter({ daysRaw, topicFilter, studentQuery });
-      const deleted = await db.query(
-        `WITH target AS (
-           SELECT d.id
-           FROM doubts d
-           LEFT JOIN users u ON u.id = d.user_id
-           ${whereSql}
-           LIMIT 10000
-         )
-         DELETE FROM doubts d
-         USING target t
-         WHERE d.id = t.id
-         RETURNING d.id`,
+      const target = await db.query(
+        `SELECT d.id
+         FROM doubts d
+         LEFT JOIN users u ON u.id = d.user_id
+         ${whereSql}
+         ORDER BY d.created_at DESC
+         LIMIT 10000`,
         params
       );
-      res.json({ success: true, deletedCount: deleted.rows.length || 0 });
+      const ids = (target.rows || [])
+        .map((r) => Number(r.id))
+        .filter((id) => Number.isFinite(id));
+      if (!ids.length) {
+        return res.json({ success: true, deletedCount: 0 });
+      }
+      const deleted = await db.query(
+        `DELETE FROM doubts
+         WHERE id = ANY($1::int[])
+         RETURNING id`,
+        [ids]
+      );
+      return res.json({ success: true, deletedCount: deleted.rows.length || 0 });
     } catch (err) {
       console.error("[Admin Doubts] delete failed:", err);
       res.status(500).json({ message: "Failed to clear doubts" });

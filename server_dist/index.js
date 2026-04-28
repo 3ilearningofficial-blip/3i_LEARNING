@@ -1571,7 +1571,8 @@ function registerLiveStreamRoutes({
         },
         body: JSON.stringify({
           meta: { name: liveClass.title },
-          recording: { mode: "automatic", timeoutSeconds: 60 }
+          // Lower timeout keeps very short classes from lingering too long as "live" after stop.
+          recording: { mode: "automatic", timeoutSeconds: 20 }
         })
       });
       if (!cfRes.ok) {
@@ -1627,6 +1628,12 @@ function registerLiveStreamRoutes({
       if (!process.env.R2_BUCKET_NAME) return res.status(500).json({ message: "R2 bucket is not configured" });
       const lcResult = await db2.query("SELECT cf_stream_uid FROM live_classes WHERE id = $1", [req.params.id]);
       const uid = lcResult.rows[0]?.cf_stream_uid;
+      const endedAtNow = Date.now();
+      await db2.query(
+        "UPDATE live_classes SET is_live = FALSE, ended_at = COALESCE(ended_at, $1), is_completed = TRUE WHERE id = $2",
+        [endedAtNow, req.params.id]
+      ).catch(() => {
+      });
       if (!uid) return res.json({ success: true });
       const getLatestRecording = async () => getLatestRecordingForLiveInput(accountId, apiToken, uid);
       let recordingUrl = null;
@@ -1664,9 +1671,9 @@ function registerLiveStreamRoutes({
       const liveClass = lcResult.rows[0];
       const title = liveClass.title;
       const peers = await db2.query("SELECT * FROM live_classes WHERE title = $1 ORDER BY id", [title]);
-      const endedAt = Date.now();
       const lectureIds = [];
       for (const row of peers.rows) {
+        const endedAt = Number(row.ended_at || Date.now());
         const durationMins = row.started_at ? Math.max(1, Math.round((endedAt - Number(row.started_at)) / 6e4)) : 0;
         await db2.query(
           `UPDATE live_classes 
@@ -3904,21 +3911,26 @@ function registerDoubtNotificationRoutes({
       const topicFilter = String(req.query.topic || "").trim();
       const studentQuery = String(req.query.student || "").trim();
       const { whereSql, params } = buildAdminDoubtFilter({ daysRaw, topicFilter, studentQuery });
-      const deleted = await db2.query(
-        `WITH target AS (
-           SELECT d.id
-           FROM doubts d
-           LEFT JOIN users u ON u.id = d.user_id
-           ${whereSql}
-           LIMIT 10000
-         )
-         DELETE FROM doubts d
-         USING target t
-         WHERE d.id = t.id
-         RETURNING d.id`,
+      const target = await db2.query(
+        `SELECT d.id
+         FROM doubts d
+         LEFT JOIN users u ON u.id = d.user_id
+         ${whereSql}
+         ORDER BY d.created_at DESC
+         LIMIT 10000`,
         params
       );
-      res.json({ success: true, deletedCount: deleted.rows.length || 0 });
+      const ids = (target.rows || []).map((r) => Number(r.id)).filter((id) => Number.isFinite(id));
+      if (!ids.length) {
+        return res.json({ success: true, deletedCount: 0 });
+      }
+      const deleted = await db2.query(
+        `DELETE FROM doubts
+         WHERE id = ANY($1::int[])
+         RETURNING id`,
+        [ids]
+      );
+      return res.json({ success: true, deletedCount: deleted.rows.length || 0 });
     } catch (err) {
       console.error("[Admin Doubts] delete failed:", err);
       res.status(500).json({ message: "Failed to clear doubts" });
