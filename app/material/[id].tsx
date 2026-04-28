@@ -9,7 +9,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/context/AuthContext";
 import { getBaseUrl, apiRequest, toHttpsMediaUrl } from "@/lib/query-client";
 import Colors from "@/constants/colors";
@@ -330,6 +330,7 @@ export default function MaterialViewerScreen() {
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const [loading, setLoading] = useState(true);
   const [mediaToken, setMediaToken] = useState<string | null>(null);
+  const qc = useQueryClient();
   const topPadding = Platform.OS === "web" ? 16 : insets.top;
   const { isAdmin } = useAuth();
 
@@ -339,11 +340,25 @@ export default function MaterialViewerScreen() {
   const { data: material, isError: fetchError } = useQuery<{
     id: number; title: string; file_url: string; file_type: string;
     description: string; download_allowed: boolean; is_free: boolean;
-    section_title: string | null;
+    section_title: string | null; course_id?: number | null;
   }>({
     queryKey: ["/api/study-materials", id],
     enabled: !!id,
   });
+
+  useEffect(() => {
+    const cid = Number(material?.course_id);
+    if (!cid || !Number.isFinite(cid)) return;
+    qc.prefetchQuery({
+      queryKey: ["/api/courses", String(cid)],
+      queryFn: async () => {
+        const res = await apiRequest("GET", `/courses/${cid}`);
+        if (!res.ok) throw new Error("prefetch course failed");
+        return res.json();
+      },
+      staleTime: 30000,
+    });
+  }, [material?.course_id, qc]);
 
   // Apply enhanced video protection only for local video playback
   const isPlayingLocalVideo = !!localUri && material?.file_type === 'video';

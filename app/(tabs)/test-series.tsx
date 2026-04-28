@@ -515,6 +515,32 @@ export default function TestSeriesScreen() {
     [tests, now]
   );
 
+  useEffect(() => {
+    const baseUrl = getApiUrl();
+    allTestSeries.slice(0, 4).forEach((course: any) => {
+      qc.prefetchQuery({
+        queryKey: ["/api/courses", String(course.id)],
+        queryFn: async () => {
+          const res = await authFetch(new URL(`/api/courses/${course.id}`, baseUrl).toString());
+          if (!res.ok) throw new Error("prefetch test-series course failed");
+          return res.json();
+        },
+        staleTime: 30000,
+      });
+    });
+    regularTests.slice(0, 4).forEach((test) => {
+      qc.prefetchQuery({
+        queryKey: ["/api/tests", test.id],
+        queryFn: async () => {
+          const res = await authFetch(new URL(`/api/tests/${test.id}`, baseUrl).toString());
+          if (!res.ok) throw new Error("prefetch test failed");
+          return res.json();
+        },
+        staleTime: 30000,
+      });
+    });
+  }, [allTestSeries, regularTests, qc]);
+
   return (
     <View style={styles.container}>
       <LinearGradient colors={["#0A1628", "#1A2E50"]} style={[styles.header, { paddingTop: topPadding + 8 }]}>

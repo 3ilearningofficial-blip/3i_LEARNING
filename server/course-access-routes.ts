@@ -136,17 +136,18 @@ export function registerCourseAccessRoutes({
         (course as any).accessExpired = accessExpired || false;
         (course as any).enrollmentValidUntil = row && row.valid_until != null ? row.valid_until : null;
 
-        let progressRow = row;
-        if ((course as any).isEnrolled) {
-          await updateCourseProgress(user.id, courseIdParam);
-          const enrollFresh = await db.query("SELECT * FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [user.id, courseIdParam]);
-          progressRow = enrollFresh.rows[0] || row;
-        }
+        const progressRow = row;
         (course as any).progress = progressRow && !accessExpired ? (progressRow?.progress_percent || 0) : 0;
         (course as any).lastLectureId = progressRow && !accessExpired ? progressRow?.last_lecture_id : null;
 
         if ((course as any).isEnrolled) {
-          const lpResult = await db.query("SELECT * FROM lecture_progress WHERE user_id = $1", [user.id]);
+          const lpResult = await db.query(
+            `SELECT lp.lecture_id, lp.is_completed
+             FROM lecture_progress lp
+             JOIN lectures l ON l.id = lp.lecture_id
+             WHERE lp.user_id = $1 AND l.course_id = $2`,
+            [user.id, courseIdParam],
+          );
           const lpMap: Record<number, boolean> = {};
           lpResult.rows.forEach((lp: { lecture_id: number; is_completed: boolean }) => {
             lpMap[lp.lecture_id] = lp.is_completed;

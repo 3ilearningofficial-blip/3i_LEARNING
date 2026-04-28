@@ -417,6 +417,22 @@ export default function HomeScreen() {
     return filtered;
   }, [allCourses, selectedCategory, search]);
 
+  useEffect(() => {
+    const baseUrl = getApiUrl();
+    const hotCourses = allCourses.slice(0, 4);
+    hotCourses.forEach((course: any) => {
+      qc.prefetchQuery({
+        queryKey: ["/api/courses", String(course.id)],
+        queryFn: async () => {
+          const res = await authFetch(new URL(`/api/courses/${course.id}`, baseUrl).toString());
+          if (!res.ok) throw new Error("prefetch course failed");
+          return res.json();
+        },
+        staleTime: 30000,
+      });
+    });
+  }, [allCourses, qc]);
+
   const { data: freeMaterialsData } = useQuery<{ materials: StudyMaterial[]; folders: MaterialFolder[] }>({
     queryKey: ["/api/study-materials", "free"],
     queryFn: async () => {
@@ -446,6 +462,22 @@ export default function HomeScreen() {
     },
     refetchInterval: 30000,
   });
+
+  useEffect(() => {
+    const baseUrl = getApiUrl();
+    const hotLive = (liveClasses || []).slice(0, 3);
+    hotLive.forEach((lc) => {
+      qc.prefetchQuery({
+        queryKey: ["/api/live-classes", lc.id],
+        queryFn: async () => {
+          const res = await authFetch(new URL(`/api/live-classes/${lc.id}`, baseUrl).toString());
+          if (!res.ok) throw new Error("prefetch live failed");
+          return res.json();
+        },
+        staleTime: 15000,
+      });
+    });
+  }, [liveClasses, qc]);
 
   const { data: homeNotifications = [] } = useQuery<any[]>({
     queryKey: ["/api/notifications"],

@@ -445,10 +445,14 @@ async function ensureCoreLearningSchemaColumns(): Promise<void> {
 
 async function ensureCoreLearningPerformanceIndexes(): Promise<void> {
   const indexStatements = [
+    "CREATE INDEX IF NOT EXISTS idx_users_session_token ON users(session_token)",
     "CREATE INDEX IF NOT EXISTS idx_enrollments_user_course_status_valid_until ON enrollments(user_id, course_id, status, valid_until)",
+    "CREATE INDEX IF NOT EXISTS idx_enrollments_course_user_status_valid_until ON enrollments(course_id, user_id, status, valid_until)",
     "CREATE INDEX IF NOT EXISTS idx_lectures_course_section ON lectures(course_id, section_title)",
     "CREATE INDEX IF NOT EXISTS idx_materials_course_section ON study_materials(course_id, section_title)",
     "CREATE INDEX IF NOT EXISTS idx_live_classes_course_scheduled ON live_classes(course_id, scheduled_at)",
+    "CREATE INDEX IF NOT EXISTS idx_live_classes_feed_visibility ON live_classes(is_completed, is_live, scheduled_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_daily_missions_date_type ON daily_missions(mission_date DESC, mission_type)",
     "CREATE INDEX IF NOT EXISTS idx_download_tokens_token_used_expires ON download_tokens(token, used, expires_at)",
     // Inbox: matches GET /api/notifications (user + unread + not hidden + non-support)
     "CREATE INDEX IF NOT EXISTS idx_notifications_inbox_unread ON notifications (user_id, created_at DESC) WHERE (is_read IS NOT TRUE) AND (is_hidden IS NOT TRUE) AND (source IS DISTINCT FROM 'support')",

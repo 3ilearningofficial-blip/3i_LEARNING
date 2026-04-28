@@ -2517,7 +2517,7 @@ export default function AdminCourseScreen() {
           </Modal>
 
           {/* Folder Action Sheet (inside open folder modal) */}
-          {folderActionSheet !== null && openAdminFolder !== null && (
+          <Modal visible={folderActionSheet !== null && openAdminFolder !== null} animationType="slide" transparent>
             <Pressable style={styles.modalOverlay} onPress={() => setFolderActionSheet(null)}>
               <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
                 <View style={styles.modalHeader}>
@@ -2585,7 +2585,7 @@ export default function AdminCourseScreen() {
                 </Pressable>
               </View>
             </Pressable>
-          )}
+          </Modal>
         </View>
       </Modal>
     </View>

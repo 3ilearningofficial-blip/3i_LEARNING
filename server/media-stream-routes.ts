@@ -53,22 +53,55 @@ async function streamMediaGet(
   }
 
   if (userRole !== "admin") {
-    const matResult = await db.query("SELECT course_id, is_free FROM study_materials WHERE file_url LIKE $1", [`%${key}%`]);
+    const normalizedKey = key.replace(/^\/+/, "");
+    const keyVariants = Array.from(new Set([
+      normalizedKey,
+      `/${normalizedKey}`,
+      decodeURIComponent(normalizedKey),
+      `/${decodeURIComponent(normalizedKey)}`,
+    ])).filter(Boolean);
+
+    const matResult = await db.query(
+      `SELECT course_id, is_free
+       FROM study_materials
+       WHERE file_url = ANY($1::text[])
+          OR regexp_replace(file_url, '^https?://[^/]+/', '') = ANY($1::text[])
+          OR regexp_replace(file_url, '^https?://[^/]+', '') = ANY($1::text[])
+       LIMIT 1`,
+      [keyVariants],
+    );
     if (matResult.rows.length > 0) {
       const mat = matResult.rows[0];
       if (mat.course_id && !mat.is_free) {
-        const enrolled = await db.query("SELECT * FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [userId, mat.course_id]);
+        const enrolled = await db.query(
+          "SELECT valid_until FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL) LIMIT 1",
+          [userId, mat.course_id],
+        );
         if (enrolled.rows.length === 0 || isEnrollmentExpired(enrolled.rows[0])) {
           res.status(403).json({ message: "Enrollment required" });
           return;
         }
       }
     } else {
-      const lecResult = await db.query("SELECT course_id, is_free_preview FROM lectures WHERE video_url LIKE $1 OR pdf_url LIKE $1", [`%${key}%`]);
+      const lecResult = await db.query(
+        `SELECT course_id, is_free_preview
+         FROM lectures
+         WHERE video_url = ANY($1::text[])
+            OR pdf_url = ANY($1::text[])
+            OR regexp_replace(video_url, '^https?://[^/]+/', '') = ANY($1::text[])
+            OR regexp_replace(video_url, '^https?://[^/]+', '') = ANY($1::text[])
+            OR regexp_replace(pdf_url, '^https?://[^/]+/', '') = ANY($1::text[])
+            OR regexp_replace(pdf_url, '^https?://[^/]+', '') = ANY($1::text[])
+         LIMIT 1`,
+        [keyVariants],
+      );
       if (lecResult.rows.length > 0) {
         const lec = lecResult.rows[0];
         if (lec.course_id && !lec.is_free_preview) {
-          const enrolled = await db.query("SELECT * FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [userId, lec.course_id]);
+          const enrolled = await db.query(
+            "SELECT valid_until FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL) LIMIT 1",
+            [userId, lec.course_id],
+          );
           if (enrolled.rows.length === 0 || isEnrollmentExpired(enrolled.rows[0])) {
             res.status(403).json({ message: "Enrollment required" });
             return;

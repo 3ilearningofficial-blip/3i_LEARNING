@@ -32,14 +32,25 @@ export function registerStudentMissionMaterialRoutes({
       if (user) {
         const userEnrollments = await db.query("SELECT course_id FROM enrollments WHERE user_id = $1", [user.id]);
         const enrolledCourseIds = new Set(userEnrollments.rows.map((e: { course_id: number }) => e.course_id));
+        const missionIds = result.rows.map((m: any) => Number(m.id)).filter((id: number) => Number.isFinite(id));
+        const userMissionMap = new Map<number, any>();
+        if (missionIds.length > 0) {
+          const umBatch = await db.query(
+            "SELECT * FROM user_missions WHERE user_id = $1 AND mission_id = ANY($2::int[])",
+            [user.id, missionIds],
+          );
+          umBatch.rows.forEach((um: any) => {
+            userMissionMap.set(Number(um.mission_id), um);
+          });
+        }
         for (const mission of result.rows) {
-          const um = await db.query("SELECT * FROM user_missions WHERE user_id = $1 AND mission_id = $2", [user.id, mission.id]);
-          mission.isCompleted = um.rows.length > 0 && um.rows[0].is_completed;
-          mission.userScore = um.rows[0]?.score || 0;
-          mission.userTimeTaken = um.rows[0]?.time_taken || 0;
-          mission.userAnswers = um.rows[0]?.answers || {};
-          mission.userIncorrect = um.rows[0]?.incorrect || 0;
-          mission.userSkipped = um.rows[0]?.skipped || 0;
+          const um = userMissionMap.get(Number(mission.id));
+          mission.isCompleted = !!um?.is_completed;
+          mission.userScore = um?.score || 0;
+          mission.userTimeTaken = um?.time_taken || 0;
+          mission.userAnswers = um?.answers || {};
+          mission.userIncorrect = um?.incorrect || 0;
+          mission.userSkipped = um?.skipped || 0;
           mission.isAccessible = mission.mission_type === "free_practice" || (mission.course_id ? enrolledCourseIds.has(mission.course_id) : enrolledCourseIds.size > 0);
         }
       } else {

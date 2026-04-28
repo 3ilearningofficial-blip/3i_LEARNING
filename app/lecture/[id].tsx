@@ -422,6 +422,21 @@ export default function LectureScreen() {
     enabled: !!id,
   });
 
+  useEffect(() => {
+    const cid = lectureData?.course_id || (courseId ? Number(courseId) : null);
+    if (!cid || !Number.isFinite(cid)) return;
+    const baseUrl = getApiUrl();
+    qc.prefetchQuery({
+      queryKey: ["/api/courses", String(cid)],
+      queryFn: async () => {
+        const res = await authFetch(new URL(`/api/courses/${cid}`, baseUrl).toString());
+        if (!res.ok) throw new Error("prefetch course failed");
+        return res.json();
+      },
+      staleTime: 30000,
+    });
+  }, [lectureData?.course_id, courseId, qc]);
+
   const isCompleted = progressData?.is_completed || lectureData?.is_completed || false;
 
   const rawVideoUrl = lectureData?.video_url || paramVideoUrl || "";

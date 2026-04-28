@@ -10,7 +10,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest, getBaseUrl, toHttpsMediaUrl } from "@/lib/query-client";
+import { apiRequest, authFetch, getApiUrl, getBaseUrl, toHttpsMediaUrl } from "@/lib/query-client";
 import { useAuth } from "@/context/AuthContext";
 import Colors from "@/constants/colors";
 import { useScreenProtection } from "@/lib/useScreenProtection";
@@ -105,7 +105,7 @@ iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border:
 </html>`;
 }
 
-/** Laptop / wide web: full-frame embed only — no overlay masks (layout already fine). */
+/** Laptop / wide web: hide YouTube branding while keeping volume/mute usable. */
 function buildYouTubeHtmlWideWeb(videoId: string): string {
   const q = new URLSearchParams({
     autoplay: "1",
@@ -129,15 +129,28 @@ function buildYouTubeHtmlWideWeb(videoId: string): string {
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { width: 100%; height: 100%; background: #000; overflow: hidden; -webkit-user-select: none; user-select: none; }
+.wrapper { position: relative; width: 100%; height: 100%; overflow: hidden; }
 iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; }
+/* Top overlays hide channel/title/share branding. */
+.cover-top-left { position: absolute; top: 0; left: 0; width: 58%; height: 58px; background: #000; z-index: 9999; pointer-events: auto; }
+.cover-top-right { position: absolute; top: 0; right: 0; width: 180px; height: 58px; background: #000; z-index: 9999; pointer-events: auto; }
+/* Bottom overlays hide branding but keep left controls (volume/mute) usable. */
+.cover-bottom-rest { position: absolute; bottom: 0; left: 140px; right: 0; height: 62px; background: #000; z-index: 9999; pointer-events: auto; }
+.cover-bottom-fs { position: absolute; bottom: 78px; right: 0; width: 92px; height: 50px; background: #000; z-index: 9999; pointer-events: auto; }
 @media print { body { display: none !important; } }
 </style>
 </head>
 <body>
-<iframe
-  src="https://www.youtube-nocookie.com/embed/${videoId}?${q.toString()}"
-  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
-></iframe>
+<div class="wrapper">
+  <div class="cover-top-left"></div>
+  <div class="cover-top-right"></div>
+  <iframe
+    src="https://www.youtube-nocookie.com/embed/${videoId}?${q.toString()}"
+    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+  ></iframe>
+  <div class="cover-bottom-fs"></div>
+  <div class="cover-bottom-rest"></div>
+</div>
 <script>document.addEventListener('contextmenu', function(e) { e.preventDefault(); });</script>
 </body>
 </html>`;
@@ -415,6 +428,20 @@ export default function LiveClassScreen() {
     },
     staleTime: 0,
   });
+
+  useEffect(() => {
+    if (!liveClassData?.course_id) return;
+    const baseUrl = getApiUrl();
+    qc.prefetchQuery({
+      queryKey: ["/api/courses", String(liveClassData.course_id)],
+      queryFn: async () => {
+        const res = await authFetch(new URL(`/api/courses/${liveClassData.course_id}`, baseUrl).toString());
+        if (!res.ok) throw new Error("prefetch course failed");
+        return res.json();
+      },
+      staleTime: 30000,
+    });
+  }, [liveClassData?.course_id, qc]);
 
   // Countdown timer — counts down to scheduled_at, then shows "Starting soon"
   useEffect(() => {

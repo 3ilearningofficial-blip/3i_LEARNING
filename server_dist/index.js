@@ -3532,14 +3532,25 @@ function registerStudentMissionMaterialRoutes({
       if (user) {
         const userEnrollments = await db2.query("SELECT course_id FROM enrollments WHERE user_id = $1", [user.id]);
         const enrolledCourseIds = new Set(userEnrollments.rows.map((e) => e.course_id));
+        const missionIds = result.rows.map((m) => Number(m.id)).filter((id) => Number.isFinite(id));
+        const userMissionMap = /* @__PURE__ */ new Map();
+        if (missionIds.length > 0) {
+          const umBatch = await db2.query(
+            "SELECT * FROM user_missions WHERE user_id = $1 AND mission_id = ANY($2::int[])",
+            [user.id, missionIds]
+          );
+          umBatch.rows.forEach((um) => {
+            userMissionMap.set(Number(um.mission_id), um);
+          });
+        }
         for (const mission of result.rows) {
-          const um = await db2.query("SELECT * FROM user_missions WHERE user_id = $1 AND mission_id = $2", [user.id, mission.id]);
-          mission.isCompleted = um.rows.length > 0 && um.rows[0].is_completed;
-          mission.userScore = um.rows[0]?.score || 0;
-          mission.userTimeTaken = um.rows[0]?.time_taken || 0;
-          mission.userAnswers = um.rows[0]?.answers || {};
-          mission.userIncorrect = um.rows[0]?.incorrect || 0;
-          mission.userSkipped = um.rows[0]?.skipped || 0;
+          const um = userMissionMap.get(Number(mission.id));
+          mission.isCompleted = !!um?.is_completed;
+          mission.userScore = um?.score || 0;
+          mission.userTimeTaken = um?.time_taken || 0;
+          mission.userAnswers = um?.answers || {};
+          mission.userIncorrect = um?.incorrect || 0;
+          mission.userSkipped = um?.skipped || 0;
           mission.isAccessible = mission.mission_type === "free_practice" || (mission.course_id ? enrolledCourseIds.has(mission.course_id) : enrolledCourseIds.size > 0);
         }
       } else {
@@ -4297,18 +4308,9 @@ function registerLiveClassRoutes({
           `SELECT lc.*, c.title as course_title, c.is_free as course_is_free,
             ${ex23} as is_enrolled
            FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
-           WHERE (lc.course_id = $1)
-           AND (
-             (lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE AND (
-                (lc.course_id = $1 AND (lc.is_free_preview = TRUE OR ${ex23}))
-             ))
-             OR (lc.is_live = TRUE AND (
-                 (lc.course_id = $1 AND (lc.is_free_preview = TRUE OR ${ex23}))
-             ))
-             OR (lc.is_completed = TRUE AND (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL) AND (
-                 (lc.course_id = $1 AND (lc.is_free_preview = TRUE OR ${ex23}))
-             ))
-           )
+           WHERE lc.course_id = $1
+             AND (lc.is_completed IS NOT TRUE OR (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL))
+             AND (lc.is_free_preview = TRUE OR ${ex23})
            ORDER BY lc.scheduled_at DESC`,
           [cid, user.id, now]
         );
@@ -4319,18 +4321,9 @@ function registerLiveClassRoutes({
         const result2 = await db2.query(
           `SELECT lc.*, c.title as course_title, c.is_free as course_is_free, FALSE as is_enrolled
            FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
-           WHERE (lc.course_id = $1)
-           AND (
-             (lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE AND (
-                (lc.course_id = $1 AND lc.is_free_preview = TRUE)
-             ))
-             OR (lc.is_live = TRUE AND (
-                 (lc.course_id = $1 AND lc.is_free_preview = TRUE)
-             ))
-             OR (lc.is_completed = TRUE AND (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL) AND (
-                 (lc.course_id = $1 AND lc.is_free_preview = TRUE)
-             ))
-           )
+           WHERE lc.course_id = $1
+             AND (lc.is_completed IS NOT TRUE OR (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL))
+             AND lc.is_free_preview = TRUE
            ORDER BY lc.scheduled_at DESC`,
           [cid]
         );
@@ -4343,20 +4336,11 @@ function registerLiveClassRoutes({
           `SELECT lc.*, c.title as course_title, c.is_free as course_is_free,
             ${ex12} as is_enrolled
            FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
-           WHERE (
-             (lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE AND (
-                 (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
-                 OR (lc.course_id IS NOT NULL AND (lc.is_free_preview = TRUE OR ${ex12}))
-             ))
-             OR (lc.is_live = TRUE AND (
-                 (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
-                 OR (lc.course_id IS NOT NULL AND (lc.is_free_preview = TRUE OR ${ex12}))
-             ))
-             OR (lc.is_completed = TRUE AND (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL) AND (
-                 (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
-                 OR (lc.course_id IS NOT NULL AND (lc.is_free_preview = TRUE OR ${ex12}))
-             ))
-           )
+           WHERE (lc.is_completed IS NOT TRUE OR (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL))
+             AND (
+               (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
+               OR (lc.course_id IS NOT NULL AND (lc.is_free_preview = TRUE OR ${ex12}))
+             )
            ORDER BY lc.scheduled_at DESC`,
           [user.id, now]
         );
@@ -4366,20 +4350,11 @@ function registerLiveClassRoutes({
       const result = await db2.query(
         `SELECT lc.*, c.title as course_title, c.is_free as course_is_free, FALSE as is_enrolled
          FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
-         WHERE (
-           (lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE AND (
-                (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
-                OR (lc.course_id IS NOT NULL AND lc.is_free_preview = TRUE)
-           ))
-           OR (lc.is_live = TRUE AND (
-                (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
-                OR (lc.course_id IS NOT NULL AND lc.is_free_preview = TRUE)
-           ))
-           OR (lc.is_completed = TRUE AND (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL) AND (
-                (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
-                OR (lc.course_id IS NOT NULL AND lc.is_free_preview = TRUE)
-           ))
-         )
+         WHERE (lc.is_completed IS NOT TRUE OR (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL))
+           AND (
+             (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
+             OR (lc.course_id IS NOT NULL AND lc.is_free_preview = TRUE)
+           )
          ORDER BY lc.scheduled_at DESC`
       );
       res.set("Cache-Control", "private, no-store");
@@ -4855,16 +4830,17 @@ function registerCourseAccessRoutes({
         course.isEnrolled = enroll.rows.length > 0 && !accessExpired;
         course.accessExpired = accessExpired || false;
         course.enrollmentValidUntil = row && row.valid_until != null ? row.valid_until : null;
-        let progressRow = row;
-        if (course.isEnrolled) {
-          await updateCourseProgress2(user.id, courseIdParam);
-          const enrollFresh = await db2.query("SELECT * FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [user.id, courseIdParam]);
-          progressRow = enrollFresh.rows[0] || row;
-        }
+        const progressRow = row;
         course.progress = progressRow && !accessExpired ? progressRow?.progress_percent || 0 : 0;
         course.lastLectureId = progressRow && !accessExpired ? progressRow?.last_lecture_id : null;
         if (course.isEnrolled) {
-          const lpResult = await db2.query("SELECT * FROM lecture_progress WHERE user_id = $1", [user.id]);
+          const lpResult = await db2.query(
+            `SELECT lp.lecture_id, lp.is_completed
+             FROM lecture_progress lp
+             JOIN lectures l ON l.id = lp.lecture_id
+             WHERE lp.user_id = $1 AND l.course_id = $2`,
+            [user.id, courseIdParam]
+          );
           const lpMap = {};
           lpResult.rows.forEach((lp) => {
             lpMap[lp.lecture_id] = lp.is_completed;
@@ -5401,22 +5377,54 @@ async function streamMediaGet(req, res, db2, getAuthUser2, getR2Client, key) {
     userRole = user.role;
   }
   if (userRole !== "admin") {
-    const matResult = await db2.query("SELECT course_id, is_free FROM study_materials WHERE file_url LIKE $1", [`%${key}%`]);
+    const normalizedKey = key.replace(/^\/+/, "");
+    const keyVariants = Array.from(/* @__PURE__ */ new Set([
+      normalizedKey,
+      `/${normalizedKey}`,
+      decodeURIComponent(normalizedKey),
+      `/${decodeURIComponent(normalizedKey)}`
+    ])).filter(Boolean);
+    const matResult = await db2.query(
+      `SELECT course_id, is_free
+       FROM study_materials
+       WHERE file_url = ANY($1::text[])
+          OR regexp_replace(file_url, '^https?://[^/]+/', '') = ANY($1::text[])
+          OR regexp_replace(file_url, '^https?://[^/]+', '') = ANY($1::text[])
+       LIMIT 1`,
+      [keyVariants]
+    );
     if (matResult.rows.length > 0) {
       const mat = matResult.rows[0];
       if (mat.course_id && !mat.is_free) {
-        const enrolled = await db2.query("SELECT * FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [userId, mat.course_id]);
+        const enrolled = await db2.query(
+          "SELECT valid_until FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL) LIMIT 1",
+          [userId, mat.course_id]
+        );
         if (enrolled.rows.length === 0 || isEnrollmentExpired(enrolled.rows[0])) {
           res.status(403).json({ message: "Enrollment required" });
           return;
         }
       }
     } else {
-      const lecResult = await db2.query("SELECT course_id, is_free_preview FROM lectures WHERE video_url LIKE $1 OR pdf_url LIKE $1", [`%${key}%`]);
+      const lecResult = await db2.query(
+        `SELECT course_id, is_free_preview
+         FROM lectures
+         WHERE video_url = ANY($1::text[])
+            OR pdf_url = ANY($1::text[])
+            OR regexp_replace(video_url, '^https?://[^/]+/', '') = ANY($1::text[])
+            OR regexp_replace(video_url, '^https?://[^/]+', '') = ANY($1::text[])
+            OR regexp_replace(pdf_url, '^https?://[^/]+/', '') = ANY($1::text[])
+            OR regexp_replace(pdf_url, '^https?://[^/]+', '') = ANY($1::text[])
+         LIMIT 1`,
+        [keyVariants]
+      );
       if (lecResult.rows.length > 0) {
         const lec = lecResult.rows[0];
         if (lec.course_id && !lec.is_free_preview) {
-          const enrolled = await db2.query("SELECT * FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [userId, lec.course_id]);
+          const enrolled = await db2.query(
+            "SELECT valid_until FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL) LIMIT 1",
+            [userId, lec.course_id]
+          );
           if (enrolled.rows.length === 0 || isEnrollmentExpired(enrolled.rows[0])) {
             res.status(403).json({ message: "Enrollment required" });
             return;
@@ -5779,10 +5787,14 @@ async function ensureCoreLearningSchemaColumns() {
 }
 async function ensureCoreLearningPerformanceIndexes() {
   const indexStatements = [
+    "CREATE INDEX IF NOT EXISTS idx_users_session_token ON users(session_token)",
     "CREATE INDEX IF NOT EXISTS idx_enrollments_user_course_status_valid_until ON enrollments(user_id, course_id, status, valid_until)",
+    "CREATE INDEX IF NOT EXISTS idx_enrollments_course_user_status_valid_until ON enrollments(course_id, user_id, status, valid_until)",
     "CREATE INDEX IF NOT EXISTS idx_lectures_course_section ON lectures(course_id, section_title)",
     "CREATE INDEX IF NOT EXISTS idx_materials_course_section ON study_materials(course_id, section_title)",
     "CREATE INDEX IF NOT EXISTS idx_live_classes_course_scheduled ON live_classes(course_id, scheduled_at)",
+    "CREATE INDEX IF NOT EXISTS idx_live_classes_feed_visibility ON live_classes(is_completed, is_live, scheduled_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_daily_missions_date_type ON daily_missions(mission_date DESC, mission_type)",
     "CREATE INDEX IF NOT EXISTS idx_download_tokens_token_used_expires ON download_tokens(token, used, expires_at)",
     // Inbox: matches GET /api/notifications (user + unread + not hidden + non-support)
     "CREATE INDEX IF NOT EXISTS idx_notifications_inbox_unread ON notifications (user_id, created_at DESC) WHERE (is_read IS NOT TRUE) AND (is_hidden IS NOT TRUE) AND (source IS DISTINCT FROM 'support')"

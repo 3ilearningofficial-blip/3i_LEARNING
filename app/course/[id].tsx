@@ -264,6 +264,65 @@ export default function CourseDetailScreen() {
     },
     enabled: !!id && id !== "undefined",
   });
+
+  // Warm likely next screens so tab/screen transitions feel instant for students.
+  useEffect(() => {
+    if (!course || !id || id === "undefined") return;
+    const baseUrl = getApiUrl();
+    const primeLectures = (course.lectures || []).slice(0, 3);
+    const primeMaterials = (course.materials || []).slice(0, 3);
+    const primeTests = (course.tests || []).slice(0, 3);
+    const primeLives = (liveClasses || []).slice(0, 2);
+
+    primeLectures.forEach((lecture) => {
+      qc.prefetchQuery({
+        queryKey: ["/api/lectures", lecture.id],
+        queryFn: async () => {
+          const res = await authFetch(new URL(`/api/lectures/${lecture.id}`, baseUrl).toString());
+          if (!res.ok) throw new Error("prefetch lecture failed");
+          return res.json();
+        },
+        staleTime: 60000,
+      });
+    });
+
+    primeMaterials.forEach((material) => {
+      qc.prefetchQuery({
+        queryKey: ["/api/study-materials", material.id],
+        queryFn: async () => {
+          const res = await authFetch(new URL(`/api/study-materials/${material.id}`, baseUrl).toString());
+          if (!res.ok) throw new Error("prefetch material failed");
+          return res.json();
+        },
+        staleTime: 60000,
+      });
+    });
+
+    primeTests.forEach((test) => {
+      qc.prefetchQuery({
+        queryKey: ["/api/tests", test.id],
+        queryFn: async () => {
+          const res = await authFetch(new URL(`/api/tests/${test.id}`, baseUrl).toString());
+          if (!res.ok) throw new Error("prefetch test failed");
+          return res.json();
+        },
+        staleTime: 30000,
+      });
+    });
+
+    primeLives.forEach((lc) => {
+      qc.prefetchQuery({
+        queryKey: ["/api/live-classes", lc.id],
+        queryFn: async () => {
+          const res = await authFetch(new URL(`/api/live-classes/${lc.id}`, baseUrl).toString());
+          if (!res.ok) throw new Error("prefetch live class failed");
+          return res.json();
+        },
+        staleTime: 15000,
+      });
+    });
+  }, [course, id, liveClasses, qc]);
+
   const LIVE_ROOT = DEFAULT_LIVE_RECORDING_SECTION;
   const getLectureRootName = (name: string) =>
     name.startsWith(`${LIVE_ROOT} /`) ? LIVE_ROOT : name;
