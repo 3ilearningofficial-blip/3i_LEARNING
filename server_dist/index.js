@@ -539,9 +539,23 @@ var init_auth_routes = __esm({
 });
 
 // server/pdf-routes.ts
-import * as http from "node:http";
-import * as https from "node:https";
-function registerPdfRoutes({ app: app2, db: db2 }) {
+import { isIP } from "node:net";
+function isPrivateOrLocalHost(hostname) {
+  const lower = hostname.toLowerCase();
+  if (lower === "localhost" || lower.endsWith(".local")) return true;
+  const ipVersion = isIP(lower);
+  if (!ipVersion) return false;
+  if (ipVersion === 4) {
+    const [a, b] = lower.split(".").map(Number);
+    if (a === 10 || a === 127) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 169 && b === 254) return true;
+    return false;
+  }
+  return lower === "::1" || lower.startsWith("fe80:") || lower.startsWith("fc") || lower.startsWith("fd");
+}
+function registerPdfRoutes({ app: app2, db: db2, getAuthUser: getAuthUser2 }) {
   app2.get("/api/pdf-viewer", async (req, res) => {
     const { token, key } = req.query;
     if (!token || !key || typeof token !== "string" || typeof key !== "string") {
@@ -629,80 +643,98 @@ pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/p
     res.send(html);
   });
   app2.get("/api/pdf-proxy", (req, res) => {
-    const { url } = req.query;
-    if (!url || typeof url !== "string") {
-      return res.status(400).json({ message: "URL is required" });
-    }
-    let parsedUrl;
-    try {
-      parsedUrl = new URL(url);
-    } catch {
-      return res.status(400).json({ message: "Invalid URL" });
-    }
-    const isGoogleDrive = parsedUrl.hostname.includes("drive.google.com") || parsedUrl.hostname.includes("docs.google.com");
-    const isPdfUrl = parsedUrl.pathname.toLowerCase().endsWith(".pdf");
-    if (!isPdfUrl && !isGoogleDrive) {
-      return res.status(400).json({ message: "Only PDF files and Google Drive links are allowed" });
-    }
-    let finalUrl = url;
-    if (isGoogleDrive) {
-      const fileIdMatch = url.match(/\/d\/([a-zA-Z0-9_-]+)/);
-      if (fileIdMatch) {
-        finalUrl = `https://drive.google.com/uc?export=download&id=${fileIdMatch[1]}`;
+    (async () => {
+      const user = await getAuthUser2(req);
+      if (!user) {
+        return res.status(401).json({ message: "Not authenticated" });
       }
-    }
-    const finalParsed = new URL(finalUrl);
-    const protocol = finalParsed.protocol === "https:" ? https : http;
-    const options = {
-      hostname: finalParsed.hostname,
-      path: finalParsed.pathname + finalParsed.search,
-      method: "GET",
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "application/pdf,*/*"
-      },
-      timeout: 3e4
-    };
-    console.log(`[PDF-Proxy] Fetching: ${parsedUrl.hostname}${parsedUrl.pathname}`);
-    const proxyReq = protocol.request(options, (proxyRes) => {
-      if (proxyRes.statusCode >= 300 && proxyRes.statusCode < 400 && proxyRes.headers.location) {
-        const redirectUrl = new URL(proxyRes.headers.location, url);
-        console.log(`[PDF-Proxy] Following redirect to: ${redirectUrl.href}`);
-        proxyRes.resume();
-        req.query.url = redirectUrl.href;
-        return app2._router.handle(req, res, () => {
+      const { url } = req.query;
+      if (!url || typeof url !== "string") {
+        return res.status(400).json({ message: "URL is required" });
+      }
+      let currentUrl = url;
+      for (let redirectCount = 0; redirectCount <= MAX_PDF_PROXY_REDIRECTS; redirectCount += 1) {
+        let parsedUrl;
+        try {
+          parsedUrl = new URL(currentUrl);
+        } catch {
+          return res.status(400).json({ message: "Invalid URL" });
+        }
+        if (parsedUrl.protocol !== "https:") {
+          return res.status(400).json({ message: "Only HTTPS PDF URLs are allowed" });
+        }
+        if (isPrivateOrLocalHost(parsedUrl.hostname)) {
+          return res.status(403).json({ message: "Blocked host" });
+        }
+        const hostname = parsedUrl.hostname.toLowerCase();
+        const isAllowedHost = PDF_PROXY_ALLOWED_HOSTS.has(hostname);
+        const isGoogleDrive = hostname.includes("drive.google.com") || hostname.includes("docs.google.com");
+        const isPdfUrl = parsedUrl.pathname.toLowerCase().endsWith(".pdf");
+        if (!isAllowedHost && !isPdfUrl) {
+          return res.status(400).json({ message: "Only trusted hosts and PDF links are allowed" });
+        }
+        if (isGoogleDrive) {
+          const fileIdMatch = currentUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
+          if (fileIdMatch) {
+            currentUrl = `https://drive.google.com/uc?export=download&id=${fileIdMatch[1]}`;
+            continue;
+          }
+        }
+        const upstream = await fetch(currentUrl, {
+          method: "GET",
+          redirect: "manual",
+          headers: {
+            "User-Agent": "3i-learning-pdf-proxy/1.0",
+            Accept: "application/pdf,*/*"
+          },
+          signal: AbortSignal.timeout(3e4)
         });
+        if (upstream.status >= 300 && upstream.status < 400) {
+          const location = upstream.headers.get("location");
+          if (!location) return res.status(502).json({ message: "Invalid redirect from source" });
+          currentUrl = new URL(location, currentUrl).toString();
+          continue;
+        }
+        if (!upstream.ok || !upstream.body) {
+          return res.status(502).json({ message: "Failed to fetch PDF" });
+        }
+        const contentLength = Number(upstream.headers.get("content-length") || "0");
+        if (Number.isFinite(contentLength) && contentLength > MAX_PDF_PROXY_BYTES) {
+          return res.status(413).json({ message: "PDF too large" });
+        }
+        const contentType = (upstream.headers.get("content-type") || "").toLowerCase();
+        if (contentType && !contentType.includes("pdf") && !contentType.includes("octet-stream")) {
+          return res.status(400).json({ message: "Source is not a PDF" });
+        }
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader("Cache-Control", "private, max-age=600");
+        if (contentLength > 0) {
+          res.setHeader("Content-Length", String(contentLength));
+        }
+        const { Readable } = await import("stream");
+        Readable.fromWeb(upstream.body).pipe(res);
+        return;
       }
-      if (proxyRes.statusCode !== 200) {
-        console.log(`[PDF-Proxy] Upstream returned ${proxyRes.statusCode}`);
-        proxyRes.resume();
-        return res.status(proxyRes.statusCode).json({ message: "Failed to fetch PDF" });
-      }
-      res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Cache-Control", "public, max-age=86400");
-      if (proxyRes.headers["content-length"]) {
-        res.setHeader("Content-Length", proxyRes.headers["content-length"]);
-      }
-      proxyRes.pipe(res);
-    });
-    proxyReq.on("error", (err) => {
-      console.error("[PDF-Proxy] Request error:", err.message);
+      return res.status(400).json({ message: "Too many redirects" });
+    })().catch((err) => {
+      console.error("[PDF-Proxy] Request error:", err?.message || err);
       if (!res.headersSent) {
         res.status(502).json({ message: "Failed to fetch PDF" });
       }
     });
-    proxyReq.on("timeout", () => {
-      proxyReq.destroy();
-      if (!res.headersSent) {
-        res.status(504).json({ message: "PDF download timed out" });
-      }
-    });
-    proxyReq.end();
   });
 }
+var MAX_PDF_PROXY_BYTES, MAX_PDF_PROXY_REDIRECTS, PDF_PROXY_ALLOWED_HOSTS;
 var init_pdf_routes = __esm({
   "server/pdf-routes.ts"() {
     "use strict";
+    MAX_PDF_PROXY_BYTES = 30 * 1024 * 1024;
+    MAX_PDF_PROXY_REDIRECTS = 2;
+    PDF_PROXY_ALLOWED_HOSTS = /* @__PURE__ */ new Set([
+      "drive.google.com",
+      "docs.google.com",
+      "lh3.googleusercontent.com"
+    ]);
   }
 });
 
@@ -746,6 +778,27 @@ function registerPaymentRoutes({
   verifyPaymentSignature: verifyPaymentSignature2,
   cacheInvalidate: cacheInvalidate2
 }) {
+  const verifyOrderOwnershipAndAmount = async ({
+    orderId,
+    expectedKind,
+    expectedUserId,
+    expectedItemId,
+    expectedAmount
+  }) => {
+    const razorpay = getRazorpay2();
+    const order = await razorpay.orders.fetch(orderId);
+    const notes = order.notes || {};
+    const orderAmount = Number(order.amount || 0);
+    const noteKind = String(notes.kind || "");
+    const noteUserId = Number(notes.userId || 0);
+    const noteTestId = Number(notes.testId || 0);
+    const noteBookId = Number(notes.bookId || 0);
+    const noteItemId = expectedKind === "test" ? noteTestId : noteBookId;
+    if (noteKind !== expectedKind) throw new Error("Payment kind mismatch");
+    if (!noteUserId || noteUserId !== expectedUserId) throw new Error("Payment user mismatch");
+    if (!noteItemId || noteItemId !== expectedItemId) throw new Error("Payment item mismatch");
+    if (!orderAmount || orderAmount !== expectedAmount) throw new Error("Payment amount mismatch");
+  };
   const ensureCourseEnrollment = async (paymentRow) => {
     const paidCourseResult = await db2.query("SELECT * FROM courses WHERE id = $1", [paymentRow.course_id]);
     const paidCourse = paidCourseResult.rows[0];
@@ -1021,6 +1074,16 @@ function registerPaymentRoutes({
       const testId = parseInt(n.testId || "0", 10);
       const userId = parseInt(n.userId || "0", 10);
       if (!testId || !userId) return res.redirect(fail);
+      const testResult = await db2.query("SELECT id, price FROM tests WHERE id = $1", [testId]);
+      if (!testResult.rows.length) return res.redirect(fail);
+      const expectedAmount = Math.round(parseFloat(String(testResult.rows[0].price || "0")) * 100);
+      await verifyOrderOwnershipAndAmount({
+        orderId: razorpay_order_id,
+        expectedKind: "test",
+        expectedUserId: userId,
+        expectedItemId: testId,
+        expectedAmount
+      });
       await db2.query(
         "INSERT INTO test_purchases (user_id, test_id, razorpay_order_id, razorpay_payment_id, created_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (user_id, test_id) DO NOTHING",
         [userId, testId, razorpay_order_id, razorpay_payment_id, Date.now()]
@@ -1036,11 +1099,23 @@ function registerPaymentRoutes({
       const user = await getAuthUser2(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const { razorpay_order_id, razorpay_payment_id, razorpay_signature, testId } = req.body;
+      const parsedTestId = Number(testId);
+      if (!parsedTestId) return res.status(400).json({ message: "testId is required" });
       const isValid = verifyPaymentSignature2(razorpay_order_id, razorpay_payment_id, razorpay_signature);
       if (!isValid) return res.status(400).json({ message: "Invalid payment signature" });
+      const testResult = await db2.query("SELECT id, price FROM tests WHERE id = $1", [parsedTestId]);
+      if (!testResult.rows.length) return res.status(404).json({ message: "Test not found" });
+      const expectedAmount = Math.round(parseFloat(String(testResult.rows[0].price || "0")) * 100);
+      await verifyOrderOwnershipAndAmount({
+        orderId: razorpay_order_id,
+        expectedKind: "test",
+        expectedUserId: user.id,
+        expectedItemId: parsedTestId,
+        expectedAmount
+      });
       await db2.query(
         "INSERT INTO test_purchases (user_id, test_id, razorpay_order_id, razorpay_payment_id, created_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (user_id, test_id) DO NOTHING",
-        [user.id, testId, razorpay_order_id, razorpay_payment_id, Date.now()]
+        [user.id, parsedTestId, razorpay_order_id, razorpay_payment_id, Date.now()]
       );
       res.json({ success: true });
     } catch (err) {
@@ -1410,7 +1485,10 @@ function registerLiveStreamRoutes({
       if (!process.env.R2_BUCKET_NAME) return null;
       const mp4Url = `https://videodelivery.net/${recordingUid}/downloads/default.mp4`;
       const source = await fetch(mp4Url);
-      if (!source.ok || !source.body) return null;
+      if (!source.ok || !source.body) {
+        console.warn(`[CF Stream] MP4 download not ready/failed for uid=${recordingUid}, status=${source.status}`);
+        return null;
+      }
       const { PutObjectCommand } = await import("@aws-sdk/client-s3");
       const { Readable } = await import("stream");
       const r2 = await getR2Client();
@@ -1426,6 +1504,28 @@ function registerLiveStreamRoutes({
       return toMediaApiPath(key);
     } catch (err) {
       console.warn("[CF Stream] Failed to archive recording to R2:", err);
+      return null;
+    }
+  };
+  const getLatestRecordingForLiveInput = async (accountId, apiToken, liveInputUid) => {
+    try {
+      const videosRes = await fetch(
+        `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/live_inputs/${liveInputUid}/videos`,
+        { headers: { Authorization: `Bearer ${apiToken}` } }
+      );
+      if (!videosRes.ok) return null;
+      const videosData = await videosRes.json();
+      const raw = videosData?.result;
+      const items = Array.isArray(raw) ? raw : Array.isArray(raw?.videos) ? raw.videos : [];
+      if (!items.length) return null;
+      const ready = items.find((v) => String(v?.status || "").toLowerCase() === "ready") || items[0];
+      const recordingUid = ready?.uid || ready?.id;
+      if (!recordingUid) return null;
+      return {
+        manifestUrl: `https://videodelivery.net/${recordingUid}/manifest/video.m3u8`,
+        recordingUid: String(recordingUid)
+      };
+    } catch {
       return null;
     }
   };
@@ -1512,28 +1612,7 @@ function registerLiveStreamRoutes({
       const lcResult = await db2.query("SELECT cf_stream_uid FROM live_classes WHERE id = $1", [req.params.id]);
       const uid = lcResult.rows[0]?.cf_stream_uid;
       if (!uid) return res.json({ success: true });
-      const getLatestRecording = async () => {
-        try {
-          const videosRes = await fetch(
-            `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/live_inputs/${uid}/videos`,
-            { headers: { Authorization: `Bearer ${apiToken}` } }
-          );
-          if (!videosRes.ok) return null;
-          const videosData = await videosRes.json();
-          const raw = videosData?.result;
-          const items = Array.isArray(raw) ? raw : Array.isArray(raw?.videos) ? raw.videos : [];
-          if (!items.length) return null;
-          const ready = items.find((v) => String(v?.status || "").toLowerCase() === "ready") || items[0];
-          const recordingUid = ready?.uid || ready?.id;
-          if (!recordingUid) return null;
-          return {
-            manifestUrl: `https://videodelivery.net/${recordingUid}/manifest/video.m3u8`,
-            recordingUid: String(recordingUid)
-          };
-        } catch {
-          return null;
-        }
-      };
+      const getLatestRecording = async () => getLatestRecordingForLiveInput(accountId, apiToken, uid);
       await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/live_inputs/${uid}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${apiToken}` }
@@ -1628,17 +1707,32 @@ function registerLiveStreamRoutes({
     isArchiveSweepRunning = true;
     try {
       const pending = await db2.query(
-        `SELECT id, title, recording_url
+        `SELECT id, title, recording_url, cf_stream_uid
          FROM live_classes
          WHERE stream_type = 'cloudflare'
            AND is_completed = TRUE
-           AND recording_url ILIKE 'https://videodelivery.net/%/manifest/video.m3u8'
+           AND (recording_url IS NULL OR recording_url ILIKE 'https://videodelivery.net/%/manifest/video.m3u8')
          ORDER BY ended_at DESC NULLS LAST
          LIMIT 20`
       );
+      const accountId = process.env.CF_STREAM_ACCOUNT_ID || process.env.R2_ACCOUNT_ID;
+      const apiToken = process.env.CF_STREAM_API_TOKEN;
       for (const row of pending.rows) {
         const currentUrl = String(row.recording_url || "").trim();
-        const recordingUid = extractCloudflareRecordingUid(currentUrl);
+        let recordingUid = extractCloudflareRecordingUid(currentUrl);
+        if (!recordingUid && accountId && apiToken && row.cf_stream_uid) {
+          const latest = await getLatestRecordingForLiveInput(accountId, apiToken, String(row.cf_stream_uid));
+          recordingUid = latest?.recordingUid || null;
+        }
+        if (recordingUid && currentUrl) {
+          const head = await fetch(`https://videodelivery.net/${recordingUid}/manifest/video.m3u8`, { method: "HEAD" }).catch(() => null);
+          if (!head || !head.ok) {
+            if (accountId && apiToken && row.cf_stream_uid) {
+              const latest = await getLatestRecordingForLiveInput(accountId, apiToken, String(row.cf_stream_uid));
+              recordingUid = latest?.recordingUid || recordingUid;
+            }
+          }
+        }
         if (!recordingUid) continue;
         const archivedUrl = await archiveCloudflareRecordingToR2(recordingUid);
         if (!archivedUrl) continue;
@@ -3191,6 +3285,22 @@ function registerBookRoutes({
   getRazorpay: getRazorpay2,
   verifyPaymentSignature: verifyPaymentSignature2
 }) {
+  const verifyBookOrder = async (orderId, userId, bookId) => {
+    const bookResult = await db2.query("SELECT id, price FROM books WHERE id = $1", [bookId]);
+    if (!bookResult.rows.length) throw new Error("Book not found");
+    const expectedAmount = Math.round(parseFloat(String(bookResult.rows[0].price || "0")) * 100);
+    const razorpay = getRazorpay2();
+    const order = await razorpay.orders.fetch(orderId);
+    const notes = order.notes || {};
+    const noteKind = String(notes.kind || "");
+    const noteUserId = Number(notes.userId || 0);
+    const noteBookId = Number(notes.bookId || 0);
+    const amount = Number(order.amount || 0);
+    if (noteKind !== "book") throw new Error("Payment kind mismatch");
+    if (!noteUserId || noteUserId !== userId) throw new Error("Payment user mismatch");
+    if (!noteBookId || noteBookId !== bookId) throw new Error("Payment book mismatch");
+    if (!amount || amount !== expectedAmount) throw new Error("Payment amount mismatch");
+  };
   app2.get("/api/books", async (req, res) => {
     try {
       const user = await getAuthUser2(req);
@@ -3354,6 +3464,7 @@ function registerBookRoutes({
       const bookId = parseInt(n.bookId || "0", 10);
       const userId = parseInt(n.userId || "0", 10);
       if (!bookId || !userId) return res.redirect(fail);
+      await verifyBookOrder(razorpay_order_id, userId, bookId);
       await db2.query(
         "INSERT INTO book_purchases (user_id, book_id, purchased_at) VALUES ($1, $2, $3) ON CONFLICT (user_id, book_id) DO NOTHING",
         [userId, bookId, Date.now()]
@@ -3371,10 +3482,13 @@ function registerBookRoutes({
       const user = await getAuthUser2(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const { bookId, razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body;
+      const parsedBookId = Number(bookId);
+      if (!parsedBookId) return res.status(400).json({ message: "bookId is required" });
       const isValid = verifyPaymentSignature2(razorpayOrderId, razorpayPaymentId, razorpaySignature);
       if (!isValid) return res.status(400).json({ message: "Invalid payment signature" });
-      await db2.query("INSERT INTO book_purchases (user_id, book_id, purchased_at) VALUES ($1, $2, $3) ON CONFLICT (user_id, book_id) DO NOTHING", [user.id, bookId, Date.now()]);
-      await db2.query("DELETE FROM book_click_tracking WHERE user_id = $1 AND book_id = $2", [user.id, bookId]).catch(() => {
+      await verifyBookOrder(razorpayOrderId, user.id, parsedBookId);
+      await db2.query("INSERT INTO book_purchases (user_id, book_id, purchased_at) VALUES ($1, $2, $3) ON CONFLICT (user_id, book_id) DO NOTHING", [user.id, parsedBookId, Date.now()]);
+      await db2.query("DELETE FROM book_click_tracking WHERE user_id = $1 AND book_id = $2", [user.id, parsedBookId]).catch(() => {
       });
       res.json({ success: true });
     } catch (err) {
@@ -3743,7 +3857,9 @@ function registerDoubtNotificationRoutes({
   });
   app2.put("/api/notifications/:id/read", async (req, res) => {
     try {
-      await db2.query("UPDATE notifications SET is_read = TRUE WHERE id = $1", [req.params.id]);
+      const user = await getAuthUser2(req);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+      await db2.query("UPDATE notifications SET is_read = TRUE WHERE id = $1 AND user_id = $2", [req.params.id, user.id]);
       res.json({ success: true });
     } catch {
       res.status(500).json({ message: "Failed to mark as read" });
@@ -3911,27 +4027,33 @@ function registerLectureRoutes({
   getAuthUser: getAuthUser2,
   updateCourseProgress: updateCourseProgress2
 }) {
+  const canAccessLecture = async (user, lectureId) => {
+    const result = await db2.query(
+      `SELECT l.*, c.is_free AS course_is_free
+       FROM lectures l
+       LEFT JOIN courses c ON l.course_id = c.id
+       WHERE l.id = $1`,
+      [lectureId]
+    );
+    if (result.rows.length === 0) return { allowed: false };
+    const lecture = result.rows[0];
+    if (user?.role === "admin" || lecture.is_free_preview) return { allowed: true, lecture };
+    if (!lecture.course_id) return { allowed: true, lecture };
+    const enrolled = await db2.query(
+      "SELECT * FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)",
+      [user.id, lecture.course_id]
+    );
+    if (enrolled.rows.length === 0 || isEnrollmentExpired(enrolled.rows[0])) return { allowed: false, lecture };
+    return { allowed: true, lecture };
+  };
   app2.get("/api/lectures/:id", async (req, res) => {
     try {
       const user = await getAuthUser2(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
-      const result = await db2.query(
-        `SELECT l.*, c.is_free AS course_is_free
-         FROM lectures l
-         LEFT JOIN courses c ON l.course_id = c.id
-         WHERE l.id = $1`,
-        [req.params.id]
-      );
-      if (result.rows.length === 0) return res.status(404).json({ message: "Lecture not found" });
-      const lecture = result.rows[0];
-      if (user.role !== "admin" && !lecture.is_free_preview) {
-        if (lecture.course_id) {
-          const enrolled = await db2.query("SELECT * FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [user.id, lecture.course_id]);
-          if (enrolled.rows.length === 0 || isEnrollmentExpired(enrolled.rows[0])) {
-            return res.status(403).json({ message: "Enrollment required to access this lecture" });
-          }
-        }
-      }
+      const access = await canAccessLecture(user, req.params.id);
+      if (!access.lecture) return res.status(404).json({ message: "Lecture not found" });
+      if (!access.allowed) return res.status(403).json({ message: "Enrollment required to access this lecture" });
+      const lecture = access.lecture;
       res.json(lecture);
     } catch {
       res.status(500).json({ message: "Failed to fetch lecture" });
@@ -3952,15 +4074,21 @@ function registerLectureRoutes({
     try {
       const user = await getAuthUser2(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
-      const { courseId, watchPercent, isCompleted } = req.body;
+      const { watchPercent, isCompleted } = req.body;
+      const access = await canAccessLecture(user, req.params.id);
+      if (!access.lecture) return res.status(404).json({ message: "Lecture not found" });
+      if (!access.allowed) return res.status(403).json({ message: "Access denied for this lecture" });
+      const lecture = access.lecture;
+      const courseId = lecture.course_id ? Number(lecture.course_id) : null;
+      const normalizedWatchPercent = Math.max(0, Math.min(100, Number(watchPercent) || 0));
       await db2.query(
         `INSERT INTO lecture_progress (user_id, lecture_id, watch_percent, is_completed, completed_at) 
          VALUES ($1, $2, $3, $4, $5) 
          ON CONFLICT (user_id, lecture_id) DO UPDATE SET watch_percent = $3, is_completed = $4, completed_at = $5`,
-        [user.id, req.params.id, watchPercent, isCompleted, isCompleted ? Date.now() : null]
+        [user.id, req.params.id, normalizedWatchPercent, Boolean(isCompleted), isCompleted ? Date.now() : null]
       );
       if (courseId && isCompleted) {
-        await updateCourseProgress2(user.id, courseId);
+        await updateCourseProgress2(user.id, Number(courseId));
         await db2.query("UPDATE enrollments SET last_lecture_id = $1 WHERE user_id = $2 AND course_id = $3", [req.params.id, user.id, courseId]);
       }
       res.json({ success: true });
@@ -4528,6 +4656,13 @@ function registerLiveClassRoutes({
   db: db2,
   getAuthUser: getAuthUser2
 }) {
+  const sanitizeLiveClass = (row) => {
+    if (!row || typeof row !== "object") return row;
+    const { cf_stream_key, cf_stream_rtmp_url, ...safe } = row;
+    void cf_stream_key;
+    void cf_stream_rtmp_url;
+    return safe;
+  };
   app2.get("/api/live-classes", async (req, res) => {
     try {
       const { courseId, admin: admin2 } = req.query;
@@ -4540,11 +4675,11 @@ function registerLiveClassRoutes({
             [cid]
           );
           res.set("Cache-Control", "private, no-store");
-          return res.json(result3.rows);
+          return res.json(result3.rows.map(sanitizeLiveClass));
         }
         const result2 = await db2.query("SELECT lc.*, c.title as course_title FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id ORDER BY lc.scheduled_at DESC");
         res.set("Cache-Control", "private, no-store");
-        return res.json(result2.rows);
+        return res.json(result2.rows.map(sanitizeLiveClass));
       }
       const ex23 = sqlEnrollmentExistsForLiveList(2, 3);
       const now = Date.now();
@@ -4560,7 +4695,7 @@ function registerLiveClassRoutes({
           [cid, user.id, now]
         );
         res.set("Cache-Control", "private, no-store");
-        return res.json(result2.rows);
+        return res.json(result2.rows.map(sanitizeLiveClass));
       }
       if (cid) {
         const result2 = await db2.query(
@@ -4573,7 +4708,7 @@ function registerLiveClassRoutes({
           [cid]
         );
         res.set("Cache-Control", "private, no-store");
-        return res.json(result2.rows);
+        return res.json(result2.rows.map(sanitizeLiveClass));
       }
       const ex12 = sqlEnrollmentExistsForLiveList(1, 2);
       if (user) {
@@ -4590,7 +4725,7 @@ function registerLiveClassRoutes({
           [user.id, now]
         );
         res.set("Cache-Control", "private, no-store");
-        return res.json(result2.rows);
+        return res.json(result2.rows.map(sanitizeLiveClass));
       }
       const result = await db2.query(
         `SELECT lc.*, c.title as course_title, c.is_free as course_is_free, FALSE as is_enrolled
@@ -4603,7 +4738,7 @@ function registerLiveClassRoutes({
          ORDER BY lc.scheduled_at DESC`
       );
       res.set("Cache-Control", "private, no-store");
-      res.json(result.rows);
+      res.json(result.rows.map(sanitizeLiveClass));
     } catch (err) {
       console.error("[LiveClasses] list error:", err);
       res.set("Cache-Control", "private, no-store");
@@ -4624,7 +4759,7 @@ function registerLiveClassRoutes({
       `);
       console.log(`[UpcomingClasses] returning ${result.rows.length} classes`);
       res.set("Cache-Control", "private, no-store");
-      res.json(result.rows);
+      res.json(result.rows.map(sanitizeLiveClass));
     } catch (err) {
       console.error("[UpcomingClasses] error:", err);
       res.set("Cache-Control", "private, no-store");
@@ -4644,7 +4779,7 @@ function registerLiveClassRoutes({
       }
       const hasAccess = await userCanAccessLiveClassContent(db2, user, lc);
       res.set("Cache-Control", "private, no-store");
-      res.json({ ...lc, is_enrolled: isEnrolled, has_access: hasAccess });
+      res.json({ ...sanitizeLiveClass(lc), is_enrolled: isEnrolled, has_access: hasAccess });
     } catch {
       res.status(500).json({ message: "Failed to fetch live class" });
     }
@@ -4992,15 +5127,84 @@ function registerCourseAccessRoutes({
   getR2Client,
   updateCourseProgress: updateCourseProgress2
 }) {
+  const normalizeStorageKey = (raw) => {
+    const trimmed = String(raw || "").trim();
+    if (!trimmed) return "";
+    if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+      try {
+        const parsed = new URL(trimmed);
+        return decodeURIComponent(parsed.pathname.replace(/^\/+/, ""));
+      } catch {
+        return trimmed;
+      }
+    }
+    return trimmed.replace(/^\/+/, "");
+  };
+  const userCanMintMediaToken = async (user, requestedKeyRaw) => {
+    const requestedKey = normalizeStorageKey(requestedKeyRaw);
+    if (!requestedKey) return false;
+    const lectureMatch = await db2.query(
+      `SELECT l.id
+       FROM lectures l
+       LEFT JOIN enrollments e
+         ON e.user_id = $1
+        AND e.course_id = l.course_id
+        AND (e.status = 'active' OR e.status IS NULL)
+       WHERE l.video_url IS NOT NULL
+         AND (
+           l.video_url = $2
+           OR regexp_replace(l.video_url, '^https?://[^/]+/', '') = $2
+           OR l.video_url LIKE '%' || $2
+         )
+         AND (
+           l.course_id IS NULL
+           OR l.is_free_preview = TRUE
+           OR (
+             e.id IS NOT NULL
+             AND (e.valid_until IS NULL OR e.valid_until > $3)
+           )
+         )
+       LIMIT 1`,
+      [user.id, requestedKey, Date.now()]
+    );
+    if (lectureMatch.rows.length > 0) return true;
+    const materialMatch = await db2.query(
+      `SELECT sm.id
+       FROM study_materials sm
+       LEFT JOIN enrollments e
+         ON e.user_id = $1
+        AND e.course_id = sm.course_id
+        AND (e.status = 'active' OR e.status IS NULL)
+       WHERE sm.file_url IS NOT NULL
+         AND (
+           sm.file_url = $2
+           OR regexp_replace(sm.file_url, '^https?://[^/]+/', '') = $2
+           OR sm.file_url LIKE '%' || $2
+         )
+         AND (
+           sm.course_id IS NULL
+           OR sm.is_free = TRUE
+           OR (
+             e.id IS NOT NULL
+             AND (e.valid_until IS NULL OR e.valid_until > $3)
+           )
+         )
+       LIMIT 1`,
+      [user.id, requestedKey, Date.now()]
+    );
+    return materialMatch.rows.length > 0;
+  };
   app2.post("/api/media-token", async (req, res) => {
     try {
       const user = await getAuthUser2(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const { fileKey } = req.body;
       if (!fileKey || typeof fileKey !== "string") return res.status(400).json({ message: "fileKey required" });
+      const allowed = await userCanMintMediaToken(user, fileKey);
+      if (!allowed) return res.status(403).json({ message: "You do not have access to this media file" });
       const token = generateSecureToken2();
       const expiresAt = Date.now() + 10 * 60 * 1e3;
-      await db2.query("INSERT INTO media_tokens (token, user_id, file_key, expires_at) VALUES ($1, $2, $3, $4)", [token, user.id, fileKey, expiresAt]);
+      await db2.query("INSERT INTO media_tokens (token, user_id, file_key, expires_at) VALUES ($1, $2, $3, $4)", [token, user.id, normalizeStorageKey(fileKey), expiresAt]);
       db2.query("DELETE FROM media_tokens WHERE expires_at < $1", [Date.now()]).catch(() => {
       });
       res.json({ token, expiresAt });
@@ -6253,14 +6457,17 @@ async function ensureCoreLearningPerformanceIndexes() {
   }
 }
 async function registerRoutes(app2) {
-  try {
-    await ensureCoreLearningSchemaColumns();
-    await ensureCoreLearningPerformanceIndexes();
-    console.log("[DB] courses + enrollments columns ensured (admin + live APIs)");
-  } catch (err) {
-    console.error("[DB] CRITICAL: could not ensure course/enrollment columns. Run SQL in Neon (same branch as DATABASE_URL). Error:", err);
+  const allowRuntimeSchemaSync = process.env.ALLOW_RUNTIME_SCHEMA_SYNC === "true" && process.env.NODE_ENV !== "production";
+  const allowStartupSchemaEnsure = process.env.ALLOW_STARTUP_SCHEMA_ENSURE === "true" && process.env.NODE_ENV !== "production";
+  if (allowStartupSchemaEnsure) {
+    try {
+      await ensureCoreLearningSchemaColumns();
+      await ensureCoreLearningPerformanceIndexes();
+      console.log("[DB] startup schema/index ensure completed");
+    } catch (err) {
+      console.error("[DB] startup schema ensure failed:", err);
+    }
   }
-  const allowRuntimeSchemaSync = process.env.ALLOW_RUNTIME_SCHEMA_SYNC === "true";
   if (allowRuntimeSchemaSync) {
     try {
       await db.query(`
@@ -7242,7 +7449,7 @@ async function registerRoutes(app2) {
     recomputeAllEnrollmentsProgressForCourse,
     getR2Client
   });
-  registerPdfRoutes({ app: app2, db });
+  registerPdfRoutes({ app: app2, db, getAuthUser });
   const httpServer = createServer(app2);
   return httpServer;
 }
@@ -7299,9 +7506,7 @@ var init_routes = __esm({
     }
     pool = new Pool({
       connectionString: databaseUrl,
-      ssl: {
-        rejectUnauthorized: false
-      },
+      ssl: process.env.PGSSL_NO_VERIFY === "true" && process.env.NODE_ENV !== "production" ? { rejectUnauthorized: false } : { rejectUnauthorized: true },
       max: 10,
       min: 1,
       connectionTimeoutMillis: 1e4,
@@ -7339,9 +7544,11 @@ import { ipKeyGenerator } from "express-rate-limit";
 import compression from "compression";
 import * as fs from "fs";
 import cors from "cors";
-dotenv.config({
-  path: path.resolve(process.cwd(), ".env")
-});
+if (process.env.NODE_ENV !== "production" || process.env.LOAD_DOTENV === "true") {
+  dotenv.config({
+    path: path.resolve(process.cwd(), ".env")
+  });
+}
 var app = express();
 var log = console.log;
 function normalizeDatabaseUrl2(raw) {
@@ -7583,7 +7790,7 @@ function setupErrorHandler(app2) {
   app2.use((err, _req, res, next) => {
     const error = err;
     const status = error.status || error.statusCode || 500;
-    const message = error.message || "Internal Server Error";
+    const message = status >= 500 && process.env.NODE_ENV === "production" ? "Internal Server Error" : error.message || "Internal Server Error";
     console.error("Internal Server Error:", err);
     if (res.headersSent) {
       return next(err);
@@ -7605,7 +7812,8 @@ function setupErrorHandler(app2) {
     const p = req.path || "";
     const allowEmbed = p.startsWith("/api/pdf-viewer") || p.startsWith("/api/media");
     if (allowEmbed) {
-      res.setHeader("Content-Security-Policy", "frame-ancestors *");
+      const frameAncestors = (process.env.FRAME_ANCESTORS || "https://3ilearning.in https://www.3ilearning.in").trim().replace(/\s+/g, " ");
+      res.setHeader("Content-Security-Policy", `frame-ancestors ${frameAncestors}`);
     } else {
       res.setHeader("X-Frame-Options", "SAMEORIGIN");
     }

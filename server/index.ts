@@ -1,9 +1,11 @@
 import dotenv from "dotenv";
 import * as path from "path";
 
-dotenv.config({
-  path: path.resolve(process.cwd(), ".env"),
-});
+if (process.env.NODE_ENV !== "production" || process.env.LOAD_DOTENV === "true") {
+  dotenv.config({
+    path: path.resolve(process.cwd(), ".env"),
+  });
+}
 
 import express from "express";
 import type { Request, Response, NextFunction } from "express";
@@ -361,7 +363,10 @@ function setupErrorHandler(app: express.Application) {
     };
 
     const status = error.status || error.statusCode || 500;
-    const message = error.message || "Internal Server Error";
+    const message =
+      status >= 500 && process.env.NODE_ENV === "production"
+        ? "Internal Server Error"
+        : error.message || "Internal Server Error";
 
     console.error("Internal Server Error:", err);
 
@@ -398,7 +403,10 @@ function setupErrorHandler(app: express.Application) {
     const p = req.path || "";
     const allowEmbed = p.startsWith("/api/pdf-viewer") || p.startsWith("/api/media");
     if (allowEmbed) {
-      res.setHeader("Content-Security-Policy", "frame-ancestors *");
+      const frameAncestors = (process.env.FRAME_ANCESTORS || "https://3ilearning.in https://www.3ilearning.in")
+        .trim()
+        .replace(/\s+/g, " ");
+      res.setHeader("Content-Security-Policy", `frame-ancestors ${frameAncestors}`);
     } else {
       res.setHeader("X-Frame-Options", "SAMEORIGIN");
     }

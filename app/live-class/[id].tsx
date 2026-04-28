@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback, useMemo } from "react"
 import {
   View, Text, StyleSheet, Pressable, Platform,
   ActivityIndicator, TextInput, FlatList, KeyboardAvoidingView,
-  Alert, useWindowDimensions,
+  Alert, useWindowDimensions, AppState,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { WebView } from "react-native-webview";
@@ -450,13 +450,28 @@ export default function LiveClassScreen() {
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
   const [handRaised, setHandRaised] = useState(false);
   const [countdown, setCountdown] = useState<string | null>(null);
+  const [isScreenActive, setIsScreenActive] = useState(true);
   const chatListRef = useRef<FlatList>(null);
   const lastMsgTimeRef = useRef<number>(0);
   const didAutoplayDirectRecording = useRef(false);
+  useEffect(() => {
+    if (Platform.OS === "web") {
+      const onVisibility = () => setIsScreenActive(!document.hidden);
+      onVisibility();
+      document.addEventListener("visibilitychange", onVisibility);
+      return () => document.removeEventListener("visibilitychange", onVisibility);
+    }
+    const sub = AppState.addEventListener("change", (state) => {
+      setIsScreenActive(state === "active");
+    });
+    return () => sub.remove();
+  }, []);
+
   const { data: liveClassData } = useQuery<{ youtube_url: string; title: string; is_completed: boolean; is_live: boolean; show_viewer_count: boolean; cf_playback_hls?: string; stream_type?: string; recording_url?: string; duration_minutes?: number; scheduled_at?: number; has_access?: boolean; is_enrolled?: boolean; course_id?: number; is_public?: boolean; chat_mode?: string }>({
     queryKey: [`/api/live-classes/${id}`],
     // Faster polling before teacher goes live helps students see live state in ~3-5s.
     refetchInterval: (query) => {
+      if (!isScreenActive) return false;
       const data = query.state.data;
       if (!data) return 1800;
       return data.is_live || data.is_completed ? 2500 : 1800;
@@ -504,14 +519,14 @@ export default function LiveClassScreen() {
 
   // Student heartbeat — POST every 15 seconds while page is open
   useEffect(() => {
-    if (!id) return;
+    if (!id || !isScreenActive || liveClassData?.is_completed) return;
     const sendHeartbeat = () => {
       apiRequest("POST", `/api/live-classes/${id}/viewers/heartbeat`, {}).catch(() => {});
     };
     sendHeartbeat(); // send immediately on mount
     const interval = setInterval(sendHeartbeat, 15000);
     return () => clearInterval(interval);
-  }, [id]);
+  }, [id, isScreenActive, liveClassData?.is_completed]);
 
   const title = liveClassData?.title || paramTitle || "Live Class";
   const topPadding = Platform.OS === "web" ? 16 : insets.top;
@@ -591,7 +606,7 @@ export default function LiveClassScreen() {
 
   const { data: chatMessages = [], refetch: refetchChat } = useQuery<ChatMsg[]>({
     queryKey: [`/api/live-classes/${id}/chat`],
-    refetchInterval: 2000,
+    refetchInterval: (!isScreenActive || liveClassData?.is_completed) ? false : 2000,
     staleTime: 0,
   });
 
@@ -610,14 +625,14 @@ export default function LiveClassScreen() {
 
   const { data: viewerData } = useQuery<{ count: number; viewers: any[]; visible: boolean }>({
     queryKey: [`/api/live-classes/${id}/viewers`],
-    refetchInterval: 5000,
+    refetchInterval: (!isScreenActive || liveClassData?.is_completed) ? false : 5000,
     staleTime: 0,
   });
 
   const { data: raisedHands = [], refetch: refetchHands } = useQuery<HandRaise[]>({
     queryKey: [`/api/admin/live-classes/${id}/raised-hands`],
-    enabled: isAdmin,
-    refetchInterval: 5000,
+    enabled: isAdmin && !!liveClassData?.is_live && isScreenActive,
+    refetchInterval: isScreenActive ? 5000 : false,
     staleTime: 0,
   });
 

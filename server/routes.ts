@@ -70,9 +70,10 @@ if (!databaseUrl) {
 
 const pool = new Pool({
   connectionString: databaseUrl,
-  ssl: {
-    rejectUnauthorized: false,
-  },
+  ssl:
+    process.env.PGSSL_NO_VERIFY === "true" && process.env.NODE_ENV !== "production"
+      ? { rejectUnauthorized: false }
+      : { rejectUnauthorized: true },
   max: 10,
   min: 1,
   connectionTimeoutMillis: 10000,
@@ -449,17 +450,22 @@ async function ensureCoreLearningPerformanceIndexes(): Promise<void> {
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // Run first: admin create/update and live-classes SELECT/INSERT need these. Without them Postgres errors
-  // when ALLOW_RUNTIME_SCHEMA_SYNC is false (Vercel → api.3ilearning.in / EC2 + Neon with an old `courses` row shape).
-  try {
-    await ensureCoreLearningSchemaColumns();
-    await ensureCoreLearningPerformanceIndexes();
-    console.log("[DB] courses + enrollments columns ensured (admin + live APIs)");
-  } catch (err) {
-    console.error("[DB] CRITICAL: could not ensure course/enrollment columns. Run SQL in Neon (same branch as DATABASE_URL). Error:", err);
+  const allowRuntimeSchemaSync =
+    process.env.ALLOW_RUNTIME_SCHEMA_SYNC === "true" && process.env.NODE_ENV !== "production";
+  const allowStartupSchemaEnsure =
+    process.env.ALLOW_STARTUP_SCHEMA_ENSURE === "true" && process.env.NODE_ENV !== "production";
+
+  // Prevent runtime schema mutation in production; run migrations before deploy.
+  if (allowStartupSchemaEnsure) {
+    try {
+      await ensureCoreLearningSchemaColumns();
+      await ensureCoreLearningPerformanceIndexes();
+      console.log("[DB] startup schema/index ensure completed");
+    } catch (err) {
+      console.error("[DB] startup schema ensure failed:", err);
+    }
   }
 
-  const allowRuntimeSchemaSync = process.env.ALLOW_RUNTIME_SCHEMA_SYNC === "true";
   if (allowRuntimeSchemaSync) {
     // ==================== BASE TABLE CREATION ====================
     try {
@@ -1508,7 +1514,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     getR2Client,
   });
 
-  registerPdfRoutes({ app, db });
+  registerPdfRoutes({ app, db, getAuthUser });
 
   const httpServer = createServer(app);
   return httpServer;

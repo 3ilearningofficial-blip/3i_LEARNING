@@ -37,7 +37,10 @@ export function registerLiveStreamRoutes({
       if (!process.env.R2_BUCKET_NAME) return null;
       const mp4Url = `https://videodelivery.net/${recordingUid}/downloads/default.mp4`;
       const source = await fetch(mp4Url);
-      if (!source.ok || !source.body) return null;
+      if (!source.ok || !source.body) {
+        console.warn(`[CF Stream] MP4 download not ready/failed for uid=${recordingUid}, status=${source.status}`);
+        return null;
+      }
       const { PutObjectCommand } = await import("@aws-sdk/client-s3");
       const { Readable } = await import("stream");
       const r2 = await getR2Client();
@@ -53,6 +56,32 @@ export function registerLiveStreamRoutes({
       return toMediaApiPath(key);
     } catch (err) {
       console.warn("[CF Stream] Failed to archive recording to R2:", err);
+      return null;
+    }
+  };
+  const getLatestRecordingForLiveInput = async (
+    accountId: string,
+    apiToken: string,
+    liveInputUid: string
+  ): Promise<{ manifestUrl: string; recordingUid: string } | null> => {
+    try {
+      const videosRes = await fetch(
+        `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/live_inputs/${liveInputUid}/videos`,
+        { headers: { Authorization: `Bearer ${apiToken}` } }
+      );
+      if (!videosRes.ok) return null;
+      const videosData = (await videosRes.json()) as any;
+      const raw = videosData?.result;
+      const items: any[] = Array.isArray(raw) ? raw : Array.isArray(raw?.videos) ? raw.videos : [];
+      if (!items.length) return null;
+      const ready = items.find((v) => String(v?.status || "").toLowerCase() === "ready") || items[0];
+      const recordingUid = ready?.uid || ready?.id;
+      if (!recordingUid) return null;
+      return {
+        manifestUrl: `https://videodelivery.net/${recordingUid}/manifest/video.m3u8`,
+        recordingUid: String(recordingUid),
+      };
+    } catch {
       return null;
     }
   };
@@ -156,28 +185,8 @@ export function registerLiveStreamRoutes({
       const uid = lcResult.rows[0]?.cf_stream_uid;
       if (!uid) return res.json({ success: true });
 
-      const getLatestRecording = async (): Promise<{ manifestUrl: string; recordingUid: string } | null> => {
-        try {
-          const videosRes = await fetch(
-            `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/live_inputs/${uid}/videos`,
-            { headers: { Authorization: `Bearer ${apiToken}` } }
-          );
-          if (!videosRes.ok) return null;
-          const videosData = (await videosRes.json()) as any;
-          const raw = videosData?.result;
-          const items: any[] = Array.isArray(raw) ? raw : Array.isArray(raw?.videos) ? raw.videos : [];
-          if (!items.length) return null;
-          const ready = items.find((v) => String(v?.status || "").toLowerCase() === "ready") || items[0];
-          const recordingUid = ready?.uid || ready?.id;
-          if (!recordingUid) return null;
-          return {
-            manifestUrl: `https://videodelivery.net/${recordingUid}/manifest/video.m3u8`,
-            recordingUid: String(recordingUid),
-          };
-        } catch {
-          return null;
-        }
-      };
+      const getLatestRecording = async (): Promise<{ manifestUrl: string; recordingUid: string } | null> =>
+        getLatestRecordingForLiveInput(accountId, apiToken, uid);
 
       await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/live_inputs/${uid}`, {
         method: "DELETE",
@@ -285,17 +294,33 @@ export function registerLiveStreamRoutes({
     isArchiveSweepRunning = true;
     try {
       const pending = await db.query(
-        `SELECT id, title, recording_url
+        `SELECT id, title, recording_url, cf_stream_uid
          FROM live_classes
          WHERE stream_type = 'cloudflare'
            AND is_completed = TRUE
-           AND recording_url ILIKE 'https://videodelivery.net/%/manifest/video.m3u8'
+           AND (recording_url IS NULL OR recording_url ILIKE 'https://videodelivery.net/%/manifest/video.m3u8')
          ORDER BY ended_at DESC NULLS LAST
          LIMIT 20`
       );
+      const accountId = process.env.CF_STREAM_ACCOUNT_ID || process.env.R2_ACCOUNT_ID;
+      const apiToken = process.env.CF_STREAM_API_TOKEN;
       for (const row of pending.rows) {
         const currentUrl = String(row.recording_url || "").trim();
-        const recordingUid = extractCloudflareRecordingUid(currentUrl);
+        let recordingUid = extractCloudflareRecordingUid(currentUrl);
+        if (!recordingUid && accountId && apiToken && row.cf_stream_uid) {
+          const latest = await getLatestRecordingForLiveInput(accountId, apiToken, String(row.cf_stream_uid));
+          recordingUid = latest?.recordingUid || null;
+        }
+        if (recordingUid && currentUrl) {
+          const head = await fetch(`https://videodelivery.net/${recordingUid}/manifest/video.m3u8`, { method: "HEAD" }).catch(() => null as any);
+          if (!head || !head.ok) {
+            // Saved UID can be the live input uid; resolve the true recording uid through Cloudflare API.
+            if (accountId && apiToken && row.cf_stream_uid) {
+              const latest = await getLatestRecordingForLiveInput(accountId, apiToken, String(row.cf_stream_uid));
+              recordingUid = latest?.recordingUid || recordingUid;
+            }
+          }
+        }
         if (!recordingUid) continue;
         const archivedUrl = await archiveCloudflareRecordingToR2(recordingUid);
         if (!archivedUrl) continue;

@@ -389,7 +389,7 @@ export default function BroadcastPage() {
       } else if (streamType === "cloudflare") {
         const endRes = await apiRequest("POST", `/api/admin/live-classes/${liveClassId}/stream/end`, {});
         const endData = await endRes.json().catch(() => ({} as any));
-        const recordingUrl = String(endData?.recordingUrl || cfPlaybackHls || "").trim();
+        const recordingUrl = String(endData?.recordingUrl || "").trim();
         if (recordingUrl) {
           await apiRequest("POST", `/api/admin/live-classes/${liveClassId}/recording`, {
             recordingUrl,

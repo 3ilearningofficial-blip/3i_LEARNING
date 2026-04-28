@@ -21,6 +21,23 @@ export function registerBookRoutes({
   getRazorpay,
   verifyPaymentSignature,
 }: RegisterBookRoutesDeps): void {
+  const verifyBookOrder = async (orderId: string, userId: number, bookId: number) => {
+    const bookResult = await db.query("SELECT id, price FROM books WHERE id = $1", [bookId]);
+    if (!bookResult.rows.length) throw new Error("Book not found");
+    const expectedAmount = Math.round(parseFloat(String(bookResult.rows[0].price || "0")) * 100);
+    const razorpay = getRazorpay();
+    const order: { amount?: number; notes?: Record<string, string> } = await razorpay.orders.fetch(orderId);
+    const notes = order.notes || {};
+    const noteKind = String(notes.kind || "");
+    const noteUserId = Number(notes.userId || 0);
+    const noteBookId = Number(notes.bookId || 0);
+    const amount = Number(order.amount || 0);
+    if (noteKind !== "book") throw new Error("Payment kind mismatch");
+    if (!noteUserId || noteUserId !== userId) throw new Error("Payment user mismatch");
+    if (!noteBookId || noteBookId !== bookId) throw new Error("Payment book mismatch");
+    if (!amount || amount !== expectedAmount) throw new Error("Payment amount mismatch");
+  };
+
   app.get("/api/books", async (req: Request, res: Response) => {
     try {
       const user = await getAuthUser(req);
@@ -194,6 +211,7 @@ export function registerBookRoutes({
       const bookId = parseInt(n.bookId || "0", 10);
       const userId = parseInt(n.userId || "0", 10);
       if (!bookId || !userId) return res.redirect(fail);
+      await verifyBookOrder(razorpay_order_id, userId, bookId);
       await db.query(
         "INSERT INTO book_purchases (user_id, book_id, purchased_at) VALUES ($1, $2, $3) ON CONFLICT (user_id, book_id) DO NOTHING",
         [userId, bookId, Date.now()]
@@ -211,10 +229,13 @@ export function registerBookRoutes({
       const user = await getAuthUser(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const { bookId, razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body;
+      const parsedBookId = Number(bookId);
+      if (!parsedBookId) return res.status(400).json({ message: "bookId is required" });
       const isValid = verifyPaymentSignature(razorpayOrderId, razorpayPaymentId, razorpaySignature);
       if (!isValid) return res.status(400).json({ message: "Invalid payment signature" });
-      await db.query("INSERT INTO book_purchases (user_id, book_id, purchased_at) VALUES ($1, $2, $3) ON CONFLICT (user_id, book_id) DO NOTHING", [user.id, bookId, Date.now()]);
-      await db.query("DELETE FROM book_click_tracking WHERE user_id = $1 AND book_id = $2", [user.id, bookId]).catch(() => {});
+      await verifyBookOrder(razorpayOrderId, user.id, parsedBookId);
+      await db.query("INSERT INTO book_purchases (user_id, book_id, purchased_at) VALUES ($1, $2, $3) ON CONFLICT (user_id, book_id) DO NOTHING", [user.id, parsedBookId, Date.now()]);
+      await db.query("DELETE FROM book_click_tracking WHERE user_id = $1 AND book_id = $2", [user.id, parsedBookId]).catch(() => {});
       res.json({ success: true });
     } catch (err) {
       console.error("Book verify-payment error:", err);

@@ -229,7 +229,9 @@ export function registerDoubtNotificationRoutes({
 
   app.put("/api/notifications/:id/read", async (req: Request, res: Response) => {
     try {
-      await db.query("UPDATE notifications SET is_read = TRUE WHERE id = $1", [req.params.id]);
+      const user = await getAuthUser(req);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+      await db.query("UPDATE notifications SET is_read = TRUE WHERE id = $1 AND user_id = $2", [req.params.id, user.id]);
       res.json({ success: true });
     } catch {
       res.status(500).json({ message: "Failed to mark as read" });

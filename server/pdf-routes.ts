@@ -1,6 +1,5 @@
 import type { Express, Request, Response } from "express";
-import * as http from "node:http";
-import * as https from "node:https";
+import { isIP } from "node:net";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -9,9 +8,35 @@ type DbClient = {
 type RegisterPdfRoutesDeps = {
   app: Express;
   db: DbClient;
+  getAuthUser: (req: Request) => Promise<{ id: number } | null>;
 };
 
-export function registerPdfRoutes({ app, db }: RegisterPdfRoutesDeps): void {
+const MAX_PDF_PROXY_BYTES = 30 * 1024 * 1024;
+const MAX_PDF_PROXY_REDIRECTS = 2;
+const PDF_PROXY_ALLOWED_HOSTS = new Set([
+  "drive.google.com",
+  "docs.google.com",
+  "lh3.googleusercontent.com",
+]);
+
+function isPrivateOrLocalHost(hostname: string): boolean {
+  const lower = hostname.toLowerCase();
+  if (lower === "localhost" || lower.endsWith(".local")) return true;
+  const ipVersion = isIP(lower);
+  if (!ipVersion) return false;
+  if (ipVersion === 4) {
+    const [a, b] = lower.split(".").map(Number);
+    if (a === 10 || a === 127) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 169 && b === 254) return true;
+    return false;
+  }
+  // Treat IPv6 loopback/link-local/ULA as private.
+  return lower === "::1" || lower.startsWith("fe80:") || lower.startsWith("fc") || lower.startsWith("fd");
+}
+
+export function registerPdfRoutes({ app, db, getAuthUser }: RegisterPdfRoutesDeps): void {
   app.get("/api/pdf-viewer", async (req: Request, res: Response) => {
     const { token, key } = req.query;
     if (!token || !key || typeof token !== "string" || typeof key !== "string") {
@@ -100,85 +125,95 @@ pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/p
   });
 
   app.get("/api/pdf-proxy", (req: Request, res: Response) => {
-    const { url } = req.query;
-    if (!url || typeof url !== "string") {
-      return res.status(400).json({ message: "URL is required" });
-    }
-
-    let parsedUrl: URL;
-    try {
-      parsedUrl = new URL(url);
-    } catch {
-      return res.status(400).json({ message: "Invalid URL" });
-    }
-
-    const isGoogleDrive = parsedUrl.hostname.includes("drive.google.com") || parsedUrl.hostname.includes("docs.google.com");
-    const isPdfUrl = parsedUrl.pathname.toLowerCase().endsWith(".pdf");
-    if (!isPdfUrl && !isGoogleDrive) {
-      return res.status(400).json({ message: "Only PDF files and Google Drive links are allowed" });
-    }
-
-    let finalUrl = url;
-    if (isGoogleDrive) {
-      const fileIdMatch = url.match(/\/d\/([a-zA-Z0-9_-]+)/);
-      if (fileIdMatch) {
-        finalUrl = `https://drive.google.com/uc?export=download&id=${fileIdMatch[1]}`;
-      }
-    }
-
-    const finalParsed = new URL(finalUrl);
-    const protocol = finalParsed.protocol === "https:" ? https : http;
-    const options = {
-      hostname: finalParsed.hostname,
-      path: finalParsed.pathname + finalParsed.search,
-      method: "GET",
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "application/pdf,*/*",
-      },
-      timeout: 30000,
-    };
-
-    console.log(`[PDF-Proxy] Fetching: ${parsedUrl.hostname}${parsedUrl.pathname}`);
-
-    const proxyReq = protocol.request(options, (proxyRes: any) => {
-      if (proxyRes.statusCode >= 300 && proxyRes.statusCode < 400 && proxyRes.headers.location) {
-        const redirectUrl = new URL(proxyRes.headers.location, url);
-        console.log(`[PDF-Proxy] Following redirect to: ${redirectUrl.href}`);
-        proxyRes.resume();
-        req.query.url = redirectUrl.href;
-        return (app as any)._router.handle(req, res, () => {});
+    (async () => {
+      const user = await getAuthUser(req);
+      if (!user) {
+        return res.status(401).json({ message: "Not authenticated" });
       }
 
-      if (proxyRes.statusCode !== 200) {
-        console.log(`[PDF-Proxy] Upstream returned ${proxyRes.statusCode}`);
-        proxyRes.resume();
-        return res.status(proxyRes.statusCode).json({ message: "Failed to fetch PDF" });
+      const { url } = req.query;
+      if (!url || typeof url !== "string") {
+        return res.status(400).json({ message: "URL is required" });
       }
 
-      res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Cache-Control", "public, max-age=86400");
-      if (proxyRes.headers["content-length"]) {
-        res.setHeader("Content-Length", proxyRes.headers["content-length"]);
-      }
-      proxyRes.pipe(res);
-    });
+      let currentUrl = url;
+      for (let redirectCount = 0; redirectCount <= MAX_PDF_PROXY_REDIRECTS; redirectCount += 1) {
+        let parsedUrl: URL;
+        try {
+          parsedUrl = new URL(currentUrl);
+        } catch {
+          return res.status(400).json({ message: "Invalid URL" });
+        }
 
-    proxyReq.on("error", (err: any) => {
-      console.error("[PDF-Proxy] Request error:", err.message);
+        if (parsedUrl.protocol !== "https:") {
+          return res.status(400).json({ message: "Only HTTPS PDF URLs are allowed" });
+        }
+        if (isPrivateOrLocalHost(parsedUrl.hostname)) {
+          return res.status(403).json({ message: "Blocked host" });
+        }
+
+        const hostname = parsedUrl.hostname.toLowerCase();
+        const isAllowedHost = PDF_PROXY_ALLOWED_HOSTS.has(hostname);
+        const isGoogleDrive = hostname.includes("drive.google.com") || hostname.includes("docs.google.com");
+        const isPdfUrl = parsedUrl.pathname.toLowerCase().endsWith(".pdf");
+        if (!isAllowedHost && !isPdfUrl) {
+          return res.status(400).json({ message: "Only trusted hosts and PDF links are allowed" });
+        }
+
+        if (isGoogleDrive) {
+          const fileIdMatch = currentUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
+          if (fileIdMatch) {
+            currentUrl = `https://drive.google.com/uc?export=download&id=${fileIdMatch[1]}`;
+            continue;
+          }
+        }
+
+        const upstream = await fetch(currentUrl, {
+          method: "GET",
+          redirect: "manual",
+          headers: {
+            "User-Agent": "3i-learning-pdf-proxy/1.0",
+            Accept: "application/pdf,*/*",
+          },
+          signal: AbortSignal.timeout(30000),
+        });
+
+        if (upstream.status >= 300 && upstream.status < 400) {
+          const location = upstream.headers.get("location");
+          if (!location) return res.status(502).json({ message: "Invalid redirect from source" });
+          currentUrl = new URL(location, currentUrl).toString();
+          continue;
+        }
+        if (!upstream.ok || !upstream.body) {
+          return res.status(502).json({ message: "Failed to fetch PDF" });
+        }
+
+        const contentLength = Number(upstream.headers.get("content-length") || "0");
+        if (Number.isFinite(contentLength) && contentLength > MAX_PDF_PROXY_BYTES) {
+          return res.status(413).json({ message: "PDF too large" });
+        }
+        const contentType = (upstream.headers.get("content-type") || "").toLowerCase();
+        if (contentType && !contentType.includes("pdf") && !contentType.includes("octet-stream")) {
+          return res.status(400).json({ message: "Source is not a PDF" });
+        }
+
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader("Cache-Control", "private, max-age=600");
+        if (contentLength > 0) {
+          res.setHeader("Content-Length", String(contentLength));
+        }
+        const { Readable } = await import("stream");
+        Readable.fromWeb(upstream.body as any).pipe(res);
+        return;
+      }
+
+      return res.status(400).json({ message: "Too many redirects" });
+    })().catch((err: any) => {
+      console.error("[PDF-Proxy] Request error:", err?.message || err);
       if (!res.headersSent) {
         res.status(502).json({ message: "Failed to fetch PDF" });
       }
     });
-
-    proxyReq.on("timeout", () => {
-      proxyReq.destroy();
-      if (!res.headersSent) {
-        res.status(504).json({ message: "PDF download timed out" });
-      }
-    });
-
-    proxyReq.end();
   });
 }
 

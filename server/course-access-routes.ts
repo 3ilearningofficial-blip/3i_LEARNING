@@ -34,15 +34,88 @@ export function registerCourseAccessRoutes({
   getR2Client,
   updateCourseProgress,
 }: RegisterCourseAccessRoutesDeps): void {
+  const normalizeStorageKey = (raw: string): string => {
+    const trimmed = String(raw || "").trim();
+    if (!trimmed) return "";
+    if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+      try {
+        const parsed = new URL(trimmed);
+        return decodeURIComponent(parsed.pathname.replace(/^\/+/, ""));
+      } catch {
+        return trimmed;
+      }
+    }
+    return trimmed.replace(/^\/+/, "");
+  };
+
+  const userCanMintMediaToken = async (user: AuthUser, requestedKeyRaw: string): Promise<boolean> => {
+    const requestedKey = normalizeStorageKey(requestedKeyRaw);
+    if (!requestedKey) return false;
+
+    const lectureMatch = await db.query(
+      `SELECT l.id
+       FROM lectures l
+       LEFT JOIN enrollments e
+         ON e.user_id = $1
+        AND e.course_id = l.course_id
+        AND (e.status = 'active' OR e.status IS NULL)
+       WHERE l.video_url IS NOT NULL
+         AND (
+           l.video_url = $2
+           OR regexp_replace(l.video_url, '^https?://[^/]+/', '') = $2
+           OR l.video_url LIKE '%' || $2
+         )
+         AND (
+           l.course_id IS NULL
+           OR l.is_free_preview = TRUE
+           OR (
+             e.id IS NOT NULL
+             AND (e.valid_until IS NULL OR e.valid_until > $3)
+           )
+         )
+       LIMIT 1`,
+      [user.id, requestedKey, Date.now()]
+    );
+    if (lectureMatch.rows.length > 0) return true;
+
+    const materialMatch = await db.query(
+      `SELECT sm.id
+       FROM study_materials sm
+       LEFT JOIN enrollments e
+         ON e.user_id = $1
+        AND e.course_id = sm.course_id
+        AND (e.status = 'active' OR e.status IS NULL)
+       WHERE sm.file_url IS NOT NULL
+         AND (
+           sm.file_url = $2
+           OR regexp_replace(sm.file_url, '^https?://[^/]+/', '') = $2
+           OR sm.file_url LIKE '%' || $2
+         )
+         AND (
+           sm.course_id IS NULL
+           OR sm.is_free = TRUE
+           OR (
+             e.id IS NOT NULL
+             AND (e.valid_until IS NULL OR e.valid_until > $3)
+           )
+         )
+       LIMIT 1`,
+      [user.id, requestedKey, Date.now()]
+    );
+    return materialMatch.rows.length > 0;
+  };
+
   app.post("/api/media-token", async (req: Request, res: Response) => {
     try {
       const user = await getAuthUser(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const { fileKey } = req.body;
       if (!fileKey || typeof fileKey !== "string") return res.status(400).json({ message: "fileKey required" });
+      const allowed = await userCanMintMediaToken(user, fileKey);
+      if (!allowed) return res.status(403).json({ message: "You do not have access to this media file" });
       const token = generateSecureToken();
       const expiresAt = Date.now() + 10 * 60 * 1000;
-      await db.query("INSERT INTO media_tokens (token, user_id, file_key, expires_at) VALUES ($1, $2, $3, $4)", [token, user.id, fileKey, expiresAt]);
+      await db.query("INSERT INTO media_tokens (token, user_id, file_key, expires_at) VALUES ($1, $2, $3, $4)", [token, user.id, normalizeStorageKey(fileKey), expiresAt]);
       db.query("DELETE FROM media_tokens WHERE expires_at < $1", [Date.now()]).catch(() => {});
       res.json({ token, expiresAt });
     } catch {

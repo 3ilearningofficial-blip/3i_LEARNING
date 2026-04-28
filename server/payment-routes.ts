@@ -26,6 +26,34 @@ export function registerPaymentRoutes({
   verifyPaymentSignature,
   cacheInvalidate,
 }: RegisterPaymentRoutesDeps): void {
+  const verifyOrderOwnershipAndAmount = async ({
+    orderId,
+    expectedKind,
+    expectedUserId,
+    expectedItemId,
+    expectedAmount,
+  }: {
+    orderId: string;
+    expectedKind: "test" | "book";
+    expectedUserId: number;
+    expectedItemId: number;
+    expectedAmount: number;
+  }) => {
+    const razorpay = getRazorpay();
+    const order: { amount?: number; notes?: Record<string, string> } = await razorpay.orders.fetch(orderId);
+    const notes = order.notes || {};
+    const orderAmount = Number(order.amount || 0);
+    const noteKind = String(notes.kind || "");
+    const noteUserId = Number(notes.userId || 0);
+    const noteTestId = Number(notes.testId || 0);
+    const noteBookId = Number(notes.bookId || 0);
+    const noteItemId = expectedKind === "test" ? noteTestId : noteBookId;
+    if (noteKind !== expectedKind) throw new Error("Payment kind mismatch");
+    if (!noteUserId || noteUserId !== expectedUserId) throw new Error("Payment user mismatch");
+    if (!noteItemId || noteItemId !== expectedItemId) throw new Error("Payment item mismatch");
+    if (!orderAmount || orderAmount !== expectedAmount) throw new Error("Payment amount mismatch");
+  };
+
   /** Idempotent: insert enrollment if missing. Fixes rows where status became paid but enrollment failed or was skipped. */
   const ensureCourseEnrollment = async (paymentRow: { user_id: number; course_id: number }) => {
     const paidCourseResult = await db.query("SELECT * FROM courses WHERE id = $1", [paymentRow.course_id]);
@@ -339,6 +367,16 @@ export function registerPaymentRoutes({
       const testId = parseInt(n.testId || "0", 10);
       const userId = parseInt(n.userId || "0", 10);
       if (!testId || !userId) return res.redirect(fail);
+      const testResult = await db.query("SELECT id, price FROM tests WHERE id = $1", [testId]);
+      if (!testResult.rows.length) return res.redirect(fail);
+      const expectedAmount = Math.round(parseFloat(String(testResult.rows[0].price || "0")) * 100);
+      await verifyOrderOwnershipAndAmount({
+        orderId: razorpay_order_id,
+        expectedKind: "test",
+        expectedUserId: userId,
+        expectedItemId: testId,
+        expectedAmount,
+      });
       await db.query(
         "INSERT INTO test_purchases (user_id, test_id, razorpay_order_id, razorpay_payment_id, created_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (user_id, test_id) DO NOTHING",
         [userId, testId, razorpay_order_id, razorpay_payment_id, Date.now()]
@@ -355,11 +393,23 @@ export function registerPaymentRoutes({
       const user = await getAuthUser(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const { razorpay_order_id, razorpay_payment_id, razorpay_signature, testId } = req.body;
+      const parsedTestId = Number(testId);
+      if (!parsedTestId) return res.status(400).json({ message: "testId is required" });
       const isValid = verifyPaymentSignature(razorpay_order_id, razorpay_payment_id, razorpay_signature);
       if (!isValid) return res.status(400).json({ message: "Invalid payment signature" });
+      const testResult = await db.query("SELECT id, price FROM tests WHERE id = $1", [parsedTestId]);
+      if (!testResult.rows.length) return res.status(404).json({ message: "Test not found" });
+      const expectedAmount = Math.round(parseFloat(String(testResult.rows[0].price || "0")) * 100);
+      await verifyOrderOwnershipAndAmount({
+        orderId: razorpay_order_id,
+        expectedKind: "test",
+        expectedUserId: user.id,
+        expectedItemId: parsedTestId,
+        expectedAmount,
+      });
       await db.query(
         "INSERT INTO test_purchases (user_id, test_id, razorpay_order_id, razorpay_payment_id, created_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (user_id, test_id) DO NOTHING",
-        [user.id, testId, razorpay_order_id, razorpay_payment_id, Date.now()]
+        [user.id, parsedTestId, razorpay_order_id, razorpay_payment_id, Date.now()]
       );
       res.json({ success: true });
     } catch (err) {

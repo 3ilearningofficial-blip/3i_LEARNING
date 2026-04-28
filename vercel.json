@@ -2,7 +2,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "http://13.53.129.91:5000/api/:path*"
+      "destination": "https://api.3ilearning.in/api/:path*"
     }
   ]
 }

@@ -17,6 +17,14 @@ export function registerLiveClassRoutes({
   db,
   getAuthUser,
 }: RegisterLiveClassRoutesDeps): void {
+  const sanitizeLiveClass = (row: any) => {
+    if (!row || typeof row !== "object") return row;
+    const { cf_stream_key, cf_stream_rtmp_url, ...safe } = row;
+    void cf_stream_key;
+    void cf_stream_rtmp_url;
+    return safe;
+  };
+
   app.get("/api/live-classes", async (req: Request, res: Response) => {
     try {
       const { courseId, admin } = req.query;
@@ -30,11 +38,11 @@ export function registerLiveClassRoutes({
             [cid]
           );
           res.set("Cache-Control", "private, no-store");
-          return res.json(result.rows);
+          return res.json(result.rows.map(sanitizeLiveClass));
         }
         const result = await db.query("SELECT lc.*, c.title as course_title FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id ORDER BY lc.scheduled_at DESC");
         res.set("Cache-Control", "private, no-store");
-        return res.json(result.rows);
+        return res.json(result.rows.map(sanitizeLiveClass));
       }
 
       const ex23 = sqlEnrollmentExistsForLiveList(2, 3);
@@ -51,7 +59,7 @@ export function registerLiveClassRoutes({
           [cid, user.id, now]
         );
         res.set("Cache-Control", "private, no-store");
-        return res.json(result.rows);
+        return res.json(result.rows.map(sanitizeLiveClass));
       }
       if (cid) {
         const result = await db.query(
@@ -64,7 +72,7 @@ export function registerLiveClassRoutes({
           [cid]
         );
         res.set("Cache-Control", "private, no-store");
-        return res.json(result.rows);
+        return res.json(result.rows.map(sanitizeLiveClass));
       }
       const ex12 = sqlEnrollmentExistsForLiveList(1, 2);
       if (user) {
@@ -81,7 +89,7 @@ export function registerLiveClassRoutes({
           [user.id, now]
         );
         res.set("Cache-Control", "private, no-store");
-        return res.json(result.rows);
+        return res.json(result.rows.map(sanitizeLiveClass));
       }
       const result = await db.query(
         `SELECT lc.*, c.title as course_title, c.is_free as course_is_free, FALSE as is_enrolled
@@ -94,7 +102,7 @@ export function registerLiveClassRoutes({
          ORDER BY lc.scheduled_at DESC`
       );
       res.set("Cache-Control", "private, no-store");
-      res.json(result.rows);
+      res.json(result.rows.map(sanitizeLiveClass));
     } catch (err) {
       console.error("[LiveClasses] list error:", err);
       // Keep login/home resilient even if this auxiliary feed fails.
@@ -117,7 +125,7 @@ export function registerLiveClassRoutes({
       `);
       console.log(`[UpcomingClasses] returning ${result.rows.length} classes`);
       res.set("Cache-Control", "private, no-store");
-      res.json(result.rows);
+      res.json(result.rows.map(sanitizeLiveClass));
     } catch (err) {
       console.error("[UpcomingClasses] error:", err);
       res.set("Cache-Control", "private, no-store");
@@ -141,7 +149,7 @@ export function registerLiveClassRoutes({
       const hasAccess = await userCanAccessLiveClassContent(db, user, lc);
 
       res.set("Cache-Control", "private, no-store");
-      res.json({ ...lc, is_enrolled: isEnrolled, has_access: hasAccess });
+      res.json({ ...sanitizeLiveClass(lc), is_enrolled: isEnrolled, has_access: hasAccess });
     } catch {
       res.status(500).json({ message: "Failed to fetch live class" });
     }
