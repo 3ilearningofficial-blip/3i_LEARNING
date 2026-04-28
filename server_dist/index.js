@@ -1613,20 +1613,21 @@ function registerLiveStreamRoutes({
       const uid = lcResult.rows[0]?.cf_stream_uid;
       if (!uid) return res.json({ success: true });
       const getLatestRecording = async () => getLatestRecordingForLiveInput(accountId, apiToken, uid);
-      await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/live_inputs/${uid}`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${apiToken}` }
-      });
       let recordingUrl = null;
-      for (let i = 0; i < 6; i += 1) {
+      for (let i = 0; i < 18; i += 1) {
         const latest = await getLatestRecording();
         if (latest) {
           const archived = await archiveCloudflareRecordingToR2(latest.recordingUid);
           recordingUrl = archived || latest.manifestUrl;
           break;
         }
-        await new Promise((resolve2) => setTimeout(resolve2, 2e3));
+        await new Promise((resolve2) => setTimeout(resolve2, 5e3));
       }
+      await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/live_inputs/${uid}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${apiToken}` }
+      }).catch(() => {
+      });
       console.log(`[CF Stream] Ended live input uid=${uid}`);
       res.json({ success: true, recordingUrl });
     } catch (err) {

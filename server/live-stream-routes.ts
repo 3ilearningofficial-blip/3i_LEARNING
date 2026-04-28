@@ -188,22 +188,23 @@ export function registerLiveStreamRoutes({
       const getLatestRecording = async (): Promise<{ manifestUrl: string; recordingUid: string } | null> =>
         getLatestRecordingForLiveInput(accountId, apiToken, uid);
 
-      await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/live_inputs/${uid}`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${apiToken}` },
-      });
-
-      // Cloudflare may need a few seconds to finalize VOD after ending live input.
+      // Cloudflare may need time to finalize VOD after stream stop.
       let recordingUrl: string | null = null;
-      for (let i = 0; i < 6; i += 1) {
+      for (let i = 0; i < 18; i += 1) {
         const latest = await getLatestRecording();
         if (latest) {
           const archived = await archiveCloudflareRecordingToR2(latest.recordingUid);
           recordingUrl = archived || latest.manifestUrl;
           break;
         }
-        await new Promise((resolve) => setTimeout(resolve, 2000));
+        await new Promise((resolve) => setTimeout(resolve, 5000));
       }
+
+      // Delete live input after recording lookup attempt (best effort).
+      await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/live_inputs/${uid}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${apiToken}` },
+      }).catch(() => {});
 
       console.log(`[CF Stream] Ended live input uid=${uid}`);
       res.json({ success: true, recordingUrl });
