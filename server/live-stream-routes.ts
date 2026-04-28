@@ -35,12 +35,23 @@ export function registerLiveStreamRoutes({
   const archiveCloudflareRecordingToR2 = async (recordingUid: string): Promise<string | null> => {
     try {
       if (!process.env.R2_BUCKET_NAME) return null;
-      const mp4Url = `https://videodelivery.net/${recordingUid}/downloads/default.mp4`;
-      const source = await fetch(mp4Url);
-      if (!source.ok || !source.body) {
-        console.warn(`[CF Stream] MP4 download not ready/failed for uid=${recordingUid}, status=${source.status}`);
-        return null;
+      const configuredDownloadBase = String(process.env.CF_STREAM_DOWNLOAD_BASE_URL || "").trim().replace(/\/+$/, "");
+      const candidateUrls = [
+        `https://videodelivery.net/${recordingUid}/downloads/default.mp4`,
+        configuredDownloadBase ? `${configuredDownloadBase}/${recordingUid}/downloads/default.mp4` : "",
+      ].filter(Boolean);
+      let source: Response | null = null;
+      let matchedUrl = "";
+      for (const candidateUrl of candidateUrls) {
+        const resp = await fetch(candidateUrl);
+        if (resp.ok && resp.body) {
+          source = resp;
+          matchedUrl = candidateUrl;
+          break;
+        }
+        console.warn(`[CF Stream] MP4 download not ready/failed for uid=${recordingUid}, status=${resp.status}, url=${candidateUrl}`);
       }
+      if (!source || !source.body) return null;
       const { PutObjectCommand } = await import("@aws-sdk/client-s3");
       const { Readable } = await import("stream");
       const r2 = await getR2Client();
@@ -53,6 +64,7 @@ export function registerLiveStreamRoutes({
           ContentType: "video/mp4",
         })
       );
+      console.log(`[CF Stream] Archived recording uid=${recordingUid} to R2 from ${matchedUrl || "unknown-source"}`);
       return toMediaApiPath(key);
     } catch (err) {
       console.warn("[CF Stream] Failed to archive recording to R2:", err);
