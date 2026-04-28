@@ -473,8 +473,8 @@ export default function LiveClassScreen() {
     refetchInterval: (query) => {
       if (!isScreenActive) return false;
       const data = query.state.data;
-      if (!data) return 1800;
-      return data.is_live || data.is_completed ? 2500 : 1800;
+      if (!data) return 1200;
+      return data.is_live || data.is_completed ? 2000 : 1200;
     },
     staleTime: 0,
   });

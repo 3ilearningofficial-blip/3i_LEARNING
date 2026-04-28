@@ -174,7 +174,7 @@ export default function BroadcastPage() {
       return res.json();
     },
     enabled: !!liveClassId,
-    refetchInterval: 5000, // Poll every 5s to pick up cfPlaybackHls once OBS connects
+    refetchInterval: 2000, // Poll faster so Cloudflare preview appears sooner after OBS starts
     staleTime: 0,
   });
 

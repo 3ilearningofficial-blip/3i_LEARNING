@@ -971,6 +971,24 @@ export default function AdminDashboard() {
     refetchInterval: activeTab === "aiTutor" ? 20000 : false,
     staleTime: 0,
   });
+  const clearAdminDoubtsMutation = useMutation({
+    mutationFn: async () => {
+      const qs = new URLSearchParams();
+      if (aiDoubtDays !== "all") qs.set("days", aiDoubtDays);
+      if (aiDoubtTopic !== "all") qs.set("topic", aiDoubtTopic);
+      if (aiDoubtStudent.trim()) qs.set("student", aiDoubtStudent.trim());
+      const path = `/api/admin/doubts${qs.toString() ? `?${qs.toString()}` : ""}`;
+      const res = await apiRequest("DELETE", path);
+      const payload = await res.json().catch(() => ({} as any));
+      if (!res.ok) throw new Error(payload?.message || "Failed to clear doubts");
+      return payload;
+    },
+    onSuccess: (payload: any) => {
+      qc.invalidateQueries({ queryKey: ["/api/admin/doubts"] });
+      Alert.alert("AI Tutor", `Deleted ${Number(payload?.deletedCount || 0)} doubts.`);
+    },
+    onError: (err: any) => Alert.alert("Error", err?.message || "Failed to clear doubts"),
+  });
 
   const { data: supportConvos = [], isLoading: supportLoading, refetch: refetchSupport } = useQuery<any[]>({
     queryKey: ["/api/admin/support/conversations"],
@@ -3058,6 +3076,47 @@ export default function AdminDashboard() {
                 value={aiDoubtStudent}
                 onChangeText={setAiDoubtStudent}
               />
+              <Pressable
+                disabled={clearAdminDoubtsMutation.isPending}
+                style={{
+                  marginTop: 2,
+                  backgroundColor: "#EF4444",
+                  borderRadius: 10,
+                  paddingVertical: 10,
+                  paddingHorizontal: 12,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 8,
+                  opacity: clearAdminDoubtsMutation.isPending ? 0.7 : 1,
+                }}
+                onPress={() => {
+                  const scope = [
+                    aiDoubtDays !== "all" ? `Days: ${aiDoubtDays}` : "Days: All",
+                    aiDoubtTopic !== "all" ? `Topic: ${aiDoubtTopic}` : "Topic: All",
+                    aiDoubtStudent.trim() ? `Search: ${aiDoubtStudent.trim()}` : "Search: All",
+                  ].join("\n");
+                  Alert.alert(
+                    "Clear Old AI Tutor Questions?",
+                    `This will permanently delete doubts for current filter scope.\n\n${scope}`,
+                    [
+                      { text: "Cancel", style: "cancel" },
+                      { text: "Delete", style: "destructive", onPress: () => clearAdminDoubtsMutation.mutate() },
+                    ]
+                  );
+                }}
+              >
+                {clearAdminDoubtsMutation.isPending ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <>
+                    <Ionicons name="trash-outline" size={14} color="#fff" />
+                    <Text style={{ color: "#fff", fontFamily: "Inter_600SemiBold", fontSize: 13 }}>
+                      Clear Old Questions (Filtered)
+                    </Text>
+                  </>
+                )}
+              </Pressable>
             </View>
 
             {adminDoubtsLoading ? (

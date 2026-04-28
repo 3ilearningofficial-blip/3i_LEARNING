@@ -307,7 +307,7 @@ export function registerLiveStreamRoutes({
     isArchiveSweepRunning = true;
     try {
       const pending = await db.query(
-        `SELECT id, title, recording_url, cf_stream_uid
+        `SELECT id, title, description, course_id, started_at, lecture_section_title, lecture_subfolder_title, recording_url, cf_stream_uid
          FROM live_classes
          WHERE stream_type = 'cloudflare'
            AND is_completed = TRUE
@@ -338,10 +338,49 @@ export function registerLiveStreamRoutes({
         const archivedUrl = await archiveCloudflareRecordingToR2(recordingUid);
         if (!archivedUrl) continue;
         await db.query("UPDATE live_classes SET recording_url = $1 WHERE id = $2", [archivedUrl, row.id]);
-        await db.query(
+        const patchedLecture = await db.query(
           "UPDATE lectures SET video_url = $1, video_type = 'r2' WHERE title = $2 AND video_url = $3",
           [archivedUrl, row.title, currentUrl]
         ).catch(() => {});
+        if (row.course_id) {
+          const updatedRows = Array.isArray((patchedLecture as any)?.rows) ? (patchedLecture as any).rows.length : 0;
+          if (updatedRows === 0) {
+            const maxOrder = await db.query(
+              "SELECT COALESCE(MAX(order_index), 0) + 1 as next_order FROM lectures WHERE course_id = $1",
+              [row.course_id]
+            );
+            const durationMins = row.started_at
+              ? Math.max(1, Math.round((Date.now() - Number(row.started_at)) / 60000))
+              : 0;
+            const sectionTitle = buildRecordingLectureSectionTitle(
+              row.lecture_section_title,
+              row.lecture_subfolder_title,
+              undefined
+            );
+            await db.query(
+              `INSERT INTO lectures (course_id, title, description, video_url, video_type, duration_minutes, order_index, is_free_preview, section_title, created_at)
+               SELECT $1, $2, $3, $4, 'r2', $5, $6, FALSE, $7, $8
+               WHERE NOT EXISTS (
+                 SELECT 1 FROM lectures
+                 WHERE course_id = $1 AND title = $2 AND video_url = $4
+               )`,
+              [
+                row.course_id,
+                row.title,
+                row.description || "",
+                archivedUrl,
+                durationMins,
+                maxOrder.rows[0].next_order,
+                sectionTitle,
+                Date.now(),
+              ]
+            );
+            await db.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [
+              row.course_id,
+            ]).catch(() => {});
+            await recomputeAllEnrollmentsProgressForCourse(row.course_id).catch(() => {});
+          }
+        }
         console.log(`[CF Stream] Archived fallback recording to R2 for live class ${row.id}`);
         await sleep(250);
       }

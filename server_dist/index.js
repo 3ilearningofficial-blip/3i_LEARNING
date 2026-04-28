@@ -1720,7 +1720,7 @@ function registerLiveStreamRoutes({
     isArchiveSweepRunning = true;
     try {
       const pending = await db2.query(
-        `SELECT id, title, recording_url, cf_stream_uid
+        `SELECT id, title, description, course_id, started_at, lecture_section_title, lecture_subfolder_title, recording_url, cf_stream_uid
          FROM live_classes
          WHERE stream_type = 'cloudflare'
            AND is_completed = TRUE
@@ -1750,11 +1750,50 @@ function registerLiveStreamRoutes({
         const archivedUrl = await archiveCloudflareRecordingToR2(recordingUid);
         if (!archivedUrl) continue;
         await db2.query("UPDATE live_classes SET recording_url = $1 WHERE id = $2", [archivedUrl, row.id]);
-        await db2.query(
+        const patchedLecture = await db2.query(
           "UPDATE lectures SET video_url = $1, video_type = 'r2' WHERE title = $2 AND video_url = $3",
           [archivedUrl, row.title, currentUrl]
         ).catch(() => {
         });
+        if (row.course_id) {
+          const updatedRows = Array.isArray(patchedLecture?.rows) ? patchedLecture.rows.length : 0;
+          if (updatedRows === 0) {
+            const maxOrder = await db2.query(
+              "SELECT COALESCE(MAX(order_index), 0) + 1 as next_order FROM lectures WHERE course_id = $1",
+              [row.course_id]
+            );
+            const durationMins = row.started_at ? Math.max(1, Math.round((Date.now() - Number(row.started_at)) / 6e4)) : 0;
+            const sectionTitle = buildRecordingLectureSectionTitle(
+              row.lecture_section_title,
+              row.lecture_subfolder_title,
+              void 0
+            );
+            await db2.query(
+              `INSERT INTO lectures (course_id, title, description, video_url, video_type, duration_minutes, order_index, is_free_preview, section_title, created_at)
+               SELECT $1, $2, $3, $4, 'r2', $5, $6, FALSE, $7, $8
+               WHERE NOT EXISTS (
+                 SELECT 1 FROM lectures
+                 WHERE course_id = $1 AND title = $2 AND video_url = $4
+               )`,
+              [
+                row.course_id,
+                row.title,
+                row.description || "",
+                archivedUrl,
+                durationMins,
+                maxOrder.rows[0].next_order,
+                sectionTitle,
+                Date.now()
+              ]
+            );
+            await db2.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [
+              row.course_id
+            ]).catch(() => {
+            });
+            await recomputeAllEnrollmentsProgressForCourse2(row.course_id).catch(() => {
+            });
+          }
+        }
         console.log(`[CF Stream] Archived fallback recording to R2 for live class ${row.id}`);
         await sleep(250);
       }
@@ -3687,6 +3726,44 @@ function registerDoubtNotificationRoutes({
   requireAdmin,
   generateAIAnswer: generateAIAnswer2
 }) {
+  const buildAdminDoubtFilter = ({
+    daysRaw,
+    topicFilter,
+    studentQuery
+  }) => {
+    const days = daysRaw === "7" || daysRaw === "30" ? Number(daysRaw) : 0;
+    const sinceTs = days > 0 ? Date.now() - days * 24 * 60 * 60 * 1e3 : 0;
+    const where = [];
+    const params = [];
+    if (sinceTs > 0) {
+      params.push(sinceTs);
+      where.push(`d.created_at >= $${params.length}`);
+    }
+    if (topicFilter) {
+      params.push(topicFilter);
+      where.push(`COALESCE(d.topic, 'General') = $${params.length}`);
+    }
+    if (studentQuery) {
+      params.push(`%${studentQuery}%`);
+      const textParamIdx = params.length;
+      const digitOnly = studentQuery.replace(/\D/g, "");
+      let digitClause = "";
+      if (digitOnly.length >= 4) {
+        params.push(`%${digitOnly}%`);
+        const digitParamIdx = params.length;
+        digitClause = ` OR regexp_replace(COALESCE(u.phone, ''), '\\D', '', 'g') LIKE $${digitParamIdx}`;
+      }
+      where.push(`(
+        COALESCE(u.name, '') ILIKE $${textParamIdx}
+        OR COALESCE(u.phone, '') ILIKE $${textParamIdx}
+        OR COALESCE(u.email, '') ILIKE $${textParamIdx}
+        OR COALESCE(d.question, '') ILIKE $${textParamIdx}
+        ${digitClause}
+      )`);
+    }
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    return { whereSql, params };
+  };
   app2.post("/api/doubts", async (req, res) => {
     try {
       const user = await getAuthUser2(req);
@@ -3718,37 +3795,7 @@ function registerDoubtNotificationRoutes({
       const daysRaw = String(req.query.days || "").trim();
       const topicFilter = String(req.query.topic || "").trim();
       const studentQuery = String(req.query.student || "").trim();
-      const days = daysRaw === "7" || daysRaw === "30" ? Number(daysRaw) : 0;
-      const sinceTs = days > 0 ? Date.now() - days * 24 * 60 * 60 * 1e3 : 0;
-      const where = [];
-      const params = [];
-      if (sinceTs > 0) {
-        params.push(sinceTs);
-        where.push(`d.created_at >= $${params.length}`);
-      }
-      if (topicFilter) {
-        params.push(topicFilter);
-        where.push(`COALESCE(d.topic, 'General') = $${params.length}`);
-      }
-      if (studentQuery) {
-        params.push(`%${studentQuery}%`);
-        const textParamIdx = params.length;
-        const digitOnly = studentQuery.replace(/\D/g, "");
-        let digitClause = "";
-        if (digitOnly.length >= 4) {
-          params.push(`%${digitOnly}%`);
-          const digitParamIdx = params.length;
-          digitClause = ` OR regexp_replace(COALESCE(u.phone, ''), '\\D', '', 'g') LIKE $${digitParamIdx}`;
-        }
-        where.push(`(
-          COALESCE(u.name, '') ILIKE $${textParamIdx}
-          OR COALESCE(u.phone, '') ILIKE $${textParamIdx}
-          OR COALESCE(u.email, '') ILIKE $${textParamIdx}
-          OR COALESCE(d.question, '') ILIKE $${textParamIdx}
-          ${digitClause}
-        )`);
-      }
-      const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+      const { whereSql, params } = buildAdminDoubtFilter({ daysRaw, topicFilter, studentQuery });
       const baseSelect = `SELECT d.*, u.name as user_name, u.phone as user_phone, u.email as user_email
          FROM doubts d
          LEFT JOIN users u ON u.id = d.user_id`;
@@ -3845,6 +3892,32 @@ function registerDoubtNotificationRoutes({
       res.json({ doubts: rows, topTopics, repeatedPatterns, studentInsights, total: rows.length });
     } catch {
       res.status(500).json({ message: "Failed to fetch admin doubts" });
+    }
+  });
+  app2.delete("/api/admin/doubts", requireAdmin, async (req, res) => {
+    try {
+      const daysRaw = String(req.query.days || "").trim();
+      const topicFilter = String(req.query.topic || "").trim();
+      const studentQuery = String(req.query.student || "").trim();
+      const { whereSql, params } = buildAdminDoubtFilter({ daysRaw, topicFilter, studentQuery });
+      const deleted = await db2.query(
+        `WITH target AS (
+           SELECT d.id
+           FROM doubts d
+           LEFT JOIN users u ON u.id = d.user_id
+           ${whereSql}
+           LIMIT 10000
+         )
+         DELETE FROM doubts d
+         USING target t
+         WHERE d.id = t.id
+         RETURNING d.id`,
+        params
+      );
+      res.json({ success: true, deletedCount: deleted.rows.length || 0 });
+    } catch (err) {
+      console.error("[Admin Doubts] delete failed:", err);
+      res.status(500).json({ message: "Failed to clear doubts" });
     }
   });
   app2.get("/api/notifications", async (req, res) => {

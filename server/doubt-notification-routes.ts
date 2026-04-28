@@ -19,6 +19,49 @@ export function registerDoubtNotificationRoutes({
   requireAdmin,
   generateAIAnswer,
 }: RegisterDoubtNotificationRoutesDeps): void {
+  const buildAdminDoubtFilter = ({
+    daysRaw,
+    topicFilter,
+    studentQuery,
+  }: {
+    daysRaw: string;
+    topicFilter: string;
+    studentQuery: string;
+  }) => {
+    const days = daysRaw === "7" || daysRaw === "30" ? Number(daysRaw) : 0;
+    const sinceTs = days > 0 ? Date.now() - days * 24 * 60 * 60 * 1000 : 0;
+    const where: string[] = [];
+    const params: unknown[] = [];
+    if (sinceTs > 0) {
+      params.push(sinceTs);
+      where.push(`d.created_at >= $${params.length}`);
+    }
+    if (topicFilter) {
+      params.push(topicFilter);
+      where.push(`COALESCE(d.topic, 'General') = $${params.length}`);
+    }
+    if (studentQuery) {
+      params.push(`%${studentQuery}%`);
+      const textParamIdx = params.length;
+      const digitOnly = studentQuery.replace(/\D/g, "");
+      let digitClause = "";
+      if (digitOnly.length >= 4) {
+        params.push(`%${digitOnly}%`);
+        const digitParamIdx = params.length;
+        digitClause = ` OR regexp_replace(COALESCE(u.phone, ''), '\\D', '', 'g') LIKE $${digitParamIdx}`;
+      }
+      where.push(`(
+        COALESCE(u.name, '') ILIKE $${textParamIdx}
+        OR COALESCE(u.phone, '') ILIKE $${textParamIdx}
+        OR COALESCE(u.email, '') ILIKE $${textParamIdx}
+        OR COALESCE(d.question, '') ILIKE $${textParamIdx}
+        ${digitClause}
+      )`);
+    }
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    return { whereSql, params };
+  };
+
   app.post("/api/doubts", async (req: Request, res: Response) => {
     try {
       const user = await getAuthUser(req);
@@ -52,38 +95,7 @@ export function registerDoubtNotificationRoutes({
       const daysRaw = String(req.query.days || "").trim();
       const topicFilter = String(req.query.topic || "").trim();
       const studentQuery = String(req.query.student || "").trim();
-      const days = daysRaw === "7" || daysRaw === "30" ? Number(daysRaw) : 0;
-      const sinceTs = days > 0 ? Date.now() - days * 24 * 60 * 60 * 1000 : 0;
-
-      const where: string[] = [];
-      const params: unknown[] = [];
-      if (sinceTs > 0) {
-        params.push(sinceTs);
-        where.push(`d.created_at >= $${params.length}`);
-      }
-      if (topicFilter) {
-        params.push(topicFilter);
-        where.push(`COALESCE(d.topic, 'General') = $${params.length}`);
-      }
-      if (studentQuery) {
-        params.push(`%${studentQuery}%`);
-        const textParamIdx = params.length;
-        const digitOnly = studentQuery.replace(/\D/g, "");
-        let digitClause = "";
-        if (digitOnly.length >= 4) {
-          params.push(`%${digitOnly}%`);
-          const digitParamIdx = params.length;
-          digitClause = ` OR regexp_replace(COALESCE(u.phone, ''), '\\D', '', 'g') LIKE $${digitParamIdx}`;
-        }
-        where.push(`(
-          COALESCE(u.name, '') ILIKE $${textParamIdx}
-          OR COALESCE(u.phone, '') ILIKE $${textParamIdx}
-          OR COALESCE(u.email, '') ILIKE $${textParamIdx}
-          OR COALESCE(d.question, '') ILIKE $${textParamIdx}
-          ${digitClause}
-        )`);
-      }
-      const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+      const { whereSql, params } = buildAdminDoubtFilter({ daysRaw, topicFilter, studentQuery });
 
       const baseSelect = `SELECT d.*, u.name as user_name, u.phone as user_phone, u.email as user_email
          FROM doubts d
@@ -202,6 +214,33 @@ export function registerDoubtNotificationRoutes({
       res.json({ doubts: rows, topTopics, repeatedPatterns, studentInsights, total: rows.length });
     } catch {
       res.status(500).json({ message: "Failed to fetch admin doubts" });
+    }
+  });
+
+  app.delete("/api/admin/doubts", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const daysRaw = String(req.query.days || "").trim();
+      const topicFilter = String(req.query.topic || "").trim();
+      const studentQuery = String(req.query.student || "").trim();
+      const { whereSql, params } = buildAdminDoubtFilter({ daysRaw, topicFilter, studentQuery });
+      const deleted = await db.query(
+        `WITH target AS (
+           SELECT d.id
+           FROM doubts d
+           LEFT JOIN users u ON u.id = d.user_id
+           ${whereSql}
+           LIMIT 10000
+         )
+         DELETE FROM doubts d
+         USING target t
+         WHERE d.id = t.id
+         RETURNING d.id`,
+        params
+      );
+      res.json({ success: true, deletedCount: deleted.rows.length || 0 });
+    } catch (err) {
+      console.error("[Admin Doubts] delete failed:", err);
+      res.status(500).json({ message: "Failed to clear doubts" });
     }
   });
 
