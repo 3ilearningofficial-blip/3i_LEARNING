@@ -1461,7 +1461,7 @@ export default function AdminDashboard() {
       return res.json();
     },
     staleTime: 30000,
-    refetchInterval: activeTab === "liveClasses" ? 20000 : false,
+    refetchInterval: activeTab === "courses" ? 20000 : false,
   });
 
   const handleScheduleLiveClass = async () => {
