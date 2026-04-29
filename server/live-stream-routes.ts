@@ -20,6 +20,11 @@ export function registerLiveStreamRoutes({
   recomputeAllEnrollmentsProgressForCourse,
   getR2Client,
 }: RegisterLiveStreamRoutesDeps): void {
+  const archiveRetryState = new Map<
+    string,
+    { attempts: number; nextAttemptAt: number; lastStatus: number | null }
+  >();
+
   const inferVideoType = (url: string): "youtube" | "cloudflare" | "r2" => {
     const lower = String(url || "").toLowerCase();
     if (lower.includes("youtube.com") || lower.includes("youtu.be")) return "youtube";
@@ -35,6 +40,11 @@ export function registerLiveStreamRoutes({
   const archiveCloudflareRecordingToR2 = async (recordingUid: string): Promise<string | null> => {
     try {
       if (!process.env.R2_BUCKET_NAME) return null;
+      const now = Date.now();
+      const retryState = archiveRetryState.get(recordingUid);
+      if (retryState && retryState.nextAttemptAt > now) {
+        return null;
+      }
       const configuredDownloadBase = String(process.env.CF_STREAM_DOWNLOAD_BASE_URL || "").trim().replace(/\/+$/, "");
       const candidateUrls = [
         `https://videodelivery.net/${recordingUid}/downloads/default.mp4`,
@@ -47,9 +57,22 @@ export function registerLiveStreamRoutes({
         if (resp.ok && resp.body) {
           source = resp;
           matchedUrl = candidateUrl;
+          archiveRetryState.delete(recordingUid);
           break;
         }
-        console.warn(`[CF Stream] MP4 download not ready/failed for uid=${recordingUid}, status=${resp.status}, url=${candidateUrl}`);
+        const prev = archiveRetryState.get(recordingUid) || { attempts: 0, nextAttemptAt: 0, lastStatus: null };
+        const attempts = prev.attempts + 1;
+        const backoffMs = Math.min(6 * 60 * 60 * 1000, Math.max(2 * 60 * 1000, attempts * 10 * 60 * 1000));
+        archiveRetryState.set(recordingUid, {
+          attempts,
+          nextAttemptAt: Date.now() + backoffMs,
+          lastStatus: resp.status,
+        });
+        if (attempts === 1 || attempts % 10 === 0) {
+          console.warn(
+            `[CF Stream] MP4 not ready uid=${recordingUid} status=${resp.status} attempt=${attempts} nextRetryInMs=${backoffMs}`
+          );
+        }
       }
       if (!source || !source.body) return null;
       const { PutObjectCommand } = await import("@aws-sdk/client-s3");
@@ -323,9 +346,11 @@ export function registerLiveStreamRoutes({
          FROM live_classes
          WHERE stream_type = 'cloudflare'
            AND is_completed = TRUE
+           AND ended_at IS NOT NULL
+           AND ended_at > (EXTRACT(EPOCH FROM NOW()) * 1000 - 14 * 24 * 60 * 60 * 1000)
            AND (recording_url IS NULL OR recording_url ILIKE 'https://videodelivery.net/%/manifest/video.m3u8')
          ORDER BY ended_at DESC NULLS LAST
-         LIMIT 20`
+         LIMIT 8`
       );
       const accountId = process.env.CF_STREAM_ACCOUNT_ID || process.env.R2_ACCOUNT_ID;
       const apiToken = process.env.CF_STREAM_API_TOKEN;

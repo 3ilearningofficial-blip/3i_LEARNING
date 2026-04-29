@@ -412,28 +412,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
     setInterval(async () => {
       try {
         const now = Date.now();
+        const minScheduleAt = now + 29 * 60 * 1000;
+        const maxScheduleAt = now + 31 * 60 * 1000;
         const classes = await db.query(
-          "SELECT lc.id, lc.title, lc.course_id, lc.scheduled_at, lc.notify_bell, lc.is_free_preview, lc.is_public FROM live_classes lc WHERE lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE AND lc.notify_bell = TRUE AND lc.scheduled_at IS NOT NULL"
+          `SELECT lc.id, lc.title, lc.course_id, lc.is_free_preview, lc.is_public
+           FROM live_classes lc
+           WHERE lc.is_completed IS NOT TRUE
+             AND lc.is_live IS NOT TRUE
+             AND lc.notify_bell = TRUE
+             AND lc.scheduled_at IS NOT NULL
+             AND lc.scheduled_at BETWEEN $1 AND $2
+           ORDER BY lc.scheduled_at ASC
+           LIMIT 50`,
+          [minScheduleAt, maxScheduleAt]
         );
         for (const lc of classes.rows) {
-          const scheduledAt = parseInt(lc.scheduled_at);
-          if (isNaN(scheduledAt)) continue;
-          const diff = scheduledAt - now;
-          const recipients =
-            (!lc.course_id || lc.is_free_preview === true || lc.is_public === true)
-              ? await db.query("SELECT id AS user_id FROM users WHERE role = 'student'")
-              : await db.query("SELECT user_id FROM enrollments WHERE course_id = $1", [lc.course_id]);
           const expiresAt = now + 6 * 3600000;
           const key30 = `30min_${lc.id}`;
-          if (diff > 0 && diff <= 31 * 60 * 1000 && diff >= 29 * 60 * 1000 && !sentNotifications.has(key30)) {
+          if (!sentNotifications.has(key30)) {
             sentNotifications.add(key30);
-            for (const e of recipients.rows) {
-              await db.query(
-                "INSERT INTO notifications (user_id, title, message, type, created_at, expires_at) VALUES ($1, $2, $3, $4, $5, $6)",
-                [e.user_id, "⏰ Live Class in 30 minutes!", `"${lc.title}" starts in 30 minutes. Get ready!`, "info", now, expiresAt]
+            const notifTitle = "⏰ Live Class in 30 minutes!";
+            const notifMessage = `"${lc.title}" starts in 30 minutes. Get ready!`;
+            if (!lc.course_id || lc.is_free_preview === true || lc.is_public === true) {
+              const inserted = await db.query(
+                `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
+                 SELECT u.id, $1, $2, 'info', $3, $4
+                 FROM users u
+                 WHERE u.role = 'student'
+                 RETURNING user_id`,
+                [notifTitle, notifMessage, now, expiresAt]
               );
+              console.log(`[LiveNotif] 30min reminder sent for class=${lc.id} recipients=${inserted.rows.length}`);
+            } else {
+              const inserted = await db.query(
+                `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
+                 SELECT e.user_id, $1, $2, 'info', $3, $4
+                 FROM enrollments e
+                 WHERE e.course_id = $5
+                 RETURNING user_id`,
+                [notifTitle, notifMessage, now, expiresAt, lc.course_id]
+              );
+              console.log(`[LiveNotif] 30min reminder sent for class=${lc.id} recipients=${inserted.rows.length}`);
             }
-            console.log(`[LiveNotif] 30min reminder sent for "${lc.title}" to ${recipients.rows.length} students`);
           }
         }
         if (sentNotifications.size > 500) sentNotifications.clear();
@@ -447,7 +467,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     setInterval(async () => {
       try {
         const result = await db.query(
-          "DELETE FROM download_tokens WHERE expires_at < $1 AND used = TRUE",
+          `DELETE FROM download_tokens
+           WHERE id IN (
+             SELECT id
+             FROM download_tokens
+             WHERE expires_at < $1 AND used = TRUE
+             ORDER BY expires_at ASC
+             LIMIT 2000
+           )`,
           [Date.now()]
         );
         if (result.rowCount && result.rowCount > 0) {
