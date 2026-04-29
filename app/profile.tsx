@@ -11,6 +11,7 @@ import { useQuery } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
 import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
+import { getInstallationId } from "@/lib/installation-id";
 import { useAuth } from "@/context/AuthContext";
 import Colors from "@/constants/colors";
 
@@ -201,7 +202,12 @@ export default function ProfileScreen() {
       // Verify OTP first
       const identifier = user?.email || user?.phone;
       const type = user?.email ? "email" : "phone";
-      const verifyRes = await apiRequest("POST", "/api/auth/verify-otp", { identifier, type, otp: otpCode });
+      const verifyRes = await apiRequest("POST", "/api/auth/verify-otp", {
+        identifier,
+        type,
+        otp: otpCode,
+        deviceId: await getInstallationId(),
+      });
       const verifyData = await verifyRes.json();
       // Now change password (no old password needed since OTP verified)
       await apiRequest("POST", "/api/auth/change-password", { newPassword: newPwd });

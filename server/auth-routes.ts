@@ -1,5 +1,9 @@
 import type { Express, Request, Response } from "express";
 import { hashPassword, isScryptHash, verifyLegacySha256, verifyPassword } from "./password-utils";
+import {
+  assertLoginAllowedForInstallation,
+  enforceInstallationBinding,
+} from "./native-device-binding";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -25,8 +29,6 @@ type RegisterAuthRoutesDeps = {
   generateSecureToken: () => string;
   sendOTPviaSMS: (phone: string, otp: string) => Promise<boolean>;
   verifyFirebaseToken: (idToken: string) => Promise<any>;
-  adminEmails: string[];
-  adminPhones: string[];
 };
 
 /** Same fields as GET /api/auth/me so the client can show DOB, photo, etc. without a second fetch. */
@@ -58,11 +60,8 @@ export function registerAuthRoutes({
   generateSecureToken,
   sendOTPviaSMS,
   verifyFirebaseToken,
-  adminEmails,
-  adminPhones,
 }: RegisterAuthRoutesDeps): void {
   app.post("/api/auth/send-otp", async (req: Request, res: Response) => {
-    console.log("OTP request received:", req.body);
     try {
       const { identifier, type } = req.body;
       if (!identifier || !type) {
@@ -74,7 +73,7 @@ export function registerAuthRoutes({
         if (existing.rows.length === 0) {
           await db.query(
             "INSERT INTO users (name, phone, role) VALUES ($1, $2, $3)",
-            [`Student${identifier.slice(-4)}`, identifier, adminPhones.includes(identifier) ? "admin" : "student"]
+            [`Student${identifier.slice(-4)}`, identifier, "student"]
           );
         }
 
@@ -87,10 +86,10 @@ export function registerAuthRoutes({
         try {
           smsSent = await sendOTPviaSMS(identifier, otp);
         } catch (smsErr) {
-          console.error(`[OTP] SMS sending threw error for ${identifier}:`, smsErr);
+          console.error("[OTP] SMS sending threw error:", smsErr);
         }
         if (!smsSent) {
-          console.log(`[OTP] SMS delivery failed for ${identifier}, OTP stored in DB`);
+          console.log("[OTP] SMS delivery failed, OTP stored in DB");
         }
 
         const isDev = process.env.NODE_ENV !== "production";
@@ -109,7 +108,7 @@ export function registerAuthRoutes({
       if (existing.rows.length === 0) {
         await db.query(
           "INSERT INTO users (name, email, otp, otp_expires_at, role) VALUES ($1, $2, $3, $4, $5)",
-          [identifier.split("@")[0], identifier, otpHash, expires, adminEmails.includes(identifier) ? "admin" : "student"]
+          [identifier.split("@")[0], identifier, otpHash, expires, "student"]
         );
       } else {
         await db.query("UPDATE users SET otp = $1, otp_expires_at = $2 WHERE email = $3", [otpHash, expires, identifier]);
@@ -139,6 +138,17 @@ export function registerAuthRoutes({
       if (!verifyOtpValue(user.otp, otp)) return res.status(400).json({ message: "Invalid OTP" });
       if (Date.now() > Number(user.otp_expires_at)) return res.status(400).json({ message: "OTP expired" });
 
+      const loginGate = await assertLoginAllowedForInstallation(db, req, {
+        userId: user.id,
+        role: user.role,
+        bodyDeviceId: deviceId || null,
+        phone: user.phone,
+        email: user.email,
+      });
+      if (!loginGate.ok) {
+        return res.status(loginGate.httpStatus).json({ message: loginGate.message });
+      }
+
       const sessionToken = generateSecureToken();
       await db.query("UPDATE users SET otp = NULL, otp_expires_at = NULL, device_id = $1, session_token = $2, last_active_at = $3 WHERE id = $4", [deviceId || null, sessionToken, Date.now(), user.id]);
 
@@ -167,12 +177,23 @@ export function registerAuthRoutes({
       if (result.rows.length === 0) {
         await db.query(
           "INSERT INTO users (name, phone, role) VALUES ($1, $2, $3)",
-          [`Student${phoneNumber.slice(-4)}`, phoneNumber, adminPhones.includes(phoneNumber) ? "admin" : "student"]
+          [`Student${phoneNumber.slice(-4)}`, phoneNumber, "student"]
         );
         result = await db.query("SELECT * FROM users WHERE phone = $1", [phoneNumber]);
       }
 
       const user = result.rows[0];
+      const loginGate = await assertLoginAllowedForInstallation(db, req, {
+        userId: user.id,
+        role: user.role,
+        bodyDeviceId: deviceId || null,
+        phone: user.phone,
+        email: user.email,
+      });
+      if (!loginGate.ok) {
+        return res.status(loginGate.httpStatus).json({ message: loginGate.message });
+      }
+
       const sessionToken = generateSecureToken();
       await db.query("UPDATE users SET otp = NULL, otp_expires_at = NULL, device_id = $1, session_token = $2, last_active_at = $3 WHERE id = $4", [deviceId || null, sessionToken, Date.now(), user.id]);
 
@@ -205,6 +226,11 @@ export function registerAuthRoutes({
               profileComplete: row.profile_complete || false,
               date_of_birth: row.date_of_birth, photo_url: row.photo_url,
             };
+            const bindBearer = await enforceInstallationBinding(db, req, row.id, row.role);
+            if (!bindBearer) {
+              (req.session as any).user = null;
+              return res.status(401).json({ message: "device_binding_mismatch" });
+            }
             (req.session as any).user = fresh;
             return res.json(fresh);
           }
@@ -231,6 +257,11 @@ export function registerAuthRoutes({
       if (sessionUser.sessionToken && row.session_token !== sessionUser.sessionToken) {
         (req.session as any).user = null;
         return res.status(401).json({ message: "logged_in_elsewhere" });
+      }
+      const bindSes = await enforceInstallationBinding(db, req, sessionUser.id, row.role);
+      if (!bindSes) {
+        (req.session as any).user = null;
+        return res.status(401).json({ message: "device_binding_mismatch" });
       }
       const fresh = {
         ...sessionUser,
@@ -262,14 +293,24 @@ export function registerAuthRoutes({
       const phone = phoneNumber.replace(/^\+91/, "");
       let result = await db.query("SELECT * FROM users WHERE phone = $1", [phone]);
       if (result.rows.length === 0) {
-        const role = adminPhones.includes(phone) ? "admin" : "student";
         result = await db.query(
           "INSERT INTO users (name, phone, role, created_at) VALUES ($1, $2, $3, $4) RETURNING *",
-          [`Student${phone.slice(-4)}`, phone, role, Date.now()]
+          [`Student${phone.slice(-4)}`, phone, "student", Date.now()]
         );
       }
 
       const user = result.rows[0];
+      const loginGate = await assertLoginAllowedForInstallation(db, req, {
+        userId: user.id,
+        role: user.role,
+        bodyDeviceId: deviceId || null,
+        phone: user.phone,
+        email: user.email,
+      });
+      if (!loginGate.ok) {
+        return res.status(loginGate.httpStatus).json({ message: loginGate.message });
+      }
+
       const sessionToken = generateSecureToken();
       await db.query("UPDATE users SET device_id = $1, session_token = $2 WHERE id = $3", [deviceId || null, sessionToken, user.id]);
 
@@ -292,7 +333,7 @@ export function registerAuthRoutes({
 
   app.post("/api/auth/email-login", async (req: Request, res: Response) => {
     try {
-      const { email, password } = req.body;
+      const { email, password, deviceId } = req.body || {};
       if (!email || !password) return res.status(400).json({ message: "Phone/email and password are required" });
 
       const identifier = email.trim().toLowerCase();
@@ -311,11 +352,6 @@ export function registerAuthRoutes({
         return res.status(401).json({ message: "Profile not complete. Please sign in with Phone OTP to complete your profile first." });
       }
 
-      if ((adminEmails.includes(identifier) || adminPhones.includes(identifier)) && user.role !== "admin") {
-        await db.query("UPDATE users SET role = 'admin' WHERE id = $1", [user.id]);
-        user.role = "admin";
-      }
-
       if (!user.password_hash) return res.status(401).json({ message: "No password set. Please use Phone OTP to sign in, then set a password in Profile." });
       let matched = false;
       if (isScryptHash(user.password_hash)) {
@@ -329,9 +365,24 @@ export function registerAuthRoutes({
       }
       if (!matched) return res.status(401).json({ message: "Incorrect password. Try again or use Phone OTP." });
 
+      const gate = await assertLoginAllowedForInstallation(db, req, {
+        userId: user.id,
+        role: user.role,
+        bodyDeviceId: typeof deviceId === "string" ? deviceId : null,
+        phone: user.phone,
+        email: user.email,
+      });
+      if (!gate.ok) {
+        return res.status(gate.httpStatus).json({ message: gate.message });
+      }
+
       const sessionToken = generateSecureToken();
-      await db.query("UPDATE users SET session_token = $1, last_active_at = $2 WHERE id = $3", [sessionToken, Date.now(), user.id]);
-      const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: null });
+      const dev = typeof deviceId === "string" ? deviceId : null;
+      await db.query(
+        "UPDATE users SET session_token = $1, last_active_at = $2, device_id = COALESCE($3, device_id) WHERE id = $4",
+        [sessionToken, Date.now(), dev, user.id]
+      );
+      const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: dev });
       (req.session as any).user = sessionUser;
       res.json({ success: true, user: sessionUser });
     } catch (err) {
@@ -390,9 +441,13 @@ export function registerAuthRoutes({
 
       const dbUser = await db.query("SELECT password_hash FROM users WHERE id = $1", [user.id]);
       if (dbUser.rows.length === 0) return res.status(404).json({ message: "User not found" });
+      const storedHash = dbUser.rows[0].password_hash as string | null;
 
-      if (oldPassword) {
-        const storedHash = dbUser.rows[0].password_hash as string;
+      if (storedHash && !oldPassword) {
+        return res.status(400).json({ message: "Current password is required" });
+      }
+
+      if (oldPassword && storedHash) {
         const validOld = isScryptHash(storedHash)
           ? await verifyPassword(oldPassword, storedHash)
           : verifyLegacySha256(oldPassword, user.id, storedHash);

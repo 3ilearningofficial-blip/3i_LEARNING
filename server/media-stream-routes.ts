@@ -135,7 +135,8 @@ async function streamMediaGet(
     res.setHeader("Accept-Ranges", "bytes");
     res.setHeader("Content-Length", String(chunkSize));
     if (head.ContentType) res.setHeader("Content-Type", head.ContentType);
-    res.setHeader("Cache-Control", "public, max-age=86400");
+    // Auth/token protected content must never be publicly cacheable.
+    res.setHeader("Cache-Control", "private, no-store");
     res.setHeader("Content-Disposition", "inline");
 
     const stream = obj.Body as any;
@@ -155,7 +156,8 @@ async function streamMediaGet(
     if (obj.ContentType) res.setHeader("Content-Type", obj.ContentType);
     if (obj.ContentLength) res.setHeader("Content-Length", String(obj.ContentLength));
     res.setHeader("Accept-Ranges", "bytes");
-    res.setHeader("Cache-Control", "public, max-age=86400");
+    // Auth/token protected content must never be publicly cacheable.
+    res.setHeader("Cache-Control", "private, no-store");
     res.setHeader("Content-Disposition", "inline");
 
     const stream = obj.Body as any;

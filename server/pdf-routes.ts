@@ -198,7 +198,8 @@ pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/p
         }
 
         res.setHeader("Content-Type", "application/pdf");
-        res.setHeader("Cache-Control", "private, max-age=600");
+        // Proxied PDFs may be access-controlled; avoid storing in shared caches.
+        res.setHeader("Cache-Control", "private, no-store");
         if (contentLength > 0) {
           res.setHeader("Content-Length", String(contentLength));
         }

@@ -117,6 +117,7 @@ export function registerCourseAccessRoutes({
       const expiresAt = Date.now() + 10 * 60 * 1000;
       await db.query("INSERT INTO media_tokens (token, user_id, file_key, expires_at) VALUES ($1, $2, $3, $4)", [token, user.id, normalizeStorageKey(fileKey), expiresAt]);
       db.query("DELETE FROM media_tokens WHERE expires_at < $1", [Date.now()]).catch(() => {});
+      res.set("Cache-Control", "private, no-store");
       res.json({ token, expiresAt });
     } catch {
       res.status(500).json({ message: "Failed to generate token" });
@@ -126,7 +127,6 @@ export function registerCourseAccessRoutes({
   app.get("/api/courses", async (req: Request, res: Response) => {
     try {
       const user = await getAuthUser(req);
-      console.log(`[Courses] auth user=${user?.id || "none"}`);
       const { category, search } = req.query;
       let query =
         user?.role === "admin"
@@ -158,7 +158,6 @@ export function registerCourseAccessRoutes({
           isEnrolled: enrollMap.has(Number(c.id)),
           progress: enrollMap.get(Number(c.id)) ?? 0,
         }));
-        console.log(`[Courses] user ${user.id} progress map:`, JSON.stringify(Object.fromEntries(enrollMap)));
       }
 
       res.set("Cache-Control", "private, no-store");
@@ -502,6 +501,8 @@ export function registerCourseAccessRoutes({
 
       res.setHeader("Content-Type", r2Response.ContentType || "application/octet-stream");
       res.setHeader("Content-Disposition", "attachment");
+      res.setHeader("Cache-Control", "private, no-store");
+      res.setHeader("Pragma", "no-cache");
       res.setHeader("X-Watermark-Token", watermarkToken);
       if (r2Response.ContentLength) {
         res.setHeader("Content-Length", r2Response.ContentLength);

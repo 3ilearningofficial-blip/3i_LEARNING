@@ -1,5 +1,7 @@
 import { Platform } from "react-native";
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
+import { getInstallationId } from "./installation-id";
+import { getStoredAuthToken } from "./auth-storage";
 
 type UnauthorizedHandler = () => void | Promise<void>;
 let onUnauthorized: UnauthorizedHandler | null = null;
@@ -239,15 +241,7 @@ async function doFetchWithRetry(url: string, options?: RequestInit): Promise<Res
 // ✅ SSR-safe token fetch
 export async function getStoredToken(): Promise<string | null> {
   try {
-    if (Platform.OS === "web") {
-      if (typeof window === "undefined") return null;
-      const stored = window.localStorage.getItem("user");
-      if (stored) return JSON.parse(stored)?.sessionToken || null;
-    } else {
-      const { default: AsyncStorage } = await import("@react-native-async-storage/async-storage");
-      const stored = await AsyncStorage.getItem("user");
-      if (stored) return JSON.parse(stored)?.sessionToken || null;
-    }
+    return await getStoredAuthToken();
   } catch (e) {
     console.log("Token error:", e);
   }
@@ -255,6 +249,19 @@ export async function getStoredToken(): Promise<string | null> {
 }
 
 // Authenticated fetch
+/** Sent on every authenticated request so the server can bind paid access to one installation. */
+export async function attachInstallationHeaders(headers: Record<string, string>): Promise<void> {
+  try {
+    const id = await getInstallationId();
+    headers["X-App-Device-Id"] = id;
+    if (Platform.OS === "ios") headers["X-Client-Platform"] = "ios";
+    else if (Platform.OS === "android") headers["X-Client-Platform"] = "android";
+    else headers["X-Client-Platform"] = "web";
+  } catch {
+    /* ignore */
+  }
+}
+
 export async function authFetch(url: string, options?: RequestInit): Promise<Response> {
   const token = await getStoredToken();
 
@@ -263,6 +270,7 @@ export async function authFetch(url: string, options?: RequestInit): Promise<Res
   };
 
   if (token) headers["Authorization"] = `Bearer ${token}`;
+  await attachInstallationHeaders(headers);
 
   const res = await doFetchWithRetry(url, {
     ...options,
@@ -288,6 +296,7 @@ export async function apiRequest(
 
   if (data) headers["Content-Type"] = "application/json";
   if (token) headers["Authorization"] = `Bearer ${token}`;
+  await attachInstallationHeaders(headers);
 
   const res = await doFetchWithRetry(url.toString(), {
     method,
@@ -315,6 +324,7 @@ export const getQueryFn: <T>(options: {
 
     const headers: Record<string, string> = {};
     if (token) headers["Authorization"] = `Bearer ${token}`;
+    await attachInstallationHeaders(headers);
 
     const res = await doFetchWithRetry(url.toString(), {
       credentials: "include",

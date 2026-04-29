@@ -36,6 +36,43 @@ Use this checklist before major production releases.
 - Run weekly maintenance check:
   - `npm run maintenance:check`
 
+## Production runbook
+- Before deploy:
+  - `npm run server:build`
+  - `npm run db:migrate`
+  - `npm run validate:release`
+- Required production env expectations:
+  - `ALLOW_RUNTIME_SCHEMA_SYNC=false`
+  - `ALLOW_STARTUP_SCHEMA_ENSURE=false`
+  - `RUN_BACKGROUND_SCHEDULERS=false` on web/API replicas that should not run workers
+  - `RUN_BACKGROUND_SCHEDULERS=true` only on the designated scheduler instance
+- Post-deploy checks:
+  - `GET /api/health/version`
+  - `GET /api/health/ready`
+  - confirm no repeated startup schema warnings in logs
+  - confirm scheduled notifications/token cleanup run only on the designated worker
+
+## Regression checklist
+- Auth:
+  - email login succeeds on the bound device/browser
+  - second-device login is denied with the recoverable mismatch message
+  - admin reset/rebind restores access
+- Paid access:
+  - course purchase grants course/lecture/PDF access
+  - test purchase grants test access
+  - book purchase grants book access
+- Live class:
+  - teacher start/join/end flow works
+  - student join/chat/viewer flow works
+  - recording playback works after completion
+- Documents/media:
+  - PDF opens on web/mobile
+  - protected media responses are not publicly cacheable
+- Admin:
+  - user lookup works
+  - device lock event list loads
+  - reset device binding works
+
 ## Rollback readiness
 - Keep rollback script ready:
   - `bash scripts/rollback-last.sh 5`
@@ -46,5 +83,6 @@ Use this checklist before major production releases.
   - `npx tsc --noEmit`
   - `npm run test`
   - `npm run server:build`
+  - `npm run validate:release`
 - DB integration tests:
   - Run with `npm run test:db` when test DB is reachable.

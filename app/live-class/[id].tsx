@@ -469,14 +469,14 @@ export default function LiveClassScreen() {
 
   const { data: liveClassData } = useQuery<{ youtube_url: string; title: string; is_completed: boolean; is_live: boolean; show_viewer_count: boolean; cf_playback_hls?: string; stream_type?: string; recording_url?: string; duration_minutes?: number; scheduled_at?: number; has_access?: boolean; is_enrolled?: boolean; course_id?: number; is_public?: boolean; chat_mode?: string }>({
     queryKey: [`/api/live-classes/${id}`],
-    // Faster polling before teacher goes live helps students see live state in ~3-5s.
+    // Keep status responsive while reducing steady request pressure.
     refetchInterval: (query) => {
       if (!isScreenActive) return false;
       const data = query.state.data;
-      if (!data) return 1200;
-      return data.is_live || data.is_completed ? 2000 : 1200;
+      if (!data) return 4000;
+      return data.is_live || data.is_completed ? 5000 : 4000;
     },
-    staleTime: 0,
+    staleTime: 2000,
   });
 
   useEffect(() => {
@@ -495,7 +495,7 @@ export default function LiveClassScreen() {
 
   // Countdown timer — counts down to scheduled_at, then shows "Starting soon"
   useEffect(() => {
-    if (!liveClassData?.scheduled_at || liveClassData.is_live || liveClassData.is_completed) {
+    if (!isScreenActive || !liveClassData?.scheduled_at || liveClassData.is_live || liveClassData.is_completed) {
       setCountdown(null);
       return;
     }
@@ -515,16 +515,16 @@ export default function LiveClassScreen() {
     tick();
     const timer = setInterval(tick, 1000);
     return () => clearInterval(timer);
-  }, [liveClassData?.scheduled_at, liveClassData?.is_live, liveClassData?.is_completed]);
+  }, [isScreenActive, liveClassData?.scheduled_at, liveClassData?.is_live, liveClassData?.is_completed]);
 
-  // Student heartbeat — POST every 15 seconds while page is open
+  // Student heartbeat — POST every 25 seconds while page is open
   useEffect(() => {
     if (!id || !isScreenActive || liveClassData?.is_completed) return;
     const sendHeartbeat = () => {
       apiRequest("POST", `/api/live-classes/${id}/viewers/heartbeat`, {}).catch(() => {});
     };
     sendHeartbeat(); // send immediately on mount
-    const interval = setInterval(sendHeartbeat, 15000);
+    const interval = setInterval(sendHeartbeat, 25000);
     return () => clearInterval(interval);
   }, [id, isScreenActive, liveClassData?.is_completed]);
 
@@ -606,8 +606,8 @@ export default function LiveClassScreen() {
 
   const { data: chatMessages = [], refetch: refetchChat } = useQuery<ChatMsg[]>({
     queryKey: [`/api/live-classes/${id}/chat`],
-    refetchInterval: (!isScreenActive || liveClassData?.is_completed) ? false : 2000,
-    staleTime: 0,
+    refetchInterval: (!isScreenActive || liveClassData?.is_completed) ? false : 4000,
+    staleTime: 1500,
   });
 
   const chatMode: "public" | "private" =
@@ -625,15 +625,15 @@ export default function LiveClassScreen() {
 
   const { data: viewerData } = useQuery<{ count: number; viewers: any[]; visible: boolean }>({
     queryKey: [`/api/live-classes/${id}/viewers`],
-    refetchInterval: (!isScreenActive || liveClassData?.is_completed) ? false : 5000,
-    staleTime: 0,
+    refetchInterval: (!isScreenActive || liveClassData?.is_completed) ? false : 10000,
+    staleTime: 3000,
   });
 
   const { data: raisedHands = [], refetch: refetchHands } = useQuery<HandRaise[]>({
     queryKey: [`/api/admin/live-classes/${id}/raised-hands`],
     enabled: isAdmin && !!liveClassData?.is_live && isScreenActive,
-    refetchInterval: isScreenActive ? 5000 : false,
-    staleTime: 0,
+    refetchInterval: isScreenActive ? 10000 : false,
+    staleTime: 3000,
   });
 
   useEffect(() => {

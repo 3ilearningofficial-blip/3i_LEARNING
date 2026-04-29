@@ -8,13 +8,10 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { apiRequest } from "@/lib/query-client";
+import { getInstallationId } from "@/lib/installation-id";
 import { useAuth } from "@/context/AuthContext";
 import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
-
-function generateDeviceId() {
-  return Date.now().toString() + Math.random().toString(36).substr(2, 9);
-}
 
 export default function OTPScreen() {
   const insets = useSafeAreaInsets();
@@ -94,7 +91,7 @@ export default function OTPScreen() {
     if (code.length !== 6) { Alert.alert("Error", "Enter the 6-digit OTP"); return; }
     setIsLoading(true);
     try {
-      const deviceId = generateDeviceId();
+      const deviceId = await getInstallationId();
       const res = await apiRequest("POST", "/api/auth/verify-otp", {
         identifier: phone,
         type: "phone",
@@ -119,7 +116,11 @@ export default function OTPScreen() {
     } catch (err: any) {
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       const msg = err?.message || "";
-      if (msg.includes("429") || msg.includes("Too many")) {
+      if (msg.includes("blocked") || msg.includes("Blocked")) {
+        Alert.alert("Account Blocked", "This account is blocked. Contact support/admin.");
+      } else if (msg.includes("registered device") || msg.includes("another device")) {
+        Alert.alert("Access Restricted", "This account is active on another device/browser. Use the original one or contact support.");
+      } else if (msg.includes("429") || msg.includes("Too many")) {
         Alert.alert("Please Wait", "Too many attempts. Please try again after a few minutes.");
       } else {
         Alert.alert("Invalid OTP", "The OTP you entered is incorrect or expired. Please try again.");

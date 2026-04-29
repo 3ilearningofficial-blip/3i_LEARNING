@@ -11,6 +11,9 @@
     "server:build": "esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --outdir=server_dist",
     "server:prod": "NODE_ENV=production node server_dist/index.js",
     "db:push": "drizzle-kit push",
+    "db:migrate": "drizzle-kit migrate --config drizzle.config.ts",
+    "db:check": "npx tsx scripts/db-ready-check.ts",
+    "db:apply-sql": "npx tsx scripts/apply-sql-migrations.ts",
     "start": "npx expo start",
     "test": "npx vitest run",
     "test:env": "node --env-file=.env node_modules/vitest/vitest.mjs --run",
@@ -20,7 +23,8 @@
     "maintenance:check": "node scripts/maintenance-check.mjs",
     "lint": "npx expo lint",
     "lint:fix": "npx expo lint --fix",
-    "quality": "npm run lint && npx tsc --noEmit && npm run test"
+    "quality": "npm run lint && npx tsc --noEmit && npm run test",
+    "validate:release": "npm run server:build && npm run db:check && npm run maintenance:check"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1028.0",
@@ -89,7 +93,7 @@
     "@types/node": "^25.6.0",
     "@types/react": "~19.1.10",
     "@vitest/ui": "^4.1.4",
-    "drizzle-kit": "^0.18.1",
+    "drizzle-kit": "^0.31.10",
     "esbuild": "^0.25.12",
     "eslint": "^9.31.0",
     "eslint-config-expo": "~10.0.0",

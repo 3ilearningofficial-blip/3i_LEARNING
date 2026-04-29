@@ -155,6 +155,12 @@ export function registerUploadRoutes({
 
   app.post("/api/upload/to-r2", requireAdmin, uploadLarge.single("file"), async (req: Request, res: Response) => {
     try {
+      if (process.env.ALLOW_SERVER_BUFFER_UPLOAD !== "true") {
+        return res.status(403).json({
+          message:
+            "Direct buffered upload is disabled. Use /api/upload/presign and upload from client instead.",
+        });
+      }
       if (!(req as any).file) return res.status(400).json({ message: "No file uploaded" });
       const file = (req as any).file;
       const folder = req.body.folder || "uploads";

@@ -102,6 +102,35 @@ export function registerAdminUsersAndContentRoutes({
     }
   });
 
+  app.get("/api/admin/device-block-events", requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      const result = await db.query(
+        `SELECT e.id, e.user_id, e.attempted_device_id, e.bound_device_id, e.phone, e.email, e.platform, e.reason, e.created_at,
+                u.name AS user_name
+         FROM device_block_events e
+         LEFT JOIN users u ON u.id = e.user_id
+         ORDER BY e.created_at DESC NULLS LAST
+         LIMIT 300`
+      );
+      res.json(result.rows);
+    } catch (err) {
+      console.error("[Admin] device-block-events:", err);
+      res.status(500).json({ message: "Failed to load device block events" });
+    }
+  });
+
+  app.post("/api/admin/users/:id/reset-device-binding", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const uid = parseInt(String(req.params.id), 10);
+      if (!Number.isFinite(uid)) return res.status(400).json({ message: "Invalid user id" });
+      await db.query("UPDATE users SET app_bound_device_id = NULL WHERE id = $1", [uid]);
+      res.json({ success: true });
+    } catch (err) {
+      console.error("[Admin] reset-device-binding:", err);
+      res.status(500).json({ message: "Failed to reset device binding" });
+    }
+  });
+
   app.get("/api/admin/users", requireAdmin, async (_req: Request, res: Response) => {
     try {
       const result = await db.query(

@@ -367,15 +367,15 @@ export default function HomeScreen() {
       const baseUrl = getApiUrl();
       const url = new URL("/api/courses", baseUrl);
       if (user?.id) url.searchParams.set("_uid", String(user.id));
-      url.searchParams.set("_t", String(Date.now()));
       const res = await authFetch(url.toString());
       if (!res.ok) throw new Error(`${res.status}`);
       const data = await res.json().catch(() => []);
       return Array.isArray(data) ? data : [];
     },
-    staleTime: 0,
-    gcTime: 0,
-    refetchInterval: 30000,
+    staleTime: 30000,
+    gcTime: 5 * 60 * 1000,
+    refetchInterval: 60000,
+    refetchOnWindowFocus: false,
     // Always fetch — even unauthenticated users can see published courses
   });
 

@@ -9,6 +9,7 @@ import { verifyFirebaseToken } from "./firebase";
 import { getRazorpay, verifyPaymentSignature } from "./razorpay";
 import { generateSecureToken, hashOtpValue, verifyOtpValue } from "./security-utils";
 import { getAuthUserFromRequest } from "./auth-utils";
+import { enforceInstallationBinding } from "./native-device-binding";
 import { registerAuthRoutes } from "./auth-routes";
 import { registerPdfRoutes } from "./pdf-routes";
 import { registerPaymentRoutes } from "./payment-routes";
@@ -43,6 +44,7 @@ import { registerCourseAccessRoutes } from "./course-access-routes";
 import { registerUploadRoutes } from "./upload-routes";
 import { registerMediaStreamRoutes } from "./media-stream-routes";
 import { createGenerateAIAnswer } from "./ai-tutor-service";
+import { checkDatabaseReadiness } from "./db-readiness";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 const uploadLarge = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } });
@@ -158,9 +160,16 @@ function generateOTP(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-// Resolve authenticated user from session OR Bearer token
+// Resolve authenticated user from session OR Bearer token — also enforces per-install binding after paid native purchase.
 async function getAuthUser(req: Request): Promise<{ id: number; name: string; email?: string; phone?: string; role: string; sessionToken?: string; profileComplete?: boolean } | null> {
-  return getAuthUserFromRequest(req, db);
+  const user = await getAuthUserFromRequest(req, db);
+  if (!user) return null;
+  const boundOk = await enforceInstallationBinding(db, req, user.id, user.role);
+  if (!boundOk) {
+    (req.session as any).user = null;
+    return null;
+  }
+  return user;
 }
 
 async function sendFirebasePhoneVerification(phone: string): Promise<{ sessionInfo: string } | null> {
@@ -183,10 +192,10 @@ async function sendFirebasePhoneVerification(phone: string): Promise<{ sessionIn
     );
     const data = await res.json();
     if (data.sessionInfo) {
-      console.log(`[Firebase Phone] Verification sent to ${phone}`);
+      console.log("[Firebase Phone] Verification sent");
       return { sessionInfo: data.sessionInfo };
     }
-    console.error("[Firebase Phone] Failed:", JSON.stringify(data.error || data));
+    console.error("[Firebase Phone] Failed:", data?.error?.message || "provider_error");
     return null;
   } catch (err) {
     console.error("[Firebase Phone] Error:", err);
@@ -221,12 +230,12 @@ async function verifyFirebasePhoneCode(sessionInfo: string, code: string): Promi
 async function sendOTPviaSMS(phone: string, otp: string): Promise<boolean> {
   const apiKey = process.env.FAST2SMS_API_KEY;
   if (!apiKey) {
-    console.log(`[SMS] No FAST2SMS_API_KEY set for ${phone}`);
+    console.log("[SMS] No FAST2SMS_API_KEY set");
     return false;
   }
 
   try {
-    console.log(`[SMS] Sending OTP via Quick SMS route to ${phone}`);
+    console.log("[SMS] Sending OTP via Quick SMS route");
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
     const res = await fetch("https://www.fast2sms.com/dev/bulkV2", {
@@ -245,37 +254,37 @@ async function sendOTPviaSMS(phone: string, otp: string): Promise<boolean> {
     });
     clearTimeout(timeout);
     const data = await res.json();
-    console.log(`[SMS] Quick SMS response:`, JSON.stringify(data));
+    console.log("[SMS] Quick SMS response received");
     if (data.return === true) {
-      console.log(`[SMS] OTP sent successfully to ${phone}`);
+      console.log("[SMS] OTP sent successfully");
       return true;
     }
-    console.error(`[SMS] Quick SMS failed:`, data.message || JSON.stringify(data));
+    console.error("[SMS] Quick SMS failed:", data.message || "provider_error");
   } catch (err: any) {
     if (err.name === "AbortError") {
-      console.error(`[SMS] Quick SMS timeout for ${phone}`);
+      console.error("[SMS] Quick SMS timeout");
     } else {
       console.error(`[SMS] Quick SMS error:`, err);
     }
   }
 
   try {
-    console.log(`[SMS] Trying OTP route as fallback for ${phone}`);
+    console.log("[SMS] Trying OTP route as fallback");
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
     const url = `https://www.fast2sms.com/dev/bulkV2?authorization=${encodeURIComponent(apiKey)}&route=otp&variables_values=${encodeURIComponent(otp)}&flash=0&numbers=${encodeURIComponent(phone)}`;
     const res = await fetch(url, { method: "GET", signal: controller.signal });
     clearTimeout(timeout);
     const data = await res.json();
-    console.log(`[SMS] OTP route response:`, JSON.stringify(data));
+    console.log("[SMS] OTP route response received");
     if (data.return === true) {
-      console.log(`[SMS] OTP route sent successfully to ${phone}`);
+      console.log("[SMS] OTP route sent successfully");
       return true;
     }
-    console.error(`[SMS] OTP route failed:`, data.message || JSON.stringify(data));
+    console.error("[SMS] OTP route failed:", data.message || "provider_error");
   } catch (err: any) {
     if (err.name === "AbortError") {
-      console.error(`[SMS] OTP route timeout for ${phone}`);
+      console.error("[SMS] OTP route timeout");
     } else {
       console.error(`[SMS] OTP route error:`, err);
     }
@@ -283,9 +292,6 @@ async function sendOTPviaSMS(phone: string, otp: string): Promise<boolean> {
 
   return false;
 }
-
-const ADMIN_EMAILS = ["3ilearningofficial@gmail.com"];
-const ADMIN_PHONES = ["9997198068"];
 
 // Recompute and persist all test-type counts for a course
 async function updateCourseTestCounts(courseId: number | string) {
@@ -390,770 +396,11 @@ async function deleteDownloadsForCourse(courseId: number): Promise<void> {
 }
 
 
-async function ensureCoreLearningSchemaColumns(): Promise<void> {
-  const requiredStatements = [
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_free BOOLEAN DEFAULT FALSE",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS price DECIMAL(10, 2) DEFAULT 0",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'Mathematics'",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS level TEXT DEFAULT 'Beginner'",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS duration_hours DECIMAL(5, 1) DEFAULT 0",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS total_lectures INTEGER DEFAULT 0",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS total_tests INTEGER DEFAULT 0",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS original_price DECIMAL(10, 2) DEFAULT 0",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS validity_months NUMERIC(8, 2) DEFAULT NULL",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_published BOOLEAN DEFAULT TRUE",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS course_type TEXT DEFAULT 'live'",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS subject TEXT DEFAULT ''",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS start_date TEXT",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS end_date TEXT",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS total_students INTEGER DEFAULT 0",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS total_materials INTEGER DEFAULT 0",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS pyq_count INTEGER DEFAULT 0",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS mock_count INTEGER DEFAULT 0",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS practice_count INTEGER DEFAULT 0",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS thumbnail TEXT",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS cover_color TEXT",
-    "ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active'",
-    "ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS valid_until BIGINT",
-    "ALTER TABLE lectures ADD COLUMN IF NOT EXISTS download_allowed BOOLEAN DEFAULT FALSE",
-    "ALTER TABLE lectures ADD COLUMN IF NOT EXISTS section_title TEXT",
-    "ALTER TABLE study_materials ADD COLUMN IF NOT EXISTS download_allowed BOOLEAN DEFAULT FALSE",
-    "ALTER TABLE study_materials ADD COLUMN IF NOT EXISTS section_title TEXT",
-    "ALTER TABLE user_downloads ADD COLUMN IF NOT EXISTS local_filename TEXT",
-    "ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS lecture_section_title TEXT",
-    "ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS lecture_subfolder_title TEXT",
-  ];
-
-  for (const statement of requiredStatements) {
-    await db.query(statement, undefined, { logSlow: false }).catch(() => {});
-  }
-}
-
-async function ensureCoreLearningPerformanceIndexes(): Promise<void> {
-  const indexStatements = [
-    "CREATE INDEX IF NOT EXISTS idx_users_session_token ON users(session_token)",
-    "CREATE INDEX IF NOT EXISTS idx_enrollments_user_course_status_valid_until ON enrollments(user_id, course_id, status, valid_until)",
-    "CREATE INDEX IF NOT EXISTS idx_enrollments_course_user_status_valid_until ON enrollments(course_id, user_id, status, valid_until)",
-    "CREATE INDEX IF NOT EXISTS idx_lectures_course_section ON lectures(course_id, section_title)",
-    "CREATE INDEX IF NOT EXISTS idx_materials_course_section ON study_materials(course_id, section_title)",
-    "CREATE INDEX IF NOT EXISTS idx_live_classes_course_scheduled ON live_classes(course_id, scheduled_at)",
-    "CREATE INDEX IF NOT EXISTS idx_live_classes_feed_visibility ON live_classes(is_completed, is_live, scheduled_at DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_daily_missions_date_type ON daily_missions(mission_date DESC, mission_type)",
-    "CREATE INDEX IF NOT EXISTS idx_download_tokens_token_used_expires ON download_tokens(token, used, expires_at)",
-    // Inbox: matches GET /api/notifications (user + unread + not hidden + non-support)
-    "CREATE INDEX IF NOT EXISTS idx_notifications_inbox_unread ON notifications (user_id, created_at DESC) WHERE (is_read IS NOT TRUE) AND (is_hidden IS NOT TRUE) AND (source IS DISTINCT FROM 'support')",
-  ];
-
-  for (const statement of indexStatements) {
-    await db.query(statement, undefined, { logSlow: false }).catch(() => {});
-  }
-}
-
 export async function registerRoutes(app: Express): Promise<Server> {
-  const allowRuntimeSchemaSync =
-    process.env.ALLOW_RUNTIME_SCHEMA_SYNC === "true" && process.env.NODE_ENV !== "production";
-  const allowStartupSchemaEnsure =
-    process.env.ALLOW_STARTUP_SCHEMA_ENSURE === "true" && process.env.NODE_ENV !== "production";
-
-  // Prevent runtime schema mutation in production; run migrations before deploy.
-  if (allowStartupSchemaEnsure) {
-    try {
-      await ensureCoreLearningSchemaColumns();
-      await ensureCoreLearningPerformanceIndexes();
-      console.log("[DB] startup schema/index ensure completed");
-    } catch (err) {
-      console.error("[DB] startup schema ensure failed:", err);
-    }
-  }
-
-  if (allowRuntimeSchemaSync) {
-    // ==================== BASE TABLE CREATION ====================
-    try {
-    // Create base tables if they don't exist
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        id SERIAL PRIMARY KEY,
-        name TEXT NOT NULL DEFAULT '',
-        email TEXT UNIQUE,
-        phone TEXT UNIQUE,
-        role TEXT NOT NULL DEFAULT 'student',
-        device_id TEXT,
-        session_token TEXT,
-        otp TEXT,
-        otp_expires_at BIGINT,
-        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
-      )
-    `);
-
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS courses (
-        id SERIAL PRIMARY KEY,
-        title TEXT NOT NULL,
-        description TEXT,
-        teacher_name TEXT NOT NULL DEFAULT '3i Learning',
-        price DECIMAL(10, 2) DEFAULT 0,
-        original_price DECIMAL(10, 2) DEFAULT 0,
-        validity_months NUMERIC(8, 2) DEFAULT NULL,
-        category TEXT DEFAULT 'Mathematics',
-        thumbnail TEXT,
-        is_free BOOLEAN DEFAULT FALSE,
-        total_lectures INTEGER DEFAULT 0,
-        total_tests INTEGER DEFAULT 0,
-        total_students INTEGER DEFAULT 0,
-        level TEXT DEFAULT 'Beginner',
-        duration_hours DECIMAL(5, 1) DEFAULT 0,
-        is_published BOOLEAN DEFAULT TRUE,
-        course_type TEXT DEFAULT 'standard',
-        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
-      )
-    `);
-
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS lectures (
-        id SERIAL PRIMARY KEY,
-        course_id INTEGER REFERENCES courses(id) ON DELETE CASCADE,
-        title TEXT NOT NULL,
-        description TEXT,
-        video_url TEXT,
-        video_type TEXT DEFAULT 'youtube',
-        pdf_url TEXT,
-        duration_minutes INTEGER DEFAULT 0,
-        order_index INTEGER DEFAULT 0,
-        is_free_preview BOOLEAN DEFAULT FALSE,
-        section_title TEXT,
-        download_allowed BOOLEAN DEFAULT FALSE,
-        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
-      )
-    `);
-
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS enrollments (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-        course_id INTEGER REFERENCES courses(id) ON DELETE CASCADE,
-        progress_percent INTEGER DEFAULT 0,
-        last_lecture_id INTEGER,
-        enrolled_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000,
-        UNIQUE(user_id, course_id)
-      )
-    `);
-
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS lecture_progress (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-        lecture_id INTEGER REFERENCES lectures(id) ON DELETE CASCADE,
-        is_completed BOOLEAN DEFAULT FALSE,
-        watch_percent INTEGER DEFAULT 0,
-        completed_at BIGINT,
-        UNIQUE(user_id, lecture_id)
-      )
-    `);
-
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS study_materials (
-        id SERIAL PRIMARY KEY,
-        title TEXT NOT NULL,
-        description TEXT,
-        file_url TEXT,
-        file_type TEXT DEFAULT 'pdf',
-        course_id INTEGER REFERENCES courses(id) ON DELETE CASCADE,
-        is_free BOOLEAN DEFAULT TRUE,
-        section_title TEXT,
-        download_allowed BOOLEAN DEFAULT FALSE,
-        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
-      )
-    `);
-
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS tests (
-        id SERIAL PRIMARY KEY,
-        title TEXT NOT NULL,
-        description TEXT,
-        course_id INTEGER REFERENCES courses(id) ON DELETE CASCADE,
-        duration_minutes INTEGER DEFAULT 60,
-        total_questions INTEGER DEFAULT 0,
-        total_marks INTEGER DEFAULT 100,
-        passing_marks INTEGER DEFAULT 35,
-        test_type TEXT DEFAULT 'practice',
-        folder_name TEXT,
-        is_published BOOLEAN DEFAULT TRUE,
-        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
-      )
-    `);
-
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS questions (
-        id SERIAL PRIMARY KEY,
-        test_id INTEGER REFERENCES tests(id) ON DELETE CASCADE,
-        question_text TEXT NOT NULL,
-        option_a TEXT NOT NULL,
-        option_b TEXT NOT NULL,
-        option_c TEXT NOT NULL,
-        option_d TEXT NOT NULL,
-        correct_option TEXT NOT NULL,
-        explanation TEXT,
-        topic TEXT,
-        difficulty TEXT DEFAULT 'medium',
-        marks INTEGER DEFAULT 4,
-        negative_marks DECIMAL(3, 1) DEFAULT 1,
-        order_index INTEGER DEFAULT 0
-      )
-    `);
-
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS test_attempts (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-        test_id INTEGER REFERENCES tests(id) ON DELETE CASCADE,
-        answers JSONB DEFAULT '{}',
-        score INTEGER DEFAULT 0,
-        total_marks INTEGER DEFAULT 0,
-        percentage DECIMAL(5, 2) DEFAULT 0,
-        time_taken_seconds INTEGER DEFAULT 0,
-        status TEXT DEFAULT 'in_progress',
-        started_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000,
-        completed_at BIGINT
-      )
-    `);
-
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS notifications (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-        title TEXT NOT NULL,
-        message TEXT NOT NULL,
-        type TEXT DEFAULT 'info',
-        is_read BOOLEAN DEFAULT FALSE,
-        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
-      )
-    `);
-
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS live_classes (
-        id SERIAL PRIMARY KEY,
-        title TEXT NOT NULL,
-        description TEXT,
-        course_id INTEGER REFERENCES courses(id) ON DELETE CASCADE,
-        youtube_url TEXT,
-        recording_url TEXT,
-        scheduled_at BIGINT,
-        is_live BOOLEAN DEFAULT FALSE,
-        is_completed BOOLEAN DEFAULT FALSE,
-        is_public BOOLEAN DEFAULT FALSE,
-        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
-      )
-    `);
-
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS live_chat_messages (
-        id SERIAL PRIMARY KEY,
-        live_class_id INTEGER REFERENCES live_classes(id) ON DELETE CASCADE,
-        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-        user_name TEXT NOT NULL,
-        message TEXT NOT NULL,
-        is_admin BOOLEAN DEFAULT FALSE,
-        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
-      )
-    `);
-
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS doubts (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-        question TEXT NOT NULL,
-        answer TEXT,
-        topic TEXT,
-        status TEXT DEFAULT 'pending',
-        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
-      )
-    `);
-
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS payments (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-        course_id INTEGER REFERENCES courses(id) ON DELETE CASCADE,
-        razorpay_order_id TEXT,
-        razorpay_payment_id TEXT,
-        razorpay_signature TEXT,
-        amount DECIMAL(10, 2),
-        currency TEXT DEFAULT 'INR',
-        status TEXT DEFAULT 'created',
-        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
-      )
-    `);
-
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS daily_missions (
-        id SERIAL PRIMARY KEY,
-        title TEXT NOT NULL,
-        description TEXT,
-        questions JSONB DEFAULT '[]',
-        mission_date DATE,
-        xp_reward INTEGER DEFAULT 50,
-        mission_type TEXT DEFAULT 'daily_drill',
-        course_id INTEGER REFERENCES courses(id) ON DELETE CASCADE
-      )
-    `);
-
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS user_missions (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-        mission_id INTEGER REFERENCES daily_missions(id) ON DELETE CASCADE,
-        is_completed BOOLEAN DEFAULT FALSE,
-        score INTEGER DEFAULT 0,
-        completed_at BIGINT,
-        UNIQUE(user_id, mission_id)
-      )
-    `);
-
-    // Secure offline downloads tables
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS download_tokens (
-        id SERIAL PRIMARY KEY,
-        token TEXT NOT NULL UNIQUE,
-        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        item_type TEXT NOT NULL CHECK (item_type IN ('lecture', 'material')),
-        item_id INTEGER NOT NULL,
-        r2_key TEXT NOT NULL,
-        used BOOLEAN NOT NULL DEFAULT FALSE,
-        created_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000,
-        expires_at BIGINT NOT NULL
-      )
-    `);
-
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS user_downloads (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        item_type TEXT NOT NULL CHECK (item_type IN ('lecture', 'material')),
-        item_id INTEGER NOT NULL,
-        local_filename TEXT,
-        downloaded_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000,
-        UNIQUE(user_id, item_type, item_id)
-      )
-    `);
-
-    console.log("[DB] Base tables ensured");
-  } catch (err) {
-    console.error("[DB] Failed to create base tables:", err);
-  }
-
-    // ==================== STARTUP MIGRATIONS ====================
-    try {
-    // DB indexes for 1000-user scale
-    await db.query("CREATE INDEX IF NOT EXISTS idx_tests_course_id ON tests(course_id)");
-    await db.query("CREATE INDEX IF NOT EXISTS idx_enrollments_user_id ON enrollments(user_id)");
-    await db.query("CREATE INDEX IF NOT EXISTS idx_enrollments_course_id ON enrollments(course_id)");
-    await db.query("CREATE INDEX IF NOT EXISTS idx_test_attempts_user_test ON test_attempts(user_id, test_id)");
-    await db.query("CREATE INDEX IF NOT EXISTS idx_test_attempts_test_id ON test_attempts(test_id)");
-    await db.query("CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id)");
-    await db.query("CREATE INDEX IF NOT EXISTS idx_lecture_progress_user ON lecture_progress(user_id)");
-    await db.query("CREATE INDEX IF NOT EXISTS idx_questions_test_id ON questions(test_id)");
-    // Secure offline downloads indexes
-    await db.query("CREATE INDEX IF NOT EXISTS idx_download_tokens_token ON download_tokens(token)");
-    await db.query("CREATE INDEX IF NOT EXISTS idx_download_tokens_expires ON download_tokens(expires_at)");
-    // Short-lived media access tokens (for PDF/video viewing in iframes)
-    await db.query(`CREATE TABLE IF NOT EXISTS media_tokens (
-      token TEXT PRIMARY KEY,
-      user_id INTEGER NOT NULL,
-      file_key TEXT NOT NULL,
-      expires_at BIGINT NOT NULL,
-      created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
-    )`).catch(() => {});
-    await db.query("CREATE INDEX IF NOT EXISTS idx_media_tokens_expires ON media_tokens(expires_at)").catch(() => {});
-    console.log("[DB] Indexes ensured");
-    } catch (err) {
-    console.error("[DB] Failed to create indexes:", err);
-  }
-    // Profile & user columns
-    try {
-    await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS date_of_birth TEXT");
-    await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS photo_url TEXT");
-    await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_complete BOOLEAN DEFAULT FALSE");
-    await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN DEFAULT FALSE");
-    await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active_at BIGINT");
-    await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT");
-    await ensureCoreLearningSchemaColumns();
-    await db.query("ALTER TABLE tests ADD COLUMN IF NOT EXISTS difficulty TEXT DEFAULT 'moderate'");
-    await db.query("ALTER TABLE tests ADD COLUMN IF NOT EXISTS scheduled_at BIGINT");
-    await db.query("ALTER TABLE tests ADD COLUMN IF NOT EXISTS is_published BOOLEAN DEFAULT TRUE");
-    await db.query("ALTER TABLE tests ADD COLUMN IF NOT EXISTS mini_course_id INTEGER").catch(() => {});
-    await db.query("ALTER TABLE tests ADD COLUMN IF NOT EXISTS price NUMERIC(10,2) DEFAULT 0").catch(() => {});
-    await db.query("ALTER TABLE lectures ADD COLUMN IF NOT EXISTS download_allowed BOOLEAN DEFAULT FALSE").catch(() => {});
-    // Add download_allowed column to study_materials table
-    await db.query("ALTER TABLE study_materials ADD COLUMN IF NOT EXISTS download_allowed BOOLEAN DEFAULT FALSE").catch(() => {});
-    // Test purchases table
-    await db.query(`CREATE TABLE IF NOT EXISTS test_purchases (
-      id SERIAL PRIMARY KEY,
-      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-      test_id INTEGER REFERENCES tests(id) ON DELETE CASCADE,
-      razorpay_order_id TEXT,
-      razorpay_payment_id TEXT,
-      created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000,
-      UNIQUE(user_id, test_id)
-    )`).catch(() => {});
-    await db.query("ALTER TABLE questions ADD COLUMN IF NOT EXISTS image_url TEXT");
-    await db.query("ALTER TABLE questions ADD COLUMN IF NOT EXISTS solution_image_url TEXT");
-    await db.query(`CREATE TABLE IF NOT EXISTS course_folders (
-      id SERIAL PRIMARY KEY,
-      course_id INTEGER REFERENCES courses(id) ON DELETE CASCADE,
-      name TEXT NOT NULL,
-      type TEXT NOT NULL,
-      is_hidden BOOLEAN DEFAULT FALSE,
-      created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000,
-      UNIQUE(course_id, name, type)
-    )`);
-    await db.query(`CREATE TABLE IF NOT EXISTS standalone_folders (
-      id SERIAL PRIMARY KEY,
-      name TEXT NOT NULL,
-      type TEXT NOT NULL,
-      is_hidden BOOLEAN DEFAULT FALSE,
-      created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000,
-      UNIQUE(name, type)
-    )`);
-    // Test folder extra columns (mini practice course)
-    await db.query("ALTER TABLE standalone_folders ADD COLUMN IF NOT EXISTS category TEXT").catch(() => {});
-    await db.query("ALTER TABLE standalone_folders ADD COLUMN IF NOT EXISTS price NUMERIC(10,2) DEFAULT 0").catch(() => {});
-    await db.query("ALTER TABLE standalone_folders ADD COLUMN IF NOT EXISTS original_price NUMERIC(10,2) DEFAULT 0").catch(() => {});
-    await db.query("ALTER TABLE standalone_folders ADD COLUMN IF NOT EXISTS is_free BOOLEAN DEFAULT TRUE").catch(() => {});
-    await db.query("ALTER TABLE standalone_folders ADD COLUMN IF NOT EXISTS description TEXT").catch(() => {});
-    await db.query("ALTER TABLE standalone_folders ADD COLUMN IF NOT EXISTS validity_months NUMERIC(8,2) DEFAULT NULL").catch(() => {});
-    // Test folder purchases table
-    await db.query(`CREATE TABLE IF NOT EXISTS folder_purchases (
-      id SERIAL PRIMARY KEY,
-      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-      folder_id INTEGER REFERENCES standalone_folders(id) ON DELETE CASCADE,
-      amount NUMERIC(10,2),
-      payment_id TEXT,
-      created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000,
-      UNIQUE(user_id, folder_id)
-    )`).catch(() => {});
-    await db.query(`CREATE TABLE IF NOT EXISTS payments (
-      id SERIAL PRIMARY KEY,
-      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-      course_id INTEGER REFERENCES courses(id) ON DELETE CASCADE,
-      razorpay_order_id TEXT,
-      razorpay_payment_id TEXT,
-      razorpay_signature TEXT,
-      amount NUMERIC DEFAULT 0,
-      status TEXT DEFAULT 'created',
-      click_count INTEGER DEFAULT 1,
-      created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000,
-      UNIQUE(user_id, course_id)
-    )`);
-    await db.query("ALTER TABLE payments ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'created'").catch(() => {});
-    await db.query("ALTER TABLE payments ADD COLUMN IF NOT EXISTS click_count INTEGER DEFAULT 1").catch(() => {});
-    await db.query("CREATE UNIQUE INDEX IF NOT EXISTS payments_user_course_unique ON payments(user_id, course_id)").catch(() => {});
-    // Fix existing rows with NULL status or NULL click_count
-    await db.query("UPDATE payments SET status = 'created' WHERE status IS NULL").catch(() => {});
-    await db.query("UPDATE payments SET click_count = 1 WHERE click_count IS NULL").catch(() => {});
-    await db.query("ALTER TABLE test_attempts ADD COLUMN IF NOT EXISTS correct INTEGER DEFAULT 0");
-    await db.query("ALTER TABLE test_attempts ADD COLUMN IF NOT EXISTS incorrect INTEGER DEFAULT 0");
-    await db.query("ALTER TABLE test_attempts ADD COLUMN IF NOT EXISTS attempted INTEGER DEFAULT 0");
-    await db.query("ALTER TABLE test_attempts ADD COLUMN IF NOT EXISTS question_times JSONB");
-    // Allow decimal scores (negative marking can produce floats)
-    await db.query("ALTER TABLE test_attempts ALTER COLUMN score TYPE NUMERIC USING score::NUMERIC").catch(() => {});
-    await db.query(`CREATE TABLE IF NOT EXISTS question_reports (
-      id SERIAL PRIMARY KEY,
-      question_id INTEGER REFERENCES questions(id) ON DELETE CASCADE,
-      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-      reason TEXT NOT NULL,
-      details TEXT,
-      created_at BIGINT,
-      UNIQUE(question_id, user_id)
-    )`);
-    // Books table
-    await db.query(`CREATE TABLE IF NOT EXISTS books (
-      id SERIAL PRIMARY KEY,
-      title TEXT NOT NULL,
-      description TEXT,
-      author TEXT,
-      price NUMERIC DEFAULT 0,
-      original_price NUMERIC DEFAULT 0,
-      cover_url TEXT,
-      file_url TEXT,
-      is_published BOOLEAN DEFAULT TRUE,
-      created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
-    )`);
-    await db.query(`CREATE TABLE IF NOT EXISTS book_purchases (
-      id SERIAL PRIMARY KEY,
-      user_id INTEGER REFERENCES users(id),
-      book_id INTEGER REFERENCES books(id),
-      purchased_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000,
-      UNIQUE(user_id, book_id)
-    )`);
-    await db.query("ALTER TABLE books ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN DEFAULT FALSE").catch(() => {});
-    // Book click tracking (abandoned checkouts for books)
-    await db.query(`CREATE TABLE IF NOT EXISTS book_click_tracking (
-      id SERIAL PRIMARY KEY,
-      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-      book_id INTEGER REFERENCES books(id) ON DELETE CASCADE,
-      click_count INTEGER DEFAULT 1,
-      created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000,
-      UNIQUE(user_id, book_id)
-    )`);
-    console.log("[DB] book_click_tracking table ensured");
-    // Live class notification columns
-    await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS notify_email BOOLEAN DEFAULT FALSE").catch(() => {});
-    await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS notify_bell BOOLEAN DEFAULT FALSE").catch(() => {});
-    await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS is_free_preview BOOLEAN DEFAULT FALSE").catch(() => {});
-    await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS is_completed BOOLEAN DEFAULT FALSE").catch(() => {});
-    await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS is_live BOOLEAN DEFAULT FALSE").catch(() => {});
-    await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEFAULT FALSE").catch(() => {});
-    // Live class studio columns
-    await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS stream_type TEXT DEFAULT 'rtmp'").catch(() => {});
-    await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS chat_mode TEXT DEFAULT 'public'").catch(() => {});
-    await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS recording_url TEXT").catch(() => {});
-    await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS show_viewer_count BOOLEAN DEFAULT TRUE").catch(() => {});
-    await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS started_at BIGINT").catch(() => {});
-    await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS ended_at BIGINT").catch(() => {});
-    await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS duration_minutes INTEGER DEFAULT 0").catch(() => {});
-    // Cloudflare Stream integration columns
-    await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS cf_stream_uid TEXT").catch(() => {});
-    await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS cf_stream_key TEXT").catch(() => {});
-    await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS cf_stream_rtmp_url TEXT").catch(() => {});
-    await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS cf_playback_hls TEXT").catch(() => {});
-    await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS lecture_section_title TEXT").catch(() => {});
-    await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS lecture_subfolder_title TEXT").catch(() => {});
-    // Live class viewers tracking (student presence via heartbeats)
-    await db.query(`CREATE TABLE IF NOT EXISTS live_class_viewers (
-      id SERIAL PRIMARY KEY,
-      live_class_id INTEGER NOT NULL,
-      user_id INTEGER NOT NULL,
-      user_name TEXT NOT NULL,
-      last_heartbeat BIGINT NOT NULL,
-      UNIQUE(live_class_id, user_id)
-    )`).catch(() => {});
-    // Live class hand raises
-    await db.query(`CREATE TABLE IF NOT EXISTS live_class_hand_raises (
-      id SERIAL PRIMARY KEY,
-      live_class_id INTEGER NOT NULL,
-      user_id INTEGER NOT NULL,
-      user_name TEXT NOT NULL,
-      raised_at BIGINT NOT NULL,
-      UNIQUE(live_class_id, user_id)
-    )`).catch(() => {});
-    // Clean up old scheduled classes created before the new system (before April 2026)
-    // Mark old non-live, non-completed classes with no notify_bell/notify_email as completed
-    await db.query("UPDATE live_classes SET is_completed = TRUE WHERE is_completed IS NOT TRUE AND is_live IS NOT TRUE AND notify_bell IS NULL AND notify_email IS NULL AND created_at < 1743465600000").catch(() => {});
-    // Set profile_complete=FALSE for all users who haven't completed it yet
-    await db.query("UPDATE users SET profile_complete = FALSE WHERE profile_complete IS NULL");
-    // Reset to FALSE anyone who doesn't have date_of_birth (profile setup wasn't completed)
-    await db.query(
-      "UPDATE users SET profile_complete = FALSE WHERE role = 'student' AND (date_of_birth IS NULL OR date_of_birth = '')"
+  if (process.env.ALLOW_RUNTIME_SCHEMA_SYNC === "true" || process.env.ALLOW_STARTUP_SCHEMA_ENSURE === "true") {
+    console.warn(
+      "[DB] Legacy startup schema flags were requested, but runtime schema mutation is now disabled. Run SQL migrations before starting the server."
     );
-    // Only mark complete if they went through profile setup (has DOB which is only set there)
-    await db.query(
-      "UPDATE users SET profile_complete = TRUE WHERE profile_complete = FALSE AND role = 'student' AND email IS NOT NULL AND date_of_birth IS NOT NULL AND name IS NOT NULL AND name NOT LIKE 'Student%'"
-    );
-    console.log("[DB] Schema columns ensured");
-
-    // User downloads tracking table
-    await db.query(`CREATE TABLE IF NOT EXISTS user_downloads (
-      id SERIAL PRIMARY KEY,
-      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-      item_type TEXT NOT NULL CHECK (item_type IN ('material', 'lecture')),
-      item_id INTEGER NOT NULL,
-      downloaded_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000,
-      UNIQUE(user_id, item_type, item_id)
-    )`).catch(() => {});
-    // Add local_filename column for encrypted offline downloads
-    await db.query("ALTER TABLE user_downloads ADD COLUMN IF NOT EXISTS local_filename TEXT").catch(() => {});
-
-    // Download tokens table for secure offline downloads
-    await db.query(`CREATE TABLE IF NOT EXISTS download_tokens (
-      id SERIAL PRIMARY KEY,
-      token TEXT NOT NULL UNIQUE,
-      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      item_type TEXT NOT NULL CHECK (item_type IN ('lecture', 'material')),
-      item_id INTEGER NOT NULL,
-      r2_key TEXT NOT NULL,
-      used BOOLEAN NOT NULL DEFAULT FALSE,
-      created_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000,
-      expires_at BIGINT NOT NULL
-    )`).catch(() => {});
-    await db.query("CREATE INDEX IF NOT EXISTS idx_download_tokens_token ON download_tokens(token)").catch(() => {});
-    await db.query("CREATE INDEX IF NOT EXISTS idx_download_tokens_expires ON download_tokens(expires_at)").catch(() => {});
-
-    // Add valid_until column to enrollments for course access expiry
-    await db.query("ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS valid_until BIGINT").catch(() => {});
-
-    // Lecture progress tracking table
-    await db.query(`CREATE TABLE IF NOT EXISTS lecture_progress (
-      id SERIAL PRIMARY KEY,
-      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-      lecture_id INTEGER REFERENCES lectures(id) ON DELETE CASCADE,
-      watch_percent INTEGER DEFAULT 0,
-      is_completed BOOLEAN DEFAULT FALSE,
-      completed_at BIGINT,
-      UNIQUE(user_id, lecture_id)
-    )`).catch(() => {});
-    // Ensure unique constraint exists (for ON CONFLICT to work)
-    await db.query("CREATE UNIQUE INDEX IF NOT EXISTS lecture_progress_user_lecture ON lecture_progress(user_id, lecture_id)").catch(() => {});
-
-    // Site settings table (for welcome page config etc.)
-    await db.query(`CREATE TABLE IF NOT EXISTS site_settings (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL,
-      updated_at BIGINT
-    )`);
-
-    // Support chat table
-    await db.query(`CREATE TABLE IF NOT EXISTS support_messages (
-      id SERIAL PRIMARY KEY,
-      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-      sender TEXT NOT NULL CHECK (sender IN ('user', 'admin')),
-      message TEXT NOT NULL,
-      is_read BOOLEAN DEFAULT FALSE,
-      created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
-    )`);
-    await db.query("CREATE INDEX IF NOT EXISTS idx_support_messages_user_id ON support_messages(user_id)");
-    // Permanently remove ALL old support chat notifications from the notifications table
-    await db.query(`
-      DELETE FROM notifications 
-      WHERE title ILIKE 'New message from%' 
-         OR title ILIKE 'New reply from Support%'
-         OR title ILIKE '%support%'
-         OR source = 'support'
-    `).catch(() => {});
-    // Add source column to notifications to tag support messages going forward
-    await db.query("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'system'").catch(() => {});
-    await db.query("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS expires_at BIGINT").catch(() => {});
-    await db.query("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN DEFAULT FALSE").catch(() => {});
-    await db.query("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS admin_notif_id INTEGER").catch(() => {});
-    await db.query("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS image_url TEXT").catch(() => {});
-    // Admin notifications log (tracks what was broadcast)
-    await db.query(`CREATE TABLE IF NOT EXISTS admin_notifications (
-      id SERIAL PRIMARY KEY,
-      title TEXT NOT NULL,
-      message TEXT NOT NULL,
-      target TEXT NOT NULL DEFAULT 'all',
-      course_id INTEGER,
-      sent_count INTEGER DEFAULT 0,
-      is_hidden BOOLEAN DEFAULT FALSE,
-      image_url TEXT,
-      created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
-    )`);
-    await db.query("ALTER TABLE admin_notifications ADD COLUMN IF NOT EXISTS image_url TEXT").catch(() => {});
-    // Backfill from existing notifications only if table is empty
-    const anCount = await db.query("SELECT COUNT(*) as cnt FROM admin_notifications");
-    if (parseInt(anCount.rows[0]?.cnt || "0") === 0) {
-      await db.query(`
-        INSERT INTO admin_notifications (title, message, target, sent_count, created_at)
-        SELECT title, message, 'all', COUNT(*), MIN(created_at)
-        FROM notifications
-        WHERE title NOT ILIKE 'New message from%'
-          AND title NOT ILIKE 'New reply from Support%'
-          AND title IS NOT NULL AND message IS NOT NULL
-        GROUP BY title, message
-      `).catch((e) => console.error("[DB] Backfill admin_notifications failed:", e));
-    }
-    console.log("[DB] admin_notifications ready");
-    // Backfill admin_notif_id for old notifications that don't have it
-    await db.query(`
-      UPDATE notifications n SET admin_notif_id = an.id
-      FROM admin_notifications an
-      WHERE n.admin_notif_id IS NULL AND n.title = an.title AND n.message = an.message
-    `).catch((e) => console.error("[DB] Backfill admin_notif_id failed:", e));
-    console.log("[DB] admin_notif_id backfill done");
-    // Backfill image_url on student notifications from admin_notifications
-    await db.query(`
-      UPDATE notifications n SET image_url = an.image_url
-      FROM admin_notifications an
-      WHERE n.admin_notif_id = an.id AND n.image_url IS NULL AND an.image_url IS NOT NULL
-    `).catch(() => {});
-    // Clean up orphaned student notifications that have no matching admin_notifications
-    await db.query(`
-      DELETE FROM notifications 
-      WHERE admin_notif_id IS NOT NULL 
-      AND admin_notif_id NOT IN (SELECT id FROM admin_notifications)
-    `).catch(() => {});
-    // Also clean up old notifications (without admin_notif_id) whose title doesn't exist in admin_notifications
-    // These are notifications from deleted admin notifications before the linking system
-    await db.query(`
-      DELETE FROM notifications 
-      WHERE admin_notif_id IS NULL 
-      AND source IS DISTINCT FROM 'support'
-      AND title NOT ILIKE 'New message from%'
-      AND title NOT ILIKE 'New reply from%'
-      AND title NOT ILIKE '%Live Class%'
-      AND title NOT IN (SELECT title FROM admin_notifications)
-    `).catch(() => {});
-    console.log("[DB] Orphaned notifications cleaned up");
-    } catch (err) {
-    console.error("[DB] Failed to add columns:", err);
-  }
-
-    // Backfill test counts for all courses (fixes existing data)
-    try {
-    await db.query(`
-      UPDATE courses c SET
-        total_tests    = sub.total,
-        pyq_count      = sub.pyq,
-        mock_count     = sub.mock,
-        practice_count = sub.practice
-      FROM (
-        SELECT course_id,
-          COUNT(*) AS total,
-          COUNT(*) FILTER (WHERE test_type = 'pyq') AS pyq,
-          COUNT(*) FILTER (WHERE test_type = 'mock') AS mock,
-          COUNT(*) FILTER (WHERE test_type = 'practice') AS practice
-        FROM tests
-        GROUP BY course_id
-      ) sub
-      WHERE c.id = sub.course_id
-    `);
-    // Zero out courses with no tests
-    await db.query(`
-      UPDATE courses SET total_tests=0, pyq_count=0, mock_count=0, practice_count=0
-      WHERE id NOT IN (SELECT DISTINCT course_id FROM tests WHERE course_id IS NOT NULL)
-    `);
-    console.log("[DB] Course test counts backfilled");
-    } catch (err) {
-    console.error("[DB] Failed to backfill test counts:", err);
-  }
-
-    // Backfill progress_percent for all enrollments based on lectures + tests completed
-    try {
-    await db.query(`
-      UPDATE enrollments e SET progress_percent = sub.pct
-      FROM (
-        SELECT 
-          e2.user_id,
-          e2.course_id,
-          ROUND(
-            (COALESCE(lp_done.cnt, 0) + COALESCE(ta_done.cnt, 0))::numeric /
-            NULLIF(COALESCE(lec_total.cnt, 0) + COALESCE(test_total.cnt, 0), 0) * 100
-          ) AS pct
-        FROM enrollments e2
-        LEFT JOIN (
-          SELECT l.course_id, lp.user_id, COUNT(*) AS cnt
-          FROM lecture_progress lp JOIN lectures l ON lp.lecture_id = l.id
-          WHERE lp.is_completed = TRUE
-          GROUP BY l.course_id, lp.user_id
-        ) lp_done ON lp_done.course_id = e2.course_id AND lp_done.user_id = e2.user_id
-        LEFT JOIN (
-          SELECT t.course_id, ta.user_id, COUNT(DISTINCT ta.test_id) AS cnt
-          FROM test_attempts ta JOIN tests t ON ta.test_id = t.id
-          WHERE ta.status = 'completed' AND t.course_id IS NOT NULL
-          GROUP BY t.course_id, ta.user_id
-        ) ta_done ON ta_done.course_id = e2.course_id AND ta_done.user_id = e2.user_id
-        LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM lectures GROUP BY course_id) lec_total ON lec_total.course_id = e2.course_id
-        LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM tests WHERE is_published = TRUE GROUP BY course_id) test_total ON test_total.course_id = e2.course_id
-        WHERE (COALESCE(lp_done.cnt, 0) + COALESCE(ta_done.cnt, 0)) > 0
-      ) sub
-      WHERE e.user_id = sub.user_id AND e.course_id = sub.course_id
-    `);
-    console.log("[DB] Enrollment progress backfilled (lectures + tests)");
-    } catch (err) {
-    console.error("[DB] Failed to backfill enrollment progress:", err);
-  }
-
-  } else {
-    console.log("[DB] Runtime schema sync skipped (ALLOW_RUNTIME_SCHEMA_SYNC != true)");
   }
 
   // ==================== LIVE CLASS NOTIFICATION + TOKEN CLEANUP SCHEDULERS ====================
@@ -1215,6 +462,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
     console.log("[Schedulers] Background schedulers disabled (RUN_BACKGROUND_SCHEDULERS=false)");
   }
 
+  // Readiness endpoint: used by orchestrators/load balancers to verify this instance can serve traffic.
+  app.get("/api/health/ready", async (_req: Request, res: Response) => {
+    try {
+      const readiness = await checkDatabaseReadiness(db);
+      if (!readiness.ok) {
+        return res.status(503).json({
+          ok: false,
+          message: "Database schema is not fully migrated",
+          checks: readiness.checks,
+          missingTables: readiness.missingTables,
+          missingColumns: readiness.missingColumns,
+        });
+      }
+      return res.json({
+        ok: true,
+        checks: readiness.checks,
+      });
+    } catch (err: any) {
+      return res.status(503).json({ ok: false, message: err?.message || "DB not ready" });
+    }
+  });
+
   // ==================== AUTH ROUTES ====================
 
   // Update last_active_at for any authenticated API request
@@ -1247,8 +516,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     generateSecureToken: () => generateSecureToken(),
     sendOTPviaSMS,
     verifyFirebaseToken,
-    adminEmails: ADMIN_EMAILS,
-    adminPhones: ADMIN_PHONES,
   });
 
   registerPaymentRoutes({

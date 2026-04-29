@@ -99,39 +99,190 @@ var init_security_utils = __esm({
 });
 
 // server/auth-utils.ts
+function rowsToAuthUser(u) {
+  return {
+    id: u.id,
+    name: u.name,
+    email: u.email,
+    phone: u.phone,
+    role: u.role,
+    sessionToken: u.session_token,
+    profileComplete: !!u.profile_complete || false
+  };
+}
 async function getAuthUserFromRequest(req, db2) {
-  const sessionUser = req.session.user;
-  if (sessionUser?.id) return sessionUser;
   const authHeader = req.headers.authorization;
-  if (!authHeader?.startsWith("Bearer ")) return null;
-  const token = authHeader.slice(7).trim();
-  if (!token || token === "null" || token === "undefined") return null;
+  const bearerRaw = authHeader?.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+  const bearerToken = bearerRaw && bearerRaw !== "null" && bearerRaw !== "undefined" ? bearerRaw : "";
+  if (bearerToken) {
+    const token = bearerToken;
+    try {
+      const result = await db2.query(
+        "SELECT id, name, email, phone, role, session_token, profile_complete, is_blocked FROM users WHERE session_token = $1",
+        [token]
+      );
+      if (result.rows.length === 0) {
+        req.session.user = null;
+        return null;
+      }
+      const u = result.rows[0];
+      if (u.is_blocked) {
+        req.session.user = null;
+        return null;
+      }
+      const authUser = rowsToAuthUser(u);
+      req.session.user = authUser;
+      return authUser;
+    } catch (e) {
+      console.error("[Auth] Bearer token lookup error:", e);
+      return null;
+    }
+  }
+  const sessionUser = req.session.user;
+  if (!sessionUser?.id) return null;
   try {
     const result = await db2.query(
-      "SELECT id, name, email, phone, role, session_token, profile_complete, is_blocked FROM users WHERE session_token = $1",
-      [token]
+      "SELECT id, name, email, phone, role, session_token, profile_complete, is_blocked FROM users WHERE id = $1",
+      [sessionUser.id]
     );
-    if (result.rows.length === 0) return null;
-    const u = result.rows[0];
-    if (u.is_blocked) return null;
-    const authUser = {
-      id: u.id,
-      name: u.name,
-      email: u.email,
-      phone: u.phone,
-      role: u.role,
-      sessionToken: u.session_token,
-      profileComplete: u.profile_complete || false
-    };
+    if (result.rows.length === 0) {
+      req.session.user = null;
+      return null;
+    }
+    const row = result.rows[0];
+    if (row.is_blocked) {
+      req.session.user = null;
+      return null;
+    }
+    if (sessionUser.sessionToken && row.session_token !== sessionUser.sessionToken) {
+      req.session.user = null;
+      return null;
+    }
+    if (row.session_token && !sessionUser.sessionToken) {
+      req.session.user = null;
+      return null;
+    }
+    const authUser = rowsToAuthUser(row);
     req.session.user = authUser;
     return authUser;
   } catch (e) {
-    console.error("[Auth] Bearer token lookup error:", e);
+    console.error("[Auth] Session user lookup error:", e);
     return null;
   }
 }
 var init_auth_utils = __esm({
   "server/auth-utils.ts"() {
+    "use strict";
+  }
+});
+
+// server/native-device-binding.ts
+function getInstallationIdFromRequest(req) {
+  const raw = (req.get("x-app-device-id") || "").trim();
+  if (!raw || raw === "null" || raw === "undefined") return null;
+  return raw;
+}
+function getClientPlatform(req) {
+  const p = (req.get("x-client-platform") || "").trim().toLowerCase();
+  if (p === "ios" || p === "android" || p === "web") return p;
+  return null;
+}
+async function assertNativePaidPurchaseInstallation(db2, userId, req) {
+  const inst = getInstallationIdFromRequest(req);
+  if (!inst) return { ok: true };
+  const r = await db2.query("SELECT app_bound_device_id FROM users WHERE id = $1", [userId]);
+  const cur = String(r.rows[0]?.app_bound_device_id ?? "").trim();
+  if (cur && cur !== inst) {
+    return {
+      ok: false,
+      message: "Purchases must be completed on the same device/browser installation registered for this account."
+    };
+  }
+  return { ok: true };
+}
+async function finalizeInstallationBindAfterPurchase(db2, userId, req) {
+  const inst = getInstallationIdFromRequest(req);
+  if (!inst) return;
+  await db2.query("UPDATE users SET app_bound_device_id = $1 WHERE id = $2 AND app_bound_device_id IS NULL", [
+    inst,
+    userId
+  ]);
+}
+async function enforceInstallationBinding(db2, req, userId, role) {
+  if (role === "admin") return true;
+  const r = await db2.query(
+    "SELECT COALESCE(app_bound_device_id, '') AS bid FROM users WHERE id = $1",
+    [userId]
+  );
+  const bound = String(r.rows[0]?.bid || "").trim();
+  if (!bound) return true;
+  const cand = getInstallationIdFromRequest(req);
+  if (!cand || cand !== bound) return false;
+  return true;
+}
+async function insertBlockEvent(db2, row) {
+  await db2.query(
+    `INSERT INTO device_block_events (user_id, attempted_device_id, bound_device_id, phone, email, platform, reason, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [
+      row.userId,
+      row.attempted,
+      row.bound,
+      row.phone ?? null,
+      row.email ?? null,
+      row.platform ?? null,
+      row.reason,
+      Date.now()
+    ]
+  );
+}
+async function logWrongInstallationAttempt(db2, req, userId, boundId, attemptedId, meta) {
+  await insertBlockEvent(db2, {
+    userId,
+    attempted: attemptedId,
+    bound: boundId,
+    phone: meta.phone ?? null,
+    email: meta.email ?? null,
+    platform: getClientPlatform(req) ?? void 0,
+    reason: "wrong_device_login_denied"
+  });
+}
+async function assertLoginAllowedForInstallation(db2, req, opts) {
+  if (opts.role === "admin") return { ok: true };
+  const ur = await db2.query(
+    "SELECT app_bound_device_id, COALESCE(is_blocked,FALSE) AS blocked FROM users WHERE id = $1",
+    [opts.userId]
+  );
+  if (ur.rows.length === 0) return { ok: true };
+  const row = ur.rows[0];
+  if (row.blocked) return { ok: false, httpStatus: 403, message: "Your account has been blocked. Please contact support." };
+  const bound = row.app_bound_device_id ? String(row.app_bound_device_id).trim() : "";
+  if (!bound) return { ok: true };
+  const attemptHeader = getInstallationIdFromRequest(req);
+  const bodyId = opts.bodyDeviceId && String(opts.bodyDeviceId).trim() || "";
+  const attempted = attemptHeader || bodyId || null;
+  if (!attempted) {
+    return {
+      ok: false,
+      httpStatus: 403,
+      message: "This account is linked to a registered device. Update the app or sign in from the same device you used to purchase."
+    };
+  }
+  if (attempted !== bound) {
+    await logWrongInstallationAttempt(db2, req, opts.userId, bound, attempted, {
+      phone: opts.phone ?? null,
+      email: opts.email ?? null
+    });
+    return {
+      ok: false,
+      httpStatus: 403,
+      message: "Access denied: this account is linked to another device/browser installation. Use the original installation or ask admin to clear the device lock."
+    };
+  }
+  return { ok: true };
+}
+var init_native_device_binding = __esm({
+  "server/native-device-binding.ts"() {
     "use strict";
   }
 });
@@ -205,12 +356,9 @@ function registerAuthRoutes({
   verifyOtpValue: verifyOtpValue2,
   generateSecureToken: generateSecureToken2,
   sendOTPviaSMS: sendOTPviaSMS2,
-  verifyFirebaseToken: verifyFirebaseToken2,
-  adminEmails,
-  adminPhones
+  verifyFirebaseToken: verifyFirebaseToken2
 }) {
   app2.post("/api/auth/send-otp", async (req, res) => {
-    console.log("OTP request received:", req.body);
     try {
       const { identifier, type } = req.body;
       if (!identifier || !type) {
@@ -221,7 +369,7 @@ function registerAuthRoutes({
         if (existing2.rows.length === 0) {
           await db2.query(
             "INSERT INTO users (name, phone, role) VALUES ($1, $2, $3)",
-            [`Student${identifier.slice(-4)}`, identifier, adminPhones.includes(identifier) ? "admin" : "student"]
+            [`Student${identifier.slice(-4)}`, identifier, "student"]
           );
         }
         const otp2 = generateOTP2();
@@ -232,10 +380,10 @@ function registerAuthRoutes({
         try {
           smsSent = await sendOTPviaSMS2(identifier, otp2);
         } catch (smsErr) {
-          console.error(`[OTP] SMS sending threw error for ${identifier}:`, smsErr);
+          console.error("[OTP] SMS sending threw error:", smsErr);
         }
         if (!smsSent) {
-          console.log(`[OTP] SMS delivery failed for ${identifier}, OTP stored in DB`);
+          console.log("[OTP] SMS delivery failed, OTP stored in DB");
         }
         const isDev = process.env.NODE_ENV !== "production";
         return res.json({
@@ -252,7 +400,7 @@ function registerAuthRoutes({
       if (existing.rows.length === 0) {
         await db2.query(
           "INSERT INTO users (name, email, otp, otp_expires_at, role) VALUES ($1, $2, $3, $4, $5)",
-          [identifier.split("@")[0], identifier, otpHash, expires, adminEmails.includes(identifier) ? "admin" : "student"]
+          [identifier.split("@")[0], identifier, otpHash, expires, "student"]
         );
       } else {
         await db2.query("UPDATE users SET otp = $1, otp_expires_at = $2 WHERE email = $3", [otpHash, expires, identifier]);
@@ -275,6 +423,16 @@ function registerAuthRoutes({
       if (user.is_blocked) return res.status(403).json({ message: "Your account has been blocked. Please contact support." });
       if (!verifyOtpValue2(user.otp, otp)) return res.status(400).json({ message: "Invalid OTP" });
       if (Date.now() > Number(user.otp_expires_at)) return res.status(400).json({ message: "OTP expired" });
+      const loginGate = await assertLoginAllowedForInstallation(db2, req, {
+        userId: user.id,
+        role: user.role,
+        bodyDeviceId: deviceId || null,
+        phone: user.phone,
+        email: user.email
+      });
+      if (!loginGate.ok) {
+        return res.status(loginGate.httpStatus).json({ message: loginGate.message });
+      }
       const sessionToken = generateSecureToken2();
       await db2.query("UPDATE users SET otp = NULL, otp_expires_at = NULL, device_id = $1, session_token = $2, last_active_at = $3 WHERE id = $4", [deviceId || null, sessionToken, Date.now(), user.id]);
       const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: deviceId || null });
@@ -299,11 +457,21 @@ function registerAuthRoutes({
       if (result.rows.length === 0) {
         await db2.query(
           "INSERT INTO users (name, phone, role) VALUES ($1, $2, $3)",
-          [`Student${phoneNumber.slice(-4)}`, phoneNumber, adminPhones.includes(phoneNumber) ? "admin" : "student"]
+          [`Student${phoneNumber.slice(-4)}`, phoneNumber, "student"]
         );
         result = await db2.query("SELECT * FROM users WHERE phone = $1", [phoneNumber]);
       }
       const user = result.rows[0];
+      const loginGate = await assertLoginAllowedForInstallation(db2, req, {
+        userId: user.id,
+        role: user.role,
+        bodyDeviceId: deviceId || null,
+        phone: user.phone,
+        email: user.email
+      });
+      if (!loginGate.ok) {
+        return res.status(loginGate.httpStatus).json({ message: loginGate.message });
+      }
       const sessionToken = generateSecureToken2();
       await db2.query("UPDATE users SET otp = NULL, otp_expires_at = NULL, device_id = $1, session_token = $2, last_active_at = $3 WHERE id = $4", [deviceId || null, sessionToken, Date.now(), user.id]);
       const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: deviceId || null });
@@ -339,6 +507,11 @@ function registerAuthRoutes({
               date_of_birth: row.date_of_birth,
               photo_url: row.photo_url
             };
+            const bindBearer = await enforceInstallationBinding(db2, req, row.id, row.role);
+            if (!bindBearer) {
+              req.session.user = null;
+              return res.status(401).json({ message: "device_binding_mismatch" });
+            }
             req.session.user = fresh;
             return res.json(fresh);
           }
@@ -364,6 +537,11 @@ function registerAuthRoutes({
       if (sessionUser.sessionToken && row.session_token !== sessionUser.sessionToken) {
         req.session.user = null;
         return res.status(401).json({ message: "logged_in_elsewhere" });
+      }
+      const bindSes = await enforceInstallationBinding(db2, req, sessionUser.id, row.role);
+      if (!bindSes) {
+        req.session.user = null;
+        return res.status(401).json({ message: "device_binding_mismatch" });
       }
       const fresh = {
         ...sessionUser,
@@ -392,13 +570,22 @@ function registerAuthRoutes({
       const phone = phoneNumber.replace(/^\+91/, "");
       let result = await db2.query("SELECT * FROM users WHERE phone = $1", [phone]);
       if (result.rows.length === 0) {
-        const role = adminPhones.includes(phone) ? "admin" : "student";
         result = await db2.query(
           "INSERT INTO users (name, phone, role, created_at) VALUES ($1, $2, $3, $4) RETURNING *",
-          [`Student${phone.slice(-4)}`, phone, role, Date.now()]
+          [`Student${phone.slice(-4)}`, phone, "student", Date.now()]
         );
       }
       const user = result.rows[0];
+      const loginGate = await assertLoginAllowedForInstallation(db2, req, {
+        userId: user.id,
+        role: user.role,
+        bodyDeviceId: deviceId || null,
+        phone: user.phone,
+        email: user.email
+      });
+      if (!loginGate.ok) {
+        return res.status(loginGate.httpStatus).json({ message: loginGate.message });
+      }
       const sessionToken = generateSecureToken2();
       await db2.query("UPDATE users SET device_id = $1, session_token = $2 WHERE id = $3", [deviceId || null, sessionToken, user.id]);
       const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: deviceId || null });
@@ -418,7 +605,7 @@ function registerAuthRoutes({
   });
   app2.post("/api/auth/email-login", async (req, res) => {
     try {
-      const { email, password } = req.body;
+      const { email, password, deviceId } = req.body || {};
       if (!email || !password) return res.status(400).json({ message: "Phone/email and password are required" });
       const identifier = email.trim().toLowerCase();
       const isPhone = /^\d{10}$/.test(identifier);
@@ -434,10 +621,6 @@ function registerAuthRoutes({
       if (!user.profile_complete) {
         return res.status(401).json({ message: "Profile not complete. Please sign in with Phone OTP to complete your profile first." });
       }
-      if ((adminEmails.includes(identifier) || adminPhones.includes(identifier)) && user.role !== "admin") {
-        await db2.query("UPDATE users SET role = 'admin' WHERE id = $1", [user.id]);
-        user.role = "admin";
-      }
       if (!user.password_hash) return res.status(401).json({ message: "No password set. Please use Phone OTP to sign in, then set a password in Profile." });
       let matched = false;
       if (isScryptHash(user.password_hash)) {
@@ -450,9 +633,23 @@ function registerAuthRoutes({
         }
       }
       if (!matched) return res.status(401).json({ message: "Incorrect password. Try again or use Phone OTP." });
+      const gate = await assertLoginAllowedForInstallation(db2, req, {
+        userId: user.id,
+        role: user.role,
+        bodyDeviceId: typeof deviceId === "string" ? deviceId : null,
+        phone: user.phone,
+        email: user.email
+      });
+      if (!gate.ok) {
+        return res.status(gate.httpStatus).json({ message: gate.message });
+      }
       const sessionToken = generateSecureToken2();
-      await db2.query("UPDATE users SET session_token = $1, last_active_at = $2 WHERE id = $3", [sessionToken, Date.now(), user.id]);
-      const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: null });
+      const dev = typeof deviceId === "string" ? deviceId : null;
+      await db2.query(
+        "UPDATE users SET session_token = $1, last_active_at = $2, device_id = COALESCE($3, device_id) WHERE id = $4",
+        [sessionToken, Date.now(), dev, user.id]
+      );
+      const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: dev });
       req.session.user = sessionUser;
       res.json({ success: true, user: sessionUser });
     } catch (err) {
@@ -516,8 +713,11 @@ function registerAuthRoutes({
       }
       const dbUser = await db2.query("SELECT password_hash FROM users WHERE id = $1", [user.id]);
       if (dbUser.rows.length === 0) return res.status(404).json({ message: "User not found" });
-      if (oldPassword) {
-        const storedHash = dbUser.rows[0].password_hash;
+      const storedHash = dbUser.rows[0].password_hash;
+      if (storedHash && !oldPassword) {
+        return res.status(400).json({ message: "Current password is required" });
+      }
+      if (oldPassword && storedHash) {
         const validOld = isScryptHash(storedHash) ? await verifyPassword(oldPassword, storedHash) : verifyLegacySha256(oldPassword, user.id, storedHash);
         if (!validOld) {
           return res.status(401).json({ message: "Current password is incorrect" });
@@ -535,6 +735,7 @@ var init_auth_routes = __esm({
   "server/auth-routes.ts"() {
     "use strict";
     init_password_utils();
+    init_native_device_binding();
   }
 });
 
@@ -707,7 +908,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/p
           return res.status(400).json({ message: "Source is not a PDF" });
         }
         res.setHeader("Content-Type", "application/pdf");
-        res.setHeader("Cache-Control", "private, max-age=600");
+        res.setHeader("Cache-Control", "private, no-store");
         if (contentLength > 0) {
           res.setHeader("Content-Length", String(contentLength));
         }
@@ -924,13 +1125,7 @@ function registerPaymentRoutes({
         receipt: `course_${courseId}_user_${user.id}_${Date.now()}`,
         notes: { courseId: courseId.toString(), userId: user.id.toString(), courseTitle: course.title }
       });
-      console.log("[Payments] create-order success", {
-        userId: user.id,
-        courseId,
-        orderId: order.id,
-        amount: order.amount,
-        currency: order.currency
-      });
+      console.log("[Payments] create-order success");
       const existingPayment = await db2.query(
         "SELECT id FROM payments WHERE user_id = $1 AND course_id = $2 AND status = 'created' ORDER BY created_at DESC LIMIT 1",
         [user.id, courseId]
@@ -967,6 +1162,10 @@ function registerPaymentRoutes({
       if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
         return res.status(400).json({ message: "Payment details are required" });
       }
+      const preBind = await assertNativePaidPurchaseInstallation(db2, user.id, req);
+      if (!preBind.ok) {
+        return res.status(403).json({ message: preBind.message });
+      }
       const result = await completeCoursePaymentByOrder({
         orderId: razorpay_order_id,
         paymentId: razorpay_payment_id,
@@ -974,12 +1173,8 @@ function registerPaymentRoutes({
         expectedUserId: user.id,
         expectedCourseId: courseId
       });
-      console.log("[Payments] verify success", {
-        userId: result.userId,
-        courseId: result.courseId,
-        orderId: razorpay_order_id,
-        paymentId: razorpay_payment_id
-      });
+      await finalizeInstallationBindAfterPurchase(db2, result.userId, req);
+      console.log("[Payments] verify success");
       res.json({ success: true, message: "Payment verified and enrolled successfully" });
     } catch (err) {
       console.error("Verify payment error:", err);
@@ -1113,10 +1308,15 @@ function registerPaymentRoutes({
         expectedItemId: parsedTestId,
         expectedAmount
       });
+      const preTest = await assertNativePaidPurchaseInstallation(db2, user.id, req);
+      if (!preTest.ok) {
+        return res.status(403).json({ message: preTest.message });
+      }
       await db2.query(
         "INSERT INTO test_purchases (user_id, test_id, razorpay_order_id, razorpay_payment_id, created_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (user_id, test_id) DO NOTHING",
         [user.id, parsedTestId, razorpay_order_id, razorpay_payment_id, Date.now()]
       );
+      await finalizeInstallationBindAfterPurchase(db2, user.id, req);
       res.json({ success: true });
     } catch (err) {
       console.error("Test verify-payment error:", err);
@@ -1138,6 +1338,7 @@ var init_payment_routes = __esm({
   "server/payment-routes.ts"() {
     "use strict";
     init_course_access_utils();
+    init_native_device_binding();
   }
 });
 
@@ -1362,17 +1563,22 @@ function registerLiveClassEngagementRoutes({
       res.status(500).json({ message: "Failed to update heartbeat" });
     }
   });
-  app2.get("/api/live-classes/:id/viewers", async (req, res) => {
+  app2.get("/api/live-classes/:id/viewers", requireAuth, async (req, res) => {
     try {
+      const user = req.user;
+      const lcAccess = await db2.query("SELECT course_id, is_free_preview, show_viewer_count FROM live_classes WHERE id = $1", [req.params.id]);
+      if (lcAccess.rows.length === 0) return res.status(404).json({ message: "Live class not found" });
+      if (!await userCanAccessLiveClassContent(db2, user, lcAccess.rows[0])) {
+        return res.status(403).json({ message: "Access denied" });
+      }
       const cutoff = Date.now() - 3e4;
       const result = await db2.query(
-        `SELECT user_id, user_name FROM live_class_viewers
+        `SELECT user_name FROM live_class_viewers
          WHERE live_class_id = $1 AND last_heartbeat > $2
          ORDER BY user_name ASC`,
         [req.params.id, cutoff]
       );
-      const lcResult = await db2.query("SELECT show_viewer_count FROM live_classes WHERE id = $1", [req.params.id]);
-      const visible = lcResult.rows[0]?.show_viewer_count ?? true;
+      const visible = lcAccess.rows[0]?.show_viewer_count ?? true;
       res.json({ viewers: result.rows, count: result.rows.length, visible });
     } catch (err) {
       console.error("Viewer list error:", err);
@@ -1814,11 +2020,17 @@ function registerLiveStreamRoutes({
       isArchiveSweepRunning = false;
     }
   };
-  const sweepIntervalMs = Math.max(3e4, Number(process.env.CF_ARCHIVE_SWEEP_MS || 12e4));
-  void runArchiveSweep();
-  setInterval(() => {
+  const runArchiveSweepWorker = process.env.RUN_BACKGROUND_SCHEDULERS !== "false";
+  if (runArchiveSweepWorker) {
+    const sweepIntervalMs = Math.max(3e4, Number(process.env.CF_ARCHIVE_SWEEP_MS || 12e4));
     void runArchiveSweep();
-  }, sweepIntervalMs);
+    setInterval(() => {
+      void runArchiveSweep();
+    }, sweepIntervalMs);
+    console.log(`[CF Stream] Archive sweep started \u2014 every ${sweepIntervalMs}ms`);
+  } else {
+    console.log("[CF Stream] Archive sweep disabled (RUN_BACKGROUND_SCHEDULERS=false)");
+  }
 }
 var init_live_stream_routes = __esm({
   "server/live-stream-routes.ts"() {
@@ -1833,19 +2045,8 @@ function registerSiteSettingsRoutes({
   db: db2,
   requireAdmin
 }) {
-  let ensureSiteSettingsTablePromise = null;
-  const ensureSiteSettingsTable = async () => {
-    if (!ensureSiteSettingsTablePromise) {
-      ensureSiteSettingsTablePromise = db2.query("CREATE TABLE IF NOT EXISTS site_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at BIGINT)").then(() => void 0).catch((err) => {
-        ensureSiteSettingsTablePromise = null;
-        throw err;
-      });
-    }
-    await ensureSiteSettingsTablePromise;
-  };
   app2.get("/api/site-settings", async (_req, res) => {
     try {
-      await ensureSiteSettingsTable();
       const result = await db2.query("SELECT key, value FROM site_settings");
       const settings = {};
       for (const row of result.rows) settings[row.key] = row.value;
@@ -1859,7 +2060,6 @@ function registerSiteSettingsRoutes({
     try {
       const { settings } = req.body;
       if (!settings || typeof settings !== "object") return res.status(400).json({ message: "Settings object required" });
-      await ensureSiteSettingsTable();
       for (const [key, value] of Object.entries(settings)) {
         await db2.query(
           "INSERT INTO site_settings (key, value, updated_at) VALUES ($1, $2, $3) ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = $3",
@@ -2830,14 +3030,14 @@ function registerAdminQuestionBulkRoutes({
       const testId = req.body.testId;
       const defaultMarks = parseInt(req.body.defaultMarks) || 4;
       const defaultNegativeMarks = parseFloat(req.body.defaultNegativeMarks) || 1;
-      console.log("[bulk-pdf] testId:", testId, "file:", req.file?.originalname, "size:", req.file?.size);
+      console.log("[bulk-pdf] upload received", { testId, fileName: req.file?.originalname, size: req.file?.size });
       if (!testId || !req.file) {
         return res.status(400).json({ message: !testId ? "testId is required" : "PDF file is required \u2014 make sure you selected a .pdf file" });
       }
       const parser = new PDFParse2({ data: req.file.buffer });
       const result = await parser.getText();
       const text = result.text;
-      console.log("[bulk-pdf] extracted text length:", text.length, "preview:", text.substring(0, 200));
+      console.log("[bulk-pdf] extracted text length:", text.length);
       const parsed = parseQuestionsFromText(text);
       console.log("[bulk-pdf] parsed questions:", parsed.length);
       if (parsed.length === 0) {
@@ -2968,6 +3168,33 @@ function registerAdminUsersAndContentRoutes({
     } catch (err) {
       console.error("[LiveClass] create failed", err);
       res.status(500).json({ message: "Failed to add live class" });
+    }
+  });
+  app2.get("/api/admin/device-block-events", requireAdmin, async (_req, res) => {
+    try {
+      const result = await db2.query(
+        `SELECT e.id, e.user_id, e.attempted_device_id, e.bound_device_id, e.phone, e.email, e.platform, e.reason, e.created_at,
+                u.name AS user_name
+         FROM device_block_events e
+         LEFT JOIN users u ON u.id = e.user_id
+         ORDER BY e.created_at DESC NULLS LAST
+         LIMIT 300`
+      );
+      res.json(result.rows);
+    } catch (err) {
+      console.error("[Admin] device-block-events:", err);
+      res.status(500).json({ message: "Failed to load device block events" });
+    }
+  });
+  app2.post("/api/admin/users/:id/reset-device-binding", requireAdmin, async (req, res) => {
+    try {
+      const uid = parseInt(String(req.params.id), 10);
+      if (!Number.isFinite(uid)) return res.status(400).json({ message: "Invalid user id" });
+      await db2.query("UPDATE users SET app_bound_device_id = NULL WHERE id = $1", [uid]);
+      res.json({ success: true });
+    } catch (err) {
+      console.error("[Admin] reset-device-binding:", err);
+      res.status(500).json({ message: "Failed to reset device binding" });
     }
   });
   app2.get("/api/admin/users", requireAdmin, async (_req, res) => {
@@ -3470,7 +3697,7 @@ function registerBookRoutes({
       `,
         [user.id, bookId, Date.now()]
       );
-      console.log(`[BookClick] user=${user.id} book=${bookId} count=${result.rows[0]?.click_count}`);
+      console.log("[BookClick] tracked");
       res.json({ ok: true });
     } catch (err) {
       console.error("[BookBuyNow] track-click error:", err);
@@ -3483,7 +3710,7 @@ function registerBookRoutes({
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const { bookId } = req.body;
       if (!bookId) return res.status(400).json({ message: "Book ID required" });
-      console.log(`[BookOrder] user=${user.id} bookId=${bookId}`);
+      console.log("[BookOrder] creating order");
       const bookResult = await db2.query("SELECT * FROM books WHERE id = $1", [bookId]);
       if (bookResult.rows.length === 0) return res.status(404).json({ message: "Book not found" });
       const book = bookResult.rows[0];
@@ -3503,7 +3730,7 @@ function registerBookRoutes({
           kind: "book"
         }
       });
-      console.log(`[BookOrder] created orderId=${order.id} amount=${amount}`);
+      console.log("[BookOrder] created");
       res.json({ orderId: order.id, amount: order.amount, currency: order.currency, keyId: process.env.RAZORPAY_KEY_ID, bookTitle: book.title, bookId });
     } catch (err) {
       console.error("Book create-order error:", err);
@@ -3550,7 +3777,12 @@ function registerBookRoutes({
       const isValid = verifyPaymentSignature2(razorpayOrderId, razorpayPaymentId, razorpaySignature);
       if (!isValid) return res.status(400).json({ message: "Invalid payment signature" });
       await verifyBookOrder(razorpayOrderId, user.id, parsedBookId);
+      const preBk = await assertNativePaidPurchaseInstallation(db2, user.id, req);
+      if (!preBk.ok) {
+        return res.status(403).json({ message: preBk.message });
+      }
       await db2.query("INSERT INTO book_purchases (user_id, book_id, purchased_at) VALUES ($1, $2, $3) ON CONFLICT (user_id, book_id) DO NOTHING", [user.id, parsedBookId, Date.now()]);
+      await finalizeInstallationBindAfterPurchase(db2, user.id, req);
       await db2.query("DELETE FROM book_click_tracking WHERE user_id = $1 AND book_id = $2", [user.id, parsedBookId]).catch(() => {
       });
       res.json({ success: true });
@@ -3563,6 +3795,7 @@ function registerBookRoutes({
 var init_book_routes = __esm({
   "server/book-routes.ts"() {
     "use strict";
+    init_native_device_binding();
   }
 });
 
@@ -4393,7 +4626,8 @@ function registerTestCoreRoutes({
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const { answers, timeTakenSeconds, questionTimes } = req.body;
       const timeTaken = parseInt(String(timeTakenSeconds || "0")) || 0;
-      console.log(`[Attempt] test=${req.params.id} user=${user.id} answers=${JSON.stringify(answers)?.slice(0, 100)} timeTaken=${timeTaken}`);
+      const answerCount = answers && typeof answers === "object" ? Object.keys(answers).length : 0;
+      console.log(`[Attempt] submit started test=${req.params.id} user=${user.id} answers=${answerCount} timeTaken=${timeTaken}`);
       const testResult = await db2.query(
         `SELECT t.*, c.is_free AS course_is_free, sf.is_free AS folder_is_free
          FROM tests t
@@ -5312,6 +5546,7 @@ function registerCourseAccessRoutes({
       await db2.query("INSERT INTO media_tokens (token, user_id, file_key, expires_at) VALUES ($1, $2, $3, $4)", [token, user.id, normalizeStorageKey(fileKey), expiresAt]);
       db2.query("DELETE FROM media_tokens WHERE expires_at < $1", [Date.now()]).catch(() => {
       });
+      res.set("Cache-Control", "private, no-store");
       res.json({ token, expiresAt });
     } catch {
       res.status(500).json({ message: "Failed to generate token" });
@@ -5320,7 +5555,6 @@ function registerCourseAccessRoutes({
   app2.get("/api/courses", async (req, res) => {
     try {
       const user = await getAuthUser2(req);
-      console.log(`[Courses] auth user=${user?.id || "none"}`);
       const { category, search } = req.query;
       let query = user?.role === "admin" ? "SELECT c.*, (SELECT COUNT(*) FROM study_materials sm WHERE sm.course_id = c.id) AS total_materials FROM courses c WHERE 1=1" : "SELECT c.*, (SELECT COUNT(*) FROM study_materials sm WHERE sm.course_id = c.id) AS total_materials FROM courses c WHERE c.is_published = TRUE";
       const params = [];
@@ -5346,7 +5580,6 @@ function registerCourseAccessRoutes({
           isEnrolled: enrollMap.has(Number(c.id)),
           progress: enrollMap.get(Number(c.id)) ?? 0
         }));
-        console.log(`[Courses] user ${user.id} progress map:`, JSON.stringify(Object.fromEntries(enrollMap)));
       }
       res.set("Cache-Control", "private, no-store");
       if (user) {
@@ -5650,6 +5883,8 @@ function registerCourseAccessRoutes({
       const watermarkToken = `${watermarkData}:${hmac}`;
       res.setHeader("Content-Type", r2Response.ContentType || "application/octet-stream");
       res.setHeader("Content-Disposition", "attachment");
+      res.setHeader("Cache-Control", "private, no-store");
+      res.setHeader("Pragma", "no-cache");
       res.setHeader("X-Watermark-Token", watermarkToken);
       if (r2Response.ContentLength) {
         res.setHeader("Content-Length", r2Response.ContentLength);
@@ -5856,6 +6091,11 @@ function registerUploadRoutes({
   });
   app2.post("/api/upload/to-r2", requireAdmin, uploadLarge2.single("file"), async (req, res) => {
     try {
+      if (process.env.ALLOW_SERVER_BUFFER_UPLOAD !== "true") {
+        return res.status(403).json({
+          message: "Direct buffered upload is disabled. Use /api/upload/presign and upload from client instead."
+        });
+      }
       if (!req.file) return res.status(400).json({ message: "No file uploaded" });
       const file = req.file;
       const folder = req.body.folder || "uploads";
@@ -6014,7 +6254,7 @@ async function streamMediaGet(req, res, db2, getAuthUser2, getR2Client, key) {
     res.setHeader("Accept-Ranges", "bytes");
     res.setHeader("Content-Length", String(chunkSize));
     if (head.ContentType) res.setHeader("Content-Type", head.ContentType);
-    res.setHeader("Cache-Control", "public, max-age=86400");
+    res.setHeader("Cache-Control", "private, no-store");
     res.setHeader("Content-Disposition", "inline");
     const stream = obj.Body;
     if (typeof stream.pipe === "function") stream.pipe(res);
@@ -6032,7 +6272,7 @@ async function streamMediaGet(req, res, db2, getAuthUser2, getR2Client, key) {
     if (obj.ContentType) res.setHeader("Content-Type", obj.ContentType);
     if (obj.ContentLength) res.setHeader("Content-Length", String(obj.ContentLength));
     res.setHeader("Accept-Ranges", "bytes");
-    res.setHeader("Cache-Control", "public, max-age=86400");
+    res.setHeader("Cache-Control", "private, no-store");
     res.setHeader("Content-Disposition", "inline");
     const stream = obj.Body;
     if (typeof stream.pipe === "function") stream.pipe(res);
@@ -6296,6 +6536,117 @@ var init_ai_tutor_service = __esm({
   }
 });
 
+// server/schema-readiness-contract.ts
+var REQUIRED_TABLES, REQUIRED_COLUMNS;
+var init_schema_readiness_contract = __esm({
+  "server/schema-readiness-contract.ts"() {
+    "use strict";
+    REQUIRED_TABLES = [
+      "users",
+      "courses",
+      "lectures",
+      "enrollments",
+      "tests",
+      "questions",
+      "test_attempts",
+      "study_materials",
+      "notifications",
+      "live_classes",
+      "download_tokens",
+      "user_downloads",
+      "media_tokens",
+      "device_block_events",
+      "live_class_viewers",
+      "live_class_hand_raises",
+      "support_messages",
+      "admin_notifications",
+      "books",
+      "book_purchases",
+      "book_click_tracking",
+      "course_folders",
+      "standalone_folders",
+      "folder_purchases",
+      "test_purchases",
+      "site_settings",
+      "question_reports"
+    ];
+    REQUIRED_COLUMNS = {
+      users: ["session_token", "app_bound_device_id", "profile_complete", "is_blocked", "last_active_at"],
+      enrollments: ["status", "valid_until"],
+      live_classes: [
+        "recording_url",
+        "stream_type",
+        "show_viewer_count",
+        "notify_email",
+        "notify_bell",
+        "chat_mode",
+        "cf_stream_uid",
+        "cf_playback_hls",
+        "lecture_section_title",
+        "lecture_subfolder_title"
+      ],
+      notifications: ["source", "expires_at", "is_hidden", "admin_notif_id", "image_url"],
+      courses: ["subject", "cover_color", "pyq_count", "mock_count", "practice_count"],
+      lectures: ["download_allowed", "section_title"],
+      study_materials: ["download_allowed", "section_title"],
+      tests: ["difficulty", "scheduled_at", "price", "mini_course_id"],
+      questions: ["image_url", "solution_image_url"],
+      standalone_folders: ["category", "price", "original_price", "is_free", "description", "validity_months"]
+    };
+  }
+});
+
+// server/db-readiness.ts
+async function checkDatabaseReadiness(db2) {
+  await db2.query("SELECT 1");
+  const tableRows = await db2.query(
+    `SELECT table_name
+     FROM information_schema.tables
+     WHERE table_schema = 'public'`
+  );
+  const presentTables = new Set(tableRows.rows.map((row) => String(row.table_name)));
+  const missingTables = REQUIRED_TABLES.filter((table) => !presentTables.has(table));
+  const columnRows = await db2.query(
+    `SELECT table_name, column_name
+     FROM information_schema.columns
+     WHERE table_schema = 'public'
+       AND table_name = ANY($1::text[])`,
+    [Object.keys(REQUIRED_COLUMNS)]
+  );
+  const presentColumns = /* @__PURE__ */ new Map();
+  for (const row of columnRows.rows) {
+    const tableName = String(row.table_name);
+    const columnName = String(row.column_name);
+    if (!presentColumns.has(tableName)) presentColumns.set(tableName, /* @__PURE__ */ new Set());
+    presentColumns.get(tableName).add(columnName);
+  }
+  const missingColumns = [];
+  for (const [table, columns] of Object.entries(REQUIRED_COLUMNS)) {
+    const set = presentColumns.get(table) ?? /* @__PURE__ */ new Set();
+    for (const column of columns) {
+      if (!set.has(column)) {
+        missingColumns.push(`${table}.${column}`);
+      }
+    }
+  }
+  return {
+    ok: missingTables.length === 0 && missingColumns.length === 0,
+    checks: {
+      db: true,
+      tables: missingTables.length === 0,
+      columns: missingColumns.length === 0
+    },
+    missingTables,
+    missingColumns
+  };
+}
+var init_db_readiness = __esm({
+  "server/db-readiness.ts"() {
+    "use strict";
+    init_schema_readiness_contract();
+  }
+});
+
 // server/routes.ts
 var routes_exports = {};
 __export(routes_exports, {
@@ -6357,16 +6708,23 @@ function generateOTP() {
   return Math.floor(1e5 + Math.random() * 9e5).toString();
 }
 async function getAuthUser(req) {
-  return getAuthUserFromRequest(req, db);
+  const user = await getAuthUserFromRequest(req, db);
+  if (!user) return null;
+  const boundOk = await enforceInstallationBinding(db, req, user.id, user.role);
+  if (!boundOk) {
+    req.session.user = null;
+    return null;
+  }
+  return user;
 }
 async function sendOTPviaSMS(phone, otp) {
   const apiKey = process.env.FAST2SMS_API_KEY;
   if (!apiKey) {
-    console.log(`[SMS] No FAST2SMS_API_KEY set for ${phone}`);
+    console.log("[SMS] No FAST2SMS_API_KEY set");
     return false;
   }
   try {
-    console.log(`[SMS] Sending OTP via Quick SMS route to ${phone}`);
+    console.log("[SMS] Sending OTP via Quick SMS route");
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15e3);
     const res = await fetch("https://www.fast2sms.com/dev/bulkV2", {
@@ -6385,36 +6743,36 @@ async function sendOTPviaSMS(phone, otp) {
     });
     clearTimeout(timeout);
     const data = await res.json();
-    console.log(`[SMS] Quick SMS response:`, JSON.stringify(data));
+    console.log("[SMS] Quick SMS response received");
     if (data.return === true) {
-      console.log(`[SMS] OTP sent successfully to ${phone}`);
+      console.log("[SMS] OTP sent successfully");
       return true;
     }
-    console.error(`[SMS] Quick SMS failed:`, data.message || JSON.stringify(data));
+    console.error("[SMS] Quick SMS failed:", data.message || "provider_error");
   } catch (err) {
     if (err.name === "AbortError") {
-      console.error(`[SMS] Quick SMS timeout for ${phone}`);
+      console.error("[SMS] Quick SMS timeout");
     } else {
       console.error(`[SMS] Quick SMS error:`, err);
     }
   }
   try {
-    console.log(`[SMS] Trying OTP route as fallback for ${phone}`);
+    console.log("[SMS] Trying OTP route as fallback");
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15e3);
     const url = `https://www.fast2sms.com/dev/bulkV2?authorization=${encodeURIComponent(apiKey)}&route=otp&variables_values=${encodeURIComponent(otp)}&flash=0&numbers=${encodeURIComponent(phone)}`;
     const res = await fetch(url, { method: "GET", signal: controller.signal });
     clearTimeout(timeout);
     const data = await res.json();
-    console.log(`[SMS] OTP route response:`, JSON.stringify(data));
+    console.log("[SMS] OTP route response received");
     if (data.return === true) {
-      console.log(`[SMS] OTP route sent successfully to ${phone}`);
+      console.log("[SMS] OTP route sent successfully");
       return true;
     }
-    console.error(`[SMS] OTP route failed:`, data.message || JSON.stringify(data));
+    console.error("[SMS] OTP route failed:", data.message || "provider_error");
   } catch (err) {
     if (err.name === "AbortError") {
-      console.error(`[SMS] OTP route timeout for ${phone}`);
+      console.error("[SMS] OTP route timeout");
     } else {
       console.error(`[SMS] OTP route error:`, err);
     }
@@ -6504,750 +6862,11 @@ async function deleteDownloadsForCourse(courseId) {
     console.error("[Cleanup] Failed to delete course downloads:", err);
   }
 }
-async function ensureCoreLearningSchemaColumns() {
-  const requiredStatements = [
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_free BOOLEAN DEFAULT FALSE",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS price DECIMAL(10, 2) DEFAULT 0",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'Mathematics'",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS level TEXT DEFAULT 'Beginner'",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS duration_hours DECIMAL(5, 1) DEFAULT 0",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS total_lectures INTEGER DEFAULT 0",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS total_tests INTEGER DEFAULT 0",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS original_price DECIMAL(10, 2) DEFAULT 0",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS validity_months NUMERIC(8, 2) DEFAULT NULL",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS is_published BOOLEAN DEFAULT TRUE",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS course_type TEXT DEFAULT 'live'",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS subject TEXT DEFAULT ''",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS start_date TEXT",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS end_date TEXT",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS total_students INTEGER DEFAULT 0",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS total_materials INTEGER DEFAULT 0",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS pyq_count INTEGER DEFAULT 0",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS mock_count INTEGER DEFAULT 0",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS practice_count INTEGER DEFAULT 0",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS thumbnail TEXT",
-    "ALTER TABLE courses ADD COLUMN IF NOT EXISTS cover_color TEXT",
-    "ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active'",
-    "ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS valid_until BIGINT",
-    "ALTER TABLE lectures ADD COLUMN IF NOT EXISTS download_allowed BOOLEAN DEFAULT FALSE",
-    "ALTER TABLE lectures ADD COLUMN IF NOT EXISTS section_title TEXT",
-    "ALTER TABLE study_materials ADD COLUMN IF NOT EXISTS download_allowed BOOLEAN DEFAULT FALSE",
-    "ALTER TABLE study_materials ADD COLUMN IF NOT EXISTS section_title TEXT",
-    "ALTER TABLE user_downloads ADD COLUMN IF NOT EXISTS local_filename TEXT",
-    "ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS lecture_section_title TEXT",
-    "ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS lecture_subfolder_title TEXT"
-  ];
-  for (const statement of requiredStatements) {
-    await db.query(statement, void 0, { logSlow: false }).catch(() => {
-    });
-  }
-}
-async function ensureCoreLearningPerformanceIndexes() {
-  const indexStatements = [
-    "CREATE INDEX IF NOT EXISTS idx_users_session_token ON users(session_token)",
-    "CREATE INDEX IF NOT EXISTS idx_enrollments_user_course_status_valid_until ON enrollments(user_id, course_id, status, valid_until)",
-    "CREATE INDEX IF NOT EXISTS idx_enrollments_course_user_status_valid_until ON enrollments(course_id, user_id, status, valid_until)",
-    "CREATE INDEX IF NOT EXISTS idx_lectures_course_section ON lectures(course_id, section_title)",
-    "CREATE INDEX IF NOT EXISTS idx_materials_course_section ON study_materials(course_id, section_title)",
-    "CREATE INDEX IF NOT EXISTS idx_live_classes_course_scheduled ON live_classes(course_id, scheduled_at)",
-    "CREATE INDEX IF NOT EXISTS idx_live_classes_feed_visibility ON live_classes(is_completed, is_live, scheduled_at DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_daily_missions_date_type ON daily_missions(mission_date DESC, mission_type)",
-    "CREATE INDEX IF NOT EXISTS idx_download_tokens_token_used_expires ON download_tokens(token, used, expires_at)",
-    // Inbox: matches GET /api/notifications (user + unread + not hidden + non-support)
-    "CREATE INDEX IF NOT EXISTS idx_notifications_inbox_unread ON notifications (user_id, created_at DESC) WHERE (is_read IS NOT TRUE) AND (is_hidden IS NOT TRUE) AND (source IS DISTINCT FROM 'support')"
-  ];
-  for (const statement of indexStatements) {
-    await db.query(statement, void 0, { logSlow: false }).catch(() => {
-    });
-  }
-}
 async function registerRoutes(app2) {
-  const allowRuntimeSchemaSync = process.env.ALLOW_RUNTIME_SCHEMA_SYNC === "true" && process.env.NODE_ENV !== "production";
-  const allowStartupSchemaEnsure = process.env.ALLOW_STARTUP_SCHEMA_ENSURE === "true" && process.env.NODE_ENV !== "production";
-  if (allowStartupSchemaEnsure) {
-    try {
-      await ensureCoreLearningSchemaColumns();
-      await ensureCoreLearningPerformanceIndexes();
-      console.log("[DB] startup schema/index ensure completed");
-    } catch (err) {
-      console.error("[DB] startup schema ensure failed:", err);
-    }
-  }
-  if (allowRuntimeSchemaSync) {
-    try {
-      await db.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        id SERIAL PRIMARY KEY,
-        name TEXT NOT NULL DEFAULT '',
-        email TEXT UNIQUE,
-        phone TEXT UNIQUE,
-        role TEXT NOT NULL DEFAULT 'student',
-        device_id TEXT,
-        session_token TEXT,
-        otp TEXT,
-        otp_expires_at BIGINT,
-        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
-      )
-    `);
-      await db.query(`
-      CREATE TABLE IF NOT EXISTS courses (
-        id SERIAL PRIMARY KEY,
-        title TEXT NOT NULL,
-        description TEXT,
-        teacher_name TEXT NOT NULL DEFAULT '3i Learning',
-        price DECIMAL(10, 2) DEFAULT 0,
-        original_price DECIMAL(10, 2) DEFAULT 0,
-        validity_months NUMERIC(8, 2) DEFAULT NULL,
-        category TEXT DEFAULT 'Mathematics',
-        thumbnail TEXT,
-        is_free BOOLEAN DEFAULT FALSE,
-        total_lectures INTEGER DEFAULT 0,
-        total_tests INTEGER DEFAULT 0,
-        total_students INTEGER DEFAULT 0,
-        level TEXT DEFAULT 'Beginner',
-        duration_hours DECIMAL(5, 1) DEFAULT 0,
-        is_published BOOLEAN DEFAULT TRUE,
-        course_type TEXT DEFAULT 'standard',
-        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
-      )
-    `);
-      await db.query(`
-      CREATE TABLE IF NOT EXISTS lectures (
-        id SERIAL PRIMARY KEY,
-        course_id INTEGER REFERENCES courses(id) ON DELETE CASCADE,
-        title TEXT NOT NULL,
-        description TEXT,
-        video_url TEXT,
-        video_type TEXT DEFAULT 'youtube',
-        pdf_url TEXT,
-        duration_minutes INTEGER DEFAULT 0,
-        order_index INTEGER DEFAULT 0,
-        is_free_preview BOOLEAN DEFAULT FALSE,
-        section_title TEXT,
-        download_allowed BOOLEAN DEFAULT FALSE,
-        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
-      )
-    `);
-      await db.query(`
-      CREATE TABLE IF NOT EXISTS enrollments (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-        course_id INTEGER REFERENCES courses(id) ON DELETE CASCADE,
-        progress_percent INTEGER DEFAULT 0,
-        last_lecture_id INTEGER,
-        enrolled_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000,
-        UNIQUE(user_id, course_id)
-      )
-    `);
-      await db.query(`
-      CREATE TABLE IF NOT EXISTS lecture_progress (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-        lecture_id INTEGER REFERENCES lectures(id) ON DELETE CASCADE,
-        is_completed BOOLEAN DEFAULT FALSE,
-        watch_percent INTEGER DEFAULT 0,
-        completed_at BIGINT,
-        UNIQUE(user_id, lecture_id)
-      )
-    `);
-      await db.query(`
-      CREATE TABLE IF NOT EXISTS study_materials (
-        id SERIAL PRIMARY KEY,
-        title TEXT NOT NULL,
-        description TEXT,
-        file_url TEXT,
-        file_type TEXT DEFAULT 'pdf',
-        course_id INTEGER REFERENCES courses(id) ON DELETE CASCADE,
-        is_free BOOLEAN DEFAULT TRUE,
-        section_title TEXT,
-        download_allowed BOOLEAN DEFAULT FALSE,
-        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
-      )
-    `);
-      await db.query(`
-      CREATE TABLE IF NOT EXISTS tests (
-        id SERIAL PRIMARY KEY,
-        title TEXT NOT NULL,
-        description TEXT,
-        course_id INTEGER REFERENCES courses(id) ON DELETE CASCADE,
-        duration_minutes INTEGER DEFAULT 60,
-        total_questions INTEGER DEFAULT 0,
-        total_marks INTEGER DEFAULT 100,
-        passing_marks INTEGER DEFAULT 35,
-        test_type TEXT DEFAULT 'practice',
-        folder_name TEXT,
-        is_published BOOLEAN DEFAULT TRUE,
-        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
-      )
-    `);
-      await db.query(`
-      CREATE TABLE IF NOT EXISTS questions (
-        id SERIAL PRIMARY KEY,
-        test_id INTEGER REFERENCES tests(id) ON DELETE CASCADE,
-        question_text TEXT NOT NULL,
-        option_a TEXT NOT NULL,
-        option_b TEXT NOT NULL,
-        option_c TEXT NOT NULL,
-        option_d TEXT NOT NULL,
-        correct_option TEXT NOT NULL,
-        explanation TEXT,
-        topic TEXT,
-        difficulty TEXT DEFAULT 'medium',
-        marks INTEGER DEFAULT 4,
-        negative_marks DECIMAL(3, 1) DEFAULT 1,
-        order_index INTEGER DEFAULT 0
-      )
-    `);
-      await db.query(`
-      CREATE TABLE IF NOT EXISTS test_attempts (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-        test_id INTEGER REFERENCES tests(id) ON DELETE CASCADE,
-        answers JSONB DEFAULT '{}',
-        score INTEGER DEFAULT 0,
-        total_marks INTEGER DEFAULT 0,
-        percentage DECIMAL(5, 2) DEFAULT 0,
-        time_taken_seconds INTEGER DEFAULT 0,
-        status TEXT DEFAULT 'in_progress',
-        started_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000,
-        completed_at BIGINT
-      )
-    `);
-      await db.query(`
-      CREATE TABLE IF NOT EXISTS notifications (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-        title TEXT NOT NULL,
-        message TEXT NOT NULL,
-        type TEXT DEFAULT 'info',
-        is_read BOOLEAN DEFAULT FALSE,
-        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
-      )
-    `);
-      await db.query(`
-      CREATE TABLE IF NOT EXISTS live_classes (
-        id SERIAL PRIMARY KEY,
-        title TEXT NOT NULL,
-        description TEXT,
-        course_id INTEGER REFERENCES courses(id) ON DELETE CASCADE,
-        youtube_url TEXT,
-        recording_url TEXT,
-        scheduled_at BIGINT,
-        is_live BOOLEAN DEFAULT FALSE,
-        is_completed BOOLEAN DEFAULT FALSE,
-        is_public BOOLEAN DEFAULT FALSE,
-        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
-      )
-    `);
-      await db.query(`
-      CREATE TABLE IF NOT EXISTS live_chat_messages (
-        id SERIAL PRIMARY KEY,
-        live_class_id INTEGER REFERENCES live_classes(id) ON DELETE CASCADE,
-        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-        user_name TEXT NOT NULL,
-        message TEXT NOT NULL,
-        is_admin BOOLEAN DEFAULT FALSE,
-        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
-      )
-    `);
-      await db.query(`
-      CREATE TABLE IF NOT EXISTS doubts (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-        question TEXT NOT NULL,
-        answer TEXT,
-        topic TEXT,
-        status TEXT DEFAULT 'pending',
-        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
-      )
-    `);
-      await db.query(`
-      CREATE TABLE IF NOT EXISTS payments (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-        course_id INTEGER REFERENCES courses(id) ON DELETE CASCADE,
-        razorpay_order_id TEXT,
-        razorpay_payment_id TEXT,
-        razorpay_signature TEXT,
-        amount DECIMAL(10, 2),
-        currency TEXT DEFAULT 'INR',
-        status TEXT DEFAULT 'created',
-        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
-      )
-    `);
-      await db.query(`
-      CREATE TABLE IF NOT EXISTS daily_missions (
-        id SERIAL PRIMARY KEY,
-        title TEXT NOT NULL,
-        description TEXT,
-        questions JSONB DEFAULT '[]',
-        mission_date DATE,
-        xp_reward INTEGER DEFAULT 50,
-        mission_type TEXT DEFAULT 'daily_drill',
-        course_id INTEGER REFERENCES courses(id) ON DELETE CASCADE
-      )
-    `);
-      await db.query(`
-      CREATE TABLE IF NOT EXISTS user_missions (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-        mission_id INTEGER REFERENCES daily_missions(id) ON DELETE CASCADE,
-        is_completed BOOLEAN DEFAULT FALSE,
-        score INTEGER DEFAULT 0,
-        completed_at BIGINT,
-        UNIQUE(user_id, mission_id)
-      )
-    `);
-      await db.query(`
-      CREATE TABLE IF NOT EXISTS download_tokens (
-        id SERIAL PRIMARY KEY,
-        token TEXT NOT NULL UNIQUE,
-        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        item_type TEXT NOT NULL CHECK (item_type IN ('lecture', 'material')),
-        item_id INTEGER NOT NULL,
-        r2_key TEXT NOT NULL,
-        used BOOLEAN NOT NULL DEFAULT FALSE,
-        created_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000,
-        expires_at BIGINT NOT NULL
-      )
-    `);
-      await db.query(`
-      CREATE TABLE IF NOT EXISTS user_downloads (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        item_type TEXT NOT NULL CHECK (item_type IN ('lecture', 'material')),
-        item_id INTEGER NOT NULL,
-        local_filename TEXT,
-        downloaded_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000,
-        UNIQUE(user_id, item_type, item_id)
-      )
-    `);
-      console.log("[DB] Base tables ensured");
-    } catch (err) {
-      console.error("[DB] Failed to create base tables:", err);
-    }
-    try {
-      await db.query("CREATE INDEX IF NOT EXISTS idx_tests_course_id ON tests(course_id)");
-      await db.query("CREATE INDEX IF NOT EXISTS idx_enrollments_user_id ON enrollments(user_id)");
-      await db.query("CREATE INDEX IF NOT EXISTS idx_enrollments_course_id ON enrollments(course_id)");
-      await db.query("CREATE INDEX IF NOT EXISTS idx_test_attempts_user_test ON test_attempts(user_id, test_id)");
-      await db.query("CREATE INDEX IF NOT EXISTS idx_test_attempts_test_id ON test_attempts(test_id)");
-      await db.query("CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id)");
-      await db.query("CREATE INDEX IF NOT EXISTS idx_lecture_progress_user ON lecture_progress(user_id)");
-      await db.query("CREATE INDEX IF NOT EXISTS idx_questions_test_id ON questions(test_id)");
-      await db.query("CREATE INDEX IF NOT EXISTS idx_download_tokens_token ON download_tokens(token)");
-      await db.query("CREATE INDEX IF NOT EXISTS idx_download_tokens_expires ON download_tokens(expires_at)");
-      await db.query(`CREATE TABLE IF NOT EXISTS media_tokens (
-      token TEXT PRIMARY KEY,
-      user_id INTEGER NOT NULL,
-      file_key TEXT NOT NULL,
-      expires_at BIGINT NOT NULL,
-      created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
-    )`).catch(() => {
-      });
-      await db.query("CREATE INDEX IF NOT EXISTS idx_media_tokens_expires ON media_tokens(expires_at)").catch(() => {
-      });
-      console.log("[DB] Indexes ensured");
-    } catch (err) {
-      console.error("[DB] Failed to create indexes:", err);
-    }
-    try {
-      await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS date_of_birth TEXT");
-      await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS photo_url TEXT");
-      await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_complete BOOLEAN DEFAULT FALSE");
-      await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN DEFAULT FALSE");
-      await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active_at BIGINT");
-      await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT");
-      await ensureCoreLearningSchemaColumns();
-      await db.query("ALTER TABLE tests ADD COLUMN IF NOT EXISTS difficulty TEXT DEFAULT 'moderate'");
-      await db.query("ALTER TABLE tests ADD COLUMN IF NOT EXISTS scheduled_at BIGINT");
-      await db.query("ALTER TABLE tests ADD COLUMN IF NOT EXISTS is_published BOOLEAN DEFAULT TRUE");
-      await db.query("ALTER TABLE tests ADD COLUMN IF NOT EXISTS mini_course_id INTEGER").catch(() => {
-      });
-      await db.query("ALTER TABLE tests ADD COLUMN IF NOT EXISTS price NUMERIC(10,2) DEFAULT 0").catch(() => {
-      });
-      await db.query("ALTER TABLE lectures ADD COLUMN IF NOT EXISTS download_allowed BOOLEAN DEFAULT FALSE").catch(() => {
-      });
-      await db.query("ALTER TABLE study_materials ADD COLUMN IF NOT EXISTS download_allowed BOOLEAN DEFAULT FALSE").catch(() => {
-      });
-      await db.query(`CREATE TABLE IF NOT EXISTS test_purchases (
-      id SERIAL PRIMARY KEY,
-      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-      test_id INTEGER REFERENCES tests(id) ON DELETE CASCADE,
-      razorpay_order_id TEXT,
-      razorpay_payment_id TEXT,
-      created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000,
-      UNIQUE(user_id, test_id)
-    )`).catch(() => {
-      });
-      await db.query("ALTER TABLE questions ADD COLUMN IF NOT EXISTS image_url TEXT");
-      await db.query("ALTER TABLE questions ADD COLUMN IF NOT EXISTS solution_image_url TEXT");
-      await db.query(`CREATE TABLE IF NOT EXISTS course_folders (
-      id SERIAL PRIMARY KEY,
-      course_id INTEGER REFERENCES courses(id) ON DELETE CASCADE,
-      name TEXT NOT NULL,
-      type TEXT NOT NULL,
-      is_hidden BOOLEAN DEFAULT FALSE,
-      created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000,
-      UNIQUE(course_id, name, type)
-    )`);
-      await db.query(`CREATE TABLE IF NOT EXISTS standalone_folders (
-      id SERIAL PRIMARY KEY,
-      name TEXT NOT NULL,
-      type TEXT NOT NULL,
-      is_hidden BOOLEAN DEFAULT FALSE,
-      created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000,
-      UNIQUE(name, type)
-    )`);
-      await db.query("ALTER TABLE standalone_folders ADD COLUMN IF NOT EXISTS category TEXT").catch(() => {
-      });
-      await db.query("ALTER TABLE standalone_folders ADD COLUMN IF NOT EXISTS price NUMERIC(10,2) DEFAULT 0").catch(() => {
-      });
-      await db.query("ALTER TABLE standalone_folders ADD COLUMN IF NOT EXISTS original_price NUMERIC(10,2) DEFAULT 0").catch(() => {
-      });
-      await db.query("ALTER TABLE standalone_folders ADD COLUMN IF NOT EXISTS is_free BOOLEAN DEFAULT TRUE").catch(() => {
-      });
-      await db.query("ALTER TABLE standalone_folders ADD COLUMN IF NOT EXISTS description TEXT").catch(() => {
-      });
-      await db.query("ALTER TABLE standalone_folders ADD COLUMN IF NOT EXISTS validity_months NUMERIC(8,2) DEFAULT NULL").catch(() => {
-      });
-      await db.query(`CREATE TABLE IF NOT EXISTS folder_purchases (
-      id SERIAL PRIMARY KEY,
-      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-      folder_id INTEGER REFERENCES standalone_folders(id) ON DELETE CASCADE,
-      amount NUMERIC(10,2),
-      payment_id TEXT,
-      created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000,
-      UNIQUE(user_id, folder_id)
-    )`).catch(() => {
-      });
-      await db.query(`CREATE TABLE IF NOT EXISTS payments (
-      id SERIAL PRIMARY KEY,
-      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-      course_id INTEGER REFERENCES courses(id) ON DELETE CASCADE,
-      razorpay_order_id TEXT,
-      razorpay_payment_id TEXT,
-      razorpay_signature TEXT,
-      amount NUMERIC DEFAULT 0,
-      status TEXT DEFAULT 'created',
-      click_count INTEGER DEFAULT 1,
-      created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000,
-      UNIQUE(user_id, course_id)
-    )`);
-      await db.query("ALTER TABLE payments ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'created'").catch(() => {
-      });
-      await db.query("ALTER TABLE payments ADD COLUMN IF NOT EXISTS click_count INTEGER DEFAULT 1").catch(() => {
-      });
-      await db.query("CREATE UNIQUE INDEX IF NOT EXISTS payments_user_course_unique ON payments(user_id, course_id)").catch(() => {
-      });
-      await db.query("UPDATE payments SET status = 'created' WHERE status IS NULL").catch(() => {
-      });
-      await db.query("UPDATE payments SET click_count = 1 WHERE click_count IS NULL").catch(() => {
-      });
-      await db.query("ALTER TABLE test_attempts ADD COLUMN IF NOT EXISTS correct INTEGER DEFAULT 0");
-      await db.query("ALTER TABLE test_attempts ADD COLUMN IF NOT EXISTS incorrect INTEGER DEFAULT 0");
-      await db.query("ALTER TABLE test_attempts ADD COLUMN IF NOT EXISTS attempted INTEGER DEFAULT 0");
-      await db.query("ALTER TABLE test_attempts ADD COLUMN IF NOT EXISTS question_times JSONB");
-      await db.query("ALTER TABLE test_attempts ALTER COLUMN score TYPE NUMERIC USING score::NUMERIC").catch(() => {
-      });
-      await db.query(`CREATE TABLE IF NOT EXISTS question_reports (
-      id SERIAL PRIMARY KEY,
-      question_id INTEGER REFERENCES questions(id) ON DELETE CASCADE,
-      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-      reason TEXT NOT NULL,
-      details TEXT,
-      created_at BIGINT,
-      UNIQUE(question_id, user_id)
-    )`);
-      await db.query(`CREATE TABLE IF NOT EXISTS books (
-      id SERIAL PRIMARY KEY,
-      title TEXT NOT NULL,
-      description TEXT,
-      author TEXT,
-      price NUMERIC DEFAULT 0,
-      original_price NUMERIC DEFAULT 0,
-      cover_url TEXT,
-      file_url TEXT,
-      is_published BOOLEAN DEFAULT TRUE,
-      created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
-    )`);
-      await db.query(`CREATE TABLE IF NOT EXISTS book_purchases (
-      id SERIAL PRIMARY KEY,
-      user_id INTEGER REFERENCES users(id),
-      book_id INTEGER REFERENCES books(id),
-      purchased_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000,
-      UNIQUE(user_id, book_id)
-    )`);
-      await db.query("ALTER TABLE books ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN DEFAULT FALSE").catch(() => {
-      });
-      await db.query(`CREATE TABLE IF NOT EXISTS book_click_tracking (
-      id SERIAL PRIMARY KEY,
-      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-      book_id INTEGER REFERENCES books(id) ON DELETE CASCADE,
-      click_count INTEGER DEFAULT 1,
-      created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000,
-      UNIQUE(user_id, book_id)
-    )`);
-      console.log("[DB] book_click_tracking table ensured");
-      await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS notify_email BOOLEAN DEFAULT FALSE").catch(() => {
-      });
-      await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS notify_bell BOOLEAN DEFAULT FALSE").catch(() => {
-      });
-      await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS is_free_preview BOOLEAN DEFAULT FALSE").catch(() => {
-      });
-      await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS is_completed BOOLEAN DEFAULT FALSE").catch(() => {
-      });
-      await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS is_live BOOLEAN DEFAULT FALSE").catch(() => {
-      });
-      await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEFAULT FALSE").catch(() => {
-      });
-      await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS stream_type TEXT DEFAULT 'rtmp'").catch(() => {
-      });
-      await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS chat_mode TEXT DEFAULT 'public'").catch(() => {
-      });
-      await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS recording_url TEXT").catch(() => {
-      });
-      await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS show_viewer_count BOOLEAN DEFAULT TRUE").catch(() => {
-      });
-      await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS started_at BIGINT").catch(() => {
-      });
-      await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS ended_at BIGINT").catch(() => {
-      });
-      await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS duration_minutes INTEGER DEFAULT 0").catch(() => {
-      });
-      await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS cf_stream_uid TEXT").catch(() => {
-      });
-      await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS cf_stream_key TEXT").catch(() => {
-      });
-      await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS cf_stream_rtmp_url TEXT").catch(() => {
-      });
-      await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS cf_playback_hls TEXT").catch(() => {
-      });
-      await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS lecture_section_title TEXT").catch(() => {
-      });
-      await db.query("ALTER TABLE live_classes ADD COLUMN IF NOT EXISTS lecture_subfolder_title TEXT").catch(() => {
-      });
-      await db.query(`CREATE TABLE IF NOT EXISTS live_class_viewers (
-      id SERIAL PRIMARY KEY,
-      live_class_id INTEGER NOT NULL,
-      user_id INTEGER NOT NULL,
-      user_name TEXT NOT NULL,
-      last_heartbeat BIGINT NOT NULL,
-      UNIQUE(live_class_id, user_id)
-    )`).catch(() => {
-      });
-      await db.query(`CREATE TABLE IF NOT EXISTS live_class_hand_raises (
-      id SERIAL PRIMARY KEY,
-      live_class_id INTEGER NOT NULL,
-      user_id INTEGER NOT NULL,
-      user_name TEXT NOT NULL,
-      raised_at BIGINT NOT NULL,
-      UNIQUE(live_class_id, user_id)
-    )`).catch(() => {
-      });
-      await db.query("UPDATE live_classes SET is_completed = TRUE WHERE is_completed IS NOT TRUE AND is_live IS NOT TRUE AND notify_bell IS NULL AND notify_email IS NULL AND created_at < 1743465600000").catch(() => {
-      });
-      await db.query("UPDATE users SET profile_complete = FALSE WHERE profile_complete IS NULL");
-      await db.query(
-        "UPDATE users SET profile_complete = FALSE WHERE role = 'student' AND (date_of_birth IS NULL OR date_of_birth = '')"
-      );
-      await db.query(
-        "UPDATE users SET profile_complete = TRUE WHERE profile_complete = FALSE AND role = 'student' AND email IS NOT NULL AND date_of_birth IS NOT NULL AND name IS NOT NULL AND name NOT LIKE 'Student%'"
-      );
-      console.log("[DB] Schema columns ensured");
-      await db.query(`CREATE TABLE IF NOT EXISTS user_downloads (
-      id SERIAL PRIMARY KEY,
-      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-      item_type TEXT NOT NULL CHECK (item_type IN ('material', 'lecture')),
-      item_id INTEGER NOT NULL,
-      downloaded_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000,
-      UNIQUE(user_id, item_type, item_id)
-    )`).catch(() => {
-      });
-      await db.query("ALTER TABLE user_downloads ADD COLUMN IF NOT EXISTS local_filename TEXT").catch(() => {
-      });
-      await db.query(`CREATE TABLE IF NOT EXISTS download_tokens (
-      id SERIAL PRIMARY KEY,
-      token TEXT NOT NULL UNIQUE,
-      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      item_type TEXT NOT NULL CHECK (item_type IN ('lecture', 'material')),
-      item_id INTEGER NOT NULL,
-      r2_key TEXT NOT NULL,
-      used BOOLEAN NOT NULL DEFAULT FALSE,
-      created_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000,
-      expires_at BIGINT NOT NULL
-    )`).catch(() => {
-      });
-      await db.query("CREATE INDEX IF NOT EXISTS idx_download_tokens_token ON download_tokens(token)").catch(() => {
-      });
-      await db.query("CREATE INDEX IF NOT EXISTS idx_download_tokens_expires ON download_tokens(expires_at)").catch(() => {
-      });
-      await db.query("ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS valid_until BIGINT").catch(() => {
-      });
-      await db.query(`CREATE TABLE IF NOT EXISTS lecture_progress (
-      id SERIAL PRIMARY KEY,
-      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-      lecture_id INTEGER REFERENCES lectures(id) ON DELETE CASCADE,
-      watch_percent INTEGER DEFAULT 0,
-      is_completed BOOLEAN DEFAULT FALSE,
-      completed_at BIGINT,
-      UNIQUE(user_id, lecture_id)
-    )`).catch(() => {
-      });
-      await db.query("CREATE UNIQUE INDEX IF NOT EXISTS lecture_progress_user_lecture ON lecture_progress(user_id, lecture_id)").catch(() => {
-      });
-      await db.query(`CREATE TABLE IF NOT EXISTS site_settings (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL,
-      updated_at BIGINT
-    )`);
-      await db.query(`CREATE TABLE IF NOT EXISTS support_messages (
-      id SERIAL PRIMARY KEY,
-      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-      sender TEXT NOT NULL CHECK (sender IN ('user', 'admin')),
-      message TEXT NOT NULL,
-      is_read BOOLEAN DEFAULT FALSE,
-      created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
-    )`);
-      await db.query("CREATE INDEX IF NOT EXISTS idx_support_messages_user_id ON support_messages(user_id)");
-      await db.query(`
-      DELETE FROM notifications 
-      WHERE title ILIKE 'New message from%' 
-         OR title ILIKE 'New reply from Support%'
-         OR title ILIKE '%support%'
-         OR source = 'support'
-    `).catch(() => {
-      });
-      await db.query("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'system'").catch(() => {
-      });
-      await db.query("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS expires_at BIGINT").catch(() => {
-      });
-      await db.query("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN DEFAULT FALSE").catch(() => {
-      });
-      await db.query("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS admin_notif_id INTEGER").catch(() => {
-      });
-      await db.query("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS image_url TEXT").catch(() => {
-      });
-      await db.query(`CREATE TABLE IF NOT EXISTS admin_notifications (
-      id SERIAL PRIMARY KEY,
-      title TEXT NOT NULL,
-      message TEXT NOT NULL,
-      target TEXT NOT NULL DEFAULT 'all',
-      course_id INTEGER,
-      sent_count INTEGER DEFAULT 0,
-      is_hidden BOOLEAN DEFAULT FALSE,
-      image_url TEXT,
-      created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
-    )`);
-      await db.query("ALTER TABLE admin_notifications ADD COLUMN IF NOT EXISTS image_url TEXT").catch(() => {
-      });
-      const anCount = await db.query("SELECT COUNT(*) as cnt FROM admin_notifications");
-      if (parseInt(anCount.rows[0]?.cnt || "0") === 0) {
-        await db.query(`
-        INSERT INTO admin_notifications (title, message, target, sent_count, created_at)
-        SELECT title, message, 'all', COUNT(*), MIN(created_at)
-        FROM notifications
-        WHERE title NOT ILIKE 'New message from%'
-          AND title NOT ILIKE 'New reply from Support%'
-          AND title IS NOT NULL AND message IS NOT NULL
-        GROUP BY title, message
-      `).catch((e) => console.error("[DB] Backfill admin_notifications failed:", e));
-      }
-      console.log("[DB] admin_notifications ready");
-      await db.query(`
-      UPDATE notifications n SET admin_notif_id = an.id
-      FROM admin_notifications an
-      WHERE n.admin_notif_id IS NULL AND n.title = an.title AND n.message = an.message
-    `).catch((e) => console.error("[DB] Backfill admin_notif_id failed:", e));
-      console.log("[DB] admin_notif_id backfill done");
-      await db.query(`
-      UPDATE notifications n SET image_url = an.image_url
-      FROM admin_notifications an
-      WHERE n.admin_notif_id = an.id AND n.image_url IS NULL AND an.image_url IS NOT NULL
-    `).catch(() => {
-      });
-      await db.query(`
-      DELETE FROM notifications 
-      WHERE admin_notif_id IS NOT NULL 
-      AND admin_notif_id NOT IN (SELECT id FROM admin_notifications)
-    `).catch(() => {
-      });
-      await db.query(`
-      DELETE FROM notifications 
-      WHERE admin_notif_id IS NULL 
-      AND source IS DISTINCT FROM 'support'
-      AND title NOT ILIKE 'New message from%'
-      AND title NOT ILIKE 'New reply from%'
-      AND title NOT ILIKE '%Live Class%'
-      AND title NOT IN (SELECT title FROM admin_notifications)
-    `).catch(() => {
-      });
-      console.log("[DB] Orphaned notifications cleaned up");
-    } catch (err) {
-      console.error("[DB] Failed to add columns:", err);
-    }
-    try {
-      await db.query(`
-      UPDATE courses c SET
-        total_tests    = sub.total,
-        pyq_count      = sub.pyq,
-        mock_count     = sub.mock,
-        practice_count = sub.practice
-      FROM (
-        SELECT course_id,
-          COUNT(*) AS total,
-          COUNT(*) FILTER (WHERE test_type = 'pyq') AS pyq,
-          COUNT(*) FILTER (WHERE test_type = 'mock') AS mock,
-          COUNT(*) FILTER (WHERE test_type = 'practice') AS practice
-        FROM tests
-        GROUP BY course_id
-      ) sub
-      WHERE c.id = sub.course_id
-    `);
-      await db.query(`
-      UPDATE courses SET total_tests=0, pyq_count=0, mock_count=0, practice_count=0
-      WHERE id NOT IN (SELECT DISTINCT course_id FROM tests WHERE course_id IS NOT NULL)
-    `);
-      console.log("[DB] Course test counts backfilled");
-    } catch (err) {
-      console.error("[DB] Failed to backfill test counts:", err);
-    }
-    try {
-      await db.query(`
-      UPDATE enrollments e SET progress_percent = sub.pct
-      FROM (
-        SELECT 
-          e2.user_id,
-          e2.course_id,
-          ROUND(
-            (COALESCE(lp_done.cnt, 0) + COALESCE(ta_done.cnt, 0))::numeric /
-            NULLIF(COALESCE(lec_total.cnt, 0) + COALESCE(test_total.cnt, 0), 0) * 100
-          ) AS pct
-        FROM enrollments e2
-        LEFT JOIN (
-          SELECT l.course_id, lp.user_id, COUNT(*) AS cnt
-          FROM lecture_progress lp JOIN lectures l ON lp.lecture_id = l.id
-          WHERE lp.is_completed = TRUE
-          GROUP BY l.course_id, lp.user_id
-        ) lp_done ON lp_done.course_id = e2.course_id AND lp_done.user_id = e2.user_id
-        LEFT JOIN (
-          SELECT t.course_id, ta.user_id, COUNT(DISTINCT ta.test_id) AS cnt
-          FROM test_attempts ta JOIN tests t ON ta.test_id = t.id
-          WHERE ta.status = 'completed' AND t.course_id IS NOT NULL
-          GROUP BY t.course_id, ta.user_id
-        ) ta_done ON ta_done.course_id = e2.course_id AND ta_done.user_id = e2.user_id
-        LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM lectures GROUP BY course_id) lec_total ON lec_total.course_id = e2.course_id
-        LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM tests WHERE is_published = TRUE GROUP BY course_id) test_total ON test_total.course_id = e2.course_id
-        WHERE (COALESCE(lp_done.cnt, 0) + COALESCE(ta_done.cnt, 0)) > 0
-      ) sub
-      WHERE e.user_id = sub.user_id AND e.course_id = sub.course_id
-    `);
-      console.log("[DB] Enrollment progress backfilled (lectures + tests)");
-    } catch (err) {
-      console.error("[DB] Failed to backfill enrollment progress:", err);
-    }
-  } else {
-    console.log("[DB] Runtime schema sync skipped (ALLOW_RUNTIME_SCHEMA_SYNC != true)");
+  if (process.env.ALLOW_RUNTIME_SCHEMA_SYNC === "true" || process.env.ALLOW_STARTUP_SCHEMA_ENSURE === "true") {
+    console.warn(
+      "[DB] Legacy startup schema flags were requested, but runtime schema mutation is now disabled. Run SQL migrations before starting the server."
+    );
   }
   const runBackgroundSchedulers = process.env.RUN_BACKGROUND_SCHEDULERS !== "false";
   if (runBackgroundSchedulers) {
@@ -7299,6 +6918,26 @@ async function registerRoutes(app2) {
   } else {
     console.log("[Schedulers] Background schedulers disabled (RUN_BACKGROUND_SCHEDULERS=false)");
   }
+  app2.get("/api/health/ready", async (_req, res) => {
+    try {
+      const readiness = await checkDatabaseReadiness(db);
+      if (!readiness.ok) {
+        return res.status(503).json({
+          ok: false,
+          message: "Database schema is not fully migrated",
+          checks: readiness.checks,
+          missingTables: readiness.missingTables,
+          missingColumns: readiness.missingColumns
+        });
+      }
+      return res.json({
+        ok: true,
+        checks: readiness.checks
+      });
+    } catch (err) {
+      return res.status(503).json({ ok: false, message: err?.message || "DB not ready" });
+    }
+  });
   app2.use("/api", async (req, res, next) => {
     try {
       const authUser = await getAuthUser(req);
@@ -7326,9 +6965,7 @@ async function registerRoutes(app2) {
     verifyOtpValue,
     generateSecureToken: () => generateSecureToken(),
     sendOTPviaSMS,
-    verifyFirebaseToken,
-    adminEmails: ADMIN_EMAILS,
-    adminPhones: ADMIN_PHONES
+    verifyFirebaseToken
   });
   registerPaymentRoutes({
     app: app2,
@@ -7558,7 +7195,7 @@ async function registerRoutes(app2) {
   const httpServer = createServer(app2);
   return httpServer;
 }
-var require3, PDFParse, upload, uploadLarge, databaseUrlRaw, databaseUrl, pool, db, generateAIAnswer, cache, ADMIN_EMAILS, ADMIN_PHONES;
+var require3, PDFParse, upload, uploadLarge, databaseUrlRaw, databaseUrl, pool, db, generateAIAnswer, cache;
 var init_routes = __esm({
   "server/routes.ts"() {
     "use strict";
@@ -7566,6 +7203,7 @@ var init_routes = __esm({
     init_razorpay();
     init_security_utils();
     init_auth_utils();
+    init_native_device_binding();
     init_auth_routes();
     init_pdf_routes();
     init_payment_routes();
@@ -7600,6 +7238,7 @@ var init_routes = __esm({
     init_upload_routes();
     init_media_stream_routes();
     init_ai_tutor_service();
+    init_db_readiness();
     require3 = createRequire2(import.meta.url);
     ({ PDFParse } = require3("pdf-parse"));
     upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -7633,8 +7272,6 @@ var init_routes = __esm({
         if (now > entry.expiresAt) cache.delete(key);
       }
     }, 5 * 60 * 1e3);
-    ADMIN_EMAILS = ["3ilearningofficial@gmail.com"];
-    ADMIN_PHONES = ["9997198068"];
   }
 });
 
@@ -7668,60 +7305,65 @@ function normalizeDatabaseUrl2(raw) {
     return raw;
   }
 }
-function setupCors(app2) {
-  const normalizeOrigin = (value) => {
-    const trimmed = value.trim();
-    if (!trimmed) return "";
-    try {
-      return new URL(trimmed).origin.toLowerCase();
-    } catch {
-      return trimmed.replace(/\/+$/, "").toLowerCase();
-    }
-  };
-  const originMatchesPattern = (origin, pattern) => {
-    if (!pattern.includes("*")) return origin === pattern;
-    const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
-    return new RegExp(`^${escaped}$`, "i").test(origin);
-  };
-  const isPrivateLocalOrigin = (origin) => {
-    try {
-      const parsed = new URL(origin);
-      const host = parsed.hostname;
-      const isLocalhost = host === "localhost" || host === "127.0.0.1" || host.endsWith(".local");
-      if (isLocalhost) return true;
-      const m = host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
-      if (!m) return false;
-      const a = Number(m[1]);
-      const b = Number(m[2]);
-      if (a === 10) return true;
-      if (a === 127) return true;
-      if (a === 192 && b === 168) return true;
-      if (a === 172 && b >= 16 && b <= 31) return true;
-      return false;
-    } catch {
-      return false;
-    }
-  };
+function normalizeOrigin(value) {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  try {
+    return new URL(trimmed).origin.toLowerCase();
+  } catch {
+    return trimmed.replace(/\/+$/, "").toLowerCase();
+  }
+}
+function originMatchesPattern(origin, pattern) {
+  if (!pattern.includes("*")) return origin === pattern;
+  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+  return new RegExp(`^${escaped}$`, "i").test(origin);
+}
+function isPrivateLocalOrigin(origin) {
+  try {
+    const parsed = new URL(origin);
+    const host = parsed.hostname;
+    const isLocalhost = host === "localhost" || host === "127.0.0.1" || host.endsWith(".local");
+    if (isLocalhost) return true;
+    const m = host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+    if (!m) return false;
+    const a = Number(m[1]);
+    const b = Number(m[2]);
+    if (a === 10) return true;
+    if (a === 127) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+function getAllowedOriginPatterns() {
   const defaultAllowedOrigins = [
     "https://3ilearning.in",
-    // Keep www variant for compatibility.
     "https://www.3ilearning.in",
-    // Local web/dev origins for testing.
     "http://localhost:8081",
     "http://127.0.0.1:8081",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
     "http://localhost:19006",
     "http://127.0.0.1:19006",
-    // Razorpay Standard Checkout: redirect/callback POSTs to our API from these origins.
     "https://api.razorpay.com",
     "https://checkout.razorpay.com"
   ];
   const envOrigins = (process.env.CORS_ORIGINS || "").split(",").map((s) => normalizeOrigin(s)).filter(Boolean);
-  const allowedOriginPatterns = [
-    ...defaultAllowedOrigins.map((origin) => normalizeOrigin(origin)),
-    ...envOrigins
-  ];
+  return [...defaultAllowedOrigins.map((origin) => normalizeOrigin(origin)), ...envOrigins];
+}
+function isTrustedOrigin(origin) {
+  if (!origin) return false;
+  const normalizedOrigin = normalizeOrigin(origin);
+  if (process.env.NODE_ENV !== "production" && isPrivateLocalOrigin(normalizedOrigin)) {
+    return true;
+  }
+  return getAllowedOriginPatterns().some((pattern) => originMatchesPattern(normalizedOrigin, pattern));
+}
+function setupCors(app2) {
+  const allowedOriginPatterns = getAllowedOriginPatterns();
   const corsOptions = {
     origin(origin, callback) {
       if (!origin) return callback(null, true);
@@ -7736,12 +7378,32 @@ function setupCors(app2) {
       return callback(new Error("Not allowed by CORS"));
     },
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Requested-With",
+      "X-App-Device-Id",
+      "X-Client-Platform"
+    ],
     credentials: true,
     preflightContinue: false,
     optionsSuccessStatus: 204
   };
   app2.use(cors(corsOptions));
+}
+function setupApiOriginProtection(app2) {
+  app2.use("/api", (req, res, next) => {
+    if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return next();
+    const hasBearer = typeof req.headers.authorization === "string" && req.headers.authorization.startsWith("Bearer ");
+    const hasCookie = typeof req.headers.cookie === "string" && req.headers.cookie.length > 0;
+    if (!hasCookie || hasBearer) return next();
+    const origin = req.get("origin");
+    const referer = req.get("referer");
+    const trustedOrigin = origin ? isTrustedOrigin(origin) : false;
+    const trustedReferer = referer ? isTrustedOrigin(referer) : false;
+    if (trustedOrigin || trustedReferer) return next();
+    return res.status(403).json({ message: "Cross-site request blocked" });
+  });
 }
 function setupBodyParsing(app2) {
   app2.use(
@@ -7819,6 +7481,18 @@ function getBackendVersion() {
     now: Date.now()
   };
 }
+function logProductionReleaseHints() {
+  if (process.env.NODE_ENV !== "production") return;
+  const schedulerRole = process.env.RUN_BACKGROUND_SCHEDULERS === "false" ? "api-only" : "scheduler-enabled";
+  log(
+    `[startup] production mode | scheduler_role=${schedulerRole} | health=/api/health/version,/api/health/ready`
+  );
+  if (process.env.ALLOW_RUNTIME_SCHEMA_SYNC === "true" || process.env.ALLOW_STARTUP_SCHEMA_ENSURE === "true") {
+    console.warn(
+      "[startup] production should rely on migrations only; disable ALLOW_RUNTIME_SCHEMA_SYNC and ALLOW_STARTUP_SCHEMA_ENSURE"
+    );
+  }
+}
 function serveExpoManifest(platform, res) {
   const manifestPath = path.resolve(
     process.cwd(),
@@ -7867,9 +7541,21 @@ function configureExpoAndLanding(app2) {
     }
     next();
   });
-  app2.use(express.static(path.resolve(process.cwd(), "static-build", "web")));
-  app2.use("/assets", express.static(path.resolve(process.cwd(), "assets")));
-  app2.use(express.static(path.resolve(process.cwd(), "static-build")));
+  const staticAssetOptions = {
+    setHeaders: (res, filePath) => {
+      const normalized = filePath.replace(/\\/g, "/");
+      const isHtml = normalized.endsWith(".html");
+      const isVersionedBundle = normalized.includes("/static-build/") || normalized.includes("/_expo/static/") || normalized.includes("/assets/");
+      if (isHtml) {
+        res.setHeader("Cache-Control", "no-store");
+      } else if (isVersionedBundle) {
+        res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      }
+    }
+  };
+  app2.use(express.static(path.resolve(process.cwd(), "static-build", "web"), staticAssetOptions));
+  app2.use("/assets", express.static(path.resolve(process.cwd(), "assets"), staticAssetOptions));
+  app2.use(express.static(path.resolve(process.cwd(), "static-build"), staticAssetOptions));
   const expoRoutes = ["/login", "/otp", "/profile", "/courses", "/settings", "/admin", "/material", "/test", "/ai-tutor", "/missions", "/live-class"];
   app2.get(expoRoutes, (req, res, next) => {
     const webBuildPath = path.resolve(process.cwd(), "static-build", "web", "index.html");
@@ -7939,8 +7625,7 @@ function setupErrorHandler(app2) {
       secure: isProduction,
       // HTTPS only in production
       httpOnly: true,
-      sameSite: isProduction ? "none" : "lax",
-      // "none" required for cross-origin with credentials
+      sameSite: "lax",
       maxAge: 7 * 24 * 60 * 60 * 1e3
     }
   };
@@ -7953,6 +7638,7 @@ function setupErrorHandler(app2) {
     });
   }
   app.use(session(sessionConfig));
+  setupApiOriginProtection(app);
   app.get("/api/health/version", (_req, res) => {
     res.json(getBackendVersion());
   });
@@ -7999,6 +7685,7 @@ function setupErrorHandler(app2) {
   configureExpoAndLanding(app);
   setupErrorHandler(app);
   const port = parseInt(process.env.PORT || "5000", 10);
+  logProductionReleaseHints();
   try {
     const { networkInterfaces } = await import("os");
     const nets = networkInterfaces();

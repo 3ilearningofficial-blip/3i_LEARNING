@@ -7,9 +7,13 @@ export const users = pgTable("users", {
   phone: text("phone").unique(),
   role: text("role").notNull().default("student"),
   deviceId: text("device_id"),
+  appBoundDeviceId: text("app_bound_device_id"),
   sessionToken: text("session_token"),
   otp: text("otp"),
   otpExpiresAt: bigint("otp_expires_at", { mode: "number" }),
+  profileComplete: boolean("profile_complete").default(false),
+  isBlocked: boolean("is_blocked").default(false),
+  lastActiveAt: bigint("last_active_at", { mode: "number" }),
   createdAt: bigint("created_at", { mode: "number" }),
 });
 
@@ -54,6 +58,8 @@ export const enrollments = pgTable("enrollments", {
   courseId: integer("course_id"),
   progressPercent: integer("progress_percent").default(0),
   lastLectureId: integer("last_lecture_id"),
+  status: text("status").default("active"),
+  validUntil: bigint("valid_until", { mode: "number" }),
   enrolledAt: bigint("enrolled_at", { mode: "number" }),
 });
 
@@ -165,6 +171,21 @@ export const liveClasses = pgTable("live_classes", {
   isLive: boolean("is_live").default(false),
   isCompleted: boolean("is_completed").default(false),
   isPublic: boolean("is_public").default(false),
+  recordingUrl: text("recording_url"),
+  streamType: text("stream_type").default("rtmp"),
+  showViewerCount: boolean("show_viewer_count").default(true),
+  createdAt: bigint("created_at", { mode: "number" }),
+});
+
+export const deviceBlockEvents = pgTable("device_block_events", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  attemptedDeviceId: text("attempted_device_id"),
+  boundDeviceId: text("bound_device_id"),
+  phone: text("phone"),
+  email: text("email"),
+  platform: text("platform"),
+  reason: text("reason").default("wrong_device_login_denied"),
   createdAt: bigint("created_at", { mode: "number" }),
 });
 
@@ -213,3 +234,4 @@ export type Notification = typeof notifications.$inferSelect;
 export type LiveClass = typeof liveClasses.$inferSelect;
 export type StudyMaterial = typeof studyMaterials.$inferSelect;
 export type Doubt = typeof doubts.$inferSelect;
+export type DeviceBlockEvent = typeof deviceBlockEvents.$inferSelect;

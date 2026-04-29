@@ -9,6 +9,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { apiRequest } from "@/lib/query-client";
+import { getInstallationId } from "@/lib/installation-id";
 import { useAuth } from "@/context/AuthContext";
 import Colors from "@/constants/colors";
 
@@ -29,9 +30,11 @@ export default function EmailLoginScreen() {
 
     setIsLoading(true);
     try {
+      const installationId = await getInstallationId();
       const res = await apiRequest("POST", "/api/auth/email-login", {
         email: identifier,
         password,
+        deviceId: installationId,
       });
       const data = await res.json();
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -47,7 +50,11 @@ export default function EmailLoginScreen() {
       }
     } catch (err: any) {
       const msg = (err?.message || "").replace(/^\d+:\s*/, "");
-      if (msg.includes("not found") || msg.includes("Not found") || msg.includes("404")) {
+      if (msg.includes("blocked") || msg.includes("Blocked")) {
+        setError("This account is blocked. Contact support/admin.");
+      } else if (msg.includes("registered device") || msg.includes("another device")) {
+        setError("This account is active on another device/browser. Use the original one or contact support.");
+      } else if (msg.includes("not found") || msg.includes("Not found") || msg.includes("404")) {
         setError("Account not found. Please sign up first.");
       } else if (msg.includes("401") || msg.includes("Invalid") || msg.includes("incorrect") || msg.includes("Incorrect")) {
         setError("Incorrect password. Try again or use Phone OTP.");

@@ -96,7 +96,9 @@ export function registerTestCoreRoutes({
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const { answers, timeTakenSeconds, questionTimes } = req.body;
       const timeTaken = parseInt(String(timeTakenSeconds || "0")) || 0;
-      console.log(`[Attempt] test=${req.params.id} user=${user.id} answers=${JSON.stringify(answers)?.slice(0, 100)} timeTaken=${timeTaken}`);
+      const answerCount =
+        answers && typeof answers === "object" ? Object.keys(answers as Record<string, unknown>).length : 0;
+      console.log(`[Attempt] submit started test=${req.params.id} user=${user.id} answers=${answerCount} timeTaken=${timeTaken}`);
       const testResult = await db.query(
         `SELECT t.*, c.is_free AS course_is_free, sf.is_free AS folder_is_free
          FROM tests t

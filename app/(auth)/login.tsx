@@ -10,6 +10,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { apiRequest } from "@/lib/query-client";
+import { getInstallationId } from "@/lib/installation-id";
 import { useAuth } from "@/context/AuthContext";
 import Colors from "@/constants/colors";
 
@@ -82,10 +83,12 @@ export default function LoginScreen() {
     setError("");
     setIsVerifying(true);
     try {
+      const deviceId = await getInstallationId();
       const res = await apiRequest("POST", "/api/auth/verify-otp", {
         identifier: phone.trim(),
         type: "phone",
         otp: otp.trim(),
+        deviceId,
       });
       const data = await res.json();
 
@@ -103,7 +106,13 @@ export default function LoginScreen() {
       }
     } catch (err: any) {
       const msg = (err?.message || "").replace(/^\d+:\s*/, "");
-      setError(msg || "Invalid OTP. Please try again.");
+      if (msg.includes("blocked") || msg.includes("Blocked")) {
+        setError("This account is blocked. Contact support/admin.");
+      } else if (msg.includes("registered device") || msg.includes("another device")) {
+        setError("This account is active on another device/browser. Use the original one or contact support.");
+      } else {
+        setError(msg || "Invalid OTP. Please try again.");
+      }
     } finally {
       setIsVerifying(false);
     }

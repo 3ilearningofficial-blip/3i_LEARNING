@@ -402,10 +402,16 @@ export function registerLiveStreamRoutes({
       isArchiveSweepRunning = false;
     }
   };
-  const sweepIntervalMs = Math.max(30000, Number(process.env.CF_ARCHIVE_SWEEP_MS || 120000));
-  void runArchiveSweep();
-  setInterval(() => {
+  const runArchiveSweepWorker = process.env.RUN_BACKGROUND_SCHEDULERS !== "false";
+  if (runArchiveSweepWorker) {
+    const sweepIntervalMs = Math.max(30000, Number(process.env.CF_ARCHIVE_SWEEP_MS || 120000));
     void runArchiveSweep();
-  }, sweepIntervalMs);
+    setInterval(() => {
+      void runArchiveSweep();
+    }, sweepIntervalMs);
+    console.log(`[CF Stream] Archive sweep started — every ${sweepIntervalMs}ms`);
+  } else {
+    console.log("[CF Stream] Archive sweep disabled (RUN_BACKGROUND_SCHEDULERS=false)");
+  }
 }
 

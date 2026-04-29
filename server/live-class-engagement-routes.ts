@@ -39,17 +39,22 @@ export function registerLiveClassEngagementRoutes({
     }
   });
 
-  app.get("/api/live-classes/:id/viewers", async (req: Request, res: Response) => {
+  app.get("/api/live-classes/:id/viewers", requireAuth, async (req: Request, res: Response) => {
     try {
+      const user = (req as any).user;
+      const lcAccess = await db.query("SELECT course_id, is_free_preview, show_viewer_count FROM live_classes WHERE id = $1", [req.params.id]);
+      if (lcAccess.rows.length === 0) return res.status(404).json({ message: "Live class not found" });
+      if (!(await userCanAccessLiveClassContent(db, user, lcAccess.rows[0]))) {
+        return res.status(403).json({ message: "Access denied" });
+      }
       const cutoff = Date.now() - 30000;
       const result = await db.query(
-        `SELECT user_id, user_name FROM live_class_viewers
+        `SELECT user_name FROM live_class_viewers
          WHERE live_class_id = $1 AND last_heartbeat > $2
          ORDER BY user_name ASC`,
         [req.params.id, cutoff]
       );
-      const lcResult = await db.query("SELECT show_viewer_count FROM live_classes WHERE id = $1", [req.params.id]);
-      const visible = lcResult.rows[0]?.show_viewer_count ?? true;
+      const visible = lcAccess.rows[0]?.show_viewer_count ?? true;
       res.json({ viewers: result.rows, count: result.rows.length, visible });
     } catch (err) {
       console.error("Viewer list error:", err);

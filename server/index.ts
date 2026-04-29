@@ -40,56 +40,52 @@ declare module "http" {
 
 import cors from "cors";
 
-function setupCors(app: express.Application) {
-  const normalizeOrigin = (value: string): string => {
-    const trimmed = value.trim();
-    if (!trimmed) return "";
-    try {
-      return new URL(trimmed).origin.toLowerCase();
-    } catch {
-      return trimmed.replace(/\/+$/, "").toLowerCase();
-    }
-  };
+function normalizeOrigin(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  try {
+    return new URL(trimmed).origin.toLowerCase();
+  } catch {
+    return trimmed.replace(/\/+$/, "").toLowerCase();
+  }
+}
 
-  const originMatchesPattern = (origin: string, pattern: string): boolean => {
-    // Supports entries like: https://*.vercel.app
-    if (!pattern.includes("*")) return origin === pattern;
-    const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
-    return new RegExp(`^${escaped}$`, "i").test(origin);
-  };
+function originMatchesPattern(origin: string, pattern: string): boolean {
+  if (!pattern.includes("*")) return origin === pattern;
+  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+  return new RegExp(`^${escaped}$`, "i").test(origin);
+}
 
-  const isPrivateLocalOrigin = (origin: string): boolean => {
-    try {
-      const parsed = new URL(origin);
-      const host = parsed.hostname;
-      const isLocalhost = host === "localhost" || host === "127.0.0.1" || host.endsWith(".local");
-      if (isLocalhost) return true;
-      const m = host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
-      if (!m) return false;
-      const a = Number(m[1]);
-      const b = Number(m[2]);
-      if (a === 10) return true;
-      if (a === 127) return true;
-      if (a === 192 && b === 168) return true;
-      if (a === 172 && b >= 16 && b <= 31) return true;
-      return false;
-    } catch {
-      return false;
-    }
-  };
+function isPrivateLocalOrigin(origin: string): boolean {
+  try {
+    const parsed = new URL(origin);
+    const host = parsed.hostname;
+    const isLocalhost = host === "localhost" || host === "127.0.0.1" || host.endsWith(".local");
+    if (isLocalhost) return true;
+    const m = host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+    if (!m) return false;
+    const a = Number(m[1]);
+    const b = Number(m[2]);
+    if (a === 10) return true;
+    if (a === 127) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
 
+function getAllowedOriginPatterns(): string[] {
   const defaultAllowedOrigins = [
     "https://3ilearning.in",
-    // Keep www variant for compatibility.
     "https://www.3ilearning.in",
-    // Local web/dev origins for testing.
     "http://localhost:8081",
     "http://127.0.0.1:8081",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
     "http://localhost:19006",
     "http://127.0.0.1:19006",
-    // Razorpay Standard Checkout: redirect/callback POSTs to our API from these origins.
     "https://api.razorpay.com",
     "https://checkout.razorpay.com",
   ];
@@ -97,10 +93,20 @@ function setupCors(app: express.Application) {
     .split(",")
     .map((s) => normalizeOrigin(s))
     .filter(Boolean);
-  const allowedOriginPatterns = [
-    ...defaultAllowedOrigins.map((origin) => normalizeOrigin(origin)),
-    ...envOrigins,
-  ];
+  return [...defaultAllowedOrigins.map((origin) => normalizeOrigin(origin)), ...envOrigins];
+}
+
+function isTrustedOrigin(origin: string | undefined): boolean {
+  if (!origin) return false;
+  const normalizedOrigin = normalizeOrigin(origin);
+  if (process.env.NODE_ENV !== "production" && isPrivateLocalOrigin(normalizedOrigin)) {
+    return true;
+  }
+  return getAllowedOriginPatterns().some((pattern) => originMatchesPattern(normalizedOrigin, pattern));
+}
+
+function setupCors(app: express.Application) {
+  const allowedOriginPatterns = getAllowedOriginPatterns();
 
   const corsOptions = {
     origin(origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) {
@@ -117,13 +123,38 @@ function setupCors(app: express.Application) {
       return callback(new Error("Not allowed by CORS"));
     },
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Requested-With",
+      "X-App-Device-Id",
+      "X-Client-Platform",
+    ],
     credentials: true,
     preflightContinue: false,
     optionsSuccessStatus: 204,
   };
 
   app.use(cors(corsOptions));
+}
+
+function setupApiOriginProtection(app: express.Application) {
+  app.use("/api", (req: Request, res: Response, next: NextFunction) => {
+    if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return next();
+
+    const hasBearer = typeof req.headers.authorization === "string" && req.headers.authorization.startsWith("Bearer ");
+    const hasCookie = typeof req.headers.cookie === "string" && req.headers.cookie.length > 0;
+    if (!hasCookie || hasBearer) return next();
+
+    const origin = req.get("origin");
+    const referer = req.get("referer");
+    const trustedOrigin = origin ? isTrustedOrigin(origin) : false;
+    const trustedReferer = referer ? isTrustedOrigin(referer) : false;
+
+    if (trustedOrigin || trustedReferer) return next();
+
+    return res.status(403).json({ message: "Cross-site request blocked" });
+  });
 }
 
 function setupBodyParsing(app: express.Application) {
@@ -231,6 +262,24 @@ function getBackendVersion() {
   };
 }
 
+function logProductionReleaseHints() {
+  if (process.env.NODE_ENV !== "production") return;
+
+  const schedulerRole = process.env.RUN_BACKGROUND_SCHEDULERS === "false" ? "api-only" : "scheduler-enabled";
+  log(
+    `[startup] production mode | scheduler_role=${schedulerRole} | health=/api/health/version,/api/health/ready`
+  );
+
+  if (
+    process.env.ALLOW_RUNTIME_SCHEMA_SYNC === "true" ||
+    process.env.ALLOW_STARTUP_SCHEMA_ENSURE === "true"
+  ) {
+    console.warn(
+      "[startup] production should rely on migrations only; disable ALLOW_RUNTIME_SCHEMA_SYNC and ALLOW_STARTUP_SCHEMA_ENSURE"
+    );
+  }
+}
+
 function serveExpoManifest(platform: string, res: Response) {
   const manifestPath = path.resolve(
     process.cwd(),
@@ -326,9 +375,25 @@ function configureExpoAndLanding(app: express.Application) {
   next();
 });
 
-  app.use(express.static(path.resolve(process.cwd(), "static-build", "web")));
-  app.use("/assets", express.static(path.resolve(process.cwd(), "assets")));
-  app.use(express.static(path.resolve(process.cwd(), "static-build")));
+  const staticAssetOptions = {
+    setHeaders: (res: Response, filePath: string) => {
+      const normalized = filePath.replace(/\\/g, "/");
+      const isHtml = normalized.endsWith(".html");
+      const isVersionedBundle =
+        normalized.includes("/static-build/") ||
+        normalized.includes("/_expo/static/") ||
+        normalized.includes("/assets/");
+      if (isHtml) {
+        res.setHeader("Cache-Control", "no-store");
+      } else if (isVersionedBundle) {
+        res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      }
+    },
+  };
+
+  app.use(express.static(path.resolve(process.cwd(), "static-build", "web"), staticAssetOptions));
+  app.use("/assets", express.static(path.resolve(process.cwd(), "assets"), staticAssetOptions));
+  app.use(express.static(path.resolve(process.cwd(), "static-build"), staticAssetOptions));
 
   const expoRoutes = ["/login", "/otp", "/profile", "/courses", "/settings", "/admin", "/material", "/test", "/ai-tutor", "/missions", "/live-class"];
   app.get(expoRoutes, (req: Request, res: Response, next: NextFunction) => {
@@ -427,7 +492,7 @@ function setupErrorHandler(app: express.Application) {
     cookie: {
       secure: isProduction,        // HTTPS only in production
       httpOnly: true,
-      sameSite: isProduction ? "none" : "lax",  // "none" required for cross-origin with credentials
+      sameSite: "lax",
       maxAge: 7 * 24 * 60 * 60 * 1000,
     },
   };
@@ -443,6 +508,7 @@ function setupErrorHandler(app: express.Application) {
 
   // 3) Auth/session and API protection middleware
   app.use(session(sessionConfig));
+  setupApiOriginProtection(app);
 
   // Lightweight version/health endpoint for deploy consistency checks.
   app.get("/api/health/version", (_req: Request, res: Response) => {
@@ -500,6 +566,7 @@ function setupErrorHandler(app: express.Application) {
   setupErrorHandler(app);
 
   const port = parseInt(process.env.PORT || "5000", 10);
+  logProductionReleaseHints();
 
   // Show local network IP for mobile access
   try {

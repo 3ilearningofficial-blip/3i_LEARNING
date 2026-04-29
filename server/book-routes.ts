@@ -1,4 +1,8 @@
 import type { Express, Request, Response } from "express";
+import {
+  assertNativePaidPurchaseInstallation,
+  finalizeInstallationBindAfterPurchase,
+} from "./native-device-binding";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -152,7 +156,7 @@ export function registerBookRoutes({
       `,
         [user.id, bookId, Date.now()]
       );
-      console.log(`[BookClick] user=${user.id} book=${bookId} count=${result.rows[0]?.click_count}`);
+      console.log("[BookClick] tracked");
       res.json({ ok: true });
     } catch (err) {
       console.error("[BookBuyNow] track-click error:", err);
@@ -166,7 +170,7 @@ export function registerBookRoutes({
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const { bookId } = req.body;
       if (!bookId) return res.status(400).json({ message: "Book ID required" });
-      console.log(`[BookOrder] user=${user.id} bookId=${bookId}`);
+      console.log("[BookOrder] creating order");
       const bookResult = await db.query("SELECT * FROM books WHERE id = $1", [bookId]);
       if (bookResult.rows.length === 0) return res.status(404).json({ message: "Book not found" });
       const book = bookResult.rows[0];
@@ -186,7 +190,7 @@ export function registerBookRoutes({
           kind: "book",
         },
       });
-      console.log(`[BookOrder] created orderId=${order.id} amount=${amount}`);
+      console.log("[BookOrder] created");
       res.json({ orderId: order.id, amount: order.amount, currency: order.currency, keyId: process.env.RAZORPAY_KEY_ID, bookTitle: book.title, bookId });
     } catch (err) {
       console.error("Book create-order error:", err);
@@ -234,7 +238,12 @@ export function registerBookRoutes({
       const isValid = verifyPaymentSignature(razorpayOrderId, razorpayPaymentId, razorpaySignature);
       if (!isValid) return res.status(400).json({ message: "Invalid payment signature" });
       await verifyBookOrder(razorpayOrderId, user.id, parsedBookId);
+      const preBk = await assertNativePaidPurchaseInstallation(db, user.id, req);
+      if (!preBk.ok) {
+        return res.status(403).json({ message: preBk.message });
+      }
       await db.query("INSERT INTO book_purchases (user_id, book_id, purchased_at) VALUES ($1, $2, $3) ON CONFLICT (user_id, book_id) DO NOTHING", [user.id, parsedBookId, Date.now()]);
+      await finalizeInstallationBindAfterPurchase(db, user.id, req);
       await db.query("DELETE FROM book_click_tracking WHERE user_id = $1 AND book_id = $2", [user.id, parsedBookId]).catch(() => {});
       res.json({ success: true });
     } catch (err) {

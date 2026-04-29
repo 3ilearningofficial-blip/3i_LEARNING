@@ -17,6 +17,7 @@ import { useAuth } from "@/context/AuthContext";
 import { fetch } from "expo/fetch";
 import BulkUploadModal from "@/components/BulkUploadModal";
 import { buildRecordingLectureSectionTitle, prefillLiveRecordingFormFields } from "@/lib/recordingSection";
+import type { DeviceBlockEventRow, UserRecord } from "./user-types";
 
 interface Course {
   id: number;
@@ -31,17 +32,6 @@ interface Course {
   start_date?: string;
   end_date?: string;
   validity_months?: number | null;
-}
-
-interface UserRecord {
-  id: number;
-  name: string;
-  email: string;
-  phone: string;
-  role: string;
-  created_at: number;
-  is_blocked: boolean;
-  last_active_at: number;
 }
 
 type AdminTab = "courses" | "tests" | "materials" | "users" | "notifications" | "aiTutor" | "missions" | "books" | "support" | "analytics" | "welcome";
@@ -868,8 +858,8 @@ export default function AdminDashboard() {
       return res.json();
     },
     enabled: true, // Admin always needs courses data
-    staleTime: 0,
-    gcTime: 0,
+    staleTime: 5 * 60 * 1000,
+    gcTime: 10 * 60 * 1000,
   });
 
   const tsCourses = React.useMemo(() => courses.filter((c: any) => c.course_type === "test_series"), [courses]);
@@ -884,15 +874,36 @@ export default function AdminDashboard() {
         console.error("Admin users fetch failed:", res.status);
         return [];
       }
-      const data = await res.json();
-      console.log("[Admin] Users fetched:", data.length);
-      return data;
+      return res.json();
     },
     enabled: activeTab === "users",
-    staleTime: 0,
-    gcTime: 0,
-    refetchOnMount: true,
-    refetchInterval: activeTab === "users" ? 30000 : false,
+    staleTime: 30000,
+    gcTime: 10 * 60 * 1000,
+    refetchOnMount: false,
+    refetchInterval: activeTab === "users" ? 60000 : false,
+  });
+
+  const { data: deviceBlockEvents = [], isLoading: deviceBlocksLoading } = useQuery<DeviceBlockEventRow[]>({
+    queryKey: ["/api/admin/device-block-events"],
+    queryFn: async () => {
+      const baseUrl = getApiUrl();
+      const url = new URL("/api/admin/device-block-events", baseUrl);
+      const res = await authFetch(url.toString());
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: activeTab === "users",
+    staleTime: 30000,
+  });
+
+  const resetDeviceBindingMutation = useMutation({
+    mutationFn: async (userId: number) => {
+      await apiRequest("POST", `/api/admin/users/${userId}/reset-device-binding`, {});
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      qc.invalidateQueries({ queryKey: ["/api/admin/device-block-events"] });
+    },
   });
 
   // Refetch users every time the tab becomes active
@@ -935,17 +946,15 @@ export default function AdminDashboard() {
           console.warn("[NotifHistory] fetch failed:", res.status);
           return [];
         }
-        const data = await res.json();
-        console.log("[NotifHistory] fetched:", data.length, "records");
-        return data;
+      return res.json();
       } catch (e) {
         console.error("[NotifHistory] error:", e);
         return [];
       }
     },
-    staleTime: 0,
-    refetchOnMount: true,
-    refetchOnWindowFocus: true,
+    staleTime: 60000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
   });
 
   const { data: adminDoubtData = { doubts: [] as AdminDoubtRow[], topTopics: [] as { topic: string; count: number }[], repeatedPatterns: [] as AdminDoubtPattern[], studentInsights: [] as AdminStudentInsight[], total: 0 }, isLoading: adminDoubtsLoading } = useQuery<{
@@ -968,8 +977,8 @@ export default function AdminDashboard() {
       return res.json();
     },
     enabled: activeTab === "aiTutor",
-    refetchInterval: activeTab === "aiTutor" ? 20000 : false,
-    staleTime: 0,
+    refetchInterval: activeTab === "aiTutor" ? 30000 : false,
+    staleTime: 15000,
   });
   const clearAdminDoubtsMutation = useMutation({
     mutationFn: async () => {
@@ -999,7 +1008,7 @@ export default function AdminDashboard() {
       return res.json();
     },
     enabled: activeTab === "support",
-    refetchInterval: activeTab === "support" ? 15000 : false,
+    refetchInterval: activeTab === "support" ? 20000 : false,
   });
 
   const [supportUserId, setSupportUserId] = useState<number | null>(null);
@@ -1102,8 +1111,8 @@ export default function AdminDashboard() {
       return [];
     },
     enabled: activeTab === "materials",
-    staleTime: 0,
-    refetchInterval: activeTab === "materials" ? 10000 : false,
+    staleTime: 30000,
+    refetchInterval: activeTab === "materials" ? 20000 : false,
   });
 
   const addFreeMaterialMutation = useMutation({
@@ -1302,9 +1311,9 @@ export default function AdminDashboard() {
       return res.json();
     },
     enabled: activeTab === "tests",
-    staleTime: 0,
-    gcTime: 0,
-    refetchInterval: activeTab === "tests" ? 10000 : false,
+    staleTime: 30000,
+    gcTime: 10 * 60 * 1000,
+    refetchInterval: activeTab === "tests" ? 20000 : false,
   });
 
   const createTestMutation = useMutation({
@@ -1449,12 +1458,10 @@ export default function AdminDashboard() {
         console.warn("[UpcomingClasses] fetch failed:", res.status);
         return [];
       }
-      const data = await res.json();
-      console.log("[UpcomingClasses] fetched:", data.length);
-      return data;
+      return res.json();
     },
-    staleTime: 0,
-    refetchInterval: 10000,
+    staleTime: 30000,
+    refetchInterval: activeTab === "liveClasses" ? 20000 : false,
   });
 
   const handleScheduleLiveClass = async () => {
@@ -2457,6 +2464,67 @@ export default function AdminDashboard() {
                         <Text style={styles.statLabel}>Inactive (180d+)</Text>
                         <Text style={[styles.statValue, { color: "#9CA3AF" }]}>{inactiveUsers.length}</Text>
                       </View>
+                    </View>
+
+                    {/* Device mismatch / denied login log */}
+                    <View style={{ marginBottom: 18, padding: 14, backgroundColor: "#FFF7ED", borderRadius: 14, borderWidth: 1, borderColor: "#FDBA74" }}>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                        <Ionicons name="phone-portrait-outline" size={20} color="#C2410C" />
+                        <Text style={{ fontFamily: "Inter_700Bold", fontSize: 15, color: "#9A3412" }}>Device lock events</Text>
+                      </View>
+                      <Text style={{ fontSize: 12, fontFamily: "Inter_400Regular", color: "#7C2D12", marginBottom: 10 }}>
+                        Students who tried to sign in on a different device/browser installation after account binding. Access was denied and logged. Use “Clear lock” to allow rebind.
+                      </Text>
+                      {deviceBlocksLoading ? (
+                        <ActivityIndicator size="small" color={Colors.light.primary} />
+                      ) : deviceBlockEvents.length === 0 ? (
+                        <Text style={{ fontSize: 13, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>No device-block events yet.</Text>
+                      ) : (
+                        deviceBlockEvents.slice(0, 25).map((ev) => (
+                          <View
+                            key={ev.id}
+                            style={{
+                              paddingVertical: 10,
+                              paddingHorizontal: 10,
+                              marginBottom: 8,
+                              backgroundColor: "#fff",
+                              borderRadius: 10,
+                              borderWidth: 1,
+                              borderColor: Colors.light.border,
+                            }}
+                          >
+                            <Text style={{ fontFamily: "Inter_600SemiBold", fontSize: 14, color: Colors.light.text }}>
+                              {ev.user_name || `User #${ev.user_id}`}
+                            </Text>
+                            {!!ev.phone && <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>{ev.phone}</Text>}
+                            {!!ev.email && <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>{ev.email}</Text>}
+                            <Text style={{ fontSize: 11, color: Colors.light.textMuted, marginTop: 4, fontFamily: "Inter_400Regular" }}>
+                              {ev.created_at ? new Date(Number(ev.created_at)).toLocaleString() : ""} · {ev.platform || "?"} · {ev.reason || ""}
+                            </Text>
+                            <Pressable
+                              style={{ alignSelf: "flex-start", marginTop: 8, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, backgroundColor: "#EEF2FF" }}
+                              onPress={() => {
+                                Alert.alert(
+                                  "Clear device binding?",
+                                  "This lets the student bind a new installation on next sign-in/purchase.",
+                                  [
+                                    { text: "Cancel", style: "cancel" },
+                                    {
+                                      text: "Clear lock",
+                                      onPress: () => {
+                                        resetDeviceBindingMutation.mutate(ev.user_id);
+                                        Alert.alert("Done", "Device binding cleared.");
+                                      },
+                                    },
+                                  ]
+                                );
+                              }}
+                            >
+                              <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>Clear device lock</Text>
+                            </Pressable>
+                          </View>
+                        ))
+                      )}
                     </View>
 
                     {/* All Users list */}

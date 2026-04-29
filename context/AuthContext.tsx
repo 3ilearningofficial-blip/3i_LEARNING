@@ -1,22 +1,22 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode, useMemo } from "react";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Alert, Platform } from "react-native";
 import { router } from "expo-router";
-import { apiRequest, getApiUrl, getStoredToken, setUnauthorizedHandler } from "@/lib/query-client";
+import {
+  apiRequest,
+  getApiUrl,
+  getStoredToken,
+  setUnauthorizedHandler,
+  attachInstallationHeaders,
+} from "@/lib/query-client";
+import {
+  getStoredAuthUser,
+  removeStoredAuthUser,
+  storeAuthUser,
+  type StoredAuthUser,
+} from "@/lib/auth-storage";
 import { fetch } from "expo/fetch";
 
-interface AuthUser {
-  id: number;
-  name: string;
-  email?: string;
-  phone?: string;
-  role: "student" | "admin";
-  deviceId?: string;
-  sessionToken?: string;
-  profileComplete?: boolean;
-  date_of_birth?: string;
-  photo_url?: string;
-}
+interface AuthUser extends StoredAuthUser {}
 
 interface AuthContextValue {
   user: AuthUser | null;
@@ -30,104 +30,82 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-const storageKey = "user";
-
-async function storeUser(userData: AuthUser) {
-  if (Platform.OS === "web" && typeof localStorage !== "undefined") {
-    localStorage.setItem(storageKey, JSON.stringify(userData));
-  } else {
-    await AsyncStorage.setItem(storageKey, JSON.stringify(userData));
-  }
-}
-
-async function getStoredUser(): Promise<AuthUser | null> {
-  try {
-    if (Platform.OS === "web" && typeof localStorage !== "undefined") {
-      const stored = localStorage.getItem(storageKey);
-      return stored ? JSON.parse(stored) : null;
-    }
-    const stored = await AsyncStorage.getItem(storageKey);
-    return stored ? JSON.parse(stored) : null;
-  } catch {
-    return null;
-  }
-}
-
-async function removeStoredUser() {
-  if (Platform.OS === "web" && typeof localStorage !== "undefined") {
-    localStorage.removeItem(storageKey);
-  } else {
-    await AsyncStorage.removeItem(storageKey);
-  }
-}
-
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   const refreshUser = async () => {
     try {
-      const stored = await getStoredUser();
+      const stored = await getStoredAuthUser();
       const token = await getStoredToken();
 
       // Avoid noisy expected 401s on public auth pages when no session exists.
-      if (!token && !stored) {
+      if (Platform.OS !== "web" && !token && !stored) {
         setUser(null);
         return;
       }
 
       const baseUrl = getApiUrl();
       const url = new URL("/api/auth/me", baseUrl);
-      // Send stored token so auth works consistently on web + native.
+      // Native uses stored bearer token; web relies on HttpOnly cookie session.
       const headers: Record<string, string> = {};
       if (token) headers["Authorization"] = `Bearer ${token}`;
+      await attachInstallationHeaders(headers);
       const res = await fetch(url.toString(), { credentials: "include", headers });
       if (res.ok) {
         const data = await res.json();
         // Always update stored token with what server returns
         if (data.sessionToken) {
           setUser(data);
-          await storeUser(data);
+          await storeAuthUser(data);
         } else if (token) {
           // Server didn't return token — preserve the one we sent
           data.sessionToken = token;
           setUser(data);
-          await storeUser(data);
+          await storeAuthUser(data);
         } else {
           setUser(data);
-          await storeUser(data);
+          await storeAuthUser(data);
         }
       } else {
         const errorData = await res.json().catch(() => null);
-        if (errorData?.message === "logged_in_elsewhere") {
+        if (errorData?.message === "device_binding_mismatch") {
+          Alert.alert(
+            "Access Restricted",
+            "This account's paid subscription is tied to the device used at purchase. Sign in using that same installation, or contact support.",
+            [{ text: "OK" }]
+          );
+          setUser(null);
+          await removeStoredAuthUser();
+        } else if (errorData?.message === "logged_in_elsewhere") {
           Alert.alert("Session Expired", "Your account has been logged in on another device.", [{ text: "OK" }]);
           setUser(null);
-          await removeStoredUser();
+          await removeStoredAuthUser();
         } else if (errorData?.message === "account_blocked") {
           Alert.alert("Account Blocked", "Your account has been blocked by the admin. Please contact support.", [{ text: "OK" }]);
           setUser(null);
-          await removeStoredUser();
+          await removeStoredAuthUser();
         } else if (errorData?.message === "account_deleted") {
           setUser(null);
-          await removeStoredUser();
+          await removeStoredAuthUser();
         } else if (Platform.OS === "web") {
           setUser(null);
-          await removeStoredUser();
+          await removeStoredAuthUser();
         } else if (stored) {
           // Native fallback keeps offline usability when transient auth errors happen.
           setUser(stored);
         } else {
           setUser(null);
-          await removeStoredUser();
+          await removeStoredAuthUser();
         }
       }
     } catch {
       if (Platform.OS === "web") {
         setUser(null);
-        await removeStoredUser();
+        await removeStoredAuthUser();
       } else {
         // Network error — use stored user as fallback on native.
-        const stored = await getStoredUser();
+        const stored = await getStoredAuthUser();
         if (stored) {
           setUser(stored);
         }
@@ -146,7 +124,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     setUnauthorizedHandler(async () => {
       setUser(null);
-      await removeStoredUser();
+      await removeStoredAuthUser();
       if (Platform.OS === "web") {
         router.replace("/welcome");
       }
@@ -165,7 +143,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       timer = setTimeout(async () => {
         if (user) {
           setUser(null);
-          await removeStoredUser();
+          await removeStoredAuthUser();
           router.replace("/welcome");
         }
       }, TIMEOUT);
@@ -183,14 +161,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = (userData: AuthUser) => {
     setUser(userData);
-    storeUser(userData);
+    storeAuthUser(userData);
   };
 
   const updateUser = (updates: Partial<AuthUser>) => {
     setUser((prev) => {
       if (!prev) return prev;
       const updated = { ...prev, ...updates };
-      storeUser(updated);
+      storeAuthUser(updated);
       return updated;
     });
   };
@@ -200,7 +178,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await apiRequest("POST", "/api/auth/logout");
     } catch (_e) {}
     setUser(null);
-    await removeStoredUser();
+    await removeStoredAuthUser();
   };
 
   const value = useMemo(

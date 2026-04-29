@@ -1,5 +1,9 @@
 import type { Express, Request, Response } from "express";
 import { computeEnrollmentValidUntil } from "./course-access-utils";
+import {
+  assertNativePaidPurchaseInstallation,
+  finalizeInstallationBindAfterPurchase,
+} from "./native-device-binding";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -205,13 +209,7 @@ export function registerPaymentRoutes({
         receipt: `course_${courseId}_user_${user.id}_${Date.now()}`,
         notes: { courseId: courseId.toString(), userId: user.id.toString(), courseTitle: course.title },
       });
-      console.log("[Payments] create-order success", {
-        userId: user.id,
-        courseId,
-        orderId: order.id,
-        amount: order.amount,
-        currency: order.currency,
-      });
+      console.log("[Payments] create-order success");
 
       const existingPayment = await db.query(
         "SELECT id FROM payments WHERE user_id = $1 AND course_id = $2 AND status = 'created' ORDER BY created_at DESC LIMIT 1",
@@ -253,6 +251,10 @@ export function registerPaymentRoutes({
         return res.status(400).json({ message: "Payment details are required" });
       }
 
+      const preBind = await assertNativePaidPurchaseInstallation(db, user.id, req);
+      if (!preBind.ok) {
+        return res.status(403).json({ message: preBind.message });
+      }
       const result = await completeCoursePaymentByOrder({
         orderId: razorpay_order_id,
         paymentId: razorpay_payment_id,
@@ -260,12 +262,8 @@ export function registerPaymentRoutes({
         expectedUserId: user.id,
         expectedCourseId: courseId,
       });
-      console.log("[Payments] verify success", {
-        userId: result.userId,
-        courseId: result.courseId,
-        orderId: razorpay_order_id,
-        paymentId: razorpay_payment_id,
-      });
+      await finalizeInstallationBindAfterPurchase(db, result.userId, req);
+      console.log("[Payments] verify success");
       res.json({ success: true, message: "Payment verified and enrolled successfully" });
     } catch (err) {
       console.error("Verify payment error:", err);
@@ -407,10 +405,15 @@ export function registerPaymentRoutes({
         expectedItemId: parsedTestId,
         expectedAmount,
       });
+      const preTest = await assertNativePaidPurchaseInstallation(db, user.id, req);
+      if (!preTest.ok) {
+        return res.status(403).json({ message: preTest.message });
+      }
       await db.query(
         "INSERT INTO test_purchases (user_id, test_id, razorpay_order_id, razorpay_payment_id, created_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (user_id, test_id) DO NOTHING",
         [user.id, parsedTestId, razorpay_order_id, razorpay_payment_id, Date.now()]
       );
+      await finalizeInstallationBindAfterPurchase(db, user.id, req);
       res.json({ success: true });
     } catch (err) {
       console.error("Test verify-payment error:", err);

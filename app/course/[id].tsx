@@ -194,8 +194,8 @@ export default function CourseDetailScreen() {
       if (!res.ok) throw new Error("Failed to load course");
       return res.json();
     },
-    staleTime: 0,
-    refetchInterval: 30000,
+    staleTime: 15000,
+    refetchInterval: 60000,
   });
 
   // Repair paid-but-not-enrolled (legacy server bug). Idempotent; no-op if no paid row.
@@ -228,8 +228,8 @@ export default function CourseDetailScreen() {
     },
     // Keep this query warm even when user is on another tab so Live tab opens instantly.
     enabled: !!id && id !== "undefined",
-    refetchInterval: activeTab === "Live" ? 10000 : 30000,
-    staleTime: 5000,
+    refetchInterval: activeTab === "Live" ? 15000 : 60000,
+    staleTime: 15000,
     refetchOnMount: "always",
   });
 
@@ -251,7 +251,7 @@ export default function CourseDetailScreen() {
       return res.json();
     },
     enabled: !!user,
-    staleTime: 0,
+    staleTime: 30000,
   });
 
   const { data: courseFolders = [] } = useQuery<any[]>({

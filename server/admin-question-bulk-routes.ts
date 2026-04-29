@@ -199,7 +199,7 @@ export function registerAdminQuestionBulkRoutes({
       const defaultMarks = parseInt(req.body.defaultMarks) || 4;
       const defaultNegativeMarks = parseFloat(req.body.defaultNegativeMarks) || 1;
 
-      console.log("[bulk-pdf] testId:", testId, "file:", req.file?.originalname, "size:", req.file?.size);
+      console.log("[bulk-pdf] upload received", { testId, fileName: req.file?.originalname, size: req.file?.size });
 
       if (!testId || !req.file) {
         return res.status(400).json({ message: !testId ? "testId is required" : "PDF file is required — make sure you selected a .pdf file" });
@@ -208,7 +208,7 @@ export function registerAdminQuestionBulkRoutes({
       const parser = new PDFParse({ data: req.file.buffer });
       const result = await parser.getText();
       const text = result.text;
-      console.log("[bulk-pdf] extracted text length:", text.length, "preview:", text.substring(0, 200));
+      console.log("[bulk-pdf] extracted text length:", text.length);
 
       const parsed = parseQuestionsFromText(text);
       console.log("[bulk-pdf] parsed questions:", parsed.length);
