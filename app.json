@@ -15,7 +15,6 @@
     },
     "android": {
       "package": "com.learning3i.app",
-      "versionCode": 1,
       "adaptiveIcon": {
         "backgroundColor": "#0A1628",
         "foregroundImage": "./assets/images/icon.png",
@@ -55,9 +54,13 @@
       "reactCompiler": true
     },
     "extra": {
+      "router": {
+        "origin": "http://localhost:5000"
+      },
       "eas": {
-        "projectId": "YOUR_EAS_PROJECT_ID"
+        "projectId": "1a053771-7e15-4507-9ecb-18c317018357"
       }
-    }
+    },
+    "owner": "pankaj_nagar"
   }
 }
