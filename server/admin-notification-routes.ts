@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { sendPushToUsers } from "./push-notifications";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[]; rowCount?: number }>;
@@ -48,6 +49,11 @@ export function registerAdminNotificationRoutes({
           [uid, title, message, type || "info", now, expiresAt, adminNotifId, imageUrl || null]
         );
       }
+      await sendPushToUsers(db, userIds.map((id) => Number(id)), {
+        title: String(title || "Notification"),
+        body: String(message || ""),
+        data: { type: "admin_notification", adminNotifId, courseId: courseId || null },
+      });
 
       res.json({ success: true, sent: userIds.length });
     } catch (err) {

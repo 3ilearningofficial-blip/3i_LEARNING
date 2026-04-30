@@ -530,22 +530,30 @@ export default function LiveClassScreen() {
 
   const title = liveClassData?.title || paramTitle || "Live Class";
   const topPadding = Platform.OS === "web" ? 16 : insets.top;
-  const bottomPadding = Platform.OS === "web" ? 34 : insets.bottom;
+  const bottomPadding = Platform.OS === "web" ? 34 : Math.max(insets.bottom, Platform.OS === "android" ? 10 : 0);
 
-  const streamType = liveClassData?.stream_type;
-  const cfHlsUrl = liveClassData?.cf_playback_hls || "";
-  const recordingUrl = liveClassData?.recording_url || "";
+  const streamType = String(liveClassData?.stream_type || "").toLowerCase();
+  const cfHlsUrl = String(liveClassData?.cf_playback_hls || "").trim();
+  const recordingUrl = String(liveClassData?.recording_url || "").trim();
+  const liveYoutubeUrl = String(liveClassData?.youtube_url || paramVideoUrl || "").trim();
   const isCompleted = liveClassData?.is_completed;
 
-  // Professional playback priority for students:
-  // 1) Saved recording URL (post-class)
-  // 2) Cloudflare HLS (live/no-branding player)
-  // 3) YouTube URL fallback
-  const videoUrl = recordingUrl
-    ? recordingUrl
-    : cfHlsUrl
-      ? cfHlsUrl
-      : (liveClassData?.youtube_url || paramVideoUrl || "");
+  // Pick source by class state + declared stream type to avoid opening wrong player.
+  const videoUrl = (() => {
+    if (isCompleted) {
+      if (recordingUrl) return recordingUrl;
+      if (liveYoutubeUrl) return liveYoutubeUrl;
+      if (cfHlsUrl) return cfHlsUrl;
+      return "";
+    }
+    if (streamType === "youtube") {
+      return liveYoutubeUrl || recordingUrl || cfHlsUrl;
+    }
+    if (streamType === "cloudflare") {
+      return cfHlsUrl || recordingUrl || liveYoutubeUrl;
+    }
+    return recordingUrl || liveYoutubeUrl || cfHlsUrl;
+  })();
 
   // For /api/media/ recording URLs, get a token so mobile web can play them
   const [recordingToken, setRecordingToken] = useState<string | null>(null);

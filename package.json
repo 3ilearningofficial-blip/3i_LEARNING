@@ -52,6 +52,7 @@
     "expo-image-picker": "~17.0.9",
     "expo-linear-gradient": "~15.0.8",
     "expo-linking": "~8.0.10",
+    "expo-notifications": "^55.0.21",
     "expo-router": "~6.0.17",
     "expo-screen-capture": "~8.0.9",
     "expo-screen-orientation": "~9.0.8",

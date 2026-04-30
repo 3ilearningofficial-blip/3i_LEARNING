@@ -1674,6 +1674,7 @@ function registerLiveStreamRoutes({
   recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse2,
   getR2Client
 }) {
+  const archiveRetryState = /* @__PURE__ */ new Map();
   const inferVideoType = (url) => {
     const lower = String(url || "").toLowerCase();
     if (lower.includes("youtube.com") || lower.includes("youtu.be")) return "youtube";
@@ -1689,6 +1690,11 @@ function registerLiveStreamRoutes({
   const archiveCloudflareRecordingToR2 = async (recordingUid) => {
     try {
       if (!process.env.R2_BUCKET_NAME) return null;
+      const now = Date.now();
+      const retryState = archiveRetryState.get(recordingUid);
+      if (retryState && retryState.nextAttemptAt > now) {
+        return null;
+      }
       const configuredDownloadBase = String(process.env.CF_STREAM_DOWNLOAD_BASE_URL || "").trim().replace(/\/+$/, "");
       const candidateUrls = [
         `https://videodelivery.net/${recordingUid}/downloads/default.mp4`,
@@ -1701,9 +1707,22 @@ function registerLiveStreamRoutes({
         if (resp.ok && resp.body) {
           source = resp;
           matchedUrl = candidateUrl;
+          archiveRetryState.delete(recordingUid);
           break;
         }
-        console.warn(`[CF Stream] MP4 download not ready/failed for uid=${recordingUid}, status=${resp.status}, url=${candidateUrl}`);
+        const prev = archiveRetryState.get(recordingUid) || { attempts: 0, nextAttemptAt: 0, lastStatus: null };
+        const attempts = prev.attempts + 1;
+        const backoffMs = Math.min(6 * 60 * 60 * 1e3, Math.max(2 * 60 * 1e3, attempts * 10 * 60 * 1e3));
+        archiveRetryState.set(recordingUid, {
+          attempts,
+          nextAttemptAt: Date.now() + backoffMs,
+          lastStatus: resp.status
+        });
+        if (attempts === 1 || attempts % 10 === 0) {
+          console.warn(
+            `[CF Stream] MP4 not ready uid=${recordingUid} status=${resp.status} attempt=${attempts} nextRetryInMs=${backoffMs}`
+          );
+        }
       }
       if (!source || !source.body) return null;
       const { PutObjectCommand } = await import("@aws-sdk/client-s3");
@@ -1941,9 +1960,11 @@ function registerLiveStreamRoutes({
          FROM live_classes
          WHERE stream_type = 'cloudflare'
            AND is_completed = TRUE
+           AND ended_at IS NOT NULL
+           AND ended_at > (EXTRACT(EPOCH FROM NOW()) * 1000 - 14 * 24 * 60 * 60 * 1000)
            AND (recording_url IS NULL OR recording_url ILIKE 'https://videodelivery.net/%/manifest/video.m3u8')
          ORDER BY ended_at DESC NULLS LAST
-         LIMIT 20`
+         LIMIT 8`
       );
       const accountId = process.env.CF_STREAM_ACCOUNT_ID || process.env.R2_ACCOUNT_ID;
       const apiToken = process.env.CF_STREAM_API_TOKEN;
@@ -6874,25 +6895,48 @@ async function registerRoutes(app2) {
     setInterval(async () => {
       try {
         const now = Date.now();
+        const minScheduleAt = now + 29 * 60 * 1e3;
+        const maxScheduleAt = now + 31 * 60 * 1e3;
         const classes = await db.query(
-          "SELECT lc.id, lc.title, lc.course_id, lc.scheduled_at, lc.notify_bell, lc.is_free_preview, lc.is_public FROM live_classes lc WHERE lc.is_completed IS NOT TRUE AND lc.is_live IS NOT TRUE AND lc.notify_bell = TRUE AND lc.scheduled_at IS NOT NULL"
+          `SELECT lc.id, lc.title, lc.course_id, lc.is_free_preview, lc.is_public
+           FROM live_classes lc
+           WHERE lc.is_completed IS NOT TRUE
+             AND lc.is_live IS NOT TRUE
+             AND lc.notify_bell = TRUE
+             AND lc.scheduled_at IS NOT NULL
+             AND lc.scheduled_at BETWEEN $1 AND $2
+           ORDER BY lc.scheduled_at ASC
+           LIMIT 50`,
+          [minScheduleAt, maxScheduleAt]
         );
         for (const lc of classes.rows) {
-          const scheduledAt = parseInt(lc.scheduled_at);
-          if (isNaN(scheduledAt)) continue;
-          const diff = scheduledAt - now;
-          const recipients = !lc.course_id || lc.is_free_preview === true || lc.is_public === true ? await db.query("SELECT id AS user_id FROM users WHERE role = 'student'") : await db.query("SELECT user_id FROM enrollments WHERE course_id = $1", [lc.course_id]);
           const expiresAt = now + 6 * 36e5;
           const key30 = `30min_${lc.id}`;
-          if (diff > 0 && diff <= 31 * 60 * 1e3 && diff >= 29 * 60 * 1e3 && !sentNotifications.has(key30)) {
+          if (!sentNotifications.has(key30)) {
             sentNotifications.add(key30);
-            for (const e of recipients.rows) {
-              await db.query(
-                "INSERT INTO notifications (user_id, title, message, type, created_at, expires_at) VALUES ($1, $2, $3, $4, $5, $6)",
-                [e.user_id, "\u23F0 Live Class in 30 minutes!", `"${lc.title}" starts in 30 minutes. Get ready!`, "info", now, expiresAt]
+            const notifTitle = "\u23F0 Live Class in 30 minutes!";
+            const notifMessage = `"${lc.title}" starts in 30 minutes. Get ready!`;
+            if (!lc.course_id || lc.is_free_preview === true || lc.is_public === true) {
+              const inserted = await db.query(
+                `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
+                 SELECT u.id, $1, $2, 'info', $3, $4
+                 FROM users u
+                 WHERE u.role = 'student'
+                 RETURNING user_id`,
+                [notifTitle, notifMessage, now, expiresAt]
               );
+              console.log(`[LiveNotif] 30min reminder sent for class=${lc.id} recipients=${inserted.rows.length}`);
+            } else {
+              const inserted = await db.query(
+                `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
+                 SELECT e.user_id, $1, $2, 'info', $3, $4
+                 FROM enrollments e
+                 WHERE e.course_id = $5
+                 RETURNING user_id`,
+                [notifTitle, notifMessage, now, expiresAt, lc.course_id]
+              );
+              console.log(`[LiveNotif] 30min reminder sent for class=${lc.id} recipients=${inserted.rows.length}`);
             }
-            console.log(`[LiveNotif] 30min reminder sent for "${lc.title}" to ${recipients.rows.length} students`);
           }
         }
         if (sentNotifications.size > 500) sentNotifications.clear();
@@ -6904,7 +6948,14 @@ async function registerRoutes(app2) {
     setInterval(async () => {
       try {
         const result = await db.query(
-          "DELETE FROM download_tokens WHERE expires_at < $1 AND used = TRUE",
+          `DELETE FROM download_tokens
+           WHERE id IN (
+             SELECT id
+             FROM download_tokens
+             WHERE expires_at < $1 AND used = TRUE
+             ORDER BY expires_at ASC
+             LIMIT 2000
+           )`,
           [Date.now()]
         );
         if (result.rowCount && result.rowCount > 0) {

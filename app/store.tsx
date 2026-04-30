@@ -457,15 +457,15 @@ setTimeout(function(){var rzp=new Razorpay(options);rzp.on("payment.failed",func
 
       {/* Razorpay WebView Modal */}
       {paymentWebViewHtml && Platform.OS !== "web" && (
-        <Modal visible animationType="slide" onRequestClose={() => { setPaymentWebViewHtml(null); setPendingBookId(null); setPayingBookId(null); }}>
-          <View style={{ flex: 1, backgroundColor: "#0A1628" }}>
-            <View style={{ flexDirection: "row", alignItems: "center", paddingTop: insets.top + 8, paddingHorizontal: 16, paddingBottom: 12, backgroundColor: "#0A1628" }}>
-              <Pressable onPress={() => { setPaymentWebViewHtml(null); setPendingBookId(null); setPayingBookId(null); }}
-                style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" }}>
-                <Ionicons name="close" size={22} color="#fff" />
-              </Pressable>
-              <Text style={{ flex: 1, textAlign: "center", fontSize: 16, fontFamily: "Inter_700Bold", color: "#fff", marginRight: 36 }}>Payment</Text>
-            </View>
+        <Modal
+          visible
+          animationType="slide"
+          presentationStyle="fullScreen"
+          statusBarTranslucent
+          navigationBarTranslucent
+          onRequestClose={() => { setPaymentWebViewHtml(null); setPendingBookId(null); setPayingBookId(null); }}
+        >
+          <View style={{ flex: 1, backgroundColor: "#0A1628", paddingBottom: Math.max(insets.bottom, Platform.OS === "android" ? 12 : 0) }}>
             <WebView
               source={{ html: paymentWebViewHtml, baseUrl: "https://api.razorpay.com" }}
               javaScriptEnabled domStorageEnabled mixedContentMode="compatibility"
@@ -500,6 +500,22 @@ setTimeout(function(){var rzp=new Razorpay(options);rzp.on("payment.failed",func
                 } catch (_e) {}
               }}
             />
+            <Pressable
+              onPress={() => { setPaymentWebViewHtml(null); setPendingBookId(null); setPayingBookId(null); }}
+              style={{
+                position: "absolute",
+                top: insets.top + 10,
+                left: 14,
+                width: 38,
+                height: 38,
+                borderRadius: 19,
+                backgroundColor: "rgba(10,22,40,0.55)",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <Ionicons name="close" size={22} color="#fff" />
+            </Pressable>
           </View>
         </Modal>
       )}

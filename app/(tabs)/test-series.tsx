@@ -726,14 +726,15 @@ export default function TestSeriesScreen() {
 
       {/* Razorpay Payment WebView (mobile only) */}
       {paymentWebViewHtml && Platform.OS !== "web" && (
-        <Modal visible animationType="slide" onRequestClose={() => { setPaymentWebViewHtml(null); clearTestPaymentUi(); }}>
-          <View style={{ flex: 1, backgroundColor: "#0A1628" }}>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 16, paddingTop: insets.top + 8, paddingBottom: 12 }}>
-              <Pressable onPress={() => { setPaymentWebViewHtml(null); clearTestPaymentUi(); }} style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" }}>
-                <Ionicons name="close" size={20} color="#fff" />
-              </Pressable>
-              <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: "#fff" }}>Complete Payment</Text>
-            </View>
+        <Modal
+          visible
+          animationType="slide"
+          presentationStyle="fullScreen"
+          statusBarTranslucent
+          navigationBarTranslucent
+          onRequestClose={() => { setPaymentWebViewHtml(null); clearTestPaymentUi(); }}
+        >
+          <View style={{ flex: 1, backgroundColor: "#0A1628", paddingBottom: Math.max(insets.bottom, Platform.OS === "android" ? 12 : 0) }}>
             <WebView
               source={{ html: paymentWebViewHtml, baseUrl: "https://api.razorpay.com" }}
               style={{ flex: 1 }}
@@ -771,6 +772,22 @@ export default function TestSeriesScreen() {
                 }
               }}
             />
+            <Pressable
+              onPress={() => { setPaymentWebViewHtml(null); clearTestPaymentUi(); }}
+              style={{
+                position: "absolute",
+                top: insets.top + 10,
+                left: 14,
+                width: 38,
+                height: 38,
+                borderRadius: 19,
+                backgroundColor: "rgba(10,22,40,0.55)",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <Ionicons name="close" size={22} color="#fff" />
+            </Pressable>
           </View>
         </Modal>
       )}

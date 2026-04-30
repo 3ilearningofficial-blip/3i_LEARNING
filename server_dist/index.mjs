@@ -1770,6 +1770,63 @@ function registerLiveStreamRoutes({
       return null;
     }
   };
+  const saveRecordingForClassAndPeers = async (liveClassId, recordingUrl, sectionTitle) => {
+    const lcResult = await db2.query("SELECT * FROM live_classes WHERE id = $1", [liveClassId]);
+    if (lcResult.rows.length === 0) {
+      throw new Error("Live class not found");
+    }
+    const liveClass = lcResult.rows[0];
+    const title = liveClass.title;
+    const peers = await db2.query("SELECT * FROM live_classes WHERE title = $1 ORDER BY id", [title]);
+    const lectureIds = [];
+    for (const row of peers.rows) {
+      const endedAt = Number(row.ended_at || Date.now());
+      const durationMins = row.started_at ? Math.max(1, Math.round((endedAt - Number(row.started_at)) / 6e4)) : 0;
+      await db2.query(
+        `UPDATE live_classes 
+         SET recording_url = $1, is_completed = TRUE, is_live = FALSE, ended_at = $2,
+             duration_minutes = CASE 
+               WHEN started_at IS NOT NULL 
+               THEN GREATEST(1, ROUND(($2::bigint - started_at) / 60000.0)::INTEGER)
+               ELSE 0
+             END
+         WHERE id = $3`,
+        [recordingUrl, endedAt, row.id]
+      );
+      if (!row.course_id) continue;
+      const maxOrder = await db2.query(
+        "SELECT COALESCE(MAX(order_index), 0) + 1 as next_order FROM lectures WHERE course_id = $1",
+        [row.course_id]
+      );
+      const recordSection = buildRecordingLectureSectionTitle(
+        row.lecture_section_title,
+        row.lecture_subfolder_title,
+        sectionTitle
+      );
+      const lectureResult = await db2.query(
+        `INSERT INTO lectures (course_id, title, description, video_url, video_type, duration_minutes, order_index, is_free_preview, section_title, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+        [
+          row.course_id,
+          row.title,
+          row.description || "",
+          recordingUrl,
+          inferVideoType(recordingUrl),
+          durationMins,
+          maxOrder.rows[0].next_order,
+          false,
+          recordSection,
+          Date.now()
+        ]
+      );
+      lectureIds.push(lectureResult.rows[0].id);
+      await db2.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [
+        row.course_id
+      ]);
+      await recomputeAllEnrollmentsProgressForCourse2(row.course_id);
+    }
+    return { lectureId: lectureIds[0] ?? null, lectureIds };
+  };
   app2.post("/api/admin/live-classes/:id/stream/create", requireAdmin, async (req, res) => {
     try {
       const accountId = process.env.CF_STREAM_ACCOUNT_ID || process.env.R2_ACCOUNT_ID;
@@ -1876,6 +1933,13 @@ function registerLiveStreamRoutes({
         headers: { Authorization: `Bearer ${apiToken}` }
       }).catch(() => {
       });
+      if (recordingUrl) {
+        try {
+          await saveRecordingForClassAndPeers(String(req.params.id), recordingUrl);
+        } catch (saveErr) {
+          console.warn("[CF Stream] recording save after stream end failed:", saveErr);
+        }
+      }
       console.log(`[CF Stream] Ended live input uid=${uid}`);
       res.json({ success: true, recordingUrl });
     } catch (err) {
@@ -1889,62 +1953,12 @@ function registerLiveStreamRoutes({
       if (!recordingUrl) {
         return res.status(400).json({ message: "recordingUrl is required" });
       }
-      const lcResult = await db2.query("SELECT * FROM live_classes WHERE id = $1", [req.params.id]);
-      if (lcResult.rows.length === 0) {
-        return res.status(404).json({ message: "Live class not found" });
-      }
-      const liveClass = lcResult.rows[0];
-      const title = liveClass.title;
-      const peers = await db2.query("SELECT * FROM live_classes WHERE title = $1 ORDER BY id", [title]);
-      const lectureIds = [];
-      for (const row of peers.rows) {
-        const endedAt = Number(row.ended_at || Date.now());
-        const durationMins = row.started_at ? Math.max(1, Math.round((endedAt - Number(row.started_at)) / 6e4)) : 0;
-        await db2.query(
-          `UPDATE live_classes 
-         SET recording_url = $1, is_completed = TRUE, is_live = FALSE, ended_at = $2,
-             duration_minutes = CASE 
-               WHEN started_at IS NOT NULL 
-               THEN GREATEST(1, ROUND(($2::bigint - started_at) / 60000.0)::INTEGER)
-               ELSE 0
-             END
-         WHERE id = $3`,
-          [recordingUrl, endedAt, row.id]
-        );
-        if (row.course_id) {
-          const maxOrder = await db2.query(
-            "SELECT COALESCE(MAX(order_index), 0) + 1 as next_order FROM lectures WHERE course_id = $1",
-            [row.course_id]
-          );
-          const recordSection = buildRecordingLectureSectionTitle(
-            row.lecture_section_title,
-            row.lecture_subfolder_title,
-            sectionTitle
-          );
-          const lectureResult = await db2.query(
-            `INSERT INTO lectures (course_id, title, description, video_url, video_type, duration_minutes, order_index, is_free_preview, section_title, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
-            [
-              row.course_id,
-              row.title,
-              row.description || "",
-              recordingUrl,
-              inferVideoType(recordingUrl),
-              durationMins,
-              maxOrder.rows[0].next_order,
-              false,
-              recordSection,
-              Date.now()
-            ]
-          );
-          lectureIds.push(lectureResult.rows[0].id);
-          await db2.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [
-            row.course_id
-          ]);
-          await recomputeAllEnrollmentsProgressForCourse2(row.course_id);
-        }
-      }
-      res.json({ success: true, lectureId: lectureIds[0] ?? null, lectureIds });
+      const { lectureId, lectureIds } = await saveRecordingForClassAndPeers(
+        String(req.params.id),
+        String(recordingUrl),
+        sectionTitle
+      );
+      res.json({ success: true, lectureId, lectureIds });
     } catch (err) {
       console.error("Recording completion error:", err);
       res.status(500).json({ message: "Failed to save recording" });
@@ -2809,6 +2823,120 @@ var init_admin_lecture_routes = __esm({
   }
 });
 
+// server/push-notifications.ts
+async function ensurePushTable(db2) {
+  if (pushTableReady) return;
+  await db2.query(`
+    CREATE TABLE IF NOT EXISTS user_push_tokens (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      expo_push_token TEXT NOT NULL UNIQUE,
+      platform TEXT,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at BIGINT NOT NULL,
+      last_seen_at BIGINT NOT NULL
+    )
+  `);
+  await db2.query(
+    "CREATE INDEX IF NOT EXISTS idx_user_push_tokens_user_active ON user_push_tokens(user_id, is_active)"
+  );
+  pushTableReady = true;
+}
+function chunkArray(arr, size) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+async function registerPushToken(db2, userId, token, platform) {
+  await ensurePushTable(db2);
+  const now = Date.now();
+  await db2.query(
+    `INSERT INTO user_push_tokens (user_id, expo_push_token, platform, is_active, created_at, last_seen_at)
+     VALUES ($1, $2, $3, TRUE, $4, $4)
+     ON CONFLICT (expo_push_token)
+     DO UPDATE SET
+       user_id = EXCLUDED.user_id,
+       platform = EXCLUDED.platform,
+       is_active = TRUE,
+       last_seen_at = EXCLUDED.last_seen_at`,
+    [userId, token, platform || "unknown", now]
+  );
+}
+async function unregisterPushToken(db2, userId, token) {
+  await ensurePushTable(db2);
+  await db2.query(
+    "UPDATE user_push_tokens SET is_active = FALSE, last_seen_at = $1 WHERE user_id = $2 AND expo_push_token = $3",
+    [Date.now(), userId, token]
+  );
+}
+async function unregisterAllPushTokens(db2, userId) {
+  await ensurePushTable(db2);
+  await db2.query("UPDATE user_push_tokens SET is_active = FALSE, last_seen_at = $1 WHERE user_id = $2", [
+    Date.now(),
+    userId
+  ]);
+}
+async function sendPushToUsers(db2, userIds, payload) {
+  await ensurePushTable(db2);
+  const uniqueUserIds = [...new Set(userIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0))];
+  if (!uniqueUserIds.length) return { sent: 0, tokens: 0 };
+  const tokenResult = await db2.query(
+    "SELECT expo_push_token FROM user_push_tokens WHERE is_active = TRUE AND user_id = ANY($1::int[])",
+    [uniqueUserIds]
+  );
+  const tokens = [...new Set(tokenResult.rows.map((r) => String(r.expo_push_token || "").trim()).filter(Boolean))];
+  if (!tokens.length) return { sent: 0, tokens: 0 };
+  const messages = tokens.map((to) => ({
+    to,
+    sound: "default",
+    title: payload.title,
+    body: payload.body,
+    data: payload.data || {},
+    priority: "high"
+  }));
+  const chunks = chunkArray(messages, 100);
+  let sent = 0;
+  const invalidTokens = [];
+  for (const chunk of chunks) {
+    try {
+      const res = await fetch("https://exp.host/--/api/v2/push/send", {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Accept-encoding": "gzip, deflate",
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(chunk)
+      });
+      const json = await res.json().catch(() => null);
+      const results = Array.isArray(json?.data) ? json.data : [];
+      sent += results.filter((r) => r?.status === "ok").length;
+      results.forEach((r, idx) => {
+        if (r?.status === "error" && r?.details?.error === "DeviceNotRegistered" && chunk[idx]?.to) {
+          invalidTokens.push(chunk[idx].to);
+        }
+      });
+    } catch (err) {
+      console.error("[Push] send chunk failed:", err);
+    }
+  }
+  if (invalidTokens.length > 0) {
+    await db2.query("UPDATE user_push_tokens SET is_active = FALSE, last_seen_at = $1 WHERE expo_push_token = ANY($2::text[])", [
+      Date.now(),
+      [...new Set(invalidTokens)]
+    ]).catch(() => {
+    });
+  }
+  return { sent, tokens: tokens.length };
+}
+var pushTableReady;
+var init_push_notifications = __esm({
+  "server/push-notifications.ts"() {
+    "use strict";
+    pushTableReady = false;
+  }
+});
+
 // server/admin-test-routes.ts
 function registerAdminTestRoutes({
   app: app2,
@@ -2853,7 +2981,28 @@ function registerAdminTestRoutes({
           Date.now()
         ]
       );
-      if (courseId) await updateCourseTestCounts2(courseId);
+      if (courseId) {
+        await updateCourseTestCounts2(courseId);
+        const courseInfo = await db2.query("SELECT title FROM courses WHERE id = $1", [courseId]).catch(() => ({ rows: [] }));
+        const courseTitle = String(courseInfo.rows[0]?.title || "your course");
+        const recipients = await db2.query("SELECT user_id FROM enrollments WHERE course_id = $1", [courseId]).catch(() => ({ rows: [] }));
+        const recipientIds = recipients.rows.map((r) => Number(r.user_id));
+        const notifTitle = "\u{1F4DD} New Test Added";
+        const notifMessage = `"${title}" has been added in ${courseTitle}.`;
+        const now = Date.now();
+        for (const uid of recipientIds) {
+          await db2.query(
+            "INSERT INTO notifications (user_id, title, message, type, created_at) VALUES ($1, $2, $3, $4, $5)",
+            [uid, notifTitle, notifMessage, "info", now]
+          ).catch(() => {
+          });
+        }
+        await sendPushToUsers(db2, recipientIds, {
+          title: notifTitle,
+          body: notifMessage,
+          data: { type: "new_test_added", testId: result.rows[0]?.id, courseId: Number(courseId) }
+        });
+      }
       res.json(result.rows[0]);
     } catch {
       res.status(500).json({ message: "Failed to create test" });
@@ -2896,6 +3045,7 @@ function registerAdminTestRoutes({
 var init_admin_test_routes = __esm({
   "server/admin-test-routes.ts"() {
     "use strict";
+    init_push_notifications();
   }
 });
 
@@ -3142,6 +3292,25 @@ function registerAdminUsersAndContentRoutes({
       );
       if (parsedCourseId) {
         await db2.query("UPDATE courses SET total_materials = (SELECT COUNT(*) FROM study_materials WHERE course_id = $1) WHERE id = $1", [parsedCourseId]);
+        const courseInfo = await db2.query("SELECT title FROM courses WHERE id = $1", [parsedCourseId]).catch(() => ({ rows: [] }));
+        const courseTitle = String(courseInfo.rows[0]?.title || "your course");
+        const recipients = await db2.query("SELECT user_id FROM enrollments WHERE course_id = $1", [parsedCourseId]).catch(() => ({ rows: [] }));
+        const recipientIds = recipients.rows.map((r) => Number(r.user_id));
+        const notifTitle = "\u{1F4D8} New Material Added";
+        const notifMessage = `"${normalizedTitle}" has been added in ${courseTitle}.`;
+        const now = Date.now();
+        for (const uid of recipientIds) {
+          await db2.query(
+            "INSERT INTO notifications (user_id, title, message, type, created_at) VALUES ($1, $2, $3, $4, $5)",
+            [uid, notifTitle, notifMessage, "info", now]
+          ).catch(() => {
+          });
+        }
+        await sendPushToUsers(db2, recipientIds, {
+          title: notifTitle,
+          body: notifMessage,
+          data: { type: "new_material_added", materialId: result.rows[0]?.id, courseId: parsedCourseId }
+        });
       }
       res.json(result.rows[0]);
     } catch (err) {
@@ -3277,6 +3446,7 @@ function registerAdminUsersAndContentRoutes({
 var init_admin_users_and_content_routes = __esm({
   "server/admin-users-and-content-routes.ts"() {
     "use strict";
+    init_push_notifications();
   }
 });
 
@@ -3479,6 +3649,11 @@ function registerAdminNotificationRoutes({
           [uid, title, message, type || "info", now, expiresAt, adminNotifId, imageUrl || null]
         );
       }
+      await sendPushToUsers(db2, userIds.map((id) => Number(id)), {
+        title: String(title || "Notification"),
+        body: String(message || ""),
+        data: { type: "admin_notification", adminNotifId, courseId: courseId || null }
+      });
       res.json({ success: true, sent: userIds.length });
     } catch (err) {
       console.error("[NotifSend] error:", err);
@@ -3538,6 +3713,7 @@ function registerAdminNotificationRoutes({
 var init_admin_notification_routes = __esm({
   "server/admin-notification-routes.ts"() {
     "use strict";
+    init_push_notifications();
   }
 });
 
@@ -4466,8 +4642,33 @@ var init_lecture_routes = __esm({
 function registerTestFolderRoutes({
   app: app2,
   db: db2,
-  getAuthUser: getAuthUser2
+  getAuthUser: getAuthUser2,
+  getRazorpay: getRazorpay2,
+  verifyPaymentSignature: verifyPaymentSignature2
 }) {
+  const verifyFolderOrder = async (orderId, userId, folderId) => {
+    const folderResult = await db2.query(
+      "SELECT id, price, is_free FROM standalone_folders WHERE id = $1 AND type = 'mini_course'",
+      [folderId]
+    );
+    if (!folderResult.rows.length) throw new Error("Folder not found");
+    const folder = folderResult.rows[0];
+    if (folder.is_free || parseFloat(String(folder.price || "0")) <= 0) {
+      throw new Error("This folder is free");
+    }
+    const expectedAmount = Math.round(parseFloat(String(folder.price || "0")) * 100);
+    const razorpay = getRazorpay2();
+    const order = await razorpay.orders.fetch(orderId);
+    const notes = order.notes || {};
+    const noteKind = String(notes.kind || "");
+    const noteUserId = Number(notes.userId || 0);
+    const noteFolderId = Number(notes.folderId || 0);
+    const amount = Number(order.amount || 0);
+    if (noteKind !== "test_folder") throw new Error("Payment kind mismatch");
+    if (!noteUserId || noteUserId !== userId) throw new Error("Payment user mismatch");
+    if (!noteFolderId || noteFolderId !== folderId) throw new Error("Payment folder mismatch");
+    if (!amount || amount !== expectedAmount) throw new Error("Payment amount mismatch");
+  };
   app2.get("/api/test-folders", async (req, res) => {
     try {
       const user = await getAuthUser2(req);
@@ -4529,10 +4730,110 @@ function registerTestFolderRoutes({
       res.status(500).json({ message: "Failed to enroll" });
     }
   });
+  app2.post("/api/test-folders/create-order", async (req, res) => {
+    try {
+      const user = await getAuthUser2(req);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+      const folderId = Number(req.body.folderId);
+      if (!folderId) return res.status(400).json({ message: "Folder ID required" });
+      const folderResult = await db2.query(
+        "SELECT id, name, price, is_free FROM standalone_folders WHERE id = $1 AND type = 'mini_course'",
+        [folderId]
+      );
+      if (!folderResult.rows.length) return res.status(404).json({ message: "Folder not found" });
+      const folder = folderResult.rows[0];
+      if (folder.is_free || parseFloat(String(folder.price || "0")) <= 0) {
+        return res.status(400).json({ message: "This folder is free" });
+      }
+      const existing = await db2.query(
+        "SELECT id FROM folder_purchases WHERE user_id = $1 AND folder_id = $2",
+        [user.id, folderId]
+      );
+      if (existing.rows.length > 0) return res.json({ alreadyPurchased: true });
+      const amount = Math.round(parseFloat(String(folder.price || "0")) * 100);
+      const razorpay = getRazorpay2();
+      const order = await razorpay.orders.create({
+        amount,
+        currency: "INR",
+        receipt: `folder_${folderId}_user_${user.id}_${Date.now()}`,
+        notes: {
+          folderId: String(folderId),
+          userId: String(user.id),
+          folderName: folder.name,
+          kind: "test_folder"
+        }
+      });
+      return res.json({
+        orderId: order.id,
+        amount: order.amount,
+        currency: order.currency,
+        keyId: process.env.RAZORPAY_KEY_ID,
+        folderName: folder.name
+      });
+    } catch (err) {
+      console.error("Test folder create-order error:", err);
+      return res.status(500).json({ message: "Failed to create payment order" });
+    }
+  });
+  app2.post("/api/test-folders/verify-payment", async (req, res) => {
+    try {
+      const user = await getAuthUser2(req);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+      const { folderId, razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body || {};
+      const parsedFolderId = Number(folderId);
+      if (!parsedFolderId) return res.status(400).json({ message: "folderId is required" });
+      if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+        return res.status(400).json({ message: "Payment details are required" });
+      }
+      const isValid = verifyPaymentSignature2(razorpay_order_id, razorpay_payment_id, razorpay_signature);
+      if (!isValid) return res.status(400).json({ message: "Invalid payment signature" });
+      await verifyFolderOrder(razorpay_order_id, user.id, parsedFolderId);
+      const pre = await assertNativePaidPurchaseInstallation(db2, user.id, req);
+      if (!pre.ok) return res.status(403).json({ message: pre.message });
+      await db2.query(
+        "INSERT INTO folder_purchases (user_id, folder_id, amount, payment_id, created_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (user_id, folder_id) DO NOTHING",
+        [user.id, parsedFolderId, null, razorpay_payment_id, Date.now()]
+      );
+      await finalizeInstallationBindAfterPurchase(db2, user.id, req);
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("Test folder verify-payment error:", err);
+      return res.status(500).json({ message: "Failed to verify payment" });
+    }
+  });
+  app2.post("/api/test-folders/verify-redirect", async (req, res) => {
+    const frontendBase = process.env.FRONTEND_URL || "https://3ilearning.in";
+    const fail = `${frontendBase}/test-series?payment=failed`;
+    try {
+      const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body || {};
+      if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+        return res.redirect(fail);
+      }
+      const isValid = verifyPaymentSignature2(razorpay_order_id, razorpay_payment_id, razorpay_signature);
+      if (!isValid) return res.redirect(fail);
+      const razorpay = getRazorpay2();
+      const order = await razorpay.orders.fetch(razorpay_order_id);
+      const notes = order.notes || {};
+      if (String(notes.kind || "") !== "test_folder") return res.redirect(fail);
+      const folderId = Number(notes.folderId || 0);
+      const userId = Number(notes.userId || 0);
+      if (!folderId || !userId) return res.redirect(fail);
+      await verifyFolderOrder(razorpay_order_id, userId, folderId);
+      await db2.query(
+        "INSERT INTO folder_purchases (user_id, folder_id, amount, payment_id, created_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (user_id, folder_id) DO NOTHING",
+        [userId, folderId, null, razorpay_payment_id, Date.now()]
+      );
+      return res.redirect(`${frontendBase}/test-folder/${folderId}?payment=success`);
+    } catch (err) {
+      console.error("Test folder verify-redirect error:", err);
+      return res.redirect(fail);
+    }
+  });
 }
 var init_test_folder_routes = __esm({
   "server/test-folder-routes.ts"() {
     "use strict";
+    init_native_device_binding();
   }
 });
 
@@ -5048,7 +5349,14 @@ function registerLiveClassRoutes({
             ${ex23} as is_enrolled
            FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
            WHERE lc.course_id = $1
-             AND (lc.is_completed IS NOT TRUE OR (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL))
+             AND (
+               lc.is_completed IS NOT TRUE
+               OR (
+                 lc.recording_url IS NOT NULL
+                 OR lc.cf_playback_hls IS NOT NULL
+                 OR (lc.youtube_url IS NOT NULL AND TRIM(lc.youtube_url) != '')
+               )
+             )
              AND (lc.is_free_preview = TRUE OR ${ex23})
            ORDER BY lc.scheduled_at DESC`,
           [cid, user.id, now]
@@ -5061,7 +5369,14 @@ function registerLiveClassRoutes({
           `SELECT lc.*, c.title as course_title, c.is_free as course_is_free, FALSE as is_enrolled
            FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
            WHERE lc.course_id = $1
-             AND (lc.is_completed IS NOT TRUE OR (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL))
+             AND (
+               lc.is_completed IS NOT TRUE
+               OR (
+                 lc.recording_url IS NOT NULL
+                 OR lc.cf_playback_hls IS NOT NULL
+                 OR (lc.youtube_url IS NOT NULL AND TRIM(lc.youtube_url) != '')
+               )
+             )
              AND lc.is_free_preview = TRUE
            ORDER BY lc.scheduled_at DESC`,
           [cid]
@@ -5075,7 +5390,14 @@ function registerLiveClassRoutes({
           `SELECT lc.*, c.title as course_title, c.is_free as course_is_free,
             ${ex12} as is_enrolled
            FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
-           WHERE (lc.is_completed IS NOT TRUE OR (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL))
+           WHERE (
+             lc.is_completed IS NOT TRUE
+             OR (
+               lc.recording_url IS NOT NULL
+               OR lc.cf_playback_hls IS NOT NULL
+               OR (lc.youtube_url IS NOT NULL AND TRIM(lc.youtube_url) != '')
+             )
+           )
              AND (
                (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
                OR (lc.course_id IS NOT NULL AND (lc.is_free_preview = TRUE OR ${ex12}))
@@ -5089,7 +5411,14 @@ function registerLiveClassRoutes({
       const result = await db2.query(
         `SELECT lc.*, c.title as course_title, c.is_free as course_is_free, FALSE as is_enrolled
          FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
-         WHERE (lc.is_completed IS NOT TRUE OR (lc.recording_url IS NOT NULL OR lc.cf_playback_hls IS NOT NULL))
+         WHERE (
+           lc.is_completed IS NOT TRUE
+           OR (
+             lc.recording_url IS NOT NULL
+             OR lc.cf_playback_hls IS NOT NULL
+             OR (lc.youtube_url IS NOT NULL AND TRIM(lc.youtube_url) != '')
+           )
+         )
            AND (
              (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
              OR (lc.course_id IS NOT NULL AND lc.is_free_preview = TRUE)
@@ -5222,16 +5551,18 @@ function registerAdminLiveClassManageRoutes({
           if (only.rows.length === 0) return res.status(404).json({ message: "Live class not found" });
           const liveClassOnly = only.rows[0];
           const st = sectionTitle;
-          const canConvert = liveClassOnly.is_completed === true && !!(liveClassOnly.youtube_url || liveClassOnly.recording_url);
+          const canConvert = liveClassOnly.is_completed === true && !!(liveClassOnly.youtube_url || liveClassOnly.recording_url || liveClassOnly.cf_playback_hls);
           if (!canConvert) {
-            return res.status(400).json({ message: "Class must be completed with a YouTube or R2 recording URL to save as a lecture." });
+            return res.status(400).json({ message: "Class must be completed with a YouTube, Cloudflare, or R2 recording URL to save as a lecture." });
           }
           await db2.query("DELETE FROM notifications WHERE title IN ('\u{1F534} Live Class Started!', '\u{1F534} Live Class Starting Now!', '\u23F0 Live Class in 30 minutes!') AND message ILIKE $1", ["%" + liveClassOnly.title + "%"]).catch(() => {
           });
           const sameTitle = await db2.query("SELECT * FROM live_classes WHERE title = $1", [liveClassOnly.title]);
           for (const peer of sameTitle.rows) {
             if (!peer.course_id) continue;
-            const urlForPeer = String(peer.recording_url || peer.youtube_url || liveClassOnly.recording_url || liveClassOnly.youtube_url || "").trim();
+            const urlForPeer = String(
+              peer.recording_url || peer.cf_playback_hls || peer.youtube_url || liveClassOnly.recording_url || liveClassOnly.cf_playback_hls || liveClassOnly.youtube_url || ""
+            ).trim();
             if (!urlForPeer) continue;
             const vType = inferVideoType(urlForPeer);
             const exists = await db2.query(
@@ -5276,6 +5607,7 @@ function registerAdminLiveClassManageRoutes({
       if (isLive === true && liveClass.course_id) {
         const recipients = liveClass.is_free_preview === true || liveClass.is_public === true ? await db2.query("SELECT id AS user_id FROM users WHERE role = 'student'") : await db2.query("SELECT user_id FROM enrollments WHERE course_id = $1", [liveClass.course_id]);
         const expiresAt = Date.now() + 6 * 36e5;
+        const recipientIds = recipients.rows.map((e) => Number(e.user_id));
         for (const e of recipients.rows) {
           await db2.query("INSERT INTO notifications (user_id, title, message, type, created_at, expires_at) VALUES ($1, $2, $3, $4, $5, $6)", [
             e.user_id,
@@ -5286,6 +5618,11 @@ function registerAdminLiveClassManageRoutes({
             expiresAt
           ]);
         }
+        await sendPushToUsers(db2, recipientIds, {
+          title: "\u{1F534} Live Class Started!",
+          body: `"${liveClass.title}" is live now. Join now!`,
+          data: { type: "live_class_started", liveClassId: liveClass.id, courseId: liveClass.course_id || null }
+        });
         console.log("[GoLive] Notification sent for '" + liveClass.title + "' to " + recipients.rows.length + " students");
       }
       if (isLive === true) {
@@ -5320,9 +5657,11 @@ function registerAdminLiveClassManageRoutes({
         });
         const otherClasses = await db2.query("SELECT course_id FROM live_classes WHERE id != $1 AND title = $2 AND is_completed IS NOT TRUE AND course_id IS NOT NULL", [req.params.id, liveClass.title]).catch(() => ({ rows: [] }));
         const expiresAt = Date.now() + 12 * 36e5;
+        const extraRecipients = /* @__PURE__ */ new Set();
         for (const other of otherClasses.rows) {
           const enrolled = await db2.query("SELECT user_id FROM enrollments WHERE course_id = $1", [other.course_id]).catch(() => ({ rows: [] }));
           for (const e of enrolled.rows) {
+            extraRecipients.add(Number(e.user_id));
             await db2.query("INSERT INTO notifications (user_id, title, message, type, created_at, expires_at) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING", [
               e.user_id,
               "\u{1F534} Live Class Started!",
@@ -5334,15 +5673,24 @@ function registerAdminLiveClassManageRoutes({
             });
           }
         }
+        if (extraRecipients.size > 0) {
+          await sendPushToUsers(db2, [...extraRecipients], {
+            title: "\u{1F534} Live Class Started!",
+            body: `"${liveClass.title}" is live now. Join now!`,
+            data: { type: "live_class_started", liveClassId: liveClass.id, courseId: liveClass.course_id || null }
+          });
+        }
       }
-      const shouldConvertToLecture = convertToLecture === true && (isCompleted === true || liveClass.is_completed === true) && (liveClass.youtube_url || liveClass.recording_url);
+      const shouldConvertToLecture = convertToLecture === true && (isCompleted === true || liveClass.is_completed === true) && (liveClass.youtube_url || liveClass.recording_url || liveClass.cf_playback_hls);
       if (shouldConvertToLecture) {
         await db2.query("DELETE FROM notifications WHERE title IN ('\u{1F534} Live Class Started!', '\u{1F534} Live Class Starting Now!', '\u23F0 Live Class in 30 minutes!') AND message ILIKE $1", ["%" + liveClass.title + "%"]).catch(() => {
         });
         const sameTitle = await db2.query("SELECT * FROM live_classes WHERE title = $1", [liveClass.title]);
         for (const peer of sameTitle.rows) {
           if (!peer.course_id) continue;
-          const urlForPeer = String(peer.recording_url || peer.youtube_url || liveClass.recording_url || liveClass.youtube_url || "").trim();
+          const urlForPeer = String(
+            peer.recording_url || peer.cf_playback_hls || peer.youtube_url || liveClass.recording_url || liveClass.cf_playback_hls || liveClass.youtube_url || ""
+          ).trim();
           if (!urlForPeer) continue;
           const vType = inferVideoType(urlForPeer);
           const exists = await db2.query(
@@ -5474,6 +5822,7 @@ var init_admin_live_class_manage_routes = __esm({
   "server/admin-live-class-manage-routes.ts"() {
     "use strict";
     init_recordingSection();
+    init_push_notifications();
   }
 });
 
@@ -6925,6 +7274,15 @@ async function registerRoutes(app2) {
                  RETURNING user_id`,
                 [notifTitle, notifMessage, now, expiresAt]
               );
+              await sendPushToUsers(
+                db,
+                inserted.rows.map((r) => Number(r.user_id)),
+                {
+                  title: notifTitle,
+                  body: notifMessage,
+                  data: { type: "live_class_reminder", liveClassId: lc.id }
+                }
+              );
               console.log(`[LiveNotif] 30min reminder sent for class=${lc.id} recipients=${inserted.rows.length}`);
             } else {
               const inserted = await db.query(
@@ -6934,6 +7292,15 @@ async function registerRoutes(app2) {
                  WHERE e.course_id = $5
                  RETURNING user_id`,
                 [notifTitle, notifMessage, now, expiresAt, lc.course_id]
+              );
+              await sendPushToUsers(
+                db,
+                inserted.rows.map((r) => Number(r.user_id)),
+                {
+                  title: notifTitle,
+                  body: notifMessage,
+                  data: { type: "live_class_reminder", liveClassId: lc.id, courseId: lc.course_id }
+                }
               );
               console.log(`[LiveNotif] 30min reminder sent for class=${lc.id} recipients=${inserted.rows.length}`);
             }
@@ -7049,7 +7416,9 @@ async function registerRoutes(app2) {
   registerTestFolderRoutes({
     app: app2,
     db,
-    getAuthUser
+    getAuthUser,
+    getRazorpay,
+    verifyPaymentSignature
   });
   registerTestCoreRoutes({
     app: app2,
@@ -7087,6 +7456,43 @@ async function registerRoutes(app2) {
     req.user = user;
     next();
   }
+  app2.post("/api/push/register", requireAuth, async (req, res) => {
+    try {
+      const user = req.user;
+      const token = String(req.body?.token || "").trim();
+      const platform = String(req.body?.platform || "").trim().toLowerCase();
+      if (!token || !token.startsWith("ExponentPushToken[")) {
+        return res.status(400).json({ message: "Valid Expo push token is required" });
+      }
+      await registerPushToken(db, Number(user.id), token, platform || "unknown");
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("[Push] register error:", err);
+      return res.status(500).json({ message: "Failed to register push token" });
+    }
+  });
+  app2.post("/api/push/unregister", requireAuth, async (req, res) => {
+    try {
+      const user = req.user;
+      const token = String(req.body?.token || "").trim();
+      if (!token) return res.status(400).json({ message: "Token is required" });
+      await unregisterPushToken(db, Number(user.id), token);
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("[Push] unregister error:", err);
+      return res.status(500).json({ message: "Failed to unregister push token" });
+    }
+  });
+  app2.post("/api/push/unregister-all", requireAuth, async (req, res) => {
+    try {
+      const user = req.user;
+      await unregisterAllPushTokens(db, Number(user.id));
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("[Push] unregister-all error:", err);
+      return res.status(500).json({ message: "Failed to unregister push tokens" });
+    }
+  });
   registerStandaloneFolderRoutes({
     app: app2,
     db,
@@ -7100,6 +7506,64 @@ async function registerRoutes(app2) {
     req.user = user;
     next();
   }
+  app2.get("/api/admin/push-tokens", requireAdmin, async (req, res) => {
+    try {
+      const userIdRaw = String(req.query.userId || "").trim();
+      const activeOnlyRaw = String(req.query.activeOnly || "true").trim().toLowerCase();
+      const activeOnly = activeOnlyRaw !== "false";
+      if (userIdRaw) {
+        const userId = Number(userIdRaw);
+        if (!Number.isFinite(userId) || userId <= 0) {
+          return res.status(400).json({ message: "Invalid userId" });
+        }
+        const detail = await db.query(
+          `SELECT t.user_id, u.name AS user_name, u.phone AS user_phone, t.expo_push_token, t.platform, t.is_active, t.created_at, t.last_seen_at
+           FROM user_push_tokens t
+           LEFT JOIN users u ON u.id = t.user_id
+           WHERE t.user_id = $1
+           ${activeOnly ? "AND t.is_active = TRUE" : ""}
+           ORDER BY t.last_seen_at DESC`,
+          [userId]
+        );
+        return res.json({
+          summary: {
+            userId,
+            total: detail.rows.length,
+            active: detail.rows.filter((r) => r.is_active === true).length
+          },
+          tokens: detail.rows
+        });
+      }
+      const summary = await db.query(
+        `SELECT
+           COUNT(*)::int AS total_tokens,
+           COUNT(*) FILTER (WHERE is_active = TRUE)::int AS active_tokens,
+           COUNT(DISTINCT user_id)::int AS total_users,
+           COUNT(DISTINCT user_id) FILTER (WHERE is_active = TRUE)::int AS users_with_active_tokens
+         FROM user_push_tokens`
+      );
+      const recent = await db.query(
+        `SELECT t.user_id, u.name AS user_name, u.phone AS user_phone, t.platform, t.is_active, t.last_seen_at
+         FROM user_push_tokens t
+         LEFT JOIN users u ON u.id = t.user_id
+         ${activeOnly ? "WHERE t.is_active = TRUE" : ""}
+         ORDER BY t.last_seen_at DESC
+         LIMIT 200`
+      );
+      return res.json({
+        summary: summary.rows[0] || {
+          total_tokens: 0,
+          active_tokens: 0,
+          total_users: 0,
+          users_with_active_tokens: 0
+        },
+        recentTokens: recent.rows
+      });
+    } catch (err) {
+      console.error("[Push Debug] failed:", err);
+      return res.status(500).json({ message: "Failed to fetch push token stats" });
+    }
+  });
   let r2Client = null;
   const getR2Client = async () => {
     if (r2Client) return r2Client;
@@ -7290,6 +7754,7 @@ var init_routes = __esm({
     init_media_stream_routes();
     init_ai_tutor_service();
     init_db_readiness();
+    init_push_notifications();
     require3 = createRequire2(import.meta.url);
     ({ PDFParse } = require3("pdf-parse"));
     upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -7433,6 +7898,7 @@ function setupCors(app2) {
       "Content-Type",
       "Authorization",
       "X-Requested-With",
+      "X-User-Id",
       "X-App-Device-Id",
       "X-Client-Platform"
     ],
@@ -7450,9 +7916,13 @@ function setupApiOriginProtection(app2) {
     if (!hasCookie || hasBearer) return next();
     const origin = req.get("origin");
     const referer = req.get("referer");
+    const clientPlatform = (req.get("x-client-platform") || "").trim().toLowerCase();
+    const hasNativeAppHeader = clientPlatform === "android" || clientPlatform === "ios";
     const trustedOrigin = origin ? isTrustedOrigin(origin) : false;
     const trustedReferer = referer ? isTrustedOrigin(referer) : false;
+    const missingBrowserHeaders = !origin && !referer;
     if (trustedOrigin || trustedReferer) return next();
+    if (hasNativeAppHeader && missingBrowserHeaders) return next();
     return res.status(403).json({ message: "Cross-site request blocked" });
   });
 }

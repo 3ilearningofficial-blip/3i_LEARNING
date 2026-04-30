@@ -22,7 +22,8 @@
       },
       "permissions": [
         "android.permission.INTERNET",
-        "android.permission.ACCESS_NETWORK_STATE"
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.POST_NOTIFICATIONS"
       ],
       "blockedPermissions": [
         "android.permission.RECORD_AUDIO",
@@ -46,6 +47,7 @@
           "origin": "http://localhost:5000"
         }
       ],
+      "expo-notifications",
       "expo-font",
       "expo-web-browser"
     ],

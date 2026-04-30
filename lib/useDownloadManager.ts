@@ -39,6 +39,15 @@ export function useDownloadManager(): UseDownloadManagerReturn {
   const getKey = (itemType: string, itemId: number) => `${itemType}:${itemId}`;
   const getLocalEncryptedPath = (localFilename: string) =>
     `${(FileSystem as any).documentDirectory}${localFilename}.enc`;
+  const unwrapPayload = (payload: any) => {
+    if (payload && typeof payload === 'object' && typeof payload.success === 'boolean') {
+      if (payload.success === false) {
+        throw new Error(payload.error || payload.message || 'Request failed');
+      }
+      if ('data' in payload) return payload.data;
+    }
+    return payload;
+  };
 
   const loadState = async () => {
     try {
@@ -112,7 +121,8 @@ export function useDownloadManager(): UseDownloadManagerReturn {
           throw new Error('Failed to get download token');
         }
 
-        const { token } = await tokenRes.json();
+        const tokenPayload = unwrapPayload(await tokenRes.json());
+        const token = tokenPayload?.token;
 
         // STEP 2: download file
         if (!token || typeof token !== 'string') {
@@ -294,7 +304,7 @@ export function useDownloadManager(): UseDownloadManagerReturn {
 
       if (!res.ok) return;
 
-      const data = await res.json();
+      const data = unwrapPayload(await res.json()) || {};
       const serverKeys = new Set<string>();
 
       [...(data.lectures || []), ...(data.materials || [])].forEach((i: any) => {

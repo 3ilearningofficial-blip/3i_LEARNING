@@ -17,6 +17,15 @@ function WebDownloadButton({ itemType, itemId }: { itemType: string; itemId: num
   const { user } = useAuth();
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState<'idle' | 'downloading' | 'done' | 'error'>('idle');
+  const unwrapPayload = (payload: any) => {
+    if (payload && typeof payload === 'object' && typeof payload.success === 'boolean') {
+      if (payload.success === false) {
+        throw new Error(payload.error || payload.message || 'Request failed');
+      }
+      if ('data' in payload) return payload.data;
+    }
+    return payload;
+  };
 
   const handleWebDownload = async () => {
     if (status === 'downloading') return;
@@ -27,21 +36,18 @@ function WebDownloadButton({ itemType, itemId }: { itemType: string; itemId: num
       const apiUrl = getApiUrl();
 
       // Step 1: Get single-use download token
-      const tokenRes = await fetch(
-        `${apiUrl}/download-url?itemType=${itemType}&itemId=${itemId}`,
-        {
-          headers: {
-            Authorization: `Bearer ${user?.sessionToken}`,
-            'X-User-Id': String(user?.id),
-          },
-        }
-      );
+      const tokenRes = await fetch(`${apiUrl}/download-url?itemType=${itemType}&itemId=${itemId}`, {
+        headers: {
+          Authorization: `Bearer ${user?.sessionToken}`,
+        },
+      });
 
       if (!tokenRes.ok) {
         throw new Error('Failed to get download token');
       }
 
-      const { token } = await tokenRes.json();
+      const tokenPayload = unwrapPayload(await tokenRes.json());
+      const token = tokenPayload?.token;
       const downloadUrl = `${apiUrl}/download-proxy?token=${token}`;
 
       // Step 2: Download with XHR for progress tracking
@@ -164,7 +170,7 @@ export function DownloadButton({
   if (state.status === 'downloading') {
     return (
       <View style={styles.container}>
-        <ActivityIndicator size="small" color="#007AFF" />
+        <ActivityIndicator size="small" color="#3B82F6" />
         <Text style={styles.progressText}>{state.progress}%</Text>
       </View>
     );
@@ -173,7 +179,7 @@ export function DownloadButton({
   if (state.status === 'downloaded') {
     return (
       <View style={styles.container}>
-        <Ionicons name="checkmark-circle" size={24} color="#34C759" />
+        <Ionicons name="checkmark-circle" size={18} color="#22C55E" />
         <Text style={styles.downloadedText}>Downloaded</Text>
       </View>
     );
@@ -182,7 +188,7 @@ export function DownloadButton({
   if (state.status === 'error') {
     return (
       <TouchableOpacity style={styles.container} onPress={handlePress}>
-        <Ionicons name="alert-circle" size={24} color="#FF3B30" />
+        <Ionicons name="alert-circle" size={18} color="#EF4444" />
         <Text style={styles.errorText}>Retry</Text>
       </TouchableOpacity>
     );
@@ -190,7 +196,8 @@ export function DownloadButton({
 
   return (
     <TouchableOpacity style={styles.container} onPress={handlePress}>
-      <Ionicons name="download-outline" size={24} color="#007AFF" />
+      <Ionicons name="download-outline" size={18} color="#3B82F6" />
+      <Text style={styles.buttonText}>Download</Text>
     </TouchableOpacity>
   );
 }
@@ -200,23 +207,33 @@ const styles = StyleSheet.create({
   container: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    padding: 8,
+    gap: 6,
+    backgroundColor: '#EFF6FF',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
   },
   progressText: {
-    fontSize: 14,
-    color: '#007AFF',
-    fontWeight: '500',
+    fontSize: 12,
+    color: '#3B82F6',
+    fontWeight: '600',
   },
   downloadedText: {
-    fontSize: 14,
-    color: '#34C759',
-    fontWeight: '500',
+    fontSize: 13,
+    color: '#22C55E',
+    fontWeight: '600',
   },
   errorText: {
-    fontSize: 14,
-    color: '#FF3B30',
-    fontWeight: '500',
+    fontSize: 13,
+    color: '#EF4444',
+    fontWeight: '600',
+  },
+  buttonText: {
+    fontSize: 13,
+    color: '#3B82F6',
+    fontWeight: '600',
   },
 });
 

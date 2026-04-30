@@ -127,6 +127,7 @@ function setupCors(app: express.Application) {
       "Content-Type",
       "Authorization",
       "X-Requested-With",
+      "X-User-Id",
       "X-App-Device-Id",
       "X-Client-Platform",
     ],

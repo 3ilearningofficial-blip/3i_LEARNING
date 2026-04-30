@@ -1,4 +1,8 @@
 import type { Express, Request, Response } from "express";
+import {
+  assertNativePaidPurchaseInstallation,
+  finalizeInstallationBindAfterPurchase,
+} from "./native-device-binding";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -8,13 +12,41 @@ type RegisterTestFolderRoutesDeps = {
   app: Express;
   db: DbClient;
   getAuthUser: (req: Request) => Promise<any>;
+  getRazorpay: () => any;
+  verifyPaymentSignature: (orderId: string, paymentId: string, signature: string) => boolean;
 };
 
 export function registerTestFolderRoutes({
   app,
   db,
   getAuthUser,
+  getRazorpay,
+  verifyPaymentSignature,
 }: RegisterTestFolderRoutesDeps): void {
+  const verifyFolderOrder = async (orderId: string, userId: number, folderId: number) => {
+    const folderResult = await db.query(
+      "SELECT id, price, is_free FROM standalone_folders WHERE id = $1 AND type = 'mini_course'",
+      [folderId]
+    );
+    if (!folderResult.rows.length) throw new Error("Folder not found");
+    const folder = folderResult.rows[0];
+    if (folder.is_free || parseFloat(String(folder.price || "0")) <= 0) {
+      throw new Error("This folder is free");
+    }
+    const expectedAmount = Math.round(parseFloat(String(folder.price || "0")) * 100);
+    const razorpay = getRazorpay();
+    const order: { amount?: number; notes?: Record<string, string> } = await razorpay.orders.fetch(orderId);
+    const notes = order.notes || {};
+    const noteKind = String(notes.kind || "");
+    const noteUserId = Number(notes.userId || 0);
+    const noteFolderId = Number(notes.folderId || 0);
+    const amount = Number(order.amount || 0);
+    if (noteKind !== "test_folder") throw new Error("Payment kind mismatch");
+    if (!noteUserId || noteUserId !== userId) throw new Error("Payment user mismatch");
+    if (!noteFolderId || noteFolderId !== folderId) throw new Error("Payment folder mismatch");
+    if (!amount || amount !== expectedAmount) throw new Error("Payment amount mismatch");
+  };
+
   app.get("/api/test-folders", async (req: Request, res: Response) => {
     try {
       const user = await getAuthUser(req);
@@ -76,6 +108,121 @@ export function registerTestFolderRoutes({
       res.json({ success: true });
     } catch {
       res.status(500).json({ message: "Failed to enroll" });
+    }
+  });
+
+  app.post("/api/test-folders/create-order", async (req: Request, res: Response) => {
+    try {
+      const user = await getAuthUser(req);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+      const folderId = Number((req.body as { folderId?: number }).folderId);
+      if (!folderId) return res.status(400).json({ message: "Folder ID required" });
+
+      const folderResult = await db.query(
+        "SELECT id, name, price, is_free FROM standalone_folders WHERE id = $1 AND type = 'mini_course'",
+        [folderId]
+      );
+      if (!folderResult.rows.length) return res.status(404).json({ message: "Folder not found" });
+      const folder = folderResult.rows[0];
+      if (folder.is_free || parseFloat(String(folder.price || "0")) <= 0) {
+        return res.status(400).json({ message: "This folder is free" });
+      }
+
+      const existing = await db.query(
+        "SELECT id FROM folder_purchases WHERE user_id = $1 AND folder_id = $2",
+        [user.id, folderId]
+      );
+      if (existing.rows.length > 0) return res.json({ alreadyPurchased: true });
+
+      const amount = Math.round(parseFloat(String(folder.price || "0")) * 100);
+      const razorpay = getRazorpay();
+      const order = await razorpay.orders.create({
+        amount,
+        currency: "INR",
+        receipt: `folder_${folderId}_user_${user.id}_${Date.now()}`,
+        notes: {
+          folderId: String(folderId),
+          userId: String(user.id),
+          folderName: folder.name,
+          kind: "test_folder",
+        },
+      });
+
+      return res.json({
+        orderId: order.id,
+        amount: order.amount,
+        currency: order.currency,
+        keyId: process.env.RAZORPAY_KEY_ID,
+        folderName: folder.name,
+      });
+    } catch (err) {
+      console.error("Test folder create-order error:", err);
+      return res.status(500).json({ message: "Failed to create payment order" });
+    }
+  });
+
+  app.post("/api/test-folders/verify-payment", async (req: Request, res: Response) => {
+    try {
+      const user = await getAuthUser(req);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+      const { folderId, razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body || {};
+      const parsedFolderId = Number(folderId);
+      if (!parsedFolderId) return res.status(400).json({ message: "folderId is required" });
+      if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+        return res.status(400).json({ message: "Payment details are required" });
+      }
+
+      const isValid = verifyPaymentSignature(razorpay_order_id, razorpay_payment_id, razorpay_signature);
+      if (!isValid) return res.status(400).json({ message: "Invalid payment signature" });
+
+      await verifyFolderOrder(razorpay_order_id, user.id, parsedFolderId);
+
+      const pre = await assertNativePaidPurchaseInstallation(db, user.id, req);
+      if (!pre.ok) return res.status(403).json({ message: pre.message });
+
+      await db.query(
+        "INSERT INTO folder_purchases (user_id, folder_id, amount, payment_id, created_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (user_id, folder_id) DO NOTHING",
+        [user.id, parsedFolderId, null, razorpay_payment_id, Date.now()]
+      );
+      await finalizeInstallationBindAfterPurchase(db, user.id, req);
+
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("Test folder verify-payment error:", err);
+      return res.status(500).json({ message: "Failed to verify payment" });
+    }
+  });
+
+  app.post("/api/test-folders/verify-redirect", async (req: Request, res: Response) => {
+    const frontendBase = process.env.FRONTEND_URL || "https://3ilearning.in";
+    const fail = `${frontendBase}/test-series?payment=failed`;
+    try {
+      const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body || {};
+      if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+        return res.redirect(fail);
+      }
+      const isValid = verifyPaymentSignature(razorpay_order_id, razorpay_payment_id, razorpay_signature);
+      if (!isValid) return res.redirect(fail);
+
+      const razorpay = getRazorpay();
+      const order: { notes?: Record<string, string> } = await razorpay.orders.fetch(razorpay_order_id);
+      const notes = order.notes || {};
+      if (String(notes.kind || "") !== "test_folder") return res.redirect(fail);
+      const folderId = Number(notes.folderId || 0);
+      const userId = Number(notes.userId || 0);
+      if (!folderId || !userId) return res.redirect(fail);
+
+      await verifyFolderOrder(razorpay_order_id, userId, folderId);
+
+      await db.query(
+        "INSERT INTO folder_purchases (user_id, folder_id, amount, payment_id, created_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (user_id, folder_id) DO NOTHING",
+        [userId, folderId, null, razorpay_payment_id, Date.now()]
+      );
+
+      return res.redirect(`${frontendBase}/test-folder/${folderId}?payment=success`);
+    } catch (err) {
+      console.error("Test folder verify-redirect error:", err);
+      return res.redirect(fail);
     }
   });
 }

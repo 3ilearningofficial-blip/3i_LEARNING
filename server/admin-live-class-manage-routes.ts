@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { buildRecordingLectureSectionTitle } from "./recordingSection";
+import { sendPushToUsers } from "./push-notifications";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -85,9 +86,10 @@ export function registerAdminLiveClassManageRoutes({
           const liveClassOnly = only.rows[0];
           const st = sectionTitle;
           const canConvert =
-            liveClassOnly.is_completed === true && !!(liveClassOnly.youtube_url || liveClassOnly.recording_url);
+            liveClassOnly.is_completed === true &&
+            !!(liveClassOnly.youtube_url || liveClassOnly.recording_url || liveClassOnly.cf_playback_hls);
           if (!canConvert) {
-            return res.status(400).json({ message: "Class must be completed with a YouTube or R2 recording URL to save as a lecture." });
+            return res.status(400).json({ message: "Class must be completed with a YouTube, Cloudflare, or R2 recording URL to save as a lecture." });
           }
           await db
             .query("DELETE FROM notifications WHERE title IN ('🔴 Live Class Started!', '🔴 Live Class Starting Now!', '⏰ Live Class in 30 minutes!') AND message ILIKE $1", ['%' + liveClassOnly.title + '%'])
@@ -95,7 +97,15 @@ export function registerAdminLiveClassManageRoutes({
           const sameTitle = await db.query("SELECT * FROM live_classes WHERE title = $1", [liveClassOnly.title]);
           for (const peer of sameTitle.rows) {
             if (!peer.course_id) continue;
-            const urlForPeer = String(peer.recording_url || peer.youtube_url || liveClassOnly.recording_url || liveClassOnly.youtube_url || "").trim();
+            const urlForPeer = String(
+              peer.recording_url ||
+              peer.cf_playback_hls ||
+              peer.youtube_url ||
+              liveClassOnly.recording_url ||
+              liveClassOnly.cf_playback_hls ||
+              liveClassOnly.youtube_url ||
+              ""
+            ).trim();
             if (!urlForPeer) continue;
             const vType = inferVideoType(urlForPeer);
             const exists = await db.query(
@@ -151,6 +161,7 @@ export function registerAdminLiveClassManageRoutes({
             ? await db.query("SELECT id AS user_id FROM users WHERE role = 'student'")
             : await db.query("SELECT user_id FROM enrollments WHERE course_id = $1", [liveClass.course_id]);
         const expiresAt = Date.now() + 6 * 3600000;
+        const recipientIds = recipients.rows.map((e: any) => Number(e.user_id));
         for (const e of recipients.rows) {
           await db.query("INSERT INTO notifications (user_id, title, message, type, created_at, expires_at) VALUES ($1, $2, $3, $4, $5, $6)", [
             e.user_id,
@@ -161,6 +172,11 @@ export function registerAdminLiveClassManageRoutes({
             expiresAt,
           ]);
         }
+        await sendPushToUsers(db, recipientIds, {
+          title: "🔴 Live Class Started!",
+          body: `"${liveClass.title}" is live now. Join now!`,
+          data: { type: "live_class_started", liveClassId: liveClass.id, courseId: liveClass.course_id || null },
+        });
         console.log("[GoLive] Notification sent for '" + liveClass.title + "' to " + recipients.rows.length + " students");
       }
 
@@ -201,9 +217,11 @@ export function registerAdminLiveClassManageRoutes({
           .query("SELECT course_id FROM live_classes WHERE id != $1 AND title = $2 AND is_completed IS NOT TRUE AND course_id IS NOT NULL", [req.params.id, liveClass.title])
           .catch(() => ({ rows: [] as any[] }));
         const expiresAt = Date.now() + 12 * 3600000;
+        const extraRecipients = new Set<number>();
         for (const other of otherClasses.rows) {
           const enrolled = await db.query("SELECT user_id FROM enrollments WHERE course_id = $1", [other.course_id]).catch(() => ({ rows: [] as any[] }));
           for (const e of enrolled.rows) {
+            extraRecipients.add(Number(e.user_id));
             await db
               .query("INSERT INTO notifications (user_id, title, message, type, created_at, expires_at) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING", [
                 e.user_id,
@@ -216,6 +234,13 @@ export function registerAdminLiveClassManageRoutes({
               .catch(() => {});
           }
         }
+        if (extraRecipients.size > 0) {
+          await sendPushToUsers(db, [...extraRecipients], {
+            title: "🔴 Live Class Started!",
+            body: `"${liveClass.title}" is live now. Join now!`,
+            data: { type: "live_class_started", liveClassId: liveClass.id, courseId: liveClass.course_id || null },
+          });
+        }
       }
 
       // "Save as Lecture" from admin: was broken when class was already completed because the handler only
@@ -223,7 +248,7 @@ export function registerAdminLiveClassManageRoutes({
       const shouldConvertToLecture =
         convertToLecture === true &&
         (isCompleted === true || liveClass.is_completed === true) &&
-        (liveClass.youtube_url || liveClass.recording_url);
+        (liveClass.youtube_url || liveClass.recording_url || liveClass.cf_playback_hls);
       if (shouldConvertToLecture) {
         await db
           .query("DELETE FROM notifications WHERE title IN ('🔴 Live Class Started!', '🔴 Live Class Starting Now!', '⏰ Live Class in 30 minutes!') AND message ILIKE $1", ['%' + liveClass.title + '%'])
@@ -231,7 +256,15 @@ export function registerAdminLiveClassManageRoutes({
         const sameTitle = await db.query("SELECT * FROM live_classes WHERE title = $1", [liveClass.title]);
         for (const peer of sameTitle.rows) {
           if (!peer.course_id) continue;
-          const urlForPeer = String(peer.recording_url || peer.youtube_url || liveClass.recording_url || liveClass.youtube_url || "").trim();
+          const urlForPeer = String(
+            peer.recording_url ||
+            peer.cf_playback_hls ||
+            peer.youtube_url ||
+            liveClass.recording_url ||
+            liveClass.cf_playback_hls ||
+            liveClass.youtube_url ||
+            ""
+          ).trim();
           if (!urlForPeer) continue;
           const vType = inferVideoType(urlForPeer);
           const exists = await db.query(

@@ -14,6 +14,7 @@ import {
   storeAuthUser,
   type StoredAuthUser,
 } from "@/lib/auth-storage";
+import { registerPushForCurrentUser, unregisterPushForCurrentUser } from "@/lib/pushNotifications";
 import { fetch } from "expo/fetch";
 
 interface AuthUser extends StoredAuthUser {}
@@ -122,6 +123,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    if (!user || Platform.OS === "web") return;
+    registerPushForCurrentUser().catch((err) => {
+      console.warn("[Push] register failed:", err);
+    });
+  }, [user?.id]);
+
+  useEffect(() => {
     setUnauthorizedHandler(async () => {
       setUser(null);
       await removeStoredAuthUser();
@@ -174,6 +182,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = async () => {
+    try {
+      await unregisterPushForCurrentUser();
+    } catch (_e) {}
     try {
       await apiRequest("POST", "/api/auth/logout");
     } catch (_e) {}

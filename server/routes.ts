@@ -45,6 +45,12 @@ import { registerUploadRoutes } from "./upload-routes";
 import { registerMediaStreamRoutes } from "./media-stream-routes";
 import { createGenerateAIAnswer } from "./ai-tutor-service";
 import { checkDatabaseReadiness } from "./db-readiness";
+import {
+  registerPushToken,
+  sendPushToUsers,
+  unregisterAllPushTokens,
+  unregisterPushToken,
+} from "./push-notifications";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 const uploadLarge = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } });
@@ -442,6 +448,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
                  RETURNING user_id`,
                 [notifTitle, notifMessage, now, expiresAt]
               );
+              await sendPushToUsers(
+                db,
+                inserted.rows.map((r: any) => Number(r.user_id)),
+                {
+                  title: notifTitle,
+                  body: notifMessage,
+                  data: { type: "live_class_reminder", liveClassId: lc.id },
+                }
+              );
               console.log(`[LiveNotif] 30min reminder sent for class=${lc.id} recipients=${inserted.rows.length}`);
             } else {
               const inserted = await db.query(
@@ -451,6 +466,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
                  WHERE e.course_id = $5
                  RETURNING user_id`,
                 [notifTitle, notifMessage, now, expiresAt, lc.course_id]
+              );
+              await sendPushToUsers(
+                db,
+                inserted.rows.map((r: any) => Number(r.user_id)),
+                {
+                  title: notifTitle,
+                  body: notifMessage,
+                  data: { type: "live_class_reminder", liveClassId: lc.id, courseId: lc.course_id },
+                }
               );
               console.log(`[LiveNotif] 30min reminder sent for class=${lc.id} recipients=${inserted.rows.length}`);
             }
@@ -583,6 +607,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     app,
     db,
     getAuthUser,
+    getRazorpay,
+    verifyPaymentSignature,
   });
 
   registerTestCoreRoutes({
@@ -628,6 +654,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
     next();
   }
 
+  app.post("/api/push/register", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user;
+      const token = String(req.body?.token || "").trim();
+      const platform = String(req.body?.platform || "").trim().toLowerCase();
+      if (!token || !token.startsWith("ExponentPushToken[")) {
+        return res.status(400).json({ message: "Valid Expo push token is required" });
+      }
+      await registerPushToken(db, Number(user.id), token, platform || "unknown");
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("[Push] register error:", err);
+      return res.status(500).json({ message: "Failed to register push token" });
+    }
+  });
+
+  app.post("/api/push/unregister", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user;
+      const token = String(req.body?.token || "").trim();
+      if (!token) return res.status(400).json({ message: "Token is required" });
+      await unregisterPushToken(db, Number(user.id), token);
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("[Push] unregister error:", err);
+      return res.status(500).json({ message: "Failed to unregister push token" });
+    }
+  });
+
+  app.post("/api/push/unregister-all", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user;
+      await unregisterAllPushTokens(db, Number(user.id));
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("[Push] unregister-all error:", err);
+      return res.status(500).json({ message: "Failed to unregister push tokens" });
+    }
+  });
+
   registerStandaloneFolderRoutes({
     app,
     db,
@@ -643,6 +709,68 @@ export async function registerRoutes(app: Express): Promise<Server> {
     (req as any).user = user;
     next();
   }
+
+  // Admin debug endpoint: inspect push-token registration health.
+  app.get("/api/admin/push-tokens", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const userIdRaw = String(req.query.userId || "").trim();
+      const activeOnlyRaw = String(req.query.activeOnly || "true").trim().toLowerCase();
+      const activeOnly = activeOnlyRaw !== "false";
+
+      if (userIdRaw) {
+        const userId = Number(userIdRaw);
+        if (!Number.isFinite(userId) || userId <= 0) {
+          return res.status(400).json({ message: "Invalid userId" });
+        }
+        const detail = await db.query(
+          `SELECT t.user_id, u.name AS user_name, u.phone AS user_phone, t.expo_push_token, t.platform, t.is_active, t.created_at, t.last_seen_at
+           FROM user_push_tokens t
+           LEFT JOIN users u ON u.id = t.user_id
+           WHERE t.user_id = $1
+           ${activeOnly ? "AND t.is_active = TRUE" : ""}
+           ORDER BY t.last_seen_at DESC`,
+          [userId]
+        );
+        return res.json({
+          summary: {
+            userId,
+            total: detail.rows.length,
+            active: detail.rows.filter((r: any) => r.is_active === true).length,
+          },
+          tokens: detail.rows,
+        });
+      }
+
+      const summary = await db.query(
+        `SELECT
+           COUNT(*)::int AS total_tokens,
+           COUNT(*) FILTER (WHERE is_active = TRUE)::int AS active_tokens,
+           COUNT(DISTINCT user_id)::int AS total_users,
+           COUNT(DISTINCT user_id) FILTER (WHERE is_active = TRUE)::int AS users_with_active_tokens
+         FROM user_push_tokens`
+      );
+      const recent = await db.query(
+        `SELECT t.user_id, u.name AS user_name, u.phone AS user_phone, t.platform, t.is_active, t.last_seen_at
+         FROM user_push_tokens t
+         LEFT JOIN users u ON u.id = t.user_id
+         ${activeOnly ? "WHERE t.is_active = TRUE" : ""}
+         ORDER BY t.last_seen_at DESC
+         LIMIT 200`
+      );
+      return res.json({
+        summary: summary.rows[0] || {
+          total_tokens: 0,
+          active_tokens: 0,
+          total_users: 0,
+          users_with_active_tokens: 0,
+        },
+        recentTokens: recent.rows,
+      });
+    } catch (err) {
+      console.error("[Push Debug] failed:", err);
+      return res.status(500).json({ message: "Failed to fetch push token stats" });
+    }
+  });
 
   // ==================== CLOUDFLARE R2 UPLOAD ROUTES ====================
   let r2Client: any = null;

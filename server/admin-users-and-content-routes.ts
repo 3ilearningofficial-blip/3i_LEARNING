@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { sendPushToUsers } from "./push-notifications";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -49,6 +50,26 @@ export function registerAdminUsersAndContentRoutes({
       );
       if (parsedCourseId) {
         await db.query("UPDATE courses SET total_materials = (SELECT COUNT(*) FROM study_materials WHERE course_id = $1) WHERE id = $1", [parsedCourseId]);
+        const courseInfo = await db.query("SELECT title FROM courses WHERE id = $1", [parsedCourseId]).catch(() => ({ rows: [] as any[] }));
+        const courseTitle = String(courseInfo.rows[0]?.title || "your course");
+        const recipients = await db.query("SELECT user_id FROM enrollments WHERE course_id = $1", [parsedCourseId]).catch(() => ({ rows: [] as any[] }));
+        const recipientIds = recipients.rows.map((r: any) => Number(r.user_id));
+        const notifTitle = "📘 New Material Added";
+        const notifMessage = `"${normalizedTitle}" has been added in ${courseTitle}.`;
+        const now = Date.now();
+        for (const uid of recipientIds) {
+          await db
+            .query(
+              "INSERT INTO notifications (user_id, title, message, type, created_at) VALUES ($1, $2, $3, $4, $5)",
+              [uid, notifTitle, notifMessage, "info", now]
+            )
+            .catch(() => {});
+        }
+        await sendPushToUsers(db, recipientIds, {
+          title: notifTitle,
+          body: notifMessage,
+          data: { type: "new_material_added", materialId: result.rows[0]?.id, courseId: parsedCourseId },
+        });
       }
       res.json(result.rows[0]);
     } catch (err) {
