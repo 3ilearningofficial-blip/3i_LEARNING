@@ -262,6 +262,20 @@ export async function attachInstallationHeaders(headers: Record<string, string>)
   }
 }
 
+/** Same Authorization + installation headers as apiRequest (required for enforceInstallationBinding on accounts with app_bound_device_id). */
+export async function prepareAuthorizedFetchHeaders(
+  bearerFallback?: string | null
+): Promise<{ headers: Record<string, string>; bearer: string | null }> {
+  const headers: Record<string, string> = {};
+  const fromStore = ((await getStoredToken()) ?? "").trim();
+  const fb = (bearerFallback && String(bearerFallback).trim()) || "";
+  const fallbackOk = fb && fb !== "undefined" && fb !== "null" ? fb : "";
+  const bearer = fromStore || fallbackOk || null;
+  if (bearer) headers.Authorization = `Bearer ${bearer}`;
+  await attachInstallationHeaders(headers);
+  return { headers, bearer };
+}
+
 export async function authFetch(url: string, options?: RequestInit): Promise<Response> {
   const token = await getStoredToken();
 

@@ -377,9 +377,11 @@ export function registerCourseAccessRoutes({
   app.get("/api/download-url", async (req: Request, res: Response) => {
     try {
       const user = await getAuthUser(req);
-      if (!user || user.role !== "student") {
+      const roleNorm = String(user?.role ?? "student").toLowerCase();
+      if (!user || (roleNorm !== "student" && roleNorm !== "admin")) {
         return res.status(401).json({ message: "Not authenticated" });
       }
+      const bypassEnrollment = roleNorm === "admin";
 
       const { itemType, itemId } = req.query;
       if (!itemType || !itemId || !["lecture", "material"].includes(String(itemType))) {
@@ -413,6 +415,11 @@ export function registerCourseAccessRoutes({
         r2Key = material.file_url;
       }
 
+      const courseIdNumeric =
+        courseId != null && courseId !== "" ? Number(courseId) : null;
+      const courseIdResolved =
+        courseIdNumeric != null && Number.isFinite(courseIdNumeric) ? Math.trunc(courseIdNumeric) : null;
+
       if (!downloadAllowed) {
         return res.status(403).json({ message: "Download not allowed for this item" });
       }
@@ -421,10 +428,10 @@ export function registerCourseAccessRoutes({
         return res.status(404).json({ message: "File URL not found" });
       }
 
-      if (courseId) {
+      if (courseIdResolved !== null && !bypassEnrollment) {
         const enrollmentResult = await db.query(
           "SELECT id, valid_until FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)",
-          [user.id, courseId]
+          [user.id, courseIdResolved]
         );
         if (enrollmentResult.rows.length === 0) {
           return res.status(403).json({ message: "Not enrolled in this course" });

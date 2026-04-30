@@ -3,7 +3,7 @@ import { TouchableOpacity, View, Text, ActivityIndicator, Platform, StyleSheet }
 import { Ionicons } from '@expo/vector-icons';
 import { useDownloadManager } from '../lib/useDownloadManager';
 import { useAuth } from '../context/AuthContext';
-import { getApiUrl } from '../lib/query-client';
+import { getApiUrl, prepareAuthorizedFetchHeaders } from '../lib/query-client';
 
 interface DownloadButtonProps {
   itemType: 'lecture' | 'material';
@@ -35,15 +35,24 @@ function WebDownloadButton({ itemType, itemId }: { itemType: string; itemId: num
     try {
       const apiUrl = getApiUrl();
 
-      // Step 1: Get single-use download token
+      // Step 1: Get single-use download token (cookies + Bearer + installation id, same as apiRequest).
+      const { headers } = await prepareAuthorizedFetchHeaders(user?.sessionToken);
+
       const tokenRes = await fetch(`${apiUrl}/download-url?itemType=${itemType}&itemId=${itemId}`, {
-        headers: {
-          Authorization: `Bearer ${user?.sessionToken}`,
-        },
+        headers,
+        credentials: 'include',
       });
 
       if (!tokenRes.ok) {
-        throw new Error('Failed to get download token');
+        let detail = `Failed to get download token (${tokenRes.status})`;
+        try {
+          const body = await tokenRes.clone().json();
+          const msg = typeof body?.message === "string" ? body.message : typeof body?.error === "string" ? body.error : "";
+          if (msg) detail = msg;
+        } catch {
+          /* ignore */
+        }
+        throw new Error(detail);
       }
 
       const tokenPayload = unwrapPayload(await tokenRes.json());

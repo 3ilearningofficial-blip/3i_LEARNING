@@ -132,6 +132,7 @@ function setupCors(app: express.Application) {
       "X-Client-Platform",
     ],
     credentials: true,
+    exposedHeaders: ["Content-Length", "Content-Type", "Content-Disposition"],
     preflightContinue: false,
     optionsSuccessStatus: 204,
   };

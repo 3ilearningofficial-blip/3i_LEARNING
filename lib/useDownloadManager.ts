@@ -4,7 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import { encryptionService } from './encryptionService';
 import { useAuth } from '../context/AuthContext';
-import { getApiUrl } from './query-client';
+import { getApiUrl, prepareAuthorizedFetchHeaders } from './query-client';
 
 const STORAGE_KEY = 'download_manager_state';
 
@@ -100,25 +100,34 @@ export function useDownloadManager(): UseDownloadManagerReturn {
   const startDownload = useCallback(
     async (itemType: 'lecture' | 'material', itemId: number) => {
       if (Platform.OS === 'web') throw new Error('Downloads not supported on web');
-      if (!user?.sessionToken) throw new Error('Not authenticated');
+
+      const { bearer, headers: authHeaders } = await prepareAuthorizedFetchHeaders(user?.sessionToken);
+      if (!bearer) throw new Error('Not authenticated');
 
       try {
         updateState(itemType, itemId, { status: 'downloading', progress: 0 });
 
         const baseUrl = getApiUrl();
 
-        // STEP 1: get token
+        // STEP 1: get token — must send X-App-Device-Id when account has app_bound_device_id
         const tokenRes = await fetch(
           `${baseUrl}/download-url?itemType=${itemType}&itemId=${itemId}`,
           {
-            headers: {
-              Authorization: `Bearer ${user.sessionToken}`,
-            },
+            headers: authHeaders,
+            credentials: 'include',
           }
         );
 
         if (!tokenRes.ok) {
-          throw new Error('Failed to get download token');
+          let detail = `Failed to get download token (${tokenRes.status})`;
+          try {
+            const body = await tokenRes.clone().json();
+            const msg = typeof body?.message === 'string' ? body.message : typeof body?.error === 'string' ? body.error : '';
+            if (msg) detail = msg;
+          } catch {
+            /* ignore */
+          }
+          throw new Error(detail);
         }
 
         const tokenPayload = unwrapPayload(await tokenRes.json());
@@ -157,7 +166,7 @@ export function useDownloadManager(): UseDownloadManagerReturn {
           // STEP 4: encrypt
           const encrypted = await encryptionService.encryptBuffer(
             fileData,
-            user.sessionToken,
+            bearer,
             user.deviceId || 'default'
           );
 
@@ -169,12 +178,14 @@ export function useDownloadManager(): UseDownloadManagerReturn {
           await FileSystem.writeAsStringAsync(finalPath, encrypted);
 
           // STEP 6: notify server
+          const { headers: postHdr } = await prepareAuthorizedFetchHeaders(user?.sessionToken);
           await fetch(`${baseUrl}/my-downloads`, {
             method: 'POST',
             headers: {
+              ...postHdr,
               'Content-Type': 'application/json',
-              Authorization: `Bearer ${user.sessionToken}`,
             },
+            credentials: 'include',
             body: JSON.stringify({ itemType, itemId, localFilename: uuid }),
           });
 
@@ -205,7 +216,8 @@ export function useDownloadManager(): UseDownloadManagerReturn {
 
   const deleteDownload = useCallback(
     async (itemType: string, itemId: number) => {
-      if (!user?.sessionToken) throw new Error('Not authenticated');
+      const { bearer } = await prepareAuthorizedFetchHeaders(user?.sessionToken);
+      if (!bearer) throw new Error('Not authenticated');
 
       const state = getDownloadState(itemType, itemId);
       if (!state.localFilename) return;
@@ -215,11 +227,11 @@ export function useDownloadManager(): UseDownloadManagerReturn {
       try {
         await FileSystem.deleteAsync(getLocalEncryptedPath(state.localFilename), { idempotent: true });
 
+        const { headers: delHdr } = await prepareAuthorizedFetchHeaders(user?.sessionToken);
         await fetch(`${baseUrl}/my-downloads/${itemType}/${itemId}`, {
           method: 'DELETE',
-          headers: {
-            Authorization: `Bearer ${user.sessionToken}`,
-          },
+          headers: delHdr,
+          credentials: 'include',
         });
 
         removeStateEntry(itemType, itemId);
@@ -239,7 +251,8 @@ export function useDownloadManager(): UseDownloadManagerReturn {
 
   const getLocalUri = useCallback(
     async (itemType: string, itemId: number) => {
-      if (!user?.sessionToken) return null;
+      const { bearer } = await prepareAuthorizedFetchHeaders(user?.sessionToken);
+      if (!bearer) return null;
 
       const state = getDownloadState(itemType, itemId);
       if (!state.localFilename) return null;
@@ -257,7 +270,7 @@ export function useDownloadManager(): UseDownloadManagerReturn {
         await encryptionService.decryptToUri(
           encrypted,
           tempPath,
-          user.sessionToken,
+          bearer,
           user.deviceId || 'default'
         );
 
@@ -291,15 +304,15 @@ export function useDownloadManager(): UseDownloadManagerReturn {
   }, []);
 
   const runForegroundAccessCheck = useCallback(async () => {
-    if (!user?.sessionToken) return;
+    const { bearer, headers } = await prepareAuthorizedFetchHeaders(user?.sessionToken);
+    if (!bearer) return;
 
     const baseUrl = getApiUrl();
 
     try {
       const res = await fetch(`${baseUrl}/my-downloads`, {
-        headers: {
-          Authorization: `Bearer ${user.sessionToken}`,
-        },
+        headers,
+        credentials: 'include',
       });
 
       if (!res.ok) return;
