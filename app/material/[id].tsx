@@ -344,6 +344,9 @@ export default function MaterialViewerScreen() {
   }>({
     queryKey: ["/api/study-materials", id],
     enabled: !!id,
+    staleTime: 5 * 60 * 1000,
+    gcTime: 15 * 60 * 1000,
+    refetchOnMount: false,
   });
 
   useEffect(() => {

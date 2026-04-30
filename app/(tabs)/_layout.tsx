@@ -3,6 +3,7 @@ import { Platform, StyleSheet, View, Text } from "react-native";
 import { BlurView } from "expo-blur";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useQuery } from "@tanstack/react-query";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Colors from "@/constants/colors";
 import { authFetch, getApiUrl } from "@/lib/query-client";
 import { useAuth } from "@/context/AuthContext";
@@ -84,6 +85,9 @@ function NotifTabIcon({ color, focused }: { color: string; focused: boolean }) {
 export default function TabLayout() {
   const isWeb = Platform.OS === "web";
   const isIOS = Platform.OS === "ios";
+  const insets = useSafeAreaInsets();
+  const androidBaseTabHeight = 60;
+  const tabBarBottomInset = isWeb ? 0 : Math.max(insets.bottom, Platform.OS === "android" ? 10 : 6);
 
   return (
     <Tabs
@@ -93,12 +97,14 @@ export default function TabLayout() {
         tabBarInactiveTintColor: Colors.light.tabIconDefault,
         tabBarLabelStyle: { fontFamily: "Inter_500Medium", fontSize: 11, marginBottom: 2 },
         tabBarStyle: {
-          position: "absolute",
+          position: isWeb ? "relative" : "absolute",
           backgroundColor: isIOS ? "transparent" : isWeb ? "#ffffff" : "#ffffff",
           borderTopWidth: isWeb ? 1 : 0,
           borderTopColor: Colors.light.border,
           elevation: 0,
-          height: isWeb ? 84 : Platform.OS === "android" ? 68 : undefined,
+          paddingBottom: tabBarBottomInset,
+          paddingTop: isWeb ? 6 : 4,
+          height: isWeb ? 84 : Platform.OS === "android" ? androidBaseTabHeight + tabBarBottomInset : undefined,
         },
         tabBarBackground: () =>
           isIOS ? (

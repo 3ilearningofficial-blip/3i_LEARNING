@@ -24,6 +24,7 @@ export default function WelcomeScreen() {
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const isWide = width >= 640;
+  const isWeb = Platform.OS === "web";
   const { user } = useAuth();
 
   const { data: cfg = {} } = useQuery<Record<string, string>>({
@@ -52,10 +53,15 @@ export default function WelcomeScreen() {
   };
 
   const googlePlayUrl = s("welcome_google_play_url", "https://play.google.com/store/apps/details?id=com.learning.threeI");
+  const appStoreUrl = s("welcome_app_store_url", "https://apps.apple.com");
 
   const handleGooglePlay = () => {
     if (Platform.OS === "web") window.open(googlePlayUrl, "_blank");
     else Linking.openURL(googlePlayUrl).catch(() => {});
+  };
+  const handleAppStore = () => {
+    if (Platform.OS === "web") window.open(appStoreUrl, "_blank");
+    else Linking.openURL(appStoreUrl).catch(() => {});
   };
 
   const handleOpenWebApp = () => {
@@ -114,7 +120,7 @@ export default function WelcomeScreen() {
           )}
 
           {/* Get the App */}
-          {on("welcome_show_get_app") && (
+          {isWeb && on("welcome_show_get_app") && (
             <View style={styles.getAppSection}>
               <Text style={styles.getAppTitle}>Get the App</Text>
               <Text style={styles.getAppSub}>Available on Android and web</Text>
@@ -129,6 +135,14 @@ export default function WelcomeScreen() {
                     </Pressable>
                   </View>
                 )}
+                <View style={[styles.getAppCard, isWide && { flex: 1 }]}>
+                  <Text style={styles.getAppCardTitle}>Download for iOS</Text>
+                  <Text style={styles.getAppCardDesc}>Get the app from the Apple App Store</Text>
+                  <Pressable style={({ pressed }) => [styles.darkBtn, pressed && { opacity: 0.85 }]} onPress={handleAppStore}>
+                    <Ionicons name="logo-apple" size={18} color="#fff" />
+                    <Text style={styles.darkBtnText}>App Store</Text>
+                  </Pressable>
+                </View>
                 {on("welcome_show_web_app") && (
                   <View style={[styles.getAppCard, isWide && { flex: 1 }]}>
                     <Text style={styles.getAppCardTitle}>Use on Web</Text>

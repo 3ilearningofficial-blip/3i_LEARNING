@@ -461,7 +461,7 @@ export default function LectureScreen() {
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
 
   const { data: lectureData, error: lectureError } = useQuery<{ video_url: string; title: string; is_completed?: boolean; download_allowed?: boolean; course_id?: number }>({
-    queryKey: [`/api/lectures/${id}`],
+    queryKey: ["/api/lectures", id],
     queryFn: async () => {
       const baseUrl = getApiUrl();
       const url = new URL(`/api/lectures/${id}`, baseUrl);
@@ -472,6 +472,10 @@ export default function LectureScreen() {
       }
       return res.json();
     },
+    enabled: !!id,
+    staleTime: 5 * 60 * 1000,
+    gcTime: 15 * 60 * 1000,
+    refetchOnMount: false,
   });
 
   const { data: progressData } = useQuery<{ is_completed: boolean }>({

@@ -194,7 +194,9 @@ export default function CourseDetailScreen() {
       if (!res.ok) throw new Error("Failed to load course");
       return res.json();
     },
-    staleTime: 15000,
+    staleTime: 2 * 60 * 1000,
+    gcTime: 15 * 60 * 1000,
+    refetchOnMount: false,
     refetchInterval: 60000,
   });
 

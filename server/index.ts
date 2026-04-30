@@ -148,10 +148,16 @@ function setupApiOriginProtection(app: express.Application) {
 
     const origin = req.get("origin");
     const referer = req.get("referer");
+    const clientPlatform = (req.get("x-client-platform") || "").trim().toLowerCase();
+    const hasNativeAppHeader = clientPlatform === "android" || clientPlatform === "ios";
     const trustedOrigin = origin ? isTrustedOrigin(origin) : false;
     const trustedReferer = referer ? isTrustedOrigin(referer) : false;
+    const missingBrowserHeaders = !origin && !referer;
 
     if (trustedOrigin || trustedReferer) return next();
+    // Native app requests (expo/fetch) may omit Origin/Referer.
+    // If they explicitly identify as android/ios, allow them.
+    if (hasNativeAppHeader && missingBrowserHeaders) return next();
 
     return res.status(403).json({ message: "Cross-site request blocked" });
   });

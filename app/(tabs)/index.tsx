@@ -3,7 +3,7 @@ import {
   View, Text, StyleSheet, ScrollView, Pressable, TextInput,
   RefreshControl, Platform, ActivityIndicator, FlatList, Image, useWindowDimensions,
 } from "react-native";
-import { router, useFocusEffect } from "expo-router";
+import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
@@ -385,13 +385,6 @@ export default function HomeScreen() {
       refetchCourses();
     }
   }, [user?.id]);
-
-  // Refetch when home tab comes into focus (e.g. navigating back from course detail)
-  useFocusEffect(
-    useCallback(() => {
-      refetchCourses();
-    }, [user?.id])
-  );
 
   const dynamicCategories = React.useMemo(() => {
     const combined = [...DEFAULT_CATEGORIES];
