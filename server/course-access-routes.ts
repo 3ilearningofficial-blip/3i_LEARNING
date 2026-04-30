@@ -415,8 +415,7 @@ export function registerCourseAccessRoutes({
         r2Key = material.file_url;
       }
 
-      const courseIdNumeric =
-        courseId != null && courseId !== "" ? Number(courseId) : null;
+      const courseIdNumeric = courseId == null ? null : Number(courseId);
       const courseIdResolved =
         courseIdNumeric != null && Number.isFinite(courseIdNumeric) ? Math.trunc(courseIdNumeric) : null;
 

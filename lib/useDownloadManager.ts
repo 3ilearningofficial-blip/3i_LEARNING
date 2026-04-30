@@ -167,7 +167,7 @@ export function useDownloadManager(): UseDownloadManagerReturn {
           const encrypted = await encryptionService.encryptBuffer(
             fileData,
             bearer,
-            user.deviceId || 'default'
+            user?.deviceId || 'default'
           );
 
           // STEP 5: save encrypted
@@ -271,7 +271,7 @@ export function useDownloadManager(): UseDownloadManagerReturn {
           encrypted,
           tempPath,
           bearer,
-          user.deviceId || 'default'
+          user?.deviceId || 'default'
         );
 
         return tempPath;
