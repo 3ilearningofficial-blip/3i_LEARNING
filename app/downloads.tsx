@@ -28,7 +28,7 @@ type DownloadItem = {
 export default function DownloadsScreen() {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
-  const { startWebDownload } = useWebDownloadJobs();
+  const { startWebDownload, forgetSavedLocally } = useWebDownloadJobs();
   const [activeTab, setActiveTab] = useState<"lectures" | "pdfs">("lectures");
   const [totalStorage, setTotalStorage] = useState<number>(0);
   /** Web: items with a Blob present in IndexedDB for this browser */
@@ -158,6 +158,7 @@ export default function DownloadsScreen() {
           credentials: "include",
         });
         await removeWebOffline(item.type, item.id);
+        forgetSavedLocally(item.type, item.id);
         await refetch();
       } catch (error: unknown) {
         const msg = error instanceof Error ? error.message : String(error);
@@ -258,9 +259,7 @@ export default function DownloadsScreen() {
           {isAvailableOffline && (
             <View style={styles.offlineBadge}>
               <Ionicons name="checkmark-circle" size={12} color="#10b981" />
-              <Text style={styles.offlineBadgeText}>
-                {Platform.OS === "web" ? "In this browser" : "Available Offline"}
-              </Text>
+              <Text style={styles.offlineBadgeText}>Downloaded</Text>
             </View>
           )}
         </View>

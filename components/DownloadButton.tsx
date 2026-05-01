@@ -29,15 +29,16 @@ function WebDownloadButton({
   fileType: string;
 }) {
   const { user } = useAuth();
-  const { getJob, startWebDownload } = useWebDownloadJobs();
+  const { getJob, startWebDownload, isItemSavedLocally } = useWebDownloadJobs();
   const [tapError, setTapError] = useState<string | null>(null);
 
   const job = getJob(itemType, itemId);
   const status = job?.status;
   const progress = job?.progress ?? 0;
+  const savedLocally = isItemSavedLocally(itemType, itemId);
 
   const handleWebDownload = async () => {
-    if (status === 'downloading') return;
+    if (savedLocally || status === 'downloading') return;
     setTapError(null);
     try {
       await startWebDownload({
@@ -64,11 +65,11 @@ function WebDownloadButton({
     );
   }
 
-  if (status === 'done') {
+  if (savedLocally) {
     return (
-      <View style={webStyles.doneContainer}>
+      <View style={webStyles.downloadedStatic}>
         <Ionicons name="checkmark-circle" size={18} color="#22C55E" />
-        <Text style={webStyles.doneText}>Saved to My Downloads</Text>
+        <Text style={webStyles.downloadedText}>Downloaded</Text>
       </View>
     );
   }
@@ -238,19 +239,21 @@ const webStyles = StyleSheet.create({
     fontWeight: '600',
     minWidth: 32,
   },
-  doneContainer: {
+  downloadedStatic: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    maxWidth: 200,
+    backgroundColor: '#ECFDF5',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
   },
-  doneText: {
-    fontSize: 11,
+  downloadedText: {
+    fontSize: 13,
     color: '#22C55E',
     fontWeight: '600',
-    flexShrink: 1,
   },
   errorContainer: {
     flexDirection: 'row',

@@ -2,13 +2,15 @@ import React, {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useReducer,
   useRef,
+  useState,
 } from "react";
 import { Platform } from "react-native";
 import { getApiUrl, prepareAuthorizedFetchHeaders, queryClient } from "@/lib/query-client";
-import { putWebOffline } from "@/lib/web-offline-store";
+import { listWebOfflineKeys, putWebOffline } from "@/lib/web-offline-store";
 
 export type WebDlJobSnapshot = {
   itemType: "lecture" | "material";
@@ -28,7 +30,7 @@ type Action =
   | { type: "error"; key: string }
   | { type: "clear"; key: string };
 
-function jobKey(itemType: string, itemId: number): string {
+export function webDownloadPersistKey(itemType: string, itemId: number): string {
   return `${itemType}:${itemId}`;
 }
 
@@ -75,6 +77,10 @@ function reducer(state: JobsState, action: Action): JobsState {
 type Ctx = {
   jobs: JobsState;
   getJob: (itemType: string, itemId: number) => WebDlJobSnapshot | undefined;
+  /** True once this lecture/material blob exists in IndexedDB (persists after job clears) */
+  isItemSavedLocally: (itemType: string, itemId: number) => boolean;
+  /** Call after deleting from IndexedDB so course buttons reset to Download */
+  forgetSavedLocally: (itemType: string, itemId: number) => void;
   startWebDownload: (params: {
     itemType: "lecture" | "material";
     itemId: number;
@@ -88,6 +94,8 @@ type Ctx = {
 const WEB_DL_STUB_CTX: Ctx = {
   jobs: {},
   getJob: () => undefined,
+  isItemSavedLocally: () => false,
+  forgetSavedLocally: () => {},
   startWebDownload: async () => {},
 };
 
@@ -95,11 +103,46 @@ const WebDownloadJobsContext = createContext<Ctx>(WEB_DL_STUB_CTX);
 
 export function WebDownloadJobsInnerProvider({ children }: { children: React.ReactNode }) {
   const [jobs, dispatch] = useReducer(reducer, {});
+  const [persistedSaved, setPersistedSaved] = useState<Record<string, boolean>>({});
   const inFlight = useRef<Set<string>>(new Set());
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const keys = await listWebOfflineKeys();
+        if (cancelled) return;
+        const next: Record<string, boolean> = {};
+        for (const k of keys) next[k] = true;
+        setPersistedSaved(next);
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const getJob = useCallback((itemType: string, itemId: number) => {
-    return jobs[jobKey(itemType, itemId)];
+    return jobs[webDownloadPersistKey(itemType, itemId)];
   }, [jobs]);
+
+  const isItemSavedLocally = useCallback(
+    (itemType: string, itemId: number) =>
+      !!persistedSaved[webDownloadPersistKey(itemType, itemId)],
+    [persistedSaved]
+  );
+
+  const forgetSavedLocally = useCallback((itemType: string, itemId: number) => {
+    const k = webDownloadPersistKey(itemType, itemId);
+    setPersistedSaved((prev) => {
+      if (!prev[k]) return prev;
+      const next = { ...prev };
+      delete next[k];
+      return next;
+    });
+  }, []);
 
   const startWebDownload = useCallback(
     async (params: {
@@ -109,7 +152,7 @@ export function WebDownloadJobsInnerProvider({ children }: { children: React.Rea
       fileType: string;
       bearerFallback?: string | null;
     }) => {
-      const key = jobKey(params.itemType, params.itemId);
+      const key = webDownloadPersistKey(params.itemType, params.itemId);
       if (inFlight.current.has(key)) return;
 
       const { bearer, headers: authHeaders } = await prepareAuthorizedFetchHeaders(params.bearerFallback);
@@ -208,6 +251,7 @@ export function WebDownloadJobsInnerProvider({ children }: { children: React.Rea
           blob,
           downloadedAt: Date.now(),
         });
+        setPersistedSaved((prev) => ({ ...prev, [key]: true }));
 
         const { headers: postHdr } = await prepareAuthorizedFetchHeaders(params.bearerFallback);
         const trackRes = await fetch(`${apiUrl}/my-downloads`, {
@@ -243,9 +287,17 @@ export function WebDownloadJobsInnerProvider({ children }: { children: React.Rea
     () => ({
       jobs,
       getJob,
+      isItemSavedLocally,
+      forgetSavedLocally,
       startWebDownload,
     }),
-    [jobs, getJob, startWebDownload]
+    [
+      jobs,
+      getJob,
+      isItemSavedLocally,
+      forgetSavedLocally,
+      startWebDownload,
+    ]
   );
 
   return <WebDownloadJobsContext.Provider value={value}>{children}</WebDownloadJobsContext.Provider>;
