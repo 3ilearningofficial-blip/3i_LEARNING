@@ -48,6 +48,20 @@ export function registerCourseAccessRoutes({
     return trimmed.replace(/^\/+/, "");
   };
 
+  /** Buckets use keys like `folder/file.pdf`. App URLs use `/api/media/folder/file.pdf` — strip that proxy prefix for GetObject. */
+  const toR2ObjectKey = (raw: string): string => {
+    let key = normalizeStorageKey(raw);
+    if (!key) return "";
+    const proxy = "api/media/";
+    if (key.toLowerCase().startsWith(proxy)) key = key.slice(proxy.length).replace(/^\/+/, "");
+    try {
+      key = decodeURIComponent(key);
+    } catch {
+      /* keep */
+    }
+    return key.replace(/^\/+/, "").replace(/\/+$/g, "");
+  };
+
   const userCanMintMediaToken = async (user: AuthUser, requestedKeyRaw: string): Promise<boolean> => {
     const requestedKey = normalizeStorageKey(requestedKeyRaw);
     if (!requestedKey) return false;
@@ -396,14 +410,19 @@ export function registerCourseAccessRoutes({
       let r2Key: string | null = null;
 
       if (itemType === "lecture") {
-        const lectureResult = await db.query("SELECT course_id, download_allowed, video_url FROM lectures WHERE id = $1", [id]);
+        const lectureResult = await db.query(
+          "SELECT course_id, download_allowed, video_url, pdf_url FROM lectures WHERE id = $1",
+          [id]
+        );
         if (lectureResult.rows.length === 0) {
           return res.status(404).json({ message: "Lecture not found" });
         }
         const lecture = lectureResult.rows[0];
         courseId = lecture.course_id;
         downloadAllowed = lecture.download_allowed;
-        r2Key = lecture.video_url;
+        const vu = lecture.video_url != null ? String(lecture.video_url).trim() : "";
+        const pu = lecture.pdf_url != null ? String(lecture.pdf_url).trim() : "";
+        r2Key = vu || pu || null;
       } else if (itemType === "material") {
         const materialResult = await db.query("SELECT course_id, download_allowed, file_url FROM study_materials WHERE id = $1", [id]);
         if (materialResult.rows.length === 0) {
@@ -441,14 +460,9 @@ export function registerCourseAccessRoutes({
         }
       }
 
-      let cleanR2Key = r2Key;
-      if (r2Key.startsWith("http")) {
-        try {
-          const url = new URL(r2Key);
-          cleanR2Key = url.pathname.substring(1);
-        } catch (_e) {
-          cleanR2Key = r2Key;
-        }
+      const cleanR2Key = toR2ObjectKey(String(r2Key));
+      if (!cleanR2Key) {
+        return res.status(404).json({ message: "File URL not found" });
       }
 
       const { randomUUID } = await import("crypto");
@@ -522,8 +536,14 @@ export function registerCourseAccessRoutes({
           res.status(500).json({ message: "Stream error" });
         }
       });
-    } catch (err) {
-      console.error("[download-proxy] Error:", err);
+    } catch (err: unknown) {
+      const name = err && typeof err === "object" && "name" in err ? String((err as { name?: string }).name) : "";
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[download-proxy] Error:", name || msg, msg);
+      if ((name === "NoSuchKey" || msg.includes("NoSuchKey")) && !res.headersSent) {
+        res.status(404).json({ message: "File not found in storage" });
+        return;
+      }
       if (!res.headersSent) {
         res.status(500).json({ message: "Failed to download file" });
       }
