@@ -460,7 +460,7 @@ export default function LectureScreen() {
   const [hasError, setHasError] = useState(false);
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
 
-  const { data: lectureData, error: lectureError } = useQuery<{ video_url: string; title: string; is_completed?: boolean; download_allowed?: boolean; course_id?: number }>({
+  const { data: lectureData, error: lectureError } = useQuery<{ video_url: string; pdf_url?: string; title: string; is_completed?: boolean; download_allowed?: boolean; course_id?: number }>({
     queryKey: ["/api/lectures", id],
     queryFn: async () => {
       const baseUrl = getApiUrl();
@@ -651,6 +651,8 @@ export default function LectureScreen() {
                 itemId={parseInt(id)}
                 downloadAllowed={lectureData.download_allowed || false}
                 isEnrolled={true}
+                title={lectureData.title || title || 'Lecture'}
+                fileType={lectureData.pdf_url && !lectureData.video_url ? 'pdf' : 'video'}
               />
             )}
             {isCompleted && (

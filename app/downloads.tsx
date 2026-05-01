@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable,
   ActivityIndicator, Platform, Alert,
@@ -7,9 +7,12 @@ import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery } from "@tanstack/react-query";
-import { authFetch, getApiUrl } from "@/lib/query-client";
+import { authFetch, getApiUrl, prepareAuthorizedFetchHeaders } from "@/lib/query-client";
 import Colors from "@/constants/colors";
 import { useDownloadManager } from "@/lib/useDownloadManager";
+import { useAuth } from "@/context/AuthContext";
+import { useWebDownloadJobs } from "@/context/WebDownloadJobsContext";
+import { getWebOffline, removeWebOffline } from "@/lib/web-offline-store";
 
 type DownloadItem = {
   id: number;
@@ -24,8 +27,12 @@ type DownloadItem = {
 
 export default function DownloadsScreen() {
   const insets = useSafeAreaInsets();
+  const { user } = useAuth();
+  const { startWebDownload } = useWebDownloadJobs();
   const [activeTab, setActiveTab] = useState<"lectures" | "pdfs">("lectures");
   const [totalStorage, setTotalStorage] = useState<number>(0);
+  /** Web: items with a Blob present in IndexedDB for this browser */
+  const [webHeldKeys, setWebHeldKeys] = useState<Set<string>>(() => new Set());
   const downloadManager = useDownloadManager();
 
   const { data, isLoading, refetch } = useQuery<{ materials: DownloadItem[]; lectures: DownloadItem[] }>({
@@ -47,6 +54,25 @@ export default function DownloadsScreen() {
   const lectures = Array.isArray(data?.lectures) ? data.lectures : [];
   const materials = Array.isArray(data?.materials) ? data.materials : [];
 
+  const refreshWebHeldKeys = useCallback(async () => {
+    if (Platform.OS !== "web") return;
+    const all = [...lectures, ...materials];
+    const next = new Set<string>();
+    for (const it of all) {
+      try {
+        const rec = await getWebOffline(it.type, it.id);
+        if (rec) next.add(`${it.type}:${it.id}`);
+      } catch {
+        /* ignore */
+      }
+    }
+    setWebHeldKeys(next);
+  }, [lectures, materials]);
+
+  useEffect(() => {
+    void refreshWebHeldKeys();
+  }, [refreshWebHeldKeys]);
+
   // Calculate total storage used
   useEffect(() => {
     if (Platform.OS !== 'web') {
@@ -55,7 +81,27 @@ export default function DownloadsScreen() {
   }, [data]);
 
   const openFile = async (item: DownloadItem) => {
-    // Try to get local URI first (for offline playback)
+    if (Platform.OS === "web") {
+      try {
+        const rec = await getWebOffline(item.type, item.id);
+        if (rec) {
+          const blobUrl = URL.createObjectURL(rec.blob);
+          if (item.type === "material") {
+            router.push({ pathname: "/material/[id]", params: { id: String(item.id), localUri: blobUrl } } as any);
+          } else {
+            router.push({
+              pathname: "/lecture/[id]",
+              params: { id: String(item.id), videoUrl: blobUrl, title: item.title, isLocal: "true" },
+            } as any);
+          }
+          return;
+        }
+      } catch (e) {
+        console.warn("[Downloads] web offline blob", e);
+      }
+    }
+
+    // Try to get local URI first (for offline playback — native encrypted files)
     if (Platform.OS !== 'web') {
       try {
         const localUri = await downloadManager.getLocalUri(item.type, item.id);
@@ -86,7 +132,41 @@ export default function DownloadsScreen() {
   };
 
   const handleDelete = async (item: DownloadItem) => {
-    if (Platform.OS === 'web') return;
+    const runNativeDelete = async () => {
+      try {
+        await downloadManager.deleteDownload(item.type, item.id);
+        await refetch();
+      } catch (error: any) {
+        Alert.alert("Delete Failed", error.message || "Failed to delete download");
+      }
+    };
+
+    if (Platform.OS === "web") {
+      const ok =
+        typeof globalThis !== "undefined" &&
+        typeof (globalThis as unknown as { confirm?: (msg: string) => boolean }).confirm === "function" &&
+        Boolean((globalThis as unknown as { confirm: (msg: string) => boolean }).confirm(
+          `Remove "${item.title}" from My Downloads on this browser?`
+        ));
+      if (!ok) return;
+      try {
+        const baseUrl = getApiUrl();
+        const { headers } = await prepareAuthorizedFetchHeaders(user?.sessionToken);
+        await fetch(`${baseUrl}/my-downloads/${item.type}/${item.id}`, {
+          method: "DELETE",
+          headers,
+          credentials: "include",
+        });
+        await removeWebOffline(item.type, item.id);
+        await refetch();
+      } catch (error: unknown) {
+        const msg = error instanceof Error ? error.message : String(error);
+        if (typeof globalThis !== "undefined" && (globalThis as unknown as { alert?: (msg: string) => void }).alert) {
+          (globalThis as unknown as { alert: (msg: string) => void }).alert(`Delete failed: ${msg}`);
+        }
+      }
+      return;
+    }
 
     Alert.alert(
       "Delete Download",
@@ -96,13 +176,8 @@ export default function DownloadsScreen() {
         {
           text: "Delete",
           style: "destructive",
-          onPress: async () => {
-            try {
-              await downloadManager.deleteDownload(item.type, item.id);
-              await refetch();
-            } catch (error: any) {
-              Alert.alert("Delete Failed", error.message || "Failed to delete download");
-            }
+          onPress: () => {
+            void runNativeDelete();
           },
         },
       ]
@@ -110,7 +185,24 @@ export default function DownloadsScreen() {
   };
 
   const handleRedownload = async (item: DownloadItem) => {
-    if (Platform.OS === 'web') return;
+    if (Platform.OS === 'web') {
+      try {
+        await startWebDownload({
+          itemType: item.type,
+          itemId: item.id,
+          title: item.title,
+          fileType: item.file_type || 'file',
+          bearerFallback: user?.sessionToken,
+        });
+        await refetch();
+        await refreshWebHeldKeys();
+      } catch (error: any) {
+        if (typeof globalThis !== 'undefined' && typeof (globalThis as any).alert === 'function') {
+          (globalThis as any).alert(error?.message || 'Failed to download file');
+        }
+      }
+      return;
+    }
 
     try {
       await downloadManager.startDownload(item.type as 'lecture' | 'material', item.id);
@@ -133,12 +225,17 @@ export default function DownloadsScreen() {
       ? downloadManager.getDownloadState(item.type, item.id)
       : { status: 'idle' as const, progress: 0 };
     
-    const isAvailableOffline = downloadState.status === 'downloaded' && downloadState.localFilename;
-    const needsRedownload = item.local_filename && !isAvailableOffline;
+    const k = `${item.type}:${item.id}`;
+    const isAvailableOffline =
+      Platform.OS === "web"
+        ? webHeldKeys.has(k)
+        : downloadState.status === "downloaded" && !!downloadState.localFilename;
+    const needsRedownload =
+      item.local_filename && !isAvailableOffline;
 
     return (
       <Pressable 
-        key={item.id} 
+        key={`${item.type}-${item.id}`} 
         style={styles.card} 
         onPress={() => openFile(item)}
         onLongPress={() => Platform.OS !== 'web' && handleDelete(item)}
@@ -161,7 +258,9 @@ export default function DownloadsScreen() {
           {isAvailableOffline && (
             <View style={styles.offlineBadge}>
               <Ionicons name="checkmark-circle" size={12} color="#10b981" />
-              <Text style={styles.offlineBadgeText}>Available Offline</Text>
+              <Text style={styles.offlineBadgeText}>
+                {Platform.OS === "web" ? "In this browser" : "Available Offline"}
+              </Text>
             </View>
           )}
         </View>

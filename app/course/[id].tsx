@@ -1110,6 +1110,8 @@ setTimeout(function() {
                               itemId={lec.id}
                               downloadAllowed={lec.download_allowed || false}
                               isEnrolled={course.isEnrolled}
+                              title={lec.title || 'Lecture'}
+                              fileType={(lec as { pdf_url?: string; video_url?: string }).pdf_url && !(lec as { video_url?: string }).video_url ? 'pdf' : 'video'}
                             />
                           </View>
                         );
@@ -1297,6 +1299,8 @@ setTimeout(function() {
                               itemId={mat.id}
                               downloadAllowed={mat.download_allowed || false}
                               isEnrolled={course.isEnrolled}
+                              title={mat.title || 'Material'}
+                              fileType={mat.file_type || 'pdf'}
                             />
                           </View>
                         );
@@ -1729,6 +1733,8 @@ setTimeout(function() {
                     itemId={lecture.id}
                     downloadAllowed={lecture.download_allowed || false}
                     isEnrolled={course.isEnrolled}
+                    title={lecture.title || 'Lecture'}
+                    fileType={(lecture as { pdf_url?: string; video_url?: string }).pdf_url && !(lecture as { video_url?: string }).video_url ? 'pdf' : 'video'}
                   />
                 </View>
               );
@@ -1751,6 +1757,8 @@ setTimeout(function() {
                     itemId={mat.id}
                     downloadAllowed={mat.download_allowed || false}
                     isEnrolled={course.isEnrolled}
+                    title={mat.title || 'Material'}
+                    fileType={mat.file_type || 'pdf'}
                   />
                 </View>
               );

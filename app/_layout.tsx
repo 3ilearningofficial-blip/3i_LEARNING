@@ -14,6 +14,8 @@ import { KeyboardProvider } from "react-native-keyboard-controller";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { getApiUrl, queryClient } from "@/lib/query-client";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
+import { WebDownloadJobsProvider } from "@/context/WebDownloadJobsContext";
+import { WebDownloadHud } from "@/components/WebDownloadHud";
 import { StatusBar } from "expo-status-bar";
 import * as ScreenOrientation from "expo-screen-orientation";
 import { Platform, AppState, AppStateStatus } from "react-native";
@@ -198,8 +200,11 @@ export default function RootLayout() {
         <GestureHandlerRootView style={{ flex: 1 }}>
           <KeyboardProvider>
             <AuthProvider>
-              <StatusBar style="light" />
-              <RootLayoutNav />
+              <WebDownloadJobsProvider>
+                <StatusBar style="light" />
+                <RootLayoutNav />
+                <WebDownloadHud />
+              </WebDownloadJobsProvider>
             </AuthProvider>
           </KeyboardProvider>
         </GestureHandlerRootView>

@@ -538,6 +538,8 @@ export default function MaterialViewerScreen() {
                     itemId={material.id}
                     downloadAllowed={material.download_allowed}
                     isEnrolled={true}
+                    title={material.title || 'Study material'}
+                    fileType={material.file_type || 'pdf'}
                   />
                 )}
               </View>

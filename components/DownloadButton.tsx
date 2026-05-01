@@ -3,110 +3,53 @@ import { TouchableOpacity, View, Text, ActivityIndicator, Platform, StyleSheet }
 import { Ionicons } from '@expo/vector-icons';
 import { useDownloadManager } from '../lib/useDownloadManager';
 import { useAuth } from '../context/AuthContext';
-import { getApiUrl, prepareAuthorizedFetchHeaders } from '../lib/query-client';
+import { useWebDownloadJobs } from '../context/WebDownloadJobsContext';
 
 interface DownloadButtonProps {
   itemType: 'lecture' | 'material';
   itemId: number;
   downloadAllowed: boolean;
   isEnrolled: boolean;
+  /** Course / upload title — used as display name & web in-app library */
+  title?: string;
+  /** e.g. pdf, video — for friendly filename/metadata */
+  fileType?: string;
 }
 
-// Web-only download with progress
-function WebDownloadButton({ itemType, itemId }: { itemType: string; itemId: number }) {
+// Web: save into IndexedDB + server my-downloads; progress from global context + HUD (survives tab switch)
+function WebDownloadButton({
+  itemType,
+  itemId,
+  title,
+  fileType,
+}: {
+  itemType: string;
+  itemId: number;
+  title: string;
+  fileType: string;
+}) {
   const { user } = useAuth();
-  const [progress, setProgress] = useState(0);
-  const [status, setStatus] = useState<'idle' | 'downloading' | 'done' | 'error'>('idle');
-  const unwrapPayload = (payload: any) => {
-    if (payload && typeof payload === 'object' && typeof payload.success === 'boolean') {
-      if (payload.success === false) {
-        throw new Error(payload.error || payload.message || 'Request failed');
-      }
-      if ('data' in payload) return payload.data;
-    }
-    return payload;
-  };
+  const { getJob, startWebDownload } = useWebDownloadJobs();
+  const [tapError, setTapError] = useState<string | null>(null);
+
+  const job = getJob(itemType, itemId);
+  const status = job?.status;
+  const progress = job?.progress ?? 0;
 
   const handleWebDownload = async () => {
     if (status === 'downloading') return;
-    setStatus('downloading');
-    setProgress(0);
-
+    setTapError(null);
     try {
-      const apiUrl = getApiUrl();
-
-      // Step 1: Get single-use download token (cookies + Bearer + installation id, same as apiRequest).
-      const { headers } = await prepareAuthorizedFetchHeaders(user?.sessionToken);
-
-      const tokenRes = await fetch(`${apiUrl}/download-url?itemType=${itemType}&itemId=${itemId}`, {
-        headers,
-        credentials: 'include',
+      await startWebDownload({
+        itemType: itemType as 'lecture' | 'material',
+        itemId,
+        title: title.trim() || 'Download',
+        fileType,
+        bearerFallback: user?.sessionToken,
       });
-
-      if (!tokenRes.ok) {
-        let detail = `Failed to get download token (${tokenRes.status})`;
-        try {
-          const body = await tokenRes.clone().json();
-          const msg = typeof body?.message === "string" ? body.message : typeof body?.error === "string" ? body.error : "";
-          if (msg) detail = msg;
-        } catch {
-          /* ignore */
-        }
-        throw new Error(detail);
-      }
-
-      const tokenPayload = unwrapPayload(await tokenRes.json());
-      const token = tokenPayload?.token;
-      const downloadUrl = `${apiUrl}/download-proxy?token=${token}`;
-
-      // Step 2: Download with XHR for progress tracking
-      await new Promise<void>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open('GET', downloadUrl);
-        xhr.responseType = 'blob';
-
-        xhr.onprogress = (e) => {
-          if (e.lengthComputable) {
-            setProgress(Math.round((e.loaded / e.total) * 100));
-          } else {
-            // Indeterminate — pulse between 20-80
-            setProgress((prev) => (prev < 80 ? prev + 5 : 20));
-          }
-        };
-
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            // Step 3: Trigger browser download
-            const blob = xhr.response as Blob;
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            // Get filename from Content-Disposition or use default
-            const disposition = xhr.getResponseHeader('Content-Disposition');
-            const match = disposition?.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
-            a.download = match ? match[1].replace(/['"]/g, '') : `${itemType}-${itemId}`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-            setProgress(100);
-            resolve();
-          } else {
-            reject(new Error(`Download failed: ${xhr.status}`));
-          }
-        };
-
-        xhr.onerror = () => reject(new Error('Network error'));
-        xhr.send();
-      });
-
-      setStatus('done');
-      // Reset after 3 seconds
-      setTimeout(() => { setStatus('idle'); setProgress(0); }, 3000);
-    } catch (err) {
+    } catch (err: unknown) {
       console.error('[WebDownload] Error:', err);
-      setStatus('error');
-      setTimeout(() => { setStatus('idle'); setProgress(0); }, 3000);
+      setTapError(err instanceof Error ? err.message : 'Download failed');
     }
   };
 
@@ -114,7 +57,7 @@ function WebDownloadButton({ itemType, itemId }: { itemType: string; itemId: num
     return (
       <View style={webStyles.container}>
         <View style={webStyles.progressBar}>
-          <View style={[webStyles.progressFill, { width: `${progress}%` as any }]} />
+          <View style={[webStyles.progressFill, { width: `${progress}%` as `${number}%` }]} />
         </View>
         <Text style={webStyles.progressText}>{progress}%</Text>
       </View>
@@ -125,12 +68,12 @@ function WebDownloadButton({ itemType, itemId }: { itemType: string; itemId: num
     return (
       <View style={webStyles.doneContainer}>
         <Ionicons name="checkmark-circle" size={18} color="#22C55E" />
-        <Text style={webStyles.doneText}>Downloaded</Text>
+        <Text style={webStyles.doneText}>Saved to My Downloads</Text>
       </View>
     );
   }
 
-  if (status === 'error') {
+  if (status === 'error' || tapError) {
     return (
       <TouchableOpacity style={webStyles.errorContainer} onPress={handleWebDownload}>
         <Ionicons name="alert-circle" size={18} color="#EF4444" />
@@ -152,6 +95,8 @@ export function DownloadButton({
   itemId,
   downloadAllowed,
   isEnrolled,
+  title = 'Download',
+  fileType = 'file',
 }: DownloadButtonProps) {
   const { getDownloadState, startDownload } = useDownloadManager();
   const state = getDownloadState(itemType, itemId);
@@ -161,12 +106,19 @@ export function DownloadButton({
     return null;
   }
 
-  // Web: use browser download with progress
+  // Web: in-app library (IndexedDB) + shared job state / HUD
   if (Platform.OS === 'web') {
-    return <WebDownloadButton itemType={itemType} itemId={itemId} />;
+    return (
+      <WebDownloadButton
+        itemType={itemType}
+        itemId={itemId}
+        title={title}
+        fileType={fileType}
+      />
+    );
   }
 
-  // Native: use encrypted offline download
+  // Native: encrypted offline download
   const handlePress = async () => {
     if (state.status === 'downloading') return;
     try {
@@ -211,7 +163,6 @@ export function DownloadButton({
   );
 }
 
-// Native styles
 const styles = StyleSheet.create({
   container: {
     flexDirection: 'row',
@@ -246,7 +197,6 @@ const styles = StyleSheet.create({
   },
 });
 
-// Web styles
 const webStyles = StyleSheet.create({
   button: {
     flexDirection: 'row',
@@ -294,11 +244,13 @@ const webStyles = StyleSheet.create({
     gap: 6,
     paddingHorizontal: 8,
     paddingVertical: 6,
+    maxWidth: 200,
   },
   doneText: {
-    fontSize: 13,
+    fontSize: 11,
     color: '#22C55E',
     fontWeight: '600',
+    flexShrink: 1,
   },
   errorContainer: {
     flexDirection: 'row',

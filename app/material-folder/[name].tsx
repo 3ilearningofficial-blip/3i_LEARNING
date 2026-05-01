@@ -109,6 +109,8 @@ export default function MaterialFolderScreen() {
                   itemId={mat.id}
                   downloadAllowed={mat.download_allowed}
                   isEnrolled={true}
+                  title={mat.title || 'Material'}
+                  fileType={mat.file_type || 'pdf'}
                 />
                 <Ionicons name="chevron-forward" size={20} color={Colors.light.textMuted} />
               </Pressable>
