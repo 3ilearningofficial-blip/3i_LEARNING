@@ -167,23 +167,31 @@ export function registerLiveStreamRoutes({
         row.lecture_subfolder_title,
         sectionTitle
       );
-      const lectureResult = await db.query(
-        `INSERT INTO lectures (course_id, title, description, video_url, video_type, duration_minutes, order_index, is_free_preview, section_title, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
-        [
-          row.course_id,
-          row.title,
-          row.description || "",
-          recordingUrl,
-          inferVideoType(recordingUrl),
-          durationMins,
-          maxOrder.rows[0].next_order,
-          false,
-          recordSection,
-          Date.now(),
-        ]
+      const existingLecture = await db.query(
+        "SELECT id FROM lectures WHERE course_id = $1 AND title = $2 AND video_url = $3 LIMIT 1",
+        [row.course_id, row.title, recordingUrl]
       );
-      lectureIds.push(lectureResult.rows[0].id);
+      if (existingLecture.rows.length > 0) {
+        lectureIds.push(Number(existingLecture.rows[0].id));
+      } else {
+        const lectureResult = await db.query(
+          `INSERT INTO lectures (course_id, title, description, video_url, video_type, duration_minutes, order_index, is_free_preview, section_title, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+          [
+            row.course_id,
+            row.title,
+            row.description || "",
+            recordingUrl,
+            inferVideoType(recordingUrl),
+            durationMins,
+            maxOrder.rows[0].next_order,
+            false,
+            recordSection,
+            Date.now(),
+          ]
+        );
+        lectureIds.push(lectureResult.rows[0].id);
+      }
       await db.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [
         row.course_id,
       ]);

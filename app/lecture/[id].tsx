@@ -262,7 +262,7 @@ iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border:
 @media (max-width: 600px) {
   .cover-tl { width: 55%; }
   .cover-tr { display: none; }
-  .cover-fs { display: none; }
+  .cover-fs { display: block; width: 120px; height: 56px; bottom: 62px; }
   .cover-br { width: 100%; right: 0; }
 }
 @media print { body { display: none !important; } }

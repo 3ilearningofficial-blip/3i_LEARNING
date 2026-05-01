@@ -179,7 +179,7 @@ export function useDownloadManager(): UseDownloadManagerReturn {
 
           // STEP 6: notify server
           const { headers: postHdr } = await prepareAuthorizedFetchHeaders(user?.sessionToken);
-          await fetch(`${baseUrl}/my-downloads`, {
+          let trackRes = await fetch(`${baseUrl}/my-downloads`, {
             method: 'POST',
             headers: {
               ...postHdr,
@@ -188,6 +188,22 @@ export function useDownloadManager(): UseDownloadManagerReturn {
             credentials: 'include',
             body: JSON.stringify({ itemType, itemId, localFilename: uuid }),
           });
+          if (!trackRes.ok) {
+            // Retry once with fresh auth headers before marking local state as fully downloaded.
+            const { headers: retryHdr } = await prepareAuthorizedFetchHeaders(user?.sessionToken);
+            trackRes = await fetch(`${baseUrl}/my-downloads`, {
+              method: 'POST',
+              headers: {
+                ...retryHdr,
+                'Content-Type': 'application/json',
+              },
+              credentials: 'include',
+              body: JSON.stringify({ itemType, itemId, localFilename: uuid }),
+            });
+          }
+          if (!trackRes.ok) {
+            throw new Error(`Failed to sync download entry (${trackRes.status})`);
+          }
 
           updateState(itemType, itemId, {
             status: 'downloaded',

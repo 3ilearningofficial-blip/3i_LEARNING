@@ -245,8 +245,10 @@ export function registerAdminLiveClassManageRoutes({
 
       // "Save as Lecture" from admin: was broken when class was already completed because the handler only
       // ran when `isCompleted` was sent in the same PUT body. Also allow `recording_url` (R2) when youtube_url is empty.
+      // Auto-publish recording into course lectures whenever class is completed.
+      // Explicit convertToLecture still works, but completion should no longer depend on manual action.
       const shouldConvertToLecture =
-        convertToLecture === true &&
+        (convertToLecture === true || isCompleted === true || isLive === false || liveClass.is_completed === true) &&
         (isCompleted === true || liveClass.is_completed === true) &&
         (liveClass.youtube_url || liveClass.recording_url || liveClass.cf_playback_hls);
       if (shouldConvertToLecture) {

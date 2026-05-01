@@ -1803,23 +1803,31 @@ function registerLiveStreamRoutes({
         row.lecture_subfolder_title,
         sectionTitle
       );
-      const lectureResult = await db2.query(
-        `INSERT INTO lectures (course_id, title, description, video_url, video_type, duration_minutes, order_index, is_free_preview, section_title, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
-        [
-          row.course_id,
-          row.title,
-          row.description || "",
-          recordingUrl,
-          inferVideoType(recordingUrl),
-          durationMins,
-          maxOrder.rows[0].next_order,
-          false,
-          recordSection,
-          Date.now()
-        ]
+      const existingLecture = await db2.query(
+        "SELECT id FROM lectures WHERE course_id = $1 AND title = $2 AND video_url = $3 LIMIT 1",
+        [row.course_id, row.title, recordingUrl]
       );
-      lectureIds.push(lectureResult.rows[0].id);
+      if (existingLecture.rows.length > 0) {
+        lectureIds.push(Number(existingLecture.rows[0].id));
+      } else {
+        const lectureResult = await db2.query(
+          `INSERT INTO lectures (course_id, title, description, video_url, video_type, duration_minutes, order_index, is_free_preview, section_title, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+          [
+            row.course_id,
+            row.title,
+            row.description || "",
+            recordingUrl,
+            inferVideoType(recordingUrl),
+            durationMins,
+            maxOrder.rows[0].next_order,
+            false,
+            recordSection,
+            Date.now()
+          ]
+        );
+        lectureIds.push(lectureResult.rows[0].id);
+      }
       await db2.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [
         row.course_id
       ]);
@@ -5681,7 +5689,7 @@ function registerAdminLiveClassManageRoutes({
           });
         }
       }
-      const shouldConvertToLecture = convertToLecture === true && (isCompleted === true || liveClass.is_completed === true) && (liveClass.youtube_url || liveClass.recording_url || liveClass.cf_playback_hls);
+      const shouldConvertToLecture = (convertToLecture === true || isCompleted === true || isLive === false || liveClass.is_completed === true) && (isCompleted === true || liveClass.is_completed === true) && (liveClass.youtube_url || liveClass.recording_url || liveClass.cf_playback_hls);
       if (shouldConvertToLecture) {
         await db2.query("DELETE FROM notifications WHERE title IN ('\u{1F534} Live Class Started!', '\u{1F534} Live Class Starting Now!', '\u23F0 Live Class in 30 minutes!') AND message ILIKE $1", ["%" + liveClass.title + "%"]).catch(() => {
         });
@@ -5848,6 +5856,17 @@ function registerCourseAccessRoutes({
       }
     }
     return trimmed.replace(/^\/+/, "");
+  };
+  const toR2ObjectKey = (raw) => {
+    let key = normalizeStorageKey(raw);
+    if (!key) return "";
+    const proxy = "api/media/";
+    if (key.toLowerCase().startsWith(proxy)) key = key.slice(proxy.length).replace(/^\/+/, "");
+    try {
+      key = decodeURIComponent(key);
+    } catch {
+    }
+    return key.replace(/^\/+/, "").replace(/\/+$/g, "");
   };
   const userCanMintMediaToken = async (user, requestedKeyRaw) => {
     const requestedKey = normalizeStorageKey(requestedKeyRaw);
@@ -6100,10 +6119,10 @@ function registerCourseAccessRoutes({
                 c.title AS course_title, 'lecture' AS type, ud.downloaded_at, ud.local_filename
          FROM user_downloads ud
          JOIN lectures l ON ud.item_id = l.id
-         JOIN courses c ON l.course_id = c.id
+         LEFT JOIN courses c ON l.course_id = c.id
          LEFT JOIN enrollments e ON e.user_id = ud.user_id AND e.course_id = c.id
          WHERE ud.user_id = $1 AND ud.item_type = 'lecture' AND l.download_allowed = TRUE
-         AND (e.valid_until IS NULL OR e.valid_until > $2)
+         AND (e.valid_until IS NULL OR e.valid_until > $2 OR c.id IS NULL)
          ORDER BY ud.downloaded_at DESC`,
         [user.id, Date.now()]
       );
@@ -6146,9 +6165,11 @@ function registerCourseAccessRoutes({
   app2.get("/api/download-url", async (req, res) => {
     try {
       const user = await getAuthUser2(req);
-      if (!user || user.role !== "student") {
+      const roleNorm = String(user?.role ?? "student").toLowerCase();
+      if (!user || roleNorm !== "student" && roleNorm !== "admin") {
         return res.status(401).json({ message: "Not authenticated" });
       }
+      const bypassEnrollment = roleNorm === "admin";
       const { itemType, itemId } = req.query;
       if (!itemType || !itemId || !["lecture", "material"].includes(String(itemType))) {
         return res.status(400).json({ message: "Valid itemType (lecture|material) and itemId required" });
@@ -6159,14 +6180,19 @@ function registerCourseAccessRoutes({
       let downloadAllowed = false;
       let r2Key = null;
       if (itemType === "lecture") {
-        const lectureResult = await db2.query("SELECT course_id, download_allowed, video_url FROM lectures WHERE id = $1", [id]);
+        const lectureResult = await db2.query(
+          "SELECT course_id, download_allowed, video_url, pdf_url FROM lectures WHERE id = $1",
+          [id]
+        );
         if (lectureResult.rows.length === 0) {
           return res.status(404).json({ message: "Lecture not found" });
         }
         const lecture = lectureResult.rows[0];
         courseId = lecture.course_id;
         downloadAllowed = lecture.download_allowed;
-        r2Key = lecture.video_url;
+        const vu = lecture.video_url != null ? String(lecture.video_url).trim() : "";
+        const pu = lecture.pdf_url != null ? String(lecture.pdf_url).trim() : "";
+        r2Key = vu || pu || null;
       } else if (itemType === "material") {
         const materialResult = await db2.query("SELECT course_id, download_allowed, file_url FROM study_materials WHERE id = $1", [id]);
         if (materialResult.rows.length === 0) {
@@ -6177,16 +6203,18 @@ function registerCourseAccessRoutes({
         downloadAllowed = material.download_allowed;
         r2Key = material.file_url;
       }
+      const courseIdNumeric = courseId == null ? null : Number(courseId);
+      const courseIdResolved = courseIdNumeric != null && Number.isFinite(courseIdNumeric) ? Math.trunc(courseIdNumeric) : null;
       if (!downloadAllowed) {
         return res.status(403).json({ message: "Download not allowed for this item" });
       }
       if (!r2Key) {
         return res.status(404).json({ message: "File URL not found" });
       }
-      if (courseId) {
+      if (courseIdResolved !== null && !bypassEnrollment) {
         const enrollmentResult = await db2.query(
           "SELECT id, valid_until FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)",
-          [user.id, courseId]
+          [user.id, courseIdResolved]
         );
         if (enrollmentResult.rows.length === 0) {
           return res.status(403).json({ message: "Not enrolled in this course" });
@@ -6196,19 +6224,14 @@ function registerCourseAccessRoutes({
           return res.status(403).json({ message: "Course access has expired" });
         }
       }
-      let cleanR2Key = r2Key;
-      if (r2Key.startsWith("http")) {
-        try {
-          const url = new URL(r2Key);
-          cleanR2Key = url.pathname.substring(1);
-        } catch (_e) {
-          cleanR2Key = r2Key;
-        }
+      const cleanR2Key = toR2ObjectKey(String(r2Key));
+      if (!cleanR2Key) {
+        return res.status(404).json({ message: "File URL not found" });
       }
       const { randomUUID } = await import("crypto");
       const token = randomUUID();
       const createdAt = Date.now();
-      const expiresAt = createdAt + 3e4;
+      const expiresAt = createdAt + 5 * 60 * 1e3;
       await db2.query("INSERT INTO download_tokens (token, user_id, item_type, item_id, r2_key, created_at, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7)", [
         token,
         user.id,
@@ -6230,12 +6253,11 @@ function registerCourseAccessRoutes({
       if (!token || typeof token !== "string") {
         return res.status(400).json({ message: "Token required" });
       }
-      const tokenResult = await db2.query("SELECT * FROM download_tokens WHERE token = $1 AND used = FALSE AND expires_at > $2", [token, Date.now()]);
+      const tokenResult = await db2.query("SELECT * FROM download_tokens WHERE token = $1 AND expires_at > $2", [token, Date.now()]);
       if (tokenResult.rows.length === 0) {
-        return res.status(403).json({ message: "Token invalid, expired, or already used" });
+        return res.status(403).json({ message: "Token invalid or expired" });
       }
       const tokenData = tokenResult.rows[0];
-      await db2.query("UPDATE download_tokens SET used = TRUE WHERE token = $1", [token]);
       const { GetObjectCommand } = await import("@aws-sdk/client-s3");
       const r2 = await getR2Client();
       const command = new GetObjectCommand({
@@ -6261,6 +6283,10 @@ function registerCourseAccessRoutes({
       }
       const stream = r2Response.Body;
       stream.pipe(res);
+      stream.on("end", () => {
+        db2.query("DELETE FROM download_tokens WHERE token = $1", [token]).catch(() => {
+        });
+      });
       stream.on("error", (err) => {
         console.error("[download-proxy] Stream error:", err);
         if (!res.headersSent) {
@@ -6268,7 +6294,13 @@ function registerCourseAccessRoutes({
         }
       });
     } catch (err) {
-      console.error("[download-proxy] Error:", err);
+      const name = err && typeof err === "object" && "name" in err ? String(err.name) : "";
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[download-proxy] Error:", name || msg, msg);
+      if ((name === "NoSuchKey" || msg.includes("NoSuchKey")) && !res.headersSent) {
+        res.status(404).json({ message: "File not found in storage" });
+        return;
+      }
       if (!res.headersSent) {
         res.status(500).json({ message: "Failed to download file" });
       }
@@ -7903,6 +7935,7 @@ function setupCors(app2) {
       "X-Client-Platform"
     ],
     credentials: true,
+    exposedHeaders: ["Content-Length", "Content-Type", "Content-Disposition"],
     preflightContinue: false,
     optionsSuccessStatus: 204
   };

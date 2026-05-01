@@ -131,11 +131,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     setUnauthorizedHandler(async () => {
+      if (Platform.OS === "web") {
+        setUser(null);
+        await removeStoredAuthUser();
+        router.replace("/welcome");
+        return;
+      }
+      // Native: avoid aggressive auto-logout on intermittent 401s from background/unstable networks.
+      // Hard invalid-session cases are still handled explicitly in refreshUser().
+      const stored = await getStoredAuthUser();
+      if (stored) {
+        setUser(stored);
+        return;
+      }
       setUser(null);
       await removeStoredAuthUser();
-      if (Platform.OS === "web") {
-        router.replace("/welcome");
-      }
     });
     return () => setUnauthorizedHandler(null);
   }, []);

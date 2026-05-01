@@ -85,7 +85,7 @@ iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border:
 @media (max-width: 600px) {
   .cover-tl { width: 55%; height: 53px; }
   .cover-tr { display: none; }
-  .cover-fs { display: none; }
+  .cover-fs { display: block; width: 120px; height: 56px; bottom: 62px; }
   .cover-br { width: 100%; right: 0; }
 }
 @media print { body { display: none !important; } }
@@ -240,6 +240,28 @@ function up(){if(rdy&&p.getDuration){var c=p.getCurrentTime()||0,d=p.getDuration
 function sc(){document.getElementById('ctl').className='ctl';clearTimeout(ht);ht=setTimeout(function(){if(p&&p.getPlayerState()===1)document.getElementById('ctl').className='ctl h';},4000);}
 document.addEventListener('contextmenu',function(e){e.preventDefault();});
 </script></body></html>`;
+}
+
+function buildNativeYouTubeFallbackHtml(videoId: string, clipSeconds?: number): string {
+  const q = new URLSearchParams({
+    autoplay: "1",
+    mute: "1",
+    playsinline: "1",
+    rel: "0",
+    modestbranding: "1",
+    iv_load_policy: "3",
+    cc_load_policy: "0",
+    fs: "1",
+    controls: "1",
+    origin: YT_EMBED_ORIGIN,
+  });
+  if (clipSeconds && clipSeconds > 0) q.set("end", String(Math.max(1, Math.floor(clipSeconds))));
+  return `<!DOCTYPE html><html><head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<style>*{margin:0;padding:0;box-sizing:border-box}html,body{width:100%;height:100%;background:#000;overflow:hidden}.w{position:relative;width:100%;height:100%}iframe{position:absolute;inset:0;width:100%;height:100%;border:none}</style>
+</head><body><div class="w">
+<iframe src="https://www.youtube.com/embed/${videoId}?${q.toString()}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"></iframe>
+</div><script>document.addEventListener('contextmenu',function(e){e.preventDefault();});</script></body></html>`;
 }
 
 function isCloudflareStreamId(str: string): boolean {
@@ -444,6 +466,7 @@ export default function LiveClassScreen() {
   const isWeb = Platform.OS === "web";
   const isWebWide = isWeb && windowWidth >= 960;
   const isNarrowWeb = isWeb && !isWebWide;
+  const showNativeAdminSplit = isAdmin && Platform.OS !== "web";
   const [mobileAdminTab, setMobileAdminTab] = useState<"chat" | "students">("chat");
   const [chatMsg, setChatMsg] = useState("");
   const [isVideoLoading, setIsVideoLoading] = useState(true);
@@ -451,6 +474,7 @@ export default function LiveClassScreen() {
   const [handRaised, setHandRaised] = useState(false);
   const [countdown, setCountdown] = useState<string | null>(null);
   const [isScreenActive, setIsScreenActive] = useState(true);
+  const [nativeYoutubeFallback, setNativeYoutubeFallback] = useState(false);
   const chatListRef = useRef<FlatList>(null);
   const lastMsgTimeRef = useRef<number>(0);
   const didAutoplayDirectRecording = useRef(false);
@@ -609,6 +633,9 @@ export default function LiveClassScreen() {
   const completedClipSeconds = liveClassData?.is_completed && (liveClassData?.duration_minutes || 0) > 0
     ? Number(liveClassData.duration_minutes) * 60
     : undefined;
+  useEffect(() => {
+    setNativeYoutubeFallback(false);
+  }, [videoUrl]);
   const hasYouTubeId = Boolean(videoId);
   const streamHtml = isStreamId ? buildCloudflareStreamHtml(videoUrl) : "";
 
@@ -929,12 +956,21 @@ export default function LiveClassScreen() {
               />
             ) : hasYouTubeId && Platform.OS !== "web" ? (
               <WebView
-                source={{ html: buildNativeYouTubeHtml(videoId), baseUrl: "https://www.youtube.com" }}
+                source={{
+                  html: nativeYoutubeFallback
+                    ? buildNativeYouTubeFallbackHtml(videoId, completedClipSeconds)
+                    : buildNativeYouTubeHtml(videoId, completedClipSeconds),
+                  baseUrl: "https://www.youtube.com",
+                }}
                 style={{ flex: 1, backgroundColor: "#000" }}
                 onLoad={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }}
+                onError={() => {
+                  // Fallback to simpler iframe embed for streams where YouTube blocks IFrame API controls.
+                  setNativeYoutubeFallback(true);
+                }}
                 onMessage={handleWebViewMessage}
                 injectedJavaScript={preventScreenCapture}
-                allowsFullscreenVideo={false} mediaPlaybackRequiresUserAction={false}
+                allowsFullscreenVideo mediaPlaybackRequiresUserAction={false}
                 allowsInlineMediaPlayback scrollEnabled={false}
                 javaScriptEnabled domStorageEnabled mixedContentMode="compatibility"
                 setSupportMultipleWindows={false} originWhitelist={["*"]}
@@ -1166,12 +1202,20 @@ export default function LiveClassScreen() {
               />
             ) : hasYouTubeId && Platform.OS !== "web" ? (
               <WebView
-                source={{ html: buildNativeYouTubeHtml(videoId), baseUrl: "https://www.youtube.com" }}
+                source={{
+                  html: nativeYoutubeFallback
+                    ? buildNativeYouTubeFallbackHtml(videoId, completedClipSeconds)
+                    : buildNativeYouTubeHtml(videoId, completedClipSeconds),
+                  baseUrl: "https://www.youtube.com",
+                }}
                 style={{ flex: 1, backgroundColor: "#000" }}
                 onLoad={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }}
+                onError={() => {
+                  setNativeYoutubeFallback(true);
+                }}
                 onMessage={handleWebViewMessage}
                 injectedJavaScript={preventScreenCapture}
-                allowsFullscreenVideo={false} mediaPlaybackRequiresUserAction={false}
+                allowsFullscreenVideo mediaPlaybackRequiresUserAction={false}
                 allowsInlineMediaPlayback scrollEnabled={false}
                 javaScriptEnabled domStorageEnabled mixedContentMode="compatibility"
                 setSupportMultipleWindows={false} originWhitelist={["*"]}
@@ -1203,7 +1247,57 @@ export default function LiveClassScreen() {
             </View>
           )}
 
-          {isAdmin && isNarrowWeb && mobileAdminTab === "students" ? (
+          {showNativeAdminSplit ? (
+            <View style={styles.nativeAdminSplitRow}>
+              <View style={styles.nativeAdminSplitPane}>
+                <LiveStudentsPanel
+                  liveClassId={String(id)}
+                  showViewerCount={liveClassData?.show_viewer_count ?? true}
+                />
+              </View>
+              <View style={[styles.chatContainer, styles.nativeAdminSplitPane]}>
+                <View style={styles.chatHeader}>
+                  <Ionicons name="chatbubbles" size={18} color={Colors.light.primary} />
+                  <Text style={styles.chatHeaderText}>
+                    {liveClassData?.is_completed ? "Class chat" : "Live Chat"}
+                  </Text>
+                </View>
+                <FlatList
+                  ref={chatListRef}
+                  data={displayMessages}
+                  keyExtractor={(item) => item.id.toString()}
+                  renderItem={renderChatItem}
+                  style={styles.chatList}
+                  contentContainerStyle={styles.chatListContent}
+                  showsVerticalScrollIndicator={false}
+                  keyboardShouldPersistTaps="handled"
+                  keyboardDismissMode="on-drag"
+                />
+                <View style={[styles.inputRow, { paddingBottom: Math.max(bottomPadding, 8) }]}>
+                  <Pressable style={[styles.iconBtn, handRaised && styles.iconBtnActive]} onPress={handleHandRaise}>
+                    <Text style={{ fontSize: 18 }}>✋</Text>
+                  </Pressable>
+                  <TextInput
+                    style={styles.chatInput}
+                    value={chatMsg}
+                    onChangeText={setChatMsg}
+                    placeholder="Ask a doubt or say hi..."
+                    placeholderTextColor="#999"
+                    maxLength={500}
+                    returnKeyType="send"
+                    onSubmitEditing={handleSend}
+                  />
+                  <Pressable
+                    style={[styles.sendBtn, !chatMsg.trim() && styles.sendBtnDisabled]}
+                    onPress={handleSend}
+                    disabled={!chatMsg.trim() || sendMsgMutation.isPending}
+                  >
+                    {sendMsgMutation.isPending ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="send" size={18} color="#fff" />}
+                  </Pressable>
+                </View>
+              </View>
+            </View>
+          ) : isAdmin && isNarrowWeb && mobileAdminTab === "students" ? (
             <View style={[styles.chatContainer, { flex: 1, minHeight: 0, backgroundColor: Colors.light.background }]}>
               <LiveStudentsPanel
                 liveClassId={String(id)}
@@ -1379,6 +1473,18 @@ const styles = StyleSheet.create({
   mobileAdminTabActive: { backgroundColor: Colors.light.primary },
   mobileAdminTabText: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
   mobileAdminTabTextActive: { color: "#fff" },
+  nativeAdminSplitRow: {
+    flex: 1,
+    minHeight: 0,
+    flexDirection: "row",
+    backgroundColor: Colors.light.background,
+  },
+  nativeAdminSplitPane: {
+    flex: 1,
+    minWidth: 0,
+    borderLeftWidth: 1,
+    borderLeftColor: Colors.light.border,
+  },
   recordingPill: {
     backgroundColor: "rgba(26,86,219,0.2)",
     paddingHorizontal: 8,

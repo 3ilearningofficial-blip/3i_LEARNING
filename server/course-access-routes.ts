@@ -340,10 +340,10 @@ export function registerCourseAccessRoutes({
                 c.title AS course_title, 'lecture' AS type, ud.downloaded_at, ud.local_filename
          FROM user_downloads ud
          JOIN lectures l ON ud.item_id = l.id
-         JOIN courses c ON l.course_id = c.id
+         LEFT JOIN courses c ON l.course_id = c.id
          LEFT JOIN enrollments e ON e.user_id = ud.user_id AND e.course_id = c.id
          WHERE ud.user_id = $1 AND ud.item_type = 'lecture' AND l.download_allowed = TRUE
-         AND (e.valid_until IS NULL OR e.valid_until > $2)
+         AND (e.valid_until IS NULL OR e.valid_until > $2 OR c.id IS NULL)
          ORDER BY ud.downloaded_at DESC`,
         [user.id, Date.now()]
       );
@@ -468,7 +468,8 @@ export function registerCourseAccessRoutes({
       const { randomUUID } = await import("crypto");
       const token = randomUUID();
       const createdAt = Date.now();
-      const expiresAt = createdAt + 30000;
+      // Keep token valid long enough for mobile startup and slower networks.
+      const expiresAt = createdAt + 5 * 60 * 1000;
 
       await db.query("INSERT INTO download_tokens (token, user_id, item_type, item_id, r2_key, created_at, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7)", [
         token,
@@ -494,12 +495,11 @@ export function registerCourseAccessRoutes({
         return res.status(400).json({ message: "Token required" });
       }
 
-      const tokenResult = await db.query("SELECT * FROM download_tokens WHERE token = $1 AND used = FALSE AND expires_at > $2", [token, Date.now()]);
+      const tokenResult = await db.query("SELECT * FROM download_tokens WHERE token = $1 AND expires_at > $2", [token, Date.now()]);
       if (tokenResult.rows.length === 0) {
-        return res.status(403).json({ message: "Token invalid, expired, or already used" });
+        return res.status(403).json({ message: "Token invalid or expired" });
       }
       const tokenData = tokenResult.rows[0];
-      await db.query("UPDATE download_tokens SET used = TRUE WHERE token = $1", [token]);
 
       const { GetObjectCommand } = await import("@aws-sdk/client-s3");
       const r2 = await getR2Client();
@@ -530,6 +530,10 @@ export function registerCourseAccessRoutes({
 
       const stream = r2Response.Body as any;
       stream.pipe(res);
+      stream.on("end", () => {
+        // Consume token after successful stream completion to avoid native resumable preflight failures.
+        db.query("DELETE FROM download_tokens WHERE token = $1", [token]).catch(() => {});
+      });
       stream.on("error", (err: Error) => {
         console.error("[download-proxy] Stream error:", err);
         if (!res.headersSent) {

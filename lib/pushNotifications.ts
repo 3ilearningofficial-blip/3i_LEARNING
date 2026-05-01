@@ -47,14 +47,30 @@ export async function registerPushForCurrentUser(): Promise<string | null> {
   }
 
   const projectId = getProjectId();
-  const tokenData = await Notifications.getExpoPushTokenAsync(projectId ? { projectId } : undefined);
-  const token = String(tokenData.data || "").trim();
+  let tokenData: Notifications.ExpoPushToken | null = null;
+  try {
+    tokenData = await Notifications.getExpoPushTokenAsync(projectId ? { projectId } : undefined);
+  } catch (e) {
+    // Some runtime configs miss EAS projectId; retry once without explicit projectId.
+    try {
+      tokenData = await Notifications.getExpoPushTokenAsync();
+    } catch (e2) {
+      console.warn("[Push] getExpoPushTokenAsync failed", { projectId, e, e2 });
+      return null;
+    }
+  }
+  const token = String(tokenData?.data || "").trim();
   if (!token) return null;
   currentToken = token;
-  await apiRequest("POST", "/push/register", {
-    token,
-    platform: Platform.OS,
-  });
+  try {
+    await apiRequest("POST", "/push/register", {
+      token,
+      platform: Platform.OS,
+    });
+  } catch (e) {
+    // Keep token in memory so logout can still unregister-all fallback.
+    console.warn("[Push] register API failed", e);
+  }
   return token;
 }
 
