@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import {
   View, Text, StyleSheet, Pressable, Platform,
-  ActivityIndicator, Alert, ScrollView,
+  ActivityIndicator, Alert, ScrollView, useWindowDimensions,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { WebView } from "react-native-webview";
@@ -14,8 +14,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
 import { useScreenProtection } from "@/lib/useScreenProtection";
 import { useVideoScreenProtection } from "@/lib/useVideoScreenProtection";
-import { isAndroidWeb } from "@/lib/useAndroidWebGate";
-import AndroidWebGate from "@/components/AndroidWebGate";
 import { DownloadButton } from "@/components/DownloadButton";
 import { VideoWatermark } from "@/components/VideoWatermark";
 
@@ -254,15 +252,13 @@ function buildYouTubeHtml(videoId: string): string {
 html, body { width: 100%; height: 100%; background: #000; overflow: hidden; -webkit-user-select: none; user-select: none; }
 .wrapper { position: relative; width: 100%; height: 100%; overflow: hidden; }
 iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; }
-.cover-tl { position: absolute; top: 0; left: 0; width: 25%; height: 56px; background: #000; z-index: 9999; pointer-events: auto; cursor: default; }
-.cover-tr { position: absolute; top: 0; right: 0; width: 130px; height: 56px; background: #000; z-index: 9999; pointer-events: auto; cursor: default; }
-.cover-bl { position: absolute; bottom: 0; left: 0; width: 70px; height: 60px; background: #000; z-index: 9999; pointer-events: auto; cursor: default; }
-.cover-fs { position: absolute; bottom: 78px; right: 0; width: 90px; height: 50px; background: #000; z-index: 9999; pointer-events: auto; cursor: default; }
-.cover-br { position: absolute; bottom: 0; right: 50px; width: 280px; height: 60px; background: #000; z-index: 9999; pointer-events: auto; cursor: default; }
+.cover-tl { position: absolute; top: 0; left: 0; width: clamp(120px, 28vw, 25%); height: clamp(48px, 12vmin, 56px); background: #000; z-index: 9999; pointer-events: auto; cursor: default; }
+.cover-tr { position: absolute; top: 0; right: 0; width: clamp(100px, 28vw, 130px); height: clamp(48px, 12vmin, 56px); background: #000; z-index: 9999; pointer-events: auto; cursor: default; }
+.cover-bl { position: absolute; bottom: 0; left: 0; width: clamp(56px, 18vw, 70px); height: clamp(52px, 14vmin, 60px); background: #000; z-index: 9999; pointer-events: auto; cursor: default; }
+.cover-br { position: absolute; bottom: 0; right: clamp(40px, 14vw, 50px); width: min(280px, 72vw); height: clamp(52px, 14vmin, 60px); background: #000; z-index: 9999; pointer-events: auto; cursor: default; }
 @media (max-width: 600px) {
-  .cover-tl { width: 55%; }
+  .cover-tl { width: clamp(48%, 55vw, 62%); }
   .cover-tr { display: none; }
-  .cover-fs { display: block; width: 120px; height: 56px; bottom: 62px; }
   .cover-br { width: 100%; right: 0; }
 }
 @media print { body { display: none !important; } }
@@ -277,7 +273,6 @@ iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border:
   allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; fullscreen"
 ></iframe>
 <div class="cover-bl"></div>
-<div class="cover-fs"></div>
 <div class="cover-br"></div>
 </div>
 <script>document.addEventListener('contextmenu', function(e) { e.preventDefault(); });</script>
@@ -453,8 +448,10 @@ export default function LectureScreen() {
   const isPlayingLocalVideo = isLocal === 'true';
   useVideoScreenProtection(isPlayingLocalVideo);
   
-  if (isAndroidWeb()) return <AndroidWebGate />;
   const insets = useSafeAreaInsets();
+  const { width: windowWidth } = useWindowDimensions();
+  const isWebWide = Platform.OS === "web" && windowWidth >= 960;
+  const isNarrowWeb = Platform.OS === "web" && !isWebWide;
   const qc = useQueryClient();
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
@@ -563,7 +560,7 @@ export default function LectureScreen() {
   const title = lectureData?.title || paramTitle || "Lecture";
 
   const topPadding = Platform.OS === "web" ? 16 : insets.top;
-  const bottomPadding = Platform.OS === "web" ? 34 : insets.bottom;
+  const bottomPadding = Platform.OS === "web" ? Math.max(34, insets.bottom) : insets.bottom;
 
   // Determine video type and prepare appropriate HTML
   const playbackUrl = authenticatedVideoUrl || videoUrl;
@@ -683,7 +680,14 @@ export default function LectureScreen() {
         </View>
       ) : (
         <>
-      <View style={styles.playerContainer}>
+      <View
+        style={[
+          styles.playerContainer,
+          Platform.OS === "web" && isWebWide && { height: 450, maxHeight: "60%" as any },
+          isNarrowWeb && { aspectRatio: 16 / 9, flexGrow: 0, width: "100%" as const },
+          Platform.OS !== "web" && { flex: 1, maxHeight: "56%" as any },
+        ]}
+      >
         {/* Video Watermark Overlay */}
         <VideoWatermark isPlaying={isVideoPlaying} />
         
@@ -838,10 +842,6 @@ const styles = StyleSheet.create({
     backgroundColor: "#000",
     position: "relative" as const,
     overflow: "hidden" as const,
-    ...Platform.select({
-      web: { height: 450, maxHeight: "60%" as any },
-      default: { flex: 1, maxHeight: "56%" as any },
-    }),
   },
   webView: { flex: 1, backgroundColor: "#000" },
   loadingOverlay: {

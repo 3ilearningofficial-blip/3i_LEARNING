@@ -14,8 +14,6 @@ import { apiRequest, authFetch, getApiUrl, getBaseUrl, toHttpsMediaUrl } from "@
 import { useAuth } from "@/context/AuthContext";
 import Colors from "@/constants/colors";
 import { useScreenProtection } from "@/lib/useScreenProtection";
-import { isAndroidWeb } from "@/lib/useAndroidWebGate";
-import AndroidWebGate from "@/components/AndroidWebGate";
 import { VideoWatermark } from "@/components/VideoWatermark";
 import LiveStudentsPanel from "@/components/LiveStudentsPanel";
 import { filterChatMessages } from "@/lib/chat-utils";
@@ -77,15 +75,13 @@ function buildYouTubeHtml(videoId: string, clipSeconds?: number): string {
 html, body { width: 100%; height: 100%; background: #000; overflow: hidden; -webkit-user-select: none; user-select: none; }
 .wrapper { position: relative; width: 100%; height: 100%; overflow: hidden; }
 iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; }
-.cover-tl { position: absolute; top: 0; left: 0; width: 25%; height: 56px; background: #000; z-index: 9999; pointer-events: auto; }
-.cover-tr { position: absolute; top: 0; right: 0; width: 130px; height: 56px; background: #000; z-index: 9999; pointer-events: auto; }
-.cover-bl { position: absolute; bottom: 0; left: 0; width: 70px; height: 60px; background: #000; z-index: 9999; pointer-events: auto; }
-.cover-fs { position: absolute; bottom: 78px; right: 0; width: 90px; height: 50px; background: #000; z-index: 9999; pointer-events: auto; }
-.cover-br { position: absolute; bottom: 0; right: 50px; width: 280px; height: 60px; background: #000; z-index: 9999; pointer-events: auto; }
+.cover-tl { position: absolute; top: 0; left: 0; width: clamp(120px, 28vw, 25%); height: clamp(48px, 12vmin, 56px); background: #000; z-index: 9999; pointer-events: auto; }
+.cover-tr { position: absolute; top: 0; right: 0; width: clamp(100px, 28vw, 130px); height: clamp(48px, 12vmin, 56px); background: #000; z-index: 9999; pointer-events: auto; }
+.cover-bl { position: absolute; bottom: 0; left: 0; width: clamp(56px, 18vw, 70px); height: clamp(52px, 14vmin, 60px); background: #000; z-index: 9999; pointer-events: auto; }
+.cover-br { position: absolute; bottom: 0; right: clamp(40px, 14vw, 50px); width: min(280px, 72vw); height: clamp(52px, 14vmin, 60px); background: #000; z-index: 9999; pointer-events: auto; }
 @media (max-width: 600px) {
-  .cover-tl { width: 55%; height: 53px; }
+  .cover-tl { width: clamp(48%, 55vw, 62%); height: clamp(48px, 12vmin, 53px); }
   .cover-tr { display: none; }
-  .cover-fs { display: block; width: 120px; height: 56px; bottom: 62px; }
   .cover-br { width: 100%; right: 0; }
 }
 @media print { body { display: none !important; } }
@@ -100,7 +96,6 @@ iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border:
   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
 ></iframe>
 <div class="cover-bl"></div>
-<div class="cover-fs"></div>
 <div class="cover-br"></div>
 </div>
 <script>document.addEventListener('contextmenu', function(e) { e.preventDefault(); });</script>
@@ -455,7 +450,6 @@ function useVoiceInput(onResult: (text: string) => void) {
 
 export default function LiveClassScreen() {
   useScreenProtection(true);
-  if (isAndroidWeb()) return <AndroidWebGate />;
   const { id, videoUrl: paramVideoUrl, title: paramTitle } = useLocalSearchParams<{
     id: string; videoUrl: string; title: string;
   }>();
@@ -554,7 +548,9 @@ export default function LiveClassScreen() {
 
   const title = liveClassData?.title || paramTitle || "Live Class";
   const topPadding = Platform.OS === "web" ? 16 : insets.top;
-  const bottomPadding = Platform.OS === "web" ? 34 : Math.max(insets.bottom, Platform.OS === "android" ? 10 : 0);
+  const bottomPadding = Platform.OS === "web"
+    ? Math.max(34, insets.bottom)
+    : Math.max(insets.bottom, Platform.OS === "android" ? 10 : 0);
 
   const streamType = String(liveClassData?.stream_type || "").toLowerCase();
   const cfHlsUrl = String(liveClassData?.cf_playback_hls || "").trim();
