@@ -16,6 +16,7 @@ import { useScreenProtection } from "@/lib/useScreenProtection";
 import { useVideoScreenProtection } from "@/lib/useVideoScreenProtection";
 import { DownloadButton } from "@/components/DownloadButton";
 import { VideoWatermark } from "@/components/VideoWatermark";
+import { buildYouTubePhoneWebSrcDoc } from "@/lib/buildYouTubePhoneWebSrcDoc";
 
 const mediaTokenCache = new Map<string, { token: string; expiresAt: number }>();
 const MEDIA_TOKEN_TTL_MS = 50 * 1000;
@@ -238,46 +239,21 @@ if (v0) v0.addEventListener('contextmenu', function(e) { e.preventDefault(); ret
 </html>`;
 }
 
-/*
- * Rectangle overlay approach — hides YouTube branding while keeping native controls working.
- * Covers: tl=25%×56px, tr=130×56px, bl=70×60px, fs=90×35px@bottom:78px, br=280×60px@right:50px
- */
+/** Phone-web lecture YouTube — same shell fullscreen + bars as live class narrow web. */
 function buildYouTubeHtml(videoId: string): string {
-  return `<!DOCTYPE html>
-<html>
-<head>
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-html, body { width: 100%; height: 100%; background: #000; overflow: hidden; -webkit-user-select: none; user-select: none; }
-.wrapper { position: relative; width: 100%; height: 100%; overflow: hidden; }
-iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; }
-.cover-tl { position: absolute; top: 0; left: 0; width: clamp(120px, 28vw, 25%); height: clamp(48px, 12vmin, 56px); background: #000; z-index: 9999; pointer-events: auto; cursor: default; }
-.cover-tr { position: absolute; top: 0; right: 0; width: clamp(100px, 28vw, 130px); height: clamp(48px, 12vmin, 56px); background: #000; z-index: 9999; pointer-events: auto; cursor: default; }
-.cover-bl { position: absolute; bottom: 0; left: 0; width: clamp(56px, 18vw, 70px); height: clamp(52px, 14vmin, 60px); background: #000; z-index: 9999; pointer-events: auto; cursor: default; }
-.cover-br { position: absolute; bottom: 0; right: clamp(40px, 14vw, 50px); width: min(280px, 72vw); height: clamp(52px, 14vmin, 60px); background: #000; z-index: 9999; pointer-events: auto; cursor: default; }
-@media (max-width: 600px) {
-  .cover-tl { width: clamp(48%, 55vw, 62%); }
-  .cover-tr { display: none; }
-  .cover-br { width: 100%; right: 0; }
-}
-@media print { body { display: none !important; } }
-</style>
-</head>
-<body>
-<div class="wrapper">
-<div class="cover-tl"></div>
-<div class="cover-tr"></div>
-<iframe
-  src="https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&mute=1&playsinline=1&rel=0&modestbranding=1&showinfo=0&iv_load_policy=3&cc_load_policy=0&fs=1&disablekb=0&controls=1"
-  allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; fullscreen"
-></iframe>
-<div class="cover-bl"></div>
-<div class="cover-br"></div>
-</div>
-<script>document.addEventListener('contextmenu', function(e) { e.preventDefault(); });</script>
-</body>
-</html>`;
+  const q = new URLSearchParams({
+    autoplay: "1",
+    mute: "1",
+    playsinline: "1",
+    rel: "0",
+    modestbranding: "1",
+    showinfo: "0",
+    iv_load_policy: "3",
+    cc_load_policy: "0",
+    disablekb: "0",
+    controls: "1",
+  });
+  return buildYouTubePhoneWebSrcDoc({ videoId, embedQueryWithoutFs: q.toString() });
 }
 
 // Native-only: YouTube IFrame API with custom controls (zero YouTube branding)

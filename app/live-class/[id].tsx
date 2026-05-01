@@ -17,6 +17,7 @@ import { useScreenProtection } from "@/lib/useScreenProtection";
 import { VideoWatermark } from "@/components/VideoWatermark";
 import LiveStudentsPanel from "@/components/LiveStudentsPanel";
 import { filterChatMessages } from "@/lib/chat-utils";
+import { buildYouTubePhoneWebSrcDoc } from "@/lib/buildYouTubePhoneWebSrcDoc";
 
 const mediaTokenCache = new Map<string, { token: string; expiresAt: number }>();
 const MEDIA_TOKEN_TTL_MS = 50 * 1000;
@@ -46,8 +47,8 @@ function getYouTubeVideoId(url: string): string {
 
 const YT_EMBED_ORIGIN = "https://3ilearning.in";
 
+/** Narrow phone-web YouTube: shell fullscreen keeps black masking bars on Android Chrome. */
 function buildYouTubeHtml(videoId: string, clipSeconds?: number): string {
-  // Use the same proven lecture-style masking geometry to avoid hiding center video content.
   const q = new URLSearchParams({
     autoplay: "1",
     mute: "1",
@@ -57,7 +58,6 @@ function buildYouTubeHtml(videoId: string, clipSeconds?: number): string {
     showinfo: "0",
     iv_load_policy: "3",
     cc_load_policy: "0",
-    fs: "1",
     disablekb: "0",
     controls: "1",
     origin: YT_EMBED_ORIGIN,
@@ -65,42 +65,7 @@ function buildYouTubeHtml(videoId: string, clipSeconds?: number): string {
   if (clipSeconds && clipSeconds > 0) {
     q.set("end", String(Math.max(1, Math.floor(clipSeconds))));
   }
-  return `<!DOCTYPE html>
-<html>
-<head>
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<meta name="referrer" content="no-referrer-when-downgrade">
-<style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-html, body { width: 100%; height: 100%; background: #000; overflow: hidden; -webkit-user-select: none; user-select: none; }
-.wrapper { position: relative; width: 100%; height: 100%; overflow: hidden; }
-iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; }
-.cover-tl { position: absolute; top: 0; left: 0; width: clamp(120px, 28vw, 25%); height: clamp(48px, 12vmin, 56px); background: #000; z-index: 9999; pointer-events: auto; }
-.cover-tr { position: absolute; top: 0; right: 0; width: clamp(100px, 28vw, 130px); height: clamp(48px, 12vmin, 56px); background: #000; z-index: 9999; pointer-events: auto; }
-.cover-bl { position: absolute; bottom: 0; left: 0; width: clamp(56px, 18vw, 70px); height: clamp(52px, 14vmin, 60px); background: #000; z-index: 9999; pointer-events: auto; }
-.cover-br { position: absolute; bottom: 0; right: clamp(40px, 14vw, 50px); width: min(280px, 72vw); height: clamp(52px, 14vmin, 60px); background: #000; z-index: 9999; pointer-events: auto; }
-@media (max-width: 600px) {
-  .cover-tl { width: clamp(48%, 55vw, 62%); height: clamp(48px, 12vmin, 53px); }
-  .cover-tr { display: none; }
-  .cover-br { width: 100%; right: 0; }
-}
-@media print { body { display: none !important; } }
-</style>
-</head>
-<body>
-<div class="wrapper">
-<div class="cover-tl"></div>
-<div class="cover-tr"></div>
-<iframe
-  src="https://www.youtube-nocookie.com/embed/${videoId}?${q.toString()}"
-  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
-></iframe>
-<div class="cover-bl"></div>
-<div class="cover-br"></div>
-</div>
-<script>document.addEventListener('contextmenu', function(e) { e.preventDefault(); });</script>
-</body>
-</html>`;
+  return buildYouTubePhoneWebSrcDoc({ videoId, embedQueryWithoutFs: q.toString() });
 }
 
 /** Laptop / wide web: hide YouTube branding while keeping volume/mute usable. */
