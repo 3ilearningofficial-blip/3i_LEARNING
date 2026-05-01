@@ -15,21 +15,12 @@
     "target": "ESNext",
     "baseUrl": ".",
     "strict": true,
-    "types": ["node"],
-    "typeRoots": ["./node_modules/@types"],
     "paths": {
       "@/*": ["./*"],
       "@shared/*": ["./shared/*"]
     }
   },
-  "exclude": [
-    "${configDir}/node_modules",
-    "${configDir}/babel.config.js",
-    "${configDir}/metro.config.js",
-    "${configDir}/jest.config.js",
-    "${configDir}/android",
-    "${configDir}/ios"
-  ],
+  "exclude": ["node_modules", "babel.config.js", "metro.config.js", "jest.config.js", "android", "ios"],
   "include": [
     "**/*.ts",
     "**/*.tsx",
