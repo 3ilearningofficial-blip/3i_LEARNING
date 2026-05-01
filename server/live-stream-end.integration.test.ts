@@ -23,9 +23,9 @@ function createFakeDb(initial: { liveClasses: any[]; lectures?: any[]; courses?:
 
   const query = async (text: string, params: unknown[] = []) => {
     const sql = text.replace(/\s+/g, " ").trim();
-    if (sql.includes("SELECT cf_stream_uid FROM live_classes WHERE id = $1")) {
+    if (sql.includes("SELECT id, title, cf_stream_uid") && sql.includes("FROM live_classes WHERE id = $1")) {
       const row = state.liveClasses.find((r) => String(r.id) === String(params[0]));
-      return { rows: row ? [{ cf_stream_uid: row.cf_stream_uid }] : [] };
+      return { rows: row ? [{ id: row.id, title: row.title, cf_stream_uid: row.cf_stream_uid }] : [] };
     }
     if (sql.includes("UPDATE live_classes SET is_live = FALSE, ended_at = COALESCE(ended_at, $1), is_completed = TRUE WHERE id = $2")) {
       const row = state.liveClasses.find((r) => String(r.id) === String(params[1]));

@@ -395,15 +395,29 @@ export default function BroadcastPage() {
             recordingUrl,
             sectionTitle: recordingSection,
           });
-        } else {
-          await apiRequest("PUT", `/api/admin/live-classes/${liveClassId}`, { isLive: false, isCompleted: true });
         }
+        await apiRequest("PUT", `/api/admin/live-classes/${liveClassId}`, {
+          isLive: false,
+          isCompleted: true,
+        });
+        queryClient.invalidateQueries({ queryKey: ["/api/live-classes"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/courses"] });
         router.replace("/admin" as any);
       } else {
+        const effectiveYoutube = String(youtubeUrl || liveClass?.youtube_url || "").trim();
+        if (!effectiveYoutube) {
+          if (Platform.OS === "web") window.alert("No YouTube URL on this live class. Add the stream URL in Studio, then end again.");
+          else Alert.alert("Missing YouTube URL", "Open Studio for this class, paste the YouTube Live / watch URL, go live again, then end.");
+          setIsEnding(false);
+          return;
+        }
         await apiRequest("POST", `/api/admin/live-classes/${liveClassId}/recording`, {
-          recordingUrl: youtubeUrl,
+          recordingUrl: effectiveYoutube,
           sectionTitle: recordingSection,
         });
+        await apiRequest("PUT", `/api/admin/live-classes/${liveClassId}`, { isLive: false, isCompleted: true });
+        queryClient.invalidateQueries({ queryKey: ["/api/live-classes"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/courses"] });
         router.replace("/admin" as any);
       }
     } catch (err: any) {
@@ -411,7 +425,7 @@ export default function BroadcastPage() {
       else Alert.alert("Error", err?.message || "Failed to end class. Please try again.");
       setIsEnding(false);
     }
-  }, [liveClassId, streamType, webrtc, recorder, youtubeUrl, cfPlaybackHls, uploadRecordingAndFinish, recordingSection]);
+  }, [liveClassId, streamType, webrtc, recorder, youtubeUrl, liveClass?.youtube_url, cfPlaybackHls, uploadRecordingAndFinish, recordingSection, queryClient, liveClass?.id]);
 
   if (isLoading) {
     return (

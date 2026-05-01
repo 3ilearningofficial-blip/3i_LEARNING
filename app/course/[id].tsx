@@ -589,7 +589,10 @@ setTimeout(function() {
   };
 
   const handleLecture = (lecture: Lecture) => {
-    const isLiveRecording = lecture.section_title === "Live Class Recordings";
+    const st = lecture.section_title || "";
+    const isLiveRecording =
+      st === DEFAULT_LIVE_RECORDING_SECTION ||
+      st.startsWith(`${DEFAULT_LIVE_RECORDING_SECTION} /`);
     // Free preview lectures are accessible to all; everything else requires enrollment
     const canAccess = isAdmin || course?.isEnrolled || lecture.is_free_preview;
     if (!canAccess) {

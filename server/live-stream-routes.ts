@@ -100,6 +100,44 @@ export function registerLiveStreamRoutes({
       return null;
     }
   };
+  const normalizeCfVideoItems = (payload: any): any[] => {
+    const raw = payload?.result;
+    if (Array.isArray(raw)) return raw;
+    if (Array.isArray(raw?.videos)) return raw.videos;
+    if (Array.isArray(payload?.videos)) return payload.videos;
+    return [];
+  };
+
+  const pickBestCfRecording = (items: any[], excludeUid?: string): { manifestUrl: string; recordingUid: string } | null => {
+    if (!items.length) return null;
+    const filtered = items.filter((v) => {
+      const id = String(v?.uid || v?.id || "");
+      return id && (!excludeUid || id !== excludeUid);
+    });
+    const pool = filtered.length ? filtered : items;
+    const statusRank = (s: string) => {
+      const x = String(s || "").toLowerCase();
+      if (x === "ready") return 0;
+      if (x.includes("progress") || x === "queued" || x === "downloading") return 1;
+      return 2;
+    };
+    const sorted = [...pool].sort((a, b) => {
+      const ra = statusRank(a?.status);
+      const rb = statusRank(b?.status);
+      if (ra !== rb) return ra - rb;
+      const ta = Number(a?.modified || a?.created || 0);
+      const tb = Number(b?.modified || b?.created || 0);
+      return tb - ta;
+    });
+    const ready = sorted.find((v) => String(v?.status || "").toLowerCase() === "ready") || sorted[0];
+    const recordingUid = String(ready?.uid || ready?.id || "").trim();
+    if (!recordingUid || recordingUid === excludeUid) return null;
+    return {
+      manifestUrl: `https://videodelivery.net/${recordingUid}/manifest/video.m3u8`,
+      recordingUid,
+    };
+  };
+
   const getLatestRecordingForLiveInput = async (
     accountId: string,
     apiToken: string,
@@ -110,18 +148,49 @@ export function registerLiveStreamRoutes({
         `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/live_inputs/${liveInputUid}/videos`,
         { headers: { Authorization: `Bearer ${apiToken}` } }
       );
-      if (!videosRes.ok) return null;
+      if (!videosRes.ok) {
+        const txt = await videosRes.text().catch(() => "");
+        console.warn("[CF Stream] live_inputs/.../videos HTTP", videosRes.status, txt.slice(0, 280));
+        return null;
+      }
       const videosData = (await videosRes.json()) as any;
-      const raw = videosData?.result;
-      const items: any[] = Array.isArray(raw) ? raw : Array.isArray(raw?.videos) ? raw.videos : [];
+      const items = normalizeCfVideoItems(videosData);
       if (!items.length) return null;
-      const ready = items.find((v) => String(v?.status || "").toLowerCase() === "ready") || items[0];
-      const recordingUid = ready?.uid || ready?.id;
-      if (!recordingUid) return null;
-      return {
-        manifestUrl: `https://videodelivery.net/${recordingUid}/manifest/video.m3u8`,
-        recordingUid: String(recordingUid),
-      };
+      return pickBestCfRecording(items, liveInputUid);
+    } catch {
+      return null;
+    }
+  };
+
+  /** If live-input polling is empty/delayed, find the asset by dashboard title / meta.name (still scoped by search). */
+  const findRecordingViaStreamSearch = async (
+    accountId: string,
+    apiToken: string,
+    liveClassTitle: string,
+    excludeLiveInputUid: string
+  ): Promise<{ manifestUrl: string; recordingUid: string } | null> => {
+    const q = String(liveClassTitle || "").trim();
+    if (q.length < 2) return null;
+    try {
+      const u = new URL(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream`);
+      u.searchParams.set("search", q);
+      u.searchParams.set("limit", "40");
+      const res = await fetch(u.toString(), { headers: { Authorization: `Bearer ${apiToken}` } });
+      if (!res.ok) return null;
+      const data = (await res.json()) as any;
+      const items = normalizeCfVideoItems(data);
+      const qLow = q.toLowerCase();
+      const matched = items.filter((v: any) => {
+        const id = String(v?.uid || v?.id || "");
+        if (!id || id === excludeLiveInputUid) return false;
+        const metaName = String(v?.meta?.name || "").trim().toLowerCase();
+        const nameField = String(v?.name || "").trim().toLowerCase();
+        if (metaName && metaName === qLow) return true;
+        if (nameField && nameField === qLow) return true;
+        return metaName.includes(qLow) || nameField.includes(qLow);
+      });
+      const pool = matched.length ? matched : items.filter((v: any) => String(v?.uid || "") && String(v.uid) !== excludeLiveInputUid);
+      return pickBestCfRecording(pool, excludeLiveInputUid);
     } catch {
       return null;
     }
@@ -295,10 +364,11 @@ export function registerLiveStreamRoutes({
       const accountId = process.env.CF_STREAM_ACCOUNT_ID || process.env.R2_ACCOUNT_ID;
       const apiToken = process.env.CF_STREAM_API_TOKEN;
       if (!accountId || !apiToken) return res.status(500).json({ message: "CF Stream credentials not configured" });
-      if (!process.env.R2_BUCKET_NAME) return res.status(500).json({ message: "R2 bucket is not configured" });
+      // R2 is optional: we always persist Cloudflare HLS when MP4 archival is unavailable.
 
-      const lcResult = await db.query("SELECT cf_stream_uid FROM live_classes WHERE id = $1", [req.params.id]);
+      const lcResult = await db.query("SELECT id, title, cf_stream_uid FROM live_classes WHERE id = $1", [req.params.id]);
       const uid = lcResult.rows[0]?.cf_stream_uid;
+      const liveTitle = String(lcResult.rows[0]?.title || "").trim();
       const endedAtNow = Date.now();
       await db.query(
         "UPDATE live_classes SET is_live = FALSE, ended_at = COALESCE(ended_at, $1), is_completed = TRUE WHERE id = $2",
@@ -309,23 +379,28 @@ export function registerLiveStreamRoutes({
       const getLatestRecording = async (): Promise<{ manifestUrl: string; recordingUid: string } | null> =>
         getLatestRecordingForLiveInput(accountId, apiToken, uid);
 
-      // Cloudflare may need time to finalize VOD after stream stop.
+      // Cloudflare needs time to finalize VOD — poll longer before falling back / deleting input.
       let recordingUrl: string | null = null;
-      for (let i = 0; i < 18; i += 1) {
+      const maxPolls = Number(process.env.CF_STREAM_END_MAX_POLLS || 48);
+      const pollMs = Number(process.env.CF_STREAM_END_POLL_MS || 5000);
+      for (let i = 0; i < maxPolls; i += 1) {
         const latest = await getLatestRecording();
         if (latest) {
           const archived = await archiveCloudflareRecordingToR2(latest.recordingUid);
           recordingUrl = archived || latest.manifestUrl;
           break;
         }
-        await new Promise((resolve) => setTimeout(resolve, 5000));
+        await new Promise((resolve) => setTimeout(resolve, pollMs));
       }
 
-      // Delete live input after recording lookup attempt (best effort).
-      await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/live_inputs/${uid}`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${apiToken}` },
-      }).catch(() => {});
+      if (!recordingUrl && liveTitle) {
+        const viaSearch = await findRecordingViaStreamSearch(accountId, apiToken, liveTitle, uid);
+        if (viaSearch) {
+          const archived = await archiveCloudflareRecordingToR2(viaSearch.recordingUid);
+          recordingUrl = archived || viaSearch.manifestUrl;
+          console.log(`[CF Stream] Resolved recording via stream search title="${liveTitle.slice(0, 60)}"`);
+        }
+      }
 
       if (recordingUrl) {
         try {
@@ -333,9 +408,22 @@ export function registerLiveStreamRoutes({
         } catch (saveErr) {
           console.warn("[CF Stream] recording save after stream end failed:", saveErr);
         }
+      } else {
+        console.warn(
+          `[CF Stream] No recording URL after end for live_class=${req.params.id} live_input_uid=${uid}. Leaving live_input in place for retry/archive sweep.`
+        );
       }
 
-      console.log(`[CF Stream] Ended live input uid=${uid}`);
+      // Delete live input only after we attached a playable URL — otherwise admins can retry "end"
+      // and archive sweep still has cf_stream_uid to resolve MP4/HLS later.
+      if (recordingUrl) {
+        await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/live_inputs/${uid}`, {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${apiToken}` },
+        }).catch(() => {});
+      }
+
+      console.log(`[CF Stream] Ended live input uid=${uid} saved=${Boolean(recordingUrl)}`);
       res.json({ success: true, recordingUrl });
     } catch (err) {
       console.error("[CF Stream] End error:", err);
