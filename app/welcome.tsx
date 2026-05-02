@@ -39,6 +39,38 @@ type MyCourseItem = { title: string; desc: string };
 type ExtraSection = { title?: string; body?: string; imageUrl?: string };
 type FeatureItem = { icon: string; color: string; title: string; desc: string };
 
+/** Title stays fixed; body (and images) scroll when compact so long CMS copy is readable on phone web / narrow layout. */
+function SectionTitleAndScroll({
+  title,
+  compact,
+  scrollMaxH,
+  children,
+}: {
+  title: string;
+  compact: boolean;
+  scrollMaxH: number;
+  children: React.ReactNode;
+}) {
+  return (
+    <View style={styles.section}>
+      <Text style={styles.sectionTitle}>{title}</Text>
+      {compact ? (
+        <ScrollView
+          nestedScrollEnabled
+          style={{ maxHeight: scrollMaxH }}
+          contentContainerStyle={styles.sectionScrollInner}
+          showsVerticalScrollIndicator
+          keyboardShouldPersistTaps="handled"
+        >
+          {children}
+        </ScrollView>
+      ) : (
+        <View style={styles.sectionChildrenFlat}>{children}</View>
+      )}
+    </View>
+  );
+}
+
 function parseJsonArray<T>(raw: string | undefined, fallback: T[]): T[] {
   if (!raw?.trim()) return fallback;
   try {
@@ -68,7 +100,7 @@ function getFeatures(cfg: Record<string, string>): FeatureItem[] {
 
 export default function WelcomeScreen() {
   const insets = useSafeAreaInsets();
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
   const isWide = width >= 640;
   const isWeb = Platform.OS === "web";
   const { user } = useAuth();
@@ -77,10 +109,13 @@ export default function WelcomeScreen() {
     queryKey: ["/api/site-settings"],
     queryFn: async () => {
       try {
-        const url = new URL("/api/site-settings", getApiUrl()).toString();
+        const url = new URL("/api/site-settings", getApiUrl());
+        if (Platform.OS === "web") {
+          url.searchParams.set("_cb", String(Date.now()));
+        }
         const res = await authFetch(
-          url,
-          Platform.OS === "web" ? ({ cache: "no-store" } as RequestInit) : undefined
+          url.toString(),
+          ({ cache: "no-store" } as RequestInit)
         );
         if (res.ok) return res.json();
       } catch { /* public */ }
@@ -161,8 +196,10 @@ export default function WelcomeScreen() {
 
   const webHero = isWeb && isWide;
   const isPhoneWeb = isWeb && !isWide;
-  /** Narrow viewports: cap About / Vision lines so phones are not overwhelmed. */
-  const isCompactText = width < 640;
+  /** Narrow width: inner scroll areas for long CMS text (phone web + small native). */
+  const useSectionInnerScroll = width < 640;
+  const sectionScrollMaxH = Math.min(340, Math.round(Math.max(220, height * 0.42)));
+  const isNativeApp = Platform.OS === "android" || Platform.OS === "ios";
 
   const logoImageEl = logoUrl ? (
     <Image source={{ uri: logoUrl }} style={styles.logoImg} resizeMode="cover" />
@@ -253,68 +290,81 @@ export default function WelcomeScreen() {
         {showPankaj && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>{pankajTitle}</Text>
-            <View style={[styles.pankajRow, !isWide && styles.pankajRowStacked]}>
-              {!!pankajPhotoUrl ? (
-                <Image
-                  source={{ uri: pankajPhotoUrl }}
-                  style={[styles.pankajPhoto, !isWide && styles.pankajPhotoMobile]}
-                  resizeMode="cover"
-                />
-              ) : (
-                <View style={[styles.pankajPhotoPlaceholder, !isWide && styles.pankajPhotoMobile]}>
-                  <Ionicons name="person" size={42} color={Colors.light.textMuted} />
+            {useSectionInnerScroll ? (
+              <ScrollView
+                nestedScrollEnabled
+                style={{ maxHeight: sectionScrollMaxH }}
+                contentContainerStyle={styles.sectionScrollInner}
+                showsVerticalScrollIndicator
+                keyboardShouldPersistTaps="handled"
+              >
+                <View style={[styles.pankajRow, styles.pankajRowStacked]}>
+                  {!!pankajPhotoUrl ? (
+                    <Image
+                      source={{ uri: pankajPhotoUrl }}
+                      style={[styles.pankajPhoto, styles.pankajPhotoMobile]}
+                      resizeMode="cover"
+                    />
+                  ) : (
+                    <View style={[styles.pankajPhotoPlaceholder, styles.pankajPhotoMobile]}>
+                      <Ionicons name="person" size={42} color={Colors.light.textMuted} />
+                    </View>
+                  )}
+                  <View style={styles.pankajTextCol}>
+                    {!!pankajBody && (
+                      <Text style={[styles.sectionBody, styles.pankajBodyMobile]}>{pankajBody}</Text>
+                    )}
+                  </View>
                 </View>
-              )}
-              <View style={styles.pankajTextCol}>
-                {!!pankajBody && (
-                  <Text
-                    style={[styles.sectionBody, !isWide && styles.pankajBodyMobile]}
-                    numberOfLines={isCompactText ? 8 : undefined}
-                    ellipsizeMode={isCompactText ? "tail" : undefined}
-                  >
-                    {pankajBody}
-                  </Text>
+              </ScrollView>
+            ) : (
+              <View style={[styles.pankajRow, !isWide && styles.pankajRowStacked]}>
+                {!!pankajPhotoUrl ? (
+                  <Image
+                    source={{ uri: pankajPhotoUrl }}
+                    style={[styles.pankajPhoto, !isWide && styles.pankajPhotoMobile]}
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <View style={[styles.pankajPhotoPlaceholder, !isWide && styles.pankajPhotoMobile]}>
+                    <Ionicons name="person" size={42} color={Colors.light.textMuted} />
+                  </View>
                 )}
+                <View style={styles.pankajTextCol}>
+                  {!!pankajBody && (
+                    <Text style={[styles.sectionBody, !isWide && styles.pankajBodyMobile]}>{pankajBody}</Text>
+                  )}
+                </View>
               </View>
-            </View>
+            )}
           </View>
         )}
 
         {/* About */}
         {showAbout && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>{aboutTitle}</Text>
-            {!!aboutBody && (
-              <Text
-                style={styles.sectionBody}
-                numberOfLines={isCompactText ? 6 : undefined}
-                ellipsizeMode={isCompactText ? "tail" : undefined}
-              >
-                {aboutBody}
-              </Text>
-            )}
+          <SectionTitleAndScroll
+            title={aboutTitle}
+            compact={useSectionInnerScroll}
+            scrollMaxH={sectionScrollMaxH}
+          >
+            {!!aboutBody && <Text style={styles.sectionBody}>{aboutBody}</Text>}
             {!!aboutImage && (
               <Image source={{ uri: aboutImage }} style={styles.sectionImage} resizeMode="cover" />
             )}
-          </View>
+          </SectionTitleAndScroll>
         )}
 
         {showVision && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>{visionTitle}</Text>
-            {!!visionBody && (
-              <Text
-                style={styles.sectionBody}
-                numberOfLines={isCompactText ? 6 : undefined}
-                ellipsizeMode={isCompactText ? "tail" : undefined}
-              >
-                {visionBody}
-              </Text>
-            )}
+          <SectionTitleAndScroll
+            title={visionTitle}
+            compact={useSectionInnerScroll}
+            scrollMaxH={sectionScrollMaxH}
+          >
+            {!!visionBody && <Text style={styles.sectionBody}>{visionBody}</Text>}
             {!!visionImage && (
               <Image source={{ uri: visionImage }} style={styles.sectionImage} resizeMode="cover" />
             )}
-          </View>
+          </SectionTitleAndScroll>
         )}
 
         {/* My courses */}
@@ -365,8 +415,8 @@ export default function WelcomeScreen() {
           </View>
         )}
 
-        {/* Get the App */}
-        {isWeb && on("welcome_show_get_app") && (
+        {/* Get the App — web only (never on native Android / iOS builds) */}
+        {!isNativeApp && Platform.OS === "web" && on("welcome_show_get_app") && (
           <View style={styles.getAppSection}>
             <Text style={styles.getAppTitle}>{s("welcome_get_app_title", "Get the App")}</Text>
             <Text style={styles.getAppSub}>{s("welcome_get_app_subtitle", "Available on Android, iOS, and web.")}</Text>
@@ -584,6 +634,8 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   sectionTitle: { fontSize: 20, fontFamily: "Inter_700Bold", color: Colors.light.text },
+  sectionScrollInner: { gap: 12, paddingBottom: 10, paddingRight: 4 },
+  sectionChildrenFlat: { gap: 12 },
   sectionIntro: { fontSize: 14, color: Colors.light.textSecondary, lineHeight: 21 },
   sectionBody: { fontSize: 15, color: Colors.light.textSecondary, lineHeight: 24 },
   sectionImage: { width: "100%", height: 200, borderRadius: 12, backgroundColor: Colors.light.background },

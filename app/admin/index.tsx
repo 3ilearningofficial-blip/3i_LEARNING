@@ -774,7 +774,7 @@ function WelcomeSettingsTab() {
 
       <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 4, borderWidth: 1, borderColor: "#E5E7EB" }}>
         <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text, marginBottom: 6 }}>Show / hide — Get the app</Text>
-        {toggleRow("Get the App section (web)", "welcome_show_get_app")}
+        {toggleRow("Get the App (browser web only — not shown in Android/iOS app)", "welcome_show_get_app")}
         {toggleRow("Google Play card", "welcome_show_google_play")}
         {toggleRow("iOS / App Store card", "welcome_show_ios")}
         {toggleRow("Web app card", "welcome_show_web_app")}

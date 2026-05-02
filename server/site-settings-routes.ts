@@ -17,6 +17,9 @@ export function registerSiteSettingsRoutes({
 }: RegisterSiteSettingsRoutesDeps): void {
   app.get("/api/site-settings", async (_req: Request, res: Response) => {
     try {
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Expires", "0");
       const result = await db.query("SELECT key, value FROM site_settings");
       const settings: Record<string, string> = {};
       for (const row of result.rows) settings[row.key] = row.value;

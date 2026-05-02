@@ -2240,6 +2240,9 @@ function registerSiteSettingsRoutes({
 }) {
   app2.get("/api/site-settings", async (_req, res) => {
     try {
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Expires", "0");
       const result = await db2.query("SELECT key, value FROM site_settings");
       const settings = {};
       for (const row of result.rows) settings[row.key] = row.value;
