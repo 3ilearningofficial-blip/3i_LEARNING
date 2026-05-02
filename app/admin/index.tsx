@@ -446,6 +446,7 @@ function AnalyticsTab() {
 }
 
 function WelcomeSettingsTab() {
+  const qc = useQueryClient();
   const [settings, setSettings] = React.useState<Record<string, string>>({});
   const [saving, setSaving] = React.useState(false);
   const [loaded, setLoaded] = React.useState(false);
@@ -453,12 +454,44 @@ function WelcomeSettingsTab() {
 
   const defaults: Record<string, string> = {
     welcome_headline: "Master Mathematics\nUnder Pankaj Sir Guidance",
+    welcome_tagline: "Master Mathematics Under Pankaj Sir Guidance",
+    welcome_brand_text: "3i Learning",
+    welcome_logo_url: "",
+    welcome_nav_line: "Courses · Live Classes · OMR Tests · Daily Missions · AI Tutor",
+    welcome_show_nav: "true",
+    welcome_show_subheadline: "false",
     welcome_subheadline: "Courses, live classes, OMR tests, daily missions and AI tutoring — everything to ace your exams.",
     welcome_login_btn: "Login — It's Free",
+    welcome_signup_btn: "Sign Up",
+    welcome_show_about: "true",
+    welcome_about_title: "About",
+    welcome_about_body:
+      "3i Learning offers expert-led mathematics coaching for defence entrance exams — with structured video courses, live classes, OMR-style tests, daily missions, and AI tutoring.",
+    welcome_about_image_url: "",
+    welcome_show_my_course: "true",
+    welcome_my_course_title: "My Courses",
+    welcome_my_course_intro: "",
+    welcome_my_course_json:
+      '[{"title":"CDS / AFCAT / NDA","desc":"Complete preparation with structured syllabus, live support, and full-length mocks."},{"title":"Test Series","desc":"OMR-style tests with analytics, negative marking, and performance tracking."}]',
+    welcome_my_course_image_url: "",
+    welcome_extra_sections_json: "[]",
+    welcome_features_json: "",
     welcome_show_features: "true",
     welcome_show_get_app: "true",
+    welcome_get_app_title: "Get the App",
+    welcome_get_app_subtitle: "Available on Android, iOS, and web.",
+    welcome_card_play_title: "Android",
+    welcome_card_play_desc: "Get the app from the Google Play Store",
+    welcome_card_ios_title: "iOS",
+    welcome_card_ios_desc: "Download from the Apple App Store",
+    welcome_card_web_title: "Web",
+    welcome_card_web_desc: "Use the full app in your browser",
+    welcome_card_pwa_title: "Install",
+    welcome_card_pwa_desc: "Add to home screen as a web app",
     welcome_google_play_url: "https://play.google.com/store/apps/details?id=com.learning.threeI",
+    welcome_app_store_url: "https://apps.apple.com",
     welcome_show_google_play: "true",
+    welcome_show_ios: "true",
     welcome_show_web_app: "true",
     welcome_show_web_download: "true",
     welcome_footer: "© 2026 3i Learning. All rights reserved.",
@@ -486,6 +519,7 @@ function WelcomeSettingsTab() {
     setSaving(true);
     try {
       const res = await apiRequest("PUT", "/api/admin/site-settings", { settings });
+      await qc.invalidateQueries({ queryKey: ["/api/site-settings"] });
       if (Platform.OS === "web") {
         setSaveMsg("✅ Settings saved successfully!");
         setTimeout(() => setSaveMsg(""), 3000);
@@ -509,6 +543,48 @@ function WelcomeSettingsTab() {
   const set = (key: string, v: string) => setSettings(prev => ({ ...prev, [key]: v }));
   const toggle = (key: string) => set(key, val(key) === "true" ? "false" : "true");
 
+  const pickImageFor = async (settingKey: string) => {
+    try {
+      if (Platform.OS === "web") {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.accept = "image/*";
+        input.onchange = async (e: any) => {
+          const file = e.target.files?.[0];
+          if (!file) return;
+          const blobUrl = URL.createObjectURL(file);
+          const { publicUrl } = await uploadToR2(blobUrl, file.name, file.type || "image/jpeg", "images");
+          URL.revokeObjectURL(blobUrl);
+          set(settingKey, publicUrl);
+        };
+        input.click();
+      } else {
+        const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (status !== "granted") {
+          Alert.alert("Permission needed", "Allow photo library access to pick an image.");
+          return;
+        }
+        const result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+          allowsEditing: true,
+          quality: 0.8,
+        });
+        if (!result.canceled && result.assets[0]) {
+          const asset = result.assets[0];
+          const { publicUrl } = await uploadToR2(
+            asset.uri,
+            asset.fileName || `welcome-${Date.now()}.jpg`,
+            asset.mimeType || "image/jpeg",
+            "images"
+          );
+          set(settingKey, publicUrl);
+        }
+      }
+    } catch (err: any) {
+      Alert.alert("Upload Failed", err?.message || "Could not upload image.");
+    }
+  };
+
   if (!loaded) return <ActivityIndicator color={Colors.light.primary} style={{ marginTop: 40 }} />;
 
   const labelStyle = { fontSize: 13, fontFamily: "Inter_600SemiBold" as const, color: Colors.light.text, marginBottom: 4 };
@@ -526,54 +602,166 @@ function WelcomeSettingsTab() {
     </Pressable>
   );
 
+  const imageUrlRow = (label: string, key: string) => (
+    <View style={{ gap: 6 }}>
+      <Text style={labelStyle}>{label}</Text>
+      <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
+        <TextInput style={[inputStyle, { flex: 1 }]} value={val(key)} onChangeText={v => set(key, v)} placeholder="https://..." autoCapitalize="none" />
+        <Pressable onPress={() => pickImageFor(key)} style={{ backgroundColor: Colors.light.secondary, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10 }}>
+          <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>Upload</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+
   return (
     <View style={{ gap: 16, padding: 4 }}>
-      {/* Hero Text */}
       <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: "#E5E7EB" }}>
-        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Hero Section</Text>
+        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Brand and hero (web layout)</Text>
+        {imageUrlRow("Logo image (optional — overrides default asset)", "welcome_logo_url")}
         <View style={{ gap: 4 }}>
-          <Text style={labelStyle}>Headline</Text>
-          <TextInput style={[inputStyle, { minHeight: 60, textAlignVertical: "top" }]} multiline value={val("welcome_headline")} onChangeText={v => set("welcome_headline", v)} placeholder="Main headline" />
+          <Text style={labelStyle}>Brand name next to logo</Text>
+          <TextInput style={inputStyle} value={val("welcome_brand_text")} onChangeText={v => set("welcome_brand_text", v)} placeholder="3i Learning" />
         </View>
+        <View style={{ gap: 4 }}>
+          <Text style={labelStyle}>Tagline (single line on web)</Text>
+          <TextInput style={inputStyle} value={val("welcome_tagline")} onChangeText={v => set("welcome_tagline", v)} placeholder="Master Mathematics Under Pankaj Sir Guidance" />
+        </View>
+        <View style={{ gap: 4 }}>
+          <Text style={labelStyle}>Navigation line</Text>
+          <TextInput style={inputStyle} value={val("welcome_nav_line")} onChangeText={v => set("welcome_nav_line", v)} placeholder="Courses · Live Classes · …" />
+        </View>
+        <View style={{ gap: 4 }}>
+          <Text style={labelStyle}>Headline (legacy / mobile)</Text>
+          <TextInput style={[inputStyle, { minHeight: 50, textAlignVertical: "top" }]} multiline value={val("welcome_headline")} onChangeText={v => set("welcome_headline", v)} placeholder="Multi-line headline" />
+        </View>
+        {toggleRow("Show navigation line", "welcome_show_nav")}
+        {toggleRow("Show subheadline under hero", "welcome_show_subheadline")}
         <View style={{ gap: 4 }}>
           <Text style={labelStyle}>Subheadline</Text>
-          <TextInput style={[inputStyle, { minHeight: 50, textAlignVertical: "top" }]} multiline value={val("welcome_subheadline")} onChangeText={v => set("welcome_subheadline", v)} placeholder="Subheadline text" />
+          <TextInput style={[inputStyle, { minHeight: 44, textAlignVertical: "top" }]} multiline value={val("welcome_subheadline")} onChangeText={v => set("welcome_subheadline", v)} />
         </View>
         <View style={{ gap: 4 }}>
-          <Text style={labelStyle}>Login Button Text</Text>
-          <TextInput style={inputStyle} value={val("welcome_login_btn")} onChangeText={v => set("welcome_login_btn", v)} placeholder="Login — It's Free" />
+          <Text style={labelStyle}>Login button</Text>
+          <TextInput style={inputStyle} value={val("welcome_login_btn")} onChangeText={v => set("welcome_login_btn", v)} />
+        </View>
+        <View style={{ gap: 4 }}>
+          <Text style={labelStyle}>Sign up button</Text>
+          <TextInput style={inputStyle} value={val("welcome_signup_btn")} onChangeText={v => set("welcome_signup_btn", v)} />
         </View>
       </View>
 
-      {/* Visibility Toggles */}
-      <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 4, borderWidth: 1, borderColor: "#E5E7EB" }}>
-        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text, marginBottom: 6 }}>Show / Hide Sections</Text>
-        {toggleRow("Features Grid", "welcome_show_features")}
-        {toggleRow("Get the App Section", "welcome_show_get_app")}
-        {toggleRow("Google Play Card", "welcome_show_google_play")}
-        {toggleRow("Use on Web Card", "welcome_show_web_app")}
-        {toggleRow("Download for Web Card", "welcome_show_web_download")}
-      </View>
-
-      {/* App Links */}
       <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: "#E5E7EB" }}>
-        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>App Links</Text>
+        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>About section</Text>
+        {toggleRow("Show About block", "welcome_show_about")}
         <View style={{ gap: 4 }}>
-          <Text style={labelStyle}>Google Play Store URL</Text>
-          <TextInput style={inputStyle} value={val("welcome_google_play_url")} onChangeText={v => set("welcome_google_play_url", v)} placeholder="https://play.google.com/..." autoCapitalize="none" />
+          <Text style={labelStyle}>Title</Text>
+          <TextInput style={inputStyle} value={val("welcome_about_title")} onChangeText={v => set("welcome_about_title", v)} />
+        </View>
+        <View style={{ gap: 4 }}>
+          <Text style={labelStyle}>Body</Text>
+          <TextInput style={[inputStyle, { minHeight: 100, textAlignVertical: "top" }]} multiline value={val("welcome_about_body")} onChangeText={v => set("welcome_about_body", v)} />
+        </View>
+        {imageUrlRow("About image (optional)", "welcome_about_image_url")}
+      </View>
+
+      <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: "#E5E7EB" }}>
+        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>My courses block</Text>
+        {toggleRow("Show My courses", "welcome_show_my_course")}
+        <View style={{ gap: 4 }}>
+          <Text style={labelStyle}>Section title</Text>
+          <TextInput style={inputStyle} value={val("welcome_my_course_title")} onChangeText={v => set("welcome_my_course_title", v)} />
+        </View>
+        <View style={{ gap: 4 }}>
+          <Text style={labelStyle}>Intro (optional)</Text>
+          <TextInput style={[inputStyle, { minHeight: 44, textAlignVertical: "top" }]} multiline value={val("welcome_my_course_intro")} onChangeText={v => set("welcome_my_course_intro", v)} />
+        </View>
+        {imageUrlRow("My courses image (optional)", "welcome_my_course_image_url")}
+        <View style={{ gap: 4 }}>
+          <Text style={labelStyle}>Course cards (JSON array of title + desc)</Text>
+          <TextInput
+            style={[inputStyle, { minHeight: 120, fontFamily: Platform.OS === "web" ? "monospace" : undefined, textAlignVertical: "top" }]}
+            multiline
+            value={val("welcome_my_course_json")}
+            onChangeText={v => set("welcome_my_course_json", v)}
+            placeholder='[{"title":"...","desc":"..."}]'
+            autoCapitalize="none"
+          />
         </View>
       </View>
 
-      {/* Footer */}
+      <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: "#E5E7EB" }}>
+        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Extra sections (optional)</Text>
+        <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>
+          JSON array: {"[{ \"title\": \"...\", \"body\": \"...\", \"imageUrl\": \"...\" }, ...]"}
+        </Text>
+        <TextInput
+          style={[inputStyle, { minHeight: 120, fontFamily: Platform.OS === "web" ? "monospace" : undefined, textAlignVertical: "top" }]}
+          multiline
+          value={val("welcome_extra_sections_json")}
+          onChangeText={v => set("welcome_extra_sections_json", v)}
+          autoCapitalize="none"
+        />
+      </View>
+
+      <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: "#E5E7EB" }}>
+        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Feature grid</Text>
+        {toggleRow("Show features grid", "welcome_show_features")}
+        <View style={{ gap: 4 }}>
+          <Text style={labelStyle}>Override features (JSON, or leave empty for defaults)</Text>
+          <TextInput
+            style={[inputStyle, { minHeight: 140, fontFamily: Platform.OS === "web" ? "monospace" : undefined, textAlignVertical: "top" }]}
+            multiline
+            value={val("welcome_features_json")}
+            onChangeText={v => set("welcome_features_json", v)}
+            placeholder='[{"icon":"videocam","color":"#1A56DB","title":"...","desc":"..."}]'
+            autoCapitalize="none"
+          />
+        </View>
+      </View>
+
+      <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 4, borderWidth: 1, borderColor: "#E5E7EB" }}>
+        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text, marginBottom: 6 }}>Show / hide — Get the app</Text>
+        {toggleRow("Get the App section (web)", "welcome_show_get_app")}
+        {toggleRow("Google Play card", "welcome_show_google_play")}
+        {toggleRow("iOS / App Store card", "welcome_show_ios")}
+        {toggleRow("Web app card", "welcome_show_web_app")}
+        {toggleRow("Install / PWA card", "welcome_show_web_download")}
+      </View>
+
+      <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: "#E5E7EB" }}>
+        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Store links and copy</Text>
+        <View style={{ gap: 4 }}>
+          <Text style={labelStyle}>Google Play URL</Text>
+          <TextInput style={inputStyle} value={val("welcome_google_play_url")} onChangeText={v => set("welcome_google_play_url", v)} autoCapitalize="none" />
+        </View>
+        <View style={{ gap: 4 }}>
+          <Text style={labelStyle}>App Store URL</Text>
+          <TextInput style={inputStyle} value={val("welcome_app_store_url")} onChangeText={v => set("welcome_app_store_url", v)} autoCapitalize="none" />
+        </View>
+        <View style={{ gap: 4 }}>
+          <Text style={labelStyle}>Section title / subtitle</Text>
+          <TextInput style={inputStyle} value={val("welcome_get_app_title")} onChangeText={v => set("welcome_get_app_title", v)} />
+          <TextInput style={[inputStyle, { marginTop: 8 }]} value={val("welcome_get_app_subtitle")} onChangeText={v => set("welcome_get_app_subtitle", v)} />
+        </View>
+        <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.text, marginTop: 8 }}>Card titles and descriptions</Text>
+        <View style={{ gap: 8 }}>
+          <TextInput style={inputStyle} value={val("welcome_card_play_title")} onChangeText={v => set("welcome_card_play_title", v)} placeholder="Android title" />
+          <TextInput style={inputStyle} value={val("welcome_card_play_desc")} onChangeText={v => set("welcome_card_play_desc", v)} placeholder="Android desc" />
+          <TextInput style={inputStyle} value={val("welcome_card_ios_title")} onChangeText={v => set("welcome_card_ios_title", v)} placeholder="iOS title" />
+          <TextInput style={inputStyle} value={val("welcome_card_ios_desc")} onChangeText={v => set("welcome_card_ios_desc", v)} placeholder="iOS desc" />
+          <TextInput style={inputStyle} value={val("welcome_card_web_title")} onChangeText={v => set("welcome_card_web_title", v)} placeholder="Web title" />
+          <TextInput style={inputStyle} value={val("welcome_card_web_desc")} onChangeText={v => set("welcome_card_web_desc", v)} placeholder="Web desc" />
+          <TextInput style={inputStyle} value={val("welcome_card_pwa_title")} onChangeText={v => set("welcome_card_pwa_title", v)} placeholder="Install title" />
+          <TextInput style={inputStyle} value={val("welcome_card_pwa_desc")} onChangeText={v => set("welcome_card_pwa_desc", v)} placeholder="Install desc" />
+        </View>
+      </View>
+
       <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: "#E5E7EB" }}>
         <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Footer</Text>
-        <View style={{ gap: 4 }}>
-          <Text style={labelStyle}>Footer Text</Text>
-          <TextInput style={inputStyle} value={val("welcome_footer")} onChangeText={v => set("welcome_footer", v)} placeholder="© 2026 ..." />
-        </View>
+        <TextInput style={inputStyle} value={val("welcome_footer")} onChangeText={v => set("welcome_footer", v)} />
       </View>
 
-      {/* Save */}
       <Pressable onPress={handleSave} disabled={saving} style={{ backgroundColor: Colors.light.primary, borderRadius: 12, paddingVertical: 14, alignItems: "center", opacity: saving ? 0.6 : 1 }}>
         {saving ? <ActivityIndicator color="#fff" /> : <Text style={{ fontSize: 15, fontFamily: "Inter_600SemiBold", color: "#fff" }}>Save Changes</Text>}
       </Pressable>

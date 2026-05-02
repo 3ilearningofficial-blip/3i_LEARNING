@@ -119,7 +119,7 @@ export default function LoginScreen() {
   };
 
   return (
-    <LinearGradient colors={["#0A1628", "#1A2E50", "#0A1628"]} style={styles.container}>
+    <View style={styles.container}>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
         <ScrollView
           contentContainerStyle={[styles.scrollContent, { paddingTop: insets.top + 40, paddingBottom: insets.bottom + 20 }]}
@@ -127,7 +127,7 @@ export default function LoginScreen() {
           bounces={false}
         >
           <Pressable style={{ alignSelf: "flex-start", marginBottom: 8 }} onPress={() => router.replace("/(auth)/email-login" as any)}>
-            <Ionicons name="arrow-back" size={22} color="#fff" />
+            <Ionicons name="arrow-back" size={22} color={Colors.light.text} />
           </Pressable>
 
           <View style={styles.logoSection}>
@@ -236,27 +236,27 @@ export default function LoginScreen() {
           </View>
 
           <View style={styles.footer}>
-            <Ionicons name="shield-checkmark-outline" size={16} color="rgba(255,255,255,0.5)" />
+            <Ionicons name="shield-checkmark-outline" size={16} color={Colors.light.textMuted} />
             <Text style={styles.footerText}>Secure login with OTP verification</Text>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
-    </LinearGradient>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
+  container: { flex: 1, backgroundColor: Colors.light.background },
   scrollContent: { flexGrow: 1, paddingHorizontal: 24, justifyContent: "center", gap: 32 },
   logoSection: { alignItems: "center", gap: 12 },
   logoContainer: {
     width: 100, height: 100, borderRadius: 50,
     backgroundColor: "#fff", alignItems: "center", justifyContent: "center",
-    borderWidth: 2, borderColor: "rgba(255,255,255,0.3)", overflow: "hidden",
+    borderWidth: 2, borderColor: Colors.light.border, overflow: "hidden",
   },
   logoImage: { width: 100, height: 100 },
-  appName: { fontSize: 32, fontFamily: "Inter_700Bold", color: "#fff" },
-  tagline: { fontSize: 14, color: "rgba(255,255,255,0.6)", fontFamily: "Inter_400Regular" },
+  appName: { fontSize: 32, fontFamily: "Inter_700Bold", color: Colors.light.text },
+  tagline: { fontSize: 14, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" },
   card: {
     backgroundColor: "#fff", borderRadius: 24, padding: 24, gap: 16,
     shadowColor: "#000", shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.2, shadowRadius: 20, elevation: 10,
@@ -285,5 +285,5 @@ const styles = StyleSheet.create({
   sendBtnGradient: { flexDirection: "row", alignItems: "center", justifyContent: "center", paddingVertical: 16, gap: 8 },
   sendBtnText: { fontSize: 16, fontFamily: "Inter_600SemiBold", color: "#fff" },
   footer: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
-  footerText: { fontSize: 13, color: "rgba(255,255,255,0.5)", fontFamily: "Inter_400Regular" },
+  footerText: { fontSize: 13, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" },
 });

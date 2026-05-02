@@ -176,6 +176,7 @@ export function registerAdminUsersAndContentRoutes({
     try {
       const { blocked } = req.body;
       if (blocked) {
+        await db.query("DELETE FROM user_sessions WHERE user_id = $1", [req.params.id]);
         await db.query("UPDATE users SET is_blocked = TRUE, session_token = NULL WHERE id = $1", [req.params.id]);
         const userId = req.params.id;
         await deleteDownloadsForUser(parseInt(Array.isArray(userId) ? userId[0] : userId));

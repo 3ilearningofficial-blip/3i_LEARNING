@@ -4,6 +4,7 @@ import {
   assertLoginAllowedForInstallation,
   enforceInstallationBinding,
 } from "./native-device-binding";
+import { persistLoginSession, resolveUserBySessionToken, userHasSessionToken } from "./user-sessions";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -150,7 +151,7 @@ export function registerAuthRoutes({
       }
 
       const sessionToken = generateSecureToken();
-      await db.query("UPDATE users SET otp = NULL, otp_expires_at = NULL, device_id = $1, session_token = $2, last_active_at = $3 WHERE id = $4", [deviceId || null, sessionToken, Date.now(), user.id]);
+      await persistLoginSession(db, user, sessionToken, deviceId || null, { clearOtp: true });
 
       const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: deviceId || null });
       (req.session as any).user = sessionUser;
@@ -195,7 +196,7 @@ export function registerAuthRoutes({
       }
 
       const sessionToken = generateSecureToken();
-      await db.query("UPDATE users SET otp = NULL, otp_expires_at = NULL, device_id = $1, session_token = $2, last_active_at = $3 WHERE id = $4", [deviceId || null, sessionToken, Date.now(), user.id]);
+      await persistLoginSession(db, user, sessionToken, deviceId || null, { clearOtp: true });
 
       const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: deviceId || null });
       (req.session as any).user = sessionUser;
@@ -211,22 +212,24 @@ export function registerAuthRoutes({
     if (!sessionUser) {
       const authHeader = req.headers.authorization;
       if (authHeader?.startsWith("Bearer ")) {
-        const token = authHeader.slice(7);
+        const token = authHeader.slice(7).trim();
         try {
-          const dbUser = await db.query(
-            "SELECT id, name, email, phone, role, session_token, profile_complete, date_of_birth, photo_url, is_blocked FROM users WHERE session_token = $1",
-            [token]
-          );
-          if (dbUser.rows.length > 0) {
-            const row = dbUser.rows[0];
+          const resolved = await resolveUserBySessionToken(db, token);
+          if (resolved) {
+            const row = resolved.row as Record<string, unknown>;
             if (row.is_blocked) return res.status(403).json({ message: "account_blocked" });
             const fresh = {
-              id: row.id, name: row.name, email: row.email, phone: row.phone,
-              role: row.role, sessionToken: row.session_token,
-              profileComplete: row.profile_complete || false,
-              date_of_birth: row.date_of_birth, photo_url: row.photo_url,
+              id: row.id,
+              name: row.name,
+              email: row.email,
+              phone: row.phone,
+              role: row.role,
+              sessionToken: token,
+              profileComplete: !!(row.profile_complete as boolean),
+              date_of_birth: row.date_of_birth,
+              photo_url: row.photo_url,
             };
-            const bindBearer = await enforceInstallationBinding(db, req, row.id, row.role);
+            const bindBearer = await enforceInstallationBinding(db, req, row.id as number, row.role as string);
             if (!bindBearer) {
               (req.session as any).user = null;
               return res.status(401).json({ message: "device_binding_mismatch" });
@@ -254,7 +257,8 @@ export function registerAuthRoutes({
         (req.session as any).user = null;
         return res.status(403).json({ message: "account_blocked" });
       }
-      if (sessionUser.sessionToken && row.session_token !== sessionUser.sessionToken) {
+      const tok = sessionUser.sessionToken;
+      if (tok && !(await userHasSessionToken(db, sessionUser.id, tok))) {
         (req.session as any).user = null;
         return res.status(401).json({ message: "logged_in_elsewhere" });
       }
@@ -263,13 +267,14 @@ export function registerAuthRoutes({
         (req.session as any).user = null;
         return res.status(401).json({ message: "device_binding_mismatch" });
       }
+      const effectiveToken = tok || row.session_token;
       const fresh = {
         ...sessionUser,
         name: row.name,
         email: row.email,
         phone: row.phone,
         role: row.role,
-        sessionToken: row.session_token,
+        sessionToken: effectiveToken,
         profileComplete: row.profile_complete || false,
         date_of_birth: row.date_of_birth,
         photo_url: row.photo_url,
@@ -312,7 +317,7 @@ export function registerAuthRoutes({
       }
 
       const sessionToken = generateSecureToken();
-      await db.query("UPDATE users SET device_id = $1, session_token = $2 WHERE id = $3", [deviceId || null, sessionToken, user.id]);
+      await persistLoginSession(db, user, sessionToken, deviceId || null, { clearOtp: false });
 
       const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: deviceId || null });
       (req.session as any).user = sessionUser;
@@ -378,10 +383,7 @@ export function registerAuthRoutes({
 
       const sessionToken = generateSecureToken();
       const dev = typeof deviceId === "string" ? deviceId : null;
-      await db.query(
-        "UPDATE users SET session_token = $1, last_active_at = $2, device_id = COALESCE($3, device_id) WHERE id = $4",
-        [sessionToken, Date.now(), dev, user.id]
-      );
+      await persistLoginSession(db, user, sessionToken, dev, { clearOtp: false });
       const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: dev });
       (req.session as any).user = sessionUser;
       res.json({ success: true, user: sessionUser });
@@ -421,7 +423,11 @@ export function registerAuthRoutes({
       if (!row) {
         return res.status(500).json({ message: "Failed to load profile after update" });
       }
-      const updated = buildSessionUserFromRow(row, { sessionToken: row.session_token, deviceId: (user as { deviceId?: string }).deviceId });
+      const keepTok = user.sessionToken || row.session_token;
+      const updated = buildSessionUserFromRow(row, {
+        sessionToken: keepTok,
+        deviceId: (user as { deviceId?: string }).deviceId,
+      });
       (req.session as any).user = updated;
       res.json({ success: true, user: updated });
     } catch {

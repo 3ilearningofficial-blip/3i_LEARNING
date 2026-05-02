@@ -26,6 +26,7 @@ export const REQUIRED_TABLES = [
   "test_purchases",
   "site_settings",
   "question_reports",
+  "user_sessions",
 ] as const;
 
 export const REQUIRED_COLUMNS: Record<string, string[]> = {

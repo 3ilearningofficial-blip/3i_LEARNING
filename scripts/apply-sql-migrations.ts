@@ -14,6 +14,7 @@ const migrationFiles = [
   "migrations/0001_production_hardening_baseline.sql",
   "migrations/0002_runtime_tables_followup.sql",
   "migrations/0003_runtime_schema_baseline.sql",
+  "migrations/0004_user_sessions.sql",
 ];
 
 const connectionString = process.env.DATABASE_URL;

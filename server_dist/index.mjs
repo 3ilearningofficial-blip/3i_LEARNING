@@ -98,15 +98,89 @@ var init_security_utils = __esm({
   }
 });
 
+// server/user-sessions.ts
+async function resolveUserBySessionToken(db2, token) {
+  const primary = await db2.query(
+    "SELECT * FROM users WHERE session_token = $1 AND COALESCE(is_blocked, FALSE) = FALSE",
+    [token]
+  );
+  if (primary.rows.length > 0) {
+    return { row: primary.rows[0], matchedVia: "primary" };
+  }
+  const extra = await db2.query(
+    `SELECT u.* FROM users u
+     INNER JOIN user_sessions s ON s.user_id = u.id AND s.session_token = $1
+     WHERE u.role = 'admin' AND COALESCE(u.is_blocked, FALSE) = FALSE`,
+    [token]
+  );
+  if (extra.rows.length > 0) {
+    return { row: extra.rows[0], matchedVia: "extra" };
+  }
+  return null;
+}
+async function userHasSessionToken(db2, userId, token) {
+  if (!token) return false;
+  const u = await db2.query("SELECT session_token, role FROM users WHERE id = $1", [userId]);
+  if (u.rows.length === 0) return false;
+  if (u.rows[0].session_token === token) return true;
+  if (u.rows[0].role !== "admin") return false;
+  const s = await db2.query(
+    "SELECT 1 FROM user_sessions WHERE user_id = $1 AND session_token = $2",
+    [userId, token]
+  );
+  return s.rows.length > 0;
+}
+async function persistLoginSession(db2, user, token, deviceId, opts) {
+  const isAdmin = user.role === "admin";
+  const now = Date.now();
+  if (isAdmin) {
+    await db2.query("INSERT INTO user_sessions (user_id, session_token, created_at) VALUES ($1, $2, $3)", [
+      user.id,
+      token,
+      now
+    ]);
+    const urow = await db2.query("SELECT session_token FROM users WHERE id = $1", [user.id]);
+    const hasPrimary = !!urow.rows[0]?.session_token;
+    if (!hasPrimary) {
+      await db2.query(
+        "UPDATE users SET session_token = $1, last_active_at = $2, device_id = COALESCE($3, device_id) WHERE id = $4",
+        [token, now, deviceId, user.id]
+      );
+    } else if (opts.clearOtp) {
+      await db2.query(
+        "UPDATE users SET otp = NULL, otp_expires_at = NULL, last_active_at = $1, device_id = COALESCE($2, device_id) WHERE id = $3",
+        [now, deviceId, user.id]
+      );
+    } else {
+      await db2.query(
+        "UPDATE users SET last_active_at = $1, device_id = COALESCE($2, device_id) WHERE id = $3",
+        [now, deviceId, user.id]
+      );
+    }
+    return;
+  }
+  await db2.query("DELETE FROM user_sessions WHERE user_id = $1", [user.id]);
+  const otpClause = opts.clearOtp !== false ? "otp = NULL, otp_expires_at = NULL, " : "";
+  await db2.query(
+    `UPDATE users SET ${otpClause}device_id = $1, session_token = $2, last_active_at = $3 WHERE id = $4`,
+    [deviceId || null, token, now, user.id]
+  );
+}
+var init_user_sessions = __esm({
+  "server/user-sessions.ts"() {
+    "use strict";
+  }
+});
+
 // server/auth-utils.ts
-function rowsToAuthUser(u) {
+function rowsToAuthUser(u, sessionTokenOverride) {
   return {
     id: u.id,
     name: u.name,
     email: u.email,
     phone: u.phone,
     role: u.role,
-    sessionToken: u.session_token,
+    sessionToken: sessionTokenOverride ?? u.session_token,
     profileComplete: !!u.profile_complete || false
   };
 }
@@ -117,20 +191,17 @@ async function getAuthUserFromRequest(req, db2) {
   if (bearerToken) {
     const token = bearerToken;
     try {
-      const result = await db2.query(
-        "SELECT id, name, email, phone, role, session_token, profile_complete, is_blocked FROM users WHERE session_token = $1",
-        [token]
-      );
-      if (result.rows.length === 0) {
+      const resolved = await resolveUserBySessionToken(db2, token);
+      if (!resolved) {
         req.session.user = null;
         return null;
       }
-      const u = result.rows[0];
+      const u = resolved.row;
       if (u.is_blocked) {
         req.session.user = null;
         return null;
       }
-      const authUser = rowsToAuthUser(u);
+      const authUser = rowsToAuthUser(u, token);
       req.session.user = authUser;
       return authUser;
     } catch (e) {
@@ -154,7 +225,8 @@ async function getAuthUserFromRequest(req, db2) {
       req.session.user = null;
       return null;
     }
-    if (sessionUser.sessionToken && row.session_token !== sessionUser.sessionToken) {
+    const cookieTok = sessionUser.sessionToken;
+    if (cookieTok && !await userHasSessionToken(db2, sessionUser.id, cookieTok)) {
       req.session.user = null;
       return null;
     }
@@ -162,7 +234,7 @@ async function getAuthUserFromRequest(req, db2) {
       req.session.user = null;
       return null;
     }
-    const authUser = rowsToAuthUser(row);
+    const authUser = rowsToAuthUser(row, cookieTok || row.session_token);
     req.session.user = authUser;
     return authUser;
   } catch (e) {
@@ -173,6 +245,7 @@ async function getAuthUserFromRequest(req, db2) {
 var init_auth_utils = __esm({
   "server/auth-utils.ts"() {
     "use strict";
+    init_user_sessions();
   }
 });
 
@@ -434,7 +507,7 @@ function registerAuthRoutes({
         return res.status(loginGate.httpStatus).json({ message: loginGate.message });
       }
       const sessionToken = generateSecureToken2();
-      await db2.query("UPDATE users SET otp = NULL, otp_expires_at = NULL, device_id = $1, session_token = $2, last_active_at = $3 WHERE id = $4", [deviceId || null, sessionToken, Date.now(), user.id]);
+      await persistLoginSession(db2, user, sessionToken, deviceId || null, { clearOtp: true });
       const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: deviceId || null });
       req.session.user = sessionUser;
       res.json({ success: true, user: sessionUser });
@@ -473,7 +546,7 @@ function registerAuthRoutes({
         return res.status(loginGate.httpStatus).json({ message: loginGate.message });
       }
       const sessionToken = generateSecureToken2();
-      await db2.query("UPDATE users SET otp = NULL, otp_expires_at = NULL, device_id = $1, session_token = $2, last_active_at = $3 WHERE id = $4", [deviceId || null, sessionToken, Date.now(), user.id]);
+      await persistLoginSession(db2, user, sessionToken, deviceId || null, { clearOtp: true });
       const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: deviceId || null });
       req.session.user = sessionUser;
       res.json({ success: true, user: sessionUser });
@@ -487,14 +560,11 @@ function registerAuthRoutes({
     if (!sessionUser) {
       const authHeader = req.headers.authorization;
       if (authHeader?.startsWith("Bearer ")) {
-        const token = authHeader.slice(7);
+        const token = authHeader.slice(7).trim();
         try {
-          const dbUser = await db2.query(
-            "SELECT id, name, email, phone, role, session_token, profile_complete, date_of_birth, photo_url, is_blocked FROM users WHERE session_token = $1",
-            [token]
-          );
-          if (dbUser.rows.length > 0) {
-            const row = dbUser.rows[0];
+          const resolved = await resolveUserBySessionToken(db2, token);
+          if (resolved) {
+            const row = resolved.row;
             if (row.is_blocked) return res.status(403).json({ message: "account_blocked" });
             const fresh = {
               id: row.id,
@@ -502,8 +572,8 @@ function registerAuthRoutes({
               email: row.email,
               phone: row.phone,
               role: row.role,
-              sessionToken: row.session_token,
-              profileComplete: row.profile_complete || false,
+              sessionToken: token,
+              profileComplete: !!row.profile_complete,
               date_of_birth: row.date_of_birth,
               photo_url: row.photo_url
             };
@@ -534,7 +604,8 @@ function registerAuthRoutes({
         req.session.user = null;
         return res.status(403).json({ message: "account_blocked" });
       }
-      if (sessionUser.sessionToken && row.session_token !== sessionUser.sessionToken) {
+      const tok = sessionUser.sessionToken;
+      if (tok && !await userHasSessionToken(db2, sessionUser.id, tok)) {
         req.session.user = null;
         return res.status(401).json({ message: "logged_in_elsewhere" });
       }
@@ -543,13 +614,14 @@ function registerAuthRoutes({
         req.session.user = null;
         return res.status(401).json({ message: "device_binding_mismatch" });
       }
+      const effectiveToken = tok || row.session_token;
       const fresh = {
         ...sessionUser,
         name: row.name,
         email: row.email,
         phone: row.phone,
         role: row.role,
-        sessionToken: row.session_token,
+        sessionToken: effectiveToken,
         profileComplete: row.profile_complete || false,
         date_of_birth: row.date_of_birth,
         photo_url: row.photo_url
@@ -587,7 +659,7 @@ function registerAuthRoutes({
         return res.status(loginGate.httpStatus).json({ message: loginGate.message });
       }
       const sessionToken = generateSecureToken2();
-      await db2.query("UPDATE users SET device_id = $1, session_token = $2 WHERE id = $3", [deviceId || null, sessionToken, user.id]);
+      await persistLoginSession(db2, user, sessionToken, deviceId || null, { clearOtp: false });
       const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: deviceId || null });
       req.session.user = sessionUser;
       res.json({ success: true, user: sessionUser });
@@ -645,10 +717,7 @@ function registerAuthRoutes({
       }
       const sessionToken = generateSecureToken2();
       const dev = typeof deviceId === "string" ? deviceId : null;
-      await db2.query(
-        "UPDATE users SET session_token = $1, last_active_at = $2, device_id = COALESCE($3, device_id) WHERE id = $4",
-        [sessionToken, Date.now(), dev, user.id]
-      );
+      await persistLoginSession(db2, user, sessionToken, dev, { clearOtp: false });
       const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: dev });
       req.session.user = sessionUser;
       res.json({ success: true, user: sessionUser });
@@ -696,7 +765,11 @@ function registerAuthRoutes({
       if (!row) {
         return res.status(500).json({ message: "Failed to load profile after update" });
       }
-      const updated = buildSessionUserFromRow(row, { sessionToken: row.session_token, deviceId: user.deviceId });
+      const keepTok = user.sessionToken || row.session_token;
+      const updated = buildSessionUserFromRow(row, {
+        sessionToken: keepTok,
+        deviceId: user.deviceId
+      });
       req.session.user = updated;
       res.json({ success: true, user: updated });
     } catch {
@@ -736,6 +809,7 @@ var init_auth_routes = __esm({
     "use strict";
     init_password_utils();
     init_native_device_binding();
+    init_user_sessions();
   }
 });
 
@@ -3494,6 +3568,7 @@ function registerAdminUsersAndContentRoutes({
     try {
       const { blocked } = req.body;
       if (blocked) {
+        await db2.query("DELETE FROM user_sessions WHERE user_id = $1", [req.params.id]);
         await db2.query("UPDATE users SET is_blocked = TRUE, session_token = NULL WHERE id = $1", [req.params.id]);
         const userId = req.params.id;
         await deleteDownloadsForUser2(parseInt(Array.isArray(userId) ? userId[0] : userId));
@@ -7046,7 +7121,8 @@ var init_schema_readiness_contract = __esm({
       "folder_purchases",
       "test_purchases",
       "site_settings",
-      "question_reports"
+      "question_reports",
+      "user_sessions"
     ];
     REQUIRED_COLUMNS = {
       users: ["session_token", "app_bound_device_id", "profile_complete", "is_blocked", "last_active_at"],

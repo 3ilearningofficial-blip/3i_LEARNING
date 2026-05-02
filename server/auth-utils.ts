@@ -1,4 +1,5 @@
 import type { Request } from "express";
+import { resolveUserBySessionToken, userHasSessionToken } from "./user-sessions";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -14,23 +15,21 @@ export type AuthUser = {
   profileComplete?: boolean;
 };
 
-function rowsToAuthUser(u: Record<string, any>): AuthUser {
+function rowsToAuthUser(u: Record<string, any>, sessionTokenOverride?: string | null): AuthUser {
   return {
     id: u.id,
     name: u.name,
     email: u.email,
     phone: u.phone,
     role: u.role,
-    sessionToken: u.session_token,
+    sessionToken: (sessionTokenOverride ?? u.session_token) as string | undefined,
     profileComplete: !!u.profile_complete || false,
   };
 }
 
 /**
- * Loads the authenticated user. Single-session (“one device”) is enforced here:
- * a new login rotates `users.session_token`, so stale cookies or old Bearer tokens
- * must fail after another device logs in. Previous bug: trusting `req.session.user`
- * without querying the DB allowed cookie-only clients to bypass invalidation.
+ * Loads the authenticated user. Students use a single rotated `users.session_token`.
+ * Admins may have additional rows in `user_sessions` so multiple devices stay signed in.
  */
 export async function getAuthUserFromRequest(req: Request, db: DbClient): Promise<AuthUser | null> {
   const authHeader = req.headers.authorization;
@@ -38,24 +37,21 @@ export async function getAuthUserFromRequest(req: Request, db: DbClient): Promis
   const bearerToken =
     bearerRaw && bearerRaw !== "null" && bearerRaw !== "undefined" ? bearerRaw : "";
 
-  // 1) Bearer present: DB is authoritative (invalid / rotated token => no user).
+  // 1) Bearer present: resolve primary session_token or admin user_sessions row.
   if (bearerToken) {
     const token = bearerToken;
     try {
-      const result = await db.query(
-        "SELECT id, name, email, phone, role, session_token, profile_complete, is_blocked FROM users WHERE session_token = $1",
-        [token]
-      );
-      if (result.rows.length === 0) {
+      const resolved = await resolveUserBySessionToken(db, token);
+      if (!resolved) {
         (req.session as any).user = null;
         return null;
       }
-      const u = result.rows[0];
+      const u = resolved.row as Record<string, unknown>;
       if (u.is_blocked) {
         (req.session as any).user = null;
         return null;
       }
-      const authUser = rowsToAuthUser(u);
+      const authUser = rowsToAuthUser(u, token);
       (req.session as any).user = authUser;
       return authUser;
     } catch (e) {
@@ -64,7 +60,8 @@ export async function getAuthUserFromRequest(req: Request, db: DbClient): Promis
     }
   }
 
-  // 2) Cookie session only: must match current DB session_token (same as GET /api/auth/me).
+  // 2) Cookie session only: must match current session (students: users.session_token;
+  // admins: that token or any user_sessions token for this user).
   const sessionUser = (req.session as any).user as { id?: number; sessionToken?: string | null } | undefined;
   if (!sessionUser?.id) return null;
 
@@ -82,17 +79,17 @@ export async function getAuthUserFromRequest(req: Request, db: DbClient): Promis
       (req.session as any).user = null;
       return null;
     }
-    if (sessionUser.sessionToken && row.session_token !== sessionUser.sessionToken) {
+    const cookieTok = sessionUser.sessionToken;
+    if (cookieTok && !(await userHasSessionToken(db, sessionUser.id, cookieTok))) {
       (req.session as any).user = null;
       return null;
     }
-    // DB has a session but cookie has no token (legacy / tampered) — do not trust.
     if (row.session_token && !sessionUser.sessionToken) {
       (req.session as any).user = null;
       return null;
     }
 
-    const authUser = rowsToAuthUser(row);
+    const authUser = rowsToAuthUser(row, cookieTok || row.session_token);
     (req.session as any).user = authUser;
     return authUser;
   } catch (e) {

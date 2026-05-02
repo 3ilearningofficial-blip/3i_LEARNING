@@ -69,7 +69,7 @@ export default function EmailLoginScreen() {
   };
 
   return (
-    <LinearGradient colors={["#0A1628", "#1A2E50", "#0A1628"]} style={styles.container}>
+    <View style={styles.container}>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
         <ScrollView
           contentContainerStyle={[
@@ -79,11 +79,11 @@ export default function EmailLoginScreen() {
           keyboardShouldPersistTaps="handled"
         >
           <Pressable style={styles.backBtn} onPress={() => router.back()}>
-            <Ionicons name="arrow-back" size={22} color="#fff" />
+            <Ionicons name="arrow-back" size={22} color={Colors.light.text} />
           </Pressable>
 
           <View style={styles.iconWrap}>
-            <Ionicons name="mail" size={36} color="#fff" />
+            <Ionicons name="mail" size={36} color={Colors.light.primary} />
           </View>
           <Text style={styles.title}>Welcome Back</Text>
           <Text style={styles.subtitle}>Sign in with your phone/email and password</Text>
@@ -164,22 +164,22 @@ export default function EmailLoginScreen() {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
-    </LinearGradient>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
+  container: { flex: 1, backgroundColor: Colors.light.background },
   scroll: { paddingHorizontal: 24, gap: 20 },
   backBtn: { alignSelf: "flex-start", marginBottom: 8 },
   iconWrap: {
     width: 72, height: 72, borderRadius: 22,
-    backgroundColor: "rgba(255,255,255,0.15)",
+    backgroundColor: Colors.light.secondary,
     alignItems: "center", justifyContent: "center",
     alignSelf: "center",
   },
-  title: { fontSize: 28, fontFamily: "Inter_700Bold", color: "#fff", textAlign: "center" },
-  subtitle: { fontSize: 14, color: "rgba(255,255,255,0.6)", textAlign: "center", fontFamily: "Inter_400Regular" },
+  title: { fontSize: 28, fontFamily: "Inter_700Bold", color: Colors.light.text, textAlign: "center" },
+  subtitle: { fontSize: 14, color: Colors.light.textMuted, textAlign: "center", fontFamily: "Inter_400Regular" },
   card: {
     backgroundColor: "#fff", borderRadius: 24, padding: 24, gap: 16,
     shadowColor: "#000", shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.2, shadowRadius: 20, elevation: 10,

@@ -157,15 +157,15 @@ export default function OTPScreen() {
   const smsWasSent = smsSent === "1";
 
   return (
-    <LinearGradient colors={["#0A1628", "#1A2E50", "#0A1628"]} style={styles.container}>
+    <View style={styles.container}>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
         <View style={[styles.content, { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 20 }]}>
           <Pressable style={styles.backBtn} onPress={() => router.back()}>
-            <Ionicons name="arrow-back" size={24} color="#fff" />
+            <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
           </Pressable>
 
           <View style={styles.iconContainer}>
-            <Ionicons name="lock-closed" size={36} color="#fff" />
+            <Ionicons name="lock-closed" size={36} color={Colors.light.primary} />
           </View>
 
           <Text style={styles.title}>Verify OTP</Text>
@@ -241,22 +241,22 @@ export default function OTPScreen() {
           </View>
         </View>
       </KeyboardAvoidingView>
-    </LinearGradient>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
+  container: { flex: 1, backgroundColor: Colors.light.background },
   content: { flex: 1, paddingHorizontal: 24, alignItems: "center", gap: 20 },
   backBtn: { alignSelf: "flex-start" },
   iconContainer: {
     width: 72, height: 72, borderRadius: 22,
-    backgroundColor: "rgba(255,255,255,0.15)",
+    backgroundColor: Colors.light.secondary,
     alignItems: "center", justifyContent: "center",
-    borderWidth: 1, borderColor: "rgba(255,255,255,0.2)",
+    borderWidth: 1, borderColor: Colors.light.border,
   },
-  title: { fontSize: 28, fontFamily: "Inter_700Bold", color: "#fff" },
-  subtitle: { fontSize: 15, color: "rgba(255,255,255,0.65)", textAlign: "center", fontFamily: "Inter_400Regular", lineHeight: 22 },
+  title: { fontSize: 28, fontFamily: "Inter_700Bold", color: Colors.light.text },
+  subtitle: { fontSize: 15, color: Colors.light.textMuted, textAlign: "center", fontFamily: "Inter_400Regular", lineHeight: 22 },
   smsWarning: {
     flexDirection: "row", alignItems: "center", gap: 8,
     backgroundColor: "rgba(245,158,11,0.15)", paddingHorizontal: 16, paddingVertical: 10, borderRadius: 10,
@@ -265,17 +265,17 @@ const styles = StyleSheet.create({
   otpContainer: { flexDirection: "row", gap: 10, marginVertical: 8 },
   otpInput: {
     width: 48, height: 56, borderRadius: 14,
-    backgroundColor: "rgba(255,255,255,0.12)",
-    borderWidth: 1.5, borderColor: "rgba(255,255,255,0.2)",
-    textAlign: "center", fontSize: 22, fontFamily: "Inter_700Bold", color: "#fff",
+    backgroundColor: Colors.light.card,
+    borderWidth: 1.5, borderColor: Colors.light.border,
+    textAlign: "center", fontSize: 22, fontFamily: "Inter_700Bold", color: Colors.light.text,
   },
-  otpInputFilled: { borderColor: Colors.light.primary, backgroundColor: "rgba(26,86,219,0.2)" },
+  otpInputFilled: { borderColor: Colors.light.primary, backgroundColor: Colors.light.secondary },
   verifyBtn: { width: "100%", borderRadius: 14, overflow: "hidden" },
   verifyBtnGradient: { flexDirection: "row", alignItems: "center", justifyContent: "center", paddingVertical: 16, gap: 8 },
   verifyBtnText: { fontSize: 16, fontFamily: "Inter_600SemiBold", color: "#fff" },
   resendContainer: { alignItems: "center" },
   resendText: { color: Colors.light.accent, fontSize: 14, fontFamily: "Inter_600SemiBold" },
-  countdownText: { color: "rgba(255,255,255,0.5)", fontSize: 14, fontFamily: "Inter_400Regular" },
+  countdownText: { color: Colors.light.textMuted, fontSize: 14, fontFamily: "Inter_400Regular" },
   devOtpBox: {
     flexDirection: "row", alignItems: "center", gap: 8,
     backgroundColor: "rgba(34,197,94,0.15)", paddingHorizontal: 16, paddingVertical: 10,
