@@ -27,6 +27,7 @@ export const REQUIRED_TABLES = [
   "site_settings",
   "question_reports",
   "user_sessions",
+  "live_class_recording_progress",
 ] as const;
 
 export const REQUIRED_COLUMNS: Record<string, string[]> = {
@@ -50,5 +51,6 @@ export const REQUIRED_COLUMNS: Record<string, string[]> = {
   study_materials: ["download_allowed", "section_title"],
   tests: ["difficulty", "scheduled_at", "price", "mini_course_id"],
   questions: ["image_url", "solution_image_url"],
+  lecture_progress: ["playback_sessions", "last_session_ping_at"],
   standalone_folders: ["category", "price", "original_price", "is_free", "description", "validity_months"],
 };

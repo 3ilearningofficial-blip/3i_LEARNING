@@ -70,6 +70,8 @@ export const lectureProgress = pgTable("lecture_progress", {
   isCompleted: boolean("is_completed").default(false),
   watchPercent: integer("watch_percent").default(0),
   completedAt: bigint("completed_at", { mode: "number" }),
+  playbackSessions: integer("playback_sessions").default(0),
+  lastSessionPingAt: bigint("last_session_ping_at", { mode: "number" }),
 });
 
 export const studyMaterials = pgTable("study_materials", {

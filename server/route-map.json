@@ -66,6 +66,11 @@
     },
     {
         "method":  "GET",
+        "path":  "/api/admin/courses/:courseId/enrollments/:userId/detail",
+        "file":  "admin-analytics-routes.ts"
+    },
+    {
+        "method":  "GET",
         "path":  "/api/admin/courses/:id/folders",
         "file":  "admin-course-management-routes.ts"
     },
@@ -495,6 +500,11 @@
         "file":  "lecture-routes.ts"
     },
     {
+        "method":  "POST",
+        "path":  "/api/lectures/:id/progress/session",
+        "file":  "lecture-routes.ts"
+    },
+    {
         "method":  "GET",
         "path":  "/api/live-classes",
         "file":  "live-class-routes.ts"
@@ -532,6 +542,11 @@
     {
         "method":  "POST",
         "path":  "/api/live-classes/:id/viewers/heartbeat",
+        "file":  "live-class-engagement-routes.ts"
+    },
+    {
+        "method":  "POST",
+        "path":  "/api/live-classes/:id/recording-progress",
         "file":  "live-class-engagement-routes.ts"
     },
     {

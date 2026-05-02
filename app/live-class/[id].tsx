@@ -583,6 +583,16 @@ export default function LiveClassScreen() {
   useEffect(() => {
     didAutoplayDirectRecording.current = false;
   }, [authenticatedVideoUrl]);
+
+  /** Count recording replay visits for admin dashboards (debounced on server ~8 min). */
+  useEffect(() => {
+    if (!id || !isScreenActive || !liveClassData?.is_completed || !recordingUrl.trim()) return;
+    const tid = setTimeout(() => {
+      apiRequest("POST", `/api/live-classes/${id}/recording-progress`, { openSession: true }).catch(() => {});
+    }, 3200);
+    return () => clearTimeout(tid);
+  }, [id, isScreenActive, liveClassData?.is_completed, recordingUrl]);
+
   const videoId = getYouTubeVideoId(videoUrl);
   const isStreamId = !videoId && isCloudflareStreamId(videoUrl);
   // Cloudflare HLS live stream or recording (m3u8 URL)

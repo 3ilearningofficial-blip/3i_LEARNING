@@ -463,6 +463,15 @@ export default function LectureScreen() {
     enabled: !!id,
   });
 
+  // Debounced "opened player" for admin replay stats (~8 min server-side debounce between bumps).
+  useEffect(() => {
+    if (!id || !lectureData) return;
+    const tid = setTimeout(() => {
+      apiRequest("POST", `/api/lectures/${id}/progress/session`, {}).catch(() => {});
+    }, 2800);
+    return () => clearTimeout(tid);
+  }, [id, lectureData?.course_id]);
+
   useEffect(() => {
     const cid = lectureData?.course_id || (courseId ? Number(courseId) : null);
     if (!cid || !Number.isFinite(cid)) return;

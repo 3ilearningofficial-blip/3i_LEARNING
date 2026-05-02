@@ -174,6 +174,7 @@ function RootLayoutNav() {
       <Stack.Screen name="live-class/[id]" options={{ headerShown: false }} />
       <Stack.Screen name="admin/index" options={{ headerShown: false }} />
       <Stack.Screen name="admin/course/[id]" options={{ headerShown: false }} />
+      <Stack.Screen name="admin/course/[id]/student/[userId]" options={{ headerShown: false }} />
     </Stack>
   );
 }

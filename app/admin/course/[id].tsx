@@ -1173,30 +1173,36 @@ export default function AdminCourseScreen() {
               </View>
             )}
             {enrolledStudents.map((student) => (
-              <Pressable key={student.id} style={styles.itemCard} onPress={() => setStudentActionSheet(student)}>
-                <View style={styles.itemRow}>
-                  <View style={[styles.itemIcon, { backgroundColor: "#EEF2FF" }]}>
-                    <Ionicons name="person" size={16} color={Colors.light.primary} />
-                  </View>
-                  <View style={styles.itemInfo}>
-                    <Text style={styles.itemTitle}>{student.name || "Unknown"}</Text>
-                    <Text style={styles.itemMeta}>{student.email || student.phone || ""}</Text>
-                    <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 2 }}>
-                      <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: (student as any).status === "inactive" ? "#EF4444" : "#22C55E" }} />
-                      <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: (student as any).status === "inactive" ? "#EF4444" : "#22C55E" }}>
-                        {(student as any).status === "inactive" ? "Inactive" : "Active"}
-                      </Text>
+              <View key={student.id} style={[styles.itemCard, { flexDirection: "row", alignItems: "stretch" }]}>
+                <Pressable
+                  style={{ flex: 1 }}
+                  onPress={() => router.push({ pathname: "/admin/course/[id]/student/[userId]", params: { id: String(id), userId: String(student.user_id) } } as any)}
+                >
+                  <View style={styles.itemRow}>
+                    <View style={[styles.itemIcon, { backgroundColor: "#EEF2FF" }]}>
+                      <Ionicons name="person" size={16} color={Colors.light.primary} />
+                    </View>
+                    <View style={styles.itemInfo}>
+                      <Text style={styles.itemTitle}>{student.name || "Unknown"}</Text>
+                      <Text style={styles.itemMeta}>{student.email || student.phone || ""}</Text>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 2 }}>
+                        <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: (student as any).status === "inactive" ? "#EF4444" : "#22C55E" }} />
+                        <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: (student as any).status === "inactive" ? "#EF4444" : "#22C55E" }}>
+                          {(student as any).status === "inactive" ? "Inactive" : "Active"}
+                        </Text>
+                      </View>
+                      <Text style={{ fontSize: 11, color: Colors.light.primary, fontFamily: "Inter_500Medium", marginTop: 4 }}>View lecture and test progress →</Text>
+                    </View>
+                    <View style={{ alignItems: "flex-end", gap: 4 }}>
+                      <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>{student.progress_percent || 0}%</Text>
+                      <Text style={{ fontSize: 10, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>Progress</Text>
                     </View>
                   </View>
-                  <View style={{ alignItems: "flex-end", gap: 4 }}>
-                    <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>{student.progress_percent || 0}%</Text>
-                    <Text style={{ fontSize: 10, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>Progress</Text>
-                  </View>
-                  <Pressable style={{ padding: 8 }} onPress={() => setStudentActionSheet(student)}>
-                    <Ionicons name="ellipsis-vertical" size={18} color={Colors.light.textMuted} />
-                  </Pressable>
-                </View>
-              </Pressable>
+                </Pressable>
+                <Pressable style={{ padding: 8, alignSelf: "center" }} onPress={() => setStudentActionSheet(student)}>
+                  <Ionicons name="ellipsis-vertical" size={18} color={Colors.light.textMuted} />
+                </Pressable>
+              </View>
             ))}
           </View>
         )}

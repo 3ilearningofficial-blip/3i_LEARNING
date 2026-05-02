@@ -215,5 +215,76 @@ export function registerAdminAnalyticsRoutes({
       res.status(500).json({ message: "Failed to fetch enrollments" });
     }
   });
+
+  /** Lecture + live + test breakdown for one enrolled student (admin). */
+  app.get("/api/admin/courses/:courseId/enrollments/:userId/detail", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const courseId = parseInt(String(req.params.courseId), 10);
+      const userId = parseInt(String(req.params.userId), 10);
+      if (!Number.isFinite(courseId) || !Number.isFinite(userId)) {
+        return res.status(400).json({ message: "Invalid course or user id" });
+      }
+      const enr = await db.query(
+        "SELECT e.id, u.id AS user_id, u.name AS user_name, u.email AS user_email, u.phone AS user_phone, e.progress_percent, e.enrolled_at, COALESCE(e.status, 'active') AS status FROM enrollments e JOIN users u ON u.id = e.user_id WHERE e.course_id = $1 AND e.user_id = $2",
+        [courseId, userId]
+      );
+      if (enr.rows.length === 0) return res.status(404).json({ message: "Enrollment not found" });
+      const student = enr.rows[0];
+
+      const lectures = await db.query(
+        `SELECT l.id AS lecture_id, l.title, l.order_index, l.section_title,
+                COALESCE(lp.watch_percent, 0) AS watch_percent,
+                COALESCE(lp.is_completed, false) AS is_completed,
+                COALESCE(lp.playback_sessions, 0) AS playback_sessions
+         FROM lectures l
+         LEFT JOIN lecture_progress lp ON lp.lecture_id = l.id AND lp.user_id = $2
+         WHERE l.course_id = $1
+         ORDER BY l.order_index ASC NULLS LAST, l.id ASC`,
+        [courseId, userId]
+      );
+
+      const liveClasses = await db.query(
+        `SELECT lc.id AS live_class_id, lc.title, lc.scheduled_at, lc.is_completed, lc.is_live,
+                (CASE WHEN v.user_id IS NOT NULL THEN true ELSE false END) AS present_during_live,
+                COALESCE(rp.watch_percent, 0) AS recording_watch_percent,
+                COALESCE(rp.playback_sessions, 0) AS recording_playback_sessions,
+                (CASE WHEN lc.recording_url IS NOT NULL AND LENGTH(BTRIM(COALESCE(lc.recording_url, ''))) > 0 THEN true ELSE false END) AS has_recording
+         FROM live_classes lc
+         LEFT JOIN live_class_viewers v ON v.live_class_id = lc.id AND v.user_id = $2
+         LEFT JOIN live_class_recording_progress rp ON rp.live_class_id = lc.id AND rp.user_id = $2
+         WHERE lc.course_id = $1
+         ORDER BY lc.scheduled_at DESC NULLS LAST, lc.id DESC`,
+        [courseId, userId]
+      );
+
+      const tests = await db.query(
+        `SELECT t.id AS test_id, t.title, t.total_questions,
+                ta.id AS attempt_id, ta.status AS attempt_status,
+                ta.correct, ta.incorrect, ta.attempted,
+                ta.completed_at, ta.score, ta.total_marks
+         FROM tests t
+         LEFT JOIN LATERAL (
+           SELECT ta2.id, ta2.status, ta2.correct, ta2.incorrect, ta2.attempted, ta2.completed_at, ta2.score, ta2.total_marks
+           FROM test_attempts ta2
+           WHERE ta2.test_id = t.id AND ta2.user_id = $2
+           ORDER BY CASE WHEN ta2.status = 'completed' THEN 0 ELSE 1 END, ta2.completed_at DESC NULLS LAST, ta2.id DESC
+           LIMIT 1
+         ) ta ON true
+         WHERE t.course_id = $1 AND COALESCE(t.is_published, true) = true
+         ORDER BY t.folder_name NULLS LAST, t.id ASC`,
+        [courseId, userId]
+      );
+
+      res.json({
+        student,
+        lectures: lectures.rows,
+        liveClasses: liveClasses.rows,
+        tests: tests.rows,
+      });
+    } catch (err) {
+      console.error("Enrollment detail error:", err);
+      res.status(500).json({ message: "Failed to fetch student progress" });
+    }
+  });
 }
 

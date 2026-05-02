@@ -18,6 +18,72 @@ export function registerLiveClassEngagementRoutes({
   requireAuth,
   requireAdmin,
 }: RegisterLiveClassEngagementRoutesDeps): void {
+  /** Recording replay progress (after class is completed): debounced session count + optional watch %. */
+  app.post("/api/live-classes/:id/recording-progress", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user;
+      const lcResult = await db.query(
+        "SELECT id, course_id, is_free_preview, is_completed, recording_url FROM live_classes WHERE id = $1",
+        [req.params.id]
+      );
+      if (lcResult.rows.length === 0) return res.status(404).json({ message: "Live class not found" });
+      const lc = lcResult.rows[0];
+      if (!(await userCanAccessLiveClassContent(db, user, lc))) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      if (!lc.is_completed || !String(lc.recording_url || "").trim()) {
+        return res.status(400).json({ message: "Recording not available for this class" });
+      }
+      const body = req.body || {};
+      const openSession = Boolean(body.openSession);
+      const watchPercentRaw = body.watchPercent != null ? Number(body.watchPercent) : null;
+      const now = Date.now();
+      const debounceMs = 8 * 60 * 1000;
+
+      if (watchPercentRaw != null && Number.isFinite(watchPercentRaw)) {
+        const wp = Math.max(0, Math.min(100, Math.round(watchPercentRaw)));
+        await db.query(
+          `INSERT INTO live_class_recording_progress (user_id, live_class_id, watch_percent, playback_sessions, last_session_ping_at, updated_at)
+           VALUES ($1, $2, $3, 0, NULL, $4)
+           ON CONFLICT (user_id, live_class_id) DO UPDATE SET
+             watch_percent = GREATEST(live_class_recording_progress.watch_percent, EXCLUDED.watch_percent),
+             updated_at = EXCLUDED.updated_at`,
+          [user.id, req.params.id, wp, now]
+        );
+      }
+
+      if (openSession) {
+        const prev = await db.query(
+          "SELECT playback_sessions, last_session_ping_at FROM live_class_recording_progress WHERE user_id = $1 AND live_class_id = $2",
+          [user.id, req.params.id]
+        );
+        const row = prev.rows[0];
+        const canBump = !row?.last_session_ping_at || now - Number(row.last_session_ping_at) >= debounceMs;
+        if (!row) {
+          await db.query(
+            `INSERT INTO live_class_recording_progress (user_id, live_class_id, watch_percent, playback_sessions, last_session_ping_at, updated_at)
+             VALUES ($1, $2, 0, 1, $3, $3)`,
+            [user.id, req.params.id, now]
+          );
+        } else if (canBump) {
+          await db.query(
+            `UPDATE live_class_recording_progress SET
+               playback_sessions = COALESCE(playback_sessions, 0) + 1,
+               last_session_ping_at = $3,
+               updated_at = $3
+             WHERE user_id = $1 AND live_class_id = $2`,
+            [user.id, req.params.id, now]
+          );
+        }
+      }
+
+      res.json({ success: true });
+    } catch (err) {
+      console.error("Recording progress error:", err);
+      res.status(500).json({ message: "Failed to save recording progress" });
+    }
+  });
+
   app.post("/api/live-classes/:id/viewers/heartbeat", requireAuth, async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;

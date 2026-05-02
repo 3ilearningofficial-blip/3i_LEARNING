@@ -58,12 +58,55 @@ export function registerLectureRoutes({
   app.get("/api/lectures/:id/progress", async (req: Request, res: Response) => {
     try {
       const user = await getAuthUser(req);
-      if (!user) return res.json({ is_completed: false });
-      const result = await db.query("SELECT is_completed, watch_percent FROM lecture_progress WHERE user_id = $1 AND lecture_id = $2", [user.id, req.params.id]);
-      if (result.rows.length === 0) return res.json({ is_completed: false, watch_percent: 0 });
+      if (!user) return res.json({ is_completed: false, watch_percent: 0, playback_sessions: 0 });
+      const result = await db.query(
+        "SELECT is_completed, watch_percent, COALESCE(playback_sessions, 0) AS playback_sessions FROM lecture_progress WHERE user_id = $1 AND lecture_id = $2",
+        [user.id, req.params.id]
+      );
+      if (result.rows.length === 0) return res.json({ is_completed: false, watch_percent: 0, playback_sessions: 0 });
       res.json(result.rows[0]);
     } catch {
-      res.json({ is_completed: false });
+      res.json({ is_completed: false, watch_percent: 0, playback_sessions: 0 });
+    }
+  });
+
+  /** Debounced "opened player" — does not change watch % or completion. */
+  app.post("/api/lectures/:id/progress/session", async (req: Request, res: Response) => {
+    try {
+      const user = await getAuthUser(req);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+      const lectureId = String(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id);
+      const access = await canAccessLecture(user, lectureId);
+      if (!access.lecture) return res.status(404).json({ message: "Lecture not found" });
+      if (!access.allowed) return res.status(403).json({ message: "Access denied for this lecture" });
+
+      const debounceMs = 8 * 60 * 1000;
+      const now = Date.now();
+      const prev = await db.query(
+        "SELECT last_session_ping_at FROM lecture_progress WHERE user_id = $1 AND lecture_id = $2",
+        [user.id, lectureId]
+      );
+      const row = prev.rows[0];
+      const canBump = !row?.last_session_ping_at || now - Number(row.last_session_ping_at) >= debounceMs;
+
+      if (!row) {
+        await db.query(
+          `INSERT INTO lecture_progress (user_id, lecture_id, watch_percent, is_completed, playback_sessions, last_session_ping_at, completed_at)
+           VALUES ($1, $2, 0, false, 1, $3, NULL)`,
+          [user.id, lectureId, now]
+        );
+      } else if (canBump) {
+        await db.query(
+          `UPDATE lecture_progress SET
+             playback_sessions = COALESCE(playback_sessions, 0) + 1,
+             last_session_ping_at = $3
+           WHERE user_id = $1 AND lecture_id = $2`,
+          [user.id, lectureId, now]
+        );
+      }
+      res.json({ success: true, bumped: canBump || !row });
+    } catch {
+      res.status(500).json({ message: "Failed to record session" });
     }
   });
 
