@@ -25,6 +25,9 @@ const DEFAULT_MY_COURSE_ITEMS = [
   { title: "Test Series", desc: "OMR-style tests with analytics, negative marking, and performance tracking." },
 ];
 
+const DEFAULT_ABOUT_BODY =
+  "3i Learning offers expert-led mathematics coaching for defence entrance exams — with structured video courses, live classes, OMR-style tests, daily missions, and AI tutoring.";
+
 type MyCourseItem = { title: string; desc: string };
 type ExtraSection = { title?: string; body?: string; imageUrl?: string };
 type FeatureItem = { icon: string; color: string; title: string; desc: string };
@@ -84,7 +87,7 @@ export default function WelcomeScreen() {
   const logoUrl = s("welcome_logo_url", "").trim();
 
   const aboutTitle = s("welcome_about_title", "About");
-  const aboutBody = s("welcome_about_body", "");
+  const aboutBody = s("welcome_about_body", DEFAULT_ABOUT_BODY).trim();
   const aboutImage = s("welcome_about_image_url", "").trim();
 
   const myCourseTitle = s("welcome_my_course_title", "My Courses");
@@ -125,7 +128,8 @@ export default function WelcomeScreen() {
     else router.push("/(auth)/email-login" as any);
   };
 
-  const showAbout = on("welcome_show_about") && (!!aboutBody.trim() || !!aboutImage);
+  const showAbout =
+    on("welcome_show_about") && (!!aboutTitle.trim() || !!aboutBody || !!aboutImage);
   const showMyCourse = on("welcome_show_my_course");
   const showSub = on("welcome_show_subheadline");
 
@@ -145,12 +149,12 @@ export default function WelcomeScreen() {
   );
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, isWeb && styles.containerWeb]}>
       <ScrollView
+        style={isWeb ? styles.scrollViewWeb : undefined}
         contentContainerStyle={[
           styles.scroll,
           { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 32 },
-          isWeb && styles.scrollWeb,
         ]}
         showsVerticalScrollIndicator={false}
       >
@@ -193,7 +197,7 @@ export default function WelcomeScreen() {
         {showAbout && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>{aboutTitle}</Text>
-            {!!aboutBody.trim() && <Text style={styles.sectionBody}>{aboutBody}</Text>}
+            {!!aboutBody && <Text style={styles.sectionBody}>{aboutBody}</Text>}
             {!!aboutImage && (
               <Image source={{ uri: aboutImage }} style={styles.sectionImage} resizeMode="cover" />
             )}
@@ -310,8 +314,9 @@ export default function WelcomeScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.light.background },
-  scroll: { paddingHorizontal: 20, gap: 20 },
-  scrollWeb: { maxWidth: 960, width: "100%", alignSelf: "center" },
+  containerWeb: { width: "100%", maxWidth: "100%", alignSelf: "stretch" },
+  scrollViewWeb: { width: "100%", flex: 1 },
+  scroll: { paddingHorizontal: 20, gap: 20, width: "100%", alignSelf: "stretch" },
   heroCenter: { alignItems: "center", gap: 14 },
   heroRowWeb: {
     flexDirection: "row",
@@ -353,11 +358,11 @@ const styles = StyleSheet.create({
     color: Colors.light.textMuted,
     textAlign: "center",
     lineHeight: 22,
-    maxWidth: 520,
-    alignSelf: "center",
+    width: "100%",
+    alignSelf: "stretch",
   },
   ctaRow: { flexDirection: "column", gap: 12, width: "100%" },
-  ctaRowWeb: { flexDirection: "row", gap: 12, maxWidth: 520, alignSelf: "flex-start" },
+  ctaRowWeb: { flexDirection: "row", gap: 12, width: "100%", alignSelf: "stretch" },
   loginBtn: { flex: 1, borderRadius: 14, overflow: "hidden", minWidth: 140 },
   loginGradient: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, paddingVertical: 16 },
   loginText: { fontSize: 16, fontFamily: "Inter_700Bold", color: "#fff" },
