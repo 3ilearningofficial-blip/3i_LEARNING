@@ -25,8 +25,15 @@ const DEFAULT_MY_COURSE_ITEMS = [
   { title: "Test Series", desc: "OMR-style tests with analytics, negative marking, and performance tracking." },
 ];
 
+/** Fit one screen on phones; admins can paste longer copy (narrow viewports ellipsis after ~6 lines). */
 const DEFAULT_ABOUT_BODY =
-  "3i Learning offers expert-led mathematics coaching for defence entrance exams — with structured video courses, live classes, OMR-style tests, daily missions, and AI tutoring.";
+  "Math coaching for NDA, CDS & AFCAT: video lessons, live classes, OMR mocks, missions, and AI help — structured to finish the syllabus without overwhelm.";
+
+const DEFAULT_VISION_BODY =
+  "We want every learner to study with clarity and confidence — fair access, disciplined practice, and teaching that respects your time.";
+
+const DEFAULT_PANKAJ_BODY =
+  "Pankaj Sir leads mathematics sessions with a focus on fundamentals, exam patterns, and consistent practice — mentoring students for NDA, CDS, AFCAT, and related entrances.";
 
 type MyCourseItem = { title: string; desc: string };
 type ExtraSection = { title?: string; body?: string; imageUrl?: string };
@@ -70,12 +77,19 @@ export default function WelcomeScreen() {
     queryKey: ["/api/site-settings"],
     queryFn: async () => {
       try {
-        const res = await authFetch(new URL("/api/site-settings", getApiUrl()).toString());
+        const url = new URL("/api/site-settings", getApiUrl()).toString();
+        const res = await authFetch(
+          url,
+          Platform.OS === "web" ? ({ cache: "no-store" } as RequestInit) : undefined
+        );
         if (res.ok) return res.json();
       } catch { /* public */ }
       return {};
     },
-    staleTime: 60000,
+    staleTime: 0,
+    gcTime: 1000 * 60 * 5,
+    refetchOnMount: true,
+    refetchOnWindowFocus: true,
   });
 
   const s = (key: string, fallback: string) => (cfg[key] != null && cfg[key] !== "" ? cfg[key] : fallback);
@@ -89,6 +103,14 @@ export default function WelcomeScreen() {
   const aboutTitle = s("welcome_about_title", "About");
   const aboutBody = s("welcome_about_body", DEFAULT_ABOUT_BODY).trim();
   const aboutImage = s("welcome_about_image_url", "").trim();
+
+  const visionTitle = s("welcome_vision_title", "Our Vision");
+  const visionBody = s("welcome_vision_body", DEFAULT_VISION_BODY).trim();
+  const visionImage = s("welcome_vision_image_url", "").trim();
+
+  const pankajTitle = s("welcome_pankaj_title", "About Pankaj Sir");
+  const pankajBody = s("welcome_pankaj_body", DEFAULT_PANKAJ_BODY).trim();
+  const pankajPhotoUrl = s("welcome_pankaj_photo_url", "").trim();
 
   const myCourseTitle = s("welcome_my_course_title", "My Courses");
   const myCourseIntro = s("welcome_my_course_intro", "");
@@ -130,11 +152,17 @@ export default function WelcomeScreen() {
 
   const showAbout =
     on("welcome_show_about") && (!!aboutTitle.trim() || !!aboutBody || !!aboutImage);
+  const showVision =
+    on("welcome_show_vision") && (!!visionTitle.trim() || !!visionBody || !!visionImage);
+  const showPankaj =
+    on("welcome_show_pankaj_sir") && (!!pankajTitle.trim() || !!pankajBody || !!pankajPhotoUrl);
   const showMyCourse = on("welcome_show_my_course");
   const showSub = on("welcome_show_subheadline");
 
   const webHero = isWeb && isWide;
   const isPhoneWeb = isWeb && !isWide;
+  /** Narrow viewports: cap About / Vision lines so phones are not overwhelmed. */
+  const isCompactText = width < 640;
 
   const logoImageEl = logoUrl ? (
     <Image source={{ uri: logoUrl }} style={styles.logoImg} resizeMode="cover" />
@@ -222,13 +250,69 @@ export default function WelcomeScreen() {
           <Text style={styles.subheadline}>{s("welcome_subheadline", "Courses, live classes, OMR tests, daily missions and AI tutoring — everything to ace your exams.")}</Text>
         ) : null}
 
+        {showPankaj && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>{pankajTitle}</Text>
+            <View style={[styles.pankajRow, !isWide && styles.pankajRowStacked]}>
+              {!!pankajPhotoUrl ? (
+                <Image
+                  source={{ uri: pankajPhotoUrl }}
+                  style={[styles.pankajPhoto, !isWide && styles.pankajPhotoMobile]}
+                  resizeMode="cover"
+                />
+              ) : (
+                <View style={[styles.pankajPhotoPlaceholder, !isWide && styles.pankajPhotoMobile]}>
+                  <Ionicons name="person" size={42} color={Colors.light.textMuted} />
+                </View>
+              )}
+              <View style={styles.pankajTextCol}>
+                {!!pankajBody && (
+                  <Text
+                    style={[styles.sectionBody, !isWide && styles.pankajBodyMobile]}
+                    numberOfLines={isCompactText ? 8 : undefined}
+                    ellipsizeMode={isCompactText ? "tail" : undefined}
+                  >
+                    {pankajBody}
+                  </Text>
+                )}
+              </View>
+            </View>
+          </View>
+        )}
+
         {/* About */}
         {showAbout && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>{aboutTitle}</Text>
-            {!!aboutBody && <Text style={styles.sectionBody}>{aboutBody}</Text>}
+            {!!aboutBody && (
+              <Text
+                style={styles.sectionBody}
+                numberOfLines={isCompactText ? 6 : undefined}
+                ellipsizeMode={isCompactText ? "tail" : undefined}
+              >
+                {aboutBody}
+              </Text>
+            )}
             {!!aboutImage && (
               <Image source={{ uri: aboutImage }} style={styles.sectionImage} resizeMode="cover" />
+            )}
+          </View>
+        )}
+
+        {showVision && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>{visionTitle}</Text>
+            {!!visionBody && (
+              <Text
+                style={styles.sectionBody}
+                numberOfLines={isCompactText ? 6 : undefined}
+                ellipsizeMode={isCompactText ? "tail" : undefined}
+              >
+                {visionBody}
+              </Text>
+            )}
+            {!!visionImage && (
+              <Image source={{ uri: visionImage }} style={styles.sectionImage} resizeMode="cover" />
             )}
           </View>
         )}
@@ -503,6 +587,39 @@ const styles = StyleSheet.create({
   sectionIntro: { fontSize: 14, color: Colors.light.textSecondary, lineHeight: 21 },
   sectionBody: { fontSize: 15, color: Colors.light.textSecondary, lineHeight: 24 },
   sectionImage: { width: "100%", height: 200, borderRadius: 12, backgroundColor: Colors.light.background },
+  pankajRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 16,
+    width: "100%",
+  },
+  pankajRowStacked: {
+    flexDirection: "column",
+    alignItems: "center",
+  },
+  pankajPhoto: {
+    width: 130,
+    height: 130,
+    borderRadius: 65,
+    borderWidth: 3,
+    borderColor: LOGO_BORDER,
+    backgroundColor: Colors.light.background,
+  },
+  pankajPhotoMobile: {
+    alignSelf: "center",
+  },
+  pankajPhotoPlaceholder: {
+    width: 130,
+    height: 130,
+    borderRadius: 65,
+    borderWidth: 2,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.secondary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  pankajTextCol: { flex: 1, minWidth: 0, width: "100%" },
+  pankajBodyMobile: { textAlign: "center" },
   courseGrid: { gap: 12, marginTop: 4 },
   courseCard: {
     padding: 16,

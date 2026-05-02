@@ -463,11 +463,21 @@ function WelcomeSettingsTab() {
     welcome_subheadline: "Courses, live classes, OMR tests, daily missions and AI tutoring — everything to ace your exams.",
     welcome_login_btn: "Login — It's Free",
     welcome_signup_btn: "Sign Up",
+    welcome_show_pankaj_sir: "true",
+    welcome_pankaj_title: "About Pankaj Sir",
+    welcome_pankaj_body:
+      "Pankaj Sir leads mathematics sessions with a focus on fundamentals, exam patterns, and consistent practice — mentoring students for NDA, CDS, AFCAT, and related entrances.",
+    welcome_pankaj_photo_url: "",
     welcome_show_about: "true",
     welcome_about_title: "About",
     welcome_about_body:
       "3i Learning offers expert-led mathematics coaching for defence entrance exams — with structured video courses, live classes, OMR-style tests, daily missions, and AI tutoring.",
     welcome_about_image_url: "",
+    welcome_show_vision: "true",
+    welcome_vision_title: "Our Vision",
+    welcome_vision_body:
+      "We want every learner to study with clarity and confidence — fair access, disciplined practice, and teaching that respects your time.",
+    welcome_vision_image_url: "",
     welcome_show_my_course: "true",
     welcome_my_course_title: "My Courses",
     welcome_my_course_intro: "",
@@ -652,6 +662,28 @@ function WelcomeSettingsTab() {
       </View>
 
       <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: "#E5E7EB" }}>
+        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>About Pankaj Sir (after Login / Sign up — and subheadline if shown)</Text>
+        {toggleRow("Show About Pankaj Sir block", "welcome_show_pankaj_sir")}
+        <View style={{ gap: 4 }}>
+          <Text style={labelStyle}>Section title</Text>
+          <TextInput style={inputStyle} value={val("welcome_pankaj_title")} onChangeText={v => set("welcome_pankaj_title", v)} />
+        </View>
+        <View style={{ gap: 4 }}>
+          <Text style={labelStyle}>Body</Text>
+          <TextInput
+            style={[inputStyle, { minHeight: 100, textAlignVertical: "top" }]}
+            multiline
+            value={val("welcome_pankaj_body")}
+            onChangeText={v => set("welcome_pankaj_body", v)}
+          />
+        </View>
+        {imageUrlRow("Pankaj Sir photo (shown in circular frame on welcome)", "welcome_pankaj_photo_url")}
+        <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", lineHeight: 17 }}>
+          Upload square or portrait photos for best fit. Until you add a photo, the welcome page shows a placeholder circle.
+        </Text>
+      </View>
+
+      <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: "#E5E7EB" }}>
         <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>About section</Text>
         {toggleRow("Show About block", "welcome_show_about")}
         <View style={{ gap: 4 }}>
@@ -663,6 +695,26 @@ function WelcomeSettingsTab() {
           <TextInput style={[inputStyle, { minHeight: 100, textAlignVertical: "top" }]} multiline value={val("welcome_about_body")} onChangeText={v => set("welcome_about_body", v)} />
         </View>
         {imageUrlRow("About image (optional)", "welcome_about_image_url")}
+        <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", lineHeight: 17 }}>
+          On narrow screens under 640px wide, About text shows about six lines with an ellipsis — keep a shorter intro here or paste the full story for laptop visitors.
+        </Text>
+      </View>
+
+      <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: "#E5E7EB" }}>
+        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Our Vision (after About)</Text>
+        {toggleRow("Show Our Vision block", "welcome_show_vision")}
+        <View style={{ gap: 4 }}>
+          <Text style={labelStyle}>Title</Text>
+          <TextInput style={inputStyle} value={val("welcome_vision_title")} onChangeText={v => set("welcome_vision_title", v)} />
+        </View>
+        <View style={{ gap: 4 }}>
+          <Text style={labelStyle}>Body</Text>
+          <TextInput style={[inputStyle, { minHeight: 100, textAlignVertical: "top" }]} multiline value={val("welcome_vision_body")} onChangeText={v => set("welcome_vision_body", v)} />
+        </View>
+        {imageUrlRow("Our Vision image (optional)", "welcome_vision_image_url")}
+        <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", lineHeight: 17 }}>
+          Same ellipsis rule as About on narrow screens (under 640px).
+        </Text>
       </View>
 
       <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: "#E5E7EB" }}>
