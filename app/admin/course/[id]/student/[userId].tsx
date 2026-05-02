@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import {
   View,
   Text,
@@ -7,7 +7,6 @@ import {
   Pressable,
   ActivityIndicator,
   Platform,
-  useWindowDimensions,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -60,11 +59,12 @@ type TestRow = {
   completed_at: number | null;
 };
 
+type ReportTab = "lecturesLive" | "tests";
+
 export default function AdminEnrollmentStudentDetailScreen() {
   const { id: courseId, userId } = useLocalSearchParams<{ id: string; userId: string }>();
   const insets = useSafeAreaInsets();
-  const { width } = useWindowDimensions();
-  const wide = width >= 840;
+  const [reportTab, setReportTab] = useState<ReportTab>("lecturesLive");
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["/api/admin/courses", courseId, "enrollment-detail", userId],
@@ -92,9 +92,8 @@ export default function AdminEnrollmentStudentDetailScreen() {
   const lives = data?.liveClasses ?? [];
   const tests = data?.tests ?? [];
 
-  const videoColumn = (
-    <ScrollView style={styles.columnScroll} contentContainerStyle={styles.columnContent} showsVerticalScrollIndicator={false}>
-      <Text style={styles.columnHeading}>Lectures & live</Text>
+  const lecturesLiveInner = (
+    <>
       <Text style={styles.sectionLabel}>Recorded lectures</Text>
       {lectures.length === 0 ? (
         <Text style={styles.emptyHint}>No lectures in this course.</Text>
@@ -116,7 +115,7 @@ export default function AdminEnrollmentStudentDetailScreen() {
               <Text style={styles.cardLine}>
                 Playback opens (debounced):{" "}
                 <Text style={styles.cardEm}>{Number(lec.playback_sessions) || 0}</Text>
-                {" "}— counts separate visits to the lecture player (~8&nbsp;min apart)
+                {" "}— counts separate visits to the lecture player (~8 min apart)
               </Text>
             </View>
           );
@@ -150,12 +149,11 @@ export default function AdminEnrollmentStudentDetailScreen() {
           </View>
         ))
       )}
-    </ScrollView>
+    </>
   );
 
-  const testsColumn = (
-    <ScrollView style={styles.columnScroll} contentContainerStyle={styles.columnContent} showsVerticalScrollIndicator={false}>
-      <Text style={styles.columnHeading}>Tests</Text>
+  const testsInner = (
+    <>
       {tests.length === 0 ? (
         <Text style={styles.emptyHint}>No tests in this course.</Text>
       ) : (
@@ -193,7 +191,18 @@ export default function AdminEnrollmentStudentDetailScreen() {
           );
         })
       )}
-    </ScrollView>
+    </>
+  );
+
+  const scrollInnerStyle = React.useMemo(
+    () =>
+      ({
+        paddingBottom: Math.max(24, insets.bottom + 16),
+        gap: 10 as const,
+        paddingHorizontal: 14,
+        paddingTop: 10,
+      }) as const,
+    [insets.bottom]
   );
 
   return (
@@ -217,9 +226,48 @@ export default function AdminEnrollmentStudentDetailScreen() {
         <Text style={styles.errorText}>{(error as Error).message}</Text>
       )}
       {!isLoading && !error && data && (
-        <View style={[styles.grid, wide ? styles.gridRow : styles.gridCol]}>
-          {videoColumn}
-          {testsColumn}
+        <View style={styles.mainBody}>
+          <View style={styles.tabBar}>
+            <Pressable
+              style={[styles.tabBtn, reportTab === "lecturesLive" && styles.tabBtnActive]}
+              onPress={() => setReportTab("lecturesLive")}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: reportTab === "lecturesLive" }}
+            >
+              <Ionicons
+                name="play-circle-outline"
+                size={18}
+                color={reportTab === "lecturesLive" ? "#fff" : Colors.light.primary}
+              />
+              <Text style={[styles.tabBtnText, reportTab === "lecturesLive" && styles.tabBtnTextActive]} numberOfLines={1}>
+                Lectures & live
+              </Text>
+            </Pressable>
+            <Pressable
+              style={[styles.tabBtn, reportTab === "tests" && styles.tabBtnActive]}
+              onPress={() => setReportTab("tests")}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: reportTab === "tests" }}
+            >
+              <Ionicons
+                name="document-text-outline"
+                size={18}
+                color={reportTab === "tests" ? "#fff" : Colors.light.primary}
+              />
+              <Text style={[styles.tabBtnText, reportTab === "tests" && styles.tabBtnTextActive]} numberOfLines={1}>
+                Tests
+              </Text>
+            </Pressable>
+          </View>
+
+          <ScrollView
+            style={styles.reportScroll}
+            contentContainerStyle={scrollInnerStyle}
+            showsVerticalScrollIndicator
+            keyboardShouldPersistTaps="handled"
+          >
+            {reportTab === "lecturesLive" ? lecturesLiveInner : testsInner}
+          </ScrollView>
         </View>
       )}
     </View>
@@ -236,12 +284,48 @@ const styles = StyleSheet.create({
   backBtn: { width: 40, height: 40, borderRadius: 10, backgroundColor: Colors.light.card, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: Colors.light.border },
   headerTitle: { fontSize: 18, fontFamily: "Inter_700Bold", color: Colors.light.text },
   headerSub: { fontSize: 13, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", marginTop: 2 },
-  grid: { flex: 1, paddingHorizontal: 12, paddingBottom: 24, gap: 16 },
-  gridRow: { flexDirection: "row", alignItems: "stretch" },
-  gridCol: { flexDirection: "column" },
-  columnScroll: { flex: 1, minHeight: 200, ...(Platform.OS === "web" ? { minWidth: 0 } : {}) },
-  columnContent: { paddingBottom: 32, gap: 10 },
-  columnHeading: { fontSize: 15, fontFamily: "Inter_700Bold", color: Colors.light.text, marginBottom: 4 },
+  mainBody: { flex: 1, minHeight: 0, ...(Platform.OS === "web" ? ({ overflow: "hidden" } as object) : {}) },
+  tabBar: {
+    flexDirection: "row",
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingTop: 4,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+  },
+  tabBtn: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: Colors.light.primary,
+    backgroundColor: Colors.light.card,
+  },
+  tabBtnActive: {
+    backgroundColor: Colors.light.primary,
+    borderColor: Colors.light.primary,
+  },
+  tabBtnText: {
+    flexShrink: 1,
+    fontSize: 13,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.primary,
+  },
+  tabBtnTextActive: {
+    color: "#fff",
+  },
+  reportScroll: {
+    flex: 1,
+    minHeight: 0,
+    ...(Platform.OS === "web" ? ({ overflow: "auto" } as object) : {}),
+  },
   sectionLabel: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.primary, textTransform: "uppercase", letterSpacing: 0.5 },
   card: {
     backgroundColor: Colors.light.card,
