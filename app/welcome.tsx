@@ -638,6 +638,7 @@ const styles = StyleSheet.create({
     gap: 14,
     width: "100%",
   },
+  /** Sizes: see `lib/welcome-image-sizes.ts` (admin hints). */
   logoRing: {
     width: 72,
     height: 72,
@@ -776,6 +777,7 @@ const styles = StyleSheet.create({
     flexDirection: "column",
     alignItems: "center",
   },
+  /** 130×130 circle — see `lib/welcome-image-sizes.ts` for admin copy. */
   pankajPhoto: {
     width: 130,
     height: 130,

@@ -12,6 +12,11 @@ import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
 import { apiRequest, getApiUrl, authFetch } from "@/lib/query-client";
 import { uploadToR2, getMimeType } from "@/lib/r2-upload";
+import {
+  WELCOME_LOGO_DISPLAY_ADMIN_HINT,
+  WELCOME_PANKAJ_PHOTO_ADMIN_HINT,
+  WELCOME_SECTION_IMAGE_ADMIN_HINT,
+} from "@/lib/welcome-image-sizes";
 import Colors from "@/constants/colors";
 import { useAuth } from "@/context/AuthContext";
 import { fetch } from "expo/fetch";
@@ -474,6 +479,7 @@ function WelcomeSettingsTab() {
   const [saving, setSaving] = React.useState(false);
   const [loaded, setLoaded] = React.useState(false);
   const [saveMsg, setSaveMsg] = React.useState("");
+  const [welcomeUploadProgress, setWelcomeUploadProgress] = React.useState<{ key: string; pct: number } | null>(null);
 
   const defaults: Record<string, string> = {
     welcome_headline: "Master Mathematics\nUnder Pankaj Sir Guidance",
@@ -590,43 +596,65 @@ function WelcomeSettingsTab() {
   const toggle = (key: string) => set(key, val(key) === "true" ? "false" : "true");
 
   const pickImageFor = async (settingKey: string) => {
-    try {
-      if (Platform.OS === "web") {
-        const input = document.createElement("input");
-        input.type = "file";
-        input.accept = "image/*";
-        input.onchange = async (e: any) => {
-          const file = e.target.files?.[0];
-          if (!file) return;
-          const blobUrl = URL.createObjectURL(file);
-          const { publicUrl } = await uploadToR2(blobUrl, file.name, file.type || "image/jpeg", "images");
-          URL.revokeObjectURL(blobUrl);
+    if (Platform.OS === "web") {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = "image/*";
+      input.onchange = async (e: any) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        setWelcomeUploadProgress({ key: settingKey, pct: 0 });
+        const blobUrl = URL.createObjectURL(file);
+        try {
+          const { publicUrl } = await uploadToR2(
+            blobUrl,
+            file.name,
+            file.type || "image/jpeg",
+            "images",
+            (pct) => setWelcomeUploadProgress({ key: settingKey, pct })
+          );
           set(settingKey, publicUrl);
-        };
-        input.click();
-      } else {
-        const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-        if (status !== "granted") {
-          Alert.alert("Permission needed", "Allow photo library access to pick an image.");
-          return;
+        } catch (err: any) {
+          Alert.alert("Upload Failed", err?.message || "Could not upload image.");
+        } finally {
+          URL.revokeObjectURL(blobUrl);
+          setWelcomeUploadProgress(null);
         }
-        const result = await ImagePicker.launchImageLibraryAsync({
-          mediaTypes: ImagePicker.MediaTypeOptions.Images,
-          allowsEditing: true,
-          quality: 0.8,
-        });
-        if (!result.canceled && result.assets[0]) {
-          const asset = result.assets[0];
+      };
+      input.click();
+      return;
+    }
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert("Permission needed", "Allow photo library access to pick an image.");
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        quality: 0.8,
+      });
+      if (!result.canceled && result.assets[0]) {
+        const asset = result.assets[0];
+        setWelcomeUploadProgress({ key: settingKey, pct: 0 });
+        try {
           const { publicUrl } = await uploadToR2(
             asset.uri,
             asset.fileName || `welcome-${Date.now()}.jpg`,
             asset.mimeType || "image/jpeg",
-            "images"
+            "images",
+            (pct) => setWelcomeUploadProgress({ key: settingKey, pct })
           );
           set(settingKey, publicUrl);
+        } catch (uploadErr: any) {
+          Alert.alert("Upload Failed", uploadErr?.message || "Could not upload image.");
+        } finally {
+          setWelcomeUploadProgress(null);
         }
       }
     } catch (err: any) {
+      setWelcomeUploadProgress(null);
       Alert.alert("Upload Failed", err?.message || "Could not upload image.");
     }
   };
@@ -648,23 +676,49 @@ function WelcomeSettingsTab() {
     </Pressable>
   );
 
-  const imageUrlRow = (label: string, key: string) => (
-    <View style={{ gap: 6 }}>
-      <Text style={labelStyle}>{label}</Text>
-      <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
-        <TextInput style={[inputStyle, { flex: 1 }]} value={val(key)} onChangeText={v => set(key, v)} placeholder="https://..." autoCapitalize="none" />
-        <Pressable onPress={() => pickImageFor(key)} style={{ backgroundColor: Colors.light.secondary, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10 }}>
-          <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>Upload</Text>
-        </Pressable>
+  const imageUrlRow = (label: string, key: string, sizeHint?: string) => {
+    const uploadingHere = welcomeUploadProgress?.key === key;
+    const pct = uploadingHere ? Math.max(0, Math.min(100, welcomeUploadProgress!.pct)) : 0;
+    const busyWelcomeUpload = welcomeUploadProgress != null;
+    return (
+      <View style={{ gap: 6 }}>
+        <Text style={labelStyle}>{label}</Text>
+        {sizeHint ? (
+          <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", lineHeight: 17 }}>{sizeHint}</Text>
+        ) : null}
+        <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
+          <TextInput style={[inputStyle, { flex: 1 }]} value={val(key)} onChangeText={v => set(key, v)} placeholder="https://..." autoCapitalize="none" editable={!uploadingHere} />
+          <Pressable
+            onPress={() => pickImageFor(key)}
+            disabled={busyWelcomeUpload}
+            style={{
+              backgroundColor: busyWelcomeUpload && !uploadingHere ? Colors.light.border : Colors.light.secondary,
+              paddingHorizontal: 12,
+              paddingVertical: 10,
+              borderRadius: 10,
+              opacity: busyWelcomeUpload && !uploadingHere ? 0.6 : 1,
+            }}
+          >
+            <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>{uploadingHere ? "…" : "Upload"}</Text>
+          </Pressable>
+        </View>
+        {uploadingHere ? (
+          <View style={{ gap: 4 }}>
+            <Text style={{ fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary }}>Uploading… {pct}%</Text>
+            <View style={{ height: 8, borderRadius: 4, overflow: "hidden", backgroundColor: "#E5E7EB", width: "100%" }}>
+              <View style={{ height: "100%", width: `${pct}%`, backgroundColor: Colors.light.primary, borderRadius: 4 }} />
+            </View>
+          </View>
+        ) : null}
       </View>
-    </View>
-  );
+    );
+  };
 
   return (
     <View style={{ gap: 16, padding: 4 }}>
       <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: "#E5E7EB" }}>
         <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Brand and hero (web layout)</Text>
-        {imageUrlRow("Logo image (optional — overrides default asset)", "welcome_logo_url")}
+        {imageUrlRow("Logo image (optional — overrides default asset)", "welcome_logo_url", WELCOME_LOGO_DISPLAY_ADMIN_HINT)}
         <View style={{ gap: 4 }}>
           <Text style={labelStyle}>Brand name next to logo</Text>
           <TextInput style={inputStyle} value={val("welcome_brand_text")} onChangeText={v => set("welcome_brand_text", v)} placeholder="3i Learning" />
@@ -740,9 +794,9 @@ function WelcomeSettingsTab() {
             onChangeText={v => set("welcome_pankaj_body", v)}
           />
         </View>
-        {imageUrlRow("Pankaj Sir photo (shown in circular frame on welcome)", "welcome_pankaj_photo_url")}
+        {imageUrlRow("Pankaj Sir photo (shown in circular frame on welcome)", "welcome_pankaj_photo_url", WELCOME_PANKAJ_PHOTO_ADMIN_HINT)}
         <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", lineHeight: 17 }}>
-          Upload square or portrait photos for best fit. Until you add a photo, the welcome page shows a placeholder circle.
+          Until you add a photo, the welcome page shows a placeholder circle.
         </Text>
       </View>
 
@@ -757,7 +811,7 @@ function WelcomeSettingsTab() {
           <Text style={labelStyle}>Body</Text>
           <TextInput style={[inputStyle, { minHeight: 100, textAlignVertical: "top" }]} multiline value={val("welcome_about_body")} onChangeText={v => set("welcome_about_body", v)} />
         </View>
-        {imageUrlRow("About image (optional)", "welcome_about_image_url")}
+        {imageUrlRow("About image (optional)", "welcome_about_image_url", WELCOME_SECTION_IMAGE_ADMIN_HINT)}
         <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", lineHeight: 17 }}>
           On narrow screens under 640px wide, About text shows about six lines with an ellipsis — keep a shorter intro here or paste the full story for laptop visitors.
         </Text>
@@ -774,7 +828,7 @@ function WelcomeSettingsTab() {
           <Text style={labelStyle}>Body</Text>
           <TextInput style={[inputStyle, { minHeight: 100, textAlignVertical: "top" }]} multiline value={val("welcome_vision_body")} onChangeText={v => set("welcome_vision_body", v)} />
         </View>
-        {imageUrlRow("Our Vision image (optional)", "welcome_vision_image_url")}
+        {imageUrlRow("Our Vision image (optional)", "welcome_vision_image_url", WELCOME_SECTION_IMAGE_ADMIN_HINT)}
         <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", lineHeight: 17 }}>
           Same ellipsis rule as About on narrow screens (under 640px).
         </Text>
@@ -791,7 +845,7 @@ function WelcomeSettingsTab() {
           <Text style={labelStyle}>Intro (optional)</Text>
           <TextInput style={[inputStyle, { minHeight: 44, textAlignVertical: "top" }]} multiline value={val("welcome_my_course_intro")} onChangeText={v => set("welcome_my_course_intro", v)} />
         </View>
-        {imageUrlRow("My courses image (optional)", "welcome_my_course_image_url")}
+        {imageUrlRow("My courses image (optional)", "welcome_my_course_image_url", WELCOME_SECTION_IMAGE_ADMIN_HINT)}
         <View style={{ gap: 4 }}>
           <Text style={labelStyle}>Course cards (JSON array of title + desc)</Text>
           <TextInput
