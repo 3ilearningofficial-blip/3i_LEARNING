@@ -55,6 +55,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const res = await fetch(url.toString(), { credentials: "include", headers });
       if (res.ok) {
         const data = await res.json();
+        if (typeof data?.id !== "number") {
+          setUser(null);
+          await removeStoredAuthUser();
+          return;
+        }
         // Always update stored token with what server returns
         if (data.sessionToken) {
           setUser(data);

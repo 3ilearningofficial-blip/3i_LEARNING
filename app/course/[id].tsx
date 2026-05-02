@@ -196,7 +196,6 @@ export default function CourseDetailScreen() {
     },
     staleTime: 20 * 1000,
     gcTime: 15 * 60 * 1000,
-    refetchOnMount: "always",
     refetchInterval: 60000,
   });
 
@@ -219,7 +218,7 @@ export default function CourseDetailScreen() {
       });
   }, [user?.id, course?.isEnrolled, courseIdNum, isAdmin, id, qc, course]);
 
-  const { data: liveClasses = [] } = useQuery<LiveClass[]>({
+  const { data: liveClasses = [], isPending: liveClassesPending } = useQuery<LiveClass[]>({
     queryKey: ["/api/live-classes", id],
     queryFn: async () => {
       const baseUrl = getApiUrl();
@@ -228,11 +227,10 @@ export default function CourseDetailScreen() {
       if (!res.ok) return [];
       return res.json();
     },
-    // Keep this query warm even when user is on another tab so Live tab opens instantly.
     enabled: !!id && id !== "undefined",
-    refetchInterval: activeTab === "Live" ? 15000 : 60000,
-    staleTime: 15000,
-    refetchOnMount: "always",
+    refetchInterval: activeTab === "Live" ? 10000 : 60000,
+    staleTime: 30_000,
+    gcTime: 15 * 60 * 1000,
   });
 
   /** Live tab: show upcoming + currently live only; recordings live under Lectures → Live Class Recordings. */
@@ -320,7 +318,7 @@ export default function CourseDetailScreen() {
           if (!res.ok) throw new Error("prefetch live class failed");
           return res.json();
         },
-        staleTime: 15000,
+        staleTime: 30_000,
       });
     });
   }, [course, id, liveClasses, qc]);
@@ -352,7 +350,7 @@ export default function CourseDetailScreen() {
     return [...new Set([...fromLectures, ...fromFolders])];
   };
 
-  const { data: enrolledStudents = [] } = useQuery<EnrolledStudent[]>({
+  const { data: enrolledStudents = [], isPending: enrolledStudentsPending } = useQuery<EnrolledStudent[]>({
     queryKey: ["/api/admin/courses", id, "enrollments"],
     queryFn: async () => {
       const baseUrl = getApiUrl();
@@ -361,7 +359,9 @@ export default function CourseDetailScreen() {
       if (!res.ok) return [];
       return res.json();
     },
-    enabled: isAdmin && activeTab === "Enrolled",
+    enabled: isAdmin && !!id && id !== "undefined",
+    staleTime: 60_000,
+    gcTime: 15 * 60 * 1000,
   });
 
   const updateEnrollmentMutation = useMutation({
@@ -419,6 +419,7 @@ export default function CourseDetailScreen() {
       setTimeout(() => {
         qc.invalidateQueries({ queryKey: ["/api/courses"] });
         qc.refetchQueries({ queryKey: ["/api/courses"], type: "all" });
+        qc.invalidateQueries({ queryKey: ["/api/admin/courses", id] });
       }, 2000);
     },
     onError: (err: any) => {
@@ -1318,7 +1319,12 @@ setTimeout(function() {
 
         {currentActiveTab === "Live" && (
           <View style={styles.list}>
-            {liveClassesForTab.length === 0 ? (
+            {liveClassesPending && liveClassesForTab.length === 0 ? (
+              <View style={[styles.emptyState, { gap: 12 }]}>
+                <ActivityIndicator size="large" color={Colors.light.primary} />
+                <Text style={styles.emptyText}>Loading live schedule…</Text>
+              </View>
+            ) : liveClassesForTab.length === 0 ? (
               <View style={styles.emptyState}>
                 <Ionicons name="videocam-outline" size={40} color={Colors.light.textMuted} />
                 <Text style={styles.emptyText}>No upcoming or live sessions</Text>
@@ -1388,7 +1394,15 @@ setTimeout(function() {
                               );
                               return;
                             }
-                            router.push({ pathname: "/live-class/[id]", params: { id: lc.id, videoUrl: lc.youtube_url, title: lc.title } });
+                            router.push({
+                              pathname: "/live-class/[id]",
+                              params: {
+                                id: lc.id,
+                                videoUrl: lc.youtube_url ?? "",
+                                title: lc.title ?? "",
+                                listIsLive: lc.is_live ? "1" : "0",
+                              },
+                            });
                           }}
                         >
                           <LinearGradient
@@ -1441,7 +1455,12 @@ setTimeout(function() {
 
         {currentActiveTab === "Enrolled" && isAdmin && (
           <View style={styles.list}>
-            {enrolledStudents.length === 0 ? (
+            {enrolledStudentsPending && enrolledStudents.length === 0 ? (
+              <View style={[styles.emptyState, { gap: 12 }]}>
+                <ActivityIndicator size="large" color={Colors.light.primary} />
+                <Text style={styles.emptyText}>Loading enrolled students…</Text>
+              </View>
+            ) : enrolledStudents.length === 0 ? (
               <View style={styles.emptyState}>
                 <Ionicons name="people-outline" size={40} color={Colors.light.textMuted} />
                 <Text style={styles.emptyText}>No enrolled students</Text>
@@ -1811,7 +1830,18 @@ setTimeout(function() {
               );
             })()}
             {openFolder?.type === "live" && openFolder.items.map((lc: any) => (              <Pressable key={lc.id} style={({ pressed }) => [styles.liveClassItem, pressed && { opacity: 0.85 }]}
-                onPress={() => { setOpenFolder(null); router.push({ pathname: "/live-class/[id]", params: { id: lc.id, videoUrl: lc.youtube_url, title: lc.title } }); }}>
+                onPress={() => {
+                  setOpenFolder(null);
+                  router.push({
+                    pathname: "/live-class/[id]",
+                    params: {
+                      id: lc.id,
+                      videoUrl: lc.youtube_url ?? "",
+                      title: lc.title ?? "",
+                      listIsLive: lc.is_live ? "1" : "0",
+                    },
+                  });
+                }}>
                 <LinearGradient colors={lc.is_live ? ["#DC2626", "#EF4444"] : lc.is_completed ? ["#1A56DB", "#3B82F6"] : ["#6B7280", "#9CA3AF"]} style={styles.liveStatusBadge}>
                   {lc.is_live ? (<><View style={styles.liveDot} /><Text style={styles.liveStatusText}>LIVE</Text></>) : lc.is_completed ? <Ionicons name="play" size={14} color="#fff" /> : <Ionicons name="time" size={14} color="#fff" />}
                 </LinearGradient>

@@ -314,7 +314,7 @@ export default function AdminCourseScreen() {
     refetchInterval: ["lectures", "tests", "materials"].includes(activeTab) ? 10000 : false,
   });
 
-  const { data: courseLiveClasses = [] } = useQuery<LiveClassItem[]>({
+  const { data: courseLiveClasses = [], isPending: courseLivePending } = useQuery<LiveClassItem[]>({
     queryKey: ["/api/live-classes", id, "admin"],
     queryFn: async () => {
       const baseUrl = getApiUrl();
@@ -325,9 +325,10 @@ export default function AdminCourseScreen() {
       const payload = unwrapPayload(raw);
       return Array.isArray(payload) ? payload : [];
     },
-    enabled: isValidId && activeTab === "live",
-    staleTime: 0,
-    refetchInterval: activeTab === "live" ? 10000 : false,
+    enabled: isValidId,
+    staleTime: 30_000,
+    gcTime: 15 * 60 * 1000,
+    refetchInterval: activeTab === "live" ? 8000 : false,
   });
 
   const { data: dbFolders = [], refetch: refetchFolders } = useQuery<any[]>({
@@ -342,7 +343,7 @@ export default function AdminCourseScreen() {
     enabled: isValidId,
   });
 
-  const { data: enrolledStudents = [] } = useQuery<EnrolledStudent[]>({
+  const { data: enrolledStudents = [], isPending: enrolledStudentsPending } = useQuery<EnrolledStudent[]>({
     queryKey: ["/api/admin/courses", id, "enrolled"],
     queryFn: async () => {
       const baseUrl = getApiUrl();
@@ -357,7 +358,9 @@ export default function AdminCourseScreen() {
         phone: s.user_phone || s.phone || "",
       }));
     },
-    enabled: isValidId && activeTab === "enrolled",
+    enabled: isValidId,
+    staleTime: 60_000,
+    gcTime: 15 * 60 * 1000,
   });
 
   const courseLectures = Array.isArray(course?.lectures) ? course.lectures : [];
@@ -1034,7 +1037,13 @@ export default function AdminCourseScreen() {
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>Live Classes ({courseLiveClasses.length})</Text>
             </View>
-            {courseLiveClasses.length === 0 && (
+            {courseLivePending && courseLiveClasses.length === 0 ? (
+              <View style={{ alignItems: "center", justifyContent: "center", paddingVertical: 48, gap: 10 }}>
+                <ActivityIndicator size="large" color={Colors.light.primary} />
+                <Text style={{ fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.textMuted }}>Loading schedule…</Text>
+              </View>
+            ) : null}
+            {!courseLivePending && courseLiveClasses.length === 0 && (
               <View style={styles.infoCard}>
                 <Ionicons name="information-circle" size={16} color={Colors.light.primary} />
                 <Text style={styles.infoText}>Schedule live classes from the Courses tab → Upcoming Class panel in the admin dashboard.</Text>
@@ -1166,7 +1175,13 @@ export default function AdminCourseScreen() {
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>Enrolled Students ({enrolledStudents.length})</Text>
             </View>
-            {enrolledStudents.length === 0 && (
+            {enrolledStudentsPending && enrolledStudents.length === 0 ? (
+              <View style={{ alignItems: "center", justifyContent: "center", paddingVertical: 48, gap: 10 }}>
+                <ActivityIndicator size="large" color={Colors.light.primary} />
+                <Text style={{ fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.textMuted }}>Loading enrolled students…</Text>
+              </View>
+            ) : null}
+            {!enrolledStudentsPending && enrolledStudents.length === 0 && (
               <View style={styles.infoCard}>
                 <Ionicons name="information-circle" size={16} color={Colors.light.primary} />
                 <Text style={styles.infoText}>No students enrolled yet.</Text>

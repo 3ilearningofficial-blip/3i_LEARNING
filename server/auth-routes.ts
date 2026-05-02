@@ -238,10 +238,12 @@ export function registerAuthRoutes({
             return res.json(fresh);
           }
         } catch {
-          // fall through to unauthorized
+          // Invalid or expired bearer token
         }
+        return res.status(401).json({ message: "Not authenticated" });
       }
-      return res.status(401).json({ message: "Not authenticated" });
+      // No session cookie and no Authorization header: treat as anonymous (avoids noisy 401 in browser consoles).
+      return res.status(200).json({});
     }
     try {
       const dbUser = await db.query(

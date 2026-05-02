@@ -2,6 +2,8 @@ import React from "react";
 import {
   View, Text, StyleSheet, Pressable, Image, Platform,
   ScrollView, useWindowDimensions, Linking,
+  type StyleProp,
+  type ImageStyle,
 } from "react-native";
 import { router } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
@@ -49,6 +51,46 @@ function buildWebContactMailto(emailRaw: string): string | null {
   const e = emailRaw.trim();
   if (!e || !e.includes("@")) return null;
   return `mailto:${e}`;
+}
+
+/** Trim pasted URLs so remote images load on web/RN (http→https, protocol-relative). */
+function normalizeWelcomeImageUrl(raw: string): string {
+  let u = raw.trim().replace(/\s/g, "");
+  if (!u) return "";
+  if (u.startsWith("//")) return `https:${u}`;
+  if (u.startsWith("http://")) return `https://${u.slice(7)}`;
+  return u;
+}
+
+function PankajSirPhoto({ uriRaw, extraStyle }: { uriRaw: string; extraStyle?: StyleProp<ImageStyle> }) {
+  const normalized = React.useMemo(() => normalizeWelcomeImageUrl(uriRaw), [uriRaw]);
+  const [failed, setFailed] = React.useState(false);
+  React.useEffect(() => {
+    setFailed(false);
+  }, [normalized]);
+
+  const webImageProps =
+    Platform.OS === "web"
+      ? ({ referrerPolicy: "no-referrer" } as Record<string, unknown>)
+      : {};
+
+  if (!normalized || failed) {
+    return (
+      <View style={[styles.pankajPhotoPlaceholder, extraStyle]}>
+        <Ionicons name="person" size={42} color={Colors.light.textMuted} />
+      </View>
+    );
+  }
+
+  return (
+    <Image
+      {...webImageProps}
+      source={{ uri: normalized }}
+      style={[styles.pankajPhoto, extraStyle]}
+      resizeMode="cover"
+      onError={() => setFailed(true)}
+    />
+  );
 }
 
 function WebAdminContactsAbove({ phoneDisplay, emailDisplay }: { phoneDisplay: string; emailDisplay: string }) {
@@ -391,12 +433,8 @@ export default function WelcomeScreen() {
                 keyboardShouldPersistTaps="handled"
               >
                 <View style={[styles.pankajRow, styles.pankajRowStacked]}>
-                  {!!pankajPhotoUrl ? (
-                    <Image
-                      source={{ uri: pankajPhotoUrl }}
-                      style={[styles.pankajPhoto, styles.pankajPhotoMobile]}
-                      resizeMode="cover"
-                    />
+                  {!!pankajPhotoUrl.trim() ? (
+                    <PankajSirPhoto uriRaw={pankajPhotoUrl} extraStyle={styles.pankajPhotoMobile} />
                   ) : (
                     <View style={[styles.pankajPhotoPlaceholder, styles.pankajPhotoMobile]}>
                       <Ionicons name="person" size={42} color={Colors.light.textMuted} />
@@ -411,12 +449,8 @@ export default function WelcomeScreen() {
               </ScrollView>
             ) : (
               <View style={[styles.pankajRow, !isWide && styles.pankajRowStacked]}>
-                {!!pankajPhotoUrl ? (
-                  <Image
-                    source={{ uri: pankajPhotoUrl }}
-                    style={[styles.pankajPhoto, !isWide && styles.pankajPhotoMobile]}
-                    resizeMode="cover"
-                  />
+                {!!pankajPhotoUrl.trim() ? (
+                  <PankajSirPhoto uriRaw={pankajPhotoUrl} extraStyle={!isWide ? styles.pankajPhotoMobile : undefined} />
                 ) : (
                   <View style={[styles.pankajPhotoPlaceholder, !isWide && styles.pankajPhotoMobile]}>
                     <Ionicons name="person" size={42} color={Colors.light.textMuted} />

@@ -59,8 +59,8 @@ export default function ProfileScreen() {
       const res = await authFetch(new URL("/api/auth/me", baseUrl).toString());
       if (!res.ok) return null;
       const data = await res.json();
-      // Update auth context with all fresh fields including date_of_birth
-      if (data) updateUser(data);
+      if (typeof data?.id !== "number") return null;
+      updateUser(data);
       return data;
     },
     staleTime: 0,

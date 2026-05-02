@@ -415,9 +415,13 @@ function useVoiceInput(onResult: (text: string) => void) {
 
 export default function LiveClassScreen() {
   useScreenProtection(true);
-  const { id, videoUrl: paramVideoUrl, title: paramTitle } = useLocalSearchParams<{
-    id: string; videoUrl: string; title: string;
+  const { id, videoUrl: paramVideoUrl, title: paramTitle, listIsLive } = useLocalSearchParams<{
+    id: string;
+    videoUrl?: string;
+    title?: string;
+    listIsLive?: string;
   }>();
+  const listLiveHint = String(listIsLive ?? "") === "1";
   const insets = useSafeAreaInsets();
   const { user, isAdmin } = useAuth();
   const qc = useQueryClient();
@@ -452,15 +456,34 @@ export default function LiveClassScreen() {
 
   const { data: liveClassData } = useQuery<{ youtube_url: string; title: string; is_completed: boolean; is_live: boolean; show_viewer_count: boolean; cf_playback_hls?: string; stream_type?: string; recording_url?: string; duration_minutes?: number; scheduled_at?: number; has_access?: boolean; is_enrolled?: boolean; course_id?: number; is_public?: boolean; chat_mode?: string }>({
     queryKey: [`/api/live-classes/${id}`],
-    // Keep status responsive while reducing steady request pressure.
     refetchInterval: (query) => {
       if (!isScreenActive) return false;
-      const data = query.state.data;
-      if (!data) return 4000;
-      return data.is_live || data.is_completed ? 5000 : 4000;
+      const data = query.state.data as
+        | {
+            is_live?: boolean;
+            is_completed?: boolean;
+            scheduled_at?: number;
+          }
+        | undefined;
+      if (!data) return listLiveHint ? 1200 : 2000;
+      if (data.is_live || data.is_completed) return 5000;
+      const t = Number(data.scheduled_at);
+      const now = Date.now();
+      if (Number.isFinite(t)) {
+        const untilStart = t - now;
+        if (untilStart <= 0) return 1200;
+        if (untilStart < 30 * 60 * 1000) return 2000;
+      }
+      return 4000;
     },
-    staleTime: 2000,
+    staleTime: 1000,
   });
+
+  const showAsLiveUI = useMemo(() => {
+    if (liveClassData?.is_completed) return false;
+    if (liveClassData?.is_live) return true;
+    return listLiveHint && liveClassData == null;
+  }, [liveClassData, listLiveHint]);
 
   useEffect(() => {
     if (!liveClassData?.course_id) return;
@@ -478,7 +501,15 @@ export default function LiveClassScreen() {
 
   // Countdown timer — counts down to scheduled_at, then shows "Starting soon"
   useEffect(() => {
-    if (!isScreenActive || !liveClassData?.scheduled_at || liveClassData.is_live || liveClassData.is_completed) {
+    if (!isScreenActive || liveClassData?.is_completed || liveClassData?.is_live) {
+      setCountdown(null);
+      return;
+    }
+    if (listLiveHint && liveClassData == null) {
+      setCountdown(null);
+      return;
+    }
+    if (!liveClassData?.scheduled_at) {
       setCountdown(null);
       return;
     }
@@ -498,7 +529,7 @@ export default function LiveClassScreen() {
     tick();
     const timer = setInterval(tick, 1000);
     return () => clearInterval(timer);
-  }, [isScreenActive, liveClassData?.scheduled_at, liveClassData?.is_live, liveClassData?.is_completed]);
+  }, [isScreenActive, liveClassData?.scheduled_at, liveClassData?.is_live, liveClassData?.is_completed, liveClassData, listLiveHint]);
 
   // Student heartbeat — POST every 25 seconds while page is open
   useEffect(() => {
@@ -778,14 +809,14 @@ export default function LiveClassScreen() {
                 Recording{liveClassData.duration_minutes ? ` · ${liveClassData.duration_minutes}m` : ""}
               </Text>
             </View>
-          ) : !liveClassData ? (
-            <View style={[styles.liveIndicator, { backgroundColor: "rgba(255,255,255,0.12)" }]}>
-              <Text style={styles.liveText}>…</Text>
-            </View>
-          ) : liveClassData.is_live ? (
+          ) : showAsLiveUI ? (
             <View style={styles.liveIndicator}>
               <View style={styles.liveDot} />
               <Text style={styles.liveText}>LIVE</Text>
+            </View>
+          ) : !liveClassData ? (
+            <View style={[styles.liveIndicator, { backgroundColor: "rgba(255,255,255,0.12)" }]}>
+              <Text style={styles.liveText}>…</Text>
             </View>
           ) : (
             <View style={styles.scheduledPill}>
@@ -823,7 +854,7 @@ export default function LiveClassScreen() {
         <View style={styles.webDesktopRow}>
           <View style={[styles.playerContainer, styles.webPlayerWide]}>
             <VideoWatermark isPlaying={isVideoPlaying} />
-            {!liveClassData?.is_live && !liveClassData?.is_completed && (
+            {!showAsLiveUI && !liveClassData?.is_completed && (
               <View style={styles.waitingOverlay}>
                 <View style={styles.waitingDot} />
                 {countdown ? (
@@ -841,10 +872,10 @@ export default function LiveClassScreen() {
                 )}
               </View>
             )}
-            {isVideoLoading && liveClassData?.is_live && (
+            {isVideoLoading && showAsLiveUI && (
               <View style={styles.loadingOverlay}><ActivityIndicator size="large" color={Colors.light.primary} /></View>
             )}
-            {(liveClassData?.is_live || liveClassData?.is_completed) && videoId && Platform.OS === "web" ? (
+            {(showAsLiveUI || liveClassData?.is_completed) && videoId && Platform.OS === "web" ? (
               <WebYouTubePlayer
                 videoId={videoId}
                 brandingMask={false}
@@ -852,7 +883,7 @@ export default function LiveClassScreen() {
                 onReady={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }}
               />
             ) : /* Web: do not use RN WebView for YouTube before go-live — it often collapses; show black stage + waiting overlay. */
-            Platform.OS === "web" && videoId && !liveClassData?.is_live && !liveClassData?.is_completed ? (
+            Platform.OS === "web" && videoId && !showAsLiveUI && !liveClassData?.is_completed ? (
               <View style={styles.webScheduledVideoSlot} />
             ) : isCfHls && Platform.OS === "web" ? (
               <iframe
@@ -1072,7 +1103,7 @@ export default function LiveClassScreen() {
             ]}
           >
             <VideoWatermark isPlaying={isVideoPlaying} />
-            {!liveClassData?.is_live && !liveClassData?.is_completed && (
+            {!showAsLiveUI && !liveClassData?.is_completed && (
               <View style={styles.waitingOverlay}>
                 <View style={styles.waitingDot} />
                 {countdown ? (
@@ -1090,17 +1121,17 @@ export default function LiveClassScreen() {
                 )}
               </View>
             )}
-            {isVideoLoading && liveClassData?.is_live && (
+            {isVideoLoading && showAsLiveUI && (
               <View style={styles.loadingOverlay}><ActivityIndicator size="large" color={Colors.light.primary} /></View>
             )}
-            {(liveClassData?.is_live || liveClassData?.is_completed) && videoId && Platform.OS === "web" ? (
+            {(showAsLiveUI || liveClassData?.is_completed) && videoId && Platform.OS === "web" ? (
               <WebYouTubePlayer
                 videoId={videoId}
                 brandingMask
                 clipSeconds={completedClipSeconds}
                 onReady={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }}
               />
-            ) : Platform.OS === "web" && videoId && !liveClassData?.is_live && !liveClassData?.is_completed ? (
+            ) : Platform.OS === "web" && videoId && !showAsLiveUI && !liveClassData?.is_completed ? (
               <View style={styles.webScheduledVideoSlot} />
             ) : isCfHls && Platform.OS === "web" ? (
               <iframe

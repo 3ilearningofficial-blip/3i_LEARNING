@@ -427,6 +427,34 @@ function configureExpoAndLanding(app: express.Application) {
   log("Expo routing: Checking expo-platform header on / and /manifest");
 }
 
+/** De-index API-origin host in search engines (robots + X-Robots-Tag). Comma-separated SEARCH_NOINDEX_HOSTNAMES overrides default. */
+function setupApiHostSearchHints(app: express.Application) {
+  const noindexHosts = new Set(
+    (process.env.SEARCH_NOINDEX_HOSTNAMES || "api.3ilearning.in")
+      .split(",")
+      .map((h) => h.trim().toLowerCase())
+      .filter(Boolean),
+  );
+
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const host = (req.hostname || "").toLowerCase();
+    if (noindexHosts.has(host)) {
+      res.setHeader("X-Robots-Tag", "noindex, nofollow, noarchive");
+    }
+    next();
+  });
+
+  app.get("/robots.txt", (req: Request, res: Response, next: NextFunction) => {
+    const host = (req.hostname || "").toLowerCase();
+    if (noindexHosts.has(host)) {
+      res.type("text/plain");
+      res.setHeader("Cache-Control", "public, max-age=86400");
+      return res.send("User-agent: *\nDisallow: /\n");
+    }
+    next();
+  });
+}
+
 function setupErrorHandler(app: express.Application) {
   app.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
     const error = err as {
@@ -517,6 +545,7 @@ function setupErrorHandler(app: express.Application) {
   // 3) Auth/session and API protection middleware
   app.use(session(sessionConfig));
   setupApiOriginProtection(app);
+  setupApiHostSearchHints(app);
 
   // Lightweight version/health endpoint for deploy consistency checks.
   app.get("/api/health/version", (_req: Request, res: Response) => {
