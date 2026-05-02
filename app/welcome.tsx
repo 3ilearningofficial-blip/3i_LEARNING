@@ -134,18 +134,12 @@ export default function WelcomeScreen() {
   const showSub = on("welcome_show_subheadline");
 
   const webHero = isWeb && isWide;
+  const isPhoneWeb = isWeb && !isWide;
 
-  const logoBlock = (
-    <View style={[styles.logoBadge, webHero && styles.logoBadgeWeb]}>
-      <View style={styles.logoCircle}>
-        {logoUrl ? (
-          <Image source={{ uri: logoUrl }} style={styles.logoImg} resizeMode="cover" />
-        ) : (
-          <Image source={require("@/assets/images/logo.png")} style={styles.logoImg} resizeMode="cover" />
-        )}
-      </View>
-      <Text style={styles.logoLabel}>{brandText}</Text>
-    </View>
+  const logoImageEl = logoUrl ? (
+    <Image source={{ uri: logoUrl }} style={styles.logoImg} resizeMode="cover" />
+  ) : (
+    <Image source={require("@/assets/images/logo.png")} style={styles.logoImg} resizeMode="cover" />
   );
 
   return (
@@ -158,40 +152,75 @@ export default function WelcomeScreen() {
         ]}
         showsVerticalScrollIndicator={false}
       >
-        {/* Header: web wide = logo + tagline row; else stacked */}
-        {webHero ? (
-          <View style={styles.heroRowWeb}>
-            {logoBlock}
-            <Text style={styles.taglineWeb} numberOfLines={2}>{tagline}</Text>
-          </View>
-        ) : (
-          <View style={styles.heroCenter}>
-            {logoBlock}
-            <Text style={styles.headlineMobile}>{tagline}</Text>
-          </View>
-        )}
+        {/* Header card: logo (profile circle), brand, headline, navigation */}
+        <View style={[styles.headerCard, isPhoneWeb && styles.headerCardPhoneWeb]}>
+          {webHero ? (
+            <>
+              <View style={styles.headerRowWeb}>
+                <View style={styles.logoRing}>
+                  <View style={styles.logoInnerCircle}>{logoImageEl}</View>
+                </View>
+                <View style={styles.headerTextColWeb}>
+                  <Text style={styles.brandInHeader}>{brandText}</Text>
+                  <Text style={styles.taglineWeb} numberOfLines={3}>{tagline}</Text>
+                </View>
+              </View>
+              {!!navLine.trim() && on("welcome_show_nav") && (
+                <Text style={[styles.navLine, styles.navLineWebHeader]} accessibilityRole="text">{navLine}</Text>
+              )}
+            </>
+          ) : (
+            <>
+              <View style={styles.headerBrandRowMobile}>
+                <View style={[styles.logoRing, isPhoneWeb && styles.logoRingPhoneWeb]}>
+                  <View style={[styles.logoInnerCircle, isPhoneWeb && styles.logoInnerCirclePhoneWeb]}>{logoImageEl}</View>
+                </View>
+                <Text style={[styles.brandInHeaderMobile, isPhoneWeb && styles.brandInHeaderPhoneWeb]} numberOfLines={2}>
+                  {brandText}
+                </Text>
+              </View>
+              <Text style={[styles.headlineMobile, styles.headlineInCard]}>{tagline}</Text>
+              {!!navLine.trim() && on("welcome_show_nav") && (
+                <Text style={[styles.navLine, styles.navLineInCard]} accessibilityRole="text">{navLine}</Text>
+              )}
+            </>
+          )}
+        </View>
 
-        {!!navLine.trim() && on("welcome_show_nav") && (
-          <Text style={[styles.navLine, webHero && styles.navLineWeb]} accessibilityRole="text">{navLine}</Text>
-        )}
+        {/* CTAs */}
+        <View style={[styles.ctaRow, webHero && styles.ctaRowWeb]}>
+          <Pressable
+            style={({ pressed }) => [
+              styles.loginBtn,
+              isPhoneWeb && styles.loginBtnPhoneWeb,
+              pressed && { opacity: 0.92 },
+            ]}
+            onPress={handleLogin}
+          >
+            <LinearGradient
+              colors={["#FF6B35", "#EF4444"]}
+              style={[styles.loginGradient, isPhoneWeb && styles.loginGradientPhoneWeb]}
+            >
+              <Ionicons name="log-in-outline" size={isPhoneWeb ? 20 : 18} color="#fff" />
+              <Text style={[styles.loginText, isPhoneWeb && styles.loginTextPhoneWeb]}>{s("welcome_login_btn", "Login — It's Free")}</Text>
+            </LinearGradient>
+          </Pressable>
+          <Pressable
+            style={({ pressed }) => [
+              styles.signupBtn,
+              isPhoneWeb && styles.signupBtnPhoneWeb,
+              pressed && { opacity: 0.92 },
+            ]}
+            onPress={handleSignup}
+          >
+            <Ionicons name="person-add-outline" size={isPhoneWeb ? 20 : 18} color={Colors.light.primary} />
+            <Text style={[styles.signupText, isPhoneWeb && styles.signupTextPhoneWeb]}>{s("welcome_signup_btn", "Sign Up")}</Text>
+          </Pressable>
+        </View>
 
         {showSub ? (
           <Text style={styles.subheadline}>{s("welcome_subheadline", "Courses, live classes, OMR tests, daily missions and AI tutoring — everything to ace your exams.")}</Text>
         ) : null}
-
-        {/* CTAs */}
-        <View style={[styles.ctaRow, webHero && styles.ctaRowWeb]}>
-          <Pressable style={({ pressed }) => [styles.loginBtn, pressed && { opacity: 0.9 }]} onPress={handleLogin}>
-            <LinearGradient colors={["#FF6B35", "#EF4444"]} style={styles.loginGradient}>
-              <Ionicons name="log-in-outline" size={18} color="#fff" />
-              <Text style={styles.loginText}>{s("welcome_login_btn", "Login — It's Free")}</Text>
-            </LinearGradient>
-          </Pressable>
-          <Pressable style={({ pressed }) => [styles.signupBtn, pressed && { opacity: 0.9 }]} onPress={handleSignup}>
-            <Ionicons name="person-add-outline" size={18} color={Colors.light.primary} />
-            <Text style={styles.signupText}>{s("welcome_signup_btn", "Sign Up")}</Text>
-          </Pressable>
-        </View>
 
         {/* About */}
         {showAbout && (
@@ -304,7 +333,7 @@ export default function WelcomeScreen() {
           </View>
         )}
 
-        <View style={styles.footerRow}>
+        <View style={styles.footerCard}>
           <Text style={styles.footer}>{s("welcome_footer", "© 2026 3i Learning. All rights reserved.")}</Text>
         </View>
       </ScrollView>
@@ -312,37 +341,102 @@ export default function WelcomeScreen() {
   );
 }
 
+const LOGO_BORDER = Colors.light.primaryDark;
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.light.background },
   containerWeb: { width: "100%", maxWidth: "100%", alignSelf: "stretch" },
   scrollViewWeb: { width: "100%", flex: 1 },
   scroll: { paddingHorizontal: 20, gap: 20, width: "100%", alignSelf: "stretch" },
-  heroCenter: { alignItems: "center", gap: 14 },
-  heroRowWeb: {
+  headerCard: {
+    backgroundColor: Colors.light.card,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    paddingHorizontal: 16,
+    paddingVertical: 18,
+    gap: 12,
+    width: "100%",
+    ...(Platform.OS === "web"
+      ? ({ boxShadow: "0px 4px 24px rgba(26, 86, 219, 0.08)" } as object)
+      : { shadowColor: "#1A56DB", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.08, shadowRadius: 12, elevation: 3 }),
+  },
+  headerCardPhoneWeb: { paddingVertical: 16 },
+  headerRowWeb: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "flex-start",
-    gap: 20,
-    flexWrap: "wrap",
+    gap: 16,
+    flexWrap: "nowrap",
+    width: "100%",
   },
-  logoBadge: {
-    flexDirection: "row", alignItems: "center", gap: 10,
+  headerTextColWeb: { flex: 1, minWidth: 0, gap: 4 },
+  headerBrandRowMobile: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 14,
+    width: "100%",
+  },
+  logoRing: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    borderWidth: 3,
+    borderColor: LOGO_BORDER,
     backgroundColor: Colors.light.card,
-    borderWidth: 1, borderColor: Colors.light.border,
-    borderRadius: 50, paddingVertical: 8, paddingHorizontal: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 3,
   },
-  logoBadgeWeb: { alignSelf: "flex-start" },
-  logoCircle: { width: 36, height: 36, borderRadius: 18, overflow: "hidden", backgroundColor: "#fff" },
-  logoImg: { width: 36, height: 36 },
-  logoLabel: { fontSize: 15, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
-  taglineWeb: {
+  logoRingPhoneWeb: {
+    width: 78,
+    height: 78,
+    borderRadius: 39,
+    borderWidth: 3,
+  },
+  logoInnerCircle: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    overflow: "hidden",
+    backgroundColor: "#fff",
+  },
+  logoInnerCirclePhoneWeb: {
+    width: 66,
+    height: 66,
+    borderRadius: 33,
+  },
+  logoImg: {
+    width: "100%",
+    height: "100%",
+  },
+  brandInHeader: {
+    fontSize: 16,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.textMuted,
+    marginBottom: 2,
+  },
+  brandInHeaderMobile: {
     flex: 1,
     flexShrink: 1,
-    fontSize: 22,
+    fontSize: 18,
     fontFamily: "Inter_700Bold",
     color: Colors.light.text,
-    lineHeight: 28,
-    minWidth: 200,
+  },
+  brandInHeaderPhoneWeb: {
+    fontSize: 19,
+    lineHeight: 24,
+    textAlign: "left",
+  },
+  headlineInCard: { marginBottom: 0 },
+  taglineWeb: {
+    flexShrink: 1,
+    fontSize: 21,
+    fontFamily: "Inter_700Bold",
+    color: Colors.light.text,
+    lineHeight: 27,
+    width: "100%",
+    textAlign: "left",
   },
   headlineMobile: { fontSize: 26, fontFamily: "Inter_700Bold", color: Colors.light.text, textAlign: "center", lineHeight: 32 },
   navLine: {
@@ -352,7 +446,8 @@ const styles = StyleSheet.create({
     textAlign: "center",
     lineHeight: 20,
   },
-  navLineWeb: { textAlign: "left", marginTop: -4 },
+  navLineInCard: { textAlign: "center", paddingTop: 2 },
+  navLineWebHeader: { textAlign: "left", alignSelf: "stretch", paddingTop: 4 },
   subheadline: {
     fontSize: 15,
     color: Colors.light.textMuted,
@@ -364,8 +459,18 @@ const styles = StyleSheet.create({
   ctaRow: { flexDirection: "column", gap: 12, width: "100%" },
   ctaRowWeb: { flexDirection: "row", gap: 12, width: "100%", alignSelf: "stretch" },
   loginBtn: { flex: 1, borderRadius: 14, overflow: "hidden", minWidth: 140 },
+  loginBtnPhoneWeb: {
+    borderRadius: 14,
+    minHeight: 54,
+    ...(Platform.OS === "web" ? ({ cursor: "pointer" } as object) : {}),
+    ...(Platform.OS === "web"
+      ? { boxShadow: "0px 4px 14px rgba(239, 68, 68, 0.35)" }
+      : { shadowColor: "#EF4444", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 8, elevation: 4 }),
+  },
   loginGradient: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, paddingVertical: 16 },
+  loginGradientPhoneWeb: { paddingVertical: 18, minHeight: 54 },
   loginText: { fontSize: 16, fontFamily: "Inter_700Bold", color: "#fff" },
+  loginTextPhoneWeb: { fontSize: 17 },
   signupBtn: {
     flex: 1,
     borderRadius: 14,
@@ -379,7 +484,13 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     minWidth: 140,
   },
+  signupBtnPhoneWeb: {
+    minHeight: 54,
+    paddingVertical: 17,
+    ...(Platform.OS === "web" ? ({ cursor: "pointer" } as object) : {}),
+  },
   signupText: { fontSize: 15, fontFamily: "Inter_600SemiBold", color: Colors.light.primary },
+  signupTextPhoneWeb: { fontSize: 16 },
   section: {
     backgroundColor: Colors.light.card,
     borderRadius: 16,
@@ -445,6 +556,24 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.light.primary, width: "100%", paddingVertical: 14, borderRadius: 12, marginTop: 4,
   },
   primaryBtnText: { fontSize: 15, fontFamily: "Inter_600SemiBold", color: "#fff" },
-  footerRow: { alignItems: "center", gap: 4, paddingTop: 8 },
-  footer: { fontSize: 12, color: Colors.light.textMuted, textAlign: "center" },
+  footerCard: {
+    alignSelf: "stretch",
+    marginTop: 12,
+    paddingVertical: 18,
+    paddingHorizontal: 16,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    /* Same soft blue as app welcome / home background */
+    backgroundColor: Colors.light.background,
+    borderWidth: 2,
+    borderColor: Colors.light.primary,
+  },
+  footer: {
+    fontSize: 13,
+    fontFamily: "Inter_500Medium",
+    color: Colors.light.primaryDark,
+    textAlign: "center",
+    lineHeight: 20,
+  },
 });
