@@ -8,7 +8,7 @@ import {
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Stack, router, useSegments } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
-import React, { useEffect } from "react";
+import React, { useEffect, useRef } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -41,6 +41,12 @@ function RootLayoutNav() {
   const { user, isLoading } = useAuth();
   const segments = useSegments();
   const { runForegroundAccessCheck } = useDownloadManager();
+  /** Avoid stacking duplicate login routes if the splash segment effect runs twice before segments settle. */
+  const incompleteSplashNavDoneRef = useRef(false);
+
+  useEffect(() => {
+    if (!user || user.profileComplete) incompleteSplashNavDoneRef.current = false;
+  }, [user?.id, user?.profileComplete]);
 
   // AppState listener for foreground access check
   useEffect(() => {
@@ -67,7 +73,18 @@ function RootLayoutNav() {
     const currentSegment = segments[0];
     if (!currentSegment) {
       if (user) {
-        router.replace(user.profileComplete ? "/(tabs)" : "/(auth)/email-login");
+        if (user.profileComplete) {
+          router.replace("/(tabs)");
+        } else {
+          if (!incompleteSplashNavDoneRef.current) {
+            incompleteSplashNavDoneRef.current = true;
+            // Keep /welcome in history so Back from login returns to the marketing page (web + native).
+            router.replace("/welcome");
+            setTimeout(() => {
+              router.push("/(auth)/email-login");
+            }, 0);
+          }
+        }
       } else {
         router.replace("/welcome");
       }
@@ -105,9 +122,8 @@ function RootLayoutNav() {
         return;
       }
 
-      // Incomplete profile: default to email+password screen; do not yank off email-login onto phone OTP.
+      // Incomplete profile: allow /welcome (e.g. user tapped Back from login); initial load stacks welcome→login from !currentSegment above.
       if (inWelcome) {
-        router.replace("/(auth)/email-login");
         return;
       }
       if (inAuthGroup) {

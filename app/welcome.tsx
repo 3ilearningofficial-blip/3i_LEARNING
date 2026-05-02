@@ -35,6 +35,78 @@ const DEFAULT_VISION_BODY =
 const DEFAULT_PANKAJ_BODY =
   "Pankaj Sir leads mathematics sessions with a focus on fundamentals, exam patterns, and consistent practice — mentoring students for NDA, CDS, AFCAT, and related entrances.";
 
+const DEFAULT_WEB_CONTACT_PHONE = "9997198068";
+const DEFAULT_WEB_CONTACT_EMAIL = "3ilearningofficial@gmail.com";
+
+function buildWebContactTelHref(phoneRaw: string): string | null {
+  const digits = phoneRaw.replace(/\D/g, "");
+  if (!digits) return null;
+  if (digits.length === 10) return `tel:+91${digits}`;
+  return `tel:+${digits}`;
+}
+
+function buildWebContactMailto(emailRaw: string): string | null {
+  const e = emailRaw.trim();
+  if (!e || !e.includes("@")) return null;
+  return `mailto:${e}`;
+}
+
+function WebAdminContactsAbove({ phoneDisplay, emailDisplay }: { phoneDisplay: string; emailDisplay: string }) {
+  const telHref = buildWebContactTelHref(phoneDisplay);
+  const mailHref = buildWebContactMailto(emailDisplay);
+  if (!telHref && !mailHref) return null;
+
+  const open =
+    (url: string) => () =>
+      Linking.openURL(url).catch(() => {});
+  return (
+    <View style={styles.adminContactRowAbove}>
+      {telHref ? (
+        <Pressable onPress={open(telHref)} style={styles.adminContactPress} accessibilityRole="link">
+          <Ionicons name="call-outline" size={18} color={Colors.light.primary} />
+          <Text style={styles.adminContactLabel}>{phoneDisplay.trim()}</Text>
+        </Pressable>
+      ) : null}
+      {mailHref ? (
+        <Pressable onPress={open(mailHref)} style={styles.adminContactPress} accessibilityRole="link">
+          <Ionicons name="mail-outline" size={18} color={Colors.light.primary} />
+          <Text style={styles.adminContactLabel} numberOfLines={1}>
+            {emailDisplay.trim()}
+          </Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
+function WebAdminContactsLaptopEnd({ phoneDisplay, emailDisplay }: { phoneDisplay: string; emailDisplay: string }) {
+  const telHref = buildWebContactTelHref(phoneDisplay);
+  const mailHref = buildWebContactMailto(emailDisplay);
+  if (!telHref && !mailHref) return null;
+
+  const open =
+    (url: string) => () =>
+      Linking.openURL(url).catch(() => {});
+  return (
+    <View style={styles.adminContactLaptopEnd}>
+      {telHref ? (
+        <Pressable onPress={open(telHref)} style={styles.adminContactPress} accessibilityRole="link">
+          <Ionicons name="call-outline" size={18} color={Colors.light.primary} />
+          <Text style={styles.adminContactLabel}>{phoneDisplay.trim()}</Text>
+        </Pressable>
+      ) : null}
+      {mailHref ? (
+        <Pressable onPress={open(mailHref)} style={styles.adminContactPress} accessibilityRole="link">
+          <Ionicons name="mail-outline" size={18} color={Colors.light.primary} />
+          <Text style={[styles.adminContactLabel, styles.adminContactEmailLaptop]} numberOfLines={1}>
+            {emailDisplay.trim()}
+          </Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
 type MyCourseItem = { title: string; desc: string };
 type ExtraSection = { title?: string; body?: string; imageUrl?: string };
 type FeatureItem = { icon: string; color: string; title: string; desc: string };
@@ -194,8 +266,17 @@ export default function WelcomeScreen() {
   const showMyCourse = on("welcome_show_my_course");
   const showSub = on("welcome_show_subheadline");
 
+  const webContactPhone = s("welcome_web_contact_phone", DEFAULT_WEB_CONTACT_PHONE);
+  const webContactEmail = s("welcome_web_contact_email", DEFAULT_WEB_CONTACT_EMAIL);
+  const webContactShows =
+    (webContactPhone.trim().length > 0 && !!buildWebContactTelHref(webContactPhone)) ||
+    (webContactEmail.trim().length > 0 && !!buildWebContactMailto(webContactEmail));
+
   const webHero = isWeb && isWide;
   const isPhoneWeb = isWeb && !isWide;
+  /** Laptop web: contacts on same row as hero; narrow web: row above brand. Web only — never native apps. */
+  const showAdminContactAbove = isWeb && webContactShows && width < 768;
+  const showAdminContactLaptopEnd = isWeb && webContactShows && width >= 768;
   /** Narrow width: inner scroll areas for long CMS text (phone web + small native). */
   const useSectionInnerScroll = width < 640;
   const sectionScrollMaxH = Math.min(340, Math.round(Math.max(220, height * 0.42)));
@@ -221,14 +302,22 @@ export default function WelcomeScreen() {
         <View style={[styles.headerCard, isPhoneWeb && styles.headerCardPhoneWeb]}>
           {webHero ? (
             <>
+              {showAdminContactAbove ? (
+                <WebAdminContactsAbove phoneDisplay={webContactPhone} emailDisplay={webContactEmail} />
+              ) : null}
               <View style={styles.headerRowWeb}>
-                <View style={styles.logoRing}>
-                  <View style={styles.logoInnerCircle}>{logoImageEl}</View>
+                <View style={styles.headerLeadingWeb}>
+                  <View style={styles.logoRing}>
+                    <View style={styles.logoInnerCircle}>{logoImageEl}</View>
+                  </View>
+                  <View style={styles.headerTextColWeb}>
+                    <Text style={styles.brandInHeader}>{brandText}</Text>
+                    <Text style={styles.taglineWeb} numberOfLines={3}>{tagline}</Text>
+                  </View>
                 </View>
-                <View style={styles.headerTextColWeb}>
-                  <Text style={styles.brandInHeader}>{brandText}</Text>
-                  <Text style={styles.taglineWeb} numberOfLines={3}>{tagline}</Text>
-                </View>
+                {showAdminContactLaptopEnd ? (
+                  <WebAdminContactsLaptopEnd phoneDisplay={webContactPhone} emailDisplay={webContactEmail} />
+                ) : null}
               </View>
               {!!navLine.trim() && on("welcome_show_nav") && (
                 <Text style={[styles.navLine, styles.navLineWebHeader]} accessibilityRole="text">{navLine}</Text>
@@ -236,6 +325,9 @@ export default function WelcomeScreen() {
             </>
           ) : (
             <>
+              {showAdminContactAbove ? (
+                <WebAdminContactsAbove phoneDisplay={webContactPhone} emailDisplay={webContactEmail} />
+              ) : null}
               <View style={styles.headerBrandRowMobile}>
                 <View style={[styles.logoRing, isPhoneWeb && styles.logoRingPhoneWeb]}>
                   <View style={[styles.logoInnerCircle, isPhoneWeb && styles.logoInnerCirclePhoneWeb]}>{logoImageEl}</View>
@@ -502,8 +594,43 @@ const styles = StyleSheet.create({
     gap: 16,
     flexWrap: "nowrap",
     width: "100%",
+    justifyContent: "space-between",
+  },
+  headerLeadingWeb: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 16,
+    flex: 1,
+    minWidth: 0,
   },
   headerTextColWeb: { flex: 1, minWidth: 0, gap: 4 },
+  adminContactRowAbove: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 14,
+    width: "100%",
+    paddingBottom: 4,
+  },
+  adminContactLaptopEnd: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 16,
+    flexShrink: 0,
+  },
+  adminContactPress: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    maxWidth: "100%",
+  },
+  adminContactLabel: {
+    fontSize: 13,
+    fontFamily: "Inter_500Medium",
+    color: Colors.light.primary,
+  },
+  adminContactEmailLaptop: { maxWidth: 220 },
   headerBrandRowMobile: {
     flexDirection: "row",
     alignItems: "center",

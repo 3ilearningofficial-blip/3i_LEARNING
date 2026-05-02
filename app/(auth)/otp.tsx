@@ -12,6 +12,7 @@ import { getInstallationId } from "@/lib/installation-id";
 import { useAuth } from "@/context/AuthContext";
 import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
+import { navigateBackFromAuth } from "@/lib/navigate-auth-back";
 
 export default function OTPScreen() {
   const insets = useSafeAreaInsets();
@@ -160,7 +161,7 @@ export default function OTPScreen() {
     <View style={styles.container}>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
         <View style={[styles.content, { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 20 }]}>
-          <Pressable style={styles.backBtn} onPress={() => router.back()}>
+          <Pressable style={styles.backBtn} onPress={navigateBackFromAuth}>
             <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
           </Pressable>
 

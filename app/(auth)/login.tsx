@@ -13,6 +13,7 @@ import { apiRequest } from "@/lib/query-client";
 import { getInstallationId } from "@/lib/installation-id";
 import { useAuth } from "@/context/AuthContext";
 import Colors from "@/constants/colors";
+import { navigateBackFromAuth } from "@/lib/navigate-auth-back";
 
 export default function LoginScreen() {
   const insets = useSafeAreaInsets();
@@ -126,7 +127,7 @@ export default function LoginScreen() {
           keyboardShouldPersistTaps="handled"
           bounces={false}
         >
-          <Pressable style={{ alignSelf: "flex-start", marginBottom: 8 }} onPress={() => router.replace("/(auth)/email-login" as any)}>
+          <Pressable style={{ alignSelf: "flex-start", marginBottom: 8 }} onPress={() => navigateBackFromAuth()}>
             <Ionicons name="arrow-back" size={22} color={Colors.light.text} />
           </Pressable>
 

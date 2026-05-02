@@ -12,6 +12,7 @@ import { apiRequest } from "@/lib/query-client";
 import { getInstallationId } from "@/lib/installation-id";
 import { useAuth } from "@/context/AuthContext";
 import Colors from "@/constants/colors";
+import { navigateBackFromAuth } from "@/lib/navigate-auth-back";
 
 export default function EmailLoginScreen() {
   const insets = useSafeAreaInsets();
@@ -78,7 +79,7 @@ export default function EmailLoginScreen() {
           ]}
           keyboardShouldPersistTaps="handled"
         >
-          <Pressable style={styles.backBtn} onPress={() => router.back()}>
+          <Pressable style={styles.backBtn} onPress={navigateBackFromAuth}>
             <Ionicons name="arrow-back" size={22} color={Colors.light.text} />
           </Pressable>
 

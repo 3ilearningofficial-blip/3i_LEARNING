@@ -445,6 +445,29 @@ function AnalyticsTab() {
   );
 }
 
+/** Invalid JSON still saves to DB but the welcome page skips it and shows default cards/features. */
+function validateWelcomeJsonForSave(settings: Record<string, string>): string | null {
+  const pairs: [string, string][] = [
+    ["welcome_my_course_json", "Course cards"],
+    ["welcome_extra_sections_json", "Extra sections"],
+    ["welcome_features_json", "Features override"],
+  ];
+  for (const [key, label] of pairs) {
+    const raw = settings[key];
+    if (raw == null || !String(raw).trim()) continue;
+    try {
+      const parsed = JSON.parse(String(raw));
+      if (!Array.isArray(parsed)) {
+        return `${label}: must be a JSON array — start with [ and end with ].`;
+      }
+    } catch (e: any) {
+      const msg = e?.message ? String(e.message) : String(e);
+      return `${label}: invalid JSON (${msg}). Do not paste line breaks inside "desc"; use \\n instead. Ensure the box starts with [{ and ends with }].`;
+    }
+  }
+  return null;
+}
+
 function WelcomeSettingsTab() {
   const qc = useQueryClient();
   const [settings, setSettings] = React.useState<Record<string, string>>({});
@@ -505,6 +528,9 @@ function WelcomeSettingsTab() {
     welcome_show_web_app: "true",
     welcome_show_web_download: "true",
     welcome_footer: "© 2026 3i Learning. All rights reserved.",
+    /** Shown on web welcome header only (phone + mail icons); not shown in Android/iOS apps. */
+    welcome_web_contact_phone: "9997198068",
+    welcome_web_contact_email: "3ilearningofficial@gmail.com",
   };
 
   React.useEffect(() => {
@@ -526,6 +552,16 @@ function WelcomeSettingsTab() {
   }, []);
 
   const handleSave = async () => {
+    const jsonErr = validateWelcomeJsonForSave(settings);
+    if (jsonErr) {
+      if (Platform.OS === "web") {
+        setSaveMsg("❌ " + jsonErr);
+        setTimeout(() => setSaveMsg(""), 8000);
+      } else {
+        Alert.alert("Invalid JSON", jsonErr);
+      }
+      return;
+    }
     setSaving(true);
     try {
       const res = await apiRequest("PUT", "/api/admin/site-settings", { settings });
@@ -633,6 +669,33 @@ function WelcomeSettingsTab() {
           <Text style={labelStyle}>Brand name next to logo</Text>
           <TextInput style={inputStyle} value={val("welcome_brand_text")} onChangeText={v => set("welcome_brand_text", v)} placeholder="3i Learning" />
         </View>
+        <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.text, marginTop: 6 }}>Web header — support contact</Text>
+        <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", lineHeight: 17 }}>
+          Phone and email with icons next to the brand (laptop web) or above it (narrow web). Not shown in native Android/iOS apps. Leave both blank to hide the row.
+        </Text>
+        <View style={{ gap: 4 }}>
+          <Text style={labelStyle}>Admin phone (display + tap to call)</Text>
+          <TextInput
+            style={inputStyle}
+            value={val("welcome_web_contact_phone")}
+            onChangeText={v => set("welcome_web_contact_phone", v)}
+            placeholder="9997198068"
+            keyboardType={Platform.OS === "web" ? undefined : "phone-pad"}
+            autoCapitalize="none"
+          />
+        </View>
+        <View style={{ gap: 4 }}>
+          <Text style={labelStyle}>Admin email (display + tap to mail)</Text>
+          <TextInput
+            style={inputStyle}
+            value={val("welcome_web_contact_email")}
+            onChangeText={v => set("welcome_web_contact_email", v)}
+            placeholder="support@example.com"
+            keyboardType="email-address"
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+        </View>
         <View style={{ gap: 4 }}>
           <Text style={labelStyle}>Tagline (single line on web)</Text>
           <TextInput style={inputStyle} value={val("welcome_tagline")} onChangeText={v => set("welcome_tagline", v)} placeholder="Master Mathematics Under Pankaj Sir Guidance" />
@@ -739,6 +802,10 @@ function WelcomeSettingsTab() {
             placeholder='[{"title":"...","desc":"..."}]'
             autoCapitalize="none"
           />
+          <Text style={{ fontSize: 12, color: "#B45309", fontFamily: "Inter_400Regular", lineHeight: 17 }}>
+            Must be valid JSON. If descriptions do not appear on the site, the usual cause is illegal line breaks inside a string — press Enter creates an error; use literal \n in the desc text instead.
+            The first character must be [ and each title/desc pair must stay inside "...". Save is blocked until JSON parses.
+          </Text>
         </View>
       </View>
 
