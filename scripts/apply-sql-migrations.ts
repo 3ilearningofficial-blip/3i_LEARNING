@@ -16,6 +16,7 @@ const migrationFiles = [
   "migrations/0003_runtime_schema_baseline.sql",
   "migrations/0004_user_sessions.sql",
   "migrations/0005_student_progress_tracking.sql",
+  "migrations/0006_web_dual_device_slots.sql",
 ];
 
 const connectionString = process.env.DATABASE_URL;

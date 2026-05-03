@@ -3,6 +3,7 @@ import { hashPassword, isScryptHash, verifyLegacySha256, verifyPassword } from "
 import {
   assertLoginAllowedForInstallation,
   enforceInstallationBinding,
+  finalizeStudentWebSlotsAfterAuth,
 } from "./native-device-binding";
 import { persistLoginSession, resolveUserBySessionToken, userHasSessionToken } from "./user-sessions";
 
@@ -152,6 +153,7 @@ export function registerAuthRoutes({
 
       const sessionToken = generateSecureToken();
       await persistLoginSession(db, user, sessionToken, deviceId || null, { clearOtp: true });
+      await finalizeStudentWebSlotsAfterAuth(db, user.id, user.role, req);
 
       const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: deviceId || null });
       (req.session as any).user = sessionUser;
@@ -197,6 +199,7 @@ export function registerAuthRoutes({
 
       const sessionToken = generateSecureToken();
       await persistLoginSession(db, user, sessionToken, deviceId || null, { clearOtp: true });
+      await finalizeStudentWebSlotsAfterAuth(db, user.id, user.role, req);
 
       const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: deviceId || null });
       (req.session as any).user = sessionUser;
@@ -320,6 +323,7 @@ export function registerAuthRoutes({
 
       const sessionToken = generateSecureToken();
       await persistLoginSession(db, user, sessionToken, deviceId || null, { clearOtp: false });
+      await finalizeStudentWebSlotsAfterAuth(db, user.id, user.role, req);
 
       const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: deviceId || null });
       (req.session as any).user = sessionUser;
@@ -386,6 +390,7 @@ export function registerAuthRoutes({
       const sessionToken = generateSecureToken();
       const dev = typeof deviceId === "string" ? deviceId : null;
       await persistLoginSession(db, user, sessionToken, dev, { clearOtp: false });
+      await finalizeStudentWebSlotsAfterAuth(db, user.id, user.role, req);
       const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: dev });
       (req.session as any).user = sessionUser;
       res.json({ success: true, user: sessionUser });

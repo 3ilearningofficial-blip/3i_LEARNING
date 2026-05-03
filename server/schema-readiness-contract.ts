@@ -31,7 +31,15 @@ export const REQUIRED_TABLES = [
 ] as const;
 
 export const REQUIRED_COLUMNS: Record<string, string[]> = {
-  users: ["session_token", "app_bound_device_id", "profile_complete", "is_blocked", "last_active_at"],
+  users: [
+    "session_token",
+    "app_bound_device_id",
+    "web_device_id_phone",
+    "web_device_id_desktop",
+    "profile_complete",
+    "is_blocked",
+    "last_active_at",
+  ],
   enrollments: ["status", "valid_until"],
   live_classes: [
     "recording_url",

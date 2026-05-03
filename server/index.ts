@@ -130,6 +130,7 @@ function setupCors(app: express.Application) {
       "X-User-Id",
       "X-App-Device-Id",
       "X-Client-Platform",
+      "X-Web-Form-Factor",
     ],
     credentials: true,
     exposedHeaders: ["Content-Length", "Content-Type", "Content-Disposition"],

@@ -17,6 +17,7 @@ import { useVideoScreenProtection } from "@/lib/useVideoScreenProtection";
 import { DownloadButton } from "@/components/DownloadButton";
 import { VideoWatermark } from "@/components/VideoWatermark";
 import { buildYouTubePhoneWebSrcDoc } from "@/lib/buildYouTubePhoneWebSrcDoc";
+import { buildCfHlsPlayerHtml } from "@/lib/buildCfHlsPlayerHtml";
 
 const mediaTokenCache = new Map<string, { token: string; expiresAt: number }>();
 const MEDIA_TOKEN_TTL_MS = 50 * 1000;
@@ -77,50 +78,6 @@ function isHlsManifestUrl(url: string): boolean {
   if (/\.m3u8($|\?)/i.test(lower)) return true;
   if (lower.includes("videodelivery.net/") && lower.includes("/manifest/")) return true;
   return false;
-}
-
-function buildCfHlsPlayerHtml(hlsUrl: string): string {
-  return `<!DOCTYPE html>
-<html>
-<head>
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
-video { width: 100%; height: 100%; object-fit: contain; background: #000; }
-</style>
-</head>
-<body>
-<video id="v" autoplay controls playsinline controlsList="nodownload noplaybackrate noremoteplayback nopictureinpicture" disablePictureInPicture disableRemotePlayback x-webkit-airplay="deny"></video>
-<script src="https://cdn.jsdelivr.net/npm/hls.js@latest/dist/hls.min.js"></script>
-<script>
-var video = document.getElementById('v');
-var hlsUrl = '${hlsUrl}';
-function tryLoad() {
-  if (Hls.isSupported()) {
-    var hls = new Hls();
-    hls.loadSource(hlsUrl);
-    hls.attachMedia(video);
-    hls.on(Hls.Events.MANIFEST_PARSED, function() {
-      video.muted = true;
-      video.play().catch(function() {});
-      if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({ event: 'play' }));
-    });
-  } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-    video.src = hlsUrl;
-    video.addEventListener('loadedmetadata', function once() {
-      video.removeEventListener('loadedmetadata', once);
-      video.muted = true;
-      video.play().catch(function() {});
-      if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({ event: 'play' }));
-    });
-  }
-}
-tryLoad();
-document.addEventListener('contextmenu', function(e) { e.preventDefault(); });
-</script>
-</body>
-</html>`;
 }
 
 function buildCloudflareStreamHtml(videoId: string, signedUrl?: string): string {

@@ -18,6 +18,7 @@ import { VideoWatermark } from "@/components/VideoWatermark";
 import LiveStudentsPanel from "@/components/LiveStudentsPanel";
 import { filterChatMessages } from "@/lib/chat-utils";
 import { buildYouTubePhoneWebSrcDoc } from "@/lib/buildYouTubePhoneWebSrcDoc";
+import { buildCfHlsPlayerHtml } from "@/lib/buildCfHlsPlayerHtml";
 
 const mediaTokenCache = new Map<string, { token: string; expiresAt: number }>();
 const MEDIA_TOKEN_TTL_MS = 50 * 1000;
@@ -228,65 +229,6 @@ function isCloudflareStreamId(str: string): boolean {
   if (!str) return false;
   // Cloudflare Stream video IDs are 32-character hex strings
   return /^[a-f0-9]{32}$/i.test(str.trim());
-}
-
-function buildCfHlsPlayerHtml(hlsUrl: string): string {
-  return `<!DOCTYPE html>
-<html>
-<head>
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
-video { width: 100%; height: 100%; object-fit: contain; background: #000; }
-#overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #0a0a0a; color: #fff; font-family: sans-serif; gap: 12px; }
-#overlay.hidden { display: none; }
-.spinner { width: 36px; height: 36px; border: 3px solid #333; border-top-color: #F6821F; border-radius: 50%; animation: spin 0.8s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
-.msg { font-size: 13px; color: #aaa; text-align: center; }
-</style>
-</head>
-<body>
-<video id="v" autoplay controls playsinline controlsList="nodownload noplaybackrate noremoteplayback nopictureinpicture" disablePictureInPicture disableRemotePlayback x-webkit-airplay="deny"></video>
-<div id="overlay"><div class="spinner"></div><div class="msg" id="msg">Connecting to live stream...</div></div>
-<script src="https://cdn.jsdelivr.net/npm/hls.js@latest/dist/hls.min.js"></script>
-<script>
-var video = document.getElementById('v');
-var overlay = document.getElementById('overlay');
-var msg = document.getElementById('msg');
-var hlsUrl = '${hlsUrl}';
-var retryCount = 0;
-function showLive() {
-  overlay.classList.add('hidden');
-  if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({ event: 'play' }));
-}
-function tryLoad() {
-  if (Hls.isSupported()) {
-    var hls = new Hls({ liveSyncDurationCount: 2, liveMaxLatencyDurationCount: 6 });
-    hls.loadSource(hlsUrl);
-    hls.attachMedia(video);
-    hls.on(Hls.Events.MANIFEST_PARSED, function() {
-      video.muted = true;
-      video.play().then(showLive).catch(function() { video.play().then(showLive).catch(showLive); });
-    });
-    hls.on(Hls.Events.ERROR, function(e, d) {
-      if (d.fatal) { retryCount++; msg.textContent = 'Connecting... (' + retryCount + ')'; setTimeout(tryLoad, 5000); }
-    });
-  } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-    video.muted = true;
-    video.src = hlsUrl;
-    video.addEventListener('loadedmetadata', function once() {
-      video.removeEventListener('loadedmetadata', once);
-      video.play().then(showLive).catch(function() { showLive(); });
-    });
-    video.addEventListener('error', function() { setTimeout(tryLoad, 5000); });
-  }
-}
-tryLoad();
-document.addEventListener('contextmenu', function(e) { e.preventDefault(); });
-</script>
-</body>
-</html>`;
 }
 
 function buildCloudflareStreamHtml(videoId: string): string {
@@ -887,7 +829,7 @@ export default function LiveClassScreen() {
               <View style={styles.webScheduledVideoSlot} />
             ) : isCfHls && Platform.OS === "web" ? (
               <iframe
-                srcDoc={buildCfHlsPlayerHtml(cfHlsUrl)}
+                srcDoc={buildCfHlsPlayerHtml(cfHlsUrl, { liveStream: true })}
                 style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" } as any}
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                 onLoad={() => setIsVideoLoading(false)}
@@ -924,7 +866,7 @@ export default function LiveClassScreen() {
               />
             ) : isCfHls && Platform.OS !== "web" ? (
               <WebView
-                source={{ html: buildCfHlsPlayerHtml(cfHlsUrl) }}
+                source={{ html: buildCfHlsPlayerHtml(cfHlsUrl, { liveStream: true }) }}
                 style={{ flex: 1, backgroundColor: "#000" }}
                 onLoad={() => setIsVideoLoading(false)}
                 onMessage={handleWebViewMessage}
@@ -1135,7 +1077,7 @@ export default function LiveClassScreen() {
               <View style={styles.webScheduledVideoSlot} />
             ) : isCfHls && Platform.OS === "web" ? (
               <iframe
-                srcDoc={buildCfHlsPlayerHtml(cfHlsUrl)}
+                srcDoc={buildCfHlsPlayerHtml(cfHlsUrl, { liveStream: true })}
                 style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" } as any}
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                 onLoad={() => setIsVideoLoading(false)}
@@ -1171,7 +1113,7 @@ export default function LiveClassScreen() {
               />
             ) : isCfHls && Platform.OS !== "web" ? (
               <WebView
-                source={{ html: buildCfHlsPlayerHtml(cfHlsUrl) }}
+                source={{ html: buildCfHlsPlayerHtml(cfHlsUrl, { liveStream: true }) }}
                 style={{ flex: 1, backgroundColor: "#000" }}
                 onLoad={() => setIsVideoLoading(false)}
                 onMessage={handleWebViewMessage}

@@ -275,11 +275,29 @@ export function registerAdminAnalyticsRoutes({
         [courseId, userId]
       );
 
+      const missions = await db.query(
+        `SELECT dm.id AS mission_id, dm.title, dm.mission_date::text AS mission_date,
+                CASE
+                  WHEN dm.questions IS NULL THEN 0
+                  ELSE GREATEST(0, COALESCE(jsonb_array_length(dm.questions::jsonb), 0))
+                END AS total_questions,
+                COALESCE(um.is_completed, false) AS is_completed,
+                COALESCE(um.score, 0) AS correct,
+                COALESCE(um.incorrect, 0) AS incorrect,
+                COALESCE(um.skipped, 0) AS skipped
+         FROM daily_missions dm
+         LEFT JOIN user_missions um ON um.mission_id = dm.id AND um.user_id = $2
+         WHERE dm.course_id = $1
+         ORDER BY dm.mission_date DESC NULLS LAST, dm.id DESC`,
+        [courseId, userId]
+      );
+
       res.json({
         student,
         lectures: lectures.rows,
         liveClasses: liveClasses.rows,
         tests: tests.rows,
+        missions: missions.rows,
       });
     } catch (err) {
       console.error("Enrollment detail error:", err);

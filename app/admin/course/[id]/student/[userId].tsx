@@ -59,6 +59,17 @@ type TestRow = {
   completed_at: number | null;
 };
 
+type MissionRow = {
+  mission_id: number;
+  title: string;
+  mission_date: string | null;
+  total_questions: number | null;
+  is_completed: boolean;
+  correct: number | null;
+  incorrect: number | null;
+  skipped: number | null;
+};
+
 type ReportTab = "lecturesLive" | "tests";
 
 export default function AdminEnrollmentStudentDetailScreen() {
@@ -82,6 +93,7 @@ export default function AdminEnrollmentStudentDetailScreen() {
         lectures: LectureRow[];
         liveClasses: LiveRow[];
         tests: TestRow[];
+        missions: MissionRow[];
       };
     },
     enabled: !!courseId && !!userId,
@@ -91,6 +103,7 @@ export default function AdminEnrollmentStudentDetailScreen() {
   const lectures = data?.lectures ?? [];
   const lives = data?.liveClasses ?? [];
   const tests = data?.tests ?? [];
+  const missions = data?.missions ?? [];
 
   const lecturesLiveInner = (
     <>
@@ -154,6 +167,46 @@ export default function AdminEnrollmentStudentDetailScreen() {
 
   const testsInner = (
     <>
+      <Text style={styles.sectionLabel}>Daily missions (this course)</Text>
+      {missions.length === 0 ? (
+        <Text style={styles.emptyHint}>No course-linked daily missions yet.</Text>
+      ) : (
+        missions.map((m) => {
+          const totalQ = m.total_questions != null ? Number(m.total_questions) : null;
+          const done = !!m.is_completed;
+          return (
+            <View key={`m-${m.mission_id}`} style={styles.card}>
+              <Text style={styles.cardTitle} numberOfLines={2}>{m.title}</Text>
+              {m.mission_date ? (
+                <Text style={styles.cardMuted}>Date: {m.mission_date}</Text>
+              ) : null}
+              {totalQ != null && (
+                <Text style={styles.cardLine}>
+                  Total questions: <Text style={styles.cardEm}>{totalQ}</Text>
+                </Text>
+              )}
+              <Text style={styles.cardLine}>
+                Status:{" "}
+                <Text style={styles.cardEm}>{done ? "Completed" : "Not completed"}</Text>
+              </Text>
+              {done ? (
+                <>
+                  <Text style={styles.cardLine}>
+                    Correct: <Text style={styles.cardEm}>{m.correct != null ? m.correct : "—"}</Text>
+                    {" · "}Incorrect: <Text style={styles.cardEm}>{m.incorrect != null ? m.incorrect : "—"}</Text>
+                  </Text>
+                  {m.skipped != null && Number(m.skipped) > 0 && (
+                    <Text style={styles.cardMuted}>Skipped: {m.skipped}</Text>
+                  )}
+                </>
+              ) : (
+                <Text style={styles.cardMuted}>Student has not submitted this mission yet.</Text>
+              )}
+            </View>
+          );
+        })
+      )}
+      <Text style={[styles.sectionLabel, { marginTop: missions.length > 0 ? 16 : 8 }]}>Tests</Text>
       {tests.length === 0 ? (
         <Text style={styles.emptyHint}>No tests in this course.</Text>
       ) : (

@@ -62,6 +62,24 @@ function normalizeWelcomeImageUrl(raw: string): string {
   return u;
 }
 
+/** Turn `/api/...` or `api/...` paths into absolute URLs so images load on phone/laptop web. */
+function resolveWelcomeMediaUrl(raw: string, apiBase: string): string {
+  const n = normalizeWelcomeImageUrl(raw);
+  if (!n) return "";
+  if (/^https?:\/\//i.test(n)) return n;
+  let path = n.trim();
+  if (!path.startsWith("/")) {
+    if (path.toLowerCase().startsWith("api/")) path = `/${path}`;
+    else return n;
+  }
+  try {
+    const base = apiBase.replace(/\/+$/, "");
+    return new URL(path.replace(/^\/+/, "/"), `${base}/`).toString();
+  } catch {
+    return n;
+  }
+}
+
 function PankajSirPhoto({ uriRaw, extraStyle }: { uriRaw: string; extraStyle?: StyleProp<ImageStyle> }) {
   const normalized = React.useMemo(() => normalizeWelcomeImageUrl(uriRaw), [uriRaw]);
   const [failed, setFailed] = React.useState(false);
@@ -260,6 +278,11 @@ export default function WelcomeScreen() {
   const pankajTitle = s("welcome_pankaj_title", "About Pankaj Sir");
   const pankajBody = s("welcome_pankaj_body", DEFAULT_PANKAJ_BODY).trim();
   const pankajPhotoUrl = s("welcome_pankaj_photo_url", "").trim();
+  const apiOrigin = getApiUrl();
+  const pankajPhotoResolved = React.useMemo(
+    () => resolveWelcomeMediaUrl(pankajPhotoUrl, apiOrigin),
+    [pankajPhotoUrl, apiOrigin]
+  );
 
   const myCourseTitle = s("welcome_my_course_title", "My Courses");
   const myCourseIntro = s("welcome_my_course_intro", "");
@@ -434,7 +457,7 @@ export default function WelcomeScreen() {
               >
                 <View style={[styles.pankajRow, styles.pankajRowStacked]}>
                   {!!pankajPhotoUrl.trim() ? (
-                    <PankajSirPhoto uriRaw={pankajPhotoUrl} extraStyle={styles.pankajPhotoMobile} />
+                    <PankajSirPhoto uriRaw={pankajPhotoResolved} extraStyle={styles.pankajPhotoMobile} />
                   ) : (
                     <View style={[styles.pankajPhotoPlaceholder, styles.pankajPhotoMobile]}>
                       <Ionicons name="person" size={42} color={Colors.light.textMuted} />
@@ -450,7 +473,7 @@ export default function WelcomeScreen() {
             ) : (
               <View style={[styles.pankajRow, !isWide && styles.pankajRowStacked]}>
                 {!!pankajPhotoUrl.trim() ? (
-                  <PankajSirPhoto uriRaw={pankajPhotoUrl} extraStyle={!isWide ? styles.pankajPhotoMobile : undefined} />
+                  <PankajSirPhoto uriRaw={pankajPhotoResolved} extraStyle={!isWide ? styles.pankajPhotoMobile : undefined} />
                 ) : (
                   <View style={[styles.pankajPhotoPlaceholder, !isWide && styles.pankajPhotoMobile]}>
                     <Ionicons name="person" size={42} color={Colors.light.textMuted} />

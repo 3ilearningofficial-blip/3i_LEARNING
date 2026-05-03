@@ -12,6 +12,16 @@ function randomId(): string {
   return `${Date.now().toString(36)}_${Crypto.randomUUID().replace(/-/g, "")}`;
 }
 
+/** Mobile-class vs desktop-class web — server stores two allowed browser installs per student. */
+export function getWebFormFactorForHeaders(): "phone" | "desktop" {
+  if (typeof navigator !== "undefined") {
+    const ua = navigator.userAgent || "";
+    if (/ipad/i.test(ua) && !/mobile/i.test(ua)) return "desktop";
+    if (/mobile|android|iphone|ipod|webos|blackberry|iemobile|opera mini/i.test(ua)) return "phone";
+  }
+  return "desktop";
+}
+
 /** All clients should send this string on every API call (see query-client headers). */
 export async function getInstallationId(): Promise<string> {
   if (Platform.OS === "web") {

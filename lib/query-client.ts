@@ -1,6 +1,6 @@
 import { Platform } from "react-native";
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
-import { getInstallationId } from "./installation-id";
+import { getInstallationId, getWebFormFactorForHeaders } from "./installation-id";
 import { getStoredAuthToken } from "./auth-storage";
 
 type UnauthorizedHandler = () => void | Promise<void>;
@@ -256,7 +256,10 @@ export async function attachInstallationHeaders(headers: Record<string, string>)
     headers["X-App-Device-Id"] = id;
     if (Platform.OS === "ios") headers["X-Client-Platform"] = "ios";
     else if (Platform.OS === "android") headers["X-Client-Platform"] = "android";
-    else headers["X-Client-Platform"] = "web";
+    else {
+      headers["X-Client-Platform"] = "web";
+      headers["X-Web-Form-Factor"] = getWebFormFactorForHeaders();
+    }
   } catch {
     /* ignore */
   }

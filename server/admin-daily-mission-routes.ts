@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { sendPushToUsers } from "./push-notifications";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -26,7 +27,35 @@ export function registerAdminDailyMissionRoutes({
          VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
         [title, description || "", JSON.stringify(questions), missionDate || new Date().toISOString().split("T")[0], xpReward || 50, missionType || "daily_drill", courseId || null]
       );
-      res.json(result.rows[0]);
+      const row = result.rows[0];
+      const cid = courseId != null && courseId !== "" ? String(courseId) : "";
+      if (cid && row?.id != null) {
+        try {
+          const courseInfo = await db.query("SELECT title FROM courses WHERE id = $1", [cid]).catch(() => ({ rows: [] as any[] }));
+          const courseTitle = String(courseInfo.rows[0]?.title || "your course");
+          const recipients = await db.query("SELECT user_id FROM enrollments WHERE course_id = $1", [cid]).catch(() => ({ rows: [] as any[] }));
+          const recipientIds = recipients.rows.map((r: any) => Number(r.user_id)).filter((id: number) => Number.isFinite(id));
+          const notifTitle = "🎯 New Daily Mission";
+          const notifMessage = `"${title}" has been added to ${courseTitle}.`;
+          const now = Date.now();
+          for (const uid of recipientIds) {
+            await db
+              .query(
+                "INSERT INTO notifications (user_id, title, message, type, created_at) VALUES ($1, $2, $3, $4, $5)",
+                [uid, notifTitle, notifMessage, "info", now]
+              )
+              .catch(() => {});
+          }
+          await sendPushToUsers(db, recipientIds, {
+            title: notifTitle,
+            body: notifMessage,
+            data: { type: "course_mission_added", missionId: Number(row.id), courseId: Number(cid) },
+          });
+        } catch (e) {
+          console.error("Course mission notify:", e);
+        }
+      }
+      res.json(row);
     } catch (err) {
       console.error(err);
       res.status(500).json({ message: "Failed to create daily mission" });

@@ -271,8 +271,8 @@ export default function SupportChatTab() {
     else grouped.push({ date: dateStr, msgs: [msg] });
   }
 
-  // Tab bar height constants
-  const TAB_BAR_HEIGHT = Platform.OS === "android" ? 68 : Platform.OS === "web" ? 84 : 83;
+  /** Clearance above the bottom tab bar — keep modest so the composer sits near the bar, not floating high. */
+  const TAB_BAR_CLEARANCE = Platform.OS === "android" ? 52 : Platform.OS === "web" ? 56 : 52;
 
   return (
     <View style={{ flex: 1, backgroundColor: "#F0F4FF" }}>
@@ -343,8 +343,11 @@ export default function SupportChatTab() {
       )}
 
       {/* Input — sits above tab bar */}
-      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} keyboardVerticalOffset={TAB_BAR_HEIGHT + insets.bottom}>
-        <View style={[styles.inputRow, { paddingBottom: TAB_BAR_HEIGHT + Math.max(insets.bottom, 4) }]}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        keyboardVerticalOffset={Platform.OS === "ios" ? TAB_BAR_CLEARANCE + insets.bottom : 0}
+      >
+        <View style={[styles.inputRow, { paddingBottom: TAB_BAR_CLEARANCE + Math.max(insets.bottom, 6) }]}>
           <TextInput
             style={styles.input}
             placeholder="Type your message..."
