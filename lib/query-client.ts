@@ -39,6 +39,8 @@ function shouldNotifyUnauthorized(url: string): boolean {
     // Ignore auth-loss for passive analytics/progress pings while watching media.
     // These endpoints are best-effort and should never force a full app logout.
     if (
+      /\/api\/lectures\/[^/]+$/.test(path) ||
+      /\/api\/lectures\/[^/]+\/progress$/.test(path) ||
       /\/api\/lectures\/[^/]+\/progress\/session$/.test(path) ||
       /\/api\/live-classes\/[^/]+\/recording-progress$/.test(path) ||
       /\/api\/live-classes\/[^/]+\/viewers\/heartbeat$/.test(path)
@@ -49,6 +51,8 @@ function shouldNotifyUnauthorized(url: string): boolean {
     if (
       url.includes("/api/media-token") ||
       url.includes("/api/media/") ||
+      /\/api\/lectures\/[^/]+$/.test(url) ||
+      /\/api\/lectures\/[^/]+\/progress$/.test(url) ||
       /\/api\/lectures\/[^/]+\/progress\/session$/.test(url) ||
       /\/api\/live-classes\/[^/]+\/recording-progress$/.test(url) ||
       /\/api\/live-classes\/[^/]+\/viewers\/heartbeat$/.test(url)

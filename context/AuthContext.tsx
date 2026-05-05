@@ -138,6 +138,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     setUnauthorizedHandler(async () => {
       if (Platform.OS === "web") {
+        // Playback routes can trigger best-effort background calls; don't hard-logout on transient 401s there.
+        const onPlaybackRoute =
+          pathname.startsWith("/lecture/") ||
+          pathname.startsWith("/live-class/") ||
+          pathname.startsWith("/material/");
+        if (onPlaybackRoute) return;
         setUser(null);
         await removeStoredAuthUser();
         router.replace("/welcome");
@@ -154,7 +160,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await removeStoredAuthUser();
     });
     return () => setUnauthorizedHandler(null);
-  }, []);
+  }, [pathname]);
 
   // Web: clear session and return to welcome after 1 hour inactivity (students only — admins may stay signed in on multiple devices).
   useEffect(() => {
