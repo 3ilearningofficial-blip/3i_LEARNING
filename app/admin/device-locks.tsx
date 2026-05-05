@@ -9,8 +9,7 @@ import type { DeviceDeniedUserRow } from "./user-types";
 
 export default function AdminDeviceLocksScreen() {
   const qc = useQueryClient();
-
-  const { data: rows = [], isLoading } = useQuery<DeviceDeniedUserRow[]>({
+  const { data: rows = [], isLoading, refetch } = useQuery<DeviceDeniedUserRow[]>({
     queryKey: ["/api/admin/device-denied-users", "screen"],
     queryFn: async () => {
       const baseUrl = getApiUrl();
@@ -72,24 +71,26 @@ export default function AdminDeviceLocksScreen() {
               <Pressable
                 style={{ alignSelf: "flex-start", marginTop: 8, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, backgroundColor: "#EEF2FF", opacity: clearMutation.isPending ? 0.6 : 1 }}
                 onPress={() => {
-                  Alert.alert(
-                    "Unlock this student device lock?",
-                    "Are you sure you want to unlock this device binding? The student will be able to sign in again from a new phone/laptop browser.",
-                    [
-                      { text: "Cancel", style: "cancel" },
-                      {
-                        text: "OK",
-                        onPress: async () => {
-                          try {
-                            await clearMutation.mutateAsync(row.user_id);
-                            Alert.alert("Unlocked", "Device lock cleared successfully.");
-                          } catch (err: any) {
-                            Alert.alert("Failed", err?.message || "Could not clear device lock. Please try again.");
-                          }
-                        },
-                      },
-                    ]
-                  );
+                  const runUnlock = async () => {
+                    try {
+                      await clearMutation.mutateAsync(row.user_id);
+                      await refetch();
+                      Alert.alert("Unlocked", "Device lock cleared successfully.");
+                    } catch (err: any) {
+                      Alert.alert("Failed", err?.message || "Could not clear device lock. Please try again.");
+                    }
+                  };
+                  if (Platform.OS === "web" && typeof window !== "undefined") {
+                    const ok = window.confirm(
+                      "Are you sure you want to unlock this device binding? The student will be able to sign in again from a new phone/laptop browser."
+                    );
+                    if (ok) void runUnlock();
+                    return;
+                  }
+                  Alert.alert("Unlock this student device lock?", "Are you sure you want to unlock this device binding?", [
+                    { text: "Cancel", style: "cancel" },
+                    { text: "OK", onPress: () => void runUnlock() },
+                  ]);
                 }}
                 disabled={clearMutation.isPending}
               >

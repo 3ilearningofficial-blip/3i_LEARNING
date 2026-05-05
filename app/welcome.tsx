@@ -132,9 +132,14 @@ function WebAdminContactsAbove({ phoneDisplay, emailDisplay }: { phoneDisplay: s
   const mailHref = buildWebContactMailto(emailDisplay);
   if (!telHref && !mailHref) return null;
 
-  const open =
-    (url: string) => () =>
-      Linking.openURL(url).catch(() => {});
+  const open = (url: string) => () => {
+    if (Platform.OS === "web" && typeof window !== "undefined") {
+      // Use direct navigation so mailto/tel reliably open the default app on mobile web.
+      window.location.href = url;
+      return;
+    }
+    Linking.openURL(url).catch(() => {});
+  };
   return (
     <View style={styles.adminContactRowAbove}>
       {telHref ? (
@@ -160,9 +165,13 @@ function WebAdminContactsLaptopEnd({ phoneDisplay, emailDisplay }: { phoneDispla
   const mailHref = buildWebContactMailto(emailDisplay);
   if (!telHref && !mailHref) return null;
 
-  const open =
-    (url: string) => () =>
-      Linking.openURL(url).catch(() => {});
+  const open = (url: string) => () => {
+    if (Platform.OS === "web" && typeof window !== "undefined") {
+      window.location.href = url;
+      return;
+    }
+    Linking.openURL(url).catch(() => {});
+  };
   return (
     <View style={styles.adminContactLaptopEnd}>
       {telHref ? (
