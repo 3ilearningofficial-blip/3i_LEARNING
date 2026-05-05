@@ -144,6 +144,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           pathname.startsWith("/live-class/") ||
           pathname.startsWith("/material/");
         if (onPlaybackRoute) return;
+        // Confirm whether session is actually invalid before clearing user on web.
+        // This avoids false logout from endpoint-specific/transient 401s.
+        try {
+          const meUrl = new URL("/api/auth/me", getApiUrl());
+          const headers: Record<string, string> = {};
+          await attachInstallationHeaders(headers);
+          const meRes = await fetch(meUrl.toString(), { credentials: "include", headers });
+          if (meRes.ok) {
+            const me = await meRes.json().catch(() => null);
+            if (typeof me?.id === "number") {
+              setUser(me);
+              await storeAuthUser(me);
+              return;
+            }
+          }
+        } catch {
+          // fall through to logout
+        }
         setUser(null);
         await removeStoredAuthUser();
         router.replace("/welcome");

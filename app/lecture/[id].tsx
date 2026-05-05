@@ -390,12 +390,19 @@ export default function LectureScreen() {
   const [hasError, setHasError] = useState(false);
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
 
-  const { data: lectureData, error: lectureError } = useQuery<{ video_url: string; pdf_url?: string; title: string; is_completed?: boolean; download_allowed?: boolean; course_id?: number }>({
+  const { data: lectureData, error: lectureError, refetch: refetchLecture } = useQuery<{ video_url: string; pdf_url?: string; title: string; is_completed?: boolean; download_allowed?: boolean; course_id?: number }>({
     queryKey: ["/api/lectures", id],
     queryFn: async () => {
       const baseUrl = getApiUrl();
       const url = new URL(`/api/lectures/${id}`, baseUrl);
-      const res = await authFetch(url.toString());
+      let res = await authFetch(url.toString());
+      if (res.status === 401) {
+        // Session cookies can briefly desync on web; verify auth and retry once before locking UI.
+        const meRes = await authFetch(new URL("/api/auth/me", baseUrl).toString()).catch(() => null);
+        if (meRes && meRes.ok) {
+          res = await authFetch(url.toString());
+        }
+      }
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.message || "Failed to load lecture");
@@ -611,13 +618,24 @@ export default function LectureScreen() {
             {(lectureError as any)?.message || "Access Denied"}
           </Text>
           <Text style={{ fontSize: 14, fontFamily: "Inter_400Regular", color: Colors.light.textSecondary, textAlign: "center" }}>
-            You need to enroll in this course to watch lectures.
+            {String((lectureError as any)?.message || "").toLowerCase().includes("enroll")
+              ? "You need to enroll in this course to watch lectures."
+              : "We could not validate your session for this lecture. Please retry."}
           </Text>
           <Pressable
-            onPress={() => router.back()}
+            onPress={() => {
+              const msg = String((lectureError as any)?.message || "").toLowerCase();
+              if (msg.includes("enroll")) {
+                router.back();
+                return;
+              }
+              void refetchLecture();
+            }}
             style={{ backgroundColor: Colors.light.primary, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 12 }}
           >
-            <Text style={{ color: "#fff", fontFamily: "Inter_600SemiBold" }}>Go Back</Text>
+            <Text style={{ color: "#fff", fontFamily: "Inter_600SemiBold" }}>
+              {String((lectureError as any)?.message || "").toLowerCase().includes("enroll") ? "Go Back" : "Retry"}
+            </Text>
           </Pressable>
         </View>
       ) : (
