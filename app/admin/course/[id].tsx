@@ -11,11 +11,13 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
 import { apiRequest, getApiUrl, authFetch } from "@/lib/query-client";
+import { liveClassesForCourseQueryKey, liveClassesQueryKey } from "@/lib/query-keys";
 import { uploadToR2, getMimeType } from "@/lib/r2-upload";
 import Colors from "@/constants/colors";
 import { fetch } from "expo/fetch";
 import BulkUploadModal from "@/components/BulkUploadModal";
 import { DEFAULT_LIVE_RECORDING_SECTION } from "@/lib/recordingSection";
+import { useDocumentVisibility } from "@/lib/useDocumentVisibility";
 
 interface Lecture {
   id: number;
@@ -219,6 +221,7 @@ export default function AdminCourseScreen() {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const courseIdNum = Number(id);
+  const tabVisible = useDocumentVisibility();
 
   const inferLectureVideoType = (url: string): string => {
     const u = (url || "").trim().toLowerCase();
@@ -283,11 +286,11 @@ export default function AdminCourseScreen() {
   };
 
   const { data: course, isLoading } = useQuery<CourseDetail>({
-    queryKey: ["/api/courses", id],
+    queryKey: ["/api/courses", String(id)],
     queryFn: async () => {
       const baseUrl = getApiUrl();
       const url = new URL(`/api/courses/${id}`, baseUrl);
-      const res = await fetch(url.toString(), { credentials: "include" });
+      const res = await authFetch(url.toString());
       const raw = await res.json().catch(() => null);
       const payload = unwrapPayload(raw);
       if (!payload || typeof payload !== "object") {
@@ -311,7 +314,8 @@ export default function AdminCourseScreen() {
     },
     enabled: isValidId,
     staleTime: 0,
-    refetchInterval: ["lectures", "tests", "materials"].includes(activeTab) ? 10000 : false,
+    refetchInterval:
+      tabVisible && ["lectures", "tests", "materials"].includes(activeTab) ? 10_000 : false,
   });
 
   const { data: courseLiveClasses = [], isPending: courseLivePending } = useQuery<LiveClassItem[]>({
@@ -319,7 +323,7 @@ export default function AdminCourseScreen() {
     queryFn: async () => {
       const baseUrl = getApiUrl();
       const url = new URL(`/api/live-classes?courseId=${id}&admin=true`, baseUrl);
-      const res = await fetch(url.toString(), { credentials: "include" });
+      const res = await authFetch(url.toString());
       if (!res.ok) return [];
       const raw = await res.json().catch(() => []);
       const payload = unwrapPayload(raw);
@@ -328,7 +332,7 @@ export default function AdminCourseScreen() {
     enabled: isValidId,
     staleTime: 30_000,
     gcTime: 15 * 60 * 1000,
-    refetchInterval: activeTab === "live" ? 8000 : false,
+    refetchInterval: tabVisible && activeTab === "live" ? 8000 : false,
   });
 
   const { data: dbFolders = [], refetch: refetchFolders } = useQuery<any[]>({
@@ -402,7 +406,7 @@ export default function AdminCourseScreen() {
     },
     onSuccess: () => {
       refetchFolders();
-      qc.invalidateQueries({ queryKey: ["/api/courses", id] });
+      qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] });
     },
     onError: (e: any) => console.error("Create folder error:", e),
   });
@@ -420,7 +424,7 @@ export default function AdminCourseScreen() {
     },
     onSuccess: () => {
       refetchFolders();
-      qc.invalidateQueries({ queryKey: ["/api/courses", id] });
+      qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] });
     },
   });
 
@@ -430,7 +434,7 @@ export default function AdminCourseScreen() {
     },
     onSuccess: () => {
       refetchFolders();
-      qc.invalidateQueries({ queryKey: ["/api/courses", id] });
+      qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] });
     },
   });
 
@@ -453,7 +457,7 @@ export default function AdminCourseScreen() {
       });
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/courses", id] });
+      qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] });
       refetchFolders();
       setShowAddLecture(false); setFolderAddModal(false); setNewLecture(emptyLecture);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -466,14 +470,14 @@ export default function AdminCourseScreen() {
     mutationFn: async (lectureId: number) => {
       await apiRequest("DELETE", `/api/admin/lectures/${lectureId}`);
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/courses", id] }); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] }); },
   });
 
   const updateLectureMutation = useMutation({
     mutationFn: async (data: any) => {
       await apiRequest("PUT", `/api/admin/lectures/${data.id}`, data);
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/courses", id] }); setEditLecture(null); setFolderEditLecture(null); setFolderEditItem(null); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] }); setEditLecture(null); setFolderEditLecture(null); setFolderEditItem(null); },
     onError: () => Alert.alert("Error", "Failed to update lecture"),
   });
 
@@ -489,7 +493,7 @@ export default function AdminCourseScreen() {
       });
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/courses", id] });
+      qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] });
       refetchFolders();
       setShowAddTest(false); setFolderAddModal(false); setNewTest(emptyTest);
       Alert.alert("Success", "Test created!");
@@ -506,7 +510,7 @@ export default function AdminCourseScreen() {
       }]);
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/courses", id] });
+      qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] });
       setShowAddQuestion(null); setNewQuestion(emptyQuestion);
       Alert.alert("Success", "Question added!");
     },
@@ -517,14 +521,14 @@ export default function AdminCourseScreen() {
     mutationFn: async (testId: number) => {
       await apiRequest("DELETE", `/api/admin/tests/${testId}`);
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/courses", id] }); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] }); },
   });
 
   const updateTestMutation = useMutation({
     mutationFn: async (data: any) => {
       await apiRequest("PUT", `/api/admin/tests/${data.id}`, data);
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/courses", id] }); setEditTest(null); setFolderEditTest(null); setFolderEditItem(null); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] }); setEditTest(null); setFolderEditTest(null); setFolderEditItem(null); },
     onError: () => Alert.alert("Error", "Failed to update test"),
   });
 
@@ -544,7 +548,7 @@ export default function AdminCourseScreen() {
       });
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/courses", id] });
+      qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] });
       qc.invalidateQueries({ queryKey: ["/api/courses"] });
       refetchFolders();
       setShowAddMaterial(false); setFolderAddModal(false); setNewMaterial(emptyMaterial);
@@ -557,14 +561,14 @@ export default function AdminCourseScreen() {
     mutationFn: async (materialId: number) => {
       await apiRequest("DELETE", `/api/admin/study-materials/${materialId}`);
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/courses", id] }); qc.invalidateQueries({ queryKey: ["/api/courses"] }); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] }); qc.invalidateQueries({ queryKey: ["/api/courses"] }); },
   });
 
   const updateMaterialMutation = useMutation({
     mutationFn: async (data: any) => {
       await apiRequest("PUT", `/api/admin/study-materials/${data.id}`, data);
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/courses", id] }); setEditMaterial(null); setFolderEditMaterial(null); setFolderEditItem(null); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] }); setEditMaterial(null); setFolderEditMaterial(null); setFolderEditItem(null); },
     onError: () => Alert.alert("Error", "Failed to update material"),
   });
 
@@ -589,7 +593,7 @@ export default function AdminCourseScreen() {
     mutationFn: async (qId: number) => {
       await apiRequest("DELETE", `/api/admin/questions/${qId}`);
     },
-    onSuccess: () => { if (showViewQuestions) loadQuestions(showViewQuestions); qc.invalidateQueries({ queryKey: ["/api/courses", id] }); },
+    onSuccess: () => { if (showViewQuestions) loadQuestions(showViewQuestions); qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] }); },
   });
 
   const addLiveClassMutation = useMutation({
@@ -604,7 +608,8 @@ export default function AdminCourseScreen() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/live-classes", id, "admin"] });
-      qc.invalidateQueries({ queryKey: ["/api/live-classes"] });
+      qc.invalidateQueries({ queryKey: liveClassesQueryKey() });
+      qc.invalidateQueries({ queryKey: liveClassesForCourseQueryKey(id) });
       setShowAddLiveClass(false); setNewLiveClass(emptyLiveClass);
       Alert.alert("Success", "Live class added!");
     },
@@ -615,7 +620,10 @@ export default function AdminCourseScreen() {
     mutationFn: async (lcId: number) => {
       await apiRequest("DELETE", `/api/admin/live-classes/${lcId}`);
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/live-classes", id, "admin"] }); },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/live-classes", id, "admin"] });
+      qc.invalidateQueries({ queryKey: liveClassesForCourseQueryKey(id) });
+    },
   });
 
   const updateLiveClassMutation = useMutation({
@@ -624,8 +632,9 @@ export default function AdminCourseScreen() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/live-classes", id, "admin"] });
-      qc.invalidateQueries({ queryKey: ["/api/live-classes"] });
-      qc.invalidateQueries({ queryKey: ["/api/courses", id] });
+      qc.invalidateQueries({ queryKey: liveClassesQueryKey() });
+      qc.invalidateQueries({ queryKey: liveClassesForCourseQueryKey(id) });
+      qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] });
     },
   });
 
@@ -649,7 +658,7 @@ export default function AdminCourseScreen() {
       });
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/courses", id] });
+      qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] });
       qc.invalidateQueries({ queryKey: ["/api/courses"] });
       setShowEditCourse(false);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -1913,7 +1922,7 @@ export default function AdminCourseScreen() {
         visible={showBulkUpload !== null}
         testId={showBulkUpload}
         onClose={() => setShowBulkUpload(null)}
-        onSaved={() => { qc.invalidateQueries({ queryKey: ["/api/courses", id] }); setShowBulkUpload(null); }}
+        onSaved={() => { qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] }); setShowBulkUpload(null); }}
         bottomPadding={bottomPadding}
       />
       <Modal visible={showEditCourse} animationType="slide" transparent>

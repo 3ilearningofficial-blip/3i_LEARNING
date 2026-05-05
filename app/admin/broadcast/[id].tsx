@@ -13,6 +13,7 @@ import {
 import { useLocalSearchParams, router } from "expo-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
+import { liveClassQueryKey, liveClassesQueryKey } from "@/lib/query-keys";
 import { useWebRTCStream } from "@/lib/useWebRTCStream";
 import { useMediaRecorder } from "@/lib/useMediaRecorder";
 import { getYouTubeVideoId } from "@/lib/youtube-utils";
@@ -22,6 +23,7 @@ import LiveStudentsPanel from "@/components/LiveStudentsPanel";
 import Colors from "@/constants/colors";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "@/context/AuthContext";
+import { useDocumentVisibility } from "@/lib/useDocumentVisibility";
 import { buildRecordingLectureSectionTitle } from "@/lib/recordingSection";
 
 type StreamType = "webrtc" | "rtmp" | "cloudflare";
@@ -164,9 +166,10 @@ export default function BroadcastPage() {
   const liveClassId = id;
   useAuth();
   const queryClient = useQueryClient();
+  const tabVisible = useDocumentVisibility();
 
   const { data: liveClass, isLoading } = useQuery<any>({
-    queryKey: ["/api/live-classes", liveClassId],
+    queryKey: liveClassQueryKey(String(liveClassId || "")),
     queryFn: async () => {
       const safeLcId = encodeURIComponent(String(liveClassId || ""));
       const res = await authFetch(`${getApiUrl()}/live-classes/${safeLcId}`);
@@ -174,7 +177,7 @@ export default function BroadcastPage() {
       return res.json();
     },
     enabled: !!liveClassId,
-    refetchInterval: 2000, // Poll faster so Cloudflare preview appears sooner after OBS starts
+    refetchInterval: tabVisible ? 2000 : 15000,
     staleTime: 0,
   });
 
@@ -400,7 +403,7 @@ export default function BroadcastPage() {
           isLive: false,
           isCompleted: true,
         });
-        queryClient.invalidateQueries({ queryKey: ["/api/live-classes"] });
+        queryClient.invalidateQueries({ queryKey: liveClassesQueryKey() });
         queryClient.invalidateQueries({ queryKey: ["/api/courses"] });
         router.replace("/admin" as any);
       } else {
@@ -416,7 +419,7 @@ export default function BroadcastPage() {
           sectionTitle: recordingSection,
         });
         await apiRequest("PUT", `/api/admin/live-classes/${liveClassId}`, { isLive: false, isCompleted: true });
-        queryClient.invalidateQueries({ queryKey: ["/api/live-classes"] });
+        queryClient.invalidateQueries({ queryKey: liveClassesQueryKey() });
         queryClient.invalidateQueries({ queryKey: ["/api/courses"] });
         router.replace("/admin" as any);
       }

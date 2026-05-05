@@ -7,6 +7,7 @@ const require = createRequire(import.meta.url);
 const { PDFParse } = require("pdf-parse");
 import { verifyFirebaseToken } from "./firebase";
 import { getRazorpay, verifyPaymentSignature } from "./razorpay";
+import { randomInt } from "node:crypto";
 import { generateSecureToken, hashOtpValue, verifyOtpValue } from "./security-utils";
 import { getAuthUserFromRequest } from "./auth-utils";
 import { enforceInstallationBinding } from "./native-device-binding";
@@ -15,6 +16,7 @@ import { registerPdfRoutes } from "./pdf-routes";
 import { registerPaymentRoutes } from "./payment-routes";
 import { registerSupportRoutes } from "./support-routes";
 import { registerLiveChatRoutes } from "./live-chat-routes";
+import { createListenPool } from "./listen-pool";
 import { registerLiveClassEngagementRoutes } from "./live-class-engagement-routes";
 import { registerLiveStreamRoutes } from "./live-stream-routes";
 import { registerSiteSettingsRoutes } from "./site-settings-routes";
@@ -76,13 +78,14 @@ if (!databaseUrl) {
   throw new Error("DATABASE_URL must be set");
 }
 
+const pgPoolMax = Math.min(50, Math.max(1, parseInt(process.env.PG_POOL_MAX || "10", 10) || 10));
 const pool = new Pool({
   connectionString: databaseUrl,
   ssl:
     process.env.PGSSL_NO_VERIFY === "true" && process.env.NODE_ENV !== "production"
       ? { rejectUnauthorized: false }
       : { rejectUnauthorized: true },
-  max: 10,
+  max: pgPoolMax,
   min: 1,
   connectionTimeoutMillis: 10000,
   idleTimeoutMillis: 10000,   // release idle connections quickly (Neon closes them anyway)
@@ -94,6 +97,39 @@ const pool = new Pool({
 pool.on("error", (err) => {
   console.error("[Pool] Idle client error (connection dropped by Neon):", err.message);
 });
+
+const listenPool = createListenPool(databaseUrl);
+listenPool.on("error", (err) => {
+  console.error("[ListenPool] Idle client error:", err.message);
+});
+
+/** Dedicated connection; no retry wrapper — use for short BEGIN/COMMIT scopes only. */
+async function runInTransaction<T>(
+  fn: (client: { query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }> }) => Promise<T>
+): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const exec = {
+      query: async (text: string, params?: unknown[]) => {
+        const r = await client.query(text, params);
+        return { rows: r.rows };
+      },
+    };
+    const out = await fn(exec);
+    await client.query("COMMIT");
+    return out;
+  } catch (e) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {
+      /* ignore rollback errors */
+    }
+    throw e;
+  } finally {
+    client.release();
+  }
+}
 
 type DbQueryOptions = { logSlow?: boolean };
 
@@ -138,44 +174,32 @@ const db = {
 };
 const generateAIAnswer = createGenerateAIAnswer(db);
 
-// ==================== IN-MEMORY CACHE ====================
-interface CacheEntry { data: unknown; expiresAt: number; }
-const cache = new Map<string, CacheEntry>();
-function cacheGet<T>(key: string): T | null {
-  const entry = cache.get(key);
-  if (!entry) return null;
-  if (Date.now() > entry.expiresAt) { cache.delete(key); return null; }
-  return entry.data as T;
-}
-function cacheSet(key: string, data: unknown, ttlMs: number) {
-  cache.set(key, { data, expiresAt: Date.now() + ttlMs });
-}
-function cacheInvalidate(pattern: string) {
-  for (const key of cache.keys()) {
-    if (key.startsWith(pattern)) cache.delete(key);
-  }
-}
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, entry] of cache.entries()) {
-    if (now > entry.expiresAt) cache.delete(key);
-  }
-}, 5 * 60 * 1000);
-
 function generateOTP(): string {
-  return Math.floor(100000 + Math.random() * 900000).toString();
+  return String(randomInt(100_000, 1_000_000));
 }
+
+type AuthUserResolved = { id: number; name: string; email?: string; phone?: string; role: string; sessionToken?: string; profileComplete?: boolean } | null;
+const authUserLazyKey = Symbol("authUserLazy");
 
 // Resolve authenticated user from session OR Bearer token — also enforces per-install binding after paid native purchase.
-async function getAuthUser(req: Request): Promise<{ id: number; name: string; email?: string; phone?: string; role: string; sessionToken?: string; profileComplete?: boolean } | null> {
-  const user = await getAuthUserFromRequest(req, db);
-  if (!user) return null;
-  const boundOk = await enforceInstallationBinding(db, req, user.id, user.role);
-  if (!boundOk) {
-    (req.session as any).user = null;
-    return null;
+// Memoized per request so middleware + handlers do not repeat session/token/binding work.
+async function getAuthUser(req: Request): Promise<AuthUserResolved> {
+  const r = req as Request & { [authUserLazyKey]?: Promise<AuthUserResolved> };
+  let p = r[authUserLazyKey];
+  if (!p) {
+    p = (async (): Promise<AuthUserResolved> => {
+      const user = await getAuthUserFromRequest(req, db);
+      if (!user) return null;
+      const boundOk = await enforceInstallationBinding(db, req, user.id, user.role);
+      if (!boundOk) {
+        (req.session as any).user = null;
+        return null;
+      }
+      return user;
+    })();
+    r[authUserLazyKey] = p;
   }
-  return user;
+  return p;
 }
 
 async function sendFirebasePhoneVerification(phone: string): Promise<{ sessionInfo: string } | null> {
@@ -351,10 +375,45 @@ async function updateCourseProgress(userId: number, courseId: number | string) {
 async function recomputeAllEnrollmentsProgressForCourse(courseId: number | string) {
   const cid = String(courseId);
   try {
-    const enr = await db.query("SELECT user_id FROM enrollments WHERE course_id = $1 AND (status = 'active' OR status IS NULL)", [cid]);
-    for (const row of enr.rows) {
-      await updateCourseProgress(row.user_id, courseId);
-    }
+    await db.query(
+      `UPDATE enrollments AS e
+       SET progress_percent = calc.pct
+       FROM (
+         SELECT
+           en.user_id,
+           en.course_id,
+           CASE
+             WHEN (COALESCE(tl.total_lec, 0) + COALESCE(tt.total_tests, 0)) <= 0 THEN 0
+             ELSE LEAST(100, GREATEST(0, ROUND(
+               (100.0 * (COALESCE(cl.done_lec, 0) + COALESCE(ct.done_tests, 0)))
+               / NULLIF(COALESCE(tl.total_lec, 0) + COALESCE(tt.total_tests, 0), 0)
+             )))
+           END::integer AS pct
+         FROM enrollments en
+         CROSS JOIN LATERAL (
+           SELECT COUNT(*)::bigint AS total_lec FROM lectures WHERE course_id = $1
+         ) tl
+         CROSS JOIN LATERAL (
+           SELECT COUNT(*)::bigint AS total_tests FROM tests WHERE course_id = $1 AND is_published = TRUE
+         ) tt
+         LEFT JOIN LATERAL (
+           SELECT COUNT(*)::bigint AS done_lec
+           FROM lecture_progress lp
+           INNER JOIN lectures l ON lp.lecture_id = l.id AND l.course_id = $1
+           WHERE lp.user_id = en.user_id AND lp.is_completed = TRUE
+         ) cl ON TRUE
+         LEFT JOIN LATERAL (
+           SELECT COUNT(DISTINCT test_id)::bigint AS done_tests
+           FROM test_attempts ta
+           WHERE ta.user_id = en.user_id
+             AND ta.status = 'completed'
+             AND ta.test_id IN (SELECT id FROM tests WHERE course_id = $1)
+         ) ct ON TRUE
+         WHERE en.course_id::text = $1 AND (en.status = 'active' OR en.status IS NULL)
+       ) AS calc
+       WHERE e.user_id = calc.user_id AND e.course_id = calc.course_id`,
+      [cid]
+    );
   } catch (err) {
     console.error("[Progress] recomputeAllEnrollmentsProgressForCourse failed:", err);
   }
@@ -524,6 +583,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           checks: readiness.checks,
           missingTables: readiness.missingTables,
           missingColumns: readiness.missingColumns,
+          missingIndexes: readiness.missingIndexes,
         });
       }
       return res.json({
@@ -536,6 +596,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ==================== AUTH ROUTES ====================
+
+  async function requireAuth(req: Request, res: Response, next: () => void) {
+    const user = await getAuthUser(req);
+    if (!user) {
+      return res.status(401).json({ message: "Login required" });
+    }
+    (req as any).user = user;
+    next();
+  }
+
+  registerSupportRoutes({
+    app,
+    db,
+    pool,
+    listenPool,
+    getAuthUser,
+    requireAuth,
+    requireAdmin,
+  });
 
   // Update last_active_at for any authenticated API request
   app.use("/api", async (req: any, res, next) => {
@@ -567,6 +646,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     generateSecureToken: () => generateSecureToken(),
     sendOTPviaSMS,
     verifyFirebaseToken,
+    runInTransaction,
   });
 
   registerPaymentRoutes({
@@ -575,16 +655,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     getAuthUser,
     getRazorpay,
     verifyPaymentSignature,
-    cacheInvalidate,
+    runInTransaction,
   });
 
-
-  registerSupportRoutes({
-    app,
-    db,
-    getAuthUser,
-    requireAdmin,
-  });
 
   registerBookRoutes({
     app,
@@ -644,15 +717,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     requireAdmin,
     generateAIAnswer,
   });
-
-  async function requireAuth(req: Request, res: Response, next: () => void) {
-    const user = await getAuthUser(req);
-    if (!user) {
-      return res.status(401).json({ message: "Login required" });
-    }
-    (req as any).user = user;
-    next();
-  }
 
   app.post("/api/push/register", requireAuth, async (req: Request, res: Response) => {
     try {
@@ -801,7 +865,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     db,
     getAuthUser,
     generateSecureToken,
-    cacheInvalidate: (prefix?: string) => cacheInvalidate(prefix ?? ""),
     getR2Client,
     updateCourseProgress,
   });
@@ -831,7 +894,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     app,
     db,
     requireAdmin,
-    cacheInvalidate,
   });
 
   registerAdminCourseImportRoutes({
@@ -859,9 +921,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     app,
     db,
     requireAdmin,
-    cacheInvalidate,
     deleteDownloadsForUser,
     deleteDownloadsForCourse,
+    runInTransaction,
   });
 
   registerAdminLectureRoutes({
@@ -892,6 +954,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     db,
     requireAdmin,
     deleteDownloadsForUser,
+    runInTransaction,
   });
 
   registerAdminNotificationRoutes({
@@ -916,6 +979,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   registerLiveChatRoutes({
     app,
     db,
+    listenPool,
     getAuthUser,
     requireAuth,
     requireAdmin,

@@ -10,6 +10,13 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import { apiRequest, getApiUrl, getBaseUrl, authFetch } from "@/lib/query-client";
+import {
+  liveClassQueryKey,
+  liveClassesForCourseQueryKey,
+  myAttemptsSummaryQueryKey,
+  myDownloadsQueryKey,
+  testQueryKey,
+} from "@/lib/query-keys";
 import Colors from "@/constants/colors";
 import { useScreenProtection } from "@/lib/useScreenProtection";
 import { fetch } from "expo/fetch";
@@ -17,6 +24,7 @@ import { useAuth } from "@/context/AuthContext";
 import { WebView } from "react-native-webview";
 import { DownloadButton } from "@/components/DownloadButton";
 import { DEFAULT_LIVE_RECORDING_SECTION } from "@/lib/recordingSection";
+import { useDocumentVisibility } from "@/lib/useDocumentVisibility";
 
 interface Lecture {
   id: number;
@@ -125,6 +133,7 @@ export default function CourseDetailScreen() {
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
   const { user, isAdmin } = useAuth();
+  const tabVisible = useDocumentVisibility();
   const [activeTab, setActiveTab] = useState("About");
   const [expandedSection, setExpandedSection] = useState<string | null>(null);
   const [expandedTestSection, setExpandedTestSection] = useState<string | null>(null);
@@ -143,7 +152,7 @@ export default function CourseDetailScreen() {
     if (!p) return;
     if (p === "success") {
       Alert.alert("Success!", "Payment successful! You are now enrolled.");
-      qc.invalidateQueries({ queryKey: ["/api/courses", id] });
+      qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] });
       qc.invalidateQueries({ queryKey: ["/api/courses"] });
     } else if (p === "failed") {
       Alert.alert("Payment", "We could not complete the payment. Please try again.");
@@ -166,7 +175,8 @@ export default function CourseDetailScreen() {
   const trackDownload = async (itemType: "material" | "lecture", itemId: number) => {
     try {
       await apiRequest("POST", "/api/my-downloads", { itemType, itemId });
-      qc.invalidateQueries({ queryKey: ["/api/my-downloads"] });
+      if (user?.id) qc.invalidateQueries({ queryKey: myDownloadsQueryKey(user.id) });
+      else qc.invalidateQueries({ queryKey: ["/api/my-downloads"] });
     } catch {}
   };
 
@@ -185,7 +195,7 @@ export default function CourseDetailScreen() {
   const bottomPadding = Platform.OS === "web" ? 16 : insets.bottom;
 
   const { data: course, isLoading } = useQuery<CourseDetail>({
-    queryKey: ["/api/courses", id],
+    queryKey: ["/api/courses", String(id)],
     queryFn: async () => {
       const baseUrl = getApiUrl();
       const url = new URL(`/api/courses/${id}`, baseUrl);
@@ -196,7 +206,7 @@ export default function CourseDetailScreen() {
     },
     staleTime: 20 * 1000,
     gcTime: 15 * 60 * 1000,
-    refetchInterval: 60000,
+    refetchInterval: tabVisible ? 60_000 : 5 * 60_000,
   });
 
   // Repair paid-but-not-enrolled (legacy server bug). Idempotent; no-op if no paid row.
@@ -209,7 +219,7 @@ export default function CourseDetailScreen() {
         if (!res.ok) return;
         const j = await res.json();
         if (j?.fixed) {
-          qc.invalidateQueries({ queryKey: ["/api/courses", id] });
+          qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] });
           qc.invalidateQueries({ queryKey: ["/api/courses"] });
         }
       })
@@ -217,7 +227,7 @@ export default function CourseDetailScreen() {
   }, [user?.id, course?.isEnrolled, courseIdNum, isAdmin, id, qc, course]);
 
   const { data: liveClasses = [], isPending: liveClassesPending } = useQuery<LiveClass[]>({
-    queryKey: ["/api/live-classes", id],
+    queryKey: liveClassesForCourseQueryKey(id),
     queryFn: async () => {
       const baseUrl = getApiUrl();
       const url = new URL(`/api/live-classes?courseId=${id}`, baseUrl);
@@ -226,7 +236,12 @@ export default function CourseDetailScreen() {
       return res.json();
     },
     enabled: !!user && !!id && id !== "undefined",
-    refetchInterval: activeTab === "Live" ? 10000 : 60000,
+    refetchInterval:
+      !tabVisible
+        ? 3 * 60_000
+        : activeTab === "Live"
+          ? 10_000
+          : 60_000,
     staleTime: 30_000,
     gcTime: 15 * 60 * 1000,
   });
@@ -241,19 +256,19 @@ export default function CourseDetailScreen() {
   }, [liveClasses]);
 
   const { data: attemptSummary = {} } = useQuery<Record<number, any>>({
-    queryKey: ["/api/my-attempts/summary"],
+    queryKey: user?.id ? myAttemptsSummaryQueryKey(user.id) : ["/api/my-attempts/summary", "guest"],
     queryFn: async () => {
       const baseUrl = getApiUrl();
       const res = await authFetch(new URL("/api/my-attempts/summary", baseUrl).toString());
       if (!res.ok) return {};
       return res.json();
     },
-    enabled: !!user,
+    enabled: !!user?.id,
     staleTime: 30000,
   });
 
   const { data: courseFolders = [] } = useQuery<any[]>({
-    queryKey: ["/api/courses", id, "folders"],
+    queryKey: ["/api/courses", String(id), "folders"],
     queryFn: async () => {
       const baseUrl = getApiUrl();
       const res = await authFetch(new URL(`/api/courses/${id}/folders`, baseUrl).toString());
@@ -298,7 +313,7 @@ export default function CourseDetailScreen() {
 
     primeTests.forEach((test) => {
       qc.prefetchQuery({
-        queryKey: ["/api/tests", test.id],
+        queryKey: testQueryKey(test.id),
         queryFn: async () => {
           const res = await authFetch(new URL(`/api/tests/${test.id}`, baseUrl).toString());
           if (!res.ok) throw new Error("prefetch test failed");
@@ -310,7 +325,7 @@ export default function CourseDetailScreen() {
 
     primeLives.forEach((lc) => {
       qc.prefetchQuery({
-        queryKey: ["/api/live-classes", lc.id],
+        queryKey: liveClassQueryKey(lc.id),
         queryFn: async () => {
           const res = await authFetch(new URL(`/api/live-classes/${lc.id}`, baseUrl).toString());
           if (!res.ok) throw new Error("prefetch live class failed");
@@ -396,7 +411,7 @@ export default function CourseDetailScreen() {
       setEnrollError("");
       setEnrollSuccess(true);
       // Optimistically update the course detail cache — don't wait for refetch
-      qc.setQueryData(["/api/courses", id], (old: any) => {
+      qc.setQueryData(["/api/courses", String(id)], (old: any) => {
         if (!old) return old;
         return { ...old, isEnrolled: true, progress: 0 };
       });
@@ -466,7 +481,7 @@ export default function CourseDetailScreen() {
                 razorpay_signature: response.razorpay_signature,
                 courseId: courseIdNum,
               });
-              qc.invalidateQueries({ queryKey: ["/api/courses", id] });
+              qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] });
               qc.invalidateQueries({ queryKey: ["/api/courses"] });
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
               Alert.alert("Success!", "Payment successful! You are now enrolled.");
@@ -557,7 +572,7 @@ setTimeout(function() {
       const msg = err?.message || "";
       if (msg.includes("Already enrolled")) {
         Alert.alert("Already Enrolled", "You are already enrolled in this course.");
-        qc.invalidateQueries({ queryKey: ["/api/courses", id] });
+        qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] });
       } else {
         Alert.alert("Error", "Failed to initiate payment. Please try again.");
       }
@@ -1572,7 +1587,7 @@ setTimeout(function() {
                         razorpay_signature: data.razorpay_signature,
                         courseId: parseInt(id as string),
                       });
-                      qc.invalidateQueries({ queryKey: ["/api/courses", id] });
+                      qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] });
                       qc.invalidateQueries({ queryKey: ["/api/courses"] });
                       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
                       Alert.alert("Success!", "Payment successful! You are now enrolled.");

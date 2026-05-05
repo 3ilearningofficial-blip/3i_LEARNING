@@ -12,6 +12,8 @@ import * as Haptics from "expo-haptics";
 import { useAuth } from "@/context/AuthContext";
 import Colors from "@/constants/colors";
 import { getApiUrl, authFetch } from "@/lib/query-client";
+import { liveClassQueryKey, notificationsQueryKey } from "@/lib/query-keys";
+import { useDocumentVisibility } from "@/lib/useDocumentVisibility";
 import { fetch } from "expo/fetch";
 
 interface Course {
@@ -89,8 +91,8 @@ function ScheduledLiveCard({ lc }: { lc: any }) {
       setStatus("countdown");
     };
     tick();
-    const t = setInterval(tick, 1000);
-    return () => clearInterval(t);
+    const timer = setInterval(tick, 1000);
+    return () => clearInterval(timer);
   }, [scheduledMs]);
 
   const scheduleDate = new Date(scheduledMs);
@@ -339,10 +341,10 @@ export default function HomeScreen() {
   const isWideScreen = screenWidth >= 768;
   const { user, isAdmin, logout } = useAuth();
   const qc = useQueryClient();
+  const tabVisible = useDocumentVisibility();
   const [search, setSearch] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("All");
   const [refreshing, setRefreshing] = useState(false);
-  const [notifAuthLost, setNotifAuthLost] = useState(false);
   const [showAllScheduled, setShowAllScheduled] = useState(false);
 
   const topPadding = Platform.OS === "web" ? 16 : insets.top;
@@ -375,7 +377,7 @@ export default function HomeScreen() {
     },
     staleTime: 5 * 60 * 1000,
     gcTime: 25 * 60 * 1000,
-    refetchInterval: 3 * 60 * 1000,
+    refetchInterval: tabVisible ? 3 * 60 * 1000 : 10 * 60 * 1000,
     refetchOnMount: true,
     refetchOnWindowFocus: false,
     // Always fetch — even unauthenticated users can see published courses
@@ -413,6 +415,7 @@ export default function HomeScreen() {
   }, [allCourses, selectedCategory, search]);
 
   useEffect(() => {
+    if (!user?.id) return;
     const baseUrl = getApiUrl();
     const hotCourses = allCourses.slice(0, 4);
     hotCourses.forEach((course: any) => {
@@ -426,7 +429,7 @@ export default function HomeScreen() {
         staleTime: 5 * 60 * 1000,
       });
     });
-  }, [allCourses, qc]);
+  }, [allCourses, qc, user?.id]);
 
   const { data: freeMaterialsData, refetch: refetchFreeMaterials } = useQuery<{ materials: StudyMaterial[]; folders: MaterialFolder[] }>({
     queryKey: ["/api/study-materials", "free"],
@@ -461,17 +464,18 @@ export default function HomeScreen() {
     },
     staleTime: 90000,
     gcTime: 15 * 60 * 1000,
-    refetchInterval: 90 * 1000,
+    refetchInterval: tabVisible ? 90 * 1000 : false,
     refetchOnMount: false,
     refetchOnWindowFocus: false,
   });
 
   useEffect(() => {
+    if (!user?.id) return;
     const baseUrl = getApiUrl();
     const hotLive = (liveClasses || []).slice(0, 3);
     hotLive.forEach((lc) => {
       qc.prefetchQuery({
-        queryKey: ["/api/live-classes", lc.id],
+        queryKey: liveClassQueryKey(lc.id),
         queryFn: async () => {
           const res = await authFetch(new URL(`/api/live-classes/${lc.id}`, baseUrl).toString());
           if (!res.ok) throw new Error("prefetch live failed");
@@ -480,25 +484,21 @@ export default function HomeScreen() {
         staleTime: 90000,
       });
     });
-  }, [liveClasses, qc]);
+  }, [liveClasses, qc, user?.id]);
 
   const { data: homeNotifications = [], refetch: refetchHomeNotifications } = useQuery<any[]>({
-    queryKey: ["/api/notifications"],
+    queryKey: user?.id ? notificationsQueryKey(user.id) : ["/api/notifications", "guest"],
     queryFn: async () => {
       try {
         const baseUrl = getApiUrl();
         const res = await authFetch(new URL("/api/notifications", baseUrl).toString());
-        if (res.status === 401) {
-          setNotifAuthLost(true);
-          return [];
-        }
+        if (res.status === 401) return [];
         if (!res.ok) return [];
-        setNotifAuthLost(false);
         return res.json();
       } catch { return []; }
     },
-    enabled: !!user && !notifAuthLost, // only fetch when logged in — prevents 401 on welcome page
-    refetchInterval: !!user && !notifAuthLost ? 90000 : false,
+    enabled: !!user?.id,
+    refetchInterval: !!user?.id ? (tabVisible ? 90_000 : false) : false,
     staleTime: 60000,
     refetchOnMount: false,
     refetchOnWindowFocus: false,

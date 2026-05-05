@@ -6,10 +6,13 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useIsFocused } from "@react-navigation/native";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
+import { supportMessagesQueryKey } from "@/lib/query-keys";
 import Colors from "@/constants/colors";
 import { useAuth } from "@/context/AuthContext";
+import { useDocumentVisibility } from "@/lib/useDocumentVisibility";
 
 type Message = {
   id: number;
@@ -23,9 +26,10 @@ export default function SupportChatTab() {
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
   const { user, isAdmin } = useAuth();
+  const isFocused = useIsFocused();
+  const tabVisible = useDocumentVisibility();
   const scrollRef = useRef<ScrollView>(null);
   const [text, setText] = useState("");
-  const [chatAuthLost, setChatAuthLost] = useState(false);
 
   // Admin state
   const [adminSelectedUserId, setAdminSelectedUserId] = useState<number | null>(null);
@@ -33,6 +37,28 @@ export default function SupportChatTab() {
   const [adminReply, setAdminReply] = useState("");
   const [adminReplying, setAdminReplying] = useState(false);
   const adminScrollRef = useRef<ScrollView>(null);
+
+  /** Web: push new rows via SSE; native keeps polling only. */
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof EventSource === "undefined" || !isAdmin || !adminSelectedUserId) return;
+    const baseUrl = getApiUrl();
+    const url = new URL(`/api/admin/support/messages/${adminSelectedUserId}/stream`, baseUrl).toString();
+    const es = new EventSource(url, { withCredentials: true } as EventSourceInit);
+    es.onmessage = (ev) => {
+      try {
+        const row = JSON.parse(ev.data) as Message;
+        qc.setQueryData(["/api/admin/support/messages", adminSelectedUserId], (prev: any[] | undefined) => {
+          const list = prev ?? [];
+          if (list.some((m) => m.id === row.id)) return list;
+          return [...list, row].sort((a, b) => Number(a.id) - Number(b.id));
+        });
+        qc.invalidateQueries({ queryKey: ["/api/admin/support/conversations"] });
+      } catch {
+        /* ignore */
+      }
+    };
+    return () => es.close();
+  }, [isAdmin, adminSelectedUserId, qc]);
 
   const { data: adminConvos = [], isLoading: adminConvosLoading } = useQuery<any[]>({
     queryKey: ["/api/admin/support/conversations"],
@@ -44,7 +70,8 @@ export default function SupportChatTab() {
     },
     enabled: isAdmin,
     staleTime: 60000,
-    refetchInterval: isAdmin ? 45000 : false,
+    refetchInterval:
+      isAdmin && isFocused ? (tabVisible ? 45_000 : 120_000) : false,
     refetchOnMount: false,
   });
 
@@ -59,7 +86,16 @@ export default function SupportChatTab() {
     },
     enabled: isAdmin && adminSelectedUserId !== null,
     staleTime: 15000,
-    refetchInterval: isAdmin && adminSelectedUserId !== null ? 15000 : false,
+    refetchInterval:
+      isAdmin && adminSelectedUserId !== null && isFocused
+        ? Platform.OS === "web"
+          ? tabVisible
+            ? 60_000
+            : 120_000
+          : tabVisible
+            ? 15_000
+            : 60_000
+        : false,
     refetchOnMount: false,
   });
 
@@ -72,6 +108,31 @@ export default function SupportChatTab() {
       if (scrollTimer) clearTimeout(scrollTimer);
     };
   }, [adminMessages.length]);
+
+  useEffect(() => {
+    if (!isAdmin || !adminSelectedUserId) return;
+    const hasUnreadUser = adminMessages.some((m: Message) => m.sender === "user" && !m.is_read);
+    if (!hasUnreadUser) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const baseUrl = getApiUrl();
+        const res = await authFetch(
+          new URL(`/api/admin/support/messages/${adminSelectedUserId}/mark-read`, baseUrl).toString(),
+          { method: "POST" }
+        );
+        if (!cancelled && res.ok) {
+          qc.invalidateQueries({ queryKey: ["/api/admin/support/messages", adminSelectedUserId] });
+          qc.invalidateQueries({ queryKey: ["/api/admin/support/conversations"] });
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isAdmin, adminSelectedUserId, adminMessages, qc]);
 
   const sendAdminReply = async () => {
     if (!adminReply.trim() || !adminSelectedUserId) return;
@@ -95,6 +156,27 @@ export default function SupportChatTab() {
       setAdminReplying(false);
     }
   };
+
+  /** Web student: SSE merges rows while this tab is focused; native uses polling only. */
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof EventSource === "undefined" || isAdmin || !user?.id || !isFocused) return;
+    const baseUrl = getApiUrl();
+    const url = new URL("/api/support/messages/stream", baseUrl).toString();
+    const es = new EventSource(url, { withCredentials: true } as EventSourceInit);
+    es.onmessage = (ev) => {
+      try {
+        const row = JSON.parse(ev.data) as Message;
+        qc.setQueryData(supportMessagesQueryKey(user.id), (prev: Message[] | undefined) => {
+          const list = prev ?? [];
+          if (list.some((m) => m.id === row.id)) return list;
+          return [...list, row].sort((a, b) => Number(a.id) - Number(b.id));
+        });
+      } catch {
+        /* ignore */
+      }
+    };
+    return () => es.close();
+  }, [isAdmin, user?.id, isFocused, qc]);
 
   if (isAdmin) {
     return (
@@ -219,24 +301,50 @@ export default function SupportChatTab() {
   }
 
   const { data: messages = [], isLoading } = useQuery<Message[]>({
-    queryKey: ["/api/support/messages"],
+    queryKey: user?.id ? supportMessagesQueryKey(user.id) : ["/api/support/messages", "guest"],
     queryFn: async () => {
       const baseUrl = getApiUrl();
       const res = await authFetch(new URL("/api/support/messages", baseUrl).toString());
-      if (res.status === 401) {
-        setChatAuthLost(true);
-        return [];
-      }
+      if (res.status === 401) return [];
       if (!res.ok) return [];
-      setChatAuthLost(false);
       return res.json();
     },
-    enabled: !!user && !isAdmin && !chatAuthLost,
+    enabled: !!user?.id && !isAdmin && isFocused,
     staleTime: 30000,
-    refetchInterval: !!user && !chatAuthLost ? 20000 : false,
+    refetchInterval:
+      !!user?.id && !isAdmin && isFocused
+        ? Platform.OS === "web"
+          ? tabVisible
+            ? 120_000
+            : 180_000
+          : tabVisible
+            ? 20_000
+            : 60_000
+        : false,
     refetchOnMount: false,
     refetchOnWindowFocus: false,
   });
+
+  useEffect(() => {
+    if (!user?.id || isAdmin || !isFocused) return;
+    const hasUnreadAdmin = messages.some((m) => m.sender === "admin" && !m.is_read);
+    if (!hasUnreadAdmin) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const baseUrl = getApiUrl();
+        const res = await authFetch(new URL("/api/support/messages/mark-read", baseUrl).toString(), { method: "POST" });
+        if (!cancelled && res.ok) {
+          qc.invalidateQueries({ queryKey: supportMessagesQueryKey(user.id) });
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isFocused, isAdmin, user?.id, messages, qc]);
 
   const sendMutation = useMutation({
     mutationFn: async (message: string) => {
@@ -244,7 +352,8 @@ export default function SupportChatTab() {
       return res.json();
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/support/messages"] });
+      if (user?.id) qc.invalidateQueries({ queryKey: supportMessagesQueryKey(user.id) });
+      else qc.invalidateQueries({ queryKey: ["/api/support/messages"] });
       setText("");
     },
   });
@@ -310,12 +419,6 @@ export default function SupportChatTab() {
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
           <ActivityIndicator color={Colors.light.primary} />
         </View>
-      ) : chatAuthLost ? (
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 20 }}>
-          <Ionicons name="lock-closed-outline" size={44} color={Colors.light.textMuted} />
-          <Text style={[styles.emptyTitle, { marginTop: 10 }]}>Session expired</Text>
-          <Text style={styles.emptySub}>Please login again to use Support Chat.</Text>
-        </View>
       ) : (
         <ScrollView
           ref={scrollRef}
@@ -380,12 +483,12 @@ export default function SupportChatTab() {
             onChangeText={setText}
             multiline
             maxLength={1000}
-            editable={!chatAuthLost}
+            editable
           />
           <Pressable
             style={[styles.sendBtn, (!text.trim() || sendMutation.isPending) && styles.sendBtnDisabled]}
             onPress={() => text.trim() && sendMutation.mutate(text.trim())}
-            disabled={!text.trim() || sendMutation.isPending || chatAuthLost}
+            disabled={!text.trim() || sendMutation.isPending}
           >
             {sendMutation.isPending
               ? <ActivityIndicator size="small" color="#fff" />
