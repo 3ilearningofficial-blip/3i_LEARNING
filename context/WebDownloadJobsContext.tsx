@@ -9,6 +9,9 @@ import React, {
   useState,
 } from "react";
 import { Platform } from "react-native";
+import { getStoredAuthUser } from "@/lib/auth-storage";
+import { useAuth } from "@/context/AuthContext";
+import { myDownloadsQueryKey } from "@/lib/query-keys";
 import { getApiUrl, prepareAuthorizedFetchHeaders, queryClient } from "@/lib/query-client";
 import { listWebOfflineKeys, putWebOffline } from "@/lib/web-offline-store";
 
@@ -32,6 +35,10 @@ type Action =
 
 export function webDownloadPersistKey(itemType: string, itemId: number): string {
   return `${itemType}:${itemId}`;
+}
+
+function userScopedPrefix(userId: number): string {
+  return `${userId}:`;
 }
 
 function reducer(state: JobsState, action: Action): JobsState {
@@ -102,6 +109,7 @@ const WEB_DL_STUB_CTX: Ctx = {
 const WebDownloadJobsContext = createContext<Ctx>(WEB_DL_STUB_CTX);
 
 export function WebDownloadJobsInnerProvider({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
   const [jobs, dispatch] = useReducer(reducer, {});
   const [persistedSaved, setPersistedSaved] = useState<Record<string, boolean>>({});
   const inFlight = useRef<Set<string>>(new Set());
@@ -110,10 +118,20 @@ export function WebDownloadJobsInnerProvider({ children }: { children: React.Rea
     let cancelled = false;
     (async () => {
       try {
+        const userId = Number(user?.id || 0);
+        if (!Number.isFinite(userId) || userId <= 0) {
+          setPersistedSaved({});
+          return;
+        }
         const keys = await listWebOfflineKeys();
         if (cancelled) return;
         const next: Record<string, boolean> = {};
-        for (const k of keys) next[k] = true;
+        const prefix = userScopedPrefix(userId);
+        for (const k of keys) {
+          if (!k.startsWith(prefix)) continue;
+          const localKey = k.slice(prefix.length);
+          next[localKey] = true;
+        }
         setPersistedSaved(next);
       } catch {
         /* ignore */
@@ -122,7 +140,7 @@ export function WebDownloadJobsInnerProvider({ children }: { children: React.Rea
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [user?.id]);
 
   const getJob = useCallback((itemType: string, itemId: number) => {
     return jobs[webDownloadPersistKey(itemType, itemId)];
@@ -154,6 +172,15 @@ export function WebDownloadJobsInnerProvider({ children }: { children: React.Rea
     }) => {
       const key = webDownloadPersistKey(params.itemType, params.itemId);
       if (inFlight.current.has(key)) return;
+      const runtimeUserId = Number(user?.id || 0);
+      let effectiveUserId = runtimeUserId;
+      if (!Number.isFinite(effectiveUserId) || effectiveUserId <= 0) {
+        const storedUser = await getStoredAuthUser();
+        effectiveUserId = Number(storedUser?.id || 0);
+        if (!Number.isFinite(effectiveUserId) || effectiveUserId <= 0) {
+          throw new Error("Not authenticated");
+        }
+      }
 
       const { bearer, headers: authHeaders } = await prepareAuthorizedFetchHeaders(params.bearerFallback);
       if (!bearer) {
@@ -242,6 +269,7 @@ export function WebDownloadJobsInnerProvider({ children }: { children: React.Rea
             : `web-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
         await putWebOffline({
+          userId: effectiveUserId,
           itemType: params.itemType,
           itemId: params.itemId,
           localFilename,
@@ -268,6 +296,7 @@ export function WebDownloadJobsInnerProvider({ children }: { children: React.Rea
           console.warn("[WebDownload] my-downloads register failed", trackRes.status);
         }
 
+        await queryClient.invalidateQueries({ queryKey: myDownloadsQueryKey(effectiveUserId) });
         await queryClient.invalidateQueries({ queryKey: ["/api/my-downloads"] });
         dispatch({ type: "done", key });
         setTimeout(() => {
@@ -280,7 +309,7 @@ export function WebDownloadJobsInnerProvider({ children }: { children: React.Rea
         inFlight.current.delete(key);
       }
     },
-    []
+    [user?.id]
   );
 
   const value = useMemo(

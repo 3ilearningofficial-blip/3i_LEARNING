@@ -102,7 +102,7 @@ export default function OTPScreen() {
       });
       const data = await res.json();
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      login(data.user);
+      await login(data.user);
       console.log("[OTP] user:", JSON.stringify({ id: data.user.id, role: data.user.role, profileComplete: data.user.profileComplete, name: data.user.name }));
       if (!data.user.profileComplete) {
         console.log("[OTP] → profile-setup");

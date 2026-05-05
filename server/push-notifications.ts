@@ -8,27 +8,6 @@ type PushPayload = {
   data?: Record<string, unknown>;
 };
 
-let pushTableReady = false;
-
-async function ensurePushTable(db: DbClient): Promise<void> {
-  if (pushTableReady) return;
-  await db.query(`
-    CREATE TABLE IF NOT EXISTS user_push_tokens (
-      id SERIAL PRIMARY KEY,
-      user_id INTEGER NOT NULL,
-      expo_push_token TEXT NOT NULL UNIQUE,
-      platform TEXT,
-      is_active BOOLEAN NOT NULL DEFAULT TRUE,
-      created_at BIGINT NOT NULL,
-      last_seen_at BIGINT NOT NULL
-    )
-  `);
-  await db.query(
-    "CREATE INDEX IF NOT EXISTS idx_user_push_tokens_user_active ON user_push_tokens(user_id, is_active)"
-  );
-  pushTableReady = true;
-}
-
 function chunkArray<T>(arr: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
@@ -36,7 +15,6 @@ function chunkArray<T>(arr: T[], size: number): T[][] {
 }
 
 export async function registerPushToken(db: DbClient, userId: number, token: string, platform: string): Promise<void> {
-  await ensurePushTable(db);
   const now = Date.now();
   await db.query(
     `INSERT INTO user_push_tokens (user_id, expo_push_token, platform, is_active, created_at, last_seen_at)
@@ -52,7 +30,6 @@ export async function registerPushToken(db: DbClient, userId: number, token: str
 }
 
 export async function unregisterPushToken(db: DbClient, userId: number, token: string): Promise<void> {
-  await ensurePushTable(db);
   await db.query(
     "UPDATE user_push_tokens SET is_active = FALSE, last_seen_at = $1 WHERE user_id = $2 AND expo_push_token = $3",
     [Date.now(), userId, token]
@@ -60,7 +37,6 @@ export async function unregisterPushToken(db: DbClient, userId: number, token: s
 }
 
 export async function unregisterAllPushTokens(db: DbClient, userId: number): Promise<void> {
-  await ensurePushTable(db);
   await db.query("UPDATE user_push_tokens SET is_active = FALSE, last_seen_at = $1 WHERE user_id = $2", [
     Date.now(),
     userId,
@@ -72,7 +48,6 @@ export async function sendPushToUsers(
   userIds: number[],
   payload: PushPayload
 ): Promise<{ sent: number; tokens: number }> {
-  await ensurePushTable(db);
   const uniqueUserIds = [...new Set(userIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0))];
   if (!uniqueUserIds.length) return { sent: 0, tokens: 0 };
 

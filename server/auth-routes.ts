@@ -5,7 +5,7 @@ import {
   enforceInstallationBinding,
   finalizeStudentWebSlotsAfterAuth,
 } from "./native-device-binding";
-import { persistLoginSession, resolveUserBySessionToken, userHasSessionToken } from "./user-sessions";
+import { persistLoginSession, resolveUserBySessionToken, revokeSessionTokenForUser, userHasSessionToken } from "./user-sessions";
 import { purgeStudentAccountById } from "./user-account-purge";
 
 type DbClient = {
@@ -32,7 +32,11 @@ type RegisterAuthRoutesDeps = {
   generateSecureToken: () => string;
   sendOTPviaSMS: (phone: string, otp: string) => Promise<boolean>;
   verifyFirebaseToken: (idToken: string) => Promise<any>;
+  runInTransaction: <T>(fn: (tx: DbClient) => Promise<T>) => Promise<T>;
 };
+
+const GENERIC_LOGIN_ERROR = "Invalid credentials";
+const GENERIC_OTP_ERROR = "Invalid or expired OTP";
 
 /** Same fields as GET /api/auth/me so the client can show DOB, photo, etc. without a second fetch. */
 function buildSessionUserFromRow(
@@ -53,6 +57,31 @@ function buildSessionUserFromRow(
   };
 }
 
+/** Mitigate session fixation: new session id before attaching authenticated user. */
+function regenerateSession(req: Request): Promise<void> {
+  return new Promise((resolve, reject) => {
+    req.session.regenerate((err: Error | null) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+}
+
+function destroySession(req: Request): Promise<void> {
+  return new Promise((resolve, reject) => {
+    req.session.destroy((err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+}
+
+function normalizePhone(input: unknown): string {
+  const digits = String(input || "").replace(/\D/g, "");
+  if (digits.length >= 10) return digits.slice(-10);
+  return digits;
+}
+
 export function registerAuthRoutes({
   app,
   db,
@@ -63,6 +92,7 @@ export function registerAuthRoutes({
   generateSecureToken,
   sendOTPviaSMS,
   verifyFirebaseToken,
+  runInTransaction,
 }: RegisterAuthRoutesDeps): void {
   app.post("/api/auth/send-otp", async (req: Request, res: Response) => {
     try {
@@ -72,22 +102,34 @@ export function registerAuthRoutes({
       }
 
       if (type === "phone") {
-        const existing = await db.query("SELECT id FROM users WHERE phone = $1", [identifier]);
-        if (existing.rows.length === 0) {
-          await db.query(
-            "INSERT INTO users (name, phone, role) VALUES ($1, $2, $3)",
-            [`Student${identifier.slice(-4)}`, identifier, "student"]
-          );
+        const normalizedPhone = normalizePhone(identifier);
+        if (!normalizedPhone || normalizedPhone.length !== 10) {
+          return res.status(400).json({ message: "Valid phone number is required" });
+        }
+        await db.query(
+          `INSERT INTO users (name, phone, role)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (phone) DO NOTHING`,
+          [`Student${normalizedPhone.slice(-4)}`, normalizedPhone, "student"]
+        );
+
+        const lockRow = await db.query("SELECT otp_locked_until FROM users WHERE phone = $1", [normalizedPhone]);
+        const lockedUntil = lockRow.rows[0]?.otp_locked_until != null ? Number(lockRow.rows[0].otp_locked_until) : 0;
+        if (lockedUntil > Date.now()) {
+          return res.status(429).json({ message: "Too many attempts. Please try again later." });
         }
 
         const otp = generateOTP();
         const otpHash = hashOtpValue(otp);
         const expires = Date.now() + 10 * 60 * 1000;
-        await db.query("UPDATE users SET otp = $1, otp_expires_at = $2 WHERE phone = $3", [otpHash, expires, identifier]);
+        await db.query(
+          "UPDATE users SET otp = $1, otp_expires_at = $2, otp_failed_attempts = 0, otp_locked_until = NULL WHERE phone = $3",
+          [otpHash, expires, normalizedPhone]
+        );
 
         let smsSent = false;
         try {
-          smsSent = await sendOTPviaSMS(identifier, otp);
+          smsSent = await sendOTPviaSMS(normalizedPhone, otp);
         } catch (smsErr) {
           console.error("[OTP] SMS sending threw error:", smsErr);
         }
@@ -104,18 +146,23 @@ export function registerAuthRoutes({
         });
       }
 
+      const email = String(identifier).trim().toLowerCase();
+      const lockEmail = await db.query("SELECT otp_locked_until FROM users WHERE email = $1", [email]);
+      const lockedUntilE = lockEmail.rows[0]?.otp_locked_until != null ? Number(lockEmail.rows[0].otp_locked_until) : 0;
+      if (lockedUntilE > Date.now()) {
+        return res.status(429).json({ message: "Too many attempts. Please try again later." });
+      }
+
       const otp = generateOTP();
       const otpHash = hashOtpValue(otp);
       const expires = Date.now() + 10 * 60 * 1000;
-      const existing = await db.query("SELECT id FROM users WHERE email = $1", [identifier]);
-      if (existing.rows.length === 0) {
-        await db.query(
-          "INSERT INTO users (name, email, otp, otp_expires_at, role) VALUES ($1, $2, $3, $4, $5)",
-          [identifier.split("@")[0], identifier, otpHash, expires, "student"]
-        );
-      } else {
-        await db.query("UPDATE users SET otp = $1, otp_expires_at = $2 WHERE email = $3", [otpHash, expires, identifier]);
-      }
+      await db.query(
+        `INSERT INTO users (name, email, otp, otp_expires_at, role)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (email) DO UPDATE SET otp = EXCLUDED.otp, otp_expires_at = EXCLUDED.otp_expires_at,
+           otp_failed_attempts = 0, otp_locked_until = NULL`,
+        [email.split("@")[0], email, otpHash, expires, "student"]
+      );
       res.json({ success: true, message: "OTP sent successfully", method: "server" });
     } catch (err) {
       console.error(err);
@@ -134,12 +181,26 @@ export function registerAuthRoutes({
         type === "email"
           ? await db.query("SELECT * FROM users WHERE email = $1", [identifier])
           : await db.query("SELECT * FROM users WHERE phone = $1", [identifier]);
-      if (result.rows.length === 0) return res.status(404).json({ message: "User not found" });
+      if (result.rows.length === 0) return res.status(401).json({ message: GENERIC_OTP_ERROR });
 
       const user = result.rows[0];
-      if (user.is_blocked) return res.status(403).json({ message: "Your account has been blocked. Please contact support." });
-      if (!verifyOtpValue(user.otp, otp)) return res.status(400).json({ message: "Invalid OTP" });
-      if (Date.now() > Number(user.otp_expires_at)) return res.status(400).json({ message: "OTP expired" });
+      if (user.is_blocked) return res.status(401).json({ message: GENERIC_OTP_ERROR });
+      const lockedUntil = user.otp_locked_until != null ? Number(user.otp_locked_until) : 0;
+      if (lockedUntil > Date.now()) {
+        return res.status(429).json({ message: "Too many attempts. Please try again later." });
+      }
+      if (!verifyOtpValue(user.otp, otp)) {
+        const lockMs = Date.now() + 15 * 60 * 1000;
+        await db.query(
+          `UPDATE users SET
+             otp_failed_attempts = LEAST(COALESCE(otp_failed_attempts, 0) + 1, 99),
+             otp_locked_until = CASE WHEN COALESCE(otp_failed_attempts, 0) + 1 >= 5 THEN $1 ELSE otp_locked_until END
+           WHERE id = $2`,
+          [lockMs, user.id]
+        );
+        return res.status(401).json({ message: GENERIC_OTP_ERROR });
+      }
+      if (Date.now() > Number(user.otp_expires_at)) return res.status(401).json({ message: GENERIC_OTP_ERROR });
 
       const loginGate = await assertLoginAllowedForInstallation(db, req, {
         userId: user.id,
@@ -157,6 +218,7 @@ export function registerAuthRoutes({
       await finalizeStudentWebSlotsAfterAuth(db, user.id, user.role, req);
 
       const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: deviceId || null });
+      await regenerateSession(req);
       (req.session as any).user = sessionUser;
       res.json({ success: true, user: sessionUser });
     } catch (err) {
@@ -173,17 +235,19 @@ export function registerAuthRoutes({
       }
 
       const decoded = await verifyFirebaseToken(idToken);
-      if (!decoded.phone_number || !decoded.phone_number.endsWith(phoneNumber)) {
+      const claimedPhone = normalizePhone(phoneNumber);
+      const tokenPhone = normalizePhone(decoded.phone_number);
+      if (!tokenPhone || !claimedPhone || tokenPhone !== claimedPhone) {
         return res.status(400).json({ message: "Phone number mismatch" });
       }
 
-      let result = await db.query("SELECT * FROM users WHERE phone = $1", [phoneNumber]);
+      let result = await db.query("SELECT * FROM users WHERE phone = $1", [claimedPhone]);
       if (result.rows.length === 0) {
         await db.query(
           "INSERT INTO users (name, phone, role) VALUES ($1, $2, $3)",
-          [`Student${phoneNumber.slice(-4)}`, phoneNumber, "student"]
+          [`Student${claimedPhone.slice(-4)}`, claimedPhone, "student"]
         );
-        result = await db.query("SELECT * FROM users WHERE phone = $1", [phoneNumber]);
+        result = await db.query("SELECT * FROM users WHERE phone = $1", [claimedPhone]);
       }
 
       const user = result.rows[0];
@@ -203,6 +267,7 @@ export function registerAuthRoutes({
       await finalizeStudentWebSlotsAfterAuth(db, user.id, user.role, req);
 
       const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: deviceId || null });
+      await regenerateSession(req);
       (req.session as any).user = sessionUser;
       res.json({ success: true, user: sessionUser });
     } catch (err) {
@@ -327,6 +392,7 @@ export function registerAuthRoutes({
       await finalizeStudentWebSlotsAfterAuth(db, user.id, user.role, req);
 
       const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: deviceId || null });
+      await regenerateSession(req);
       (req.session as any).user = sessionUser;
       res.json({ success: true, user: sessionUser });
     } catch (err: any) {
@@ -338,8 +404,39 @@ export function registerAuthRoutes({
     }
   });
 
-  app.post("/api/auth/logout", (req: Request, res: Response) => {
-    (req.session as any).user = null;
+  app.post("/api/auth/logout", async (req: Request, res: Response) => {
+    const cookie = req.session?.cookie;
+    const sessionUser = (req.session as any)?.user as { id?: number; sessionToken?: string } | undefined;
+    let revokeUserId = sessionUser?.id ? Number(sessionUser.id) : null;
+    let revokeToken = sessionUser?.sessionToken || null;
+    if (!revokeToken) {
+      const authHeader = req.headers.authorization;
+      if (authHeader?.startsWith("Bearer ")) revokeToken = authHeader.slice(7).trim();
+    }
+    if (!revokeUserId && revokeToken) {
+      const resolved = await resolveUserBySessionToken(db, revokeToken).catch(() => null);
+      if (resolved?.row?.id) revokeUserId = Number(resolved.row.id);
+    }
+    if (revokeUserId && revokeToken) {
+      await revokeSessionTokenForUser(db, revokeUserId, revokeToken).catch(() => {});
+    }
+    try {
+      await destroySession(req);
+    } catch (err) {
+      console.error("[auth] logout destroy failed:", err);
+      return res.status(500).json({ message: "Logout failed" });
+    }
+    if (cookie) {
+      res.clearCookie("connect.sid", {
+        path: cookie.path || "/",
+        httpOnly: cookie.httpOnly !== false,
+        secure: !!cookie.secure,
+        sameSite: cookie.sameSite as "lax" | "strict" | "none" | undefined,
+        domain: cookie.domain,
+      });
+    } else {
+      res.clearCookie("connect.sid", { path: "/" });
+    }
     res.json({ success: true });
   });
 
@@ -351,8 +448,22 @@ export function registerAuthRoutes({
       if (user.role === "admin") {
         return res.status(403).json({ message: "Admin accounts cannot be deleted here. Contact support." });
       }
-      await purgeStudentAccountById(db, user.id);
-      (req.session as any).user = null;
+      await runInTransaction((tx) => purgeStudentAccountById(tx, user.id));
+      const cookie = req.session?.cookie;
+      try {
+        await destroySession(req);
+      } catch {
+        (req.session as any).user = null;
+      }
+      if (cookie) {
+        res.clearCookie("connect.sid", {
+          path: cookie.path || "/",
+          httpOnly: cookie.httpOnly !== false,
+          secure: !!cookie.secure,
+          sameSite: cookie.sameSite as "lax" | "strict" | "none" | undefined,
+          domain: cookie.domain,
+        });
+      }
       res.json({ success: true });
     } catch (err) {
       console.error("Delete account error:", err);
@@ -374,14 +485,14 @@ export function registerAuthRoutes({
         result = await db.query("SELECT * FROM users WHERE LOWER(email) = LOWER($1)", [identifier]);
       }
 
-      if (result.rows.length === 0) return res.status(404).json({ message: "Account not found. Please sign up first." });
+      if (result.rows.length === 0) return res.status(401).json({ message: GENERIC_LOGIN_ERROR });
       const user = result.rows[0];
-      if (user.is_blocked) return res.status(403).json({ message: "Your account has been blocked. Please contact support." });
+      if (user.is_blocked) return res.status(401).json({ message: GENERIC_LOGIN_ERROR });
       if (!user.profile_complete) {
-        return res.status(401).json({ message: "Profile not complete. Please sign in with Phone OTP to complete your profile first." });
+        return res.status(401).json({ message: GENERIC_LOGIN_ERROR });
       }
 
-      if (!user.password_hash) return res.status(401).json({ message: "No password set. Please use Phone OTP to sign in, then set a password in Profile." });
+      if (!user.password_hash) return res.status(401).json({ message: GENERIC_LOGIN_ERROR });
       let matched = false;
       if (isScryptHash(user.password_hash)) {
         matched = await verifyPassword(password, user.password_hash);
@@ -392,7 +503,7 @@ export function registerAuthRoutes({
           await db.query("UPDATE users SET password_hash = $1 WHERE id = $2", [migratedHash, user.id]);
         }
       }
-      if (!matched) return res.status(401).json({ message: "Incorrect password. Try again or use Phone OTP." });
+      if (!matched) return res.status(401).json({ message: GENERIC_LOGIN_ERROR });
 
       const gate = await assertLoginAllowedForInstallation(db, req, {
         userId: user.id,
@@ -410,6 +521,7 @@ export function registerAuthRoutes({
       await persistLoginSession(db, user, sessionToken, dev, { clearOtp: false });
       await finalizeStudentWebSlotsAfterAuth(db, user.id, user.role, req);
       const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: dev });
+      await regenerateSession(req);
       (req.session as any).user = sessionUser;
       res.json({ success: true, user: sessionUser });
     } catch (err) {

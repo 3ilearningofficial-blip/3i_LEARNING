@@ -3,32 +3,29 @@ import { Platform, StyleSheet, View, Text } from "react-native";
 import { BlurView } from "expo-blur";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useQuery } from "@tanstack/react-query";
-import React, { useState } from "react";
+import React from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Colors from "@/constants/colors";
 import { authFetch, getApiUrl } from "@/lib/query-client";
+import { supportMessagesQueryKey } from "@/lib/query-keys";
 import { useAuth } from "@/context/AuthContext";
 
 function ChatTabIcon({ color, focused }: { color: string; focused: boolean }) {
   const { user } = useAuth();
-  const [authLost, setAuthLost] = useState(false);
   const { data: messages = [] } = useQuery<any[]>({
-    queryKey: ["/api/support/messages"],
+    queryKey: user?.id ? supportMessagesQueryKey(user.id) : ["/api/support/messages", "guest"],
     queryFn: async () => {
       try {
         const baseUrl = getApiUrl();
         const res = await authFetch(new URL("/api/support/messages", baseUrl).toString());
-        if (res.status === 401) {
-          setAuthLost(true);
-          return [];
-        }
+        if (res.status === 401) return [];
         if (!res.ok) return [];
-        setAuthLost(false);
         return res.json();
       } catch { return []; }
     },
-    enabled: !!user && !authLost,
-    refetchInterval: !!user && !authLost ? 90000 : false,
+    // When Support tab itself is focused, the screen-level query should be the active poll owner.
+    enabled: !!user?.id && !focused,
+    refetchInterval: !!user?.id && !focused ? 90000 : false,
     staleTime: 60000,
     refetchOnMount: false,
   });
@@ -38,50 +35,6 @@ function ChatTabIcon({ color, focused }: { color: string; focused: boolean }) {
   return (
     <View style={{ width: 28, height: 28, alignItems: "center", justifyContent: "center" }}>
       <Ionicons name={focused ? "chatbubbles" : "chatbubbles-outline"} size={24} color={color} />
-      {unread > 0 && (
-        <View style={{
-          position: "absolute", top: -2, right: -4,
-          backgroundColor: "#EF4444", borderRadius: 8,
-          minWidth: 16, height: 16,
-          alignItems: "center", justifyContent: "center",
-          paddingHorizontal: 3,
-        }}>
-          <Text style={{ fontSize: 9, fontFamily: "Inter_700Bold", color: "#fff" }}>{unread > 9 ? "9+" : unread}</Text>
-        </View>
-      )}
-    </View>
-  );
-}
-
-function NotifTabIcon({ color, focused }: { color: string; focused: boolean }) {
-  const { user } = useAuth();
-  const [authLost, setAuthLost] = useState(false);
-  const { data: notifications = [] } = useQuery<any[]>({
-    queryKey: ["/api/notifications"],
-    queryFn: async () => {
-      try {
-        const baseUrl = getApiUrl();
-        const res = await authFetch(new URL("/api/notifications", baseUrl).toString());
-        if (res.status === 401) {
-          setAuthLost(true);
-          return [];
-        }
-        if (!res.ok) return [];
-        setAuthLost(false);
-        return res.json();
-      } catch { return []; }
-    },
-    enabled: !!user && !authLost,
-    refetchInterval: !!user && !authLost ? 90000 : false,
-    staleTime: 60000,
-    refetchOnMount: false,
-  });
-
-  const unread = notifications.filter((n: any) => !n.is_read).length;
-
-  return (
-    <View style={{ width: 28, height: 28, alignItems: "center", justifyContent: "center" }}>
-      <Ionicons name={focused ? "notifications" : "notifications-outline"} size={24} color={color} />
       {unread > 0 && (
         <View style={{
           position: "absolute", top: -2, right: -4,

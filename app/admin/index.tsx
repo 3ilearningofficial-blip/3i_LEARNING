@@ -11,6 +11,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
 import { apiRequest, getApiUrl, authFetch } from "@/lib/query-client";
+import { liveClassesQueryKey } from "@/lib/query-keys";
 import { uploadToR2, getMimeType } from "@/lib/r2-upload";
 import {
   WELCOME_LOGO_DISPLAY_ADMIN_HINT,
@@ -1897,7 +1898,7 @@ export default function AdminDashboard() {
         if (liveIsNow && createdId) {
           refetchUpcoming();
           qc.invalidateQueries({ queryKey: ["/api/upcoming-classes"] });
-          qc.invalidateQueries({ queryKey: ["/api/live-classes"] });
+          qc.invalidateQueries({ queryKey: liveClassesQueryKey() });
           setShowScheduleLiveClass(false);
           setEditingLiveClass(null);
           setLiveTitle(""); setLiveSelectedCourses([]);
@@ -1914,7 +1915,7 @@ export default function AdminDashboard() {
       // Notifications will be sent automatically 30 min before class by server scheduler — not here
       refetchUpcoming();
       qc.invalidateQueries({ queryKey: ["/api/upcoming-classes"] });
-      qc.invalidateQueries({ queryKey: ["/api/live-classes"] });
+      qc.invalidateQueries({ queryKey: liveClassesQueryKey() });
       setShowScheduleLiveClass(false);
       setEditingLiveClass(null);
       setLiveTitle(""); setLiveSelectedCourses([]);
@@ -4528,7 +4529,7 @@ export default function AdminDashboard() {
                 setLiveActionSheet(null);
                 const doDelete = async () => {
                   for (const id of g.ids) { await apiRequest("DELETE", `/api/admin/live-classes/${id}`).catch(() => {}); }
-                  refetchUpcoming(); qc.invalidateQueries({ queryKey: ["/api/live-classes"] });
+                  refetchUpcoming(); qc.invalidateQueries({ queryKey: liveClassesQueryKey() });
                 };
                 if (Platform.OS === "web") { if (window.confirm(`Delete "${g.title}" from all courses?`)) doDelete(); }
                 else Alert.alert("Delete", `Delete "${g.title}" from all ${g.ids.length} course(s)?`, [{ text: "Cancel" }, { text: "Delete", style: "destructive", onPress: doDelete }]);

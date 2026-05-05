@@ -43,10 +43,12 @@ export function registerAdminNotificationRoutes({
       );
       const adminNotifId = insertResult.rows[0]?.id || null;
 
-      for (const uid of userIds) {
+      if (userIds.length > 0) {
         await db.query(
-          "INSERT INTO notifications (user_id, title, message, type, created_at, expires_at, admin_notif_id, image_url) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-          [uid, title, message, type || "info", now, expiresAt, adminNotifId, imageUrl || null]
+          `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at, admin_notif_id, image_url)
+           SELECT u, $2::text, $3::text, $4::text, $5::bigint, $6::bigint, $7, $8::text
+           FROM unnest($1::int[]) AS u`,
+          [userIds, title, message, type || "info", now, expiresAt, adminNotifId, imageUrl || null]
         );
       }
       await sendPushToUsers(db, userIds.map((id) => Number(id)), {

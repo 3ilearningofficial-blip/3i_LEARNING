@@ -5,6 +5,7 @@ import {
   apiRequest,
   getApiUrl,
   getStoredToken,
+  queryClient,
   setUnauthorizedHandler,
   attachInstallationHeaders,
 } from "@/lib/query-client";
@@ -23,7 +24,7 @@ interface AuthContextValue {
   user: AuthUser | null;
   isLoading: boolean;
   isAdmin: boolean;
-  login: (user: AuthUser) => void;
+  login: (user: AuthUser) => Promise<void>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
   updateUser: (updates: Partial<AuthUser>) => void;
@@ -41,24 +42,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const stored = await getStoredAuthUser();
       const token = await getStoredToken();
 
-      // Avoid noisy expected 401s on public auth pages when no session exists.
-      if (Platform.OS !== "web" && !token && !stored) {
+      // No persisted session — skip /api/auth/me (same idea as native).
+      if (!token && !stored) {
         setUser(null);
         return;
       }
 
       const baseUrl = getApiUrl();
       const url = new URL("/api/auth/me", baseUrl);
-      // Native uses stored bearer token; web relies on HttpOnly cookie session.
-      const headers: Record<string, string> = {};
-      if (token) headers["Authorization"] = `Bearer ${token}`;
-      await attachInstallationHeaders(headers);
-      const res = await fetch(url.toString(), { credentials: "include", headers });
+      const buildHeaders = async (): Promise<Record<string, string>> => {
+        const headers: Record<string, string> = {};
+        const t = await getStoredToken();
+        if (t) headers["Authorization"] = `Bearer ${t}`;
+        await attachInstallationHeaders(headers);
+        return headers;
+      };
+
+      const fetchMe = async () =>
+        fetch(url.toString(), { credentials: "include", headers: await buildHeaders() });
+
+      let res = await fetchMe();
+      // One retry on web for transient cookie/network races after navigation or tab restore.
+      if (Platform.OS === "web" && !res.ok && (res.status === 401 || res.status === 403 || res.status === 502)) {
+        await new Promise((r) => setTimeout(r, 400));
+        res = await fetchMe();
+      }
+
       if (res.ok) {
         const data = await res.json();
         if (typeof data?.id !== "number") {
           setUser(null);
           await removeStoredAuthUser();
+          queryClient.clear();
           return;
         }
         // Always update stored token with what server returns
@@ -76,7 +91,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       } else {
         const errorData = await res.json().catch(() => null);
-        if (errorData?.message === "device_binding_mismatch") {
+        const msg = errorData?.message as string | undefined;
+        if (msg === "device_binding_mismatch") {
           Alert.alert(
             "Access Restricted",
             "This account's paid subscription is tied to the device used at purchase. Sign in using that same installation, or contact support.",
@@ -84,38 +100,57 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           );
           setUser(null);
           await removeStoredAuthUser();
-        } else if (errorData?.message === "logged_in_elsewhere") {
+          queryClient.clear();
+        } else if (msg === "logged_in_elsewhere") {
           Alert.alert("Session Expired", "Your account has been logged in on another device.", [{ text: "OK" }]);
           setUser(null);
           await removeStoredAuthUser();
-        } else if (errorData?.message === "account_blocked") {
+          queryClient.clear();
+        } else if (msg === "account_blocked") {
           Alert.alert("Account Blocked", "Your account has been blocked by the admin. Please contact support.", [{ text: "OK" }]);
           setUser(null);
           await removeStoredAuthUser();
-        } else if (errorData?.message === "account_deleted") {
+          queryClient.clear();
+        } else if (msg === "account_deleted") {
           setUser(null);
           await removeStoredAuthUser();
+          queryClient.clear();
         } else if (Platform.OS === "web") {
+          // Keep last known user when we still have a token (transient / misclassified failures).
+          const tok = await getStoredToken();
+          if (stored && tok) {
+            setUser(stored);
+            return;
+          }
           setUser(null);
           await removeStoredAuthUser();
+          queryClient.clear();
         } else if (stored) {
           // Native fallback keeps offline usability when transient auth errors happen.
           setUser(stored);
         } else {
           setUser(null);
           await removeStoredAuthUser();
+          queryClient.clear();
         }
       }
     } catch {
+      const stored = await getStoredAuthUser();
+      const tok = await getStoredToken();
       if (Platform.OS === "web") {
+        if (stored && tok) {
+          setUser(stored);
+          return;
+        }
         setUser(null);
         await removeStoredAuthUser();
+        queryClient.clear();
+      } else if (stored) {
+        setUser(stored);
       } else {
-        // Network error — use stored user as fallback on native.
-        const stored = await getStoredAuthUser();
-        if (stored) {
-          setUser(stored);
-        }
+        setUser(null);
+        await removeStoredAuthUser();
+        queryClient.clear();
       }
     }
   };
@@ -149,6 +184,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         try {
           const meUrl = new URL("/api/auth/me", getApiUrl());
           const headers: Record<string, string> = {};
+          const bearer = await getStoredToken();
+          if (bearer) headers["Authorization"] = `Bearer ${bearer}`;
           await attachInstallationHeaders(headers);
           const meRes = await fetch(meUrl.toString(), { credentials: "include", headers });
           if (meRes.ok) {
@@ -164,6 +201,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         setUser(null);
         await removeStoredAuthUser();
+        queryClient.clear();
         router.replace("/welcome");
         return;
       }
@@ -176,6 +214,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       setUser(null);
       await removeStoredAuthUser();
+      queryClient.clear();
     });
     return () => setUnauthorizedHandler(null);
   }, [pathname]);
@@ -186,7 +225,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (user?.role === "admin") return;
     // Recorded/live class playback can happen inside iframes/video surfaces that do not
     // reliably bubble activity events to the app shell. Avoid timing out while on player pages.
-    const onPlaybackRoute = pathname.startsWith("/lecture/") || pathname.startsWith("/live-class/");
+    const onPlaybackRoute =
+      pathname.startsWith("/lecture/") ||
+      pathname.startsWith("/live-class/") ||
+      pathname.startsWith("/material/");
     if (onPlaybackRoute) return;
     const TIMEOUT = 60 * 60 * 1000; // 1 hour
     let timer: ReturnType<typeof setTimeout>;
@@ -197,6 +239,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (user) {
           setUser(null);
           await removeStoredAuthUser();
+          queryClient.clear();
           router.replace("/welcome");
         }
       }, TIMEOUT);
@@ -212,9 +255,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [user, pathname]);
 
-  const login = (userData: AuthUser) => {
+  const login = async (userData: AuthUser) => {
+    queryClient.clear();
     setUser(userData);
-    storeAuthUser(userData);
+    await storeAuthUser(userData);
   };
 
   const updateUser = (updates: Partial<AuthUser>) => {
@@ -235,6 +279,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (_e) {}
     setUser(null);
     await removeStoredAuthUser();
+    queryClient.clear();
   };
 
   const value = useMemo(

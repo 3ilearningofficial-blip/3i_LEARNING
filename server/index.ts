@@ -15,6 +15,8 @@ import rateLimit from "express-rate-limit";
 import { ipKeyGenerator } from "express-rate-limit";
 import compression from "compression";
 import * as fs from "fs";
+import pg from "pg";
+import { PgRateLimitStore } from "./pg-rate-limit-store";
 
 const app = express();
 const log = console.log;
@@ -527,6 +529,13 @@ function setupErrorHandler(app: express.Application) {
   });
 }
 
+function normalizeOtpIdentifier(input: unknown): string {
+  const raw = String(input || "").trim().toLowerCase();
+  const digits = raw.replace(/\D/g, "");
+  if (digits.length >= 10) return `phone:${digits.slice(-10)}`;
+  return `id:${raw || "global"}`;
+}
+
 (async () => {
   // Import routes only after dotenv has initialized env vars.
   const { registerRoutes } = await import("./routes");
@@ -567,6 +576,9 @@ function setupErrorHandler(app: express.Application) {
     next();
   });
 
+  /** e.g. `.3ilearning.in` so the session cookie applies on both apex and `www` (set in EC2 env if you use both hostnames). */
+  const sessionCookieDomain = (process.env.SESSION_COOKIE_DOMAIN || "").trim() || undefined;
+
   const sessionConfig: session.SessionOptions = {
     secret: process.env.SESSION_SECRET || (isProduction
       ? (() => { throw new Error("SESSION_SECRET must be set in production"); })()
@@ -578,6 +590,7 @@ function setupErrorHandler(app: express.Application) {
       httpOnly: true,
       sameSite: "lax",
       maxAge: 7 * 24 * 60 * 60 * 1000,
+      ...(isProduction && sessionCookieDomain ? { domain: sessionCookieDomain } : {}),
     },
   };
 
@@ -586,7 +599,8 @@ function setupErrorHandler(app: express.Application) {
     sessionConfig.store = new PgSession({
       conString: normalizeDatabaseUrl(process.env.DATABASE_URL),
       tableName: "session",
-      createTableIfMissing: true,
+      // Table is created by migrations/0011_distributed_rate_limits_and_session.sql
+      createTableIfMissing: false,
     });
   }
 
@@ -600,25 +614,46 @@ function setupErrorHandler(app: express.Application) {
     res.json(getBackendVersion());
   });
 
+  const rateLimitPgSsl =
+    process.env.PGSSL_NO_VERIFY === "true" && process.env.NODE_ENV !== "production"
+      ? { rejectUnauthorized: false as const }
+      : { rejectUnauthorized: true as const };
+  const rateLimitPool =
+    typeof process.env.DATABASE_URL === "string" && process.env.DATABASE_URL.trim().length > 0
+      ? new pg.Pool({
+          connectionString: normalizeDatabaseUrl(process.env.DATABASE_URL),
+          max: 5,
+          min: 0,
+          connectionTimeoutMillis: 8000,
+          ssl: rateLimitPgSsl,
+        })
+      : null;
+
+  const otpSendStore = rateLimitPool ? new PgRateLimitStore(rateLimitPool) : undefined;
+  const otpVerifyStore = rateLimitPool ? new PgRateLimitStore(rateLimitPool) : undefined;
+  const globalApiStore = rateLimitPool ? new PgRateLimitStore(rateLimitPool) : undefined;
+
   const otpSendLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 200,
+    max: 20,
     message: { message: "Too many requests, please try again later" },
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req: Request) => {
-      return `${ipKeyGenerator(req.ip || "")}:${req.body?.identifier || "global"}`;
+      return `${ipKeyGenerator(req.ip || "")}:${normalizeOtpIdentifier(req.body?.identifier)}`;
     },
+    ...(otpSendStore ? { store: otpSendStore } : {}),
   });
   const otpVerifyLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 300,
+    max: 30,
     message: { message: "Too many requests, please try again later" },
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req: Request) => {
-      return `${ipKeyGenerator(req.ip || "")}:${req.body?.identifier || "global"}`;
+      return `${ipKeyGenerator(req.ip || "")}:${normalizeOtpIdentifier(req.body?.identifier)}`;
     },
+    ...(otpVerifyStore ? { store: otpVerifyStore } : {}),
   });
   app.use("/api/auth/send-otp", otpSendLimiter);
   app.use("/api/auth/verify-otp", otpVerifyLimiter);
@@ -626,11 +661,12 @@ function setupErrorHandler(app: express.Application) {
   // Global API rate limit — prevents abuse across all endpoints
   const globalApiLimiter = rateLimit({
     windowMs: 60 * 1000,
-    max: 300,  // 300 req/min per IP — plenty for normal use
+    max: 600,
     message: { message: "Too many requests, please slow down" },
     standardHeaders: true,
     legacyHeaders: false,
     skip: (req) => req.path.startsWith("/api/auth/send-otp") || req.path.startsWith("/api/auth/verify-otp"),
+    ...(globalApiStore ? { store: globalApiStore } : {}),
   });
   app.use("/api", globalApiLimiter);
 

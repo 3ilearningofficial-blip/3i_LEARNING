@@ -16,6 +16,23 @@ export function registerStudentMissionMaterialRoutes({
   db,
   getAuthUser,
 }: RegisterStudentMissionMaterialRoutesDeps): void {
+  const hasActiveCourseEnrollment = async (userId: number, courseId: number): Promise<boolean> => {
+    const e = await db.query(
+      "SELECT valid_until FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL) LIMIT 1",
+      [userId, courseId]
+    );
+    if (e.rows.length === 0) return false;
+    return !isEnrollmentExpired(e.rows[0]);
+  };
+
+  const canAccessMission = async (user: any | null, mission: any): Promise<boolean> => {
+    if (mission?.mission_type === "free_practice") return true;
+    if (!user?.id) return false;
+    if (user.role === "admin") return true;
+    if (!mission?.course_id) return false;
+    return hasActiveCourseEnrollment(Number(user.id), Number(mission.course_id));
+  };
+
   app.get("/api/daily-missions", async (req: Request, res: Response) => {
     try {
       const user = await getAuthUser(req);
@@ -30,8 +47,6 @@ export function registerStudentMissionMaterialRoutes({
       const result = await db.query(query, params);
 
       if (user) {
-        const userEnrollments = await db.query("SELECT course_id FROM enrollments WHERE user_id = $1", [user.id]);
-        const enrolledCourseIds = new Set(userEnrollments.rows.map((e: { course_id: number }) => e.course_id));
         const missionIds = result.rows.map((m: any) => Number(m.id)).filter((id: number) => Number.isFinite(id));
         const userMissionMap = new Map<number, any>();
         if (missionIds.length > 0) {
@@ -43,7 +58,40 @@ export function registerStudentMissionMaterialRoutes({
             userMissionMap.set(Number(um.mission_id), um);
           });
         }
+
+        const enrolledCourseIds = new Set<number>();
+        if (user.role !== "admin") {
+          const courseIds = [
+            ...new Set(
+              result.rows
+                .map((m: any) => Number(m.course_id))
+                .filter((cid: number) => Number.isFinite(cid) && cid > 0)
+            ),
+          ];
+          if (courseIds.length > 0) {
+            const enr = await db.query(
+              `SELECT course_id, valid_until FROM enrollments
+               WHERE user_id = $1 AND course_id = ANY($2::int[])
+                 AND (status = 'active' OR status IS NULL)`,
+              [user.id, courseIds]
+            );
+            for (const row of enr.rows) {
+              if (!isEnrollmentExpired(row)) enrolledCourseIds.add(Number(row.course_id));
+            }
+          }
+        }
+
+        const missionAccessible = (mission: any): boolean => {
+          if (mission?.mission_type === "free_practice") return true;
+          if (user.role === "admin") return true;
+          const cid = Number(mission?.course_id);
+          if (!Number.isFinite(cid) || cid <= 0) return false;
+          return enrolledCourseIds.has(cid);
+        };
+
         for (const mission of result.rows) {
+          mission.isAccessible = missionAccessible(mission);
+          if (!mission.isAccessible && user.role !== "admin") continue;
           const um = userMissionMap.get(Number(mission.id));
           mission.isCompleted = !!um?.is_completed;
           mission.userScore = um?.score || 0;
@@ -51,10 +99,13 @@ export function registerStudentMissionMaterialRoutes({
           mission.userAnswers = um?.answers || {};
           mission.userIncorrect = um?.incorrect || 0;
           mission.userSkipped = um?.skipped || 0;
-          mission.isAccessible = mission.mission_type === "free_practice" || (mission.course_id ? enrolledCourseIds.has(mission.course_id) : enrolledCourseIds.size > 0);
+        }
+        if (user.role !== "admin") {
+          result.rows = result.rows.filter((m: any) => !!m.isAccessible);
         }
       } else {
         for (const mission of result.rows) mission.isAccessible = mission.mission_type === "free_practice";
+        result.rows = result.rows.filter((m: any) => !!m.isAccessible);
       }
       res.json(result.rows);
     } catch (err) {
@@ -88,6 +139,11 @@ export function registerStudentMissionMaterialRoutes({
     try {
       const user = await getAuthUser(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
+      const missionRes = await db.query("SELECT * FROM daily_missions WHERE id = $1 LIMIT 1", [req.params.id]);
+      if (missionRes.rows.length === 0) return res.status(404).json({ message: "Mission not found" });
+      const mission = missionRes.rows[0];
+      const allowed = await canAccessMission(user, mission);
+      if (!allowed) return res.status(403).json({ message: "Access denied" });
       const { score, timeTaken, answers, incorrect, skipped } = req.body;
       await db.query(
         `INSERT INTO user_missions (user_id, mission_id, is_completed, score, completed_at, time_taken, answers, incorrect, skipped) 
@@ -104,18 +160,53 @@ export function registerStudentMissionMaterialRoutes({
 
   app.get("/api/study-materials", async (req: Request, res: Response) => {
     try {
+      const user = await getAuthUser(req);
       const { free } = req.query;
-      let query = "SELECT * FROM study_materials";
-      const params: unknown[] = [];
-      if (free === "true") query += " WHERE is_free = TRUE";
-      query += " ORDER BY created_at DESC";
-      const result = await db.query(query, params);
+      const now = Date.now();
 
-      let folders: any[] = [];
-      if (free === "true") {
-        const foldersResult = await db.query("SELECT * FROM standalone_folders WHERE type = 'material' AND (is_hidden = FALSE OR is_hidden IS NULL) ORDER BY created_at ASC");
-        folders = foldersResult.rows;
+      const loadFolders = async () => {
+        if (free !== "true") return [];
+        const foldersResult = await db.query(
+          "SELECT * FROM standalone_folders WHERE type = 'material' AND (is_hidden = FALSE OR is_hidden IS NULL) ORDER BY created_at ASC"
+        );
+        return foldersResult.rows;
+      };
+
+      if (user?.role === "admin") {
+        let query = "SELECT * FROM study_materials";
+        if (free === "true") query += " WHERE is_free = TRUE";
+        query += " ORDER BY created_at DESC";
+        const result = await db.query(query, []);
+        const folders = await loadFolders();
+        res.set("Cache-Control", "private, no-store");
+        return res.json({ materials: result.rows, folders });
       }
+
+      if (!user) {
+        const result = await db.query(
+          "SELECT id, title, description, file_type, course_id, is_free, section_title, download_allowed, created_at, file_url FROM study_materials WHERE is_free = TRUE ORDER BY created_at DESC"
+        );
+        const folders = await loadFolders();
+        res.set("Cache-Control", "private, no-store");
+        return res.json({ materials: result.rows, folders });
+      }
+
+      const result = await db.query(
+        `SELECT sm.*
+         FROM study_materials sm
+         WHERE sm.is_free = TRUE
+           OR (sm.course_id IS NULL AND sm.is_free = TRUE)
+            OR EXISTS (
+              SELECT 1 FROM enrollments e
+              WHERE e.user_id = $1
+                AND e.course_id = sm.course_id
+                AND (e.status = 'active' OR e.status IS NULL)
+                AND (e.valid_until IS NULL OR e.valid_until > $2)
+            )
+         ORDER BY sm.created_at DESC`,
+        [user.id, now]
+      );
+      const folders = await loadFolders();
       res.set("Cache-Control", "private, no-store");
       res.json({ materials: result.rows, folders });
     } catch {

@@ -128,7 +128,7 @@ export default function ProfileSetupScreen() {
         const data = await res.json();
         if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         if (data?.user) {
-          login(data.user);
+          await login(data.user);
         } else {
           updateUser({ name: trimmedName, email: trimmedEmail, profileComplete: true, date_of_birth: trimmedDob });
         }

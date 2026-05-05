@@ -1,5 +1,5 @@
 import type { Express, Request, Response } from "express";
-import { computeEnrollmentValidUntil } from "./course-access-utils";
+import { computeEnrollmentValidUntil, isEnrollmentExpired } from "./course-access-utils";
 import {
   assertNativePaidPurchaseInstallation,
   finalizeInstallationBindAfterPurchase,
@@ -19,8 +19,32 @@ type RegisterPaymentRoutesDeps = {
   getAuthUser: (req: Request) => Promise<AuthUser | null>;
   getRazorpay: () => any;
   verifyPaymentSignature: (orderId: string, paymentId: string, signature: string) => boolean;
-  cacheInvalidate?: (pattern: string) => void;
+  runInTransaction: <T>(fn: (tx: DbClient) => Promise<T>) => Promise<T>;
 };
+
+/** Maps domain errors from course payment verification to HTTP status (best-effort). */
+function httpStatusForCourseVerifyError(message: string): number {
+  switch (message) {
+    case "Invalid payment signature":
+      return 400;
+    case "Payment order not found":
+      return 404;
+    case "Payment does not belong to this user":
+      return 403;
+    case "Course mismatch":
+      return 400;
+    case "This course has ended":
+      return 410;
+    case "Course not found":
+      return 404;
+    case "Payment kind mismatch":
+    case "Payment user mismatch":
+    case "Payment course mismatch":
+      return 400;
+    default:
+      return 500;
+  }
+}
 
 export function registerPaymentRoutes({
   app,
@@ -28,7 +52,7 @@ export function registerPaymentRoutes({
   getAuthUser,
   getRazorpay,
   verifyPaymentSignature,
-  cacheInvalidate,
+  runInTransaction,
 }: RegisterPaymentRoutesDeps): void {
   const verifyOrderOwnershipAndAmount = async ({
     orderId,
@@ -58,26 +82,56 @@ export function registerPaymentRoutes({
     if (!orderAmount || orderAmount !== expectedAmount) throw new Error("Payment amount mismatch");
   };
 
-  /** Idempotent: insert enrollment if missing. Fixes rows where status became paid but enrollment failed or was skipped. */
-  const ensureCourseEnrollment = async (paymentRow: { user_id: number; course_id: number }) => {
-    const paidCourseResult = await db.query("SELECT * FROM courses WHERE id = $1", [paymentRow.course_id]);
+  const verifyCourseOrderOwnership = async ({
+    orderId,
+    expectedUserId,
+    expectedCourseId,
+  }: {
+    orderId: string;
+    expectedUserId: number;
+    expectedCourseId: number;
+  }) => {
+    const razorpay = getRazorpay();
+    const order: { notes?: Record<string, string> } = await razorpay.orders.fetch(orderId);
+    const notes = order.notes || {};
+    const noteUserId = Number(notes.userId || 0);
+    const noteCourseId = Number(notes.courseId || 0);
+    const noteKind = String(notes.kind || "");
+    if (noteKind && noteKind !== "course") throw new Error("Payment kind mismatch");
+    if (!noteUserId || noteUserId !== expectedUserId) throw new Error("Payment user mismatch");
+    if (!noteCourseId || noteCourseId !== expectedCourseId) throw new Error("Payment course mismatch");
+  };
+
+  /** Insert new enrollment (bumps course total_students) or renew expired/inactive access without double-counting. */
+  const ensureCourseEnrollment = async (
+    exec: DbClient,
+    paymentRow: { user_id: number; course_id: number }
+  ) => {
+    const paidCourseResult = await exec.query("SELECT * FROM courses WHERE id = $1", [paymentRow.course_id]);
     const paidCourse = paidCourseResult.rows[0];
     if (!paidCourse) throw new Error("Course not found");
-    const alreadyEnrolled = await db.query(
-      "SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2",
-      [paymentRow.user_id, paymentRow.course_id]
-    );
-    if (alreadyEnrolled.rows.length > 0) return;
     const at = Date.now();
     const vu = computeEnrollmentValidUntil(paidCourse, at);
-    await db.query(
-      "INSERT INTO enrollments (user_id, course_id, enrolled_at, valid_until) VALUES ($1, $2, $3, $4)",
-      [paymentRow.user_id, paymentRow.course_id, at, vu]
+    const existing = await exec.query(
+      "SELECT id, valid_until, status FROM enrollments WHERE user_id = $1 AND course_id = $2 FOR UPDATE",
+      [paymentRow.user_id, paymentRow.course_id]
     );
-    await db.query(
-      "UPDATE courses SET total_students = COALESCE(total_students, 0) + 1 WHERE id = $1",
-      [paymentRow.course_id]
-    );
+    if (existing.rows.length === 0) {
+      await exec.query(
+        `INSERT INTO enrollments (user_id, course_id, enrolled_at, valid_until, status)
+         VALUES ($1, $2, $3, $4, 'active')`,
+        [paymentRow.user_id, paymentRow.course_id, at, vu]
+      );
+      await exec.query("UPDATE courses SET total_students = COALESCE(total_students, 0) + 1 WHERE id = $1", [
+        paymentRow.course_id,
+      ]);
+    } else {
+      await exec.query(
+        `UPDATE enrollments SET enrolled_at = $1, valid_until = $2, status = 'active'
+         WHERE user_id = $3 AND course_id = $4`,
+        [at, vu, paymentRow.user_id, paymentRow.course_id]
+      );
+    }
   };
 
   const completeCoursePaymentByOrder = async ({
@@ -98,44 +152,44 @@ export function registerPaymentRoutes({
       throw new Error("Invalid payment signature");
     }
 
-    const paymentRecord = await db.query(
-      "SELECT * FROM payments WHERE razorpay_order_id = $1",
-      [orderId]
-    );
-    if (paymentRecord.rows.length === 0) {
-      throw new Error("Payment order not found");
-    }
-
-    const paymentRow = paymentRecord.rows[0];
-    if (expectedUserId && paymentRow.user_id !== expectedUserId) {
-      throw new Error("Payment does not belong to this user");
-    }
-    if (expectedCourseId && paymentRow.course_id !== expectedCourseId) {
-      throw new Error("Course mismatch");
-    }
-
-    if (paymentRow.status !== "paid") {
-      const paidCourseResult = await db.query("SELECT * FROM courses WHERE id = $1", [paymentRow.course_id]);
-      const paidCourse = paidCourseResult.rows[0];
-      if (!paidCourse) throw new Error("Course not found");
-      const endTsPaid = paidCourse.end_date != null && String(paidCourse.end_date).trim() !== ""
-        ? Date.parse(String(paidCourse.end_date).trim()) : null;
-      if (Number.isFinite(endTsPaid) && (endTsPaid as number) < Date.now()) {
-        throw new Error("This course has ended");
+    const result = await runInTransaction(async (tx) => {
+      const paymentRecord = await tx.query(
+        "SELECT * FROM payments WHERE razorpay_order_id = $1 FOR UPDATE",
+        [orderId]
+      );
+      if (paymentRecord.rows.length === 0) {
+        throw new Error("Payment order not found");
       }
 
-      await db.query(
-        "UPDATE payments SET razorpay_payment_id = $1, razorpay_signature = $2, status = $3 WHERE razorpay_order_id = $4",
-        [paymentId, signature, "paid", orderId]
-      );
-    }
+      const paymentRow = paymentRecord.rows[0];
+      if (expectedUserId && paymentRow.user_id !== expectedUserId) {
+        throw new Error("Payment does not belong to this user");
+      }
+      if (expectedCourseId && paymentRow.course_id !== expectedCourseId) {
+        throw new Error("Course mismatch");
+      }
 
-    // Always ensure enrollment for this paid order (idempotent). Previously, when status was already
-    // "paid", the block above was skipped and no enrollment row was created — users saw success but stayed locked out.
-    await ensureCourseEnrollment(paymentRow);
+      if (paymentRow.status !== "paid") {
+        const paidCourseResult = await tx.query("SELECT * FROM courses WHERE id = $1", [paymentRow.course_id]);
+        const paidCourse = paidCourseResult.rows[0];
+        if (!paidCourse) throw new Error("Course not found");
+        const endTsPaid = paidCourse.end_date != null && String(paidCourse.end_date).trim() !== ""
+          ? Date.parse(String(paidCourse.end_date).trim()) : null;
+        if (Number.isFinite(endTsPaid) && (endTsPaid as number) < Date.now()) {
+          throw new Error("This course has ended");
+        }
 
-    cacheInvalidate?.("courses:");
-    return { userId: paymentRow.user_id, courseId: paymentRow.course_id };
+        await tx.query(
+          "UPDATE payments SET razorpay_payment_id = $1, razorpay_signature = $2, status = $3 WHERE razorpay_order_id = $4",
+          [paymentId, signature, "paid", orderId]
+        );
+      }
+
+      await ensureCourseEnrollment(tx, paymentRow);
+      return { userId: paymentRow.user_id as number, courseId: paymentRow.course_id as number };
+    });
+
+    return result;
   };
 
   app.post("/api/payments/track-click", async (req: Request, res: Response) => {
@@ -146,30 +200,35 @@ export function registerPaymentRoutes({
       if (!courseId) return res.json({ ok: true });
       const course = await db.query("SELECT price FROM courses WHERE id = $1", [courseId]);
       const price = course.rows[0]?.price || 0;
+      const pricePaisa = Math.round(parseFloat(String(price)) * 100);
+      const now = Date.now();
 
-      const existing = await db.query(
-        "SELECT id, click_count FROM payments WHERE user_id = $1 AND course_id = $2 AND (status = 'created' OR status IS NULL) ORDER BY created_at DESC LIMIT 1",
+      const updated = await db.query(
+        `UPDATE payments AS p
+         SET click_count = COALESCE(p.click_count, 1) + 1,
+             status = 'created'
+         FROM (
+           SELECT id FROM payments
+           WHERE user_id = $1 AND course_id = $2
+             AND (status = 'created' OR status IS NULL)
+             AND (razorpay_order_id IS NULL OR btrim(razorpay_order_id) = '')
+           ORDER BY created_at DESC
+           LIMIT 1
+         ) AS sub
+         WHERE p.id = sub.id
+         RETURNING p.id`,
         [user.id, courseId]
       );
-      if (existing.rows.length > 0) {
-        const currentCount = parseInt(existing.rows[0].click_count) || 1;
-        const newCount = currentCount + 1;
-        await db.query(
-          "UPDATE payments SET click_count = $1, status = 'created' WHERE id = $2 RETURNING id, click_count",
-          [newCount, existing.rows[0].id]
-        );
-      } else {
+      if (updated.rows.length === 0) {
         const paid = await db.query(
           "SELECT id FROM payments WHERE user_id = $1 AND course_id = $2 AND status = 'paid' LIMIT 1",
           [user.id, courseId]
         );
         if (paid.rows.length === 0) {
-          const pricePaisa = Math.round(parseFloat(String(price)) * 100);
-        await db.query(
+          await db.query(
             `INSERT INTO payments (user_id, course_id, amount, status, click_count, created_at)
-             VALUES ($1, $2, $3, 'created', 1, $4)
-             ON CONFLICT (user_id, course_id) DO UPDATE SET click_count = payments.click_count + 1`,
-            [user.id, courseId, pricePaisa, Date.now()]
+             VALUES ($1, $2, $3, 'created', 1, $4)`,
+            [user.id, courseId, pricePaisa, now]
           );
         }
       }
@@ -198,8 +257,17 @@ export function registerPaymentRoutes({
         return res.status(400).json({ message: "This course has ended" });
       }
 
-      const existingEnrollment = await db.query("SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2", [user.id, courseId]);
-      if (existingEnrollment.rows.length > 0) return res.status(400).json({ message: "Already enrolled" });
+      const existingEnrollment = await db.query(
+        "SELECT valid_until, status FROM enrollments WHERE user_id = $1 AND course_id = $2 LIMIT 1",
+        [user.id, courseId]
+      );
+      if (existingEnrollment.rows.length > 0) {
+        const er = existingEnrollment.rows[0];
+        const statusOk = er.status == null || String(er.status).toLowerCase() === "active";
+        if (statusOk && !isEnrollmentExpired(er)) {
+          return res.status(400).json({ message: "Already enrolled" });
+        }
+      }
 
       const amount = Math.round(parseFloat(course.price) * 100);
       const razorpay = getRazorpay();
@@ -207,24 +275,20 @@ export function registerPaymentRoutes({
         amount,
         currency: "INR",
         receipt: `course_${courseId}_user_${user.id}_${Date.now()}`,
-        notes: { courseId: courseId.toString(), userId: user.id.toString(), courseTitle: course.title },
+        notes: { courseId: courseId.toString(), userId: user.id.toString(), courseTitle: course.title, kind: "course" },
       });
       console.log("[Payments] create-order success");
 
-      const existingPayment = await db.query(
-        "SELECT id FROM payments WHERE user_id = $1 AND course_id = $2 AND status = 'created' ORDER BY created_at DESC LIMIT 1",
-        [user.id, courseId]
-      );
-      if (existingPayment.rows.length > 0) {
-        await db.query(
-          "UPDATE payments SET razorpay_order_id = $1, amount = $2 WHERE id = $3",
-          [order.id, amount, existingPayment.rows[0].id]
-        );
-      } else {
+      try {
         await db.query(
           "INSERT INTO payments (user_id, course_id, razorpay_order_id, amount, status, click_count, created_at) VALUES ($1, $2, $3, $4, 'created', 1, $5)",
           [user.id, courseId, order.id, amount, Date.now()]
         );
+      } catch (insertErr: any) {
+        if (insertErr?.code === "23505") {
+          return res.status(409).json({ message: "Duplicate payment order; try again" });
+        }
+        throw insertErr;
       }
 
       res.json({
@@ -267,7 +331,12 @@ export function registerPaymentRoutes({
       res.json({ success: true, message: "Payment verified and enrolled successfully" });
     } catch (err) {
       console.error("Verify payment error:", err);
-      res.status(500).json({ message: "Payment verification failed" });
+      const msg = err instanceof Error ? err.message : "";
+      const status = httpStatusForCourseVerifyError(msg);
+      if (status === 500) {
+        return res.status(500).json({ message: "Payment verification failed" });
+      }
+      return res.status(status).json({ message: msg || "Payment verification failed" });
     }
   });
 
@@ -287,8 +356,7 @@ export function registerPaymentRoutes({
       if (pay.rows.length === 0) {
         return res.json({ ok: true, fixed: false, message: "No paid order for this course" });
       }
-      await ensureCourseEnrollment(pay.rows[0]);
-      cacheInvalidate?.("courses:");
+      await ensureCourseEnrollment(db, pay.rows[0]);
       return res.json({ ok: true, fixed: true, message: "Enrollment synced" });
     } catch (err) {
       console.error("sync-enrollment error:", err);
@@ -309,11 +377,24 @@ export function registerPaymentRoutes({
       if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
         return res.redirect(fail);
       }
+      const isValid = verifyPaymentSignature(razorpay_order_id, razorpay_payment_id, razorpay_signature);
+      if (!isValid) return res.redirect(fail);
+      const paymentRecord = await db.query("SELECT * FROM payments WHERE razorpay_order_id = $1", [razorpay_order_id]);
+      if (paymentRecord.rows.length === 0) return res.redirect(fail);
+      const paymentRow = paymentRecord.rows[0] as { user_id: number; course_id: number };
+      await verifyCourseOrderOwnership({
+        orderId: razorpay_order_id,
+        expectedUserId: paymentRow.user_id,
+        expectedCourseId: paymentRow.course_id,
+      });
+      const preBind = await assertNativePaidPurchaseInstallation(db, paymentRow.user_id, req);
+      if (!preBind.ok) return res.redirect(fail);
       const result = await completeCoursePaymentByOrder({
         orderId: razorpay_order_id,
         paymentId: razorpay_payment_id,
         signature: razorpay_signature,
       });
+      await finalizeInstallationBindAfterPurchase(db, result.userId, req);
       return res.redirect(`${frontendBase}/course/${result.courseId}?payment=success`);
     } catch (err) {
       console.error("[Payments] redirect verify failed:", err);
@@ -375,10 +456,13 @@ export function registerPaymentRoutes({
         expectedItemId: testId,
         expectedAmount,
       });
+      const preTest = await assertNativePaidPurchaseInstallation(db, userId, req);
+      if (!preTest.ok) return res.redirect(fail);
       await db.query(
         "INSERT INTO test_purchases (user_id, test_id, razorpay_order_id, razorpay_payment_id, created_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (user_id, test_id) DO NOTHING",
         [userId, testId, razorpay_order_id, razorpay_payment_id, Date.now()]
       );
+      await finalizeInstallationBindAfterPurchase(db, userId, req);
       return res.redirect(`${frontendBase}/test-series?payment=success&testId=${testId}`);
     } catch (err) {
       console.error("[Tests] verify-redirect failed:", err);

@@ -25,6 +25,35 @@ export function registerLiveClassRoutes({
     return safe;
   };
 
+  /** Remove playback / meeting URLs from public feeds when user must not watch yet (marketing/home upcoming strip). */
+  const stripPublicPlaybackFields = (row: any) => {
+    if (!row || typeof row !== "object") return row;
+    const {
+      recording_url,
+      cf_playback_hls,
+      youtube_url,
+      cf_stream_uid,
+      stream_url,
+      meeting_url,
+      join_url,
+      zoom_meeting_id,
+      google_meet_link,
+      ...rest
+    } = row;
+    void recording_url;
+    void cf_playback_hls;
+    void youtube_url;
+    void cf_stream_uid;
+    void stream_url;
+    void meeting_url;
+    void join_url;
+    void zoom_meeting_id;
+    void google_meet_link;
+    return rest;
+  };
+
+  const toPublicUpcomingDto = (row: any) => stripPublicPlaybackFields(sanitizeLiveClass(row));
+
   app.get("/api/live-classes", async (req: Request, res: Response) => {
     try {
       const { courseId, admin } = req.query;
@@ -153,7 +182,7 @@ export function registerLiveClassRoutes({
       `);
       console.log(`[UpcomingClasses] returning ${result.rows.length} classes`);
       res.set("Cache-Control", "private, no-store");
-      res.json(result.rows.map(sanitizeLiveClass));
+      res.json(result.rows.map(toPublicUpcomingDto));
     } catch (err) {
       console.error("[UpcomingClasses] error:", err);
       res.set("Cache-Control", "private, no-store");
@@ -177,8 +206,10 @@ export function registerLiveClassRoutes({
       const hasAccess = await userCanAccessLiveClassContent(db, user, lc);
 
       const canViewStreamSecrets = user?.role === "admin";
+      const base = canViewStreamSecrets ? lc : sanitizeLiveClass(lc);
+      const payload = canViewStreamSecrets || hasAccess ? base : stripPublicPlaybackFields(base);
       res.set("Cache-Control", "private, no-store");
-      res.json({ ...(canViewStreamSecrets ? lc : sanitizeLiveClass(lc)), is_enrolled: isEnrolled, has_access: hasAccess });
+      res.json({ ...payload, is_enrolled: isEnrolled, has_access: hasAccess });
     } catch {
       res.status(500).json({ message: "Failed to fetch live class" });
     }

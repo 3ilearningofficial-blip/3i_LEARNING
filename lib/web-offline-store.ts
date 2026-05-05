@@ -5,6 +5,7 @@ const STORE = "files";
 const DB_VERSION = 1;
 
 export type WebOfflineRecord = {
+  userId: number;
   itemType: "lecture" | "material";
   itemId: number;
   localFilename: string;
@@ -15,8 +16,8 @@ export type WebOfflineRecord = {
   downloadedAt: number;
 };
 
-function keyOf(itemType: string, itemId: number): string {
-  return `${itemType}:${itemId}`;
+function keyOf(userId: number, itemType: string, itemId: number): string {
+  return `${userId}:${itemType}:${itemId}`;
 }
 
 function openDb(): Promise<IDBDatabase> {
@@ -39,7 +40,7 @@ function openDb(): Promise<IDBDatabase> {
 
 export async function putWebOffline(record: WebOfflineRecord): Promise<void> {
   const db = await openDb();
-  const k = keyOf(record.itemType, record.itemId);
+  const k = keyOf(record.userId, record.itemType, record.itemId);
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE, "readwrite");
     tx.oncomplete = () => resolve();
@@ -49,9 +50,9 @@ export async function putWebOffline(record: WebOfflineRecord): Promise<void> {
   db.close();
 }
 
-export async function getWebOffline(itemType: string, itemId: number): Promise<WebOfflineRecord | null> {
+export async function getWebOffline(userId: number, itemType: string, itemId: number): Promise<WebOfflineRecord | null> {
   const db = await openDb();
-  const k = keyOf(itemType, itemId);
+  const k = keyOf(userId, itemType, itemId);
   const record = await new Promise<WebOfflineRecord | null>((resolve, reject) => {
     const tx = db.transaction(STORE, "readonly");
     const q = tx.objectStore(STORE).get(k);
@@ -62,9 +63,9 @@ export async function getWebOffline(itemType: string, itemId: number): Promise<W
   return record;
 }
 
-export async function removeWebOffline(itemType: string, itemId: number): Promise<void> {
+export async function removeWebOffline(userId: number, itemType: string, itemId: number): Promise<void> {
   const db = await openDb();
-  const k = keyOf(itemType, itemId);
+  const k = keyOf(userId, itemType, itemId);
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE, "readwrite");
     tx.oncomplete = () => resolve();
@@ -74,8 +75,8 @@ export async function removeWebOffline(itemType: string, itemId: number): Promis
   db.close();
 }
 
-export async function hasWebOffline(itemType: string, itemId: number): Promise<boolean> {
-  const r = await getWebOffline(itemType, itemId);
+export async function hasWebOffline(userId: number, itemType: string, itemId: number): Promise<boolean> {
+  const r = await getWebOffline(userId, itemType, itemId);
   return r != null;
 }
 

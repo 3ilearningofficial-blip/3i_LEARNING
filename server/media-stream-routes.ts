@@ -39,9 +39,14 @@ async function streamMediaGet(
       res.status(401).json({ message: "Token expired or invalid" });
       return;
     }
-    userId = tokenResult.rows[0].user_id;
-    const userResult = await db.query("SELECT role FROM users WHERE id = $1", [userId]);
-    if (userResult.rows.length > 0) userRole = userResult.rows[0].role;
+    const tokenUserId = tokenResult.rows[0].user_id as number;
+    const sessionUser = await getAuthUser(req);
+    if (!sessionUser || sessionUser.id !== tokenUserId) {
+      res.status(401).json({ message: "Unauthorized" });
+      return;
+    }
+    userId = tokenUserId;
+    userRole = sessionUser.role;
   } else {
     const user = await getAuthUser(req);
     if (!user) {
@@ -107,6 +112,9 @@ async function streamMediaGet(
             return;
           }
         }
+      } else {
+        res.status(403).json({ message: "Forbidden" });
+        return;
       }
     }
   }

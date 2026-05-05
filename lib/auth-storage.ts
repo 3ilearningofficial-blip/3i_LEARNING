@@ -39,9 +39,8 @@ async function getNativeStoredToken(): Promise<string | null> {
 
 export async function storeAuthUser(userData: StoredAuthUser) {
   if (Platform.OS === "web" && typeof localStorage !== "undefined") {
-    const { sessionToken, ...rest } = userData;
-    void sessionToken;
-    localStorage.setItem(userStorageKey, JSON.stringify(rest));
+    // Persist opaque sessionToken on web so authFetch can send Bearer alongside cookies.
+    localStorage.setItem(userStorageKey, JSON.stringify(userData));
   } else {
     const { sessionToken, ...rest } = userData;
     await AsyncStorage.setItem(userStorageKey, JSON.stringify(rest));
@@ -76,7 +75,13 @@ export async function removeStoredAuthUser() {
 
 export async function getStoredAuthToken(): Promise<string | null> {
   try {
-    if (Platform.OS === "web") return null;
+    if (Platform.OS === "web" && typeof localStorage !== "undefined") {
+      const stored = localStorage.getItem(userStorageKey);
+      if (!stored) return null;
+      const parsed = JSON.parse(stored) as { sessionToken?: string };
+      const t = parsed.sessionToken?.trim();
+      return t && t !== "null" && t !== "undefined" ? t : null;
+    }
     return await getNativeStoredToken();
   } catch {
     return null;

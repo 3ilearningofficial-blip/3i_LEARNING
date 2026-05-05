@@ -13,6 +13,15 @@ type RegisterTestCoreRoutesDeps = {
   updateCourseProgress: (userId: number, courseId: number) => Promise<void>;
 };
 
+/** Students must not receive answers or worked solutions before submitting an attempt. */
+function sanitizeQuestionsForClient(rows: Record<string, unknown>[], isAdmin: boolean): Record<string, unknown>[] {
+  if (isAdmin) return rows;
+  return rows.map((q) => {
+    const { correct_option: _c, explanation: _e, solution_image_url: _s, ...rest } = q;
+    return rest;
+  });
+}
+
 export function registerTestCoreRoutes({
   app,
   db,
@@ -84,7 +93,8 @@ export function registerTestCoreRoutes({
       }
 
       const questionsResult = await db.query("SELECT * FROM questions WHERE test_id = $1 ORDER BY order_index", [req.params.id]);
-      res.json({ ...test, questions: questionsResult.rows });
+      const isAdmin = user.role === "admin";
+      res.json({ ...test, questions: sanitizeQuestionsForClient(questionsResult.rows, isAdmin) });
     } catch {
       res.status(500).json({ message: "Failed to fetch test" });
     }
@@ -191,7 +201,7 @@ export function registerTestCoreRoutes({
       });
     } catch (err) {
       console.error("[Attempt] Submit error:", err);
-      res.status(500).json({ message: "Failed to submit test", detail: String(err) });
+      res.status(500).json({ message: "Failed to submit test" });
     }
   });
 }

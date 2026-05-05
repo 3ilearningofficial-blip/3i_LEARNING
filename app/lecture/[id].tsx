@@ -14,6 +14,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
 import { useScreenProtection } from "@/lib/useScreenProtection";
 import { useVideoScreenProtection } from "@/lib/useVideoScreenProtection";
+import { useAuth } from "@/context/AuthContext";
 import { DownloadButton } from "@/components/DownloadButton";
 import { VideoWatermark } from "@/components/VideoWatermark";
 import { buildYouTubePhoneWebSrcDoc } from "@/lib/buildYouTubePhoneWebSrcDoc";
@@ -391,6 +392,7 @@ export default function LectureScreen() {
   const isWebWide = Platform.OS === "web" && windowWidth >= 960;
   const isNarrowWeb = Platform.OS === "web" && !isWebWide;
   const qc = useQueryClient();
+  const { user } = useAuth();
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
@@ -482,12 +484,13 @@ export default function LectureScreen() {
     const path = rawVideoUrl.startsWith("/") ? rawVideoUrl : rawVideoUrl.replace(/^https?:\/\/[^/]+/, "");
     return path.replace(/^\/api\/media\//, "");
   })();
+  const userScopedMediaKey = fileKey ? `${String(user?.id || 0)}:${fileKey}` : null;
   useEffect(() => {
-    if (!fileKey) {
+    if (!fileKey || !userScopedMediaKey) {
       setMediaToken(null);
       return;
     }
-    const cached = mediaTokenCache.get(fileKey);
+    const cached = mediaTokenCache.get(userScopedMediaKey);
     if (cached && cached.expiresAt > Date.now()) {
       setMediaToken(cached.token);
       return;
@@ -498,14 +501,14 @@ export default function LectureScreen() {
       .then(d => {
         if (!cancelled && d.token) {
           setMediaToken(d.token);
-          mediaTokenCache.set(fileKey, { token: d.token, expiresAt: Date.now() + MEDIA_TOKEN_TTL_MS });
+          mediaTokenCache.set(userScopedMediaKey, { token: d.token, expiresAt: Date.now() + MEDIA_TOKEN_TTL_MS });
         }
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [fileKey]);
+  }, [fileKey, userScopedMediaKey]);
   const authenticatedVideoUrl = toHttpsMediaUrl(
     fileKey && mediaToken
       ? `${baseUrl}/api/media/${fileKey}?token=${mediaToken}`
@@ -539,7 +542,9 @@ export default function LectureScreen() {
       });
       // Invalidate queries to refresh the UI
       qc.invalidateQueries({ queryKey: [`/api/lectures/${id}/progress`] });
-      qc.invalidateQueries({ queryKey: ["/api/courses", courseId] });
+      if (courseId) {
+        qc.invalidateQueries({ queryKey: ["/api/courses", String(courseId)] });
+      }
       if (!auto) {
         if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         Alert.alert("Lecture Completed!", "Your progress has been saved.", [

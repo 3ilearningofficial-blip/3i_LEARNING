@@ -11,6 +11,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 import { getApiUrl, getBaseUrl, authFetch, apiRequest } from "@/lib/query-client";
+import { myAttemptsSummaryQueryKey, testQueryKey } from "@/lib/query-keys";
 import { useAuth } from "@/context/AuthContext";
 import { WebView } from "react-native-webview";
 
@@ -463,14 +464,14 @@ export default function TestSeriesScreen() {
   });
 
   const { data: attemptSummary = {} } = useQuery<Record<number, any>>({
-    queryKey: ["/api/my-attempts/summary"],
+    queryKey: user?.id ? myAttemptsSummaryQueryKey(user.id) : ["/api/my-attempts/summary", "guest"],
     queryFn: async () => {
       const baseUrl = getApiUrl();
       const res = await authFetch(new URL("/api/my-attempts/summary", baseUrl).toString());
       if (!res.ok) return {};
       return res.json();
     },
-    enabled: !!user,
+    enabled: !!user?.id,
     staleTime: 3 * 60 * 1000,
     gcTime: 20 * 60 * 1000,
     refetchOnMount: false,
@@ -540,7 +541,7 @@ export default function TestSeriesScreen() {
     });
     regularTests.slice(0, 4).forEach((test) => {
       qc.prefetchQuery({
-        queryKey: ["/api/tests", test.id],
+        queryKey: testQueryKey(test.id),
         queryFn: async () => {
           const res = await authFetch(new URL(`/api/tests/${test.id}`, baseUrl).toString());
           if (!res.ok) throw new Error("prefetch test failed");

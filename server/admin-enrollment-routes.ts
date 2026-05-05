@@ -8,18 +8,18 @@ type RegisterAdminEnrollmentRoutesDeps = {
   app: Express;
   db: DbClient;
   requireAdmin: (req: Request, res: Response, next: () => void) => any;
-  cacheInvalidate: (prefix: string) => void;
   deleteDownloadsForUser: (userId: number, courseId: number) => Promise<void>;
   deleteDownloadsForCourse: (courseId: number) => Promise<void>;
+  runInTransaction: <T>(fn: (tx: DbClient) => Promise<T>) => Promise<T>;
 };
 
 export function registerAdminEnrollmentRoutes({
   app,
   db,
   requireAdmin,
-  cacheInvalidate,
   deleteDownloadsForUser,
   deleteDownloadsForCourse,
+  runInTransaction,
 }: RegisterAdminEnrollmentRoutesDeps): void {
   app.put("/api/admin/enrollments/:id", requireAdmin, async (req: Request, res: Response) => {
     try {
@@ -72,17 +72,18 @@ export function registerAdminEnrollmentRoutes({
 
       await deleteDownloadsForCourse(parseInt(Array.isArray(courseId) ? courseId[0] : courseId));
 
-      await db.query("DELETE FROM test_attempts WHERE test_id IN (SELECT id FROM tests WHERE course_id = $1)", [courseId]);
-      await db.query("DELETE FROM questions WHERE test_id IN (SELECT id FROM tests WHERE course_id = $1)", [courseId]);
-      await db.query("DELETE FROM tests WHERE course_id = $1", [courseId]);
-      await db.query("DELETE FROM lectures WHERE course_id = $1", [courseId]);
-      await db.query("DELETE FROM enrollments WHERE course_id = $1", [courseId]);
-      await db.query("DELETE FROM payments WHERE course_id = $1", [courseId]);
-      await db.query("DELETE FROM study_materials WHERE course_id = $1", [courseId]);
-      await db.query("DELETE FROM live_classes WHERE course_id = $1", [courseId]);
-      await db.query("DELETE FROM courses WHERE id = $1", [courseId]);
-      cacheInvalidate("courses:");
-      cacheInvalidate("tests:");
+      // R2/storage is already cleared; DB deletes are atomic so we do not leave a half-deleted course row graph.
+      await runInTransaction(async (tx) => {
+        await tx.query("DELETE FROM test_attempts WHERE test_id IN (SELECT id FROM tests WHERE course_id = $1)", [courseId]);
+        await tx.query("DELETE FROM questions WHERE test_id IN (SELECT id FROM tests WHERE course_id = $1)", [courseId]);
+        await tx.query("DELETE FROM tests WHERE course_id = $1", [courseId]);
+        await tx.query("DELETE FROM lectures WHERE course_id = $1", [courseId]);
+        await tx.query("DELETE FROM enrollments WHERE course_id = $1", [courseId]);
+        await tx.query("DELETE FROM payments WHERE course_id = $1", [courseId]);
+        await tx.query("DELETE FROM study_materials WHERE course_id = $1", [courseId]);
+        await tx.query("DELETE FROM live_classes WHERE course_id = $1", [courseId]);
+        await tx.query("DELETE FROM courses WHERE id = $1", [courseId]);
+      });
       res.json({ success: true });
     } catch (err) {
       console.error("Delete course error:", err);

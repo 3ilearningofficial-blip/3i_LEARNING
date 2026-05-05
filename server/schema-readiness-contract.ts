@@ -28,6 +28,9 @@ export const REQUIRED_TABLES = [
   "question_reports",
   "user_sessions",
   "live_class_recording_progress",
+  "user_push_tokens",
+  "session",
+  "express_rate_limit",
 ] as const;
 
 export const REQUIRED_COLUMNS: Record<string, string[]> = {
@@ -62,3 +65,22 @@ export const REQUIRED_COLUMNS: Record<string, string[]> = {
   lecture_progress: ["playback_sessions", "last_session_ping_at"],
   standalone_folders: ["category", "price", "original_price", "is_free", "description", "validity_months"],
 };
+
+export const REQUIRED_UNIQUE_INDEX_SPECS = [
+  { table: "enrollments", columns: ["user_id", "course_id"] },
+  { table: "user_downloads", columns: ["user_id", "item_type", "item_id"] },
+  { table: "user_missions", columns: ["user_id", "mission_id"] },
+  { table: "payments", columns: ["razorpay_order_id"] },
+  { table: "lecture_progress", columns: ["user_id", "lecture_id"] },
+  { table: "live_class_viewers", columns: ["live_class_id", "user_id"] },
+  { table: "live_class_hand_raises", columns: ["live_class_id", "user_id"] },
+  { table: "book_purchases", columns: ["user_id", "book_id"] },
+  { table: "folder_purchases", columns: ["user_id", "folder_id"] },
+  { table: "test_purchases", columns: ["user_id", "test_id"] },
+  { table: "question_reports", columns: ["question_id", "user_id"] },
+  { table: "book_click_tracking", columns: ["user_id", "book_id"] },
+  { table: "site_settings", columns: ["key"] },
+  { table: "user_push_tokens", columns: ["expo_push_token"] },
+  { table: "users", columns: ["phone"] },
+  { table: "users", columns: ["email"] },
+] as const;

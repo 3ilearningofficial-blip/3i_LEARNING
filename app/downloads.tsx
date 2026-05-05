@@ -8,6 +8,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery } from "@tanstack/react-query";
 import { authFetch, getApiUrl, prepareAuthorizedFetchHeaders } from "@/lib/query-client";
+import { myDownloadsQueryKey } from "@/lib/query-keys";
 import Colors from "@/constants/colors";
 import { useDownloadManager } from "@/lib/useDownloadManager";
 import { useAuth } from "@/context/AuthContext";
@@ -36,7 +37,7 @@ export default function DownloadsScreen() {
   const downloadManager = useDownloadManager();
 
   const { data, isLoading, refetch } = useQuery<{ materials: DownloadItem[]; lectures: DownloadItem[] }>({
-    queryKey: ["/api/my-downloads"],
+    queryKey: user?.id ? myDownloadsQueryKey(user.id) : ["/api/my-downloads", "guest"],
     queryFn: async () => {
       const baseUrl = getApiUrl();
       const res = await authFetch(new URL("/api/my-downloads", baseUrl).toString());
@@ -47,8 +48,8 @@ export default function DownloadsScreen() {
         lectures: Array.isArray(payload?.lectures) ? payload.lectures : [],
       };
     },
-    staleTime: 0,
-    gcTime: 0,
+    staleTime: 30 * 1000,
+    gcTime: 5 * 60 * 1000,
   });
 
   const lectures = Array.isArray(data?.lectures) ? data.lectures : [];
@@ -56,18 +57,23 @@ export default function DownloadsScreen() {
 
   const refreshWebHeldKeys = useCallback(async () => {
     if (Platform.OS !== "web") return;
+    const userId = Number(user?.id || 0);
+    if (!Number.isFinite(userId) || userId <= 0) {
+      setWebHeldKeys(new Set());
+      return;
+    }
     const all = [...lectures, ...materials];
     const next = new Set<string>();
     for (const it of all) {
       try {
-        const rec = await getWebOffline(it.type, it.id);
+        const rec = await getWebOffline(userId, it.type, it.id);
         if (rec) next.add(`${it.type}:${it.id}`);
       } catch {
         /* ignore */
       }
     }
     setWebHeldKeys(next);
-  }, [lectures, materials]);
+  }, [lectures, materials, user?.id]);
 
   useEffect(() => {
     void refreshWebHeldKeys();
@@ -83,7 +89,8 @@ export default function DownloadsScreen() {
   const openFile = async (item: DownloadItem) => {
     if (Platform.OS === "web") {
       try {
-        const rec = await getWebOffline(item.type, item.id);
+        const userId = Number(user?.id || 0);
+        const rec = Number.isFinite(userId) && userId > 0 ? await getWebOffline(userId, item.type, item.id) : null;
         if (rec) {
           const blobUrl = URL.createObjectURL(rec.blob);
           if (item.type === "material") {
@@ -157,7 +164,9 @@ export default function DownloadsScreen() {
           headers,
           credentials: "include",
         });
-        await removeWebOffline(item.type, item.id);
+        if (user?.id) {
+          await removeWebOffline(user.id, item.type, item.id);
+        }
         forgetSavedLocally(item.type, item.id);
         await refetch();
       } catch (error: unknown) {

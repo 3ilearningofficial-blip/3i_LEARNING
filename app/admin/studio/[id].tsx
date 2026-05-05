@@ -12,6 +12,7 @@ import {
 import { useLocalSearchParams, router } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
+import { liveClassQueryKey } from "@/lib/query-keys";
 import { useWebRTCStream } from "@/lib/useWebRTCStream";
 import { getYouTubeVideoId } from "@/lib/youtube-utils";
 import Colors from "@/constants/colors";
@@ -28,7 +29,7 @@ export default function StudioSetupPage() {
 
   // Fetch live class data — poll every 5s to detect when stream goes live
   const { data: liveClass, isLoading: isLoadingClass } = useQuery<any>({
-    queryKey: ["/api/live-classes", liveClassId],
+    queryKey: liveClassQueryKey(String(liveClassId || "")),
     queryFn: async () => {
       const safeId = encodeURIComponent(String(liveClassId || ""));
       // getApiUrl() is .../api; join paths (new URL("/live-...", getApiUrl()) wrongly drops /api on absolute paths)

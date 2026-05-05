@@ -216,10 +216,13 @@ export function registerBookRoutes({
       const userId = parseInt(n.userId || "0", 10);
       if (!bookId || !userId) return res.redirect(fail);
       await verifyBookOrder(razorpay_order_id, userId, bookId);
+      const preBk = await assertNativePaidPurchaseInstallation(db, userId, req);
+      if (!preBk.ok) return res.redirect(fail);
       await db.query(
         "INSERT INTO book_purchases (user_id, book_id, purchased_at) VALUES ($1, $2, $3) ON CONFLICT (user_id, book_id) DO NOTHING",
         [userId, bookId, Date.now()]
       );
+      await finalizeInstallationBindAfterPurchase(db, userId, req);
       await db.query("DELETE FROM book_click_tracking WHERE user_id = $1 AND book_id = $2", [userId, bookId]).catch(() => {});
       return res.redirect(`${frontendBase}/store?payment=success&bookId=${bookId}`);
     } catch (err) {

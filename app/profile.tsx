@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable, TextInput,
   Platform, ActivityIndicator, Alert, Image, Linking, Modal, Share,
@@ -11,6 +11,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
 import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
+import { myPaymentsQueryKey } from "@/lib/query-keys";
 import { getInstallationId } from "@/lib/installation-id";
 import { useAuth } from "@/context/AuthContext";
 import Colors from "@/constants/colors";
@@ -62,25 +63,31 @@ export default function ProfileScreen() {
       if (!res.ok) return null;
       const data = await res.json();
       if (typeof data?.id !== "number") return null;
-      updateUser(data);
       return data;
     },
-    staleTime: 0,
-    gcTime: 0,
+    staleTime: 60 * 1000,
+    gcTime: 5 * 60 * 1000,
   });
+
+  useEffect(() => {
+    if (!freshProfile || typeof freshProfile.id !== "number") return;
+    if (user?.id != null && freshProfile.id !== user.id) return;
+    updateUser(freshProfile);
+  }, [freshProfile, user?.id]);
 
   // Use fresh profile data if available, fall back to cached user
   const profile = freshProfile || user;
 
   // Payments
   const { data: payments = [], isLoading: payLoading } = useQuery<any[]>({
-    queryKey: ["/api/my-payments"],
+    queryKey: user?.id ? myPaymentsQueryKey(user.id) : ["/api/my-payments", "guest"],
     queryFn: async () => {
       const baseUrl = getApiUrl();
       const res = await authFetch(new URL("/api/my-payments", baseUrl).toString());
       if (!res.ok) return [];
       return res.json();
     },
+    enabled: !!user?.id,
   });
 
   const [activeSection, setActiveSection] = useState<"payments" | "contact" | null>(null);

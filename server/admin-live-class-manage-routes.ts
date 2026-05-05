@@ -162,15 +162,18 @@ export function registerAdminLiveClassManageRoutes({
             : await db.query("SELECT user_id FROM enrollments WHERE course_id = $1", [liveClass.course_id]);
         const expiresAt = Date.now() + 6 * 3600000;
         const recipientIds = recipients.rows.map((e: any) => Number(e.user_id));
-        for (const e of recipients.rows) {
-          await db.query("INSERT INTO notifications (user_id, title, message, type, created_at, expires_at) VALUES ($1, $2, $3, $4, $5, $6)", [
-            e.user_id,
-            "🔴 Live Class Started!",
-            '"' + liveClass.title + '" is live now. Join now!',
-            "info",
-            Date.now(),
-            expiresAt,
-          ]);
+        const notifTitle = "🔴 Live Class Started!";
+        const notifMessage = '"' + liveClass.title + '" is live now. Join now!';
+        const now = Date.now();
+        if (recipientIds.length > 0) {
+          await db
+            .query(
+              `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
+               SELECT u, $2::text, $3::text, 'info', $4::bigint, $5::bigint
+               FROM unnest($1::int[]) AS u`,
+              [recipientIds, notifTitle, notifMessage, now, expiresAt]
+            )
+            .catch(() => {});
         }
         await sendPushToUsers(db, recipientIds, {
           title: "🔴 Live Class Started!",
@@ -216,26 +219,28 @@ export function registerAdminLiveClassManageRoutes({
         const otherClasses = await db
           .query("SELECT course_id FROM live_classes WHERE id != $1 AND title = $2 AND is_completed IS NOT TRUE AND course_id IS NOT NULL", [req.params.id, liveClass.title])
           .catch(() => ({ rows: [] as any[] }));
-        const expiresAt = Date.now() + 12 * 3600000;
+        const peerExpiresAt = Date.now() + 12 * 3600000;
         const extraRecipients = new Set<number>();
         for (const other of otherClasses.rows) {
           const enrolled = await db.query("SELECT user_id FROM enrollments WHERE course_id = $1", [other.course_id]).catch(() => ({ rows: [] as any[] }));
           for (const e of enrolled.rows) {
             extraRecipients.add(Number(e.user_id));
-            await db
-              .query("INSERT INTO notifications (user_id, title, message, type, created_at, expires_at) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING", [
-                e.user_id,
-                "🔴 Live Class Started!",
-                '"' + liveClass.title + '" is live now. Join now!',
-                "info",
-                Date.now(),
-                expiresAt,
-              ])
-              .catch(() => {});
           }
         }
+        const peerNotifTitle = "🔴 Live Class Started!";
+        const peerNotifMessage = '"' + liveClass.title + '" is live now. Join now!';
+        const peerNow = Date.now();
         if (extraRecipients.size > 0) {
-          await sendPushToUsers(db, [...extraRecipients], {
+          const peerIds = [...extraRecipients];
+          await db
+            .query(
+              `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
+               SELECT u, $2::text, $3::text, 'info', $4::bigint, $5::bigint
+               FROM unnest($1::int[]) AS u`,
+              [peerIds, peerNotifTitle, peerNotifMessage, peerNow, peerExpiresAt]
+            )
+            .catch(() => {});
+          await sendPushToUsers(db, peerIds, {
             title: "🔴 Live Class Started!",
             body: `"${liveClass.title}" is live now. Join now!`,
             data: { type: "live_class_started", liveClassId: liveClass.id, courseId: liveClass.course_id || null },

@@ -124,6 +124,39 @@ function formatTime(secs: number) {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
+function normalizeMissionQuestion(raw: any): MissionQuestion {
+  const arr = Array.isArray(raw?.options) ? raw.options : [];
+  const fromLegacy = [
+    raw?.option_a ?? raw?.optionA ?? "",
+    raw?.option_b ?? raw?.optionB ?? "",
+    raw?.option_c ?? raw?.optionC ?? "",
+    raw?.option_d ?? raw?.optionD ?? "",
+  ];
+  const options = (arr.length > 0 ? arr : fromLegacy).map((v: unknown) => String(v ?? ""));
+  while (options.length < 4) options.push("");
+  return {
+    ...raw,
+    id: Number(raw?.id ?? 0),
+    question: String(raw?.question ?? raw?.question_text ?? ""),
+    options: options.slice(0, 4),
+    correct: String(raw?.correct ?? raw?.correct_option ?? "").toUpperCase(),
+    topic: String(raw?.topic ?? ""),
+    subtopic: String(raw?.subtopic ?? ""),
+    marks: Number(raw?.marks ?? 0) || 0,
+    time_limit: Number(raw?.time_limit ?? 0) || 0,
+    solution: String(raw?.solution ?? raw?.explanation ?? ""),
+    image_url: raw?.image_url ? String(raw.image_url) : undefined,
+    solution_image_url: raw?.solution_image_url ? String(raw.solution_image_url) : undefined,
+  };
+}
+
+function normalizeMission(raw: any): DailyMission {
+  return {
+    ...raw,
+    questions: Array.isArray(raw?.questions) ? raw.questions.map(normalizeMissionQuestion) : [],
+  };
+}
+
 type Screen = "list" | "start" | "quiz" | "result" | "review";
 
 export default function DailyMissionScreen() {
@@ -146,6 +179,7 @@ export default function DailyMissionScreen() {
   const [completedThisSession, setCompletedThisSession] = useState<Set<number>>(new Set());
   // Store full result data per mission for immediate display
   const [sessionResults, setSessionResults] = useState<Record<number, { score: number; timeTaken: number; answers: Record<number, string>; incorrect: number; skipped: number }>>({});
+  const [isSubmittingMission, setIsSubmittingMission] = useState(false);
 
   // Refs — always current, safe inside Alert callbacks (no stale closure)
   const totalTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -170,7 +204,8 @@ export default function DailyMissionScreen() {
       const baseUrl = getApiUrl();
       const url = new URL(`/api/daily-missions?type=${activeTab}`, baseUrl);
       const res = await authFetch(url.toString());
-      return res.json();
+      const payload = await res.json();
+      return Array.isArray(payload) ? payload.map(normalizeMission) : [];
     },
     staleTime: 5 * 60 * 1000,
     gcTime: 25 * 60 * 1000,
@@ -193,6 +228,7 @@ export default function DailyMissionScreen() {
       if (Platform.OS === "web") {
         console.error("[Mission] This mission attempt was NOT saved to the database.");
       }
+      setIsSubmittingMission(false);
     },
     onSuccess: (data) => {
       // Patch all cached mission lists (each tab has its own cache key)
@@ -210,6 +246,19 @@ export default function DailyMissionScreen() {
       });
       // Also invalidate to get fresh server data
       qc.invalidateQueries({ queryKey: ["/api/daily-missions"] });
+      setCompletedThisSession((prev) => new Set(prev).add(data.missionId));
+      setSessionResults((prev) => ({
+        ...prev,
+        [data.missionId]: {
+          score: data.score,
+          timeTaken: data.timeTaken,
+          answers: data.answers,
+          incorrect: data.incorrect,
+          skipped: data.skipped,
+        },
+      }));
+      setScreen("result");
+      setIsSubmittingMission(false);
     },
   });
 
@@ -321,12 +370,9 @@ export default function DailyMissionScreen() {
     setIncorrectCount(incorrect);
     setSkippedCount(skipped);
     lastSubmitDataRef.current = { score: correct, timeTaken: finalTime, answers, incorrect, skipped };
+    setIsSubmittingMission(true);
     completeMutation.mutate({ missionId: mission.id, score: correct, timeTaken: finalTime, answers, incorrect, skipped });
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    // Mark as completed locally so card updates immediately even if cache patch fails
-    setCompletedThisSession((prev) => new Set(prev).add(mission.id));
-    setSessionResults((prev) => ({ ...prev, [mission.id]: { score: correct, timeTaken: finalTime, answers, incorrect, skipped } }));
-    setScreen("result");
   };
   // Always keep the ref pointing to the latest submitMission
   submitMissionRef.current = submitMission;
@@ -705,10 +751,16 @@ export default function DailyMissionScreen() {
             <Ionicons name="chevron-back" size={20} color={currentQ === 0 ? Colors.light.textMuted : Colors.light.primary} />
           </Pressable>
           {currentQ === questions.length - 1 ? (
-            <Pressable style={styles.submitBtn} onPress={handleSubmit}>
+            <Pressable style={[styles.submitBtn, isSubmittingMission && { opacity: 0.7 }]} onPress={handleSubmit} disabled={isSubmittingMission}>
               <LinearGradient colors={["#22C55E", "#16A34A"]} style={styles.submitBtnGradient}>
-                <Text style={styles.submitBtnText}>Submit</Text>
-                <Ionicons name="checkmark-circle" size={20} color="#fff" />
+                {isSubmittingMission ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <>
+                    <Text style={styles.submitBtnText}>Submit</Text>
+                    <Ionicons name="checkmark-circle" size={20} color="#fff" />
+                  </>
+                )}
               </LinearGradient>
             </Pressable>
           ) : (

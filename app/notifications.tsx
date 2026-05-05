@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React from "react";
 import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Platform, Image } from "react-native";
 import { router } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
@@ -6,6 +6,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { authFetch, apiRequest, getApiUrl } from "@/lib/query-client";
+import { notificationsQueryKey } from "@/lib/query-keys";
 import Colors from "@/constants/colors";
 import { useAuth } from "@/context/AuthContext";
 
@@ -23,22 +24,17 @@ export default function NotificationsScreen() {
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
   const { user } = useAuth();
-  const [authLost, setAuthLost] = useState(false);
 
   const { data: notifications = [], isLoading } = useQuery<Notification[]>({
-    queryKey: ["/api/notifications"],
+    queryKey: user?.id ? notificationsQueryKey(user.id) : ["/api/notifications", "guest"],
     queryFn: async () => {
       const baseUrl = getApiUrl();
       const res = await authFetch(new URL("/api/notifications", baseUrl).toString());
-      if (res.status === 401) {
-        setAuthLost(true);
-        return [];
-      }
+      if (res.status === 401) return [];
       if (!res.ok) return [];
-      setAuthLost(false);
       return res.json();
     },
-    enabled: !!user && !authLost,
+    enabled: !!user?.id,
     staleTime: 0,
   });
 
@@ -46,7 +42,10 @@ export default function NotificationsScreen() {
     mutationFn: async (id: number) => {
       await apiRequest("PUT", `/api/notifications/${id}/read`);
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/notifications"] }),
+    onSuccess: () => {
+      if (user?.id) qc.invalidateQueries({ queryKey: notificationsQueryKey(user.id) });
+      else qc.invalidateQueries({ queryKey: ["/api/notifications"] });
+    },
   });
 
   const unread = notifications.filter((n) => !n.is_read).length;

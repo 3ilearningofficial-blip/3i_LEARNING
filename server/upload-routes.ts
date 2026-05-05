@@ -9,6 +9,14 @@ type RegisterUploadRoutesDeps = {
   uploadLarge: any;
 };
 
+function getPublicApiBaseUrl(req: Request): string {
+  const configured = String(process.env.PUBLIC_API_BASE_URL || "").trim();
+  if (configured) return configured.replace(/\/+$/, "");
+  const protocol = req.headers["x-forwarded-proto"] || req.protocol || "http";
+  const host = req.headers["x-forwarded-host"] || req.headers.host || `localhost:${process.env.PORT || 5000}`;
+  return `${protocol}://${host}`;
+}
+
 function buildPresignedObjectKey(
   body: { filename: string; folder?: string; subfolder?: string }
 ): { key: string } | { error: string } {
@@ -142,9 +150,7 @@ export function registerUploadRoutes({
         ContentType: contentType,
       });
       const uploadUrl = await getSignedUrl(r2, command, { expiresIn: 600 });
-      const protocol = req.headers["x-forwarded-proto"] || req.protocol || "http";
-      const host = req.headers["x-forwarded-host"] || req.headers.host || `localhost:${process.env.PORT || 5000}`;
-      const publicUrl = `${protocol}://${host}/api/media/${key}`;
+      const publicUrl = `${getPublicApiBaseUrl(req)}/api/media/${key}`;
       console.log(`[R2] Presigned URL generated for ${key}, public: ${publicUrl}`);
       res.json({ uploadUrl, publicUrl, key });
     } catch (err: any) {
@@ -183,9 +189,7 @@ export function registerUploadRoutes({
           ContentType: file.mimetype,
         })
       );
-      const protocol = req.headers["x-forwarded-proto"] || req.protocol || "http";
-      const host = req.headers["x-forwarded-host"] || req.headers.host || `localhost:${process.env.PORT || 5000}`;
-      const publicUrl = `${protocol}://${host}/api/media/${key}`;
+      const publicUrl = `${getPublicApiBaseUrl(req)}/api/media/${key}`;
       console.log(`[R2] Server upload complete: ${key} (${file.size} bytes)`);
       res.json({ publicUrl, key });
     } catch (err: any) {

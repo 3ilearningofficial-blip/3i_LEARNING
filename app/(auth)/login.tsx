@@ -95,7 +95,7 @@ export default function LoginScreen() {
       const data = await res.json();
 
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      login(data.user);
+      await login(data.user);
 
       if (!data.user.profileComplete) {
         navigateToProfileSetupWithNotice();

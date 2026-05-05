@@ -214,10 +214,14 @@ export function registerTestFolderRoutes({
 
       await verifyFolderOrder(razorpay_order_id, userId, folderId);
 
+      const pre = await assertNativePaidPurchaseInstallation(db, userId, req);
+      if (!pre.ok) return res.redirect(fail);
+
       await db.query(
         "INSERT INTO folder_purchases (user_id, folder_id, amount, payment_id, created_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (user_id, folder_id) DO NOTHING",
         [userId, folderId, null, razorpay_payment_id, Date.now()]
       );
+      await finalizeInstallationBindAfterPurchase(db, userId, req);
 
       return res.redirect(`${frontendBase}/test-folder/${folderId}?payment=success`);
     } catch (err) {

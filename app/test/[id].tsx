@@ -10,7 +10,9 @@ import { Ionicons } from "@expo/vector-icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
+import { myAttemptsSummaryQueryKey, testQueryKey } from "@/lib/query-keys";
 import Colors from "@/constants/colors";
+import { useAuth } from "@/context/AuthContext";
 import { useScreenProtection } from "@/lib/useScreenProtection";
 import { isAndroidWeb } from "@/lib/useAndroidWebGate";
 import AndroidWebGate from "@/components/AndroidWebGate";
@@ -51,6 +53,7 @@ export default function TestScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
+  const { user } = useAuth();
   const [hasStarted, setHasStarted] = useState(false);
   const [currentQ, setCurrentQ] = useState(0);
   const [answers, setAnswers] = useState<Record<number, string>>({});
@@ -71,7 +74,7 @@ export default function TestScreen() {
   const topPadding = Platform.OS === "web" ? 16 : insets.top;
   const bottomPadding = Platform.OS === "web" ? 34 : insets.bottom;
   const { data: test, isLoading, error: testError } = useQuery<TestData>({
-    queryKey: ["/api/tests", id],
+    queryKey: testQueryKey(String(id)),
     queryFn: async () => {
       const baseUrl = getApiUrl();
       const url = new URL(`/api/tests/${id}`, baseUrl);
@@ -85,7 +88,7 @@ export default function TestScreen() {
   });
   // Check if user already attempted this test (all attempts, most recent first)
   const { data: priorAttempts, isLoading: attemptLoading } = useQuery<any[]>({
-    queryKey: ["/api/tests", id, "my-attempts"],
+    queryKey: [...testQueryKey(String(id)), "my-attempts"],
     queryFn: async () => {
       const baseUrl = getApiUrl();
       const url = new URL(`/api/tests/${id}/my-attempts`, baseUrl);
@@ -220,7 +223,7 @@ export default function TestScreen() {
       const result = await res.json();
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       // Invalidate attempt summary and courses (progress update) so cards update immediately
-      qc.invalidateQueries({ queryKey: ["/api/my-attempts/summary"] });
+      if (user?.id) qc.invalidateQueries({ queryKey: myAttemptsSummaryQueryKey(user.id) });
       qc.invalidateQueries({ queryKey: ["/api/courses"] });
       router.replace({
         pathname: "/test-result/[id]",
@@ -437,6 +440,7 @@ export default function TestScreen() {
         <View style={styles.optionsList}>
           {OPTIONS.map((opt, optIdx) => {
             const optText = [q.option_a, q.option_b, q.option_c, q.option_d][optIdx];
+            if (!optText || !String(optText).trim()) return null;
             const isSelected = answers[q.id] === opt;
             return (
               <Pressable

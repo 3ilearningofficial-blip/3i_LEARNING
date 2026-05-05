@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 
 type DbClient = {
@@ -34,6 +35,16 @@ function isPrivateOrLocalHost(hostname: string): boolean {
   }
   // Treat IPv6 loopback/link-local/ULA as private.
   return lower === "::1" || lower.startsWith("fe80:") || lower.startsWith("fc") || lower.startsWith("fd");
+}
+
+async function resolveToPublicAddress(hostname: string): Promise<boolean> {
+  try {
+    const resolved = await lookup(hostname, { all: true });
+    if (!resolved.length) return false;
+    return resolved.every((entry) => !isPrivateOrLocalHost(entry.address));
+  } catch {
+    return false;
+  }
 }
 
 export function registerPdfRoutes({ app, db, getAuthUser }: RegisterPdfRoutesDeps): void {
@@ -155,9 +166,12 @@ pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/p
         const hostname = parsedUrl.hostname.toLowerCase();
         const isAllowedHost = PDF_PROXY_ALLOWED_HOSTS.has(hostname);
         const isGoogleDrive = hostname.includes("drive.google.com") || hostname.includes("docs.google.com");
-        const isPdfUrl = parsedUrl.pathname.toLowerCase().endsWith(".pdf");
-        if (!isAllowedHost && !isPdfUrl) {
-          return res.status(400).json({ message: "Only trusted hosts and PDF links are allowed" });
+        if (!isAllowedHost) {
+          return res.status(400).json({ message: "Only trusted hosts are allowed" });
+        }
+        const dnsSafe = await resolveToPublicAddress(parsedUrl.hostname);
+        if (!dnsSafe) {
+          return res.status(403).json({ message: "Blocked host" });
         }
 
         if (isGoogleDrive) {

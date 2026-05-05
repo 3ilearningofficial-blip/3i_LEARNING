@@ -1,4 +1,4 @@
-import { REQUIRED_COLUMNS, REQUIRED_TABLES } from "./schema-readiness-contract";
+import { REQUIRED_COLUMNS, REQUIRED_TABLES, REQUIRED_UNIQUE_INDEX_SPECS } from "./schema-readiness-contract";
 
 type Queryable = {
   query: (
@@ -12,6 +12,7 @@ export async function checkDatabaseReadiness(db: Queryable): Promise<{
   checks: Record<string, boolean>;
   missingTables: string[];
   missingColumns: string[];
+  missingIndexes: string[];
 }> {
   await db.query("SELECT 1");
 
@@ -49,15 +50,41 @@ export async function checkDatabaseReadiness(db: Queryable): Promise<{
     }
   }
 
+  const indexRows = await db.query(
+    `SELECT
+       t.relname AS table_name,
+       i.indisunique AS is_unique,
+       ARRAY_AGG(a.attname ORDER BY k.ordinality) AS cols
+     FROM pg_index i
+     JOIN pg_class t ON t.oid = i.indrelid
+     JOIN pg_namespace n ON n.oid = t.relnamespace
+     JOIN LATERAL unnest(i.indkey) WITH ORDINALITY AS k(attnum, ordinality) ON TRUE
+     JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
+     WHERE n.nspname = 'public'
+     GROUP BY t.relname, i.indisunique, i.indexrelid`
+  );
+  const presentUniqueKeys = new Set<string>();
+  for (const row of indexRows.rows) {
+    if (!row.is_unique) continue;
+    const table = String(row.table_name);
+    const cols = Array.isArray(row.cols) ? row.cols.map((c: unknown) => String(c)) : [];
+    presentUniqueKeys.add(`${table}|${cols.join(",")}`);
+  }
+  const missingIndexes = REQUIRED_UNIQUE_INDEX_SPECS
+    .map((s) => `${s.table}|${s.columns.join(",")}`)
+    .filter((sig) => !presentUniqueKeys.has(sig));
+
   return {
-    ok: missingTables.length === 0 && missingColumns.length === 0,
+    ok: missingTables.length === 0 && missingColumns.length === 0 && missingIndexes.length === 0,
     checks: {
       db: true,
       tables: missingTables.length === 0,
       columns: missingColumns.length === 0,
+      indexes: missingIndexes.length === 0,
     },
     missingTables,
     missingColumns,
+    missingIndexes,
   };
 }
 

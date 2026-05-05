@@ -60,6 +60,23 @@ export function registerTestAttemptRoutes({
       const attemptRes = await db.query("SELECT * FROM test_attempts WHERE id = $1 AND user_id = $2", [req.params.attemptId, user.id]);
       if (attemptRes.rows.length === 0) return res.status(404).json({ message: "Attempt not found" });
       const attempt = attemptRes.rows[0];
+      const requestedTestId = Number(req.params.id);
+      if (!Number.isFinite(requestedTestId) || Number(attempt.test_id) !== requestedTestId) {
+        return res.status(403).json({ message: "Attempt does not belong to this test" });
+      }
+      const testRes = await db.query(
+        `SELECT t.*, c.is_free AS course_is_free, sf.is_free AS folder_is_free
+         FROM tests t
+         LEFT JOIN courses c ON t.course_id = c.id
+         LEFT JOIN standalone_folders sf ON t.mini_course_id = sf.id
+         WHERE t.id = $1`,
+        [requestedTestId]
+      );
+      if (testRes.rows.length === 0) return res.status(404).json({ message: "Test not found" });
+      if (user.role !== "admin") {
+        const access = await assertTestAccess(db, user, testRes.rows[0], String(requestedTestId));
+        if (!access.ok) return res.status(403).json({ message: access.message });
+      }
       const answers = typeof attempt.answers === "string" ? JSON.parse(attempt.answers) : attempt.answers || {};
 
       const questionsRes = await db.query("SELECT * FROM questions WHERE test_id = $1 ORDER BY order_index", [req.params.id]);
@@ -231,7 +248,7 @@ export function registerTestAttemptRoutes({
            ta.correct, ta.incorrect, ta.attempted, ta.time_taken_seconds, ta.completed_at
          FROM test_attempts ta
          WHERE ta.user_id = $1 AND ta.status = 'completed'
-         ORDER BY ta.test_id, ta.completed_at ASC`,
+         ORDER BY ta.test_id, ta.completed_at DESC`,
         [user.id]
       );
       const summary: Record<number, any> = {};

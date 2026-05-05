@@ -19,7 +19,7 @@ import { WebDownloadHud } from "@/components/WebDownloadHud";
 import { StatusBar } from "expo-status-bar";
 import * as ScreenOrientation from "expo-screen-orientation";
 import { Platform, AppState, AppStateStatus } from "react-native";
-import { useDownloadManager } from "@/lib/useDownloadManager";
+import { DownloadManagerProvider, useDownloadManager } from "@/lib/useDownloadManager";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -217,11 +217,13 @@ export default function RootLayout() {
         <GestureHandlerRootView style={{ flex: 1 }}>
           <KeyboardProvider>
             <AuthProvider>
-              <WebDownloadJobsProvider>
-                <StatusBar style="light" />
-                <RootLayoutNav />
-                <WebDownloadHud />
-              </WebDownloadJobsProvider>
+              <DownloadManagerProvider>
+                <WebDownloadJobsProvider>
+                  <StatusBar style="light" />
+                  <RootLayoutNav />
+                  <WebDownloadHud />
+                </WebDownloadJobsProvider>
+              </DownloadManagerProvider>
             </AuthProvider>
           </KeyboardProvider>
         </GestureHandlerRootView>

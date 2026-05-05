@@ -38,11 +38,13 @@ export function registerAdminDailyMissionRoutes({
           const notifTitle = "🎯 New Daily Mission";
           const notifMessage = `"${title}" has been added to ${courseTitle}.`;
           const now = Date.now();
-          for (const uid of recipientIds) {
+          if (recipientIds.length > 0) {
             await db
               .query(
-                "INSERT INTO notifications (user_id, title, message, type, created_at) VALUES ($1, $2, $3, $4, $5)",
-                [uid, notifTitle, notifMessage, "info", now]
+                `INSERT INTO notifications (user_id, title, message, type, created_at)
+                 SELECT u, $2::text, $3::text, $4::text, $5::bigint
+                 FROM unnest($1::int[]) AS u`,
+                [recipientIds, notifTitle, notifMessage, "info", now]
               )
               .catch(() => {});
           }

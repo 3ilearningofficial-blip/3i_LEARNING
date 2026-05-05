@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import * as FileSystem from 'expo-file-system';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
@@ -6,7 +6,7 @@ import { encryptionService } from './encryptionService';
 import { useAuth } from '../context/AuthContext';
 import { getApiUrl, prepareAuthorizedFetchHeaders } from './query-client';
 
-const STORAGE_KEY = 'download_manager_state';
+const STORAGE_KEY_PREFIX = 'download_manager_state';
 
 export interface DownloadState {
   status: 'idle' | 'downloading' | 'downloaded' | 'error' | 'deletion_pending';
@@ -24,16 +24,30 @@ export interface UseDownloadManagerReturn {
   runForegroundAccessCheck: () => Promise<void>;
 }
 
-export function useDownloadManager(): UseDownloadManagerReturn {
+const DownloadManagerContext = createContext<UseDownloadManagerReturn | null>(null);
+
+function useDownloadManagerImpl(): UseDownloadManagerReturn {
   const { user } = useAuth();
   const [stateMap, setStateMap] = useState<Map<string, DownloadState>>(new Map());
+  const storageKey = `${STORAGE_KEY_PREFIX}:${user?.id ?? "guest"}`;
+  const inFlightRef = useRef<Set<string>>(new Set());
+  const deleteInFlightRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
+    setStateMap(new Map());
     loadState();
-  }, []);
+  }, [storageKey]);
 
+  const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    saveState();
+    if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
+    persistTimerRef.current = setTimeout(() => {
+      persistTimerRef.current = null;
+      saveState();
+    }, 450);
+    return () => {
+      if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
+    };
   }, [stateMap]);
 
   const getKey = (itemType: string, itemId: number) => `${itemType}:${itemId}`;
@@ -51,7 +65,7 @@ export function useDownloadManager(): UseDownloadManagerReturn {
 
   const loadState = async () => {
     try {
-      const stored = await AsyncStorage.getItem(STORAGE_KEY);
+      const stored = await AsyncStorage.getItem(storageKey);
       if (stored) {
         const parsed = JSON.parse(stored);
         setStateMap(new Map(Object.entries(parsed)));
@@ -64,7 +78,7 @@ export function useDownloadManager(): UseDownloadManagerReturn {
   const saveState = async () => {
     try {
       const obj = Object.fromEntries(stateMap);
-      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(obj));
+      await AsyncStorage.setItem(storageKey, JSON.stringify(obj));
     } catch (e) {
       console.error('[DownloadManager] save error:', e);
     }
@@ -100,9 +114,12 @@ export function useDownloadManager(): UseDownloadManagerReturn {
   const startDownload = useCallback(
     async (itemType: 'lecture' | 'material', itemId: number) => {
       if (Platform.OS === 'web') throw new Error('Downloads not supported on web');
+      const key = getKey(itemType, itemId);
+      if (inFlightRef.current.has(key)) return;
 
       const { bearer, headers: authHeaders } = await prepareAuthorizedFetchHeaders(user?.sessionToken);
       if (!bearer) throw new Error('Not authenticated');
+      inFlightRef.current.add(key);
 
       try {
         updateState(itemType, itemId, { status: 'downloading', progress: 0 });
@@ -223,6 +240,8 @@ export function useDownloadManager(): UseDownloadManagerReturn {
           error: err.message,
         });
         throw err;
+      } finally {
+        inFlightRef.current.delete(key);
       }
     },
     [user]
@@ -232,6 +251,8 @@ export function useDownloadManager(): UseDownloadManagerReturn {
 
   const deleteDownload = useCallback(
     async (itemType: string, itemId: number) => {
+      const key = getKey(itemType, itemId);
+      if (deleteInFlightRef.current.has(key)) return;
       const { bearer } = await prepareAuthorizedFetchHeaders(user?.sessionToken);
       if (!bearer) throw new Error('Not authenticated');
 
@@ -240,15 +261,27 @@ export function useDownloadManager(): UseDownloadManagerReturn {
 
       const baseUrl = getApiUrl();
 
+      deleteInFlightRef.current.add(key);
       try {
-        await FileSystem.deleteAsync(getLocalEncryptedPath(state.localFilename), { idempotent: true });
-
         const { headers: delHdr } = await prepareAuthorizedFetchHeaders(user?.sessionToken);
-        await fetch(`${baseUrl}/my-downloads/${itemType}/${itemId}`, {
+        let delRes = await fetch(`${baseUrl}/my-downloads/${itemType}/${itemId}`, {
           method: 'DELETE',
           headers: delHdr,
           credentials: 'include',
         });
+        if (!delRes.ok) {
+          const { headers: retryHdr } = await prepareAuthorizedFetchHeaders(user?.sessionToken);
+          delRes = await fetch(`${baseUrl}/my-downloads/${itemType}/${itemId}`, {
+            method: 'DELETE',
+            headers: retryHdr,
+            credentials: 'include',
+          });
+        }
+        if (!delRes.ok) {
+          throw new Error(`Failed to sync delete (${delRes.status})`);
+        }
+
+        await FileSystem.deleteAsync(getLocalEncryptedPath(state.localFilename), { idempotent: true });
 
         removeStateEntry(itemType, itemId);
 
@@ -258,6 +291,9 @@ export function useDownloadManager(): UseDownloadManagerReturn {
           error: err.message,
         });
         throw err;
+      }
+      finally {
+        deleteInFlightRef.current.delete(key);
       }
     },
     [user, getDownloadState, removeStateEntry]
@@ -364,4 +400,17 @@ export function useDownloadManager(): UseDownloadManagerReturn {
     getTotalStorageBytes,
     runForegroundAccessCheck,
   };
+}
+
+export function DownloadManagerProvider({ children }: { children: React.ReactNode }) {
+  const value = useDownloadManagerImpl();
+  return React.createElement(DownloadManagerContext.Provider, { value }, children);
+}
+
+export function useDownloadManager(): UseDownloadManagerReturn {
+  const ctx = useContext(DownloadManagerContext);
+  if (!ctx) {
+    throw new Error('useDownloadManager must be used within DownloadManagerProvider');
+  }
+  return ctx;
 }

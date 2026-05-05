@@ -20,7 +20,6 @@ type RegisterCourseAccessRoutesDeps = {
   db: DbClient;
   getAuthUser: (req: Request) => Promise<AuthUser | null>;
   generateSecureToken: () => string;
-  cacheInvalidate: (prefix: string) => void;
   getR2Client: () => Promise<any>;
   updateCourseProgress: (userId: number, courseId: number | string) => Promise<void>;
 };
@@ -30,10 +29,59 @@ export function registerCourseAccessRoutes({
   db,
   getAuthUser,
   generateSecureToken,
-  cacheInvalidate,
   getR2Client,
   updateCourseProgress,
 }: RegisterCourseAccessRoutesDeps): void {
+  /** Same rules as GET /api/download-url (without issuing a token). */
+  const assertTrackDownloadAllowed = async (
+    user: AuthUser,
+    itemType: string,
+    itemId: number
+  ): Promise<{ ok: true } | { ok: false; status: number; message: string }> => {
+    const roleNorm = String(user.role ?? "student").toLowerCase();
+    if (roleNorm !== "student" && roleNorm !== "admin") {
+      return { ok: false, status: 401, message: "Not authenticated" };
+    }
+    const bypass = roleNorm === "admin";
+    if (itemType !== "lecture" && itemType !== "material") {
+      return { ok: false, status: 400, message: "Invalid itemType" };
+    }
+    let courseId: number | null = null;
+    let materialIsFree = false;
+    let downloadAllowed = false;
+    if (itemType === "lecture") {
+      const lectureResult = await db.query("SELECT course_id, download_allowed FROM lectures WHERE id = $1", [itemId]);
+      if (lectureResult.rows.length === 0) return { ok: false, status: 404, message: "Lecture not found" };
+      courseId = lectureResult.rows[0].course_id;
+      downloadAllowed = !!lectureResult.rows[0].download_allowed;
+    } else {
+      const materialResult = await db.query("SELECT course_id, download_allowed, is_free FROM study_materials WHERE id = $1", [itemId]);
+      if (materialResult.rows.length === 0) return { ok: false, status: 404, message: "Material not found" };
+      courseId = materialResult.rows[0].course_id;
+      downloadAllowed = !!materialResult.rows[0].download_allowed;
+      materialIsFree = !!materialResult.rows[0].is_free;
+    }
+    if (!downloadAllowed) return { ok: false, status: 403, message: "Download not allowed for this item" };
+    const courseIdResolved = courseId == null ? null : Math.trunc(Number(courseId));
+    if (itemType === "material" && courseIdResolved === null && !bypass && !materialIsFree) {
+      return { ok: false, status: 403, message: "This material requires purchase" };
+    }
+    if (courseIdResolved !== null && !bypass) {
+      const enrollmentResult = await db.query(
+        "SELECT id, valid_until FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)",
+        [user.id, courseIdResolved]
+      );
+      if (enrollmentResult.rows.length === 0) {
+        return { ok: false, status: 403, message: "Not enrolled in this course" };
+      }
+      const row = enrollmentResult.rows[0];
+      if (isEnrollmentExpired(row)) {
+        return { ok: false, status: 403, message: "Course access has expired" };
+      }
+    }
+    return { ok: true };
+  };
+
   const normalizeStorageKey = (raw: string): string => {
     const trimmed = String(raw || "").trim();
     if (!trimmed) return "";
@@ -77,7 +125,6 @@ export function registerCourseAccessRoutes({
          AND (
            l.video_url = $2
            OR regexp_replace(l.video_url, '^https?://[^/]+/', '') = $2
-           OR l.video_url LIKE '%' || $2
          )
          AND (
            l.course_id IS NULL
@@ -103,7 +150,6 @@ export function registerCourseAccessRoutes({
          AND (
            sm.file_url = $2
            OR regexp_replace(sm.file_url, '^https?://[^/]+/', '') = $2
-           OR sm.file_url LIKE '%' || $2
          )
          AND (
            sm.course_id IS NULL
@@ -117,6 +163,17 @@ export function registerCourseAccessRoutes({
       [user.id, requestedKey, Date.now()]
     );
     return materialMatch.rows.length > 0;
+  };
+
+  const canAccessCourseContent = async (user: AuthUser | null, courseId: string): Promise<boolean> => {
+    if (!user) return false;
+    if (user.role === "admin") return true;
+    const enroll = await db.query(
+      "SELECT * FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)",
+      [user.id, courseId]
+    );
+    if (enroll.rows.length === 0) return false;
+    return !isEnrollmentExpired(enroll.rows[0]);
   };
 
   app.post("/api/media-token", async (req: Request, res: Response) => {
@@ -216,6 +273,10 @@ export function registerCourseAccessRoutes({
       const lecturesResult = await db.query("SELECT * FROM lectures WHERE course_id = $1 ORDER BY order_index", [courseIdParam]);
       const testsResult = await db.query("SELECT * FROM tests WHERE course_id = $1 AND is_published = TRUE ORDER BY created_at DESC, id DESC", [courseIdParam]);
       const materialsResult = await db.query("SELECT * FROM study_materials WHERE course_id = $1", [courseIdParam]);
+      const fullLectures = lecturesResult.rows;
+      const fullMaterials = materialsResult.rows;
+      let responseLectures = fullLectures;
+      let responseMaterials = fullMaterials;
 
       if (user) {
         const enroll = await db.query("SELECT * FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [user.id, courseIdParam]);
@@ -247,13 +308,19 @@ export function registerCourseAccessRoutes({
         }
       }
 
+      const hasContentAccess = await canAccessCourseContent(user, courseIdParam);
+      if (!hasContentAccess) {
+        responseLectures = fullLectures.filter((l: any) => l.is_free_preview === true);
+        responseMaterials = fullMaterials.filter((m: any) => m.is_free === true);
+      }
+
       res.set("Cache-Control", "private, no-store");
       res.json({
         ...course,
-        total_materials: materialsResult.rows.length,
-        lectures: lecturesResult.rows,
+        total_materials: responseMaterials.length,
+        lectures: responseLectures,
         tests: testsResult.rows,
-        materials: materialsResult.rows,
+        materials: responseMaterials,
       });
     } catch (err) {
       console.error(err);
@@ -292,9 +359,16 @@ export function registerCourseAccessRoutes({
 
       const at = Date.now();
       const vu = computeEnrollmentValidUntil(courseRow, at);
-      await db.query("INSERT INTO enrollments (user_id, course_id, enrolled_at, valid_until) VALUES ($1, $2, $3, $4)", [user.id, req.params.id, at, vu]);
-      await db.query("UPDATE courses SET total_students = COALESCE(total_students, 0) + 1 WHERE id = $1", [req.params.id]);
-      cacheInvalidate("courses:");
+      const ins = await db.query(
+        `INSERT INTO enrollments (user_id, course_id, enrolled_at, valid_until, status)
+         VALUES ($1, $2, $3, $4, 'active')
+         ON CONFLICT (user_id, course_id) DO NOTHING
+         RETURNING id`,
+        [user.id, req.params.id, at, vu]
+      );
+      if (ins.rows.length > 0) {
+        await db.query("UPDATE courses SET total_students = COALESCE(total_students, 0) + 1 WHERE id = $1", [req.params.id]);
+      }
       res.json({ success: true });
     } catch (err) {
       console.error("Enroll error:", err);
@@ -331,7 +405,13 @@ export function registerCourseAccessRoutes({
          LEFT JOIN courses c ON sm.course_id = c.id
          LEFT JOIN enrollments e ON e.user_id = ud.user_id AND e.course_id = c.id
          WHERE ud.user_id = $1 AND ud.item_type = 'material' AND sm.download_allowed = TRUE
-         AND (e.valid_until IS NULL OR e.valid_until > $2 OR c.id IS NULL)
+         AND (
+           c.id IS NULL
+           OR (
+             (e.status = 'active' OR e.status IS NULL)
+             AND (e.valid_until IS NULL OR e.valid_until > $2)
+           )
+         )
          ORDER BY ud.downloaded_at DESC`,
         [user.id, Date.now()]
       );
@@ -346,7 +426,13 @@ export function registerCourseAccessRoutes({
          LEFT JOIN courses c ON l.course_id = c.id
          LEFT JOIN enrollments e ON e.user_id = ud.user_id AND e.course_id = c.id
          WHERE ud.user_id = $1 AND ud.item_type = 'lecture' AND l.download_allowed = TRUE
-         AND (e.valid_until IS NULL OR e.valid_until > $2 OR c.id IS NULL)
+         AND (
+           c.id IS NULL
+           OR (
+             (e.status = 'active' OR e.status IS NULL)
+             AND (e.valid_until IS NULL OR e.valid_until > $2)
+           )
+         )
          ORDER BY ud.downloaded_at DESC`,
         [user.id, Date.now()]
       );
@@ -368,9 +454,13 @@ export function registerCourseAccessRoutes({
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const { itemType, itemId, localFilename } = req.body;
       if (!itemType || !itemId) return res.status(400).json({ message: "itemType and itemId required" });
+      const idNum = parseInt(String(itemId), 10);
+      if (!Number.isFinite(idNum)) return res.status(400).json({ message: "Invalid itemId" });
+      const gate = await assertTrackDownloadAllowed(user, String(itemType), idNum);
+      if (!gate.ok) return res.status(gate.status).json({ message: gate.message });
       await db.query(
         "INSERT INTO user_downloads (user_id, item_type, item_id, local_filename) VALUES ($1, $2, $3, $4) ON CONFLICT (user_id, item_type, item_id) DO UPDATE SET downloaded_at = EXTRACT(EPOCH FROM NOW()) * 1000, local_filename = EXCLUDED.local_filename",
-        [user.id, itemType, itemId, localFilename || null]
+        [user.id, itemType, idNum, localFilename || null]
       );
       res.json({ success: true });
     } catch {
@@ -409,6 +499,7 @@ export function registerCourseAccessRoutes({
       if (isNaN(id)) return res.status(400).json({ message: "Invalid itemId" });
 
       let courseId: number | null = null;
+      let materialIsFree = false;
       let downloadAllowed = false;
       let r2Key: string | null = null;
 
@@ -427,7 +518,7 @@ export function registerCourseAccessRoutes({
         const pu = lecture.pdf_url != null ? String(lecture.pdf_url).trim() : "";
         r2Key = vu || pu || null;
       } else if (itemType === "material") {
-        const materialResult = await db.query("SELECT course_id, download_allowed, file_url FROM study_materials WHERE id = $1", [id]);
+        const materialResult = await db.query("SELECT course_id, download_allowed, file_url, is_free FROM study_materials WHERE id = $1", [id]);
         if (materialResult.rows.length === 0) {
           return res.status(404).json({ message: "Material not found" });
         }
@@ -435,6 +526,7 @@ export function registerCourseAccessRoutes({
         courseId = material.course_id;
         downloadAllowed = material.download_allowed;
         r2Key = material.file_url;
+        materialIsFree = !!material.is_free;
       }
 
       const courseIdNumeric = courseId == null ? null : Number(courseId);
@@ -447,6 +539,9 @@ export function registerCourseAccessRoutes({
 
       if (!r2Key) {
         return res.status(404).json({ message: "File URL not found" });
+      }
+      if (itemType === "material" && courseIdResolved === null && !bypassEnrollment && !materialIsFree) {
+        return res.status(403).json({ message: "This material requires purchase" });
       }
 
       if (courseIdResolved !== null && !bypassEnrollment) {
@@ -493,16 +588,24 @@ export function registerCourseAccessRoutes({
 
   app.get("/api/download-proxy", async (req: Request, res: Response) => {
     try {
+      const user = await getAuthUser(req);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
       const { token } = req.query;
       if (!token || typeof token !== "string") {
         return res.status(400).json({ message: "Token required" });
       }
 
-      const tokenResult = await db.query("SELECT * FROM download_tokens WHERE token = $1 AND expires_at > $2", [token, Date.now()]);
+      const tokenResult = await db.query(
+        "DELETE FROM download_tokens WHERE token = $1 AND expires_at > $2 RETURNING *",
+        [token, Date.now()]
+      );
       if (tokenResult.rows.length === 0) {
         return res.status(403).json({ message: "Token invalid or expired" });
       }
       const tokenData = tokenResult.rows[0];
+      if (Number(tokenData.user_id) !== Number(user.id)) {
+        return res.status(403).json({ message: "Token does not belong to this user" });
+      }
 
       const { GetObjectCommand } = await import("@aws-sdk/client-s3");
       const r2 = await getR2Client();
@@ -533,10 +636,6 @@ export function registerCourseAccessRoutes({
 
       const stream = r2Response.Body as any;
       stream.pipe(res);
-      stream.on("end", () => {
-        // Consume token after successful stream completion to avoid native resumable preflight failures.
-        db.query("DELETE FROM download_tokens WHERE token = $1", [token]).catch(() => {});
-      });
       stream.on("error", (err: Error) => {
         console.error("[download-proxy] Stream error:", err);
         if (!res.headersSent) {

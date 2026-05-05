@@ -8,9 +8,7 @@ export type DbExec = {
 
 export async function purgeStudentAccountById(db: DbExec, userId: number): Promise<void> {
   const id = userId;
-  const q = async (sql: string) => {
-    await db.query(sql, [id]).catch(() => {});
-  };
+  const q = (sql: string) => db.query(sql, [id]);
   await q("DELETE FROM user_sessions WHERE user_id = $1");
   await q("DELETE FROM lecture_progress WHERE user_id = $1");
   await q("DELETE FROM live_class_recording_progress WHERE user_id = $1");

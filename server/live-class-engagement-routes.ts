@@ -92,11 +92,16 @@ export function registerLiveClassEngagementRoutes({
       if (!(await userCanAccessLiveClassContent(db, user, lcResult.rows[0]))) {
         return res.status(403).json({ message: "Access denied" });
       }
+      const now = Date.now();
       await db.query(
         `INSERT INTO live_class_viewers (live_class_id, user_id, user_name, last_heartbeat)
          VALUES ($1, $2, $3, $4)
-         ON CONFLICT (live_class_id, user_id) DO UPDATE SET last_heartbeat = $4, user_name = $3`,
-        [req.params.id, user.id, user.name || user.phone || "Anonymous", Date.now()]
+         ON CONFLICT (live_class_id, user_id) DO UPDATE SET
+           last_heartbeat = EXCLUDED.last_heartbeat,
+           user_name = COALESCE(EXCLUDED.user_name, live_class_viewers.user_name)
+         WHERE live_class_viewers.last_heartbeat IS NULL
+            OR EXCLUDED.last_heartbeat - live_class_viewers.last_heartbeat >= 20000`,
+        [req.params.id, user.id, user.name || user.phone || "Anonymous", now]
       );
       res.json({ success: true });
     } catch (err) {

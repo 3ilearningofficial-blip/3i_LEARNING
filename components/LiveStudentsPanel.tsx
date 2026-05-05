@@ -7,6 +7,8 @@ import Colors from "@/constants/colors";
 interface LiveStudentsPanelProps {
   liveClassId: string;
   showViewerCount: boolean;
+  /** When provided, uses this data and does not run a separate /viewers query (avoids duplicate polling). */
+  parentViewers?: { viewers: Viewer[]; count: number };
 }
 
 interface Viewer {
@@ -19,14 +21,15 @@ interface ViewersResponse {
   count: number;
 }
 
-export default function LiveStudentsPanel({ liveClassId, showViewerCount }: LiveStudentsPanelProps) {
+export default function LiveStudentsPanel({ liveClassId, showViewerCount, parentViewers }: LiveStudentsPanelProps) {
   const { data } = useQuery<ViewersResponse>({
     queryKey: [`/api/live-classes/${liveClassId}/viewers`],
-    refetchInterval: 10000,
+    refetchInterval: parentViewers ? false : 10000,
+    enabled: parentViewers === undefined,
   });
 
-  const viewers = data?.viewers ?? [];
-  const count = data?.count ?? 0;
+  const viewers = parentViewers?.viewers ?? data?.viewers ?? [];
+  const count = parentViewers?.count ?? data?.count ?? 0;
 
   const renderItem = ({ item }: { item: Viewer }) => (
     <View style={styles.studentRow}>

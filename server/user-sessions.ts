@@ -1,12 +1,15 @@
 import type { DbLike } from "./native-device-binding";
 
+const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
 export async function resolveUserBySessionToken(
   db: DbLike,
   token: string
 ): Promise<{ row: Record<string, unknown>; matchedVia: "primary" | "extra" } | null> {
+  const minCreatedAt = Date.now() - SESSION_MAX_AGE_MS;
   const primary = await db.query(
-    "SELECT * FROM users WHERE session_token = $1 AND COALESCE(is_blocked, FALSE) = FALSE",
-    [token]
+    "SELECT * FROM users WHERE session_token = $1 AND COALESCE(is_blocked, FALSE) = FALSE AND (last_active_at IS NULL OR last_active_at >= $2)",
+    [token, minCreatedAt]
   );
   if (primary.rows.length > 0) {
     return { row: primary.rows[0], matchedVia: "primary" };
@@ -14,8 +17,8 @@ export async function resolveUserBySessionToken(
   const extra = await db.query(
     `SELECT u.* FROM users u
      INNER JOIN user_sessions s ON s.user_id = u.id AND s.session_token = $1
-     WHERE u.role = 'admin' AND COALESCE(u.is_blocked, FALSE) = FALSE`,
-    [token]
+     WHERE u.role = 'admin' AND COALESCE(u.is_blocked, FALSE) = FALSE AND s.created_at >= $2`,
+    [token, minCreatedAt]
   );
   if (extra.rows.length > 0) {
     return { row: extra.rows[0], matchedVia: "extra" };
@@ -30,13 +33,17 @@ export async function userHasSessionToken(
   token: string | null | undefined
 ): Promise<boolean> {
   if (!token) return false;
-  const u = await db.query("SELECT session_token, role FROM users WHERE id = $1", [userId]);
+  const minCreatedAt = Date.now() - SESSION_MAX_AGE_MS;
+  const u = await db.query("SELECT session_token, role, last_active_at FROM users WHERE id = $1", [userId]);
   if (u.rows.length === 0) return false;
-  if (u.rows[0].session_token === token) return true;
+  if (u.rows[0].session_token === token) {
+    const la = Number(u.rows[0].last_active_at || 0);
+    if (!la || la >= minCreatedAt) return true;
+  }
   if (u.rows[0].role !== "admin") return false;
   const s = await db.query(
-    "SELECT 1 FROM user_sessions WHERE user_id = $1 AND session_token = $2",
-    [userId, token]
+    "SELECT 1 FROM user_sessions WHERE user_id = $1 AND session_token = $2 AND created_at >= $3",
+    [userId, token, minCreatedAt]
   );
   return s.rows.length > 0;
 }
@@ -66,7 +73,7 @@ export async function persistLoginSession(
       );
     } else if (opts.clearOtp) {
       await db.query(
-        "UPDATE users SET otp = NULL, otp_expires_at = NULL, last_active_at = $1, device_id = COALESCE($2, device_id) WHERE id = $3",
+        "UPDATE users SET otp = NULL, otp_expires_at = NULL, otp_failed_attempts = 0, otp_locked_until = NULL, last_active_at = $1, device_id = COALESCE($2, device_id) WHERE id = $3",
         [now, deviceId, user.id]
       );
     } else {
@@ -81,7 +88,7 @@ export async function persistLoginSession(
   await db.query("DELETE FROM user_sessions WHERE user_id = $1", [user.id]);
   const otpClause =
     opts.clearOtp !== false
-      ? "otp = NULL, otp_expires_at = NULL, "
+      ? "otp = NULL, otp_expires_at = NULL, otp_failed_attempts = 0, otp_locked_until = NULL, "
       : "";
   await db.query(
     `UPDATE users SET ${otpClause}device_id = $1, session_token = $2, last_active_at = $3 WHERE id = $4`,
@@ -92,4 +99,10 @@ export async function persistLoginSession(
 export async function revokeAllSessionsForUser(db: DbLike, userId: number): Promise<void> {
   await db.query("DELETE FROM user_sessions WHERE user_id = $1", [userId]);
   await db.query("UPDATE users SET session_token = NULL WHERE id = $1", [userId]);
+}
+
+export async function revokeSessionTokenForUser(db: DbLike, userId: number, token: string | null | undefined): Promise<void> {
+  if (!token) return;
+  await db.query("DELETE FROM user_sessions WHERE user_id = $1 AND session_token = $2", [userId, token]);
+  await db.query("UPDATE users SET session_token = NULL WHERE id = $1 AND session_token = $2", [userId, token]);
 }

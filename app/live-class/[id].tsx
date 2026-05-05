@@ -11,6 +11,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, authFetch, getApiUrl, getBaseUrl, toHttpsMediaUrl } from "@/lib/query-client";
+import { liveClassQueryKey } from "@/lib/query-keys";
 import { useAuth } from "@/context/AuthContext";
 import Colors from "@/constants/colors";
 import { useScreenProtection } from "@/lib/useScreenProtection";
@@ -382,7 +383,10 @@ export default function LiveClassScreen() {
   const [nativeYoutubeFallback, setNativeYoutubeFallback] = useState(false);
   const chatListRef = useRef<FlatList>(null);
   const lastMsgTimeRef = useRef<number>(0);
+  const forceFullChatRefreshRef = useRef(false);
   const didAutoplayDirectRecording = useRef(false);
+  /** Web: live chat uses SSE when connected; native keeps HTTP polling only. */
+  const [chatSseActive, setChatSseActive] = useState(false);
   useEffect(() => {
     if (Platform.OS === "web") {
       const onVisibility = () => setIsScreenActive(!document.hidden);
@@ -397,7 +401,7 @@ export default function LiveClassScreen() {
   }, []);
 
   const { data: liveClassData } = useQuery<{ youtube_url: string; title: string; is_completed: boolean; is_live: boolean; show_viewer_count: boolean; cf_playback_hls?: string; stream_type?: string; recording_url?: string; duration_minutes?: number; scheduled_at?: number; has_access?: boolean; is_enrolled?: boolean; course_id?: number; is_public?: boolean; chat_mode?: string }>({
-    queryKey: [`/api/live-classes/${id}`],
+    queryKey: liveClassQueryKey(String(id)),
     refetchInterval: (query) => {
       if (!isScreenActive) return false;
       const data = query.state.data as
@@ -407,16 +411,16 @@ export default function LiveClassScreen() {
             scheduled_at?: number;
           }
         | undefined;
-      if (!data) return listLiveHint ? 1200 : 2000;
-      if (data.is_live || data.is_completed) return 5000;
+      if (!data) return listLiveHint ? 2500 : 3500;
+      if (data.is_live || data.is_completed) return 8000;
       const t = Number(data.scheduled_at);
       const now = Date.now();
       if (Number.isFinite(t)) {
         const untilStart = t - now;
-        if (untilStart <= 0) return 1200;
-        if (untilStart < 30 * 60 * 1000) return 2000;
+        if (untilStart <= 0) return 3000;
+        if (untilStart < 30 * 60 * 1000) return 4000;
       }
-      return 4000;
+      return 6000;
     },
     staleTime: 1000,
   });
@@ -473,14 +477,14 @@ export default function LiveClassScreen() {
     return () => clearInterval(timer);
   }, [isScreenActive, liveClassData?.scheduled_at, liveClassData?.is_live, liveClassData?.is_completed, liveClassData, listLiveHint]);
 
-  // Student heartbeat — POST every 25 seconds while page is open
+  // Student heartbeat — POST periodically while page is open (reduced churn vs sub-minute polling)
   useEffect(() => {
     if (!id || !isScreenActive || liveClassData?.is_completed) return;
     const sendHeartbeat = () => {
       apiRequest("POST", `/api/live-classes/${id}/viewers/heartbeat`, {}).catch(() => {});
     };
     sendHeartbeat(); // send immediately on mount
-    const interval = setInterval(sendHeartbeat, 25000);
+    const interval = setInterval(sendHeartbeat, 32000);
     return () => clearInterval(interval);
   }, [id, isScreenActive, liveClassData?.is_completed]);
 
@@ -520,12 +524,13 @@ export default function LiveClassScreen() {
     const path = recordingUrl.startsWith("/") ? recordingUrl : recordingUrl.replace(/^https?:\/\/[^/]+/, "");
     return path.replace(/^\/api\/media\//, "");
   })();
+  const userScopedRecordingKey = recordingFileKey ? `${String(user?.id || 0)}:${recordingFileKey}` : null;
   useEffect(() => {
-    if (!recordingFileKey) {
+    if (!recordingFileKey || !userScopedRecordingKey) {
       setRecordingToken(null);
       return;
     }
-    const cached = mediaTokenCache.get(recordingFileKey);
+    const cached = mediaTokenCache.get(userScopedRecordingKey);
     if (cached && cached.expiresAt > Date.now()) {
       setRecordingToken(cached.token);
       return;
@@ -536,14 +541,14 @@ export default function LiveClassScreen() {
       .then(d => {
         if (!cancelled && d.token) {
           setRecordingToken(d.token);
-          mediaTokenCache.set(recordingFileKey, { token: d.token, expiresAt: Date.now() + MEDIA_TOKEN_TTL_MS });
+          mediaTokenCache.set(userScopedRecordingKey, { token: d.token, expiresAt: Date.now() + MEDIA_TOKEN_TTL_MS });
         }
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [recordingFileKey]);
+  }, [recordingFileKey, userScopedRecordingKey]);
 
   const authenticatedVideoUrl = (() => {
     if (!recordingFileKey) return toHttpsMediaUrl(videoUrl);
@@ -583,9 +588,83 @@ export default function LiveClassScreen() {
   const hasYouTubeId = Boolean(videoId);
   const streamHtml = isStreamId ? buildCloudflareStreamHtml(videoUrl) : "";
 
+  const { data: viewerData } = useQuery<{ count: number; viewers: any[]; visible: boolean }>({
+    queryKey: [`/api/live-classes/${id}/viewers`],
+    refetchInterval: (!isScreenActive || liveClassData?.is_completed) ? false : 12000,
+    staleTime: 3000,
+  });
+
+  const parentViewersPayload = useMemo(
+    () => ({ viewers: viewerData?.viewers ?? [], count: viewerData?.count ?? 0 }),
+    [viewerData]
+  );
+
+  const chatListKey = useMemo(() => [`/api/live-classes/${id}/chat`] as const, [id]);
+
+  useEffect(() => {
+    if (!isWeb || !id || !isScreenActive || liveClassData?.is_completed || !user?.id) {
+      setChatSseActive(false);
+      return;
+    }
+    const base = getApiUrl();
+    const url = `${base}/api/live-classes/${encodeURIComponent(String(id))}/chat/stream`;
+    const es = new EventSource(url, { withCredentials: true } as EventSourceInit);
+    es.onopen = () => setChatSseActive(true);
+    es.onmessage = (ev) => {
+      try {
+        const row = JSON.parse(ev.data) as ChatMsg;
+        qc.setQueryData<ChatMsg[]>(chatListKey, (prev = []) => {
+          if (prev.some((m) => m.id === row.id)) return prev;
+          return [...prev, row].sort((a, b) => Number(a.created_at) - Number(b.created_at));
+        });
+      } catch {
+        /* ignore */
+      }
+    };
+    es.onerror = () => {
+      setChatSseActive(false);
+      es.close();
+    };
+    return () => {
+      setChatSseActive(false);
+      es.close();
+    };
+  }, [isWeb, id, isScreenActive, liveClassData?.is_completed, user?.id, qc, chatListKey]);
+
   const { data: chatMessages = [], refetch: refetchChat } = useQuery<ChatMsg[]>({
-    queryKey: [`/api/live-classes/${id}/chat`],
-    refetchInterval: (!isScreenActive || liveClassData?.is_completed) ? false : 4000,
+    queryKey: chatListKey,
+    queryFn: async () => {
+      const prev = qc.getQueryData<ChatMsg[]>(chatListKey) ?? [];
+      const baseUrl = getApiUrl();
+      const url = new URL(`/api/live-classes/${id}/chat`, baseUrl);
+      if (prev.length > 0 && !forceFullChatRefreshRef.current) {
+        const maxTs = Math.max(...prev.map((m) => Number(m.created_at) || 0));
+        if (Number.isFinite(maxTs) && maxTs > 0) url.searchParams.set("after", String(maxTs));
+      }
+      const res = await authFetch(url.toString());
+      if (!res.ok) throw new Error("Failed to fetch chat");
+      const delta = (await res.json()) as ChatMsg[];
+      if (forceFullChatRefreshRef.current) {
+        forceFullChatRefreshRef.current = false;
+      }
+      if (!Array.isArray(delta) || delta.length === 0) return prev;
+      const seen = new Set(prev.map((m) => m.id));
+      const merged: ChatMsg[] = [...prev];
+      for (const m of delta) {
+        if (!seen.has(m.id)) {
+          merged.push(m);
+          seen.add(m.id);
+        }
+      }
+      merged.sort((a, b) => Number(a.created_at) - Number(b.created_at));
+      return merged;
+    },
+    refetchInterval:
+      !isScreenActive || liveClassData?.is_completed
+        ? false
+        : isWeb && chatSseActive
+          ? 120_000
+          : 6000,
     staleTime: 1500,
   });
 
@@ -602,16 +681,10 @@ export default function LiveClassScreen() {
     [chatMessages, user?.id, isAdmin, chatMode]
   );
 
-  const { data: viewerData } = useQuery<{ count: number; viewers: any[]; visible: boolean }>({
-    queryKey: [`/api/live-classes/${id}/viewers`],
-    refetchInterval: (!isScreenActive || liveClassData?.is_completed) ? false : 10000,
-    staleTime: 3000,
-  });
-
   const { data: raisedHands = [], refetch: refetchHands } = useQuery<HandRaise[]>({
     queryKey: [`/api/admin/live-classes/${id}/raised-hands`],
     enabled: isAdmin && !!liveClassData?.is_live && isScreenActive,
-    refetchInterval: isScreenActive ? 10000 : false,
+    refetchInterval: isScreenActive ? 12000 : false,
     staleTime: 3000,
   });
 
@@ -636,12 +709,16 @@ export default function LiveClassScreen() {
 
   const deleteMsgMutation = useMutation({
     mutationFn: (msgId: number) => apiRequest("DELETE", `/api/admin/live-classes/${id}/chat/${msgId}`),
-    onSuccess: () => refetchChat(),
+    onSuccess: (_resp, msgId) => {
+      qc.setQueryData<ChatMsg[]>(chatListKey, (prev = []) => prev.filter((m) => m.id !== msgId));
+      forceFullChatRefreshRef.current = true;
+      refetchChat();
+    },
   });
 
   const toggleViewerCountMutation = useMutation({
     mutationFn: (show: boolean) => apiRequest("POST", `/api/admin/live-classes/${id}/viewer-count-toggle`, { show }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: [`/api/live-classes/${id}`] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: liveClassQueryKey(String(id)) }),
   });
 
   const raiseHandMutation = useMutation({
@@ -933,6 +1010,7 @@ export default function LiveClassScreen() {
                 <LiveStudentsPanel
                   liveClassId={String(id)}
                   showViewerCount={liveClassData?.show_viewer_count ?? true}
+                  parentViewers={parentViewersPayload}
                 />
               </View>
             )}
@@ -1197,6 +1275,7 @@ export default function LiveClassScreen() {
                 <LiveStudentsPanel
                   liveClassId={String(id)}
                   showViewerCount={liveClassData?.show_viewer_count ?? true}
+                  parentViewers={parentViewersPayload}
                 />
               </View>
               <View style={[styles.chatContainer, styles.nativeAdminSplitPane]}>
@@ -1246,6 +1325,7 @@ export default function LiveClassScreen() {
               <LiveStudentsPanel
                 liveClassId={String(id)}
                 showViewerCount={liveClassData?.show_viewer_count ?? true}
+                parentViewers={parentViewersPayload}
               />
             </View>
           ) : (
