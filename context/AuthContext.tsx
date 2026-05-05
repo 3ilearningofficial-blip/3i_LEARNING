@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode, useMemo } from "react";
 import { Alert, Platform } from "react-native";
-import { router } from "expo-router";
+import { router, usePathname } from "expo-router";
 import {
   apiRequest,
   getApiUrl,
@@ -34,6 +34,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const pathname = usePathname();
 
   const refreshUser = async () => {
     try {
@@ -159,6 +160,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (Platform.OS !== "web") return;
     if (user?.role === "admin") return;
+    // Recorded/live class playback can happen inside iframes/video surfaces that do not
+    // reliably bubble activity events to the app shell. Avoid timing out while on player pages.
+    const onPlaybackRoute = pathname.startsWith("/lecture/") || pathname.startsWith("/live-class/");
+    if (onPlaybackRoute) return;
     const TIMEOUT = 60 * 60 * 1000; // 1 hour
     let timer: ReturnType<typeof setTimeout>;
 
@@ -181,7 +186,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearTimeout(timer);
       events.forEach((e) => window.removeEventListener(e, resetTimer));
     };
-  }, [user]);
+  }, [user, pathname]);
 
   const login = (userData: AuthUser) => {
     setUser(userData);

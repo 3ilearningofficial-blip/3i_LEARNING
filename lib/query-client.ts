@@ -29,6 +29,21 @@ async function notifyUnauthorized(): Promise<void> {
   } catch (_e) {}
 }
 
+function shouldNotifyUnauthorized(url: string): boolean {
+  try {
+    const parsed = new URL(url, getBaseUrl());
+    const path = parsed.pathname || "";
+    if (path === "/api/media-token" || path.startsWith("/api/media/")) {
+      return false;
+    }
+  } catch {
+    if (url.includes("/api/media-token") || url.includes("/api/media/")) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export function getWebUrl(): string {
   // Web (browser)
   if (typeof window !== "undefined") {
@@ -294,7 +309,7 @@ export async function authFetch(url: string, options?: RequestInit): Promise<Res
     headers,
     credentials: "include",
   });
-  if (res.status === 401) await notifyUnauthorized();
+  if (res.status === 401 && shouldNotifyUnauthorized(url)) await notifyUnauthorized();
 
   return withUnwrappedJson(res);
 }
@@ -321,7 +336,7 @@ export async function apiRequest(
     body: data ? JSON.stringify(data) : undefined,
     credentials: "include",
   });
-  if (res.status === 401) await notifyUnauthorized();
+  if (res.status === 401 && shouldNotifyUnauthorized(url.toString())) await notifyUnauthorized();
 
   await throwIfResNotOk(res, method, url.toString());
   return withUnwrappedJson(res);
@@ -347,7 +362,7 @@ export const getQueryFn: <T>(options: {
       credentials: "include",
       headers,
     });
-    if (res.status === 401) await notifyUnauthorized();
+    if (res.status === 401 && shouldNotifyUnauthorized(url.toString())) await notifyUnauthorized();
 
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {
       return null;
