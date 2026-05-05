@@ -678,11 +678,12 @@ const styles = StyleSheet.create({
   },
   headerTextColWeb: { flex: 1, minWidth: 0, gap: 4 },
   adminContactRowAbove: {
-    flexDirection: "row",
-    flexWrap: "wrap",
+    // Phone/narrow web: show phone and email on separate lines.
+    flexDirection: "column",
+    flexWrap: "nowrap",
     justifyContent: "center",
     alignItems: "center",
-    gap: 14,
+    gap: 8,
     width: "100%",
     paddingBottom: 4,
   },

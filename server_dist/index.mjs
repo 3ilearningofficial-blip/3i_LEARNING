@@ -3895,6 +3895,11 @@ function registerAdminUsersAndContentRoutes({
         "UPDATE users SET app_bound_device_id = NULL, web_device_id_phone = NULL, web_device_id_desktop = NULL WHERE id = $1",
         [uid]
       );
+      await db2.query(
+        "DELETE FROM device_block_events WHERE user_id = $1 AND reason IN ('wrong_web_browser_login_denied', 'wrong_device_login_denied')",
+        [uid]
+      ).catch(() => {
+      });
       res.json({ success: true });
     } catch (err) {
       console.error("[Admin] reset-device-binding:", err);

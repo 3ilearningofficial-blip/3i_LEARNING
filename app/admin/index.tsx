@@ -961,7 +961,6 @@ export default function AdminDashboard() {
   const qc = useQueryClient();
   const { user, isAdmin, logout } = useAuth();
   const [activeTab, setActiveTab] = useState<AdminTab>("welcome");
-  const [deviceLockPanelOpen, setDeviceLockPanelOpen] = React.useState(false);
   const [aiDoubtDays, setAiDoubtDays] = useState<"all" | "7" | "30">("all");
   const [aiDoubtTopic, setAiDoubtTopic] = useState<string>("all");
   const [aiDoubtStudent, setAiDoubtStudent] = useState("");
@@ -1269,16 +1268,6 @@ export default function AdminDashboard() {
     () => deviceDeniedUsers.reduce((s, u) => s + (Number(u.event_count) || 0), 0),
     [deviceDeniedUsers]
   );
-
-  const resetDeviceBindingMutation = useMutation({
-    mutationFn: async (userId: number) => {
-      await apiRequest("POST", `/api/admin/users/${userId}/reset-device-binding`, {});
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/admin/users"] });
-      qc.invalidateQueries({ queryKey: ["/api/admin/device-denied-users"] });
-    },
-  });
 
   const { data: adminMissions = [], isLoading: missionsLoading } = useQuery<any[]>({
     queryKey: ["/api/admin/daily-missions"],
@@ -2851,10 +2840,10 @@ export default function AdminDashboard() {
                       </View>
                     </View>
 
-                    {/* Device mismatch / denied login — tap to expand list + unblock */}
+                    {/* Device mismatch / denied login — open dedicated screen */}
                     <View style={{ marginBottom: 18, padding: 14, backgroundColor: "#FFF7ED", borderRadius: 14, borderWidth: 1, borderColor: "#FDBA74" }}>
                       <Pressable
-                        onPress={() => setDeviceLockPanelOpen((o) => !o)}
+                        onPress={() => router.push("/admin/device-locks" as any)}
                         style={({ pressed }) => ({
                           flexDirection: "row",
                           alignItems: "center",
@@ -2863,7 +2852,6 @@ export default function AdminDashboard() {
                           ...(Platform.OS === "web" ? ({ cursor: "pointer" } as object) : {}),
                         })}
                         accessibilityRole="button"
-                        accessibilityState={{ expanded: deviceLockPanelOpen }}
                       >
                         <Ionicons name="phone-portrait-outline" size={20} color="#C2410C" />
                         <View style={{ flex: 1 }}>
@@ -2873,71 +2861,11 @@ export default function AdminDashboard() {
                               ? "Loading…"
                               : `${deviceDeniedUsers.length} student${deviceDeniedUsers.length === 1 ? "" : "s"} · ${deviceDeniedEventSum} event${deviceDeniedEventSum === 1 ? "" : "s"}`}
                             {" · "}
-                            Tap to {deviceLockPanelOpen ? "hide" : "show"}
+                            Tap to open list
                           </Text>
                         </View>
-                        <Ionicons name={deviceLockPanelOpen ? "chevron-up" : "chevron-down"} size={22} color="#9A3412" />
+                        <Ionicons name="chevron-forward" size={22} color="#9A3412" />
                       </Pressable>
-                      {deviceLockPanelOpen && (
-                        <>
-                          <Text style={{ fontSize: 12, fontFamily: "Inter_400Regular", color: "#7C2D12", marginTop: 12, marginBottom: 10 }}>
-                            Students who attempted sign-in from a disallowed device/browser after their account was bound. They were not auto-unblocked. Use “Clear device lock” so they can bind again.
-                          </Text>
-                          {deviceDeniedLoading ? (
-                            <ActivityIndicator size="small" color={Colors.light.primary} />
-                          ) : deviceDeniedUsers.length === 0 ? (
-                            <Text style={{ fontSize: 13, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>
-                              No blocked sign-in attempts logged yet.
-                            </Text>
-                          ) : (
-                            deviceDeniedUsers.map((row) => (
-                              <View
-                                key={row.user_id}
-                                style={{
-                                  paddingVertical: 10,
-                                  paddingHorizontal: 10,
-                                  marginBottom: 8,
-                                  backgroundColor: "#fff",
-                                  borderRadius: 10,
-                                  borderWidth: 1,
-                                  borderColor: Colors.light.border,
-                                }}
-                              >
-                                <Text style={{ fontFamily: "Inter_600SemiBold", fontSize: 14, color: Colors.light.text }}>
-                                  {row.user_name || `User #${row.user_id}`}
-                                </Text>
-                                {!!row.phone && <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>{row.phone}</Text>}
-                                {!!row.email && <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>{row.email}</Text>}
-                                <Text style={{ fontSize: 11, color: Colors.light.textMuted, marginTop: 4, fontFamily: "Inter_400Regular" }}>
-                                  Last: {row.latest_at ? new Date(Number(row.latest_at)).toLocaleString() : ""} · {row.latest_platform || "?"} · {row.latest_reason || ""}
-                                  {Number(row.event_count) > 1 ? ` · ${row.event_count} attempts` : ""}
-                                </Text>
-                                <Pressable
-                                  style={{ alignSelf: "flex-start", marginTop: 8, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, backgroundColor: "#EEF2FF" }}
-                                  onPress={() => {
-                                    Alert.alert(
-                                      "Clear device binding?",
-                                      "This clears phone web + laptop web + native app lock for this student so they can sign in again from new devices.",
-                                      [
-                                        { text: "Cancel", style: "cancel" },
-                                        {
-                                          text: "Clear lock",
-                                          onPress: () => {
-                                            resetDeviceBindingMutation.mutate(row.user_id);
-                                            Alert.alert("Done", "Device binding cleared.");
-                                          },
-                                        },
-                                      ]
-                                    );
-                                  }}
-                                >
-                                  <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>Clear device lock</Text>
-                                </Pressable>
-                              </View>
-                            ))
-                          )}
-                        </>
-                      )}
                     </View>
 
                     {/* All Users list */}
