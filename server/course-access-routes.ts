@@ -162,7 +162,10 @@ export function registerCourseAccessRoutes({
       let courses: any[] = result.rows;
 
       if (user) {
-        const enrollResult = await db.query("SELECT course_id, progress_percent FROM enrollments WHERE user_id = $1 AND (status = 'active' OR status IS NULL)", [user.id]);
+        const enrollResult = await db.query(
+          "SELECT course_id, progress_percent FROM enrollments WHERE user_id = $1 AND (status = 'active' OR status IS NULL) AND (valid_until IS NULL OR valid_until > $2)",
+          [user.id, Date.now()]
+        );
         const enrollMap = new Map<number, number>();
         enrollResult.rows.forEach((e: { course_id: number; progress_percent: number }) => {
           enrollMap.set(Number(e.course_id), Number(e.progress_percent) || 0);

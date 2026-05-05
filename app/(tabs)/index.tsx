@@ -375,7 +375,7 @@ export default function HomeScreen() {
     staleTime: 5 * 60 * 1000,
     gcTime: 25 * 60 * 1000,
     refetchInterval: 3 * 60 * 1000,
-    refetchOnMount: false,
+    refetchOnMount: true,
     refetchOnWindowFocus: false,
     // Always fetch — even unauthenticated users can see published courses
   });
