@@ -260,38 +260,14 @@ function getClientPlatform(req) {
   if (p === "ios" || p === "android" || p === "web") return p;
   return null;
 }
-async function assertNativePaidPurchaseInstallation(db2, userId, req) {
-  const inst = getInstallationIdFromRequest(req);
-  if (!inst) return { ok: true };
-  const r = await db2.query("SELECT app_bound_device_id FROM users WHERE id = $1", [userId]);
-  const cur = String(r.rows[0]?.app_bound_device_id ?? "").trim();
-  if (cur && cur !== inst) {
-    return {
-      ok: false,
-      message: "Purchases must be completed on the same device/browser installation registered for this account."
-    };
-  }
-  return { ok: true };
-}
-async function finalizeInstallationBindAfterPurchase(db2, userId, req) {
-  const inst = getInstallationIdFromRequest(req);
-  if (!inst) return;
-  await db2.query("UPDATE users SET app_bound_device_id = $1 WHERE id = $2 AND app_bound_device_id IS NULL", [
-    inst,
-    userId
-  ]);
-}
-async function enforceInstallationBinding(db2, req, userId, role) {
-  if (role === "admin") return true;
-  const r = await db2.query(
-    "SELECT COALESCE(app_bound_device_id, '') AS bid FROM users WHERE id = $1",
-    [userId]
-  );
-  const bound = String(r.rows[0]?.bid || "").trim();
-  if (!bound) return true;
-  const cand = getInstallationIdFromRequest(req);
-  if (!cand || cand !== bound) return false;
-  return true;
+function getWebFormFactorFromRequest(req) {
+  const raw = (req.get("x-web-form-factor") || "").trim().toLowerCase();
+  if (raw === "phone" || raw === "mobile") return "phone";
+  if (raw === "desktop" || raw === "laptop") return "desktop";
+  const ua = (req.get("user-agent") || "").toLowerCase();
+  if (/ipad/i.test(ua) && !/mobile/i.test(ua)) return "desktop";
+  if (/mobile|android|iphone|ipod|webos|blackberry|iemobile|opera mini/i.test(ua)) return "phone";
+  return "desktop";
 }
 async function insertBlockEvent(db2, row) {
   await db2.query(
@@ -309,7 +285,7 @@ async function insertBlockEvent(db2, row) {
     ]
   );
 }
-async function logWrongInstallationAttempt(db2, req, userId, boundId, attemptedId, meta) {
+async function logWrongInstallationAttempt(db2, req, userId, boundId, attemptedId, meta, reason = "wrong_device_login_denied") {
   await insertBlockEvent(db2, {
     userId,
     attempted: attemptedId,
@@ -317,32 +293,181 @@ async function logWrongInstallationAttempt(db2, req, userId, boundId, attemptedI
     phone: meta.phone ?? null,
     email: meta.email ?? null,
     platform: getClientPlatform(req) ?? void 0,
-    reason: "wrong_device_login_denied"
+    reason
   });
+}
+async function assertNativePaidPurchaseInstallation(db2, userId, req) {
+  const inst = getInstallationIdFromRequest(req);
+  if (!inst || inst === "web_anon") return { ok: true };
+  const plat = getClientPlatform(req);
+  const r = await db2.query(
+    `SELECT app_bound_device_id,
+            COALESCE(web_device_id_phone, '') AS wph,
+            COALESCE(web_device_id_desktop, '') AS wdk
+     FROM users WHERE id = $1`,
+    [userId]
+  );
+  if (r.rows.length === 0) return { ok: true };
+  const row = r.rows[0];
+  const ok = studentInstallationMatchesActiveSession(
+    {
+      app_bound_device_id: row.app_bound_device_id,
+      web_device_id_phone: row.wph,
+      web_device_id_desktop: row.wdk
+    },
+    req,
+    inst,
+    plat
+  );
+  if (!ok) {
+    return {
+      ok: false,
+      message: "Purchases must be completed on the same device/browser installation registered for this account."
+    };
+  }
+  return { ok: true };
+}
+async function finalizeStudentWebSlotsAfterAuth(db2, userId, role, req) {
+  if (role === "admin") return;
+  const inst = getInstallationIdFromRequest(req);
+  if (!inst || inst === "web_anon") return;
+  if (getClientPlatform(req) !== "web") return;
+  const factor = getWebFormFactorFromRequest(req);
+  const slot = factor === "phone" ? "phone" : "desktop";
+  await db2.query(
+    `UPDATE users SET
+       web_device_id_phone = CASE
+         WHEN $1 = 'phone' AND COALESCE(NULLIF(TRIM(web_device_id_phone), ''), '') = '' THEN $2
+         ELSE web_device_id_phone END,
+       web_device_id_desktop = CASE
+         WHEN $1 = 'desktop' AND COALESCE(NULLIF(TRIM(web_device_id_desktop), ''), '') = '' THEN $2
+         ELSE web_device_id_desktop END
+     WHERE id = $3 AND COALESCE(role, '') <> 'admin'`,
+    [slot, inst, userId]
+  );
+}
+async function finalizeInstallationBindAfterPurchase(db2, userId, req) {
+  const inst = getInstallationIdFromRequest(req);
+  if (!inst || inst === "web_anon") return;
+  const ur = await db2.query("SELECT role FROM users WHERE id = $1", [userId]);
+  const role = ur.rows[0]?.role;
+  await finalizeStudentWebSlotsAfterAuth(db2, userId, role, req);
+  await db2.query("UPDATE users SET app_bound_device_id = $1 WHERE id = $2 AND app_bound_device_id IS NULL", [inst, userId]);
+}
+function studentInstallationMatchesActiveSession(row, req, cand, plat) {
+  if (!cand || cand === "web_anon") return false;
+  const appb = String(row.app_bound_device_id ?? "").trim();
+  const wph = String(row.web_device_id_phone ?? "").trim();
+  const wdk = String(row.web_device_id_desktop ?? "").trim();
+  if (plat === "ios" || plat === "android") {
+    if (!appb) return true;
+    return cand === appb;
+  }
+  if (plat === "web") {
+    const factor = getWebFormFactorFromRequest(req);
+    if (!wph && !wdk && !appb) return true;
+    if (cand === wph || cand === wdk) return true;
+    if (!wph && factor === "phone") return true;
+    if (!wdk && factor === "desktop") return true;
+    if (!wph && !wdk && appb && cand === appb) return true;
+    return false;
+  }
+  if (!appb) return true;
+  return cand === appb;
+}
+async function enforceInstallationBinding(db2, req, userId, role) {
+  if (role === "admin") return true;
+  const r = await db2.query(
+    `SELECT COALESCE(app_bound_device_id, '') AS appb,
+            COALESCE(web_device_id_phone, '') AS wph,
+            COALESCE(web_device_id_desktop, '') AS wdk
+     FROM users WHERE id = $1`,
+    [userId]
+  );
+  if (!r.rows.length) return true;
+  const row = r.rows[0];
+  const appb = String(row.appb ?? "").trim();
+  const wph = String(row.wph ?? "").trim();
+  const wdk = String(row.wdk ?? "").trim();
+  const cand = getInstallationIdFromRequest(req);
+  const plat = getClientPlatform(req);
+  if (!wph && !wdk && !appb) return true;
+  if (!cand || cand === "web_anon") return false;
+  return studentInstallationMatchesActiveSession(
+    { app_bound_device_id: appb, web_device_id_phone: wph, web_device_id_desktop: wdk },
+    req,
+    cand,
+    plat
+  );
 }
 async function assertLoginAllowedForInstallation(db2, req, opts) {
   if (opts.role === "admin") return { ok: true };
   const ur = await db2.query(
-    "SELECT app_bound_device_id, COALESCE(is_blocked,FALSE) AS blocked FROM users WHERE id = $1",
+    `SELECT app_bound_device_id,
+            COALESCE(web_device_id_phone, '') AS wph,
+            COALESCE(web_device_id_desktop, '') AS wdk,
+            COALESCE(is_blocked,FALSE) AS blocked
+     FROM users WHERE id = $1`,
     [opts.userId]
   );
   if (ur.rows.length === 0) return { ok: true };
   const row = ur.rows[0];
   if (row.blocked) return { ok: false, httpStatus: 403, message: "Your account has been blocked. Please contact support." };
-  const bound = row.app_bound_device_id ? String(row.app_bound_device_id).trim() : "";
-  if (!bound) return { ok: true };
   const attemptHeader = getInstallationIdFromRequest(req);
   const bodyId = opts.bodyDeviceId && String(opts.bodyDeviceId).trim() || "";
   const attempted = attemptHeader || bodyId || null;
-  if (!attempted) {
+  const plat = getClientPlatform(req);
+  const appb = row.app_bound_device_id ? String(row.app_bound_device_id).trim() : "";
+  const wph = String(row.wph ?? "").trim();
+  const wdk = String(row.wdk ?? "").trim();
+  if (plat === "ios" || plat === "android") {
+    if (!appb) return { ok: true };
+    if (!attempted || attempted !== appb) {
+      await logWrongInstallationAttempt(db2, req, opts.userId, appb, attempted, {
+        phone: opts.phone ?? null,
+        email: opts.email ?? null
+      });
+      return {
+        ok: false,
+        httpStatus: 403,
+        message: "Access denied: this account is linked to another device/browser installation. Use the original installation or ask admin to clear the device lock."
+      };
+    }
+    return { ok: true };
+  }
+  if (plat === "web") {
+    const factor = getWebFormFactorFromRequest(req);
+    if (!attempted || attempted === "web_anon") {
+      if (!wph && !wdk && !appb) return { ok: true };
+      return {
+        ok: false,
+        httpStatus: 403,
+        message: "Enable cookies/storage for this site and retry sign-in so your browser installation can be verified."
+      };
+    }
+    if (attempted === wph || attempted === wdk) return { ok: true };
+    if (!wph && factor === "phone") return { ok: true };
+    if (!wdk && factor === "desktop") return { ok: true };
+    if (!wph && !wdk && appb && attempted === appb) return { ok: true };
+    if (!wph && !wdk && !appb) return { ok: true };
+    await logWrongInstallationAttempt(
+      db2,
+      req,
+      opts.userId,
+      factor === "phone" ? wph || null : wdk || null,
+      attempted,
+      { phone: opts.phone ?? null, email: opts.email ?? null },
+      "wrong_web_browser_login_denied"
+    );
     return {
       ok: false,
       httpStatus: 403,
-      message: "This account is linked to a registered device. Update the app or sign in from the same device you used to purchase."
+      message: "Access denied: this account is already signed in on another phone web and/or laptop web browser. Use those browsers or ask admin to clear the web device lock."
     };
   }
-  if (attempted !== bound) {
-    await logWrongInstallationAttempt(db2, req, opts.userId, bound, attempted, {
+  if (!appb) return { ok: true };
+  if (!attempted || attempted !== appb) {
+    await logWrongInstallationAttempt(db2, req, opts.userId, appb, attempted, {
       phone: opts.phone ?? null,
       email: opts.email ?? null
     });
@@ -402,6 +527,42 @@ var init_password_utils = __esm({
     pbkdf2Async = promisify(pbkdf2Cb);
     PBKDF2_ITERATIONS = 21e4;
     KEY_LEN = 64;
+  }
+});
+
+// server/user-account-purge.ts
+async function purgeStudentAccountById(db2, userId) {
+  const id = userId;
+  const q = async (sql) => {
+    await db2.query(sql, [id]).catch(() => {
+    });
+  };
+  await q("DELETE FROM user_sessions WHERE user_id = $1");
+  await q("DELETE FROM lecture_progress WHERE user_id = $1");
+  await q("DELETE FROM live_class_recording_progress WHERE user_id = $1");
+  await q("DELETE FROM live_chat_messages WHERE user_id = $1");
+  await q("DELETE FROM live_class_hand_raises WHERE user_id = $1");
+  await q("DELETE FROM live_class_viewers WHERE user_id = $1");
+  await q("DELETE FROM device_block_events WHERE user_id = $1");
+  await q("DELETE FROM user_missions WHERE user_id = $1");
+  await q("DELETE FROM doubts WHERE user_id = $1");
+  await q("DELETE FROM media_tokens WHERE user_id = $1");
+  await q("DELETE FROM download_tokens WHERE user_id = $1");
+  await q("DELETE FROM test_attempts WHERE user_id = $1");
+  await q("DELETE FROM enrollments WHERE user_id = $1");
+  await q("DELETE FROM notifications WHERE user_id = $1");
+  await q("DELETE FROM payments WHERE user_id = $1");
+  await q("DELETE FROM book_purchases WHERE user_id = $1");
+  await q("DELETE FROM book_click_tracking WHERE user_id = $1");
+  await q("DELETE FROM folder_purchases WHERE user_id = $1");
+  await q("DELETE FROM support_messages WHERE user_id = $1");
+  await q("DELETE FROM user_downloads WHERE user_id = $1");
+  await q("DELETE FROM mission_attempts WHERE user_id = $1");
+  await db2.query("DELETE FROM users WHERE id = $1", [id]);
+}
+var init_user_account_purge = __esm({
+  "server/user-account-purge.ts"() {
+    "use strict";
   }
 });
 
@@ -508,6 +669,7 @@ function registerAuthRoutes({
       }
       const sessionToken = generateSecureToken2();
       await persistLoginSession(db2, user, sessionToken, deviceId || null, { clearOtp: true });
+      await finalizeStudentWebSlotsAfterAuth(db2, user.id, user.role, req);
       const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: deviceId || null });
       req.session.user = sessionUser;
       res.json({ success: true, user: sessionUser });
@@ -547,6 +709,7 @@ function registerAuthRoutes({
       }
       const sessionToken = generateSecureToken2();
       await persistLoginSession(db2, user, sessionToken, deviceId || null, { clearOtp: true });
+      await finalizeStudentWebSlotsAfterAuth(db2, user.id, user.role, req);
       const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: deviceId || null });
       req.session.user = sessionUser;
       res.json({ success: true, user: sessionUser });
@@ -587,8 +750,9 @@ function registerAuthRoutes({
           }
         } catch {
         }
+        return res.status(401).json({ message: "Not authenticated" });
       }
-      return res.status(401).json({ message: "Not authenticated" });
+      return res.status(200).json({});
     }
     try {
       const dbUser = await db2.query(
@@ -660,6 +824,7 @@ function registerAuthRoutes({
       }
       const sessionToken = generateSecureToken2();
       await persistLoginSession(db2, user, sessionToken, deviceId || null, { clearOtp: false });
+      await finalizeStudentWebSlotsAfterAuth(db2, user.id, user.role, req);
       const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: deviceId || null });
       req.session.user = sessionUser;
       res.json({ success: true, user: sessionUser });
@@ -674,6 +839,21 @@ function registerAuthRoutes({
   app2.post("/api/auth/logout", (req, res) => {
     req.session.user = null;
     res.json({ success: true });
+  });
+  app2.delete("/api/auth/account", async (req, res) => {
+    try {
+      const user = await getAuthUser2(req);
+      if (!user?.id) return res.status(401).json({ message: "Not authenticated" });
+      if (user.role === "admin") {
+        return res.status(403).json({ message: "Admin accounts cannot be deleted here. Contact support." });
+      }
+      await purgeStudentAccountById(db2, user.id);
+      req.session.user = null;
+      res.json({ success: true });
+    } catch (err) {
+      console.error("Delete account error:", err);
+      res.status(500).json({ message: "Failed to delete account" });
+    }
   });
   app2.post("/api/auth/email-login", async (req, res) => {
     try {
@@ -718,6 +898,7 @@ function registerAuthRoutes({
       const sessionToken = generateSecureToken2();
       const dev = typeof deviceId === "string" ? deviceId : null;
       await persistLoginSession(db2, user, sessionToken, dev, { clearOtp: false });
+      await finalizeStudentWebSlotsAfterAuth(db2, user.id, user.role, req);
       const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: dev });
       req.session.user = sessionUser;
       res.json({ success: true, user: sessionUser });
@@ -810,6 +991,7 @@ var init_auth_routes = __esm({
     init_password_utils();
     init_native_device_binding();
     init_user_sessions();
+    init_user_account_purge();
   }
 });
 
@@ -1617,6 +1799,67 @@ function registerLiveClassEngagementRoutes({
   requireAuth,
   requireAdmin
 }) {
+  app2.post("/api/live-classes/:id/recording-progress", requireAuth, async (req, res) => {
+    try {
+      const user = req.user;
+      const lcResult = await db2.query(
+        "SELECT id, course_id, is_free_preview, is_completed, recording_url FROM live_classes WHERE id = $1",
+        [req.params.id]
+      );
+      if (lcResult.rows.length === 0) return res.status(404).json({ message: "Live class not found" });
+      const lc = lcResult.rows[0];
+      if (!await userCanAccessLiveClassContent(db2, user, lc)) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      if (!lc.is_completed || !String(lc.recording_url || "").trim()) {
+        return res.status(400).json({ message: "Recording not available for this class" });
+      }
+      const body = req.body || {};
+      const openSession = Boolean(body.openSession);
+      const watchPercentRaw = body.watchPercent != null ? Number(body.watchPercent) : null;
+      const now = Date.now();
+      const debounceMs = 8 * 60 * 1e3;
+      if (watchPercentRaw != null && Number.isFinite(watchPercentRaw)) {
+        const wp = Math.max(0, Math.min(100, Math.round(watchPercentRaw)));
+        await db2.query(
+          `INSERT INTO live_class_recording_progress (user_id, live_class_id, watch_percent, playback_sessions, last_session_ping_at, updated_at)
+           VALUES ($1, $2, $3, 0, NULL, $4)
+           ON CONFLICT (user_id, live_class_id) DO UPDATE SET
+             watch_percent = GREATEST(live_class_recording_progress.watch_percent, EXCLUDED.watch_percent),
+             updated_at = EXCLUDED.updated_at`,
+          [user.id, req.params.id, wp, now]
+        );
+      }
+      if (openSession) {
+        const prev = await db2.query(
+          "SELECT playback_sessions, last_session_ping_at FROM live_class_recording_progress WHERE user_id = $1 AND live_class_id = $2",
+          [user.id, req.params.id]
+        );
+        const row = prev.rows[0];
+        const canBump = !row?.last_session_ping_at || now - Number(row.last_session_ping_at) >= debounceMs;
+        if (!row) {
+          await db2.query(
+            `INSERT INTO live_class_recording_progress (user_id, live_class_id, watch_percent, playback_sessions, last_session_ping_at, updated_at)
+             VALUES ($1, $2, 0, 1, $3, $3)`,
+            [user.id, req.params.id, now]
+          );
+        } else if (canBump) {
+          await db2.query(
+            `UPDATE live_class_recording_progress SET
+               playback_sessions = COALESCE(playback_sessions, 0) + 1,
+               last_session_ping_at = $3,
+               updated_at = $3
+             WHERE user_id = $1 AND live_class_id = $2`,
+            [user.id, req.params.id, now]
+          );
+        }
+      }
+      res.json({ success: true });
+    } catch (err) {
+      console.error("Recording progress error:", err);
+      res.status(500).json({ message: "Failed to save recording progress" });
+    }
+  });
   app2.post("/api/live-classes/:id/viewers/heartbeat", requireAuth, async (req, res) => {
     try {
       const user = req.user;
@@ -2763,6 +3006,88 @@ function registerAdminAnalyticsRoutes({
       res.status(500).json({ message: "Failed to fetch enrollments" });
     }
   });
+  app2.get("/api/admin/courses/:courseId/enrollments/:userId/detail", requireAdmin, async (req, res) => {
+    try {
+      const courseId = parseInt(String(req.params.courseId), 10);
+      const userId = parseInt(String(req.params.userId), 10);
+      if (!Number.isFinite(courseId) || !Number.isFinite(userId)) {
+        return res.status(400).json({ message: "Invalid course or user id" });
+      }
+      const enr = await db2.query(
+        "SELECT e.id, u.id AS user_id, u.name AS user_name, u.email AS user_email, u.phone AS user_phone, e.progress_percent, e.enrolled_at, COALESCE(e.status, 'active') AS status FROM enrollments e JOIN users u ON u.id = e.user_id WHERE e.course_id = $1 AND e.user_id = $2",
+        [courseId, userId]
+      );
+      if (enr.rows.length === 0) return res.status(404).json({ message: "Enrollment not found" });
+      const student = enr.rows[0];
+      const lectures = await db2.query(
+        `SELECT l.id AS lecture_id, l.title, l.order_index, l.section_title,
+                COALESCE(lp.watch_percent, 0) AS watch_percent,
+                COALESCE(lp.is_completed, false) AS is_completed,
+                COALESCE(lp.playback_sessions, 0) AS playback_sessions
+         FROM lectures l
+         LEFT JOIN lecture_progress lp ON lp.lecture_id = l.id AND lp.user_id = $2
+         WHERE l.course_id = $1
+         ORDER BY l.order_index ASC NULLS LAST, l.id ASC`,
+        [courseId, userId]
+      );
+      const liveClasses = await db2.query(
+        `SELECT lc.id AS live_class_id, lc.title, lc.scheduled_at, lc.is_completed, lc.is_live,
+                (CASE WHEN v.user_id IS NOT NULL THEN true ELSE false END) AS present_during_live,
+                COALESCE(rp.watch_percent, 0) AS recording_watch_percent,
+                COALESCE(rp.playback_sessions, 0) AS recording_playback_sessions,
+                (CASE WHEN lc.recording_url IS NOT NULL AND LENGTH(BTRIM(COALESCE(lc.recording_url, ''))) > 0 THEN true ELSE false END) AS has_recording
+         FROM live_classes lc
+         LEFT JOIN live_class_viewers v ON v.live_class_id = lc.id AND v.user_id = $2
+         LEFT JOIN live_class_recording_progress rp ON rp.live_class_id = lc.id AND rp.user_id = $2
+         WHERE lc.course_id = $1
+         ORDER BY lc.scheduled_at DESC NULLS LAST, lc.id DESC`,
+        [courseId, userId]
+      );
+      const tests = await db2.query(
+        `SELECT t.id AS test_id, t.title, t.total_questions,
+                ta.id AS attempt_id, ta.status AS attempt_status,
+                ta.correct, ta.incorrect, ta.attempted,
+                ta.completed_at, ta.score, ta.total_marks
+         FROM tests t
+         LEFT JOIN LATERAL (
+           SELECT ta2.id, ta2.status, ta2.correct, ta2.incorrect, ta2.attempted, ta2.completed_at, ta2.score, ta2.total_marks
+           FROM test_attempts ta2
+           WHERE ta2.test_id = t.id AND ta2.user_id = $2
+           ORDER BY CASE WHEN ta2.status = 'completed' THEN 0 ELSE 1 END, ta2.completed_at DESC NULLS LAST, ta2.id DESC
+           LIMIT 1
+         ) ta ON true
+         WHERE t.course_id = $1 AND COALESCE(t.is_published, true) = true
+         ORDER BY t.folder_name NULLS LAST, t.id ASC`,
+        [courseId, userId]
+      );
+      const missions = await db2.query(
+        `SELECT dm.id AS mission_id, dm.title, dm.mission_date::text AS mission_date,
+                CASE
+                  WHEN dm.questions IS NULL THEN 0
+                  ELSE GREATEST(0, COALESCE(jsonb_array_length(dm.questions::jsonb), 0))
+                END AS total_questions,
+                COALESCE(um.is_completed, false) AS is_completed,
+                COALESCE(um.score, 0) AS correct,
+                COALESCE(um.incorrect, 0) AS incorrect,
+                COALESCE(um.skipped, 0) AS skipped
+         FROM daily_missions dm
+         LEFT JOIN user_missions um ON um.mission_id = dm.id AND um.user_id = $2
+         WHERE dm.course_id = $1
+         ORDER BY dm.mission_date DESC NULLS LAST, dm.id DESC`,
+        [courseId, userId]
+      );
+      res.json({
+        student,
+        lectures: lectures.rows,
+        liveClasses: liveClasses.rows,
+        tests: tests.rows,
+        missions: missions.rows
+      });
+    } catch (err) {
+      console.error("Enrollment detail error:", err);
+      res.status(500).json({ message: "Failed to fetch student progress" });
+    }
+  });
 }
 var init_admin_analytics_routes = __esm({
   "server/admin-analytics-routes.ts"() {
@@ -3537,11 +3862,39 @@ function registerAdminUsersAndContentRoutes({
       res.status(500).json({ message: "Failed to load device block events" });
     }
   });
+  app2.get("/api/admin/device-denied-users", requireAdmin, async (_req, res) => {
+    try {
+      const result = await db2.query(
+        `SELECT u.id AS user_id,
+                u.name AS user_name,
+                u.phone,
+                u.email,
+                MAX(e.created_at) AS latest_at,
+                COUNT(*)::int AS event_count,
+                (ARRAY_AGG(e.reason ORDER BY e.created_at DESC))[1] AS latest_reason,
+                (ARRAY_AGG(e.platform ORDER BY e.created_at DESC))[1] AS latest_platform
+         FROM device_block_events e
+         INNER JOIN users u ON u.id = e.user_id
+         WHERE e.reason IN ('wrong_web_browser_login_denied', 'wrong_device_login_denied')
+           AND COALESCE(u.role, '') <> 'admin'
+         GROUP BY u.id, u.name, u.phone, u.email
+         ORDER BY MAX(e.created_at) DESC NULLS LAST
+         LIMIT 200`
+      );
+      res.json(result.rows);
+    } catch (err) {
+      console.error("[Admin] device-denied-users:", err);
+      res.status(500).json({ message: "Failed to load device-denied users" });
+    }
+  });
   app2.post("/api/admin/users/:id/reset-device-binding", requireAdmin, async (req, res) => {
     try {
       const uid = parseInt(String(req.params.id), 10);
       if (!Number.isFinite(uid)) return res.status(400).json({ message: "Invalid user id" });
-      await db2.query("UPDATE users SET app_bound_device_id = NULL WHERE id = $1", [uid]);
+      await db2.query(
+        "UPDATE users SET app_bound_device_id = NULL, web_device_id_phone = NULL, web_device_id_desktop = NULL WHERE id = $1",
+        [uid]
+      );
       res.json({ success: true });
     } catch (err) {
       console.error("[Admin] reset-device-binding:", err);
@@ -3585,19 +3938,10 @@ function registerAdminUsersAndContentRoutes({
   });
   app2.delete("/api/admin/users/:id", requireAdmin, async (req, res) => {
     try {
-      const userId = req.params.id;
-      await db2.query("DELETE FROM test_attempts WHERE user_id = $1", [userId]);
-      await db2.query("DELETE FROM enrollments WHERE user_id = $1", [userId]);
-      await db2.query("DELETE FROM notifications WHERE user_id = $1", [userId]);
-      await db2.query("DELETE FROM payments WHERE user_id = $1", [userId]);
-      await db2.query("DELETE FROM book_purchases WHERE user_id = $1", [userId]);
-      await db2.query("DELETE FROM folder_purchases WHERE user_id = $1", [userId]).catch(() => {
-      });
-      await db2.query("DELETE FROM support_messages WHERE user_id = $1", [userId]).catch(() => {
-      });
-      await db2.query("DELETE FROM mission_attempts WHERE user_id = $1", [userId]).catch(() => {
-      });
-      await db2.query("DELETE FROM users WHERE id = $1", [userId]);
+      const userId = parseInt(String(req.params.id), 10);
+      if (!Number.isFinite(userId)) return res.status(400).json({ message: "Invalid user id" });
+      await deleteDownloadsForUser2(userId);
+      await purgeStudentAccountById(db2, userId);
       res.json({ success: true });
     } catch (err) {
       console.error("Delete user error:", err);
@@ -3609,6 +3953,7 @@ var init_admin_users_and_content_routes = __esm({
   "server/admin-users-and-content-routes.ts"() {
     "use strict";
     init_push_notifications();
+    init_user_account_purge();
   }
 });
 
@@ -3712,7 +4057,34 @@ function registerAdminDailyMissionRoutes({
          VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
         [title, description || "", JSON.stringify(questions), missionDate || (/* @__PURE__ */ new Date()).toISOString().split("T")[0], xpReward || 50, missionType || "daily_drill", courseId || null]
       );
-      res.json(result.rows[0]);
+      const row = result.rows[0];
+      const cid = courseId != null && courseId !== "" ? String(courseId) : "";
+      if (cid && row?.id != null) {
+        try {
+          const courseInfo = await db2.query("SELECT title FROM courses WHERE id = $1", [cid]).catch(() => ({ rows: [] }));
+          const courseTitle = String(courseInfo.rows[0]?.title || "your course");
+          const recipients = await db2.query("SELECT user_id FROM enrollments WHERE course_id = $1", [cid]).catch(() => ({ rows: [] }));
+          const recipientIds = recipients.rows.map((r) => Number(r.user_id)).filter((id) => Number.isFinite(id));
+          const notifTitle = "\u{1F3AF} New Daily Mission";
+          const notifMessage = `"${title}" has been added to ${courseTitle}.`;
+          const now = Date.now();
+          for (const uid of recipientIds) {
+            await db2.query(
+              "INSERT INTO notifications (user_id, title, message, type, created_at) VALUES ($1, $2, $3, $4, $5)",
+              [uid, notifTitle, notifMessage, "info", now]
+            ).catch(() => {
+            });
+          }
+          await sendPushToUsers(db2, recipientIds, {
+            title: notifTitle,
+            body: notifMessage,
+            data: { type: "course_mission_added", missionId: Number(row.id), courseId: Number(cid) }
+          });
+        } catch (e) {
+          console.error("Course mission notify:", e);
+        }
+      }
+      res.json(row);
     } catch (err) {
       console.error(err);
       res.status(500).json({ message: "Failed to create daily mission" });
@@ -3773,6 +4145,7 @@ function registerAdminDailyMissionRoutes({
 var init_admin_daily_mission_routes = __esm({
   "server/admin-daily-mission-routes.ts"() {
     "use strict";
+    init_push_notifications();
   }
 });
 
@@ -4757,12 +5130,51 @@ function registerLectureRoutes({
   app2.get("/api/lectures/:id/progress", async (req, res) => {
     try {
       const user = await getAuthUser2(req);
-      if (!user) return res.json({ is_completed: false });
-      const result = await db2.query("SELECT is_completed, watch_percent FROM lecture_progress WHERE user_id = $1 AND lecture_id = $2", [user.id, req.params.id]);
-      if (result.rows.length === 0) return res.json({ is_completed: false, watch_percent: 0 });
+      if (!user) return res.json({ is_completed: false, watch_percent: 0, playback_sessions: 0 });
+      const result = await db2.query(
+        "SELECT is_completed, watch_percent, COALESCE(playback_sessions, 0) AS playback_sessions FROM lecture_progress WHERE user_id = $1 AND lecture_id = $2",
+        [user.id, req.params.id]
+      );
+      if (result.rows.length === 0) return res.json({ is_completed: false, watch_percent: 0, playback_sessions: 0 });
       res.json(result.rows[0]);
     } catch {
-      res.json({ is_completed: false });
+      res.json({ is_completed: false, watch_percent: 0, playback_sessions: 0 });
+    }
+  });
+  app2.post("/api/lectures/:id/progress/session", async (req, res) => {
+    try {
+      const user = await getAuthUser2(req);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+      const lectureId = String(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id);
+      const access = await canAccessLecture(user, lectureId);
+      if (!access.lecture) return res.status(404).json({ message: "Lecture not found" });
+      if (!access.allowed) return res.status(403).json({ message: "Access denied for this lecture" });
+      const debounceMs = 8 * 60 * 1e3;
+      const now = Date.now();
+      const prev = await db2.query(
+        "SELECT last_session_ping_at FROM lecture_progress WHERE user_id = $1 AND lecture_id = $2",
+        [user.id, lectureId]
+      );
+      const row = prev.rows[0];
+      const canBump = !row?.last_session_ping_at || now - Number(row.last_session_ping_at) >= debounceMs;
+      if (!row) {
+        await db2.query(
+          `INSERT INTO lecture_progress (user_id, lecture_id, watch_percent, is_completed, playback_sessions, last_session_ping_at, completed_at)
+           VALUES ($1, $2, 0, false, 1, $3, NULL)`,
+          [user.id, lectureId, now]
+        );
+      } else if (canBump) {
+        await db2.query(
+          `UPDATE lecture_progress SET
+             playback_sessions = COALESCE(playback_sessions, 0) + 1,
+             last_session_ping_at = $3
+           WHERE user_id = $1 AND lecture_id = $2`,
+          [user.id, lectureId, now]
+        );
+      }
+      res.json({ success: true, bumped: canBump || !row });
+    } catch {
+      res.status(500).json({ message: "Failed to record session" });
     }
   });
   app2.post("/api/lectures/:id/progress", async (req, res) => {
@@ -7125,10 +7537,19 @@ var init_schema_readiness_contract = __esm({
       "test_purchases",
       "site_settings",
       "question_reports",
-      "user_sessions"
+      "user_sessions",
+      "live_class_recording_progress"
     ];
     REQUIRED_COLUMNS = {
-      users: ["session_token", "app_bound_device_id", "profile_complete", "is_blocked", "last_active_at"],
+      users: [
+        "session_token",
+        "app_bound_device_id",
+        "web_device_id_phone",
+        "web_device_id_desktop",
+        "profile_complete",
+        "is_blocked",
+        "last_active_at"
+      ],
       enrollments: ["status", "valid_until"],
       live_classes: [
         "recording_url",
@@ -7148,6 +7569,7 @@ var init_schema_readiness_contract = __esm({
       study_materials: ["download_allowed", "section_title"],
       tests: ["difficulty", "scheduled_at", "price", "mini_course_id"],
       questions: ["image_url", "solution_image_url"],
+      lecture_progress: ["playback_sessions", "last_session_ping_at"],
       standalone_folders: ["category", "price", "original_price", "is_free", "description", "validity_months"]
     };
   }
@@ -8057,6 +8479,17 @@ function getAllowedOriginPatterns() {
   const envOrigins = (process.env.CORS_ORIGINS || "").split(",").map((s) => normalizeOrigin(s)).filter(Boolean);
   return [...defaultAllowedOrigins.map((origin) => normalizeOrigin(origin)), ...envOrigins];
 }
+function getInboundHostname(req) {
+  const xf = (req.get("x-forwarded-host") || "").split(",")[0].trim();
+  if (xf) return xf.replace(/:\d+$/, "").toLowerCase();
+  try {
+    const h = typeof req.hostname === "string" ? req.hostname : "";
+    if (h) return h.replace(/:\d+$/, "").toLowerCase();
+  } catch {
+  }
+  const host = (req.get("host") || "").trim();
+  return host.replace(/:\d+$/, "").toLowerCase();
+}
 function isTrustedOrigin(origin) {
   if (!origin) return false;
   const normalizedOrigin = normalizeOrigin(origin);
@@ -8087,7 +8520,8 @@ function setupCors(app2) {
       "X-Requested-With",
       "X-User-Id",
       "X-App-Device-Id",
-      "X-Client-Platform"
+      "X-Client-Platform",
+      "X-Web-Form-Factor"
     ],
     credentials: true,
     exposedHeaders: ["Content-Length", "Content-Type", "Content-Disposition"],
@@ -8227,7 +8661,21 @@ function configureExpoAndLanding(app2) {
   );
   const landingPageTemplate = fs.readFileSync(templatePath, "utf-8");
   const appName = getAppName();
+  const apiNoMarketingHosts = getApiNoindexHosts();
   log("Serving static Expo files with dynamic manifest routing");
+  app2.use((req, res, next) => {
+    if (req.method !== "GET" && req.method !== "HEAD") return next();
+    const host = getInboundHostname(req);
+    if (!apiNoMarketingHosts.has(host)) return next();
+    const p = req.path || "";
+    if (p.startsWith("/api") || p === "/manifest" || p.startsWith("/firebase-phone-auth") || p.startsWith("/_expo") || p.startsWith("/assets") || p.includes(".") && /\.[a-z0-9]+$/i.test(p)) {
+      return next();
+    }
+    res.setHeader("X-Robots-Tag", "noindex, nofollow, noarchive");
+    res.setHeader("Cache-Control", "no-store");
+    const body = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><meta name="robots" content="noindex,nofollow,noarchive"/><title>API</title></head><body><p>This host serves the application API only.</p><p>Visit <a href="https://www.3ilearning.in">3i Learning</a> in your browser.</p></body></html>`;
+    return res.status(200).type("html").send(body);
+  });
   app2.use((req, res, next) => {
     if (req.path.startsWith("/api")) {
       return next();
@@ -8285,6 +8733,30 @@ function configureExpoAndLanding(app2) {
     next();
   });
   log("Expo routing: Checking expo-platform header on / and /manifest");
+}
+function getApiNoindexHosts() {
+  return new Set(
+    (process.env.SEARCH_NOINDEX_HOSTNAMES || "api.3ilearning.in").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean)
+  );
+}
+function setupApiHostSearchHints(app2) {
+  const noindexHosts = getApiNoindexHosts();
+  app2.use((req, res, next) => {
+    const host = getInboundHostname(req);
+    if (noindexHosts.has(host)) {
+      res.setHeader("X-Robots-Tag", "noindex, nofollow, noarchive");
+    }
+    next();
+  });
+  app2.get("/robots.txt", (req, res, next) => {
+    const host = getInboundHostname(req);
+    if (noindexHosts.has(host)) {
+      res.type("text/plain");
+      res.setHeader("Cache-Control", "public, max-age=86400");
+      return res.send("User-agent: *\nDisallow: /\n");
+    }
+    next();
+  });
 }
 function setupErrorHandler(app2) {
   app2.use((err, _req, res, next) => {
@@ -8348,6 +8820,7 @@ function setupErrorHandler(app2) {
   }
   app.use(session(sessionConfig));
   setupApiOriginProtection(app);
+  setupApiHostSearchHints(app);
   app.get("/api/health/version", (_req, res) => {
     res.json(getBackendVersion());
   });

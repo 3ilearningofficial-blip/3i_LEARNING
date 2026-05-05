@@ -42,7 +42,9 @@ export default function SupportChatTab() {
       return res.json();
     },
     enabled: isAdmin,
-    refetchInterval: isAdmin ? 8000 : false,
+    staleTime: 60000,
+    refetchInterval: isAdmin ? 45000 : false,
+    refetchOnMount: false,
   });
 
   const { data: adminMessages = [], isLoading: adminMsgLoading } = useQuery<any[]>({
@@ -55,7 +57,9 @@ export default function SupportChatTab() {
       return res.json();
     },
     enabled: isAdmin && adminSelectedUserId !== null,
-    refetchInterval: isAdmin && adminSelectedUserId !== null ? 5000 : false,
+    staleTime: 15000,
+    refetchInterval: isAdmin && adminSelectedUserId !== null ? 15000 : false,
+    refetchOnMount: false,
   });
 
   useEffect(() => {
@@ -221,7 +225,10 @@ export default function SupportChatTab() {
       if (!res.ok) return [];
       return res.json();
     },
-    refetchInterval: 5000,
+    staleTime: 30000,
+    refetchInterval: 20000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
   });
 
   const sendMutation = useMutation({

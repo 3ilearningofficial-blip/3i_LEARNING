@@ -362,8 +362,11 @@ export const queryClient = new QueryClient({
     queries: {
       queryFn: getQueryFn({ on401: "throw" }),
       refetchInterval: false,
-      refetchOnWindowFocus: true,
-      staleTime: 30000,
+      // Native: avoid refetch on every app resume / tab focus; data stays warm from cache. Web: still refetch on tab focus for fresher dashboards.
+      refetchOnWindowFocus: Platform.OS === "web",
+      staleTime: 3 * 60 * 1000,
+      gcTime: 20 * 60 * 1000,
+      refetchOnReconnect: true,
       retry: false,
     },
     mutations: {

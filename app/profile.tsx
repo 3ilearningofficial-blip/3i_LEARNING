@@ -7,7 +7,7 @@ import { router } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
 import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
@@ -20,6 +20,7 @@ const ADMIN_WHATSAPP = "9997198068";
 
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
+  const qc = useQueryClient();
   const { user, updateUser, logout } = useAuth();
   const isAdmin = user?.role === "admin";
   const topPadding = Platform.OS === "web" ? 16 : insets.top;
@@ -50,6 +51,7 @@ export default function ProfileScreen() {
   const [otpSent, setOtpSent] = useState(false);
   const [otpCode, setOtpCode] = useState("");
   const [otpLoading, setOtpLoading] = useState(false);
+  const [deleteAccountBusy, setDeleteAccountBusy] = useState(false);
 
   // Fetch fresh profile data from server (ensures date_of_birth, photo_url are current)
   const { data: freshProfile } = useQuery<any>({
@@ -219,6 +221,39 @@ export default function ProfileScreen() {
       setPwdError(err?.message?.replace(/^\d+: /, "") || "Failed to reset password.");
     } finally {
       setPwdLoading(false);
+    }
+  };
+
+  const performDeleteAccount = async () => {
+    setDeleteAccountBusy(true);
+    try {
+      await apiRequest("DELETE", "/api/auth/account");
+      qc.clear();
+      await logout();
+      router.replace("/welcome");
+    } catch (e: any) {
+      const msg =
+        typeof e?.message === "string"
+          ? e.message.replace(/^\d+:\s*/, "")
+          : "Failed to delete account. Try again or contact support.";
+      Alert.alert("Error", msg);
+    } finally {
+      setDeleteAccountBusy(false);
+    }
+  };
+
+  const handleDeleteAccount = () => {
+    const msg =
+      "Your account and related data will be permanently removed: courses, tests, daily missions, downloads, payments records, support messages, and profile. This cannot be undone. Continue?";
+    if (Platform.OS === "web") {
+      if (!window.confirm(msg)) return;
+      if (!window.confirm("Final confirmation: delete your account permanently?")) return;
+      void performDeleteAccount();
+    } else {
+      Alert.alert("Delete account?", msg, [
+        { text: "Cancel", style: "cancel" },
+        { text: "Delete permanently", style: "destructive", onPress: () => void performDeleteAccount() },
+      ]);
     }
   };
 
@@ -477,6 +512,23 @@ export default function ProfileScreen() {
           <Text style={styles.optionLabel}>Share App</Text>
           <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
         </Pressable>
+
+        {/* Delete account — students only */}
+        {!isAdmin ? (
+          <Pressable
+            style={[styles.optionRow, deleteAccountBusy && { opacity: 0.6 }]}
+            onPress={handleDeleteAccount}
+            disabled={deleteAccountBusy}
+          >
+            <View style={[styles.optionIcon, { backgroundColor: "#991B1B22" }]}>
+              <Ionicons name="trash-outline" size={20} color="#B91C1C" />
+            </View>
+            <Text style={[styles.optionLabel, { color: "#B91C1C" }]}>
+              {deleteAccountBusy ? "Deleting…" : "Delete Account"}
+            </Text>
+            <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
+          </Pressable>
+        ) : null}
 
         {/* Logout */}
         <Pressable style={styles.optionRow} onPress={handleLogout}>

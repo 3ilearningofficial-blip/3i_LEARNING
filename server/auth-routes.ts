@@ -6,6 +6,7 @@ import {
   finalizeStudentWebSlotsAfterAuth,
 } from "./native-device-binding";
 import { persistLoginSession, resolveUserBySessionToken, userHasSessionToken } from "./user-sessions";
+import { purgeStudentAccountById } from "./user-account-purge";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -340,6 +341,23 @@ export function registerAuthRoutes({
   app.post("/api/auth/logout", (req: Request, res: Response) => {
     (req.session as any).user = null;
     res.json({ success: true });
+  });
+
+  /** Student-only: permanently delete account and all related app data (GDPR-style erase). Admins cannot use this endpoint. */
+  app.delete("/api/auth/account", async (req: Request, res: Response) => {
+    try {
+      const user = await getAuthUser(req);
+      if (!user?.id) return res.status(401).json({ message: "Not authenticated" });
+      if (user.role === "admin") {
+        return res.status(403).json({ message: "Admin accounts cannot be deleted here. Contact support." });
+      }
+      await purgeStudentAccountById(db, user.id);
+      (req.session as any).user = null;
+      res.json({ success: true });
+    } catch (err) {
+      console.error("Delete account error:", err);
+      res.status(500).json({ message: "Failed to delete account" });
+    }
   });
 
   app.post("/api/auth/email-login", async (req: Request, res: Response) => {

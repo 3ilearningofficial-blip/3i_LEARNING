@@ -12,6 +12,7 @@ import { getInstallationId } from "@/lib/installation-id";
 import { useAuth } from "@/context/AuthContext";
 import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
+import { navigateToProfileSetupWithNotice } from "@/lib/profile-completion-ui";
 import { navigateBackFromAuth } from "@/lib/navigate-auth-back";
 
 export default function OTPScreen() {
@@ -103,13 +104,9 @@ export default function OTPScreen() {
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       login(data.user);
       console.log("[OTP] user:", JSON.stringify({ id: data.user.id, role: data.user.role, profileComplete: data.user.profileComplete, name: data.user.name }));
-      // Route based on profile completion — applies to all roles including admin
       if (!data.user.profileComplete) {
-        if (Platform.OS === "web" && typeof window !== "undefined") {
-          (window as any).__allowProfileSetupOnce = "1";
-        }
         console.log("[OTP] → profile-setup");
-        router.replace("/profile-setup");
+        navigateToProfileSetupWithNotice();
       } else {
         console.log("[OTP] → tabs");
         router.replace("/(tabs)");

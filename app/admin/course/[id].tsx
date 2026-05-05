@@ -1130,15 +1130,6 @@ export default function AdminCourseScreen() {
                 {/* Action buttons for scheduled/live classes */}
                 {!lc.is_completed && (
                   <View style={{ flexDirection: "row", gap: 6, marginTop: 4 }}>
-                    {!lc.is_live && (
-                      <Pressable
-                        style={{ flexDirection: "row", alignItems: "center", gap: 5, backgroundColor: "#FEE2E2", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 }}
-                        onPress={() => router.push(`/admin/studio/${lc.id}`)}
-                      >
-                        <Ionicons name="radio" size={14} color="#DC2626" />
-                        <Text style={{ fontSize: 11, fontFamily: "Inter_600SemiBold", color: "#DC2626" }}>Start Live</Text>
-                      </Pressable>
-                    )}
                     {lc.is_live && (
                       <Pressable
                         style={{ flexDirection: "row", alignItems: "center", gap: 5, backgroundColor: "#DC2626", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 }}

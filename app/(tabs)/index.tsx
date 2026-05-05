@@ -372,9 +372,10 @@ export default function HomeScreen() {
       const data = await res.json().catch(() => []);
       return Array.isArray(data) ? data : [];
     },
-    staleTime: 30000,
-    gcTime: 5 * 60 * 1000,
-    refetchInterval: 60000,
+    staleTime: 5 * 60 * 1000,
+    gcTime: 25 * 60 * 1000,
+    refetchInterval: 3 * 60 * 1000,
+    refetchOnMount: false,
     refetchOnWindowFocus: false,
     // Always fetch — even unauthenticated users can see published courses
   });
@@ -421,12 +422,12 @@ export default function HomeScreen() {
           if (!res.ok) throw new Error("prefetch course failed");
           return res.json();
         },
-        staleTime: 30000,
+        staleTime: 5 * 60 * 1000,
       });
     });
   }, [allCourses, qc]);
 
-  const { data: freeMaterialsData } = useQuery<{ materials: StudyMaterial[]; folders: MaterialFolder[] }>({
+  const { data: freeMaterialsData, refetch: refetchFreeMaterials } = useQuery<{ materials: StudyMaterial[]; folders: MaterialFolder[] }>({
     queryKey: ["/api/study-materials", "free"],
     queryFn: async () => {
       const baseUrl = getApiUrl();
@@ -440,11 +441,15 @@ export default function HomeScreen() {
         folders: Array.isArray((data as any)?.folders) ? (data as any).folders : [],
       };
     },
+    staleTime: 5 * 60 * 1000,
+    gcTime: 25 * 60 * 1000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
   });
   const freeMaterials = freeMaterialsData?.materials || [];
   const materialFolders = freeMaterialsData?.folders || [];
 
-  const { data: liveClasses = [] } = useQuery<LiveClass[]>({
+  const { data: liveClasses = [], refetch: refetchLiveClasses } = useQuery<LiveClass[]>({
     queryKey: ["/api/live-classes"],
     queryFn: async () => {
       const baseUrl = getApiUrl();
@@ -453,7 +458,11 @@ export default function HomeScreen() {
       const data = await res.json().catch(() => []);
       return Array.isArray(data) ? data : [];
     },
-    refetchInterval: 30000,
+    staleTime: 90000,
+    gcTime: 15 * 60 * 1000,
+    refetchInterval: 90 * 1000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
   });
 
   useEffect(() => {
@@ -467,12 +476,12 @@ export default function HomeScreen() {
           if (!res.ok) throw new Error("prefetch live failed");
           return res.json();
         },
-        staleTime: 15000,
+        staleTime: 90000,
       });
     });
   }, [liveClasses, qc]);
 
-  const { data: homeNotifications = [] } = useQuery<any[]>({
+  const { data: homeNotifications = [], refetch: refetchHomeNotifications } = useQuery<any[]>({
     queryKey: ["/api/notifications"],
     queryFn: async () => {
       try {
@@ -483,8 +492,10 @@ export default function HomeScreen() {
       } catch { return []; }
     },
     enabled: !!user, // only fetch when logged in — prevents 401 on welcome page
-    refetchInterval: 30000,
-    staleTime: 10000,
+    refetchInterval: 90000,
+    staleTime: 60000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
   });
   const unreadNotifCount = homeNotifications.filter((n: any) => !n.is_read).length;
 
@@ -494,9 +505,14 @@ export default function HomeScreen() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await refetchCourses();
+    await Promise.all([
+      refetchCourses(),
+      refetchLiveClasses(),
+      refetchFreeMaterials(),
+      ...(user?.id ? [refetchHomeNotifications()] : []),
+    ]);
     setRefreshing(false);
-  }, []);
+  }, [refetchCourses, refetchLiveClasses, refetchFreeMaterials, refetchHomeNotifications, user?.id]);
 
   const liveClass = liveClasses.find((lc) => lc.is_live);
 

@@ -11,6 +11,11 @@ import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
 import { apiRequest } from "@/lib/query-client";
 import { uploadToR2 } from "@/lib/r2-upload";
+import {
+  PROFILE_PERMANENT_FIELDS_NOTICE,
+  PROFILE_SAVE_CONFIRM_MESSAGE,
+  PROFILE_SAVE_CONFIRM_TITLE,
+} from "@/lib/profile-completion-ui";
 import { useAuth } from "@/context/AuthContext";
 import Colors from "@/constants/colors";
 
@@ -110,30 +115,36 @@ export default function ProfileSetupScreen() {
     if (password.length < 6) { setError("Password must be at least 6 characters."); return; }
     if (password !== confirmPassword) { setError("Passwords do not match."); return; }
 
-    setIsLoading(true);
-    try {
-      const res = await apiRequest("PUT", "/api/auth/profile", {
-        name: trimmedName,
-        dateOfBirth: trimmedDob,
-        email: trimmedEmail,
-        photoUrl: photoUri || undefined,
-        password,
-      });
-      const data = await res.json();
-      if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      if (data?.user) {
-        login(data.user);
-      } else {
-        updateUser({ name: trimmedName, email: trimmedEmail, profileComplete: true, date_of_birth: trimmedDob });
+    const performSave = async () => {
+      setIsLoading(true);
+      try {
+        const res = await apiRequest("PUT", "/api/auth/profile", {
+          name: trimmedName,
+          dateOfBirth: trimmedDob,
+          email: trimmedEmail,
+          photoUrl: photoUri || undefined,
+          password,
+        });
+        const data = await res.json();
+        if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        if (data?.user) {
+          login(data.user);
+        } else {
+          updateUser({ name: trimmedName, email: trimmedEmail, profileComplete: true, date_of_birth: trimmedDob });
+        }
+        router.replace("/(tabs)");
+      } catch (err: any) {
+        console.error("Profile save error:", err);
+        setError(err?.message || "Failed to save profile. Please try again.");
+      } finally {
+        setIsLoading(false);
       }
-      // Go directly to home after profile setup
-      router.replace("/(tabs)");
-    } catch (err: any) {
-      console.error("Profile save error:", err);
-      setError(err?.message || "Failed to save profile. Please try again.");
-    } finally {
-      setIsLoading(false);
-    }
+    };
+
+    Alert.alert(PROFILE_SAVE_CONFIRM_TITLE, PROFILE_SAVE_CONFIRM_MESSAGE, [
+      { text: "Review", style: "cancel" },
+      { text: "Save & continue", onPress: () => void performSave() },
+    ]);
   };
 
   return (
@@ -150,7 +161,12 @@ export default function ProfileSetupScreen() {
           {/* Header */}
           <View style={styles.headerSection}>
             <Text style={styles.title}>Complete Your Profile</Text>
-            <Text style={styles.subtitle}>Tell us a bit about yourself to get started</Text>
+            <Text style={styles.subtitle}>Fill in your details to use the app — this is required before you continue</Text>
+          </View>
+
+          <View style={styles.permanentNotice}>
+            <Ionicons name="warning-outline" size={22} color="#B45309" style={styles.permanentNoticeIcon} />
+            <Text style={styles.permanentNoticeText}>{PROFILE_PERMANENT_FIELDS_NOTICE}</Text>
           </View>
 
           {/* Photo picker — centered at top */}
@@ -316,7 +332,25 @@ const styles = StyleSheet.create({
   scrollContent: { paddingHorizontal: 24, gap: 24 },
   headerSection: { alignItems: "center", gap: 8 },
   title: { fontSize: 26, fontFamily: "Inter_700Bold", color: "#fff", textAlign: "center" },
-  subtitle: { fontSize: 14, color: "rgba(255,255,255,0.6)", fontFamily: "Inter_400Regular", textAlign: "center" },
+  subtitle: { fontSize: 14, color: "rgba(255,255,255,0.6)", fontFamily: "Inter_400Regular", textAlign: "center", paddingHorizontal: 8 },
+  permanentNotice: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 12,
+    padding: 14,
+    borderRadius: 14,
+    backgroundColor: "rgba(251, 191, 36, 0.18)",
+    borderWidth: 1,
+    borderColor: "rgba(251, 191, 36, 0.45)",
+  },
+  permanentNoticeIcon: { marginTop: 2 },
+  permanentNoticeText: {
+    flex: 1,
+    fontSize: 14,
+    lineHeight: 21,
+    fontFamily: "Inter_500Medium",
+    color: "rgba(255,255,255,0.92)",
+  },
   photoSection: { alignItems: "center", gap: 10 },
   photoWrapper: { position: "relative", width: 100, height: 100 },
   photoImage: { width: 100, height: 100, borderRadius: 50, borderWidth: 3, borderColor: Colors.light.primary },

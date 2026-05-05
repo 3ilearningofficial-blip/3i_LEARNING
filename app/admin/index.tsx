@@ -22,7 +22,7 @@ import { useAuth } from "@/context/AuthContext";
 import { fetch } from "expo/fetch";
 import BulkUploadModal from "@/components/BulkUploadModal";
 import { buildRecordingLectureSectionTitle, prefillLiveRecordingFormFields } from "@/lib/recordingSection";
-import type { DeviceBlockEventRow, UserRecord } from "./user-types";
+import type { DeviceDeniedUserRow, UserRecord } from "./user-types";
 
 interface Course {
   id: number;
@@ -120,7 +120,8 @@ function AnalyticsTab() {
       if (!res.ok) return {};
       return res.json();
     },
-    staleTime: 0,
+    staleTime: 2 * 60 * 1000,
+    refetchOnMount: false,
     enabled: period !== "custom" || (!!customStart && !!customEnd),
   });
 
@@ -960,6 +961,7 @@ export default function AdminDashboard() {
   const qc = useQueryClient();
   const { user, isAdmin, logout } = useAuth();
   const [activeTab, setActiveTab] = useState<AdminTab>("welcome");
+  const [deviceLockPanelOpen, setDeviceLockPanelOpen] = React.useState(false);
   const [aiDoubtDays, setAiDoubtDays] = useState<"all" | "7" | "30">("all");
   const [aiDoubtTopic, setAiDoubtTopic] = useState<string>("all");
   const [aiDoubtStudent, setAiDoubtStudent] = useState("");
@@ -1220,12 +1222,14 @@ export default function AdminDashboard() {
     },
     enabled: true, // Admin always needs courses data
     staleTime: 5 * 60 * 1000,
-    gcTime: 10 * 60 * 1000,
+    gcTime: 30 * 60 * 1000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
   });
 
   const tsCourses = React.useMemo(() => courses.filter((c: any) => c.course_type === "test_series"), [courses]);
 
-  const { data: users = [], isLoading: usersLoading, refetch: refetchUsers } = useQuery<UserRecord[]>({
+  const { data: users = [], isLoading: usersLoading } = useQuery<UserRecord[]>({
     queryKey: ["/api/admin/users"],
     queryFn: async () => {
       const baseUrl = getApiUrl();
@@ -1238,24 +1242,33 @@ export default function AdminDashboard() {
       return res.json();
     },
     enabled: activeTab === "users",
-    staleTime: 30000,
-    gcTime: 10 * 60 * 1000,
+    staleTime: 10 * 60 * 1000,
+    gcTime: 30 * 60 * 1000,
     refetchOnMount: false,
-    refetchInterval: activeTab === "users" ? 60000 : false,
+    refetchOnWindowFocus: false,
+    refetchInterval: false,
   });
 
-  const { data: deviceBlockEvents = [], isLoading: deviceBlocksLoading } = useQuery<DeviceBlockEventRow[]>({
-    queryKey: ["/api/admin/device-block-events"],
+  const { data: deviceDeniedUsers = [], isLoading: deviceDeniedLoading } = useQuery<DeviceDeniedUserRow[]>({
+    queryKey: ["/api/admin/device-denied-users"],
     queryFn: async () => {
       const baseUrl = getApiUrl();
-      const url = new URL("/api/admin/device-block-events", baseUrl);
+      const url = new URL("/api/admin/device-denied-users", baseUrl);
       const res = await authFetch(url.toString());
       if (!res.ok) return [];
       return res.json();
     },
     enabled: activeTab === "users",
-    staleTime: 30000,
+    staleTime: 10 * 60 * 1000,
+    gcTime: 30 * 60 * 1000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
   });
+
+  const deviceDeniedEventSum = React.useMemo(
+    () => deviceDeniedUsers.reduce((s, u) => s + (Number(u.event_count) || 0), 0),
+    [deviceDeniedUsers]
+  );
 
   const resetDeviceBindingMutation = useMutation({
     mutationFn: async (userId: number) => {
@@ -1263,16 +1276,9 @@ export default function AdminDashboard() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/admin/users"] });
-      qc.invalidateQueries({ queryKey: ["/api/admin/device-block-events"] });
+      qc.invalidateQueries({ queryKey: ["/api/admin/device-denied-users"] });
     },
   });
-
-  // Refetch users every time the tab becomes active
-  useEffect(() => {
-    if (activeTab === "users") {
-      refetchUsers();
-    }
-  }, [activeTab]);
 
   const { data: adminMissions = [], isLoading: missionsLoading } = useQuery<any[]>({
     queryKey: ["/api/admin/daily-missions"],
@@ -1284,6 +1290,10 @@ export default function AdminDashboard() {
       return res.json();
     },
     enabled: activeTab === "missions",
+    staleTime: 5 * 60 * 1000,
+    gcTime: 30 * 60 * 1000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
   });
 
   const { data: adminBooks = [], isLoading: booksLoading } = useQuery<any[]>({
@@ -1295,6 +1305,10 @@ export default function AdminDashboard() {
       return res.json();
     },
     enabled: activeTab === "books",
+    staleTime: 5 * 60 * 1000,
+    gcTime: 30 * 60 * 1000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
   });
 
   const { data: notifHistory = [], refetch: refetchNotifHistory } = useQuery<any[]>({
@@ -1313,7 +1327,7 @@ export default function AdminDashboard() {
         return [];
       }
     },
-    staleTime: 60000,
+    staleTime: 5 * 60 * 1000,
     refetchOnMount: false,
     refetchOnWindowFocus: false,
   });
@@ -1338,8 +1352,9 @@ export default function AdminDashboard() {
       return res.json();
     },
     enabled: activeTab === "aiTutor",
-    refetchInterval: activeTab === "aiTutor" ? 30000 : false,
-    staleTime: 15000,
+    refetchInterval: activeTab === "aiTutor" ? 120000 : false,
+    staleTime: 3 * 60 * 1000,
+    refetchOnMount: false,
   });
   const clearAdminDoubtsMutation = useMutation({
     mutationFn: async () => {
@@ -1369,7 +1384,9 @@ export default function AdminDashboard() {
       return res.json();
     },
     enabled: activeTab === "support",
-    refetchInterval: activeTab === "support" ? 20000 : false,
+    staleTime: 60000,
+    refetchInterval: activeTab === "support" ? 60000 : false,
+    refetchOnMount: false,
   });
 
   const [supportUserId, setSupportUserId] = useState<number | null>(null);
@@ -1472,8 +1489,9 @@ export default function AdminDashboard() {
       return [];
     },
     enabled: activeTab === "materials",
-    staleTime: 30000,
-    refetchInterval: activeTab === "materials" ? 20000 : false,
+    staleTime: 5 * 60 * 1000,
+    refetchInterval: activeTab === "materials" ? 120000 : false,
+    refetchOnMount: false,
   });
 
   const addFreeMaterialMutation = useMutation({
@@ -1574,6 +1592,8 @@ export default function AdminDashboard() {
       return res.json();
     },
     enabled: activeTab === "tests",
+    staleTime: 10 * 60 * 1000,
+    refetchOnMount: false,
   });
 
   const { data: materialFolders = [], refetch: refetchMaterialFolders } = useQuery<any[]>({
@@ -1585,6 +1605,8 @@ export default function AdminDashboard() {
       return res.json();
     },
     enabled: activeTab === "materials",
+    staleTime: 10 * 60 * 1000,
+    refetchOnMount: false,
   });
 
   const createStandaloneFolderMutation = useMutation({
@@ -1672,9 +1694,10 @@ export default function AdminDashboard() {
       return res.json();
     },
     enabled: activeTab === "tests",
-    staleTime: 30000,
-    gcTime: 10 * 60 * 1000,
-    refetchInterval: activeTab === "tests" ? 20000 : false,
+    staleTime: 5 * 60 * 1000,
+    gcTime: 30 * 60 * 1000,
+    refetchInterval: activeTab === "tests" ? 120000 : false,
+    refetchOnMount: false,
   });
 
   const createTestMutation = useMutation({
@@ -1821,8 +1844,9 @@ export default function AdminDashboard() {
       }
       return res.json();
     },
-    staleTime: 30000,
-    refetchInterval: activeTab === "courses" ? 20000 : false,
+    staleTime: 5 * 60 * 1000,
+    refetchInterval: activeTab === "courses" ? 120000 : false,
+    refetchOnMount: false,
   });
 
   const handleScheduleLiveClass = async () => {
@@ -2827,64 +2851,92 @@ export default function AdminDashboard() {
                       </View>
                     </View>
 
-                    {/* Device mismatch / denied login log */}
+                    {/* Device mismatch / denied login — tap to expand list + unblock */}
                     <View style={{ marginBottom: 18, padding: 14, backgroundColor: "#FFF7ED", borderRadius: 14, borderWidth: 1, borderColor: "#FDBA74" }}>
-                      <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                      <Pressable
+                        onPress={() => setDeviceLockPanelOpen((o) => !o)}
+                        style={({ pressed }) => ({
+                          flexDirection: "row",
+                          alignItems: "center",
+                          gap: 10,
+                          opacity: pressed ? 0.92 : 1,
+                          ...(Platform.OS === "web" ? ({ cursor: "pointer" } as object) : {}),
+                        })}
+                        accessibilityRole="button"
+                        accessibilityState={{ expanded: deviceLockPanelOpen }}
+                      >
                         <Ionicons name="phone-portrait-outline" size={20} color="#C2410C" />
-                        <Text style={{ fontFamily: "Inter_700Bold", fontSize: 15, color: "#9A3412" }}>Device lock events</Text>
-                      </View>
-                      <Text style={{ fontSize: 12, fontFamily: "Inter_400Regular", color: "#7C2D12", marginBottom: 10 }}>
-                        Students who tried to sign in on a different device/browser installation after account binding. Access was denied and logged. Use “Clear lock” to allow rebind.
-                      </Text>
-                      {deviceBlocksLoading ? (
-                        <ActivityIndicator size="small" color={Colors.light.primary} />
-                      ) : deviceBlockEvents.length === 0 ? (
-                        <Text style={{ fontSize: 13, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>No device-block events yet.</Text>
-                      ) : (
-                        deviceBlockEvents.slice(0, 25).map((ev) => (
-                          <View
-                            key={ev.id}
-                            style={{
-                              paddingVertical: 10,
-                              paddingHorizontal: 10,
-                              marginBottom: 8,
-                              backgroundColor: "#fff",
-                              borderRadius: 10,
-                              borderWidth: 1,
-                              borderColor: Colors.light.border,
-                            }}
-                          >
-                            <Text style={{ fontFamily: "Inter_600SemiBold", fontSize: 14, color: Colors.light.text }}>
-                              {ev.user_name || `User #${ev.user_id}`}
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ fontFamily: "Inter_700Bold", fontSize: 15, color: "#9A3412" }}>Blocked sign-in attempts (device lock)</Text>
+                          <Text style={{ fontSize: 12, fontFamily: "Inter_400Regular", color: "#7C2D12", marginTop: 2 }}>
+                            {deviceDeniedLoading
+                              ? "Loading…"
+                              : `${deviceDeniedUsers.length} student${deviceDeniedUsers.length === 1 ? "" : "s"} · ${deviceDeniedEventSum} event${deviceDeniedEventSum === 1 ? "" : "s"}`}
+                            {" · "}
+                            Tap to {deviceLockPanelOpen ? "hide" : "show"}
+                          </Text>
+                        </View>
+                        <Ionicons name={deviceLockPanelOpen ? "chevron-up" : "chevron-down"} size={22} color="#9A3412" />
+                      </Pressable>
+                      {deviceLockPanelOpen && (
+                        <>
+                          <Text style={{ fontSize: 12, fontFamily: "Inter_400Regular", color: "#7C2D12", marginTop: 12, marginBottom: 10 }}>
+                            Students who attempted sign-in from a disallowed device/browser after their account was bound. They were not auto-unblocked. Use “Clear device lock” so they can bind again.
+                          </Text>
+                          {deviceDeniedLoading ? (
+                            <ActivityIndicator size="small" color={Colors.light.primary} />
+                          ) : deviceDeniedUsers.length === 0 ? (
+                            <Text style={{ fontSize: 13, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>
+                              No blocked sign-in attempts logged yet.
                             </Text>
-                            {!!ev.phone && <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>{ev.phone}</Text>}
-                            {!!ev.email && <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>{ev.email}</Text>}
-                            <Text style={{ fontSize: 11, color: Colors.light.textMuted, marginTop: 4, fontFamily: "Inter_400Regular" }}>
-                              {ev.created_at ? new Date(Number(ev.created_at)).toLocaleString() : ""} · {ev.platform || "?"} · {ev.reason || ""}
-                            </Text>
-                            <Pressable
-                              style={{ alignSelf: "flex-start", marginTop: 8, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, backgroundColor: "#EEF2FF" }}
-                              onPress={() => {
-                                Alert.alert(
-                                  "Clear device binding?",
-                                  "This lets the student bind a new installation on next sign-in/purchase.",
-                                  [
-                                    { text: "Cancel", style: "cancel" },
-                                    {
-                                      text: "Clear lock",
-                                      onPress: () => {
-                                        resetDeviceBindingMutation.mutate(ev.user_id);
-                                        Alert.alert("Done", "Device binding cleared.");
-                                      },
-                                    },
-                                  ]
-                                );
-                              }}
-                            >
-                              <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>Clear device lock</Text>
-                            </Pressable>
-                          </View>
-                        ))
+                          ) : (
+                            deviceDeniedUsers.map((row) => (
+                              <View
+                                key={row.user_id}
+                                style={{
+                                  paddingVertical: 10,
+                                  paddingHorizontal: 10,
+                                  marginBottom: 8,
+                                  backgroundColor: "#fff",
+                                  borderRadius: 10,
+                                  borderWidth: 1,
+                                  borderColor: Colors.light.border,
+                                }}
+                              >
+                                <Text style={{ fontFamily: "Inter_600SemiBold", fontSize: 14, color: Colors.light.text }}>
+                                  {row.user_name || `User #${row.user_id}`}
+                                </Text>
+                                {!!row.phone && <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>{row.phone}</Text>}
+                                {!!row.email && <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>{row.email}</Text>}
+                                <Text style={{ fontSize: 11, color: Colors.light.textMuted, marginTop: 4, fontFamily: "Inter_400Regular" }}>
+                                  Last: {row.latest_at ? new Date(Number(row.latest_at)).toLocaleString() : ""} · {row.latest_platform || "?"} · {row.latest_reason || ""}
+                                  {Number(row.event_count) > 1 ? ` · ${row.event_count} attempts` : ""}
+                                </Text>
+                                <Pressable
+                                  style={{ alignSelf: "flex-start", marginTop: 8, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, backgroundColor: "#EEF2FF" }}
+                                  onPress={() => {
+                                    Alert.alert(
+                                      "Clear device binding?",
+                                      "This clears phone web + laptop web + native app lock for this student so they can sign in again from new devices.",
+                                      [
+                                        { text: "Cancel", style: "cancel" },
+                                        {
+                                          text: "Clear lock",
+                                          onPress: () => {
+                                            resetDeviceBindingMutation.mutate(row.user_id);
+                                            Alert.alert("Done", "Device binding cleared.");
+                                          },
+                                        },
+                                      ]
+                                    );
+                                  }}
+                                >
+                                  <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>Clear device lock</Text>
+                                </Pressable>
+                              </View>
+                            ))
+                          )}
+                        </>
                       )}
                     </View>
 

@@ -12,11 +12,19 @@ import { apiRequest } from "@/lib/query-client";
 import { getInstallationId } from "@/lib/installation-id";
 import { useAuth } from "@/context/AuthContext";
 import Colors from "@/constants/colors";
+import { PROFILE_INCOMPLETE_ALERT_MESSAGE, PROFILE_INCOMPLETE_ALERT_TITLE, navigateToProfileSetupWithNotice } from "@/lib/profile-completion-ui";
 import { navigateBackFromAuth } from "@/lib/navigate-auth-back";
 
 export default function EmailLoginScreen() {
   const insets = useSafeAreaInsets();
-  const { login } = useAuth();
+  const { login, user } = useAuth();
+
+  const goProfileSetupAllowWeb = () => {
+    if (Platform.OS === "web" && typeof window !== "undefined") {
+      (window as any).__allowProfileSetupOnce = "1";
+    }
+    router.replace("/profile-setup");
+  };
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -40,12 +48,8 @@ export default function EmailLoginScreen() {
       const data = await res.json();
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       login(data.user);
-      // All users including admin must complete profile before accessing the app
       if (!data.user.profileComplete) {
-        if (Platform.OS === "web" && typeof window !== "undefined") {
-          (window as any).__allowProfileSetupOnce = "1";
-        }
-        router.replace("/profile-setup");
+        navigateToProfileSetupWithNotice();
       } else {
         router.replace("/(tabs)");
       }
@@ -88,6 +92,20 @@ export default function EmailLoginScreen() {
           </View>
           <Text style={styles.title}>Welcome Back</Text>
           <Text style={styles.subtitle}>Sign in with your phone/email and password</Text>
+
+          {user && !user.profileComplete ? (
+            <View style={styles.incompleteBanner}>
+              <Ionicons name="information-circle-outline" size={22} color={Colors.light.primary} />
+              <View style={{ flex: 1, gap: 8 }}>
+                <Text style={styles.incompleteBannerTitle}>{PROFILE_INCOMPLETE_ALERT_TITLE}</Text>
+                <Text style={styles.incompleteBannerText}>{PROFILE_INCOMPLETE_ALERT_MESSAGE}</Text>
+                <Pressable style={styles.incompleteBannerBtn} onPress={goProfileSetupAllowWeb}>
+                  <Text style={styles.incompleteBannerBtnText}>Go to profile setup</Text>
+                  <Ionicons name="arrow-forward" size={16} color="#fff" />
+                </Pressable>
+              </View>
+            </View>
+          ) : null}
 
           <View style={styles.card}>
             {/* Phone or Email */}
@@ -181,6 +199,31 @@ const styles = StyleSheet.create({
   },
   title: { fontSize: 28, fontFamily: "Inter_700Bold", color: Colors.light.text, textAlign: "center" },
   subtitle: { fontSize: 14, color: Colors.light.textMuted, textAlign: "center", fontFamily: "Inter_400Regular" },
+  incompleteBanner: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 12,
+    padding: 14,
+    borderRadius: 16,
+    backgroundColor: "#EFF6FF",
+    borderWidth: 1,
+    borderColor: "#BFDBFE",
+  },
+  incompleteBannerTitle: { fontSize: 15, fontFamily: "Inter_700Bold", color: Colors.light.text },
+  incompleteBannerText: { fontSize: 13, fontFamily: "Inter_400Regular", color: Colors.light.textSecondary, lineHeight: 19 },
+  incompleteBannerBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    alignSelf: "flex-start",
+    backgroundColor: Colors.light.primary,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
+    marginTop: 4,
+  },
+  incompleteBannerBtnText: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: "#fff" },
   card: {
     backgroundColor: "#fff", borderRadius: 24, padding: 24, gap: 16,
     shadowColor: "#000", shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.2, shadowRadius: 20, elevation: 10,

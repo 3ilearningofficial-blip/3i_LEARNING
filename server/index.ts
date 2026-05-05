@@ -96,6 +96,20 @@ function getAllowedOriginPatterns(): string[] {
   return [...defaultAllowedOrigins.map((origin) => normalizeOrigin(origin)), ...envOrigins];
 }
 
+/** Host-only name for SEO / subdomain checks (handles X-Forwarded-Host behind nginx/ALB). */
+function getInboundHostname(req: Request): string {
+  const xf = (req.get("x-forwarded-host") || "").split(",")[0].trim();
+  if (xf) return xf.replace(/:\d+$/, "").toLowerCase();
+  try {
+    const h = typeof req.hostname === "string" ? req.hostname : "";
+    if (h) return h.replace(/:\d+$/, "").toLowerCase();
+  } catch {
+    /* ignore */
+  }
+  const host = (req.get("host") || "").trim();
+  return host.replace(/:\d+$/, "").toLowerCase();
+}
+
 function isTrustedOrigin(origin: string | undefined): boolean {
   if (!origin) return false;
   const normalizedOrigin = normalizeOrigin(origin);
@@ -347,8 +361,31 @@ function configureExpoAndLanding(app: express.Application) {
   );
   const landingPageTemplate = fs.readFileSync(templatePath, "utf-8");
   const appName = getAppName();
+  const apiNoMarketingHosts = getApiNoindexHosts();
 
   log("Serving static Expo files with dynamic manifest routing");
+
+  // API hostname: avoid serving SPA index (duplicate “3i Learning” snippets in Google). Still allow /api, /manifest, hashed assets.
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (req.method !== "GET" && req.method !== "HEAD") return next();
+    const host = getInboundHostname(req);
+    if (!apiNoMarketingHosts.has(host)) return next();
+    const p = req.path || "";
+    if (
+      p.startsWith("/api") ||
+      p === "/manifest" ||
+      p.startsWith("/firebase-phone-auth") ||
+      p.startsWith("/_expo") ||
+      p.startsWith("/assets") ||
+      (p.includes(".") && /\.[a-z0-9]+$/i.test(p))
+    ) {
+      return next();
+    }
+    res.setHeader("X-Robots-Tag", "noindex, nofollow, noarchive");
+    res.setHeader("Cache-Control", "no-store");
+    const body = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><meta name="robots" content="noindex,nofollow,noarchive"/><title>API</title></head><body><p>This host serves the application API only.</p><p>Visit <a href="https://www.3ilearning.in">3i Learning</a> in your browser.</p></body></html>`;
+    return res.status(200).type("html").send(body);
+  });
 
   app.use((req: Request, res: Response, next: NextFunction) => {
   // Skip API routes
@@ -428,17 +465,27 @@ function configureExpoAndLanding(app: express.Application) {
   log("Expo routing: Checking expo-platform header on / and /manifest");
 }
 
-/** De-index API-origin host in search engines (robots + X-Robots-Tag). Comma-separated SEARCH_NOINDEX_HOSTNAMES overrides default. */
-function setupApiHostSearchHints(app: express.Application) {
-  const noindexHosts = new Set(
+function getApiNoindexHosts(): Set<string> {
+  return new Set(
     (process.env.SEARCH_NOINDEX_HOSTNAMES || "api.3ilearning.in")
       .split(",")
       .map((h) => h.trim().toLowerCase())
       .filter(Boolean),
   );
+}
+
+/**
+ * De-index API-origin host (robots + X-Robots-Tag). Uses forwarded Host so nginx → Node still matches.
+ *
+ * Ops (URLs already in Google): verify production sends X-Robots-Tag on api host (`curl -sI https://api…/`).
+ * Then use Google Search Console → Removals to request temporary removal of `https://api…/` URLs;
+ * noindex stops new indexing but does not instantly purge cached snippets.
+ */
+function setupApiHostSearchHints(app: express.Application) {
+  const noindexHosts = getApiNoindexHosts();
 
   app.use((req: Request, res: Response, next: NextFunction) => {
-    const host = (req.hostname || "").toLowerCase();
+    const host = getInboundHostname(req);
     if (noindexHosts.has(host)) {
       res.setHeader("X-Robots-Tag", "noindex, nofollow, noarchive");
     }
@@ -446,7 +493,7 @@ function setupApiHostSearchHints(app: express.Application) {
   });
 
   app.get("/robots.txt", (req: Request, res: Response, next: NextFunction) => {
-    const host = (req.hostname || "").toLowerCase();
+    const host = getInboundHostname(req);
     if (noindexHosts.has(host)) {
       res.type("text/plain");
       res.setHeader("Cache-Control", "public, max-age=86400");

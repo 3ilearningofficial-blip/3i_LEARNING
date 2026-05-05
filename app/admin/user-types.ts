@@ -21,3 +21,15 @@ export interface DeviceBlockEventRow {
   created_at: number;
   user_name: string | null;
 }
+
+/** One row per student from GET /api/admin/device-denied-users (latest device-lock denial). */
+export interface DeviceDeniedUserRow {
+  user_id: number;
+  user_name: string | null;
+  phone: string | null;
+  email: string | null;
+  latest_at: number;
+  event_count: number;
+  latest_reason: string | null;
+  latest_platform: string | null;
+}

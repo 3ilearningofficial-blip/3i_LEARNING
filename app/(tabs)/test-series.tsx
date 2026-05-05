@@ -431,7 +431,10 @@ export default function TestSeriesScreen() {
       return res.json();
     },
     enabled: !!user,
-    staleTime: 0,
+    staleTime: 5 * 60 * 1000,
+    gcTime: 25 * 60 * 1000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
   });
 
   const myTestSeries = useMemo(
@@ -453,6 +456,10 @@ export default function TestSeriesScreen() {
       if (!res.ok) return [];
       return res.json();
     },
+    staleTime: 5 * 60 * 1000,
+    gcTime: 20 * 60 * 1000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
   });
 
   const { data: attemptSummary = {} } = useQuery<Record<number, any>>({
@@ -464,7 +471,10 @@ export default function TestSeriesScreen() {
       return res.json();
     },
     enabled: !!user,
-    staleTime: 0,
+    staleTime: 3 * 60 * 1000,
+    gcTime: 20 * 60 * 1000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
   });
 
   const handleStartTest = (test: Test) => {

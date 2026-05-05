@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { sendPushToUsers } from "./push-notifications";
+import { purgeStudentAccountById } from "./user-account-purge";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -140,6 +141,33 @@ export function registerAdminUsersAndContentRoutes({
     }
   });
 
+  /** Distinct students with device / web login denials (for Admin Users tab). */
+  app.get("/api/admin/device-denied-users", requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      const result = await db.query(
+        `SELECT u.id AS user_id,
+                u.name AS user_name,
+                u.phone,
+                u.email,
+                MAX(e.created_at) AS latest_at,
+                COUNT(*)::int AS event_count,
+                (ARRAY_AGG(e.reason ORDER BY e.created_at DESC))[1] AS latest_reason,
+                (ARRAY_AGG(e.platform ORDER BY e.created_at DESC))[1] AS latest_platform
+         FROM device_block_events e
+         INNER JOIN users u ON u.id = e.user_id
+         WHERE e.reason IN ('wrong_web_browser_login_denied', 'wrong_device_login_denied')
+           AND COALESCE(u.role, '') <> 'admin'
+         GROUP BY u.id, u.name, u.phone, u.email
+         ORDER BY MAX(e.created_at) DESC NULLS LAST
+         LIMIT 200`
+      );
+      res.json(result.rows);
+    } catch (err) {
+      console.error("[Admin] device-denied-users:", err);
+      res.status(500).json({ message: "Failed to load device-denied users" });
+    }
+  });
+
   app.post("/api/admin/users/:id/reset-device-binding", requireAdmin, async (req: Request, res: Response) => {
     try {
       const uid = parseInt(String(req.params.id), 10);
@@ -194,16 +222,10 @@ export function registerAdminUsersAndContentRoutes({
 
   app.delete("/api/admin/users/:id", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const userId = req.params.id;
-      await db.query("DELETE FROM test_attempts WHERE user_id = $1", [userId]);
-      await db.query("DELETE FROM enrollments WHERE user_id = $1", [userId]);
-      await db.query("DELETE FROM notifications WHERE user_id = $1", [userId]);
-      await db.query("DELETE FROM payments WHERE user_id = $1", [userId]);
-      await db.query("DELETE FROM book_purchases WHERE user_id = $1", [userId]);
-      await db.query("DELETE FROM folder_purchases WHERE user_id = $1", [userId]).catch(() => {});
-      await db.query("DELETE FROM support_messages WHERE user_id = $1", [userId]).catch(() => {});
-      await db.query("DELETE FROM mission_attempts WHERE user_id = $1", [userId]).catch(() => {});
-      await db.query("DELETE FROM users WHERE id = $1", [userId]);
+      const userId = parseInt(String(req.params.id), 10);
+      if (!Number.isFinite(userId)) return res.status(400).json({ message: "Invalid user id" });
+      await deleteDownloadsForUser(userId);
+      await purgeStudentAccountById(db, userId);
       res.json({ success: true });
     } catch (err) {
       console.error("Delete user error:", err);

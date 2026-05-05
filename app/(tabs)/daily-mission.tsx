@@ -53,6 +53,65 @@ const TABS = [
   { key: "free_practice", label: "Free Practice" },
 ];
 
+function normalizeTopicLabel(s: unknown): string {
+  return String(s ?? "").trim().replace(/\s+/g, " ");
+}
+
+/** Unique topic chips + subtopics that are not duplicates of any topic (avoids repeating the same label twice). */
+function uniqueTopicsAndSubtopicsFromQuestions(questions: MissionQuestion[]): { topics: string[]; subtopics: string[] } {
+  const topicKeys = new Set<string>();
+  const topics: string[] = [];
+  for (const q of questions) {
+    const t = normalizeTopicLabel(q.topic);
+    if (!t) continue;
+    const k = t.toLowerCase();
+    if (topicKeys.has(k)) continue;
+    topicKeys.add(k);
+    topics.push(t);
+  }
+  const subtopicKeys = new Set<string>();
+  const subtopics: string[] = [];
+  for (const q of questions) {
+    const st = normalizeTopicLabel(q.subtopic);
+    if (!st) continue;
+    const k = st.toLowerCase();
+    if (topicKeys.has(k) || subtopicKeys.has(k)) continue;
+    subtopicKeys.add(k);
+    subtopics.push(st);
+  }
+  return { topics, subtopics };
+}
+
+/** Single question row: show one chip if topic and subtopic are the same string. */
+function TopicSubtopicChipsRow({ topic, subtopic }: { topic?: string; subtopic?: string }) {
+  const t = normalizeTopicLabel(topic);
+  const st = normalizeTopicLabel(subtopic);
+  if (!t && !st) return null;
+  if (t && st && t.toLowerCase() === st.toLowerCase()) {
+    return (
+      <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
+        <View style={styles.topicChip}>
+          <Text style={styles.topicChipText}>{t}</Text>
+        </View>
+      </View>
+    );
+  }
+  return (
+    <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
+      {t ? (
+        <View style={styles.topicChip}>
+          <Text style={styles.topicChipText}>{t}</Text>
+        </View>
+      ) : null}
+      {st ? (
+        <View style={[styles.topicChip, { backgroundColor: "#F3E8FF" }]}>
+          <Text style={[styles.topicChipText, { color: "#7C3AED" }]}>{st}</Text>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 function formatDate(dateStr: string) {
   if (!dateStr) return "";
   const d = new Date(dateStr);
@@ -113,8 +172,10 @@ export default function DailyMissionScreen() {
       const res = await authFetch(url.toString());
       return res.json();
     },
-    staleTime: 0,
-    refetchOnMount: true,
+    staleTime: 5 * 60 * 1000,
+    gcTime: 25 * 60 * 1000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
   });
 
   const completeMutation = useMutation({
@@ -365,13 +426,7 @@ export default function DailyMissionScreen() {
         </LinearGradient>
 
         <ScrollView style={styles.quizContent} contentContainerStyle={styles.quizContentInner}>
-          {/* Topic / subtopic */}
-          {(q.topic || q.subtopic) && (
-            <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
-              {q.topic ? <View style={styles.topicChip}><Text style={styles.topicChipText}>{q.topic}</Text></View> : null}
-              {q.subtopic ? <View style={[styles.topicChip, { backgroundColor: "#F3E8FF" }]}><Text style={[styles.topicChipText, { color: "#7C3AED" }]}>{q.subtopic}</Text></View> : null}
-            </View>
-          )}
+          <TopicSubtopicChipsRow topic={q.topic} subtopic={q.subtopic} />
           <View style={[styles.questionCard, { borderLeftWidth: 4, borderLeftColor: isCorrect ? "#22C55E" : userAns ? "#EF4444" : "#9CA3AF" }]}>
             <Text style={styles.questionText}>{q.question}</Text>
             {q.image_url ? (
@@ -525,8 +580,20 @@ export default function DailyMissionScreen() {
                 <View style={styles.reviewHeader}>
                   <Ionicons name={isCorrect ? "checkmark-circle" : isSkipped ? "remove-circle" : "close-circle"} size={20} color={isCorrect ? "#22C55E" : isSkipped ? "#9CA3AF" : "#EF4444"} />
                   <Text style={styles.reviewQNum}>Q{idx + 1}</Text>
-                  {q.topic ? <Text style={styles.reviewTopic}>{q.topic}</Text> : null}
-                  {q.subtopic ? <Text style={[styles.reviewTopic, { color: "#7C3AED" }]}>{q.subtopic}</Text> : null}
+                  {(() => {
+                    const rt = normalizeTopicLabel(q.topic);
+                    const rst = normalizeTopicLabel(q.subtopic);
+                    if (!rt && !rst) return null;
+                    if (rt && rst && rt.toLowerCase() === rst.toLowerCase()) {
+                      return <Text style={styles.reviewTopic}>{rt}</Text>;
+                    }
+                    return (
+                      <>
+                        {rt ? <Text style={styles.reviewTopic}>{rt}</Text> : null}
+                        {rst ? <Text style={[styles.reviewTopic, { color: "#7C3AED" }]}>{rst}</Text> : null}
+                      </>
+                    );
+                  })()}
                   <Ionicons name="chevron-forward" size={16} color={Colors.light.textMuted} style={{ marginLeft: "auto" as any }} />
                 </View>
                 <Text style={styles.reviewQuestion} numberOfLines={2}>{q.question}</Text>
@@ -606,13 +673,7 @@ export default function DailyMissionScreen() {
         </LinearGradient>
 
         <ScrollView style={styles.quizContent} contentContainerStyle={styles.quizContentInner} keyboardShouldPersistTaps="handled">
-          {/* Topic / subtopic chips */}
-          {(q?.topic || q?.subtopic) && (
-            <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
-              {q.topic ? <View style={styles.topicChip}><Text style={styles.topicChipText}>{q.topic}</Text></View> : null}
-              {q.subtopic ? <View style={[styles.topicChip, { backgroundColor: "#F3E8FF" }]}><Text style={[styles.topicChipText, { color: "#7C3AED" }]}>{q.subtopic}</Text></View> : null}
-            </View>
-          )}
+          <TopicSubtopicChipsRow topic={q?.topic} subtopic={q?.subtopic} />
           <View style={styles.questionCard}>
             <Text style={styles.questionText}>{q?.question}</Text>
             {q?.image_url ? (
@@ -668,7 +729,7 @@ export default function DailyMissionScreen() {
     const questions = activeMission.questions || [];
     const totalMarks = questions.reduce((s, q) => s + (q.marks || 0), 0);
     const totalTime = questions.reduce((s, q) => s + (q.time_limit || 0), 0);
-    const topics = [...new Set(questions.map((q) => q.topic).filter(Boolean))];
+    const { topics, subtopics: startSubtopics } = uniqueTopicsAndSubtopicsFromQuestions(questions);
     const typeLabel = activeMission.mission_type === "free_practice" ? "Free Practice" : "Daily Drill";
     const typeColor = activeMission.mission_type === "free_practice" ? "#22C55E" : "#F59E0B";
     return (
@@ -704,12 +765,19 @@ export default function DailyMissionScreen() {
           </View>
         </LinearGradient>
         {/* Topics */}
-        {topics.length > 0 && (
+        {(topics.length > 0 || startSubtopics.length > 0) && (
           <View style={{ gap: 8 }}>
             <Text style={{ fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Topics Covered</Text>
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
               {topics.map((t) => (
-                <View key={t} style={styles.topicChip}><Text style={styles.topicChipText}>{t}</Text></View>
+                <View key={`t-${t}`} style={styles.topicChip}>
+                  <Text style={styles.topicChipText}>{t}</Text>
+                </View>
+              ))}
+              {startSubtopics.map((s) => (
+                <View key={`s-${s}`} style={[styles.topicChip, { backgroundColor: "#F3E8FF" }]}>
+                  <Text style={[styles.topicChipText, { color: "#7C3AED" }]}>{s}</Text>
+                </View>
               ))}
             </View>
           </View>
@@ -768,8 +836,7 @@ export default function DailyMissionScreen() {
             const typeColor = item.mission_type === "free_practice" ? "#22C55E" : "#F59E0B";
             const totalMarks = questions.reduce((s: number, q: MissionQuestion) => s + (q.marks || 0), 0);
             const totalTimeSecs = questions.reduce((s: number, q: MissionQuestion) => s + (q.time_limit || 0), 0);
-            const topics = [...new Set(questions.map((q: MissionQuestion) => q.topic).filter(Boolean))];
-            const subtopics = [...new Set(questions.map((q: MissionQuestion) => q.subtopic).filter(Boolean))];
+            const { topics, subtopics } = uniqueTopicsAndSubtopicsFromQuestions(questions);
             return (
               <Pressable
                 style={[styles.missionListCard, isLocked && styles.missionLocked, isCompleted && styles.missionDone]}
@@ -832,11 +899,15 @@ export default function DailyMissionScreen() {
                 {/* Topics / subtopics */}
                 {(topics.length > 0 || subtopics.length > 0) && (
                   <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
-                    {topics.slice(0, 3).map((t) => (
-                      <View key={t as string} style={styles.topicChip}><Text style={styles.topicChipText}>{t as string}</Text></View>
+                    {topics.map((t) => (
+                      <View key={`t-${t}`} style={styles.topicChip}>
+                        <Text style={styles.topicChipText}>{t}</Text>
+                      </View>
                     ))}
-                    {subtopics.slice(0, 2).map((s) => (
-                      <View key={s as string} style={[styles.topicChip, { backgroundColor: "#F3E8FF" }]}><Text style={[styles.topicChipText, { color: "#7C3AED" }]}>{s as string}</Text></View>
+                    {subtopics.map((s) => (
+                      <View key={`s-${s}`} style={[styles.topicChip, { backgroundColor: "#F3E8FF" }]}>
+                        <Text style={[styles.topicChipText, { color: "#7C3AED" }]}>{s}</Text>
+                      </View>
                     ))}
                   </View>
                 )}

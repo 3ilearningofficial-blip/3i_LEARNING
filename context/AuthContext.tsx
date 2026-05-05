@@ -155,9 +155,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => setUnauthorizedHandler(null);
   }, []);
 
-  // Web: clear session and return to welcome after 1 hour inactivity.
+  // Web: clear session and return to welcome after 1 hour inactivity (students only — admins may stay signed in on multiple devices).
   useEffect(() => {
     if (Platform.OS !== "web") return;
+    if (user?.role === "admin") return;
     const TIMEOUT = 60 * 60 * 1000; // 1 hour
     let timer: ReturnType<typeof setTimeout>;
 

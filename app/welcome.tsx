@@ -87,11 +87,6 @@ function PankajSirPhoto({ uriRaw, extraStyle }: { uriRaw: string; extraStyle?: S
     setFailed(false);
   }, [normalized]);
 
-  const webImageProps =
-    Platform.OS === "web"
-      ? ({ referrerPolicy: "no-referrer" } as Record<string, unknown>)
-      : {};
-
   if (!normalized || failed) {
     return (
       <View style={[styles.pankajPhotoPlaceholder, extraStyle]}>
@@ -100,9 +95,30 @@ function PankajSirPhoto({ uriRaw, extraStyle }: { uriRaw: string; extraStyle?: S
     );
   }
 
+  /** RN-web `Image` often fails loading cross-origin URLs on mobile Safari; native `img` is reliable. */
+  if (Platform.OS === "web" && typeof window !== "undefined") {
+    return (
+      <View style={[styles.pankajPhoto, extraStyle, { overflow: "hidden", padding: 0 }]}>
+        {React.createElement("img", {
+          src: normalized,
+          alt: "",
+          referrerPolicy: "strict-origin-when-cross-origin",
+          style: {
+            width: "100%",
+            height: "100%",
+            display: "block",
+            objectFit: "cover",
+          },
+          onError: () => setFailed(true),
+          loading: "lazy",
+          decoding: "async",
+        })}
+      </View>
+    );
+  }
+
   return (
     <Image
-      {...webImageProps}
       source={{ uri: normalized }}
       style={[styles.pankajPhoto, extraStyle]}
       resizeMode="cover"

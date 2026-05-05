@@ -21,8 +21,9 @@ function ChatTabIcon({ color, focused }: { color: string; focused: boolean }) {
       } catch { return []; }
     },
     enabled: !!user,
-    refetchInterval: 30000,
-    staleTime: 10000,
+    refetchInterval: 90000,
+    staleTime: 60000,
+    refetchOnMount: false,
   });
 
   const unread = messages.filter((m: any) => m.sender === "admin" && !m.is_read).length;
@@ -58,8 +59,9 @@ function NotifTabIcon({ color, focused }: { color: string; focused: boolean }) {
       } catch { return []; }
     },
     enabled: !!user,
-    refetchInterval: 45000,
-    staleTime: 15000,
+    refetchInterval: 90000,
+    staleTime: 60000,
+    refetchOnMount: false,
   });
 
   const unread = notifications.filter((n: any) => !n.is_read).length;

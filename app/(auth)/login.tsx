@@ -13,6 +13,7 @@ import { apiRequest } from "@/lib/query-client";
 import { getInstallationId } from "@/lib/installation-id";
 import { useAuth } from "@/context/AuthContext";
 import Colors from "@/constants/colors";
+import { navigateToProfileSetupWithNotice } from "@/lib/profile-completion-ui";
 import { navigateBackFromAuth } from "@/lib/navigate-auth-back";
 
 export default function LoginScreen() {
@@ -96,12 +97,8 @@ export default function LoginScreen() {
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       login(data.user);
 
-      // If profile not complete → go to profile setup
-      if (!data.user.profileComplete && data.user.role !== "admin") {
-        if (Platform.OS === "web" && typeof window !== "undefined") {
-          (window as any).__allowProfileSetupOnce = "1";
-        }
-        router.replace("/profile-setup");
+      if (!data.user.profileComplete) {
+        navigateToProfileSetupWithNotice();
       } else {
         router.replace("/(tabs)");
       }

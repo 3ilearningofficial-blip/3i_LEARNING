@@ -48,6 +48,10 @@ export default function AITutorScreen() {
       if (!res.ok) return [];
       return res.json();
     },
+    staleTime: 3 * 60 * 1000,
+    gcTime: 20 * 60 * 1000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
   });
 
   const askMutation = useMutation({
