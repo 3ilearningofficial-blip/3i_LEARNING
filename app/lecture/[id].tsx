@@ -270,7 +270,8 @@ function onRdy(e){rdy=1;e.target.playVideo();up();sc();
 window.ReactNativeWebView&&window.ReactNativeWebView.postMessage('ready');}
 function onSt(e){var s=e.data;
 document.getElementById('ld').style.display=s===3?'block':'none';
-document.getElementById('bp').className=(s===1||s===3)?'bp h':'bp';upi();}
+document.getElementById('bp').className=(s===1||s===3)?'bp h':'bp';upi();
+if(s===0&&window.ReactNativeWebView){window.ReactNativeWebView.postMessage(JSON.stringify({event:'ended'}));}}
 function tp(){if(!rdy)return;p.getPlayerState()===1?p.pauseVideo():p.playVideo();}
 function upi(){var pl=p&&p.getPlayerState()===1;
 document.getElementById('pli').innerHTML=pl?'<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>':'<path d="M8 5v14l11-7z"/>';}
@@ -349,7 +350,7 @@ function WebDirectVideoPlayer({ url, onReady }: { url: string; onReady: () => vo
       src={url}
       controls
       playsInline
-      controlsList="nodownload noplaybackrate noremoteplayback nopictureinpicture"
+      controlsList="nodownload noremoteplayback nopictureinpicture"
       disablePictureInPicture
       disableRemotePlayback
       style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "contain", backgroundColor: "#000" } as any}
@@ -367,6 +368,10 @@ function WebDirectVideoPlayer({ url, onReady }: { url: string; onReady: () => vo
             v.muted = true;
             v.play().catch(() => {});
           });
+      }}
+      onEnded={() => {
+        // Bubble to React so completed playback can be auto-marked.
+        window.dispatchEvent(new CustomEvent("lecture-ended"));
       }}
     />
   );
@@ -389,6 +394,7 @@ export default function LectureScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
+  const autoCompleteSentRef = useRef(false);
 
   const { data: lectureData, error: lectureError, refetch: refetchLecture } = useQuery<{ video_url: string; pdf_url?: string; title: string; is_completed?: boolean; download_allowed?: boolean; course_id?: number }>({
     queryKey: ["/api/lectures", id],
@@ -523,7 +529,8 @@ export default function LectureScreen() {
   const streamHtml = isStreamId ? buildCloudflareStreamHtml(playbackUrl) : "";
   const directVideoHtml = isDirect ? buildDirectVideoHtml(playbackUrl) : "";
 
-  const handleMarkComplete = async () => {
+  const markComplete = async (opts?: { auto?: boolean }) => {
+    const auto = !!opts?.auto;
     try {
       await apiRequest("POST", `/api/lectures/${id}/progress`, {
         courseId: courseId ? parseInt(courseId) : undefined,
@@ -533,14 +540,24 @@ export default function LectureScreen() {
       // Invalidate queries to refresh the UI
       qc.invalidateQueries({ queryKey: [`/api/lectures/${id}/progress`] });
       qc.invalidateQueries({ queryKey: ["/api/courses", courseId] });
-      if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      Alert.alert("Lecture Completed!", "Your progress has been saved.", [
-        { text: "Continue", onPress: () => router.back() },
-      ]);
+      if (!auto) {
+        if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        Alert.alert("Lecture Completed!", "Your progress has been saved.", [
+          { text: "Continue", onPress: () => router.back() },
+        ]);
+      }
     } catch (err: any) {
       console.error("Mark complete error:", err);
-      Alert.alert("Error", `Failed to save progress: ${err?.message || "Unknown error"}`);
+      if (!auto) {
+        Alert.alert("Error", `Failed to save progress: ${err?.message || "Unknown error"}`);
+      }
     }
+  };
+
+  const triggerAutoComplete = () => {
+    if (isCompleted || autoCompleteSentRef.current) return;
+    autoCompleteSentRef.current = true;
+    void markComplete({ auto: true });
   };
 
   const preventScreenCapture = `
@@ -557,7 +574,7 @@ export default function LectureScreen() {
           window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({ event: 'pause' }));
         });
         video.addEventListener('ended', function() {
-          window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({ event: 'pause' }));
+          window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({ event: 'ended' }));
         });
       });
     })();
@@ -571,6 +588,9 @@ export default function LectureScreen() {
         setIsVideoPlaying(true);
       } else if (data.event === 'pause' || data.event === 'ended') {
         setIsVideoPlaying(false);
+        if (data.event === 'ended') {
+          triggerAutoComplete();
+        }
       }
     } catch (e) {
       // Ignore non-JSON messages
@@ -579,6 +599,13 @@ export default function LectureScreen() {
       }
     }
   };
+
+  useEffect(() => {
+    if (Platform.OS !== "web") return;
+    const onLectureEnded = () => triggerAutoComplete();
+    window.addEventListener("lecture-ended", onLectureEnded as EventListener);
+    return () => window.removeEventListener("lecture-ended", onLectureEnded as EventListener);
+  }, [isCompleted, id]);
 
   return (
     <View style={styles.container}>
@@ -767,7 +794,7 @@ export default function LectureScreen() {
         {!isCompleted && (
           <Pressable
             style={({ pressed }) => [styles.completeBtn, pressed && { opacity: 0.9 }]}
-            onPress={handleMarkComplete}
+            onPress={() => void markComplete()}
           >
             <LinearGradient colors={["#22C55E", "#16A34A"]} style={styles.completeBtnGradient}>
               <Ionicons name="checkmark-circle" size={20} color="#fff" />
