@@ -3,6 +3,7 @@ import { Platform, StyleSheet, View, Text } from "react-native";
 import { BlurView } from "expo-blur";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useQuery } from "@tanstack/react-query";
+import React, { useState } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Colors from "@/constants/colors";
 import { authFetch, getApiUrl } from "@/lib/query-client";
@@ -10,18 +11,24 @@ import { useAuth } from "@/context/AuthContext";
 
 function ChatTabIcon({ color, focused }: { color: string; focused: boolean }) {
   const { user } = useAuth();
+  const [authLost, setAuthLost] = useState(false);
   const { data: messages = [] } = useQuery<any[]>({
     queryKey: ["/api/support/messages"],
     queryFn: async () => {
       try {
         const baseUrl = getApiUrl();
         const res = await authFetch(new URL("/api/support/messages", baseUrl).toString());
+        if (res.status === 401) {
+          setAuthLost(true);
+          return [];
+        }
         if (!res.ok) return [];
+        setAuthLost(false);
         return res.json();
       } catch { return []; }
     },
-    enabled: !!user,
-    refetchInterval: 90000,
+    enabled: !!user && !authLost,
+    refetchInterval: !!user && !authLost ? 90000 : false,
     staleTime: 60000,
     refetchOnMount: false,
   });
@@ -48,18 +55,24 @@ function ChatTabIcon({ color, focused }: { color: string; focused: boolean }) {
 
 function NotifTabIcon({ color, focused }: { color: string; focused: boolean }) {
   const { user } = useAuth();
+  const [authLost, setAuthLost] = useState(false);
   const { data: notifications = [] } = useQuery<any[]>({
     queryKey: ["/api/notifications"],
     queryFn: async () => {
       try {
         const baseUrl = getApiUrl();
         const res = await authFetch(new URL("/api/notifications", baseUrl).toString());
+        if (res.status === 401) {
+          setAuthLost(true);
+          return [];
+        }
         if (!res.ok) return [];
+        setAuthLost(false);
         return res.json();
       } catch { return []; }
     },
-    enabled: !!user,
-    refetchInterval: 90000,
+    enabled: !!user && !authLost,
+    refetchInterval: !!user && !authLost ? 90000 : false,
     staleTime: 60000,
     refetchOnMount: false,
   });

@@ -101,7 +101,7 @@ html, body { width: 100%; height: 100%; background: #000; overflow: hidden; -web
   controls
   autoplay
   preload="auto"
-  controlslist="nodownload noplaybackrate noremoteplayback"
+  controlslist="nodownload noremoteplayback"
   disablepictureinpicture
   ${signedUrl ? `signed-url="${signedUrl}"` : ''}
 ></stream>
@@ -116,7 +116,7 @@ document.addEventListener('selectstart', function(e) { e.preventDefault(); retur
 const player = document.getElementById('player');
 var media = document.querySelector('video');
 if (media) {
-  media.setAttribute('controlsList', 'nodownload noplaybackrate noremoteplayback nopictureinpicture');
+  media.setAttribute('controlsList', 'nodownload noremoteplayback nopictureinpicture');
   media.setAttribute('disablePictureInPicture', 'true');
   media.setAttribute('disableRemotePlayback', 'true');
   media.setAttribute('x-webkit-airplay', 'deny');
@@ -174,7 +174,7 @@ video { width: 100%; height: 100%; object-fit: contain; background: #000; }
 </style>
 </head>
 <body>
-<video controls playsinline controlsList="nodownload noplaybackrate noremoteplayback nopictureinpicture" disablePictureInPicture disableRemotePlayback x-webkit-airplay="deny">
+<video controls playsinline controlsList="nodownload noremoteplayback nopictureinpicture" disablePictureInPicture disableRemotePlayback x-webkit-airplay="deny">
   <source src="${url}" type="video/mp4">
 </video>
 <script>

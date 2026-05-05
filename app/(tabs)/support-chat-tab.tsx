@@ -22,9 +22,10 @@ type Message = {
 export default function SupportChatTab() {
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
-  const { isAdmin } = useAuth();
+  const { user, isAdmin } = useAuth();
   const scrollRef = useRef<ScrollView>(null);
   const [text, setText] = useState("");
+  const [chatAuthLost, setChatAuthLost] = useState(false);
 
   // Admin state
   const [adminSelectedUserId, setAdminSelectedUserId] = useState<number | null>(null);
@@ -222,11 +223,17 @@ export default function SupportChatTab() {
     queryFn: async () => {
       const baseUrl = getApiUrl();
       const res = await authFetch(new URL("/api/support/messages", baseUrl).toString());
+      if (res.status === 401) {
+        setChatAuthLost(true);
+        return [];
+      }
       if (!res.ok) return [];
+      setChatAuthLost(false);
       return res.json();
     },
+    enabled: !!user && !isAdmin && !chatAuthLost,
     staleTime: 30000,
-    refetchInterval: 20000,
+    refetchInterval: !!user && !chatAuthLost ? 20000 : false,
     refetchOnMount: false,
     refetchOnWindowFocus: false,
   });
@@ -280,6 +287,10 @@ export default function SupportChatTab() {
 
   /** Clearance above the bottom tab bar — keep modest so the composer sits near the bar, not floating high. */
   const TAB_BAR_CLEARANCE = Platform.OS === "android" ? 52 : Platform.OS === "web" ? 56 : 52;
+  const composerBottomPadding =
+    Platform.OS === "web"
+      ? 8
+      : TAB_BAR_CLEARANCE + Math.max(insets.bottom, 6);
 
   return (
     <View style={{ flex: 1, backgroundColor: "#F0F4FF" }}>
@@ -298,6 +309,12 @@ export default function SupportChatTab() {
       {isLoading ? (
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
           <ActivityIndicator color={Colors.light.primary} />
+        </View>
+      ) : chatAuthLost ? (
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 20 }}>
+          <Ionicons name="lock-closed-outline" size={44} color={Colors.light.textMuted} />
+          <Text style={[styles.emptyTitle, { marginTop: 10 }]}>Session expired</Text>
+          <Text style={styles.emptySub}>Please login again to use Support Chat.</Text>
         </View>
       ) : (
         <ScrollView
@@ -354,7 +371,7 @@ export default function SupportChatTab() {
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         keyboardVerticalOffset={Platform.OS === "ios" ? TAB_BAR_CLEARANCE + insets.bottom : 0}
       >
-        <View style={[styles.inputRow, { paddingBottom: TAB_BAR_CLEARANCE + Math.max(insets.bottom, 6) }]}>
+        <View style={[styles.inputRow, { paddingBottom: composerBottomPadding }]}>
           <TextInput
             style={styles.input}
             placeholder="Type your message..."
@@ -363,11 +380,12 @@ export default function SupportChatTab() {
             onChangeText={setText}
             multiline
             maxLength={1000}
+            editable={!chatAuthLost}
           />
           <Pressable
             style={[styles.sendBtn, (!text.trim() || sendMutation.isPending) && styles.sendBtnDisabled]}
             onPress={() => text.trim() && sendMutation.mutate(text.trim())}
-            disabled={!text.trim() || sendMutation.isPending}
+            disabled={!text.trim() || sendMutation.isPending || chatAuthLost}
           >
             {sendMutation.isPending
               ? <ActivityIndicator size="small" color="#fff" />

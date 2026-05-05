@@ -213,9 +213,7 @@ export default function CourseDetailScreen() {
           qc.invalidateQueries({ queryKey: ["/api/courses"] });
         }
       })
-      .catch(() => {
-        enrollmentSyncAttempted.current = false;
-      });
+      .catch(() => {});
   }, [user?.id, course?.isEnrolled, courseIdNum, isAdmin, id, qc, course]);
 
   const { data: liveClasses = [], isPending: liveClassesPending } = useQuery<LiveClass[]>({
@@ -227,7 +225,7 @@ export default function CourseDetailScreen() {
       if (!res.ok) return [];
       return res.json();
     },
-    enabled: !!id && id !== "undefined",
+    enabled: !!user && !!id && id !== "undefined",
     refetchInterval: activeTab === "Live" ? 10000 : 60000,
     staleTime: 30_000,
     gcTime: 15 * 60 * 1000,
@@ -267,7 +265,7 @@ export default function CourseDetailScreen() {
 
   // Warm likely next screens so tab/screen transitions feel instant for students.
   useEffect(() => {
-    if (!course || !id || id === "undefined") return;
+    if (!user || !course || !id || id === "undefined") return;
     const baseUrl = getApiUrl();
     const primeLectures = (course.lectures || []).slice(0, 3);
     const primeMaterials = (course.materials || []).slice(0, 3);
@@ -321,7 +319,7 @@ export default function CourseDetailScreen() {
         staleTime: 30_000,
       });
     });
-  }, [course, id, liveClasses, qc]);
+  }, [user?.id, course, id, liveClasses, qc]);
 
   const LIVE_ROOT = DEFAULT_LIVE_RECORDING_SECTION;
   const getLectureRootName = (name: string) =>
@@ -1735,7 +1733,9 @@ setTimeout(function() {
                       <View style={styles.lectureMetaRow}>
                         <Ionicons name="time-outline" size={12} color={Colors.light.textMuted} />
                         <Text style={styles.lectureMeta}>
-                          {lecture.section_title === "Live Class Recordings" && lecture.created_at
+                          {typeof lecture.section_title === "string" &&
+                          lecture.section_title.startsWith("Live Class Recordings") &&
+                          lecture.created_at
                             ? `${new Date(Number(lecture.created_at)).toLocaleDateString(undefined, {
                                 year: "numeric",
                                 month: "short",

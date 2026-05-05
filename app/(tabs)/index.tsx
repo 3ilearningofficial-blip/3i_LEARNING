@@ -342,6 +342,7 @@ export default function HomeScreen() {
   const [search, setSearch] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("All");
   const [refreshing, setRefreshing] = useState(false);
+  const [notifAuthLost, setNotifAuthLost] = useState(false);
   const [showAllScheduled, setShowAllScheduled] = useState(false);
 
   const topPadding = Platform.OS === "web" ? 16 : insets.top;
@@ -487,12 +488,17 @@ export default function HomeScreen() {
       try {
         const baseUrl = getApiUrl();
         const res = await authFetch(new URL("/api/notifications", baseUrl).toString());
+        if (res.status === 401) {
+          setNotifAuthLost(true);
+          return [];
+        }
         if (!res.ok) return [];
+        setNotifAuthLost(false);
         return res.json();
       } catch { return []; }
     },
-    enabled: !!user, // only fetch when logged in — prevents 401 on welcome page
-    refetchInterval: 90000,
+    enabled: !!user && !notifAuthLost, // only fetch when logged in — prevents 401 on welcome page
+    refetchInterval: !!user && !notifAuthLost ? 90000 : false,
     staleTime: 60000,
     refetchOnMount: false,
     refetchOnWindowFocus: false,

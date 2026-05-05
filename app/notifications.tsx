@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Platform, Image } from "react-native";
 import { router } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { authFetch, apiRequest, getApiUrl } from "@/lib/query-client";
 import Colors from "@/constants/colors";
+import { useAuth } from "@/context/AuthContext";
 
 interface Notification {
   id: number;
@@ -21,15 +22,23 @@ interface Notification {
 export default function NotificationsScreen() {
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
+  const { user } = useAuth();
+  const [authLost, setAuthLost] = useState(false);
 
   const { data: notifications = [], isLoading } = useQuery<Notification[]>({
     queryKey: ["/api/notifications"],
     queryFn: async () => {
       const baseUrl = getApiUrl();
       const res = await authFetch(new URL("/api/notifications", baseUrl).toString());
+      if (res.status === 401) {
+        setAuthLost(true);
+        return [];
+      }
       if (!res.ok) return [];
+      setAuthLost(false);
       return res.json();
     },
+    enabled: !!user && !authLost,
     staleTime: 0,
   });
 

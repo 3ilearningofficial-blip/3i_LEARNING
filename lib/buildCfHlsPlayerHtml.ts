@@ -23,13 +23,25 @@ video { width: 100%; height: 100%; object-fit: contain; background: #000; }
 .spinner { width: 36px; height: 36px; border: 3px solid #333; border-top-color: #F6821F; border-radius: 50%; animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .msg { font-size: 13px; color: #aaa; text-align: center; }
-#qwrap { position: absolute; bottom: 10px; left: 10px; z-index: 50; font-family: system-ui, sans-serif; }
+#qwrap { position: absolute; bottom: 10px; left: 10px; z-index: 50; font-family: system-ui, sans-serif; display: flex; gap: 8px; }
 #qsel { font-size: 13px; padding: 6px 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.35); background: rgba(0,0,0,0.65); color: #fff; max-width: 160px; }
+#ssel { font-size: 13px; padding: 6px 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.35); background: rgba(0,0,0,0.65); color: #fff; max-width: 120px; }
 </style>
 </head>
 <body>
-<div id="qwrap"><select id="qsel" aria-label="Quality"></select></div>
-<video id="v" autoplay controls playsinline controlsList="nodownload noplaybackrate noremoteplayback nopictureinpicture" disablePictureInPicture disableRemotePlayback x-webkit-airplay="deny"></video>
+<div id="qwrap">
+  <select id="qsel" aria-label="Quality"></select>
+  <select id="ssel" aria-label="Speed">
+    <option value="0.5">0.5x</option>
+    <option value="0.75">0.75x</option>
+    <option value="1" selected>1x</option>
+    <option value="1.25">1.25x</option>
+    <option value="1.5">1.5x</option>
+    <option value="1.75">1.75x</option>
+    <option value="2">2x</option>
+  </select>
+</div>
+<video id="v" autoplay controls playsinline controlsList="nodownload noremoteplayback nopictureinpicture" disablePictureInPicture disableRemotePlayback x-webkit-airplay="deny"></video>
 <div id="overlay"><div class="spinner"></div><div class="msg" id="msg">Connecting to live stream...</div></div>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7/dist/hls.min.js"></script>
 <script>
@@ -38,6 +50,7 @@ var overlay = document.getElementById('overlay');
 var msg = document.getElementById('msg');
 var hlsUrl = ${safeUrl};
 var qsel = document.getElementById('qsel');
+var ssel = document.getElementById('ssel');
 var retryCount = 0;
 var hlsRef = null;
 function showLive() {
@@ -67,6 +80,12 @@ function fillQuality(hls) {
   qsel.onchange = function() {
     var v = parseInt(qsel.value, 10);
     if (hlsRef) hlsRef.currentLevel = isNaN(v) ? -1 : v;
+  };
+}
+if (ssel) {
+  ssel.onchange = function() {
+    var r = parseFloat(ssel.value || '1');
+    video.playbackRate = isNaN(r) ? 1 : r;
   };
 }
 function tryLoad() {
@@ -111,19 +130,38 @@ document.addEventListener('contextmenu', function(e) { e.preventDefault(); });
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
 video { width: 100%; height: 100%; object-fit: contain; background: #000; }
-#qwrap { position: absolute; bottom: 10px; left: 10px; z-index: 50; font-family: system-ui, sans-serif; }
+#qwrap { position: absolute; bottom: 10px; left: 10px; z-index: 50; font-family: system-ui, sans-serif; display: flex; gap: 8px; }
 #qsel { font-size: 13px; padding: 6px 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.35); background: rgba(0,0,0,0.65); color: #fff; max-width: 160px; }
+#ssel { font-size: 13px; padding: 6px 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.35); background: rgba(0,0,0,0.65); color: #fff; max-width: 120px; }
 </style>
 </head>
 <body>
-<div id="qwrap"><select id="qsel" aria-label="Quality"></select></div>
-<video id="v" autoplay controls playsinline controlsList="nodownload noplaybackrate noremoteplayback nopictureinpicture" disablePictureInPicture disableRemotePlayback x-webkit-airplay="deny"></video>
+<div id="qwrap">
+  <select id="qsel" aria-label="Quality"></select>
+  <select id="ssel" aria-label="Speed">
+    <option value="0.5">0.5x</option>
+    <option value="0.75">0.75x</option>
+    <option value="1" selected>1x</option>
+    <option value="1.25">1.25x</option>
+    <option value="1.5">1.5x</option>
+    <option value="1.75">1.75x</option>
+    <option value="2">2x</option>
+  </select>
+</div>
+<video id="v" autoplay controls playsinline controlsList="nodownload noremoteplayback nopictureinpicture" disablePictureInPicture disableRemotePlayback x-webkit-airplay="deny"></video>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7/dist/hls.min.js"></script>
 <script>
 var video = document.getElementById('v');
 var hlsUrl = ${safeUrl};
 var qsel = document.getElementById('qsel');
+var ssel = document.getElementById('ssel');
 var hlsRef = null;
+if (ssel) {
+  ssel.onchange = function() {
+    var r = parseFloat(ssel.value || '1');
+    video.playbackRate = isNaN(r) ? 1 : r;
+  };
+}
 function fillQuality(hls) {
   hlsRef = hls;
   if (!qsel || !hls || !hls.levels || hls.levels.length <= 1) {
