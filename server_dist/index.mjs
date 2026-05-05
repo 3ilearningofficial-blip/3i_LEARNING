@@ -6530,7 +6530,10 @@ function registerCourseAccessRoutes({
       const result = await db2.query(query, params);
       let courses = result.rows;
       if (user) {
-        const enrollResult = await db2.query("SELECT course_id, progress_percent FROM enrollments WHERE user_id = $1 AND (status = 'active' OR status IS NULL)", [user.id]);
+        const enrollResult = await db2.query(
+          "SELECT course_id, progress_percent FROM enrollments WHERE user_id = $1 AND (status = 'active' OR status IS NULL) AND (valid_until IS NULL OR valid_until > $2)",
+          [user.id, Date.now()]
+        );
         const enrollMap = /* @__PURE__ */ new Map();
         enrollResult.rows.forEach((e) => {
           enrollMap.set(Number(e.course_id), Number(e.progress_percent) || 0);

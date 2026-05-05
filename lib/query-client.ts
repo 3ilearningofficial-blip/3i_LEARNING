@@ -36,8 +36,23 @@ function shouldNotifyUnauthorized(url: string): boolean {
     if (path === "/api/media-token" || path.startsWith("/api/media/")) {
       return false;
     }
+    // Ignore auth-loss for passive analytics/progress pings while watching media.
+    // These endpoints are best-effort and should never force a full app logout.
+    if (
+      /\/api\/lectures\/[^/]+\/progress\/session$/.test(path) ||
+      /\/api\/live-classes\/[^/]+\/recording-progress$/.test(path) ||
+      /\/api\/live-classes\/[^/]+\/viewers\/heartbeat$/.test(path)
+    ) {
+      return false;
+    }
   } catch {
-    if (url.includes("/api/media-token") || url.includes("/api/media/")) {
+    if (
+      url.includes("/api/media-token") ||
+      url.includes("/api/media/") ||
+      /\/api\/lectures\/[^/]+\/progress\/session$/.test(url) ||
+      /\/api\/live-classes\/[^/]+\/recording-progress$/.test(url) ||
+      /\/api\/live-classes\/[^/]+\/viewers\/heartbeat$/.test(url)
+    ) {
       return false;
     }
   }
