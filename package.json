@@ -24,7 +24,7 @@
     "lint": "npx expo lint",
     "lint:fix": "npx expo lint --fix",
     "quality": "npm run lint && npx tsc --noEmit && npm run test",
-    "validate:release": "npm run server:build && npm run db:check && npm run maintenance:check"
+    "validate:release": "npm run server:build && npm run db:apply-sql && npm run db:check && npm run maintenance:check"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1028.0",
