@@ -13,7 +13,8 @@ export async function purgeStudentAccountById(db: DbExec, userId: number): Promi
       await db.query(`DELETE FROM ${tableName} WHERE user_id = $1`, [id]);
     } catch (err: any) {
       // Keep user deletion working across partially migrated/stale schemas on prod.
-      if (String(err?.code || "") === "42P01") return; // undefined_table
+      const code = String(err?.code || "");
+      if (code === "42P01" || code === "42703") return; // undefined_table / undefined_column
       throw err;
     }
   };

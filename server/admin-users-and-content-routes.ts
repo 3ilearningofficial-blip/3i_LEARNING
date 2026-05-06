@@ -268,7 +268,8 @@ export function registerAdminUsersAndContentRoutes({
       res.json({ success: true });
     } catch (err) {
       console.error("Delete user error:", err);
-      res.status(500).json({ message: "Failed to delete user" });
+      const e = err as any;
+      res.status(500).json({ message: "Failed to delete user", code: e?.code || null, detail: e?.message || null });
     }
   });
 }
