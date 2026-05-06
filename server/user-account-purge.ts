@@ -19,6 +19,27 @@ export async function purgeStudentAccountById(db: DbExec, userId: number): Promi
     }
   };
 
+  // Production can have schema drift across instances; discover all user_id tables dynamically.
+  // This avoids transaction aborts when a newly added relation is forgotten in the static list.
+  try {
+    const discovered = await db.query(
+      `SELECT DISTINCT table_name
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND column_name = 'user_id'
+         AND table_name <> 'users'`
+    );
+    for (const row of discovered.rows as Array<{ table_name?: string }>) {
+      const tableName = String(row.table_name || "");
+      if (!/^[a-z_][a-z0-9_]*$/.test(tableName)) continue;
+      await safeDeleteByUser(tableName);
+    }
+  } catch {
+    // Fall back to known core tables if metadata query fails.
+  }
+
+  // Keep explicit deletions for safety/fallback and predictable cleanup ordering.
+  await safeDeleteByUser("user_push_tokens");
   await safeDeleteByUser("user_sessions");
   await safeDeleteByUser("lecture_progress");
   await safeDeleteByUser("live_class_recording_progress");
@@ -31,6 +52,8 @@ export async function purgeStudentAccountById(db: DbExec, userId: number): Promi
   await safeDeleteByUser("media_tokens");
   await safeDeleteByUser("download_tokens");
   await safeDeleteByUser("test_attempts");
+  await safeDeleteByUser("test_purchases");
+  await safeDeleteByUser("question_reports");
   await safeDeleteByUser("enrollments");
   await safeDeleteByUser("notifications");
   await safeDeleteByUser("payments");
