@@ -127,8 +127,13 @@ function RootLayoutNav() {
         return;
       }
       if (inAuthGroup) {
-        if (inAuthSubScreen) return;
-        router.replace("/(auth)/email-login");
+        // Once authenticated, incomplete-profile users should leave auth screens
+        // and continue profile completion.
+        if (inAuthSubScreen) {
+          router.replace("/profile-setup");
+          return;
+        }
+        router.replace("/profile-setup");
         return;
       }
       if (inProfileSetup) {

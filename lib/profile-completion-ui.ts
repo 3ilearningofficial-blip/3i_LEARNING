@@ -28,5 +28,10 @@ export function navigateToProfileSetupWithNotice(): void {
     }
     router.replace("/profile-setup");
   };
+  if (Platform.OS === "web" && typeof window !== "undefined") {
+    window.alert(`${PROFILE_INCOMPLETE_ALERT_TITLE}\n\n${PROFILE_INCOMPLETE_ALERT_MESSAGE}`);
+    go();
+    return;
+  }
   Alert.alert(PROFILE_INCOMPLETE_ALERT_TITLE, PROFILE_INCOMPLETE_ALERT_MESSAGE, [{ text: "Continue", onPress: go }]);
 }
