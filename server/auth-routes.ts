@@ -303,6 +303,7 @@ export function registerAuthRoutes({
               (req.session as any).user = null;
               return res.status(401).json({ message: "device_binding_mismatch" });
             }
+            await finalizeStudentWebSlotsAfterAuth(db, row.id as number, row.role as string, req);
             (req.session as any).user = fresh;
             return res.json(fresh);
           }
@@ -338,6 +339,7 @@ export function registerAuthRoutes({
         (req.session as any).user = null;
         return res.status(401).json({ message: "device_binding_mismatch" });
       }
+      await finalizeStudentWebSlotsAfterAuth(db, sessionUser.id, row.role, req);
       const effectiveToken = tok || row.session_token;
       const fresh = {
         ...sessionUser,

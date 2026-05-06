@@ -11,7 +11,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/context/AuthContext";
-import { getBaseUrl, apiRequest, toHttpsMediaUrl } from "@/lib/query-client";
+import { getBaseUrl, apiRequest, fetchMediaToken, toHttpsMediaUrl } from "@/lib/query-client";
 import Colors from "@/constants/colors";
 import { useScreenProtection } from "@/lib/useScreenProtection";
 import { useVideoScreenProtection } from "@/lib/useVideoScreenProtection";
@@ -330,9 +330,11 @@ export default function MaterialViewerScreen() {
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const [loading, setLoading] = useState(true);
   const [mediaToken, setMediaToken] = useState<string | null>(null);
+  const [mediaTokenError, setMediaTokenError] = useState<string | null>(null);
+  const [mediaTokenRetryTick, setMediaTokenRetryTick] = useState(0);
   const qc = useQueryClient();
   const topPadding = Platform.OS === "web" ? 16 : insets.top;
-  const { isAdmin } = useAuth();
+  const { isAdmin, user } = useAuth();
 
   // 16:9 video height based on screen width
   const videoHeight = Math.round(screenWidth * 9 / 16);
@@ -352,8 +354,9 @@ export default function MaterialViewerScreen() {
   useEffect(() => {
     const cid = Number(material?.course_id);
     if (!cid || !Number.isFinite(cid)) return;
+    const uidSeg = String(user?.id ?? "guest");
     qc.prefetchQuery({
-      queryKey: ["/api/courses", String(cid)],
+      queryKey: ["/api/courses", String(cid), uidSeg],
       queryFn: async () => {
         const res = await apiRequest("GET", `/courses/${cid}`);
         if (!res.ok) throw new Error("prefetch course failed");
@@ -361,7 +364,7 @@ export default function MaterialViewerScreen() {
       },
       staleTime: 30000,
     });
-  }, [material?.course_id, qc]);
+  }, [material?.course_id, qc, user?.id]);
 
   // Apply enhanced video protection only for local video playback
   const isPlayingLocalVideo = !!localUri && material?.file_type === 'video';
@@ -414,27 +417,39 @@ export default function MaterialViewerScreen() {
 
   // Fetch a short-lived media token for PDF/video viewing (avoids srcDoc cookie issues)
   useEffect(() => {
-    if (!fileKey || !material) return;
+    if (!fileKey || !material) {
+      setMediaTokenError(null);
+      return;
+    }
     if (isGDrive || isYouTube) return; // not needed for these
     const cached = mediaTokenCache.get(fileKey);
     if (cached && cached.expiresAt > Date.now()) {
       setMediaToken(cached.token);
+      setMediaTokenError(null);
       return;
     }
     let cancelled = false;
-    apiRequest("POST", "/api/media-token", { fileKey })
-      .then(r => r.json())
-      .then(d => {
-        if (!cancelled && d.token) {
-          setMediaToken(d.token);
-          mediaTokenCache.set(fileKey, { token: d.token, expiresAt: Date.now() + MEDIA_TOKEN_TTL_MS });
-        }
-      })
-      .catch(() => {}); // silently fail — fallback to direct URL
+    setMediaTokenError(null);
+    void (async () => {
+      const r = await fetchMediaToken(fileKey);
+      if (cancelled) return;
+      if (r.ok) {
+        setMediaToken(r.token);
+        mediaTokenCache.set(fileKey, { token: r.token, expiresAt: Date.now() + MEDIA_TOKEN_TTL_MS });
+        return;
+      }
+      const msg =
+        r.status === 401
+          ? "Sign in again to open this file (session expired)."
+          : r.status === 403
+            ? "You do not have access to this material."
+            : r.message || `Could not unlock file (${r.status}).`;
+      setMediaTokenError(msg);
+    })();
     return () => {
       cancelled = true;
     };
-  }, [fileKey, material?.id, isGDrive, isYouTube]);
+  }, [fileKey, material?.id, isGDrive, isYouTube, mediaTokenRetryTick]);
 
   // Authenticated URL with token (always use API base — never the Vercel preview origin on web)
   const tokenizedUrl = toHttpsMediaUrl(
@@ -547,6 +562,20 @@ export default function MaterialViewerScreen() {
           </LinearGradient>
 
           <View style={styles.content}>
+            {material && fileKey && mediaTokenError && (
+              <View style={{ paddingHorizontal: 16, paddingVertical: 12, backgroundColor: "#FEF2F2", borderBottomWidth: 1, borderBottomColor: "#FECACA" }}>
+                <Text style={{ fontSize: 13, fontFamily: "Inter_500Medium", color: "#991B1B" }}>{mediaTokenError}</Text>
+                <Pressable
+                  style={[styles.retryBtn, { marginTop: 10, alignSelf: "flex-start" }]}
+                  onPress={() => {
+                    setMediaTokenError(null);
+                    setMediaTokenRetryTick((t) => t + 1);
+                  }}
+                >
+                  <Text style={styles.retryBtnText}>Retry</Text>
+                </Pressable>
+              </View>
+            )}
             {fetchError ? (
               <View style={styles.centered}>
                 <Ionicons name="alert-circle-outline" size={48} color={Colors.light.accent} />
@@ -573,7 +602,15 @@ export default function MaterialViewerScreen() {
                     onLoad={() => setLoading(false)}
                   />
                 ) : isPdf && fileUrl && material ? (
-                  (pdfViewerUrl || !fileKey) ? (
+                  mediaTokenError && fileKey ? (
+                    <View style={styles.centered}>
+                      <Ionicons name="lock-closed-outline" size={44} color={Colors.light.primary} />
+                      <Text style={[styles.loadingText, { textAlign: "center", paddingHorizontal: 24 }]}>{mediaTokenError}</Text>
+                      <Pressable style={[styles.retryBtn, { marginTop: 16 }]} onPress={() => setMediaTokenRetryTick((t) => t + 1)}>
+                        <Text style={styles.retryBtnText}>Retry</Text>
+                      </Pressable>
+                    </View>
+                  ) : (pdfViewerUrl || !fileKey) ? (
                     <iframe
                       src={pdfViewerUrl || fileUrl}
                       style={{ width: "100%", height: "100%", border: "none" } as any}

@@ -9,7 +9,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { LinearGradient } from "expo-linear-gradient";
-import { apiRequest, authFetch, getApiUrl, getBaseUrl, toHttpsMediaUrl } from "@/lib/query-client";
+import { apiRequest, authFetch, fetchMediaToken, getApiUrl, getBaseUrl, toHttpsMediaUrl } from "@/lib/query-client";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
 import { useScreenProtection } from "@/lib/useScreenProtection";
@@ -397,6 +397,8 @@ export default function LectureScreen() {
   const [hasError, setHasError] = useState(false);
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
   const autoCompleteSentRef = useRef(false);
+  const [mediaTokenError, setMediaTokenError] = useState<string | null>(null);
+  const [mediaTokenRetryTick, setMediaTokenRetryTick] = useState(0);
 
   const { data: lectureData, error: lectureError, refetch: refetchLecture } = useQuery<{ video_url: string; pdf_url?: string; title: string; is_completed?: boolean; download_allowed?: boolean; course_id?: number }>({
     queryKey: ["/api/lectures", id],
@@ -448,16 +450,19 @@ export default function LectureScreen() {
     const cid = lectureData?.course_id || (courseId ? Number(courseId) : null);
     if (!cid || !Number.isFinite(cid)) return;
     const baseUrl = getApiUrl();
+    const uidSeg = String(user?.id ?? "guest");
+    const url = new URL(`/api/courses/${cid}`, baseUrl);
+    if (user?.id) url.searchParams.set("_uid", String(user.id));
     qc.prefetchQuery({
-      queryKey: ["/api/courses", String(cid)],
+      queryKey: ["/api/courses", String(cid), uidSeg],
       queryFn: async () => {
-        const res = await authFetch(new URL(`/api/courses/${cid}`, baseUrl).toString());
+        const res = await authFetch(url.toString());
         if (!res.ok) throw new Error("prefetch course failed");
         return res.json();
       },
       staleTime: 30000,
     });
-  }, [lectureData?.course_id, courseId, qc]);
+  }, [lectureData?.course_id, courseId, qc, user?.id]);
 
   const isCompleted = progressData?.is_completed || lectureData?.is_completed || false;
 
@@ -488,27 +493,37 @@ export default function LectureScreen() {
   useEffect(() => {
     if (!fileKey || !userScopedMediaKey) {
       setMediaToken(null);
+      setMediaTokenError(null);
       return;
     }
     const cached = mediaTokenCache.get(userScopedMediaKey);
     if (cached && cached.expiresAt > Date.now()) {
       setMediaToken(cached.token);
+      setMediaTokenError(null);
       return;
     }
     let cancelled = false;
-    apiRequest("POST", "/api/media-token", { fileKey })
-      .then(r => r.json())
-      .then(d => {
-        if (!cancelled && d.token) {
-          setMediaToken(d.token);
-          mediaTokenCache.set(userScopedMediaKey, { token: d.token, expiresAt: Date.now() + MEDIA_TOKEN_TTL_MS });
-        }
-      })
-      .catch(() => {});
+    setMediaTokenError(null);
+    void (async () => {
+      const r = await fetchMediaToken(fileKey);
+      if (cancelled) return;
+      if (r.ok) {
+        setMediaToken(r.token);
+        mediaTokenCache.set(userScopedMediaKey, { token: r.token, expiresAt: Date.now() + MEDIA_TOKEN_TTL_MS });
+        return;
+      }
+      const msg =
+        r.status === 401
+          ? "Sign in again to play this video (session expired)."
+          : r.status === 403
+            ? "You do not have access to this file. If you are enrolled, pull to refresh the course page and retry."
+            : r.message || `Could not unlock playback (${r.status}).`;
+      setMediaTokenError(msg);
+    })();
     return () => {
       cancelled = true;
     };
-  }, [fileKey, userScopedMediaKey]);
+  }, [fileKey, userScopedMediaKey, mediaTokenRetryTick]);
   const authenticatedVideoUrl = toHttpsMediaUrl(
     fileKey && mediaToken
       ? `${baseUrl}/api/media/${fileKey}?token=${mediaToken}`
@@ -682,11 +697,27 @@ export default function LectureScreen() {
       >
         {/* Video Watermark Overlay */}
         <VideoWatermark isPlaying={isVideoPlaying} />
+
+        {fileKey && mediaTokenError && (
+          <View style={[styles.loadingOverlay, { zIndex: 25, backgroundColor: "rgba(0,0,0,0.92)" }]}>
+            <Ionicons name="lock-closed-outline" size={40} color="#fff" />
+            <Text style={[styles.loadingText, { marginTop: 12, paddingHorizontal: 20, textAlign: "center" }]}>{mediaTokenError}</Text>
+            <Pressable
+              style={[styles.retryBtn, { marginTop: 16 }]}
+              onPress={() => {
+                setMediaTokenError(null);
+                setMediaTokenRetryTick((t) => t + 1);
+              }}
+            >
+              <Text style={styles.retryBtnText}>Retry</Text>
+            </Pressable>
+          </View>
+        )}
         
-        {isLoading && !hasError && (
+        {((isLoading && !hasError) || (!!fileKey && !mediaToken && !mediaTokenError)) && !mediaTokenError && (
           <View style={styles.loadingOverlay}>
             <ActivityIndicator size="large" color={Colors.light.primary} />
-            <Text style={styles.loadingText}>Loading video...</Text>
+            <Text style={styles.loadingText}>{fileKey && !mediaToken ? "Securing playback…" : "Loading video..."}</Text>
           </View>
         )}
         {hasError && (

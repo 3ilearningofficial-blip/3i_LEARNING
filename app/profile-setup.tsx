@@ -13,6 +13,8 @@ import { apiRequest } from "@/lib/query-client";
 import { uploadToR2 } from "@/lib/r2-upload";
 import {
   PROFILE_PERMANENT_FIELDS_NOTICE,
+  PROFILE_POST_SAVE_SUCCESS_MESSAGE,
+  PROFILE_POST_SAVE_SUCCESS_TITLE,
   PROFILE_SAVE_CONFIRM_MESSAGE,
   PROFILE_SAVE_CONFIRM_TITLE,
 } from "@/lib/profile-completion-ui";
@@ -132,7 +134,17 @@ export default function ProfileSetupScreen() {
         } else {
           updateUser({ name: trimmedName, email: trimmedEmail, profileComplete: true, date_of_birth: trimmedDob });
         }
-        router.replace("/(tabs)");
+        const goHome = () => {
+          router.replace("/(tabs)");
+        };
+        if (Platform.OS === "web" && typeof window !== "undefined") {
+          window.alert(`${PROFILE_POST_SAVE_SUCCESS_TITLE}\n\n${PROFILE_POST_SAVE_SUCCESS_MESSAGE}`);
+          goHome();
+        } else {
+          Alert.alert(PROFILE_POST_SAVE_SUCCESS_TITLE, PROFILE_POST_SAVE_SUCCESS_MESSAGE, [
+            { text: "Continue", onPress: goHome },
+          ]);
+        }
       } catch (err: any) {
         console.error("Profile save error:", err);
         setError(err?.message || "Failed to save profile. Please try again.");

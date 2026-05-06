@@ -15,6 +15,11 @@ export const PROFILE_SAVE_CONFIRM_TITLE = "Save permanent details?";
 export const PROFILE_SAVE_CONFIRM_MESSAGE =
   "You will not be able to change your name, date of birth, or email after this. Make sure everything is correct, then continue.";
 
+export const PROFILE_POST_SAVE_SUCCESS_TITLE = "Profile saved";
+
+export const PROFILE_POST_SAVE_SUCCESS_MESSAGE =
+  "You're all set. Continue to your home screen.";
+
 /** Call after successful sign-in when profile is incomplete; then routes to profile setup. */
 export function navigateToProfileSetupWithNotice(): void {
   const go = () => {

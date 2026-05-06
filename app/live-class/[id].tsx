@@ -10,7 +10,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest, authFetch, getApiUrl, getBaseUrl, toHttpsMediaUrl } from "@/lib/query-client";
+import { apiRequest, authFetch, fetchMediaToken, getApiUrl, getBaseUrl, toHttpsMediaUrl } from "@/lib/query-client";
 import { liveClassQueryKey } from "@/lib/query-keys";
 import { useAuth } from "@/context/AuthContext";
 import Colors from "@/constants/colors";
@@ -434,16 +434,19 @@ export default function LiveClassScreen() {
   useEffect(() => {
     if (!liveClassData?.course_id) return;
     const baseUrl = getApiUrl();
+    const uidSeg = String(user?.id ?? "guest");
+    const url = new URL(`/api/courses/${liveClassData.course_id}`, baseUrl);
+    if (user?.id) url.searchParams.set("_uid", String(user.id));
     qc.prefetchQuery({
-      queryKey: ["/api/courses", String(liveClassData.course_id)],
+      queryKey: ["/api/courses", String(liveClassData.course_id), uidSeg],
       queryFn: async () => {
-        const res = await authFetch(new URL(`/api/courses/${liveClassData.course_id}`, baseUrl).toString());
+        const res = await authFetch(url.toString());
         if (!res.ok) throw new Error("prefetch course failed");
         return res.json();
       },
       staleTime: 30000,
     });
-  }, [liveClassData?.course_id, qc]);
+  }, [liveClassData?.course_id, qc, user?.id]);
 
   // Countdown timer — counts down to scheduled_at, then shows "Starting soon"
   useEffect(() => {
@@ -519,6 +522,8 @@ export default function LiveClassScreen() {
 
   // For /api/media/ recording URLs, get a token so mobile web can play them
   const [recordingToken, setRecordingToken] = useState<string | null>(null);
+  const [recordingTokenError, setRecordingTokenError] = useState<string | null>(null);
+  const [recordingTokenRetryTick, setRecordingTokenRetryTick] = useState(0);
   const recordingFileKey = (() => {
     if (!recordingUrl || !recordingUrl.includes("/api/media/")) return null;
     const path = recordingUrl.startsWith("/") ? recordingUrl : recordingUrl.replace(/^https?:\/\/[^/]+/, "");
@@ -528,27 +533,40 @@ export default function LiveClassScreen() {
   useEffect(() => {
     if (!recordingFileKey || !userScopedRecordingKey) {
       setRecordingToken(null);
+      setRecordingTokenError(null);
       return;
     }
     const cached = mediaTokenCache.get(userScopedRecordingKey);
     if (cached && cached.expiresAt > Date.now()) {
       setRecordingToken(cached.token);
+      setRecordingTokenError(null);
       return;
     }
     let cancelled = false;
-    apiRequest("POST", "/api/media-token", { fileKey: recordingFileKey })
-      .then(r => r.json())
-      .then(d => {
-        if (!cancelled && d.token) {
-          setRecordingToken(d.token);
-          mediaTokenCache.set(userScopedRecordingKey, { token: d.token, expiresAt: Date.now() + MEDIA_TOKEN_TTL_MS });
+    setRecordingToken(null);
+    setRecordingTokenError(null);
+    void (async () => {
+      const result = await fetchMediaToken(recordingFileKey);
+      if (cancelled) return;
+      if (result.ok && result.token) {
+        setRecordingToken(result.token);
+        mediaTokenCache.set(userScopedRecordingKey, { token: result.token, expiresAt: Date.now() + MEDIA_TOKEN_TTL_MS });
+        return;
+      }
+      if (!result.ok) {
+        if (result.status === 401) {
+          setRecordingTokenError("Your session expired. Sign in again, then tap Retry.");
+        } else if (result.status === 403) {
+          setRecordingTokenError("You don't have access to this recording.");
+        } else {
+          setRecordingTokenError(result.message || "Could not unlock recording playback.");
         }
-      })
-      .catch(() => {});
+      }
+    })();
     return () => {
       cancelled = true;
     };
-  }, [recordingFileKey, userScopedRecordingKey]);
+  }, [recordingFileKey, userScopedRecordingKey, recordingTokenRetryTick]);
 
   const authenticatedVideoUrl = (() => {
     if (!recordingFileKey) return toHttpsMediaUrl(videoUrl);
@@ -561,6 +579,32 @@ export default function LiveClassScreen() {
   useEffect(() => {
     didAutoplayDirectRecording.current = false;
   }, [authenticatedVideoUrl]);
+
+  const recordingTokenStatusOverlay = useMemo(() => {
+    if (!recordingFileKey) return null;
+    if (recordingTokenError) {
+      return (
+        <View style={[styles.loadingOverlay, { justifyContent: "center", alignItems: "center", padding: 20, gap: 14, zIndex: 20 }]}>
+          <Text style={{ color: "#fff", textAlign: "center", fontSize: 15 }}>{recordingTokenError}</Text>
+          <Pressable
+            style={{ backgroundColor: Colors.light.primary, paddingHorizontal: 20, paddingVertical: 10, borderRadius: 8 }}
+            onPress={() => setRecordingTokenRetryTick((t) => t + 1)}
+          >
+            <Text style={{ color: "#fff", fontWeight: "600" }}>Retry</Text>
+          </Pressable>
+        </View>
+      );
+    }
+    if (!recordingToken) {
+      return (
+        <View style={[styles.loadingOverlay, { justifyContent: "center", alignItems: "center", zIndex: 20 }]}>
+          <ActivityIndicator size="large" color={Colors.light.primary} />
+          <Text style={{ color: "rgba(255,255,255,0.85)", marginTop: 10, fontSize: 14 }}>Securing playback…</Text>
+        </View>
+      );
+    }
+    return null;
+  }, [recordingFileKey, recordingTokenError, recordingToken]);
 
   /** Count recording replay visits for admin dashboards (debounced on server ~8 min). */
   useEffect(() => {
@@ -873,6 +917,7 @@ export default function LiveClassScreen() {
         <View style={styles.webDesktopRow}>
           <View style={[styles.playerContainer, styles.webPlayerWide]}>
             <VideoWatermark isPlaying={isVideoPlaying} />
+            {recordingTokenStatusOverlay}
             {!showAsLiveUI && !liveClassData?.is_completed && (
               <View style={styles.waitingOverlay}>
                 <View style={styles.waitingDot} />
@@ -1123,6 +1168,7 @@ export default function LiveClassScreen() {
             ]}
           >
             <VideoWatermark isPlaying={isVideoPlaying} />
+            {recordingTokenStatusOverlay}
             {!showAsLiveUI && !liveClassData?.is_completed && (
               <View style={styles.waitingOverlay}>
                 <View style={styles.waitingDot} />

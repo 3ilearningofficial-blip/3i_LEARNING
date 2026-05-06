@@ -96,6 +96,30 @@ export function registerCourseAccessRoutes({
     return trimmed.replace(/^\/+/, "");
   };
 
+  /** Path after host + optional `/api/media/` — matches client `fileKey` and DB `video_url` / `file_url` variants. */
+  const canonicalMediaRelativeKey = (raw: string): string => {
+    let s = normalizeStorageKey(raw);
+    if (!s) return "";
+    s = s.replace(/^\/+/, "");
+    const proxy = "api/media/";
+    if (s.toLowerCase().startsWith(proxy)) {
+      s = s.slice(proxy.length).replace(/^\/+/, "");
+    }
+    try {
+      s = decodeURIComponent(s);
+    } catch {
+      /* keep */
+    }
+    return s.replace(/^\/+/, "").replace(/\/+$/g, "");
+  };
+
+  const mediaKeyMatchVariants = (raw: string): string[] => {
+    const k = canonicalMediaRelativeKey(raw);
+    if (!k || k.includes("..")) return [];
+    const set = new Set<string>([k, `api/media/${k}`, `/api/media/${k}`]);
+    return [...set];
+  };
+
   /** Buckets use keys like `folder/file.pdf`. App URLs use `/api/media/folder/file.pdf` — strip that proxy prefix for GetObject. */
   const toR2ObjectKey = (raw: string): string => {
     let key = normalizeStorageKey(raw);
@@ -111,8 +135,15 @@ export function registerCourseAccessRoutes({
   };
 
   const userCanMintMediaToken = async (user: AuthUser, requestedKeyRaw: string): Promise<boolean> => {
-    const requestedKey = normalizeStorageKey(requestedKeyRaw);
-    if (!requestedKey) return false;
+    const variants = mediaKeyMatchVariants(requestedKeyRaw);
+    if (variants.length === 0) return false;
+
+    const roleNorm = String(user.role ?? "").toLowerCase();
+    if (roleNorm === "admin") {
+      return true;
+    }
+
+    const now = Date.now();
 
     const lectureMatch = await db.query(
       `SELECT l.id
@@ -123,8 +154,8 @@ export function registerCourseAccessRoutes({
         AND (e.status = 'active' OR e.status IS NULL)
        WHERE l.video_url IS NOT NULL
          AND (
-           l.video_url = $2
-           OR regexp_replace(l.video_url, '^https?://[^/]+/', '') = $2
+           regexp_replace(regexp_replace(COALESCE(l.video_url, ''), '^https?://[^/]+/', ''), '^/+', '') = ANY($2::text[])
+           OR regexp_replace(COALESCE(l.video_url, ''), '^https?://[^/]+/', '') = ANY($2::text[])
          )
          AND (
            l.course_id IS NULL
@@ -135,7 +166,7 @@ export function registerCourseAccessRoutes({
            )
          )
        LIMIT 1`,
-      [user.id, requestedKey, Date.now()]
+      [user.id, variants, now]
     );
     if (lectureMatch.rows.length > 0) return true;
 
@@ -148,8 +179,8 @@ export function registerCourseAccessRoutes({
         AND (e.status = 'active' OR e.status IS NULL)
        WHERE sm.file_url IS NOT NULL
          AND (
-           sm.file_url = $2
-           OR regexp_replace(sm.file_url, '^https?://[^/]+/', '') = $2
+           regexp_replace(regexp_replace(COALESCE(sm.file_url, ''), '^https?://[^/]+/', ''), '^/+', '') = ANY($2::text[])
+           OR regexp_replace(COALESCE(sm.file_url, ''), '^https?://[^/]+/', '') = ANY($2::text[])
          )
          AND (
            sm.course_id IS NULL
@@ -160,7 +191,7 @@ export function registerCourseAccessRoutes({
            )
          )
        LIMIT 1`,
-      [user.id, requestedKey, Date.now()]
+      [user.id, variants, now]
     );
     return materialMatch.rows.length > 0;
   };
@@ -186,7 +217,8 @@ export function registerCourseAccessRoutes({
       if (!allowed) return res.status(403).json({ message: "You do not have access to this media file" });
       const token = generateSecureToken();
       const expiresAt = Date.now() + 10 * 60 * 1000;
-      await db.query("INSERT INTO media_tokens (token, user_id, file_key, expires_at) VALUES ($1, $2, $3, $4)", [token, user.id, normalizeStorageKey(fileKey), expiresAt]);
+      const storedKey = canonicalMediaRelativeKey(fileKey) || normalizeStorageKey(fileKey);
+      await db.query("INSERT INTO media_tokens (token, user_id, file_key, expires_at) VALUES ($1, $2, $3, $4)", [token, user.id, storedKey, expiresAt]);
       db.query("DELETE FROM media_tokens WHERE expires_at < $1", [Date.now()]).catch(() => {});
       res.set("Cache-Control", "private, no-store");
       res.json({ token, expiresAt });

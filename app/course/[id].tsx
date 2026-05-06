@@ -194,8 +194,17 @@ export default function CourseDetailScreen() {
   const topPadding = Platform.OS === "web" ? 16 : insets.top;
   const bottomPadding = Platform.OS === "web" ? 16 : insets.bottom;
 
-  const { data: course, isLoading } = useQuery<CourseDetail>({
-    queryKey: ["/api/courses", String(id)],
+  /** Include user in the key so enrollment refetches when auth becomes available (cached guest payload is not reused). */
+  const courseDetailUserSegment = String(user?.id ?? "guest");
+
+  const {
+    data: course,
+    isLoading,
+    error: courseQueryError,
+    fetchStatus: courseFetchStatus,
+    refetch: refetchCourse,
+  } = useQuery<CourseDetail>({
+    queryKey: ["/api/courses", String(id), courseDetailUserSegment],
     queryFn: async () => {
       const baseUrl = getApiUrl();
       const url = new URL(`/api/courses/${id}`, baseUrl);
@@ -411,7 +420,7 @@ export default function CourseDetailScreen() {
       setEnrollError("");
       setEnrollSuccess(true);
       // Optimistically update the course detail cache — don't wait for refetch
-      qc.setQueryData(["/api/courses", String(id)], (old: any) => {
+      qc.setQueryData(["/api/courses", String(id), courseDetailUserSegment], (old: any) => {
         if (!old) return old;
         return { ...old, isEnrolled: true, progress: 0 };
       });
@@ -602,6 +611,22 @@ setTimeout(function() {
     }
   };
 
+  /** When course detail refetch failed, don't treat unknown enrollment as "must purchase". */
+  const showEnrollmentOrPurchaseAlert = (showPurchase: () => void) => {
+    if (user && !isAdmin && courseQueryError != null && courseFetchStatus !== "fetching") {
+      Alert.alert(
+        "Couldn't verify access",
+        "We couldn't confirm your enrollment. Check your connection and tap Retry.",
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Retry", onPress: () => { void refetchCourse(); } },
+        ]
+      );
+      return;
+    }
+    showPurchase();
+  };
+
   const handleLecture = (lecture: Lecture) => {
     const st = lecture.section_title || "";
     const isLiveRecording =
@@ -610,16 +635,18 @@ setTimeout(function() {
     // Free preview lectures are accessible to all; everything else requires enrollment
     const canAccess = isAdmin || course?.isEnrolled || lecture.is_free_preview;
     if (!canAccess) {
-      Alert.alert(
-        course?.is_free ? "Enroll Required" : "Purchase Required",
-        course?.is_free
-          ? "Please enroll for free to access this lecture."
-          : "Please purchase this course to access all lectures.",
-        [
-          { text: "Cancel", style: "cancel" },
-          { text: course?.is_free ? "Enroll Free" : "Buy Now", onPress: handleEnroll },
-        ]
-      );
+      showEnrollmentOrPurchaseAlert(() => {
+        Alert.alert(
+          course?.is_free ? "Enroll Required" : "Purchase Required",
+          course?.is_free
+            ? "Please enroll for free to access this lecture."
+            : "Please purchase this course to access all lectures.",
+          [
+            { text: "Cancel", style: "cancel" },
+            { text: course?.is_free ? "Enroll Free" : "Buy Now", onPress: handleEnroll },
+          ]
+        );
+      });
       return;
     }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -1275,11 +1302,13 @@ setTimeout(function() {
                             style={[styles.testSectionCard, { borderLeftColor: folderColor }]}
                             onPress={() => {
                               if (isLocked) {
-                                Alert.alert(
-                                  course.is_free ? "Enroll Required" : "Purchase Required",
-                                  course.is_free ? "Please enroll for free to access materials." : "Please purchase this course to access materials.",
-                                  [{ text: "Cancel", style: "cancel" }, { text: course.is_free ? "Enroll Free" : "Buy Now", onPress: handleEnroll }]
-                                );
+                                showEnrollmentOrPurchaseAlert(() => {
+                                  Alert.alert(
+                                    course.is_free ? "Enroll Required" : "Purchase Required",
+                                    course.is_free ? "Please enroll for free to access materials." : "Please purchase this course to access materials.",
+                                    [{ text: "Cancel", style: "cancel" }, { text: course.is_free ? "Enroll Free" : "Buy Now", onPress: handleEnroll }]
+                                  );
+                                });
                                 return;
                               }
                               setOpenFolder({ name: folderName, type: "materials", color: folderColor, items: materials });
@@ -1367,11 +1396,13 @@ setTimeout(function() {
                           onPress={() => {
                             const canAccess = isAdmin || course.isEnrolled || course.is_free;
                             if (!canAccess) {
-                              Alert.alert(
-                                course.is_free ? "Enroll Required" : "Purchase Required",
-                                course.is_free ? "Please enroll for free to access live classes." : "Please purchase this course to access live classes.",
-                                [{ text: "Cancel", style: "cancel" }, { text: course.is_free ? "Enroll Free" : "Buy Now", onPress: handleEnroll }]
-                              );
+                              showEnrollmentOrPurchaseAlert(() => {
+                                Alert.alert(
+                                  course.is_free ? "Enroll Required" : "Purchase Required",
+                                  course.is_free ? "Please enroll for free to access live classes." : "Please purchase this course to access live classes.",
+                                  [{ text: "Cancel", style: "cancel" }, { text: course.is_free ? "Enroll Free" : "Buy Now", onPress: handleEnroll }]
+                                );
+                              });
                               return;
                             }
                             setOpenFolder({ name: folderName!, type: "live", color: "#DC2626", items: classes });
@@ -1395,16 +1426,18 @@ setTimeout(function() {
                             // Check enrollment for non-free, non-public classes
                             const canAccess = isAdmin || course.isEnrolled || course.is_free || (lc as any).is_free_preview;
                             if (!canAccess) {
-                              Alert.alert(
-                                course.is_free ? "Enroll Required" : "Purchase Required",
-                                course.is_free
-                                  ? "Please enroll for free to access this live class."
-                                  : "Please purchase this course to access live classes.",
-                                [
-                                  { text: "Cancel", style: "cancel" },
-                                  { text: course.is_free ? "Enroll Free" : "Buy Now", onPress: handleEnroll },
-                                ]
-                              );
+                              showEnrollmentOrPurchaseAlert(() => {
+                                Alert.alert(
+                                  course.is_free ? "Enroll Required" : "Purchase Required",
+                                  course.is_free
+                                    ? "Please enroll for free to access this live class."
+                                    : "Please purchase this course to access live classes.",
+                                  [
+                                    { text: "Cancel", style: "cancel" },
+                                    { text: course.is_free ? "Enroll Free" : "Buy Now", onPress: handleEnroll },
+                                  ]
+                                );
+                              });
                               return;
                             }
                             router.push({
@@ -1737,7 +1770,12 @@ setTimeout(function() {
               return (
                 <View key={lecture.id} style={styles.lectureItem}>
                   <Pressable style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 12 }} onPress={() => {
-                    if (isLocked) { Alert.alert("Locked", "Enroll in this course to watch this lecture."); return; }
+                    if (isLocked) {
+                      showEnrollmentOrPurchaseAlert(() => {
+                        Alert.alert("Locked", "Enroll in this course to watch this lecture.");
+                      });
+                      return;
+                    }
                     setOpenFolder(null); handleLecture(lecture);
                   }}>
                     <View style={[styles.lectureNumber, lecture.isCompleted && styles.lectureNumberDone]}>
@@ -1781,7 +1819,13 @@ setTimeout(function() {
               return (
                 <View key={mat.id} style={[styles.materialItem, !canAccess && { opacity: 0.5 }]}>
                   <Pressable style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 12 }}
-                    onPress={() => { if (!canAccess) { Alert.alert("Locked", "Enroll to access."); return; } setOpenFolder(null); router.push(`/material/${mat.id}`); }}>
+                    onPress={() => {
+                      if (!canAccess) {
+                        showEnrollmentOrPurchaseAlert(() => { Alert.alert("Locked", "Enroll to access."); });
+                        return;
+                      }
+                      setOpenFolder(null); router.push(`/material/${mat.id}`);
+                    }}>
                     <View style={styles.materialIcon}><Ionicons name={!canAccess ? "lock-closed" : mat.file_type === "video" ? "videocam" : mat.file_type === "link" ? "link" : "document-text"} size={22} color={!canAccess ? Colors.light.textMuted : "#DC2626"} /></View>
                     <View style={styles.materialInfo}>
                       <Text style={styles.materialTitle}>{mat.title}</Text>

@@ -361,6 +361,42 @@ export async function apiRequest(
   return withUnwrappedJson(res);
 }
 
+export type MediaTokenResult =
+  | { ok: true; token: string; expiresAt: number }
+  | { ok: false; status: number; message: string };
+
+/** POST /api/media-token without throwing — players should show 401/403 instead of spinning forever. */
+export async function fetchMediaToken(fileKey: string): Promise<MediaTokenResult> {
+  const baseUrl = getApiUrl();
+  const url = new URL("/api/media-token", baseUrl);
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const token = await getStoredToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  await attachInstallationHeaders(headers);
+  const res = await doFetchWithRetry(url.toString(), {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ fileKey }),
+    credentials: "include",
+  });
+  if (!res.ok) {
+    return { ok: false, status: res.status, message: await getErrorMessage(res) };
+  }
+  try {
+    const payload = unwrapApiEnvelope(await res.json());
+    const tok = typeof (payload as any)?.token === "string" ? (payload as any).token : null;
+    const exp = Number((payload as any)?.expiresAt);
+    if (!tok) return { ok: false, status: 500, message: "Missing token in response" };
+    return {
+      ok: true,
+      token: tok,
+      expiresAt: Number.isFinite(exp) ? exp : Date.now() + 9 * 60 * 1000,
+    };
+  } catch {
+    return { ok: false, status: res.status, message: "Invalid token response" };
+  }
+}
+
 type UnauthorizedBehavior = "returnNull" | "throw";
 
 export const getQueryFn: <T>(options: {
