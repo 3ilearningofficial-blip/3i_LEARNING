@@ -8,14 +8,33 @@ export type DbExec = {
 
 export async function purgeStudentAccountById(db: DbExec, userId: number): Promise<void> {
   const id = userId;
+  let spSeq = 0;
+  const withSavepoint = async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
+    const spName = `purge_sp_${spSeq++}`;
+    await db.query(`SAVEPOINT ${spName}`);
+    try {
+      const out = await fn();
+      await db.query(`RELEASE SAVEPOINT ${spName}`);
+      return out;
+    } catch (err) {
+      await db.query(`ROLLBACK TO SAVEPOINT ${spName}`).catch(() => {});
+      await db.query(`RELEASE SAVEPOINT ${spName}`).catch(() => {});
+      (err as any).purgeStep = label;
+      throw err;
+    }
+  };
   const safeDeleteByUser = async (tableName: string) => {
     try {
-      await db.query(`DELETE FROM ${tableName} WHERE user_id = $1`, [id]);
+      await withSavepoint(tableName, async () => {
+        await db.query(`DELETE FROM ${tableName} WHERE user_id = $1`, [id]);
+      });
     } catch (err: any) {
       // Keep user deletion working across partially migrated/stale schemas on prod.
       const code = String(err?.code || "");
       if (code === "42P01" || code === "42703") return; // undefined_table / undefined_column
-      throw err;
+      throw new Error(
+        `[purge:${tableName}] code=${code || "unknown"} constraint=${String(err?.constraint || "")} detail=${String(err?.detail || err?.message || "")}`
+      );
     }
   };
 
@@ -64,5 +83,12 @@ export async function purgeStudentAccountById(db: DbExec, userId: number): Promi
   await safeDeleteByUser("user_downloads");
   await safeDeleteByUser("mission_attempts");
 
-  await db.query("DELETE FROM users WHERE id = $1", [id]);
+  await withSavepoint("users", async () => {
+    await db.query("DELETE FROM users WHERE id = $1", [id]);
+  }).catch((err: any) => {
+    const code = String(err?.code || "");
+    throw new Error(
+      `[purge:users] code=${code || "unknown"} constraint=${String(err?.constraint || "")} detail=${String(err?.detail || err?.message || "")}`
+    );
+  });
 }
