@@ -158,7 +158,11 @@ describe("Cloudflare stream end auto-save", () => {
 
     expect(result.statusCode).toBe(200);
     expect(result.body?.success).toBe(true);
-    expect(String(result.body?.recordingUrl || "")).toContain("videodelivery.net/recording_uid_1/manifest/video.m3u8");
+    expect(result.body?.recordingPending).toBe(true);
+    expect(result.body?.recordingUrl).toBeUndefined();
+
+    // stream/end now returns immediately and finalizes recording asynchronously.
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     const updatedLive = db.state.liveClasses.find((r: any) => r.id === 7);
     expect(updatedLive.is_completed).toBe(true);
