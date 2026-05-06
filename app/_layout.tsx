@@ -132,15 +132,8 @@ function RootLayoutNav() {
         return;
       }
       if (inProfileSetup) {
-        if (Platform.OS === "web" && typeof window !== "undefined") {
-          const allowProfileSetupOnce = (window as any).__allowProfileSetupOnce === "1";
-          if (allowProfileSetupOnce) {
-            (window as any).__allowProfileSetupOnce = "0";
-            return;
-          }
-          router.replace("/(auth)/email-login");
-          return;
-        }
+        // Incomplete users must stay on profile-setup until details are saved.
+        // The previous one-time web flag caused bounce-back to auth on re-render.
         return;
       }
       if (incompleteUserAllowedTopSegments.has(currentSegment)) {

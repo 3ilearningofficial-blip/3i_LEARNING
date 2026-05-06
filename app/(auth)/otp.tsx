@@ -114,7 +114,9 @@ export default function OTPScreen() {
     } catch (err: any) {
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       const msg = err?.message || "";
-      if (msg.includes("blocked") || msg.includes("Blocked")) {
+      if (msg.includes("not found") || msg.includes("register first") || msg.includes("404")) {
+        Alert.alert("Register First", "No account exists for this phone number. Please register first.");
+      } else if (msg.includes("blocked") || msg.includes("Blocked")) {
         Alert.alert("Account Blocked", "This account is blocked. Contact support/admin.");
       } else if (msg.includes("registered device") || msg.includes("another device")) {
         Alert.alert("Access Restricted", "This account is active on another device/browser. Use the original one or contact support.");

@@ -181,7 +181,9 @@ export function registerAuthRoutes({
         type === "email"
           ? await db.query("SELECT * FROM users WHERE email = $1", [identifier])
           : await db.query("SELECT * FROM users WHERE phone = $1", [identifier]);
-      if (result.rows.length === 0) return res.status(401).json({ message: GENERIC_OTP_ERROR });
+      if (result.rows.length === 0) {
+        return res.status(404).json({ message: "Account not found. Please register first." });
+      }
 
       const user = result.rows[0];
       if (user.is_blocked) return res.status(401).json({ message: GENERIC_OTP_ERROR });
@@ -487,7 +489,9 @@ export function registerAuthRoutes({
         result = await db.query("SELECT * FROM users WHERE LOWER(email) = LOWER($1)", [identifier]);
       }
 
-      if (result.rows.length === 0) return res.status(401).json({ message: GENERIC_LOGIN_ERROR });
+      if (result.rows.length === 0) {
+        return res.status(404).json({ message: "Account not found. Please register first." });
+      }
       const user = result.rows[0];
       if (user.is_blocked) return res.status(401).json({ message: GENERIC_LOGIN_ERROR });
       if (!user.profile_complete) {
