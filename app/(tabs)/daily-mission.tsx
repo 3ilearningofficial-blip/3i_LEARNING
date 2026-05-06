@@ -197,6 +197,10 @@ export default function DailyMissionScreen() {
 
   const topPadding = Platform.OS === "web" ? 16 : insets.top;
   const bottomPadding = Platform.OS === "web" ? 16 : insets.bottom;
+  const actionBarBottomPadding =
+    Platform.OS === "web"
+      ? 12
+      : (Platform.OS === "android" ? 58 : 52) + Math.max(insets.bottom, 6);
 
   const { data: missions = [], isLoading } = useQuery<DailyMission[]>({
     queryKey: ["/api/daily-missions", activeTab],
@@ -443,7 +447,7 @@ export default function DailyMissionScreen() {
     const isCorrect = userAns === q.correct;
     const qTime = questionTimes[q.id] || 0;
     return (
-      <View style={[styles.container, { paddingBottom: bottomPadding + 80 }]}>
+      <View style={styles.container}>
         <LinearGradient colors={["#0A1628", "#1A2E50"]} style={[styles.quizHeader, { paddingTop: topPadding + 8 }]}>
           <View style={styles.quizHeaderTop}>
             <Pressable onPress={() => setScreen("result")} hitSlop={10}>
@@ -531,7 +535,7 @@ export default function DailyMissionScreen() {
           ) : null}
         </ScrollView>
 
-        <View style={[styles.quizActions, { paddingBottom: bottomPadding + 16 }]}>
+        <View style={[styles.quizActions, { paddingBottom: actionBarBottomPadding }]}>
           <Pressable style={[styles.navBtn, reviewQIndex === 0 && styles.navBtnDisabled]} onPress={() => reviewQIndex > 0 && setReviewQIndex((p) => p - 1)} disabled={reviewQIndex === 0}>
             <Ionicons name="chevron-back" size={20} color={reviewQIndex === 0 ? Colors.light.textMuted : Colors.light.primary} />
           </Pressable>
@@ -673,7 +677,7 @@ export default function DailyMissionScreen() {
     const OPTIONS = ["A", "B", "C", "D"];
     const totalMarks = questions.reduce((s, qq) => s + (qq.marks || 0), 0);
     return (
-      <View style={[styles.container, { paddingBottom: bottomPadding + 80 }]}>
+      <View style={styles.container}>
         <LinearGradient colors={["#0A1628", "#1A2E50"]} style={[styles.quizHeader, { paddingTop: topPadding + 8 }]}>
           <View style={styles.quizHeaderTop}>
             <Pressable onPress={() => {
@@ -746,7 +750,7 @@ export default function DailyMissionScreen() {
           </View>
         </ScrollView>
 
-        <View style={[styles.quizActions, { paddingBottom: bottomPadding + 16 }]}>
+        <View style={[styles.quizActions, { paddingBottom: actionBarBottomPadding }]}>
           <Pressable style={[styles.navBtn, currentQ === 0 && styles.navBtnDisabled]} onPress={handlePrev} disabled={currentQ === 0}>
             <Ionicons name="chevron-back" size={20} color={currentQ === 0 ? Colors.light.textMuted : Colors.light.primary} />
           </Pressable>

@@ -635,18 +635,6 @@ setTimeout(function() {
     // Free preview lectures are accessible to all; everything else requires enrollment
     const canAccess = isAdmin || course?.isEnrolled || lecture.is_free_preview;
     if (!canAccess) {
-      showEnrollmentOrPurchaseAlert(() => {
-        Alert.alert(
-          course?.is_free ? "Enroll Required" : "Purchase Required",
-          course?.is_free
-            ? "Please enroll for free to access this lecture."
-            : "Please purchase this course to access all lectures.",
-          [
-            { text: "Cancel", style: "cancel" },
-            { text: course?.is_free ? "Enroll Free" : "Buy Now", onPress: handleEnroll },
-          ]
-        );
-      });
       return;
     }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -1229,7 +1217,9 @@ setTimeout(function() {
                 {!isTestSeriesCourse && course.tests.filter((t: any) => !t.folder_name).map((test: any) => {
                   const color = TEST_TYPE_COLORS[test.test_type] || "#1A56DB";
                   const attempt = attemptSummary[test.id];
+                  const canAccess = isAdmin || course.isEnrolled || course.is_free;
                   const handlePress = () => {
+                    if (!canAccess) return;
                     if (attempt) {
                       router.push({
                         pathname: "/test-result/[id]",
@@ -1240,7 +1230,7 @@ setTimeout(function() {
                     }
                   };
                   return (
-                    <Pressable key={test.id} style={styles.testCard} onPress={handlePress}>
+                    <Pressable key={test.id} style={[styles.testCard, !canAccess && { opacity: 0.6 }]} onPress={handlePress}>
                       <View style={[styles.testColorBar, { backgroundColor: color }]} />
                       <View style={styles.testItemIcon}><Ionicons name="document-text" size={22} color={color} /></View>
                       <View style={styles.testItemInfo}>
@@ -1255,7 +1245,7 @@ setTimeout(function() {
                           )}
                         </View>
                       </View>
-                      {!course.isEnrolled && !course.is_free ? <Ionicons name="lock-closed" size={18} color={Colors.light.textMuted} /> : attempt ? <Ionicons name="bar-chart" size={18} color={Colors.light.primary} /> : <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />}
+                      {!canAccess ? <Ionicons name="lock-closed" size={18} color={Colors.light.textMuted} /> : attempt ? <Ionicons name="bar-chart" size={18} color={Colors.light.primary} /> : <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />}
                     </Pressable>
                   );
                 })}
@@ -1301,16 +1291,6 @@ setTimeout(function() {
                           <Pressable key={folderKey}
                             style={[styles.testSectionCard, { borderLeftColor: folderColor }]}
                             onPress={() => {
-                              if (isLocked) {
-                                showEnrollmentOrPurchaseAlert(() => {
-                                  Alert.alert(
-                                    course.is_free ? "Enroll Required" : "Purchase Required",
-                                    course.is_free ? "Please enroll for free to access materials." : "Please purchase this course to access materials.",
-                                    [{ text: "Cancel", style: "cancel" }, { text: course.is_free ? "Enroll Free" : "Buy Now", onPress: handleEnroll }]
-                                  );
-                                });
-                                return;
-                              }
                               setOpenFolder({ name: folderName, type: "materials", color: folderColor, items: materials });
                             }}
                           >
@@ -1771,9 +1751,6 @@ setTimeout(function() {
                 <View key={lecture.id} style={styles.lectureItem}>
                   <Pressable style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 12 }} onPress={() => {
                     if (isLocked) {
-                      showEnrollmentOrPurchaseAlert(() => {
-                        Alert.alert("Locked", "Enroll in this course to watch this lecture.");
-                      });
                       return;
                     }
                     setOpenFolder(null); handleLecture(lecture);
@@ -1821,7 +1798,6 @@ setTimeout(function() {
                   <Pressable style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 12 }}
                     onPress={() => {
                       if (!canAccess) {
-                        showEnrollmentOrPurchaseAlert(() => { Alert.alert("Locked", "Enroll to access."); });
                         return;
                       }
                       setOpenFolder(null); router.push(`/material/${mat.id}`);
