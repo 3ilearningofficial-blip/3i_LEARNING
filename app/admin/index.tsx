@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable,
   Platform, ActivityIndicator, Alert, TextInput, Modal, Switch, Image, KeyboardAvoidingView, useWindowDimensions,
@@ -1022,6 +1022,7 @@ export default function AdminDashboard() {
   const [showAllPastNotifs, setShowAllPastNotifs] = useState(false);
   // User action sheet
   const [userActionUser, setUserActionUser] = useState<UserRecord | null>(null);
+  const deletingUserIdsRef = useRef<Set<number>>(new Set());
   const [showCourseAccess, setShowCourseAccess] = useState(false);
   const [courseAccessUserId, setCourseAccessUserId] = useState<number | null>(null);
   const [grantingCourseId, setGrantingCourseId] = useState<number | null>(null);
@@ -1996,10 +1997,13 @@ export default function AdminDashboard() {
 
   const deleteUserMutation = useMutation({
     mutationFn: async (userId: number) => {
+      if (deletingUserIdsRef.current.has(userId)) return userId;
+      deletingUserIdsRef.current.add(userId);
       await apiRequest("DELETE", `/api/admin/users/${userId}`);
       return userId;
     },
     onSuccess: (deletedUserId) => {
+      deletingUserIdsRef.current.delete(Number(deletedUserId));
       qc.setQueryData<UserRecord[]>(["/api/admin/users"], (prev) =>
         Array.isArray(prev) ? prev.filter((u) => Number(u.id) !== Number(deletedUserId)) : prev
       );
@@ -2008,7 +2012,13 @@ export default function AdminDashboard() {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
       Alert.alert("Success", "User removed from app");
     },
-    onError: (err: any) => Alert.alert("Error", err?.message || "Failed to delete user"),
+    onError: (err: any, userId) => {
+      deletingUserIdsRef.current.delete(Number(userId));
+      Alert.alert("Error", err?.message || "Failed to delete user");
+    },
+    onSettled: (_data, _error, userId) => {
+      deletingUserIdsRef.current.delete(Number(userId));
+    },
   });
 
   if (!isAdmin) {

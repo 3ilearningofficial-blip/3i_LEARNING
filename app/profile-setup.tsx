@@ -153,6 +153,14 @@ export default function ProfileSetupScreen() {
       }
     };
 
+    if (Platform.OS === "web" && typeof window !== "undefined") {
+      const confirmed = window.confirm(`${PROFILE_SAVE_CONFIRM_TITLE}\n\n${PROFILE_SAVE_CONFIRM_MESSAGE}`);
+      if (confirmed) {
+        void performSave();
+      }
+      return;
+    }
+
     Alert.alert(PROFILE_SAVE_CONFIRM_TITLE, PROFILE_SAVE_CONFIRM_MESSAGE, [
       { text: "Review", style: "cancel" },
       { text: "Save & continue", onPress: () => void performSave() },
