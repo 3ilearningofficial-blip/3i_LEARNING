@@ -32,6 +32,7 @@ async function streamMediaGet(
   const mediaToken = req.query.token as string | undefined;
   let userId: number | null = null;
   let userRole = "student";
+  let authenticatedViaMediaToken = false;
 
   if (mediaToken) {
     const tokenResult = await db.query("SELECT user_id FROM media_tokens WHERE token = $1 AND expires_at > $2 AND file_key = $3", [mediaToken, Date.now(), key]);
@@ -54,6 +55,7 @@ async function streamMediaGet(
       const roleRow = await db.query("SELECT role FROM users WHERE id = $1 LIMIT 1", [tokenUserId]);
       userRole = String(roleRow.rows[0]?.role ?? "student");
     }
+    authenticatedViaMediaToken = true;
   } else {
     const user = await getAuthUser(req);
     if (!user) {
@@ -64,7 +66,8 @@ async function streamMediaGet(
     userRole = user.role;
   }
 
-  if (userRole !== "admin") {
+  // Media token mint already validates entitlement for this user + key.
+  if (!authenticatedViaMediaToken && userRole !== "admin") {
     const normalizedKey = key.replace(/^\/+/, "");
     const keyVariants = Array.from(new Set([
       normalizedKey,
