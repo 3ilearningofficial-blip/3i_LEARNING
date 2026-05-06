@@ -10,10 +10,10 @@ export function buildCfHlsPlayerHtml(hlsUrl: string, opts?: CfHlsPlayerOptions):
   const live = !!opts?.liveStream;
   const safeUrl = JSON.stringify(hlsUrl);
   const menuCss = `
-#menu { position: absolute; right: 10px; bottom: 52px; z-index: 80; font-family: system-ui, sans-serif; }
-#menuBtn { width: 36px; height: 32px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.28); background: rgba(0,0,0,0.55); color: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+#menu { position: absolute; right: 52px; bottom: 8px; z-index: 80; font-family: system-ui, sans-serif; }
+#menuBtn { width: 28px; height: 28px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.24); background: rgba(0,0,0,0.48); color: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 16px; line-height: 1; }
 #menuBtn:active { transform: translateY(1px); }
-#menuPanel { position: absolute; right: 0; bottom: 42px; min-width: 200px; background: rgba(17,17,17,0.92); border: 1px solid rgba(255,255,255,0.18); border-radius: 12px; padding: 10px; display: none; gap: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.4); }
+#menuPanel { position: absolute; right: 0; bottom: 36px; min-width: 200px; background: rgba(17,17,17,0.92); border: 1px solid rgba(255,255,255,0.18); border-radius: 12px; padding: 10px; display: none; gap: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.4); }
 #menuPanel.open { display: grid; }
 .row { display: grid; gap: 6px; }
 .lbl { font-size: 12px; color: rgba(255,255,255,0.78); }

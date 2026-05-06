@@ -194,21 +194,40 @@ export function registerAdminUsersAndContentRoutes({
 
   app.get("/api/admin/users", requireAdmin, async (_req: Request, res: Response) => {
     try {
-      const result = await db.query(
-        `SELECT id, name, email, phone, role, created_at,
-                COALESCE(is_blocked, FALSE) AS is_blocked,
-                last_active_at
-         FROM users ORDER BY created_at DESC NULLS LAST`
+      const colsResult = await db.query(
+        "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users'"
       );
-      res.json(result.rows);
+      const cols = new Set(colsResult.rows.map((r: any) => String(r.column_name)));
+      if (!cols.has("id")) return res.status(500).json({ message: "Users table missing id column" });
+
+      const field = (name: string, fallbackSql: string) => (cols.has(name) ? name : `${fallbackSql} AS ${name}`);
+      const selectSql = [
+        "id",
+        field("name", "NULL"),
+        field("email", "NULL"),
+        field("phone", "NULL"),
+        field("role", "'student'"),
+        field("created_at", "NULL"),
+        field("is_blocked", "FALSE"),
+        field("last_active_at", "NULL"),
+      ].join(", ");
+      const orderSql = cols.has("created_at") ? "created_at DESC NULLS LAST" : "id DESC";
+      const result = await db.query(`SELECT ${selectSql} FROM users ORDER BY ${orderSql}`);
+      res.json(
+        result.rows.map((r: any) => ({
+          id: r.id,
+          name: r.name ?? `User${r.id}`,
+          email: r.email ?? null,
+          phone: r.phone ?? null,
+          role: r.role ?? "student",
+          created_at: r.created_at ?? null,
+          is_blocked: !!r.is_blocked,
+          last_active_at: r.last_active_at ?? null,
+        }))
+      );
     } catch (err) {
       console.error("Admin users error:", err);
-      try {
-        const result = await db.query("SELECT id, name, email, phone, role, created_at, FALSE AS is_blocked, NULL AS last_active_at FROM users ORDER BY id DESC");
-        res.json(result.rows);
-      } catch {
-        res.status(500).json({ message: "Failed to fetch users" });
-      }
+      res.status(500).json({ message: "Failed to fetch users" });
     }
   });
 
