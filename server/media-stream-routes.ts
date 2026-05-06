@@ -41,12 +41,19 @@ async function streamMediaGet(
     }
     const tokenUserId = tokenResult.rows[0].user_id as number;
     const sessionUser = await getAuthUser(req);
-    if (!sessionUser || sessionUser.id !== tokenUserId) {
+    // Session cookie is often absent on api.* when the app runs on www/root domain — pdf.js/video still sends ?token=... only.
+    // A row in media_tokens already binds this token to tokenUserId after authenticated mint.
+    if (sessionUser && sessionUser.id !== tokenUserId) {
       res.status(401).json({ message: "Unauthorized" });
       return;
     }
     userId = tokenUserId;
-    userRole = sessionUser.role;
+    if (sessionUser && sessionUser.id === tokenUserId) {
+      userRole = sessionUser.role;
+    } else {
+      const roleRow = await db.query("SELECT role FROM users WHERE id = $1 LIMIT 1", [tokenUserId]);
+      userRole = String(roleRow.rows[0]?.role ?? "student");
+    }
   } else {
     const user = await getAuthUser(req);
     if (!user) {
