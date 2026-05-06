@@ -376,55 +376,63 @@ export function registerLiveStreamRoutes({
       ).catch(() => {});
       if (!uid) return res.json({ success: true });
 
+      // Respond immediately so admin UI reflects "ended" without waiting for CF to finalize the VOD.
+      res.json({ success: true, recordingPending: true });
+
       const getLatestRecording = async (): Promise<{ manifestUrl: string; recordingUid: string } | null> =>
         getLatestRecordingForLiveInput(accountId, apiToken, uid);
 
       // Cloudflare needs time to finalize VOD — poll longer before falling back / deleting input.
-      let recordingUrl: string | null = null;
-      const maxPolls = Number(process.env.CF_STREAM_END_MAX_POLLS || 48);
-      const pollMs = Number(process.env.CF_STREAM_END_POLL_MS || 5000);
-      for (let i = 0; i < maxPolls; i += 1) {
-        const latest = await getLatestRecording();
-        if (latest) {
-          const archived = await archiveCloudflareRecordingToR2(latest.recordingUid);
-          recordingUrl = archived || latest.manifestUrl;
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, pollMs));
-      }
-
-      if (!recordingUrl && liveTitle) {
-        const viaSearch = await findRecordingViaStreamSearch(accountId, apiToken, liveTitle, uid);
-        if (viaSearch) {
-          const archived = await archiveCloudflareRecordingToR2(viaSearch.recordingUid);
-          recordingUrl = archived || viaSearch.manifestUrl;
-          console.log(`[CF Stream] Resolved recording via stream search title="${liveTitle.slice(0, 60)}"`);
-        }
-      }
-
-      if (recordingUrl) {
+      void (async () => {
         try {
-          await saveRecordingForClassAndPeers(String(req.params.id), recordingUrl);
-        } catch (saveErr) {
-          console.warn("[CF Stream] recording save after stream end failed:", saveErr);
+          let recordingUrl: string | null = null;
+          const maxPolls = Number(process.env.CF_STREAM_END_MAX_POLLS || 48);
+          const pollMs = Number(process.env.CF_STREAM_END_POLL_MS || 5000);
+          for (let i = 0; i < maxPolls; i += 1) {
+            const latest = await getLatestRecording();
+            if (latest) {
+              const archived = await archiveCloudflareRecordingToR2(latest.recordingUid);
+              recordingUrl = archived || latest.manifestUrl;
+              break;
+            }
+            await new Promise((resolve) => setTimeout(resolve, pollMs));
+          }
+
+          if (!recordingUrl && liveTitle) {
+            const viaSearch = await findRecordingViaStreamSearch(accountId, apiToken, liveTitle, uid);
+            if (viaSearch) {
+              const archived = await archiveCloudflareRecordingToR2(viaSearch.recordingUid);
+              recordingUrl = archived || viaSearch.manifestUrl;
+              console.log(`[CF Stream] Resolved recording via stream search title="${liveTitle.slice(0, 60)}"`);
+            }
+          }
+
+          if (recordingUrl) {
+            try {
+              await saveRecordingForClassAndPeers(String(req.params.id), recordingUrl);
+            } catch (saveErr) {
+              console.warn("[CF Stream] recording save after stream end failed:", saveErr);
+            }
+          } else {
+            console.warn(
+              `[CF Stream] No recording URL after end for live_class=${req.params.id} live_input_uid=${uid}. Leaving live_input in place for retry/archive sweep.`
+            );
+          }
+
+          // Delete live input only after we attached a playable URL — otherwise admins can retry "end"
+          // and archive sweep still has cf_stream_uid to resolve MP4/HLS later.
+          if (recordingUrl) {
+            await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/live_inputs/${uid}`, {
+              method: "DELETE",
+              headers: { Authorization: `Bearer ${apiToken}` },
+            }).catch(() => {});
+          }
+
+          console.log(`[CF Stream] Ended live input uid=${uid} saved=${Boolean(recordingUrl)}`);
+        } catch (err) {
+          console.error("[CF Stream] End background finalize error:", err);
         }
-      } else {
-        console.warn(
-          `[CF Stream] No recording URL after end for live_class=${req.params.id} live_input_uid=${uid}. Leaving live_input in place for retry/archive sweep.`
-        );
-      }
-
-      // Delete live input only after we attached a playable URL — otherwise admins can retry "end"
-      // and archive sweep still has cf_stream_uid to resolve MP4/HLS later.
-      if (recordingUrl) {
-        await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/live_inputs/${uid}`, {
-          method: "DELETE",
-          headers: { Authorization: `Bearer ${apiToken}` },
-        }).catch(() => {});
-      }
-
-      console.log(`[CF Stream] Ended live input uid=${uid} saved=${Boolean(recordingUrl)}`);
-      res.json({ success: true, recordingUrl });
+      })();
     } catch (err) {
       console.error("[CF Stream] End error:", err);
       res.status(500).json({ message: "Failed to end stream" });

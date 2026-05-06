@@ -233,8 +233,16 @@ export function registerCourseAccessRoutes({
       const { category, search } = req.query;
       let query =
         user?.role === "admin"
-          ? "SELECT c.*, (SELECT COUNT(*) FROM study_materials sm WHERE sm.course_id = c.id) AS total_materials FROM courses c WHERE 1=1"
-          : "SELECT c.*, (SELECT COUNT(*) FROM study_materials sm WHERE sm.course_id = c.id) AS total_materials FROM courses c WHERE c.is_published = TRUE";
+          ? `SELECT c.*,
+               (SELECT COUNT(*) FROM lectures l WHERE l.course_id = c.id) AS total_lectures,
+               (SELECT COUNT(*) FROM tests t WHERE t.course_id = c.id AND t.is_published = TRUE) AS total_tests,
+               (SELECT COUNT(*) FROM study_materials sm WHERE sm.course_id = c.id) AS total_materials
+             FROM courses c WHERE 1=1`
+          : `SELECT c.*,
+               (SELECT COUNT(*) FROM lectures l WHERE l.course_id = c.id) AS total_lectures,
+               (SELECT COUNT(*) FROM tests t WHERE t.course_id = c.id AND t.is_published = TRUE) AS total_tests,
+               (SELECT COUNT(*) FROM study_materials sm WHERE sm.course_id = c.id) AS total_materials
+             FROM courses c WHERE c.is_published = TRUE`;
       const params: unknown[] = [];
 
       if (search) {

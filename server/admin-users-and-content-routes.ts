@@ -233,6 +233,17 @@ export function registerAdminUsersAndContentRoutes({
     try {
       const userId = parseInt(String(req.params.id), 10);
       if (!Number.isFinite(userId)) return res.status(400).json({ message: "Invalid user id" });
+      const requester = (req as any).user as { id?: number } | undefined;
+      if (requester?.id && Number(requester.id) === userId) {
+        return res.status(400).json({ message: "You cannot remove your own admin account" });
+      }
+      const userRow = await db.query("SELECT id, role FROM users WHERE id = $1 LIMIT 1", [userId]);
+      if (userRow.rows.length === 0) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      if (String((userRow.rows[0] as any).role || "").toLowerCase() === "admin") {
+        return res.status(400).json({ message: "Admin accounts cannot be removed from this action" });
+      }
       await deleteDownloadsForUser(userId);
       await runInTransaction((tx) => purgeStudentAccountById(tx, userId));
       res.json({ success: true });

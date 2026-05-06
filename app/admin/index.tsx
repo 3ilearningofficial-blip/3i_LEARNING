@@ -1997,13 +1997,18 @@ export default function AdminDashboard() {
   const deleteUserMutation = useMutation({
     mutationFn: async (userId: number) => {
       await apiRequest("DELETE", `/api/admin/users/${userId}`);
+      return userId;
     },
-    onSuccess: () => {
+    onSuccess: (deletedUserId) => {
+      qc.setQueryData<UserRecord[]>(["/api/admin/users"], (prev) =>
+        Array.isArray(prev) ? prev.filter((u) => Number(u.id) !== Number(deletedUserId)) : prev
+      );
       qc.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      qc.refetchQueries({ queryKey: ["/api/admin/users"], type: "active" });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
       Alert.alert("Success", "User removed from app");
     },
-    onError: () => Alert.alert("Error", "Failed to delete user"),
+    onError: (err: any) => Alert.alert("Error", err?.message || "Failed to delete user"),
   });
 
   if (!isAdmin) {

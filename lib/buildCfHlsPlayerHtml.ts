@@ -9,6 +9,52 @@ export type CfHlsPlayerOptions = {
 export function buildCfHlsPlayerHtml(hlsUrl: string, opts?: CfHlsPlayerOptions): string {
   const live = !!opts?.liveStream;
   const safeUrl = JSON.stringify(hlsUrl);
+  const menuCss = `
+#menu { position: absolute; right: 10px; bottom: 52px; z-index: 80; font-family: system-ui, sans-serif; }
+#menuBtn { width: 36px; height: 32px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.28); background: rgba(0,0,0,0.55); color: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+#menuBtn:active { transform: translateY(1px); }
+#menuPanel { position: absolute; right: 0; bottom: 42px; min-width: 200px; background: rgba(17,17,17,0.92); border: 1px solid rgba(255,255,255,0.18); border-radius: 12px; padding: 10px; display: none; gap: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.4); }
+#menuPanel.open { display: grid; }
+.row { display: grid; gap: 6px; }
+.lbl { font-size: 12px; color: rgba(255,255,255,0.78); }
+.sel { font-size: 13px; padding: 8px 10px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.22); background: rgba(0,0,0,0.35); color: #fff; width: 100%; }
+`;
+  const menuHtml = `
+<div id="menu">
+  <button id="menuBtn" aria-label="More options" title="Options">⋮</button>
+  <div id="menuPanel" role="menu" aria-label="Playback options">
+    <div class="row" id="qrow">
+      <div class="lbl">Video quality</div>
+      <select id="qsel" class="sel" aria-label="Quality"></select>
+    </div>
+    <div class="row">
+      <div class="lbl">Playback speed</div>
+      <select id="ssel" class="sel" aria-label="Speed">
+        <option value="0.5">0.5x</option>
+        <option value="0.75">0.75x</option>
+        <option value="1" selected>1x</option>
+        <option value="1.25">1.25x</option>
+        <option value="1.5">1.5x</option>
+        <option value="1.75">1.75x</option>
+        <option value="2">2x</option>
+      </select>
+    </div>
+  </div>
+</div>
+`;
+  const menuJs = `
+var menuBtn = document.getElementById('menuBtn');
+var menuPanel = document.getElementById('menuPanel');
+function closeMenu(){ if (menuPanel) menuPanel.classList.remove('open'); }
+if (menuBtn && menuPanel) {
+  menuBtn.addEventListener('click', function(e){
+    e.preventDefault(); e.stopPropagation();
+    menuPanel.classList.toggle('open');
+  });
+  document.addEventListener('click', function(){ closeMenu(); });
+  document.addEventListener('keydown', function(e){ if (e.key === 'Escape') closeMenu(); });
+}
+`;
   if (live) {
     return `<!DOCTYPE html>
 <html>
@@ -23,25 +69,12 @@ video { width: 100%; height: 100%; object-fit: contain; background: #000; }
 .spinner { width: 36px; height: 36px; border: 3px solid #333; border-top-color: #F6821F; border-radius: 50%; animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .msg { font-size: 13px; color: #aaa; text-align: center; }
-#qwrap { position: absolute; bottom: 10px; left: 10px; z-index: 50; font-family: system-ui, sans-serif; display: flex; gap: 8px; }
-#qsel { font-size: 13px; padding: 6px 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.35); background: rgba(0,0,0,0.65); color: #fff; max-width: 160px; }
-#ssel { font-size: 13px; padding: 6px 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.35); background: rgba(0,0,0,0.65); color: #fff; max-width: 120px; }
+${menuCss}
 </style>
 </head>
 <body>
-<div id="qwrap">
-  <select id="qsel" aria-label="Quality"></select>
-  <select id="ssel" aria-label="Speed">
-    <option value="0.5">0.5x</option>
-    <option value="0.75">0.75x</option>
-    <option value="1" selected>1x</option>
-    <option value="1.25">1.25x</option>
-    <option value="1.5">1.5x</option>
-    <option value="1.75">1.75x</option>
-    <option value="2">2x</option>
-  </select>
-</div>
 <video id="v" autoplay controls playsinline controlsList="nodownload noremoteplayback nopictureinpicture" disablePictureInPicture disableRemotePlayback x-webkit-airplay="deny"></video>
+${menuHtml}
 <div id="overlay"><div class="spinner"></div><div class="msg" id="msg">Connecting to live stream...</div></div>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7/dist/hls.min.js"></script>
 <script>
@@ -53,6 +86,7 @@ var qsel = document.getElementById('qsel');
 var ssel = document.getElementById('ssel');
 var retryCount = 0;
 var hlsRef = null;
+${menuJs}
 function showLive() {
   overlay.classList.add('hidden');
   if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({ event: 'play' }));
@@ -60,7 +94,8 @@ function showLive() {
 function fillQuality(hls) {
   hlsRef = hls;
   if (!qsel || !hls || !hls.levels || hls.levels.length <= 1) {
-    if (qsel && qsel.parentNode) qsel.parentNode.style.display = 'none';
+    var qrow = document.getElementById('qrow');
+    if (qrow) qrow.style.display = 'none';
     return;
   }
   qsel.innerHTML = '';
@@ -105,7 +140,8 @@ function tryLoad() {
       if (d.fatal) { retryCount++; msg.textContent = 'Connecting... (' + retryCount + ')'; setTimeout(tryLoad, 5000); }
     });
   } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-    if (qsel && qsel.parentNode) qsel.parentNode.style.display = 'none';
+    var qrow = document.getElementById('qrow');
+    if (qrow) qrow.style.display = 'none';
     video.muted = true;
     video.src = hlsUrl;
     video.addEventListener('loadedmetadata', function once() {
@@ -130,25 +166,12 @@ document.addEventListener('contextmenu', function(e) { e.preventDefault(); });
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
 video { width: 100%; height: 100%; object-fit: contain; background: #000; }
-#qwrap { position: absolute; bottom: 10px; left: 10px; z-index: 50; font-family: system-ui, sans-serif; display: flex; gap: 8px; }
-#qsel { font-size: 13px; padding: 6px 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.35); background: rgba(0,0,0,0.65); color: #fff; max-width: 160px; }
-#ssel { font-size: 13px; padding: 6px 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.35); background: rgba(0,0,0,0.65); color: #fff; max-width: 120px; }
+${menuCss}
 </style>
 </head>
 <body>
-<div id="qwrap">
-  <select id="qsel" aria-label="Quality"></select>
-  <select id="ssel" aria-label="Speed">
-    <option value="0.5">0.5x</option>
-    <option value="0.75">0.75x</option>
-    <option value="1" selected>1x</option>
-    <option value="1.25">1.25x</option>
-    <option value="1.5">1.5x</option>
-    <option value="1.75">1.75x</option>
-    <option value="2">2x</option>
-  </select>
-</div>
 <video id="v" autoplay controls playsinline controlsList="nodownload noremoteplayback nopictureinpicture" disablePictureInPicture disableRemotePlayback x-webkit-airplay="deny"></video>
+${menuHtml}
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7/dist/hls.min.js"></script>
 <script>
 var video = document.getElementById('v');
@@ -156,6 +179,7 @@ var hlsUrl = ${safeUrl};
 var qsel = document.getElementById('qsel');
 var ssel = document.getElementById('ssel');
 var hlsRef = null;
+${menuJs}
 if (ssel) {
   ssel.onchange = function() {
     var r = parseFloat(ssel.value || '1');
@@ -165,7 +189,8 @@ if (ssel) {
 function fillQuality(hls) {
   hlsRef = hls;
   if (!qsel || !hls || !hls.levels || hls.levels.length <= 1) {
-    if (qsel && qsel.parentNode) qsel.parentNode.style.display = 'none';
+    var qrow = document.getElementById('qrow');
+    if (qrow) qrow.style.display = 'none';
     return;
   }
   qsel.innerHTML = '';
@@ -202,7 +227,8 @@ function tryLoad() {
       if (qsel && hls.currentLevel >= 0) qsel.value = String(hls.currentLevel);
     });
   } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-    if (qsel && qsel.parentNode) qsel.parentNode.style.display = 'none';
+    var qrow = document.getElementById('qrow');
+    if (qrow) qrow.style.display = 'none';
     video.src = hlsUrl;
     video.addEventListener('loadedmetadata', function once() {
       video.removeEventListener('loadedmetadata', once);
