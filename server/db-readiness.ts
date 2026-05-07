@@ -7,6 +7,26 @@ type Queryable = {
   ) => Promise<{ rows: Array<Record<string, any>> }>;
 };
 
+function parseIndexColumns(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((c) => String(c));
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return [];
+    // pg can return array_agg(name) as "{col1,col2}" string depending on type parser
+    // setup. Normalize both "{a,b}" and "a,b" formats.
+    const inner =
+      trimmed.startsWith("{") && trimmed.endsWith("}") ? trimmed.slice(1, -1) : trimmed;
+    if (!inner) return [];
+    return inner
+      .split(",")
+      .map((part) => part.replace(/^"+|"+$/g, "").trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
 export async function checkDatabaseReadiness(db: Queryable): Promise<{
   ok: boolean;
   checks: Record<string, boolean>;
@@ -67,7 +87,7 @@ export async function checkDatabaseReadiness(db: Queryable): Promise<{
   for (const row of indexRows.rows) {
     if (!row.is_unique) continue;
     const table = String(row.table_name);
-    const cols = Array.isArray(row.cols) ? row.cols.map((c: unknown) => String(c)) : [];
+    const cols = parseIndexColumns(row.cols);
     presentUniqueKeys.add(`${table}|${cols.join(",")}`);
   }
   const missingIndexes = REQUIRED_UNIQUE_INDEX_SPECS
