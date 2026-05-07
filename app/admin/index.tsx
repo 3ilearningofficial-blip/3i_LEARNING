@@ -1835,9 +1835,10 @@ export default function AdminDashboard() {
       }
       return res.json();
     },
-    staleTime: 5 * 60 * 1000,
-    refetchInterval: activeTab === "courses" ? 120000 : false,
-    refetchOnMount: false,
+    staleTime: 0,
+    refetchInterval: activeTab === "courses" ? 10_000 : false,
+    refetchOnMount: true,
+    refetchOnWindowFocus: true,
   });
 
   const handleScheduleLiveClass = async () => {
@@ -1937,6 +1938,7 @@ export default function AdminDashboard() {
   const [editingLiveClass, setEditingLiveClass] = useState<any>(null);
   const [liveActionSheet, setLiveActionSheet] = useState<any>(null);
   const [showAllUpcoming, setShowAllUpcoming] = useState(false);
+  const [endingLiveGroupKey, setEndingLiveGroupKey] = useState<string | null>(null);
 
   const createFolderForCourse = async (courseId: number, folderName: string) => {
     if (!folderName.trim()) return;
@@ -2658,8 +2660,20 @@ export default function AdminDashboard() {
                                         <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#fff" }}>Enter Studio</Text>
                                       </Pressable>
                                       <Pressable
-                                        style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, backgroundColor: "#7F1D1D", borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12 }}
+                                        style={{
+                                          flexDirection: "row",
+                                          alignItems: "center",
+                                          justifyContent: "center",
+                                          gap: 6,
+                                          backgroundColor: "#7F1D1D",
+                                          borderRadius: 8,
+                                          paddingVertical: 8,
+                                          paddingHorizontal: 12,
+                                          opacity: endingLiveGroupKey === g.key ? 0.6 : 1,
+                                        }}
+                                        disabled={endingLiveGroupKey === g.key}
                                         onPress={async () => {
+                                          if (endingLiveGroupKey === g.key) return;
                                           const confirmed = Platform.OS === "web"
                                             ? window.confirm("End this live class?")
                                             : await new Promise<boolean>(resolve =>
@@ -2670,18 +2684,30 @@ export default function AdminDashboard() {
                                               );
                                           if (!confirmed) return;
                                           try {
-                                            await apiRequest("PUT", `/api/admin/live-classes/${g.ids[0]}`, {
-                                              isLive: false,
-                                              isCompleted: true,
-                                            });
-                                            refetchUpcoming();
+                                            setEndingLiveGroupKey(g.key);
+                                            if ((g.streamType || "").toLowerCase() === "cloudflare") {
+                                              await apiRequest("POST", `/api/admin/live-classes/${g.ids[0]}/stream/end`, {});
+                                            } else {
+                                              await apiRequest("PUT", `/api/admin/live-classes/${g.ids[0]}`, {
+                                                isLive: false,
+                                                isCompleted: true,
+                                              });
+                                            }
+                                            await refetchUpcoming();
+                                            qc.invalidateQueries({ queryKey: ["/api/upcoming-classes"] });
+                                            qc.invalidateQueries({ queryKey: liveClassesQueryKey() });
+                                            qc.invalidateQueries({ queryKey: ["/api/courses"] });
                                           } catch (e) {
                                             if (Platform.OS === "web") window.alert("Failed to end class");
                                             else Alert.alert("Error", "Failed to end class");
+                                          } finally {
+                                            setEndingLiveGroupKey(null);
                                           }
                                         }}>
                                         <Ionicons name="stop-circle" size={14} color="#fff" />
-                                        <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#fff" }}>End Live</Text>
+                                        <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#fff" }}>
+                                          {endingLiveGroupKey === g.key ? "Ending..." : "End Live"}
+                                        </Text>
                                       </Pressable>
                                     </>
                                   )}

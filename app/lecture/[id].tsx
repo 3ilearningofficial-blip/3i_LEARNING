@@ -21,7 +21,7 @@ import { buildYouTubePhoneWebSrcDoc } from "@/lib/buildYouTubePhoneWebSrcDoc";
 import { buildCfHlsPlayerHtml } from "@/lib/buildCfHlsPlayerHtml";
 
 const mediaTokenCache = new Map<string, { token: string; expiresAt: number }>();
-const MEDIA_TOKEN_TTL_MS = 50 * 1000;
+const MEDIA_TOKEN_REFRESH_SKEW_MS = 60 * 1000;
 
 function getYouTubeVideoId(url: string): string {
   if (!url) return "";
@@ -63,6 +63,8 @@ function isDirectVideoUrl(url: string): boolean {
   if (lower.match(/\.(mp4|mov|mkv|avi|webm)(\?|$)/)) return true;
   if (lower.includes("3ilearning.in")) return true;
   if (lower.includes("r2.cloudflarestorage.com")) return true;
+  if (lower.includes("r2.dev")) return true;
+  if (lower.includes("cdn.")) return true;
   if (lower.includes("/api/media/")) return true;
   return false;
 }
@@ -299,40 +301,36 @@ document.addEventListener('contextmenu',function(e){e.preventDefault();});
 }
 
 function WebYouTubePlayer({ videoId, onReady }: { videoId: string; onReady: () => void }) {
-  const calledRef = useRef(false);
-  useEffect(() => {
-    if (!calledRef.current) {
-      calledRef.current = true;
-      onReady();
-    }
-  }, [onReady]);
   return (
     <iframe
       srcDoc={buildYouTubeHtml(videoId)}
       style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" } as any}
       allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+      onLoad={onReady}
     />
   );
 }
 
 function WebCloudflareStreamPlayer({ videoId, onReady }: { videoId: string; onReady: () => void }) {
-  const calledRef = useRef(false);
-  useEffect(() => {
-    if (!calledRef.current) {
-      calledRef.current = true;
-      onReady();
-    }
-  }, [onReady]);
   return (
     <iframe
       srcDoc={buildCloudflareStreamHtml(videoId)}
       style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" } as any}
       allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+      onLoad={onReady}
     />
   );
 }
 
-function WebDirectVideoPlayer({ url, onReady }: { url: string; onReady: () => void }) {
+function WebDirectVideoPlayer({
+  url,
+  onReady,
+  onError,
+}: {
+  url: string;
+  onReady: () => void;
+  onError: () => void;
+}) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const calledRef = useRef(false);
   const didAutoplay = useRef(false);
@@ -356,6 +354,12 @@ function WebDirectVideoPlayer({ url, onReady }: { url: string; onReady: () => vo
       disableRemotePlayback
       style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "contain", backgroundColor: "#000" } as any}
       onContextMenu={(e: any) => e.preventDefault()}
+      onLoadedMetadata={() => {
+        if (!calledRef.current) {
+          calledRef.current = true;
+          onReady();
+        }
+      }}
       onCanPlay={(e) => {
         if (didAutoplay.current) return;
         didAutoplay.current = true;
@@ -370,6 +374,7 @@ function WebDirectVideoPlayer({ url, onReady }: { url: string; onReady: () => vo
             v.play().catch(() => {});
           });
       }}
+      onError={() => onError()}
       onEnded={() => {
         // Bubble to React so completed playback can be auto-marked.
         window.dispatchEvent(new CustomEvent("lecture-ended"));
@@ -509,7 +514,7 @@ export default function LectureScreen() {
       if (cancelled) return;
       if (r.ok) {
         setMediaToken(r.token);
-        mediaTokenCache.set(userScopedMediaKey, { token: r.token, expiresAt: Date.now() + MEDIA_TOKEN_TTL_MS });
+        mediaTokenCache.set(userScopedMediaKey, { token: r.token, expiresAt: r.expiresAt });
         return;
       }
       const msg =
@@ -524,6 +529,14 @@ export default function LectureScreen() {
       cancelled = true;
     };
   }, [fileKey, userScopedMediaKey, mediaTokenRetryTick]);
+  useEffect(() => {
+    if (!userScopedMediaKey || !fileKey) return;
+    const cached = mediaTokenCache.get(userScopedMediaKey);
+    if (!cached?.expiresAt) return;
+    const msUntilRefresh = Math.max(0, cached.expiresAt - Date.now() - MEDIA_TOKEN_REFRESH_SKEW_MS);
+    const tid = setTimeout(() => setMediaTokenRetryTick((t) => t + 1), msUntilRefresh);
+    return () => clearTimeout(tid);
+  }, [fileKey, userScopedMediaKey, mediaToken]);
   const authenticatedVideoUrl = toHttpsMediaUrl(
     fileKey && mediaToken
       ? `${baseUrl}/api/media/${fileKey}?token=${mediaToken}`
@@ -605,7 +618,15 @@ export default function LectureScreen() {
     try {
       const data = JSON.parse(event.nativeEvent.data);
       if (data.event === 'play') {
+        setIsLoading(false);
         setIsVideoPlaying(true);
+      } else if (data.event === 'ready') {
+        setIsLoading(false);
+        setIsVideoPlaying(true);
+      } else if (data.event === 'error') {
+        setIsLoading(false);
+        setHasError(true);
+        setIsVideoPlaying(false);
       } else if (data.event === 'pause' || data.event === 'ended') {
         setIsVideoPlaying(false);
         if (data.event === 'ended') {
@@ -615,6 +636,7 @@ export default function LectureScreen() {
     } catch (e) {
       // Ignore non-JSON messages
       if (event.nativeEvent.data === 'ready') {
+        setIsLoading(false);
         setIsVideoPlaying(true); // Assume playing when ready
       }
     }
@@ -739,7 +761,7 @@ export default function LectureScreen() {
             srcDoc={buildCfHlsPlayerHtml(playbackUrl)}
             style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" } as any}
             allow="autoplay; fullscreen"
-            onLoad={() => { setIsLoading(false); setIsVideoPlaying(true); }}
+            onLoad={() => { setIsLoading(false); }}
           />
         ) : !hasError && videoId && nativeYouTubeHtml && Platform.OS !== "web" ? (
           <WebView
@@ -794,7 +816,15 @@ export default function LectureScreen() {
             originWhitelist={["*"]}
           />
         ) : !hasError && isDirect && Platform.OS === "web" ? (
-          <WebDirectVideoPlayer url={playbackUrl} onReady={() => setIsLoading(false)} />
+          <WebDirectVideoPlayer
+            url={playbackUrl}
+            onReady={() => setIsLoading(false)}
+            onError={() => {
+              setIsLoading(false);
+              setHasError(true);
+              setIsVideoPlaying(false);
+            }}
+          />
         ) : !hasError && isDirect && Platform.OS !== "web" ? (
           <WebView
             source={{ html: directVideoHtml }}

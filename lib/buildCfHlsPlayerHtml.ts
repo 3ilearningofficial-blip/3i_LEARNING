@@ -179,6 +179,8 @@ var hlsUrl = ${safeUrl};
 var qsel = document.getElementById('qsel');
 var ssel = document.getElementById('ssel');
 var hlsRef = null;
+var retryCount = 0;
+var maxRetries = 3;
 ${menuJs}
 if (ssel) {
   ssel.onchange = function() {
@@ -226,6 +228,18 @@ function tryLoad() {
     hls.on(Hls.Events.LEVEL_SWITCHED, function() {
       if (qsel && hls.currentLevel >= 0) qsel.value = String(hls.currentLevel);
     });
+    hls.on(Hls.Events.ERROR, function(e, d) {
+      var fatal = !!(d && d.fatal);
+      if (fatal) {
+        retryCount += 1;
+        if (retryCount <= maxRetries) {
+          setTimeout(tryLoad, retryCount * 1000);
+          return;
+        }
+        var reason = (d && d.details) || 'hls-fatal';
+        if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({ event: 'error', reason: reason }));
+      }
+    });
   } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
     var qrow = document.getElementById('qrow');
     if (qrow) qrow.style.display = 'none';
@@ -235,6 +249,14 @@ function tryLoad() {
       video.muted = true;
       video.play().catch(function() {});
       if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({ event: 'play' }));
+    });
+    video.addEventListener('error', function() {
+      retryCount += 1;
+      if (retryCount <= maxRetries) {
+        setTimeout(tryLoad, retryCount * 1000);
+        return;
+      }
+      if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({ event: 'error', reason: 'native-hls-error' }));
     });
   }
 }

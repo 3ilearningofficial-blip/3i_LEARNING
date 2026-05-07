@@ -87,10 +87,13 @@ export function registerLiveClassEngagementRoutes({
   app.post("/api/live-classes/:id/viewers/heartbeat", requireAuth, async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
-      const lcResult = await db.query("SELECT course_id, is_free_preview FROM live_classes WHERE id = $1", [req.params.id]);
+      const lcResult = await db.query("SELECT course_id, is_free_preview, is_live, is_completed FROM live_classes WHERE id = $1", [req.params.id]);
       if (lcResult.rows.length === 0) return res.status(404).json({ message: "Live class not found" });
       if (!(await userCanAccessLiveClassContent(db, user, lcResult.rows[0]))) {
         return res.status(403).json({ message: "Access denied" });
+      }
+      if (!lcResult.rows[0].is_live || lcResult.rows[0].is_completed) {
+        return res.status(409).json({ message: "Class is not live" });
       }
       const now = Date.now();
       await db.query(
@@ -113,10 +116,14 @@ export function registerLiveClassEngagementRoutes({
   app.get("/api/live-classes/:id/viewers", requireAuth, async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
-      const lcAccess = await db.query("SELECT course_id, is_free_preview, show_viewer_count FROM live_classes WHERE id = $1", [req.params.id]);
+      const lcAccess = await db.query("SELECT course_id, is_free_preview, show_viewer_count, is_live, is_completed FROM live_classes WHERE id = $1", [req.params.id]);
       if (lcAccess.rows.length === 0) return res.status(404).json({ message: "Live class not found" });
       if (!(await userCanAccessLiveClassContent(db, user, lcAccess.rows[0]))) {
         return res.status(403).json({ message: "Access denied" });
+      }
+      if (!lcAccess.rows[0].is_live || lcAccess.rows[0].is_completed) {
+        const visible = lcAccess.rows[0]?.show_viewer_count ?? true;
+        return res.json({ viewers: [], count: 0, visible });
       }
       const cutoff = Date.now() - 30000;
       const result = await db.query(
@@ -136,10 +143,13 @@ export function registerLiveClassEngagementRoutes({
   app.post("/api/live-classes/:id/raise-hand", requireAuth, async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
-      const lcResult = await db.query("SELECT course_id, is_free_preview FROM live_classes WHERE id = $1", [req.params.id]);
+      const lcResult = await db.query("SELECT course_id, is_free_preview, is_live, is_completed FROM live_classes WHERE id = $1", [req.params.id]);
       if (lcResult.rows.length === 0) return res.status(404).json({ message: "Live class not found" });
       if (!(await userCanAccessLiveClassContent(db, user, lcResult.rows[0]))) {
         return res.status(403).json({ message: "Access denied" });
+      }
+      if (!lcResult.rows[0].is_live || lcResult.rows[0].is_completed) {
+        return res.status(409).json({ message: "Hand raise is available only during live class" });
       }
       await db.query(
         `INSERT INTO live_class_hand_raises (live_class_id, user_id, user_name, raised_at)
@@ -157,10 +167,13 @@ export function registerLiveClassEngagementRoutes({
   app.delete("/api/live-classes/:id/raise-hand", requireAuth, async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
-      const lcResult = await db.query("SELECT course_id, is_free_preview FROM live_classes WHERE id = $1", [req.params.id]);
+      const lcResult = await db.query("SELECT course_id, is_free_preview, is_live, is_completed FROM live_classes WHERE id = $1", [req.params.id]);
       if (lcResult.rows.length === 0) return res.status(404).json({ message: "Live class not found" });
       if (!(await userCanAccessLiveClassContent(db, user, lcResult.rows[0]))) {
         return res.status(403).json({ message: "Access denied" });
+      }
+      if (!lcResult.rows[0].is_live || lcResult.rows[0].is_completed) {
+        return res.status(409).json({ message: "Hand raise is available only during live class" });
       }
       await db.query("DELETE FROM live_class_hand_raises WHERE live_class_id = $1 AND user_id = $2", [req.params.id, user.id]);
       res.json({ success: true });

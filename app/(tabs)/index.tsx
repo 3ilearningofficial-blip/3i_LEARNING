@@ -462,11 +462,11 @@ export default function HomeScreen() {
       const data = await res.json().catch(() => []);
       return Array.isArray(data) ? data : [];
     },
-    staleTime: 90000,
+    staleTime: 10_000,
     gcTime: 15 * 60 * 1000,
-    refetchInterval: tabVisible ? 90 * 1000 : false,
-    refetchOnMount: false,
-    refetchOnWindowFocus: false,
+    refetchInterval: tabVisible ? 15 * 1000 : false,
+    refetchOnMount: true,
+    refetchOnWindowFocus: true,
   });
 
   useEffect(() => {
@@ -481,7 +481,7 @@ export default function HomeScreen() {
           if (!res.ok) throw new Error("prefetch live failed");
           return res.json();
         },
-        staleTime: 90000,
+        staleTime: 15_000,
       });
     });
   }, [liveClasses, qc, user?.id]);

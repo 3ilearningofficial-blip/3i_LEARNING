@@ -250,8 +250,8 @@ export default function CourseDetailScreen() {
         ? 3 * 60_000
         : activeTab === "Live"
           ? 10_000
-          : 60_000,
-    staleTime: 30_000,
+          : 20_000,
+    staleTime: 10_000,
     gcTime: 15 * 60 * 1000,
   });
 

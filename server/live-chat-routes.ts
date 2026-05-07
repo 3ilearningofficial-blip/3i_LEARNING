@@ -186,9 +186,15 @@ export function registerLiveChatRoutes({
     try {
       const hasAccess = await checkLiveClassAccess(req, res, db, getAuthUser, req.params.id as string);
       if (!hasAccess) return;
+      const user = (req as any).user;
+      const lc = await db.query("SELECT is_live, is_completed FROM live_classes WHERE id = $1", [req.params.id]);
+      const liveClass = lc.rows[0];
+      // Students can message only while class is actually live.
+      if (user?.role !== "admin" && (!liveClass?.is_live || liveClass?.is_completed)) {
+        return res.status(403).json({ message: "Chat is available only during live class." });
+      }
       const { message } = req.body;
       if (!message || !message.trim()) return res.status(400).json({ message: "Message is required" });
-      const user = (req as any).user;
       const result = await db.query(
         `INSERT INTO live_chat_messages (live_class_id, user_id, user_name, message, is_admin, created_at) 
          VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,

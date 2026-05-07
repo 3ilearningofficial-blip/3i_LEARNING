@@ -366,9 +366,19 @@ export function registerLiveStreamRoutes({
       if (!accountId || !apiToken) return res.status(500).json({ message: "CF Stream credentials not configured" });
       // R2 is optional: we always persist Cloudflare HLS when MP4 archival is unavailable.
 
-      const lcResult = await db.query("SELECT id, title, cf_stream_uid FROM live_classes WHERE id = $1", [req.params.id]);
-      const uid = lcResult.rows[0]?.cf_stream_uid;
-      const liveTitle = String(lcResult.rows[0]?.title || "").trim();
+      const lcResult = await db.query(
+        "SELECT id, title, cf_stream_uid, is_completed, recording_url FROM live_classes WHERE id = $1",
+        [req.params.id]
+      );
+      if (lcResult.rows.length === 0) return res.status(404).json({ message: "Live class not found" });
+      const current = lcResult.rows[0];
+      const uid = current?.cf_stream_uid;
+      const liveTitle = String(current?.title || "").trim();
+      const existingRecordingUrl = String(current?.recording_url || "").trim();
+      // Idempotency guard: if already completed and recording persisted, do not run end-finalization again.
+      if (current?.is_completed === true && !!existingRecordingUrl) {
+        return res.json({ success: true, alreadyEnded: true, recordingUrl: existingRecordingUrl });
+      }
       const endedAtNow = Date.now();
       await db.query(
         "UPDATE live_classes SET is_live = FALSE, ended_at = COALESCE(ended_at, $1), is_completed = TRUE WHERE id = $2",

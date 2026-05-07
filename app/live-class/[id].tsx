@@ -480,16 +480,16 @@ export default function LiveClassScreen() {
     return () => clearInterval(timer);
   }, [isScreenActive, liveClassData?.scheduled_at, liveClassData?.is_live, liveClassData?.is_completed, liveClassData, listLiveHint]);
 
-  // Student heartbeat — POST periodically while page is open (reduced churn vs sub-minute polling)
+  // Viewer heartbeat — count only while class is actually live.
   useEffect(() => {
-    if (!id || !isScreenActive || liveClassData?.is_completed) return;
+    if (!id || !isScreenActive || !liveClassData?.is_live || liveClassData?.is_completed) return;
     const sendHeartbeat = () => {
       apiRequest("POST", `/api/live-classes/${id}/viewers/heartbeat`, {}).catch(() => {});
     };
     sendHeartbeat(); // send immediately on mount
     const interval = setInterval(sendHeartbeat, 32000);
     return () => clearInterval(interval);
-  }, [id, isScreenActive, liveClassData?.is_completed]);
+  }, [id, isScreenActive, liveClassData?.is_live, liveClassData?.is_completed]);
 
   const title = liveClassData?.title || paramTitle || "Live Class";
   const topPadding = Platform.OS === "web" ? 16 : insets.top;
@@ -634,7 +634,7 @@ export default function LiveClassScreen() {
 
   const { data: viewerData } = useQuery<{ count: number; viewers: any[]; visible: boolean }>({
     queryKey: [`/api/live-classes/${id}/viewers`],
-    refetchInterval: (!isScreenActive || liveClassData?.is_completed) ? false : 12000,
+    refetchInterval: (!isScreenActive || !liveClassData?.is_live || liveClassData?.is_completed) ? false : 12000,
     staleTime: 3000,
   });
 
@@ -714,6 +714,8 @@ export default function LiveClassScreen() {
 
   const chatMode: "public" | "private" =
     liveClassData?.chat_mode === "private" ? "private" : "public";
+  const canStudentChat = !!liveClassData?.is_live && !liveClassData?.is_completed;
+  const canSendChat = !!isAdmin || canStudentChat;
   const displayMessages = useMemo(
     () =>
       filterChatMessages(
@@ -781,20 +783,22 @@ export default function LiveClassScreen() {
   });
 
   const handleSend = useCallback(() => {
+    if (!canSendChat) return;
     const msg = chatMsg.trim();
     if (!msg) return;
     if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     sendMsgMutation.mutate(msg);
-  }, [chatMsg]);
+  }, [chatMsg, canSendChat]);
 
   const { isListening, startListening, stopListening } = useVoiceInput((text) => {
     setChatMsg((prev) => (prev ? prev + " " + text : text));
   });
 
   const handleHandRaise = useCallback(() => {
+    if (!canSendChat) return;
     if (handRaised) { lowerHandMutation.mutate(); }
     else { raiseHandMutation.mutate(); }
-  }, [handRaised]);
+  }, [handRaised, canSendChat]);
 
   const handleWebViewMessage = useCallback((event: any) => {
     try {
@@ -1125,18 +1129,19 @@ export default function LiveClassScreen() {
                   }
                 />
                 <View style={[styles.inputRow, { paddingBottom: Math.max(bottomPadding, 8) }]}>
-                  <Pressable style={[styles.iconBtn, handRaised && styles.iconBtnActive]} onPress={handleHandRaise}>
+                  <Pressable style={[styles.iconBtn, handRaised && styles.iconBtnActive, !canSendChat && { opacity: 0.5 }]} onPress={handleHandRaise} disabled={!canSendChat}>
                     <Text style={{ fontSize: 18 }}>✋</Text>
                   </Pressable>
                   <TextInput
                     style={styles.chatInput}
                     value={chatMsg}
                     onChangeText={setChatMsg}
-                    placeholder="Ask a doubt or say hi..."
+                    placeholder={canSendChat ? "Ask a doubt or say hi..." : "Chat opens when class goes live"}
                     placeholderTextColor="#999"
                     maxLength={500}
                     returnKeyType="send"
                     onSubmitEditing={handleSend}
+                    editable={canSendChat}
                   />
                   {Platform.OS === "web" && (
                     <Pressable
@@ -1149,7 +1154,7 @@ export default function LiveClassScreen() {
                   <Pressable
                     style={[styles.sendBtn, !chatMsg.trim() && styles.sendBtnDisabled]}
                     onPress={handleSend}
-                    disabled={!chatMsg.trim() || sendMsgMutation.isPending}
+                    disabled={!canSendChat || !chatMsg.trim() || sendMsgMutation.isPending}
                   >
                     {sendMsgMutation.isPending ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="send" size={18} color="#fff" />}
                   </Pressable>
@@ -1343,23 +1348,24 @@ export default function LiveClassScreen() {
                   keyboardDismissMode="on-drag"
                 />
                 <View style={[styles.inputRow, { paddingBottom: Math.max(bottomPadding, 8) }]}>
-                  <Pressable style={[styles.iconBtn, handRaised && styles.iconBtnActive]} onPress={handleHandRaise}>
+                  <Pressable style={[styles.iconBtn, handRaised && styles.iconBtnActive, !canSendChat && { opacity: 0.5 }]} onPress={handleHandRaise} disabled={!canSendChat}>
                     <Text style={{ fontSize: 18 }}>✋</Text>
                   </Pressable>
                   <TextInput
                     style={styles.chatInput}
                     value={chatMsg}
                     onChangeText={setChatMsg}
-                    placeholder="Ask a doubt or say hi..."
+                    placeholder={canSendChat ? "Ask a doubt or say hi..." : "Chat opens when class goes live"}
                     placeholderTextColor="#999"
                     maxLength={500}
                     returnKeyType="send"
                     onSubmitEditing={handleSend}
+                    editable={canSendChat}
                   />
                   <Pressable
                     style={[styles.sendBtn, !chatMsg.trim() && styles.sendBtnDisabled]}
                     onPress={handleSend}
-                    disabled={!chatMsg.trim() || sendMsgMutation.isPending}
+                    disabled={!canSendChat || !chatMsg.trim() || sendMsgMutation.isPending}
                   >
                     {sendMsgMutation.isPending ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="send" size={18} color="#fff" />}
                   </Pressable>
@@ -1446,18 +1452,19 @@ export default function LiveClassScreen() {
                   }
                 />
                 <View style={[styles.inputRow, { paddingBottom: isNarrowWeb ? 8 : Math.max(bottomPadding, 8) }]}>
-                  <Pressable style={[styles.iconBtn, handRaised && styles.iconBtnActive]} onPress={handleHandRaise}>
+                  <Pressable style={[styles.iconBtn, handRaised && styles.iconBtnActive, !canSendChat && { opacity: 0.5 }]} onPress={handleHandRaise} disabled={!canSendChat}>
                     <Text style={{ fontSize: 18 }}>✋</Text>
                   </Pressable>
                   <TextInput
                     style={styles.chatInput}
                     value={chatMsg}
                     onChangeText={setChatMsg}
-                    placeholder="Ask a doubt or say hi..."
+                    placeholder={canSendChat ? "Ask a doubt or say hi..." : "Chat opens when class goes live"}
                     placeholderTextColor="#999"
                     maxLength={500}
                     returnKeyType="send"
                     onSubmitEditing={handleSend}
+                    editable={canSendChat}
                   />
                   {Platform.OS === "web" && (
                     <Pressable
@@ -1470,7 +1477,7 @@ export default function LiveClassScreen() {
                   <Pressable
                     style={[styles.sendBtn, !chatMsg.trim() && styles.sendBtnDisabled]}
                     onPress={handleSend}
-                    disabled={!chatMsg.trim() || sendMsgMutation.isPending}
+                    disabled={!canSendChat || !chatMsg.trim() || sendMsgMutation.isPending}
                   >
                     {sendMsgMutation.isPending ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="send" size={18} color="#fff" />}
                   </Pressable>

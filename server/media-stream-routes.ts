@@ -17,6 +17,20 @@ type RegisterMediaStreamRoutesDeps = {
   getR2Client: () => Promise<any>;
 };
 
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 async function streamMediaGet(
   req: Request,
   res: Response,
@@ -134,15 +148,47 @@ async function streamMediaGet(
   const rangeHeader = req.headers.range;
 
   if (rangeHeader) {
-    const head = await r2.send(new HeadObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: key }));
+    const head = await withTimeout(
+      r2.send(new HeadObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: key })),
+      10000,
+      "R2 head request timed out"
+    );
     const totalSize = head.ContentLength || 0;
-    const parts = rangeHeader.replace(/bytes=/, "").split("-");
-    const start = parseInt(parts[0], 10);
-    const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+    const m = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim());
+    if (!m || totalSize <= 0) {
+      res.status(416);
+      res.setHeader("Content-Range", `bytes */${totalSize}`);
+      res.json({ message: "Invalid range" });
+      return;
+    }
+    const startRaw = m[1];
+    const endRaw = m[2];
+    let start = 0;
+    let end = totalSize - 1;
+    if (startRaw === "" && endRaw !== "") {
+      const suffix = Number.parseInt(endRaw, 10);
+      if (!Number.isFinite(suffix) || suffix <= 0) {
+        res.status(416);
+        res.setHeader("Content-Range", `bytes */${totalSize}`);
+        res.json({ message: "Invalid range" });
+        return;
+      }
+      start = Math.max(totalSize - suffix, 0);
+    } else {
+      start = Number.parseInt(startRaw, 10);
+      end = endRaw ? Number.parseInt(endRaw, 10) : totalSize - 1;
+    }
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start >= totalSize || end < start) {
+      res.status(416);
+      res.setHeader("Content-Range", `bytes */${totalSize}`);
+      res.json({ message: "Invalid range" });
+      return;
+    }
+    if (end >= totalSize) end = totalSize - 1;
     const chunkSize = end - start + 1;
 
     const command = new GetObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: key, Range: `bytes=${start}-${end}` });
-    const obj = await r2.send(command);
+    const obj = await withTimeout(r2.send(command), 15000, "R2 media range request timed out");
     if (!obj.Body) {
       res.status(404).json({ message: "File not found" });
       return;
@@ -165,7 +211,7 @@ async function streamMediaGet(
     } else res.status(500).json({ message: "Cannot stream file" });
   } else {
     const command = new GetObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: key });
-    const obj = await r2.send(command);
+    const obj = await withTimeout(r2.send(command), 15000, "R2 media request timed out");
     if (!obj.Body) {
       res.status(404).json({ message: "File not found" });
       return;
@@ -200,6 +246,9 @@ export function registerMediaStreamRoutes({
       await streamMediaGet(req, res, db, getAuthUser, getR2Client, key);
     } catch (err: any) {
       console.error("[R2 Proxy] Error:", err?.message || err);
+      if (String(err?.message || "").toLowerCase().includes("timed out")) {
+        return res.status(504).json({ message: "Media upstream timeout" });
+      }
       if (err?.name === "NoSuchKey") return res.status(404).json({ message: "File not found" });
       if (!res.headersSent) res.status(500).json({ message: "Failed to fetch file" });
     }
@@ -211,6 +260,24 @@ export function registerMediaStreamRoutes({
       await streamMediaGet(req, res, db, getAuthUser, getR2Client, key);
     } catch (err: any) {
       console.error("[R2 Proxy] Error:", err?.message || err);
+      if (String(err?.message || "").toLowerCase().includes("timed out")) {
+        return res.status(504).json({ message: "Media upstream timeout" });
+      }
+      if (err?.name === "NoSuchKey") return res.status(404).json({ message: "File not found" });
+      if (!res.headersSent) res.status(500).json({ message: "Failed to fetch file" });
+    }
+  });
+
+  // Catch-all nested keys: /api/media/a/b/c/d...
+  app.get(/^\/api\/media\/(.+)$/, async (req: Request, res: Response) => {
+    try {
+      const key = String((req.params as any)?.[0] || "").replace(/^\/+/, "");
+      await streamMediaGet(req, res, db, getAuthUser, getR2Client, key);
+    } catch (err: any) {
+      console.error("[R2 Proxy] Error:", err?.message || err);
+      if (String(err?.message || "").toLowerCase().includes("timed out")) {
+        return res.status(504).json({ message: "Media upstream timeout" });
+      }
       if (err?.name === "NoSuchKey") return res.status(404).json({ message: "File not found" });
       if (!res.headersSent) res.status(500).json({ message: "Failed to fetch file" });
     }

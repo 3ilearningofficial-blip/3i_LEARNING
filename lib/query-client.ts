@@ -373,12 +373,25 @@ export async function fetchMediaToken(fileKey: string): Promise<MediaTokenResult
   const token = await getStoredToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   await attachInstallationHeaders(headers);
-  const res = await doFetchWithRetry(url.toString(), {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ fileKey }),
-    credentials: "include",
-  });
+  const ctrl = new AbortController();
+  const timeout = setTimeout(() => ctrl.abort(), 12000);
+  let res: Response;
+  try {
+    res = await doFetchWithRetry(url.toString(), {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ fileKey }),
+      credentials: "include",
+      signal: ctrl.signal,
+    });
+  } catch (err) {
+    clearTimeout(timeout);
+    if (err instanceof Error && err.name === "AbortError") {
+      return { ok: false, status: 504, message: "Media token request timed out. Please retry." };
+    }
+    return { ok: false, status: 500, message: err instanceof Error ? err.message : "Failed to fetch media token" };
+  }
+  clearTimeout(timeout);
   if (!res.ok) {
     return { ok: false, status: res.status, message: await getErrorMessage(res) };
   }

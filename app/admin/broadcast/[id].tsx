@@ -387,6 +387,7 @@ export default function BroadcastPage() {
         } else {
           await apiRequest("PUT", `/api/admin/live-classes/${liveClassId}`, { isLive: false, isCompleted: true });
           webrtc.cleanup();
+          queryClient.invalidateQueries({ queryKey: ["/api/upcoming-classes"] });
           router.replace("/admin" as any);
         }
       } else if (streamType === "cloudflare") {
@@ -405,6 +406,7 @@ export default function BroadcastPage() {
         });
         queryClient.invalidateQueries({ queryKey: liveClassesQueryKey() });
         queryClient.invalidateQueries({ queryKey: ["/api/courses"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/upcoming-classes"] });
         router.replace("/admin" as any);
       } else {
         const effectiveYoutube = String(youtubeUrl || liveClass?.youtube_url || "").trim();
@@ -421,6 +423,7 @@ export default function BroadcastPage() {
         await apiRequest("PUT", `/api/admin/live-classes/${liveClassId}`, { isLive: false, isCompleted: true });
         queryClient.invalidateQueries({ queryKey: liveClassesQueryKey() });
         queryClient.invalidateQueries({ queryKey: ["/api/courses"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/upcoming-classes"] });
         router.replace("/admin" as any);
       }
     } catch (err: any) {
