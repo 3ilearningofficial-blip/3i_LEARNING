@@ -370,6 +370,50 @@ export default function AdminCourseScreen() {
   const courseLectures = Array.isArray(course?.lectures) ? course.lectures : [];
   const courseTests = Array.isArray(course?.tests) ? course.tests : [];
   const courseMaterials = Array.isArray(course?.materials) ? course.materials : [];
+  const applyDeleteOptimisticUpdate = (entity: "lecture" | "test" | "material", itemId: number) => {
+    qc.setQueryData<CourseDetail | undefined>(["/api/courses", String(id)], (prev) => {
+      if (!prev) return prev;
+      if (entity === "lecture") {
+        return {
+          ...prev,
+          lectures: (prev.lectures || []).filter((l) => Number(l.id) !== Number(itemId)),
+          total_lectures: Math.max(0, Number(prev.total_lectures || 0) - 1),
+        };
+      }
+      if (entity === "test") {
+        return {
+          ...prev,
+          tests: (prev.tests || []).filter((t) => Number(t.id) !== Number(itemId)),
+          total_tests: Math.max(0, Number(prev.total_tests || 0) - 1),
+        };
+      }
+      const next: any = {
+        ...prev,
+        materials: (prev.materials || []).filter((m) => Number(m.id) !== Number(itemId)),
+      };
+      if (typeof (prev as any).total_materials === "number") {
+        next.total_materials = Math.max(0, Number((prev as any).total_materials || 0) - 1);
+      }
+      return next;
+    });
+
+    qc.setQueryData<any[]>(["/api/courses"], (prev) => {
+      if (!Array.isArray(prev)) return prev;
+      return prev.map((c) => {
+        if (Number(c?.id) !== Number(id)) return c;
+        if (entity === "lecture") {
+          return { ...c, total_lectures: Math.max(0, Number(c?.total_lectures || 0) - 1) };
+        }
+        if (entity === "test") {
+          return { ...c, total_tests: Math.max(0, Number(c?.total_tests || 0) - 1) };
+        }
+        if (typeof c?.total_materials === "number") {
+          return { ...c, total_materials: Math.max(0, Number(c?.total_materials || 0) - 1) };
+        }
+        return c;
+      });
+    });
+  };
   const safeFolders = Array.isArray(dbFolders) ? dbFolders : [];
   const LIVE_ROOT = DEFAULT_LIVE_RECORDING_SECTION;
   const getLectureRootName = (name: string) =>
@@ -470,7 +514,22 @@ export default function AdminCourseScreen() {
     mutationFn: async (lectureId: number) => {
       await apiRequest("DELETE", `/api/admin/lectures/${lectureId}`);
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] }); },
+    onMutate: async (lectureId: number) => {
+      await qc.cancelQueries({ queryKey: ["/api/courses", String(id)] });
+      await qc.cancelQueries({ queryKey: ["/api/courses"] });
+      const prevDetail = qc.getQueryData<CourseDetail>(["/api/courses", String(id)]);
+      const prevList = qc.getQueryData<any[]>(["/api/courses"]);
+      applyDeleteOptimisticUpdate("lecture", lectureId);
+      return { prevDetail, prevList };
+    },
+    onError: (_err, _lectureId, ctx) => {
+      if (ctx?.prevDetail) qc.setQueryData(["/api/courses", String(id)], ctx.prevDetail);
+      if (ctx?.prevList) qc.setQueryData(["/api/courses"], ctx.prevList);
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] });
+      qc.invalidateQueries({ queryKey: ["/api/courses"] });
+    },
   });
 
   const updateLectureMutation = useMutation({
@@ -521,7 +580,22 @@ export default function AdminCourseScreen() {
     mutationFn: async (testId: number) => {
       await apiRequest("DELETE", `/api/admin/tests/${testId}`);
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] }); },
+    onMutate: async (testId: number) => {
+      await qc.cancelQueries({ queryKey: ["/api/courses", String(id)] });
+      await qc.cancelQueries({ queryKey: ["/api/courses"] });
+      const prevDetail = qc.getQueryData<CourseDetail>(["/api/courses", String(id)]);
+      const prevList = qc.getQueryData<any[]>(["/api/courses"]);
+      applyDeleteOptimisticUpdate("test", testId);
+      return { prevDetail, prevList };
+    },
+    onError: (_err, _testId, ctx) => {
+      if (ctx?.prevDetail) qc.setQueryData(["/api/courses", String(id)], ctx.prevDetail);
+      if (ctx?.prevList) qc.setQueryData(["/api/courses"], ctx.prevList);
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] });
+      qc.invalidateQueries({ queryKey: ["/api/courses"] });
+    },
   });
 
   const updateTestMutation = useMutation({
@@ -561,7 +635,22 @@ export default function AdminCourseScreen() {
     mutationFn: async (materialId: number) => {
       await apiRequest("DELETE", `/api/admin/study-materials/${materialId}`);
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] }); qc.invalidateQueries({ queryKey: ["/api/courses"] }); },
+    onMutate: async (materialId: number) => {
+      await qc.cancelQueries({ queryKey: ["/api/courses", String(id)] });
+      await qc.cancelQueries({ queryKey: ["/api/courses"] });
+      const prevDetail = qc.getQueryData<CourseDetail>(["/api/courses", String(id)]);
+      const prevList = qc.getQueryData<any[]>(["/api/courses"]);
+      applyDeleteOptimisticUpdate("material", materialId);
+      return { prevDetail, prevList };
+    },
+    onError: (_err, _materialId, ctx) => {
+      if (ctx?.prevDetail) qc.setQueryData(["/api/courses", String(id)], ctx.prevDetail);
+      if (ctx?.prevList) qc.setQueryData(["/api/courses"], ctx.prevList);
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] });
+      qc.invalidateQueries({ queryKey: ["/api/courses"] });
+    },
   });
 
   const updateMaterialMutation = useMutation({

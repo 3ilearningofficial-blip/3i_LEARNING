@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   View, Text, StyleSheet, Pressable, Platform,
   ActivityIndicator, Alert, ScrollView, useWindowDimensions,
@@ -401,7 +401,9 @@ export default function LectureScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
+  const [playerRetryTick, setPlayerRetryTick] = useState(0);
   const autoCompleteSentRef = useRef(false);
+  const autoPlaybackRetryRef = useRef(false);
   const [mediaTokenError, setMediaTokenError] = useState<string | null>(null);
   const [mediaTokenRetryTick, setMediaTokenRetryTick] = useState(0);
 
@@ -593,6 +595,28 @@ export default function LectureScreen() {
     void markComplete({ auto: true });
   };
 
+  const triggerPlayerRetry = useCallback((auto = false) => {
+    setHasError(false);
+    setIsLoading(true);
+    if (fileKey) {
+      setMediaTokenError(null);
+      setMediaTokenRetryTick((t) => t + 1);
+    }
+    setPlayerRetryTick((t) => t + 1);
+    if (!auto) autoPlaybackRetryRef.current = false;
+  }, [fileKey]);
+
+  const handlePlaybackError = useCallback(() => {
+    if (!autoPlaybackRetryRef.current) {
+      autoPlaybackRetryRef.current = true;
+      triggerPlayerRetry(true);
+      return;
+    }
+    setIsLoading(false);
+    setHasError(true);
+    setIsVideoPlaying(false);
+  }, [triggerPlayerRetry]);
+
   const preventScreenCapture = `
     (function() {
       document.addEventListener('contextmenu', function(e){ e.preventDefault(); return false; });
@@ -618,15 +642,15 @@ export default function LectureScreen() {
     try {
       const data = JSON.parse(event.nativeEvent.data);
       if (data.event === 'play') {
+        autoPlaybackRetryRef.current = false;
         setIsLoading(false);
         setIsVideoPlaying(true);
       } else if (data.event === 'ready') {
+        autoPlaybackRetryRef.current = false;
         setIsLoading(false);
         setIsVideoPlaying(true);
       } else if (data.event === 'error') {
-        setIsLoading(false);
-        setHasError(true);
-        setIsVideoPlaying(false);
+        handlePlaybackError();
       } else if (data.event === 'pause' || data.event === 'ended') {
         setIsVideoPlaying(false);
         if (data.event === 'ended') {
@@ -636,6 +660,7 @@ export default function LectureScreen() {
     } catch (e) {
       // Ignore non-JSON messages
       if (event.nativeEvent.data === 'ready') {
+        autoPlaybackRetryRef.current = false;
         setIsLoading(false);
         setIsVideoPlaying(true); // Assume playing when ready
       }
@@ -747,17 +772,18 @@ export default function LectureScreen() {
             <Ionicons name="alert-circle-outline" size={40} color="#EF4444" />
             <Text style={styles.errorTitle}>Video unavailable</Text>
             <Text style={styles.errorSub}>Check your internet connection and try again.</Text>
-            <Pressable style={styles.retryBtn} onPress={() => { setHasError(false); setIsLoading(true); }}>
+            <Pressable style={styles.retryBtn} onPress={() => triggerPlayerRetry()}>
               <Text style={styles.retryBtnText}>Retry</Text>
             </Pressable>
           </View>
         )}
         {!hasError && videoId && Platform.OS === "web" ? (
-          <WebYouTubePlayer videoId={videoId} onReady={() => setIsLoading(false)} />
+          <WebYouTubePlayer key={`yt-web-${playerRetryTick}`} videoId={videoId} onReady={() => setIsLoading(false)} />
         ) : !hasError && isStreamId && Platform.OS === "web" ? (
-          <WebCloudflareStreamPlayer videoId={playbackUrl} onReady={() => setIsLoading(false)} />
+          <WebCloudflareStreamPlayer key={`cf-web-${playerRetryTick}`} videoId={playbackUrl} onReady={() => setIsLoading(false)} />
         ) : !hasError && isCfHls && Platform.OS === "web" ? (
           <iframe
+            key={`hls-web-${playerRetryTick}`}
             srcDoc={buildCfHlsPlayerHtml(playbackUrl)}
             style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" } as any}
             allow="autoplay; fullscreen"
@@ -765,10 +791,11 @@ export default function LectureScreen() {
           />
         ) : !hasError && videoId && nativeYouTubeHtml && Platform.OS !== "web" ? (
           <WebView
+            key={`yt-native-${playerRetryTick}`}
             source={{ html: nativeYouTubeHtml, baseUrl: "https://www.youtube.com" }}
             style={styles.webView}
             onLoad={() => { setIsLoading(false); setIsVideoPlaying(true); }}
-            onError={() => { setIsLoading(false); setHasError(true); }}
+            onError={handlePlaybackError}
             onMessage={handleWebViewMessage}
             allowsFullscreenVideo={false}
             mediaPlaybackRequiresUserAction={false}
@@ -783,10 +810,11 @@ export default function LectureScreen() {
           />
         ) : !hasError && isStreamId && streamHtml ? (
           <WebView
+            key={`cf-native-${playerRetryTick}`}
             source={{ html: streamHtml, baseUrl: "https://cloudflarestream.com" }}
             style={styles.webView}
             onLoad={() => { setIsLoading(false); setIsVideoPlaying(true); }}
-            onError={() => { setIsLoading(false); setHasError(true); }}
+            onError={handlePlaybackError}
             onMessage={handleWebViewMessage}
             allowsFullscreenVideo
             mediaPlaybackRequiresUserAction={false}
@@ -800,10 +828,11 @@ export default function LectureScreen() {
           />
         ) : !hasError && isCfHls && Platform.OS !== "web" ? (
           <WebView
+            key={`hls-native-${playerRetryTick}`}
             source={{ html: buildCfHlsPlayerHtml(playbackUrl) }}
             style={styles.webView}
             onLoad={() => { setIsLoading(false); setIsVideoPlaying(true); }}
-            onError={() => { setIsLoading(false); setHasError(true); }}
+            onError={handlePlaybackError}
             onMessage={handleWebViewMessage}
             allowsFullscreenVideo
             mediaPlaybackRequiresUserAction={false}
@@ -817,20 +846,18 @@ export default function LectureScreen() {
           />
         ) : !hasError && isDirect && Platform.OS === "web" ? (
           <WebDirectVideoPlayer
+            key={`direct-web-${playerRetryTick}`}
             url={playbackUrl}
             onReady={() => setIsLoading(false)}
-            onError={() => {
-              setIsLoading(false);
-              setHasError(true);
-              setIsVideoPlaying(false);
-            }}
+            onError={handlePlaybackError}
           />
         ) : !hasError && isDirect && Platform.OS !== "web" ? (
           <WebView
+            key={`direct-native-${playerRetryTick}`}
             source={{ html: directVideoHtml }}
             style={styles.webView}
             onLoad={() => { setIsLoading(false); setIsVideoPlaying(true); }}
-            onError={() => { setIsLoading(false); setHasError(true); }}
+            onError={handlePlaybackError}
             onMessage={handleWebViewMessage}
             allowsFullscreenVideo
             mediaPlaybackRequiresUserAction={false}
