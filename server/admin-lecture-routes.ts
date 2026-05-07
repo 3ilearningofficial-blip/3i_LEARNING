@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { withTimeout } from "./async-utils";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -112,21 +113,69 @@ export function registerAdminLectureRoutes({
 
   app.delete("/api/admin/lectures/:id", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const lec = await db.query("SELECT course_id, video_url FROM lectures WHERE id = $1", [req.params.id]);
+      // Try to also surface live_class_id so we can mark the parent live class as
+      // "recording deleted" (prevents the async finalize / archive sweep from re-creating
+      // the lecture a few seconds after the admin removes it). The column may not yet exist
+      // on older deployments, so fall back to the legacy projection.
+      let lec: { rows: any[] };
+      try {
+        lec = await db.query(
+          "SELECT course_id, video_url, live_class_id FROM lectures WHERE id = $1",
+          [req.params.id],
+        );
+      } catch (_err) {
+        lec = await db.query(
+          "SELECT course_id, video_url FROM lectures WHERE id = $1",
+          [req.params.id],
+        );
+      }
 
-      if (lec.rows.length > 0) {
-        const lecture = lec.rows[0];
+      if (lec.rows.length === 0) {
+        return res.json({ success: true });
+      }
 
-        if (lecture.video_url) {
+      const lecture = lec.rows[0];
+
+      // 1) Hard-delete from DB first. R2 cleanup runs after the response so a slow
+      //    object-store call never holds the request long enough for the upstream
+      //    proxy to return its own 504 (which would strip CORS headers).
+      await db.query("DELETE FROM lectures WHERE id = $1", [req.params.id]);
+      await db.query(
+        "UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1",
+        [lecture.course_id],
+      );
+
+      // 2) If this lecture was created from a live class, tombstone the live class so
+      //    the async VOD finalize loop / archive sweep does not re-insert it.
+      if (lecture.live_class_id) {
+        try {
+          await db.query(
+            "UPDATE live_classes SET recording_deleted_at = $1 WHERE id = $2",
+            [Date.now(), lecture.live_class_id],
+          );
+        } catch (markErr) {
+          // Column may not exist on older schemas; the migration adds it.
+          console.warn(
+            "[AdminLectures] could not mark live_classes.recording_deleted_at:",
+            markErr instanceof Error ? markErr.message : markErr,
+          );
+        }
+      }
+
+      res.json({ success: true });
+
+      // 3) Fire-and-forget R2 cleanup, bounded by a short timeout.
+      if (lecture.video_url && typeof lecture.video_url === "string") {
+        void (async () => {
           try {
             const { DeleteObjectCommand } = await import("@aws-sdk/client-s3");
             const r2 = await getR2Client();
 
-            let r2Key = lecture.video_url;
+            let r2Key: string = lecture.video_url;
             if (r2Key.startsWith("http")) {
               try {
                 const url = new URL(r2Key);
-                r2Key = url.pathname.substring(1);
+                r2Key = url.pathname.replace(/^\/+/, "");
               } catch (_e) {
                 // keep original if URL parsing fails
               }
@@ -137,23 +186,21 @@ export function registerAdminLectureRoutes({
               Key: r2Key,
             });
 
-            await r2.send(deleteCommand);
+            await withTimeout(r2.send(deleteCommand), 4000, "R2 delete timed out");
             console.log(`[R2] Deleted lecture file: ${r2Key}`);
           } catch (r2Err) {
-            console.error("[R2] Failed to delete lecture file:", r2Err);
+            console.error(
+              "[R2] Failed to delete lecture file (non-fatal):",
+              r2Err instanceof Error ? r2Err.message : r2Err,
+            );
           }
-        }
-
-        await db.query("DELETE FROM lectures WHERE id = $1", [req.params.id]);
-        await db.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [
-          lecture.course_id,
-        ]);
+        })();
       }
-
-      res.json({ success: true });
     } catch (err) {
       console.error("Delete lecture error:", err);
-      res.status(500).json({ message: "Failed to delete lecture" });
+      if (!res.headersSent) {
+        res.status(500).json({ message: "Failed to delete lecture" });
+      }
     }
   });
 }

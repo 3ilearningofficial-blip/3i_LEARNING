@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { LIVE_CLASS_RECORDING_ROOT, sanitizeLiveRecordingSubfolder } from "./r2-path-utils";
+import { isTimeoutError, withTimeout } from "./async-utils";
 
 type RegisterUploadRoutesDeps = {
   app: Express;
@@ -77,13 +78,17 @@ export function registerUploadRoutes({
       const { ListObjectsV2Command } = await import("@aws-sdk/client-s3");
       const r2 = await getR2Client();
       const prefix = `${LIVE_CLASS_RECORDING_ROOT}/`;
-      const out = await r2.send(
-        new ListObjectsV2Command({
-          Bucket: process.env.R2_BUCKET_NAME,
-          Prefix: prefix,
-          Delimiter: "/",
-          MaxKeys: 1000,
-        })
+      const out = await withTimeout<any>(
+        r2.send(
+          new ListObjectsV2Command({
+            Bucket: process.env.R2_BUCKET_NAME,
+            Prefix: prefix,
+            Delimiter: "/",
+            MaxKeys: 1000,
+          }),
+        ),
+        6000,
+        "R2 list folders timed out",
       );
       const fromPrefixes = (out.CommonPrefixes || [])
         .map((c: { Prefix?: string }) => c.Prefix?.replace(prefix, "").replace(/\/$/, "") || "")
@@ -101,6 +106,13 @@ export function registerUploadRoutes({
       const names = [...new Set([...fromPrefixes, ...fromKeys])].sort();
       res.json({ folders: names });
     } catch (err) {
+      // On R2 latency, degrade to an empty list with a 200 so the admin UI stays
+      // usable. A 504 here would also strip CORS headers via the upstream proxy
+      // and cause a confusing "Access-Control-Allow-Credentials" browser error.
+      if (isTimeoutError(err)) {
+        console.warn("[R2] List subfolders timed out, returning empty list");
+        return res.json({ folders: [], degraded: true });
+      }
       console.error("[R2] List subfolders error:", err);
       res.status(500).json({ message: "Failed to list folders" });
     }

@@ -55,6 +55,15 @@ import {
 } from "./push-notifications";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+const uploadPdf = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const mimetype = String(file?.mimetype || "").toLowerCase();
+    if (mimetype === "application/pdf") return cb(null, true);
+    return cb(new Error("Only PDF files are allowed"));
+  },
+});
 const uploadLarge = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } });
 
 function normalizeDatabaseUrl(raw: string): string {
@@ -945,7 +954,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     app,
     db,
     requireAdmin,
-    upload,
+    upload: uploadPdf,
     PDFParse,
   });
 

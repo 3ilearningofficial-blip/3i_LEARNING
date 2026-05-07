@@ -400,10 +400,10 @@ export default function BroadcastPage() {
             sectionTitle: recordingSection,
           });
         }
-        await apiRequest("PUT", `/api/admin/live-classes/${liveClassId}`, {
-          isLive: false,
-          isCompleted: true,
-        });
+        // Do not send a follow-up PUT isCompleted=true here.
+        // `/stream/end` already marks the class completed and starts the canonical
+        // async finalize path; calling PUT immediately races with finalize and used
+        // to create duplicate lecture recordings.
         queryClient.invalidateQueries({ queryKey: liveClassesQueryKey() });
         queryClient.invalidateQueries({ queryKey: ["/api/courses"] });
         queryClient.invalidateQueries({ queryKey: ["/api/upcoming-classes"] });

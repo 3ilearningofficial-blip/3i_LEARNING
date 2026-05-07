@@ -506,7 +506,7 @@ function setupApiHostSearchHints(app: express.Application) {
 }
 
 function setupErrorHandler(app: express.Application) {
-  app.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
+  app.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
     const error = err as {
       status?: number;
       statusCode?: number;
@@ -523,6 +523,17 @@ function setupErrorHandler(app: express.Application) {
 
     if (res.headersSent) {
       return next(err);
+    }
+
+    // Make sure error responses still carry CORS credential headers — otherwise the
+    // browser logs a confusing "Access-Control-Allow-Credentials" error on top of
+    // whatever the underlying failure was. cors() normally handles this for
+    // happy-path responses but is bypassed when an error short-circuits the chain.
+    const origin = req.get("origin");
+    if (origin && isTrustedOrigin(origin)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+      res.setHeader("Vary", "Origin");
     }
 
     return res.status(status).json({ message });

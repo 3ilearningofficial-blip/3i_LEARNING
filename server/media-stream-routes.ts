@@ -17,17 +17,26 @@ type RegisterMediaStreamRoutesDeps = {
   getR2Client: () => Promise<any>;
 };
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | null = null;
+import { withTimeout, isTimeoutError } from "./async-utils";
+
+// R2 timeouts: cold reads from the India region routinely take 8–12 s, so the previous
+// 10/15 s ceilings often pushed PDFs and videos into a 504. We give R2 a longer window
+// here and add a single retry below for the GetObject path.
+const R2_HEAD_TIMEOUT_MS = 15000;
+const R2_GET_TIMEOUT_MS = 30000;
+
+async function r2GetWithRetry<T>(
+  send: () => Promise<T>,
+  label: string,
+): Promise<T> {
   try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
+    return await withTimeout<T>(send(), R2_GET_TIMEOUT_MS, label);
+  } catch (err) {
+    if (!isTimeoutError(err)) throw err;
+    // Brief backoff, then a single retry. Most R2 timeouts are transient and a quick
+    // retry succeeds where the first request had a slow connection setup.
+    await new Promise((r) => setTimeout(r, 250));
+    return await withTimeout<T>(send(), R2_GET_TIMEOUT_MS, label);
   }
 }
 
@@ -150,7 +159,7 @@ async function streamMediaGet(
   if (rangeHeader) {
     const head = await withTimeout<any>(
       r2.send(new HeadObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: key })),
-      10000,
+      R2_HEAD_TIMEOUT_MS,
       "R2 head request timed out"
     );
     const totalSize = head.ContentLength || 0;
@@ -187,8 +196,13 @@ async function streamMediaGet(
     if (end >= totalSize) end = totalSize - 1;
     const chunkSize = end - start + 1;
 
-    const command = new GetObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: key, Range: `bytes=${start}-${end}` });
-    const obj = await withTimeout<any>(r2.send(command), 15000, "R2 media range request timed out");
+    const obj = await r2GetWithRetry<any>(
+      () =>
+        r2.send(
+          new GetObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: key, Range: `bytes=${start}-${end}` }),
+        ),
+      "R2 media range request timed out",
+    );
     if (!obj.Body) {
       res.status(404).json({ message: "File not found" });
       return;
@@ -199,8 +213,11 @@ async function streamMediaGet(
     res.setHeader("Accept-Ranges", "bytes");
     res.setHeader("Content-Length", String(chunkSize));
     if (head.ContentType) res.setHeader("Content-Type", head.ContentType);
-    // Auth/token protected content must never be publicly cacheable.
-    res.setHeader("Cache-Control", "private, no-store");
+    // PDF range responses can be safely cached privately for a few minutes — pdf.js
+    // re-requests range chunks repeatedly on page navigation. All other content stays
+    // no-store so signed-token access controls aren't undermined.
+    const isPdf = typeof head.ContentType === "string" && /pdf/i.test(head.ContentType);
+    res.setHeader("Cache-Control", isPdf ? "private, max-age=300" : "private, no-store");
     res.setHeader("Content-Disposition", "inline");
 
     const stream = obj.Body as any;
@@ -210,8 +227,10 @@ async function streamMediaGet(
       res.end(Buffer.from(bytes));
     } else res.status(500).json({ message: "Cannot stream file" });
   } else {
-    const command = new GetObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: key });
-    const obj = await withTimeout<any>(r2.send(command), 15000, "R2 media request timed out");
+    const obj = await r2GetWithRetry<any>(
+      () => r2.send(new GetObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: key })),
+      "R2 media request timed out",
+    );
     if (!obj.Body) {
       res.status(404).json({ message: "File not found" });
       return;
@@ -220,8 +239,11 @@ async function streamMediaGet(
     if (obj.ContentType) res.setHeader("Content-Type", obj.ContentType);
     if (obj.ContentLength) res.setHeader("Content-Length", String(obj.ContentLength));
     res.setHeader("Accept-Ranges", "bytes");
-    // Auth/token protected content must never be publicly cacheable.
-    res.setHeader("Cache-Control", "private, no-store");
+    // PDFs are safe to cache privately for a few minutes (re-opens hit the browser
+    // cache instead of R2). Other media stays no-store so signed-token access
+    // controls aren't undermined.
+    const isPdf = typeof obj.ContentType === "string" && /pdf/i.test(obj.ContentType);
+    res.setHeader("Cache-Control", isPdf ? "private, max-age=300" : "private, no-store");
     res.setHeader("Content-Disposition", "inline");
 
     const stream = obj.Body as any;

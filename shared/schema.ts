@@ -49,6 +49,10 @@ export const lectures = pgTable("lectures", {
   orderIndex: integer("order_index").default(0),
   isFreePreview: boolean("is_free_preview").default(false),
   sectionTitle: text("section_title"),
+  // Live-class linkage: a recording lecture is tied 1:1 to its live class so the
+  // finalize/insert path is idempotent. See migrations/0013.
+  liveClassId: integer("live_class_id"),
+  liveClassFinalized: boolean("live_class_finalized").default(false),
   createdAt: bigint("created_at", { mode: "number" }),
 });
 
@@ -176,6 +180,9 @@ export const liveClasses = pgTable("live_classes", {
   recordingUrl: text("recording_url"),
   streamType: text("stream_type").default("rtmp"),
   showViewerCount: boolean("show_viewer_count").default(true),
+  // Tombstone set by the lecture-delete handler so background finalize/sweep loops
+  // do not resurrect the recording row a few seconds later.
+  recordingDeletedAt: bigint("recording_deleted_at", { mode: "number" }),
   createdAt: bigint("created_at", { mode: "number" }),
 });
 

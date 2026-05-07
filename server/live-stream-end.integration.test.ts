@@ -23,9 +23,20 @@ function createFakeDb(initial: { liveClasses: any[]; lectures?: any[]; courses?:
 
   const query = async (text: string, params: unknown[] = []) => {
     const sql = text.replace(/\s+/g, " ").trim();
-    if (sql.includes("SELECT id, title, cf_stream_uid") && sql.includes("FROM live_classes WHERE id = $1")) {
+    if (sql.includes("SELECT id, title, cf_stream_uid, is_completed, recording_url, recording_deleted_at FROM live_classes WHERE id = $1")) {
       const row = state.liveClasses.find((r) => String(r.id) === String(params[0]));
-      return { rows: row ? [{ id: row.id, title: row.title, cf_stream_uid: row.cf_stream_uid }] : [] };
+      return {
+        rows: row
+          ? [{
+              id: row.id,
+              title: row.title,
+              cf_stream_uid: row.cf_stream_uid,
+              is_completed: row.is_completed,
+              recording_url: row.recording_url ?? null,
+              recording_deleted_at: row.recording_deleted_at ?? null,
+            }]
+          : [],
+      };
     }
     if (sql.includes("UPDATE live_classes SET is_live = FALSE, ended_at = COALESCE(ended_at, $1), is_completed = TRUE WHERE id = $2")) {
       const row = state.liveClasses.find((r) => String(r.id) === String(params[1]));
@@ -61,11 +72,35 @@ function createFakeDb(initial: { liveClasses: any[]; lectures?: any[]; courses?:
       const maxOrder = rows.length ? Math.max(...rows.map((l) => Number(l.order_index) || 0)) : 0;
       return { rows: [{ next_order: maxOrder + 1 }] };
     }
-    if (sql.includes("INSERT INTO lectures (course_id, title, description, video_url, video_type, duration_minutes, order_index, is_free_preview, section_title, created_at)")) {
-      const [course_id, title, description, video_url, video_type, duration_minutes, order_index, is_free_preview, section_title, created_at] = params as any[];
+    if (sql.includes("INSERT INTO lectures (") && sql.includes("live_class_id") && sql.includes("ON CONFLICT (live_class_id)")) {
+      const [course_id, title, description, video_url, video_type, duration_minutes, order_index, is_free_preview, section_title, live_class_id, created_at] = params as any[];
+      const existing = state.lectures.find((l) => Number(l.live_class_id) === Number(live_class_id));
+      if (existing) {
+        existing.course_id = course_id;
+        existing.title = title;
+        existing.description = description;
+        existing.video_url = video_url;
+        existing.video_type = video_type;
+        existing.duration_minutes = duration_minutes;
+        existing.section_title = section_title;
+        existing.live_class_finalized = true;
+        return { rows: [{ id: existing.id }] };
+      }
       state.lectureId += 1;
       state.lectures.push({
-        id: state.lectureId, course_id, title, description, video_url, video_type, duration_minutes, order_index, is_free_preview, section_title, created_at,
+        id: state.lectureId,
+        course_id,
+        title,
+        description,
+        video_url,
+        video_type,
+        duration_minutes,
+        order_index,
+        is_free_preview,
+        section_title,
+        live_class_id,
+        live_class_finalized: true,
+        created_at,
       });
       return { rows: [{ id: state.lectureId }] };
     }

@@ -34,11 +34,13 @@ export default function BulkUploadModal({ visible, testId, onClose, onSaved, bot
   const [mode, setMode] = useState<"text" | "pdf">("text");
   const [bulkText, setBulkText] = useState("");
   const [parsedQuestions, setParsedQuestions] = useState<ParsedQuestion[] | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
   const reset = () => {
     setBulkText("");
     setParsedQuestions(null);
+    setUploadError(null);
     setSaved(false);
     setMode("text");
   };
@@ -96,6 +98,7 @@ export default function BulkUploadModal({ visible, testId, onClose, onSaved, bot
   // Parse PDF
   const parsePdfMutation = useMutation({
     mutationFn: async (file: any): Promise<ParsedQuestion[]> => {
+      setUploadError(null);
       const baseUrl = getApiUrl();
       const url = new URL("/api/admin/questions/bulk-pdf", baseUrl);
       const formData = new FormData();
@@ -129,12 +132,30 @@ export default function BulkUploadModal({ visible, testId, onClose, onSaved, bot
       // Use globalThis.fetch — do NOT set Content-Type (browser sets multipart boundary)
       const res = await globalThis.fetch(url.toString(), { method: "POST", headers, body: formData, credentials: "include" });
       const data = await res.json().catch(() => ({ message: `Server error ${res.status}` }));
-      if (!res.ok) throw new Error(data.message || `Upload failed (${res.status})`);
-      if (!data.questions || data.questions.length === 0) throw new Error("No questions found in PDF. Make sure questions are numbered (Q1, 1., etc.) with options A, B, C, D.");
-      return data.questions.map((q: any) => ({ ...q, explanation: q.explanation || "", imageUrl: q.imageUrl || "", solutionImageUrl: q.solutionImageUrl || "" }));
+      const payload = data?.data ?? data;
+      if (!res.ok) {
+        const msg = data?.error || data?.message || payload?.message || `Upload failed (${res.status})`;
+        throw new Error(msg);
+      }
+      const questions = Array.isArray(payload?.questions) ? payload.questions : [];
+      if (!questions.length) {
+        throw new Error(
+          payload?.rawTextPreview
+            ? "PDF parsed, but question format did not match. Use Q-numbering with A/B/C/D options."
+            : "No questions found in PDF. Make sure questions are numbered (Q1, 1., etc.) with options A, B, C, D.",
+        );
+      }
+      return questions.map((q: any) => ({ ...q, explanation: q.explanation || "", imageUrl: q.imageUrl || "", solutionImageUrl: q.solutionImageUrl || "" }));
     },
-    onSuccess: (qs) => setParsedQuestions(qs),
-    onError: (err: any) => Alert.alert("PDF Parse Error", err.message || "Failed to parse PDF"),
+    onSuccess: (qs) => {
+      setUploadError(null);
+      setParsedQuestions(qs);
+    },
+    onError: (err: any) => {
+      const msg = err?.message || "Failed to parse PDF";
+      setUploadError(msg);
+      Alert.alert("PDF Parse Error", msg);
+    },
   });
 
   // Save edited questions
@@ -300,6 +321,13 @@ export default function BulkUploadModal({ visible, testId, onClose, onSaved, bot
               </>
             ) : (
               <>
+                {uploadError && (
+                  <View style={{ backgroundColor: "#FEF2F2", borderRadius: 10, borderWidth: 1, borderColor: "#FCA5A5", padding: 10 }}>
+                    <Text style={{ fontSize: 12, color: "#991B1B", fontFamily: "Inter_600SemiBold" }}>
+                      {uploadError}
+                    </Text>
+                  </View>
+                )}
                 <View style={{ backgroundColor: Colors.light.secondary, borderRadius: 10, padding: 12, gap: 8 }}>
                   <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
                     <Ionicons name="document-text" size={16} color={Colors.light.primary} />

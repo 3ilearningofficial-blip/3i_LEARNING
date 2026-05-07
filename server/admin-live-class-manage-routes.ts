@@ -108,11 +108,6 @@ export function registerAdminLiveClassManageRoutes({
             ).trim();
             if (!urlForPeer) continue;
             const vType = inferVideoType(urlForPeer);
-            const exists = await db.query(
-              "SELECT 1 FROM lectures WHERE course_id = $1 AND title = $2 AND video_url = $3 LIMIT 1",
-              [peer.course_id, peer.title, urlForPeer]
-            );
-            if (exists.rows.length > 0) continue;
             const maxOrder = await db.query("SELECT COALESCE(MAX(order_index), 0) + 1 as next_order FROM lectures WHERE course_id = $1", [peer.course_id]);
             const durationMins =
               peer.started_at && peer.ended_at
@@ -128,7 +123,17 @@ export function registerAdminLiveClassManageRoutes({
               st
             );
             await db.query(
-              "INSERT INTO lectures (course_id, title, description, video_url, video_type, duration_minutes, order_index, is_free_preview, section_title, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+              `INSERT INTO lectures (
+                 course_id, title, description, video_url, video_type, duration_minutes,
+                 order_index, is_free_preview, section_title, live_class_id, live_class_finalized, created_at
+               ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE, $11)
+               ON CONFLICT (live_class_id) WHERE live_class_id IS NOT NULL
+               DO UPDATE SET
+                 video_url = EXCLUDED.video_url,
+                 video_type = EXCLUDED.video_type,
+                 duration_minutes = EXCLUDED.duration_minutes,
+                 section_title = EXCLUDED.section_title,
+                 live_class_finalized = TRUE`,
               [
                 peer.course_id,
                 peer.title,
@@ -139,6 +144,7 @@ export function registerAdminLiveClassManageRoutes({
                 maxOrder.rows[0].next_order,
                 false,
                 sectionForLecture,
+                peer.id,
                 Date.now(),
               ]
             );
@@ -253,8 +259,9 @@ export function registerAdminLiveClassManageRoutes({
       // Auto-publish recording into course lectures whenever class is completed.
       // Explicit convertToLecture still works, but completion should no longer depend on manual action.
       const shouldConvertToLecture =
-        (convertToLecture === true || isCompleted === true || isLive === false || liveClass.is_completed === true) &&
+        convertToLecture === true &&
         (isCompleted === true || liveClass.is_completed === true) &&
+        !liveClass.recording_deleted_at &&
         (liveClass.youtube_url || liveClass.recording_url || liveClass.cf_playback_hls);
       if (shouldConvertToLecture) {
         await db
@@ -274,11 +281,6 @@ export function registerAdminLiveClassManageRoutes({
           ).trim();
           if (!urlForPeer) continue;
           const vType = inferVideoType(urlForPeer);
-          const exists = await db.query(
-            "SELECT 1 FROM lectures WHERE course_id = $1 AND title = $2 AND video_url = $3 LIMIT 1",
-            [peer.course_id, peer.title, urlForPeer]
-          );
-          if (exists.rows.length > 0) continue;
           const maxOrder = await db.query("SELECT COALESCE(MAX(order_index), 0) + 1 as next_order FROM lectures WHERE course_id = $1", [peer.course_id]);
           const durationMins =
             peer.started_at && peer.ended_at
@@ -294,7 +296,17 @@ export function registerAdminLiveClassManageRoutes({
             sectionTitle
           );
           await db.query(
-            "INSERT INTO lectures (course_id, title, description, video_url, video_type, duration_minutes, order_index, is_free_preview, section_title, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+            `INSERT INTO lectures (
+               course_id, title, description, video_url, video_type, duration_minutes,
+               order_index, is_free_preview, section_title, live_class_id, live_class_finalized, created_at
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE, $11)
+             ON CONFLICT (live_class_id) WHERE live_class_id IS NOT NULL
+             DO UPDATE SET
+               video_url = EXCLUDED.video_url,
+               video_type = EXCLUDED.video_type,
+               duration_minutes = EXCLUDED.duration_minutes,
+               section_title = EXCLUDED.section_title,
+               live_class_finalized = TRUE`,
             [
               peer.course_id,
               peer.title,
@@ -305,6 +317,7 @@ export function registerAdminLiveClassManageRoutes({
               maxOrder.rows[0].next_order,
               false,
               targetSection,
+              peer.id,
               Date.now(),
             ]
           );

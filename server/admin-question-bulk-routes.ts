@@ -204,6 +204,13 @@ export function registerAdminQuestionBulkRoutes({
       if (!testId || !req.file) {
         return res.status(400).json({ message: !testId ? "testId is required" : "PDF file is required — make sure you selected a .pdf file" });
       }
+      if (!/application\/pdf/i.test(String(req.file.mimetype || ""))) {
+        return res.status(400).json({
+          success: false,
+          error: "Only PDF files are allowed for bulk upload",
+          message: "Please select a valid .pdf file",
+        });
+      }
 
       const parser = new PDFParse({ data: req.file.buffer });
       const result = await parser.getText();
@@ -214,15 +221,21 @@ export function registerAdminQuestionBulkRoutes({
       console.log("[bulk-pdf] parsed questions:", parsed.length);
       if (parsed.length === 0) {
         return res.status(400).json({
-          message: "No questions could be parsed from the PDF. Make sure questions are numbered (Q1, 1., etc.) with options labeled A, B, C, D.",
-          rawTextPreview: text.substring(0, 500),
+          success: false,
+          error: "No questions could be parsed from this PDF",
+          message: "Make sure questions are numbered (Q1, 1., etc.) with options labeled A, B, C, D.",
+          data: { rawTextPreview: text.substring(0, 500) },
         });
       }
 
-      res.json({ success: true, count: parsed.length, questions: parsed });
+      res.json({ success: true, data: { count: parsed.length, questions: parsed } });
     } catch (err: any) {
       console.error("[bulk-pdf] error:", err);
-      res.status(500).json({ message: `Failed to parse PDF: ${err?.message || "unknown error"}` });
+      res.status(500).json({
+        success: false,
+        error: "Failed to parse PDF",
+        message: `Failed to parse PDF: ${err?.message || "unknown error"}`,
+      });
     }
   });
 

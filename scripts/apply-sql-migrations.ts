@@ -24,6 +24,7 @@ const migrationFiles = [
   "migrations/0010_production_hardening_constraints_and_indexes.sql",
   "migrations/0011_distributed_rate_limits_and_session.sql",
   "migrations/0012_support_messages_notify.sql",
+  "migrations/0013_live_class_recording_dedupe.sql",
 ];
 
 const connectionString = process.env.DATABASE_URL;

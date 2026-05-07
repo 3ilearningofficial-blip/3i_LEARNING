@@ -205,11 +205,17 @@ export function registerLiveStreamRoutes({
       throw new Error("Live class not found");
     }
     const liveClass = lcResult.rows[0];
+    if (liveClass.recording_deleted_at) {
+      // Admin explicitly deleted this recording. Keep delete sticky: do not re-create
+      // via async finalize/poll/sweep jobs.
+      return { lectureId: null, lectureIds: [] };
+    }
     const title = liveClass.title as string;
     const peers = await db.query("SELECT * FROM live_classes WHERE title = $1 ORDER BY id", [title]);
     const lectureIds: number[] = [];
 
     for (const row of peers.rows) {
+      if (row.recording_deleted_at) continue;
       const endedAt = Number(row.ended_at || Date.now());
       const durationMins = row.started_at
         ? Math.max(1, Math.round((endedAt - Number(row.started_at)) / 60000))
@@ -236,31 +242,48 @@ export function registerLiveStreamRoutes({
         row.lecture_subfolder_title,
         sectionTitle
       );
-      const existingLecture = await db.query(
-        "SELECT id FROM lectures WHERE course_id = $1 AND title = $2 AND video_url = $3 LIMIT 1",
-        [row.course_id, row.title, recordingUrl]
+      const lectureResult = await db.query(
+        `INSERT INTO lectures (
+           course_id,
+           title,
+           description,
+           video_url,
+           video_type,
+           duration_minutes,
+           order_index,
+           is_free_preview,
+           section_title,
+           live_class_id,
+           live_class_finalized,
+           created_at
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE, $11)
+         ON CONFLICT (live_class_id) WHERE live_class_id IS NOT NULL
+         DO UPDATE SET
+           course_id = EXCLUDED.course_id,
+           title = EXCLUDED.title,
+           description = EXCLUDED.description,
+           video_url = EXCLUDED.video_url,
+           video_type = EXCLUDED.video_type,
+           duration_minutes = EXCLUDED.duration_minutes,
+           section_title = EXCLUDED.section_title,
+           live_class_finalized = TRUE
+         RETURNING id`,
+        [
+          row.course_id,
+          row.title,
+          row.description || "",
+          recordingUrl,
+          inferVideoType(recordingUrl),
+          durationMins,
+          maxOrder.rows[0].next_order,
+          false,
+          recordSection,
+          row.id,
+          Date.now(),
+        ]
       );
-      if (existingLecture.rows.length > 0) {
-        lectureIds.push(Number(existingLecture.rows[0].id));
-      } else {
-        const lectureResult = await db.query(
-          `INSERT INTO lectures (course_id, title, description, video_url, video_type, duration_minutes, order_index, is_free_preview, section_title, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
-          [
-            row.course_id,
-            row.title,
-            row.description || "",
-            recordingUrl,
-            inferVideoType(recordingUrl),
-            durationMins,
-            maxOrder.rows[0].next_order,
-            false,
-            recordSection,
-            Date.now(),
-          ]
-        );
-        lectureIds.push(lectureResult.rows[0].id);
-      }
+      lectureIds.push(Number(lectureResult.rows[0]?.id));
       await db.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [
         row.course_id,
       ]);
@@ -367,7 +390,7 @@ export function registerLiveStreamRoutes({
       // R2 is optional: we always persist Cloudflare HLS when MP4 archival is unavailable.
 
       const lcResult = await db.query(
-        "SELECT id, title, cf_stream_uid, is_completed, recording_url FROM live_classes WHERE id = $1",
+        "SELECT id, title, cf_stream_uid, is_completed, recording_url, recording_deleted_at FROM live_classes WHERE id = $1",
         [req.params.id]
       );
       if (lcResult.rows.length === 0) return res.status(404).json({ message: "Live class not found" });
@@ -375,6 +398,9 @@ export function registerLiveStreamRoutes({
       const uid = current?.cf_stream_uid;
       const liveTitle = String(current?.title || "").trim();
       const existingRecordingUrl = String(current?.recording_url || "").trim();
+      if (current?.recording_deleted_at) {
+        return res.json({ success: true, alreadyEnded: true, recordingDeleted: true });
+      }
       // Idempotency guard: if already completed and recording persisted, do not run end-finalization again.
       if (current?.is_completed === true && !!existingRecordingUrl) {
         return res.json({ success: true, alreadyEnded: true, recordingUrl: existingRecordingUrl });
@@ -473,12 +499,13 @@ export function registerLiveStreamRoutes({
     isArchiveSweepRunning = true;
     try {
       const pending = await db.query(
-        `SELECT id, title, description, course_id, started_at, lecture_section_title, lecture_subfolder_title, recording_url, cf_stream_uid
+        `SELECT id, title, description, course_id, started_at, lecture_section_title, lecture_subfolder_title, recording_url, cf_stream_uid, recording_deleted_at
          FROM live_classes
          WHERE stream_type = 'cloudflare'
            AND is_completed = TRUE
            AND ended_at IS NOT NULL
            AND ended_at > (EXTRACT(EPOCH FROM NOW()) * 1000 - 14 * 24 * 60 * 60 * 1000)
+           AND recording_deleted_at IS NULL
            AND (recording_url IS NULL OR recording_url ILIKE 'https://videodelivery.net/%/manifest/video.m3u8')
          ORDER BY ended_at DESC NULLS LAST
          LIMIT 8`
@@ -507,8 +534,8 @@ export function registerLiveStreamRoutes({
         if (!archivedUrl) continue;
         await db.query("UPDATE live_classes SET recording_url = $1 WHERE id = $2", [archivedUrl, row.id]);
         const patchedLecture = await db.query(
-          "UPDATE lectures SET video_url = $1, video_type = 'r2' WHERE title = $2 AND video_url = $3",
-          [archivedUrl, row.title, currentUrl]
+          "UPDATE lectures SET video_url = $1, video_type = 'r2', live_class_finalized = TRUE WHERE live_class_id = $2 RETURNING id",
+          [archivedUrl, row.id]
         ).catch(() => {});
         if (row.course_id) {
           const updatedRows = Array.isArray((patchedLecture as any)?.rows) ? (patchedLecture as any).rows.length : 0;
@@ -526,12 +553,28 @@ export function registerLiveStreamRoutes({
               undefined
             );
             await db.query(
-              `INSERT INTO lectures (course_id, title, description, video_url, video_type, duration_minutes, order_index, is_free_preview, section_title, created_at)
-               SELECT $1, $2, $3, $4, 'r2', $5, $6, FALSE, $7, $8
-               WHERE NOT EXISTS (
-                 SELECT 1 FROM lectures
-                 WHERE course_id = $1 AND title = $2 AND video_url = $4
-               )`,
+              `INSERT INTO lectures (
+                 course_id,
+                 title,
+                 description,
+                 video_url,
+                 video_type,
+                 duration_minutes,
+                 order_index,
+                 is_free_preview,
+                 section_title,
+                 live_class_id,
+                 live_class_finalized,
+                 created_at
+               )
+               VALUES ($1, $2, $3, $4, 'r2', $5, $6, FALSE, $7, $8, TRUE, $9)
+               ON CONFLICT (live_class_id) WHERE live_class_id IS NOT NULL
+               DO UPDATE SET
+                 video_url = EXCLUDED.video_url,
+                 video_type = EXCLUDED.video_type,
+                 duration_minutes = EXCLUDED.duration_minutes,
+                 section_title = EXCLUDED.section_title,
+                 live_class_finalized = TRUE`,
               [
                 row.course_id,
                 row.title,
@@ -540,6 +583,7 @@ export function registerLiveStreamRoutes({
                 durationMins,
                 maxOrder.rows[0].next_order,
                 sectionTitle,
+                row.id,
                 Date.now(),
               ]
             );

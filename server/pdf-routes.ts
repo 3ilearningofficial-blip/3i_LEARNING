@@ -79,6 +79,7 @@ html,body{width:100%;height:100%;background:#2a2a2a;overflow:auto;font-family:-a
 .page-info{color:#888;font-size:12px;padding:4px 0}
 .error{position:fixed;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;color:#ccc;padding:32px;text-align:center;background:#2a2a2a;z-index:20}
 .error h3{font-size:18px;color:#fff}.error p{font-size:13px;color:#999;line-height:1.5}
+.error button{margin-top:8px;padding:10px 18px;background:#1A56DB;border:none;border-radius:8px;color:#fff;font-size:13px;cursor:pointer}
 @keyframes spin{to{transform:rotate(360deg)}}
 @media print{body{display:none!important}}
 </style>
@@ -117,12 +118,30 @@ pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/p
       renderPage(1);
     });
   }
-  renderPdf(pdfUrl).catch(function(){
-    document.getElementById('loading').style.display='none';
+  function showError(canRetry){
+    var loading=document.getElementById('loading');if(loading)loading.style.display='none';
+    var existing=document.querySelector('.error');if(existing)existing.remove();
     var d=document.createElement('div');d.className='error';
-    d.innerHTML='<h3>Unable to load PDF</h3><p>Please try again or contact support.</p>';
+    var h=document.createElement('h3');h.textContent='Unable to load PDF';d.appendChild(h);
+    var p=document.createElement('p');p.textContent='The file is taking longer than expected. Check your connection and try again.';d.appendChild(p);
+    if(canRetry){
+      var b=document.createElement('button');b.type='button';b.textContent='Try again';
+      b.addEventListener('click',function(){d.remove();var l=document.getElementById('loading');if(l)l.style.display='flex';attempt(0);});
+      d.appendChild(b);
+    }
     document.body.appendChild(d);
-  });
+  }
+  function attempt(retryCount){
+    renderPdf(pdfUrl).catch(function(){
+      // One automatic retry — most R2 timeouts are transient cold-read stalls.
+      if(retryCount<1){
+        setTimeout(function(){attempt(retryCount+1);},1500);
+        return;
+      }
+      showError(true);
+    });
+  }
+  attempt(0);
   document.addEventListener('contextmenu',function(e){e.preventDefault();});
   document.addEventListener('keydown',function(e){
     if(e.key==='PrintScreen'||(e.ctrlKey&&(e.key==='p'||e.key==='P'||e.key==='s'||e.key==='S'))){e.preventDefault();}
