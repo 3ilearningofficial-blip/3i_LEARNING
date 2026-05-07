@@ -157,6 +157,26 @@ const emptyQuestion: NewQuestion = { questionText: "", optionA: "", optionB: "",
 const emptyMaterial: NewMaterial = { title: "", description: "", fileUrl: "", fileType: "pdf", isFree: false, sectionTitle: "", downloadAllowed: false };
 const emptyLiveClass: NewLiveClass = { title: "", description: "", youtubeUrl: "", scheduledAt: "", isLive: false, isPublic: false, lectureSectionTitle: "Live Class Recordings", lectureSubfolderTitle: "" };
 
+const LIVE_RECORDING_ROOT = DEFAULT_LIVE_RECORDING_SECTION;
+
+function splitLectureSectionPath(sectionTitle: unknown): { root: string; subfolder: string } {
+  const raw = String(sectionTitle || "").trim();
+  if (!raw) return { root: "", subfolder: "" };
+  if (raw === LIVE_RECORDING_ROOT) return { root: LIVE_RECORDING_ROOT, subfolder: "" };
+  const prefix = `${LIVE_RECORDING_ROOT} / `;
+  if (raw.startsWith(prefix)) return { root: LIVE_RECORDING_ROOT, subfolder: raw.slice(prefix.length).trim() };
+  return { root: raw, subfolder: "" };
+}
+
+function composeLectureSectionPath(sectionTitle: unknown, subfolderTitle: unknown): string | null {
+  const root = String(sectionTitle || "").trim();
+  const subfolder = String(subfolderTitle || "").trim();
+  if (!root && !subfolder) return null;
+  if (!subfolder) return root || null;
+  if (!root) return subfolder;
+  return `${root} / ${subfolder}`;
+}
+
 export default function AdminCourseScreen() {
   useEffect(() => {
     if (Platform.OS !== "web" || typeof MutationObserver === "undefined") return;
@@ -930,7 +950,17 @@ export default function AdminCourseScreen() {
                     <Text style={styles.itemTitle}>{lecture.title}</Text>
                     <Text style={styles.itemMeta}>{lecture.duration_minutes}min · Order {lecture.order_index}{lecture.is_free_preview ? " · Free Preview" : ""}</Text>
                   </View>
-                  <Pressable style={[styles.deleteItemBtn, { backgroundColor: "#EEF2FF", marginRight: 6 }]} onPress={() => setEditLecture({ ...lecture })}>
+                  <Pressable
+                    style={[styles.deleteItemBtn, { backgroundColor: "#EEF2FF", marginRight: 6 }]}
+                    onPress={() => {
+                      const parts = splitLectureSectionPath(lecture.section_title);
+                      setEditLecture({
+                        ...lecture,
+                        section_title: parts.root || "",
+                        lecture_subfolder_title: parts.subfolder || "",
+                      });
+                    }}
+                  >
                     <Ionicons name="pencil-outline" size={16} color={Colors.light.primary} />
                   </Pressable>
                   <Pressable
@@ -1402,6 +1432,12 @@ export default function AdminCourseScreen() {
               </Pressable>
               <FormField label="Description" placeholder="What students will learn" value={editLecture?.description || ""} onChangeText={(v) => setEditLecture((p: any) => ({ ...p, description: v }))} />
               <FormField label="Folder/Section (optional)" placeholder="e.g., Chapter 1" value={editLecture?.section_title || ""} onChangeText={(v) => setEditLecture((p: any) => ({ ...p, section_title: v }))} />
+              <FormField
+                label="Subfolder (optional)"
+                placeholder="e.g., Number System"
+                value={editLecture?.lecture_subfolder_title || ""}
+                onChangeText={(v) => setEditLecture((p: any) => ({ ...p, lecture_subfolder_title: v }))}
+              />
               <FormField label="Duration (minutes)" placeholder="45" value={String(editLecture?.duration_minutes || "")} onChangeText={(v) => setEditLecture((p: any) => ({ ...p, duration_minutes: v }))} numeric />
               <FormField label="Order Index" placeholder="1" value={String(editLecture?.order_index || "")} onChangeText={(v) => setEditLecture((p: any) => ({ ...p, order_index: v }))} numeric />
               <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 12 }}>
@@ -1413,7 +1449,7 @@ export default function AdminCourseScreen() {
                 <Text style={{ fontSize: 14, fontFamily: "Inter_500Medium", color: Colors.light.text }}>Allow Download</Text>
               </View>
             </ScrollView>
-            <ActionButton label="Save Changes" onPress={() => editLecture && updateLectureMutation.mutate({ id: editLecture.id, title: editLecture.title, description: editLecture.description || "", videoUrl: editLecture.video_url, videoType: editLecture.video_type || "youtube", durationMinutes: parseInt(editLecture.duration_minutes) || 0, orderIndex: parseInt(editLecture.order_index) || 0, isFreePreview: editLecture.is_free_preview, sectionTitle: editLecture.section_title, downloadAllowed: editLecture.download_allowed || false, courseId: editLecture.course_id || parseInt(id) })} disabled={!editLecture?.title} loading={updateLectureMutation.isPending} />
+            <ActionButton label="Save Changes" onPress={() => editLecture && updateLectureMutation.mutate({ id: editLecture.id, title: editLecture.title, description: editLecture.description || "", videoUrl: editLecture.video_url, videoType: editLecture.video_type || "youtube", durationMinutes: parseInt(editLecture.duration_minutes) || 0, orderIndex: parseInt(editLecture.order_index) || 0, isFreePreview: editLecture.is_free_preview, sectionTitle: composeLectureSectionPath(editLecture.section_title, editLecture.lecture_subfolder_title), lectureSubfolderTitle: editLecture.lecture_subfolder_title || null, downloadAllowed: editLecture.download_allowed || false, courseId: editLecture.course_id || parseInt(id) })} disabled={!editLecture?.title} loading={updateLectureMutation.isPending} />
           </View>
         </View>
       </Modal>
@@ -2280,7 +2316,21 @@ export default function AdminCourseScreen() {
                           <Text style={styles.itemTitle}>{lecture.title}</Text>
                           <Text style={styles.itemMeta}>{lecture.duration_minutes}min · Order {lecture.order_index}</Text>
                         </View>
-                        <Pressable style={[styles.deleteItemBtn, { backgroundColor: "#EEF2FF", marginRight: 4 }]} onPress={() => setFolderEditLecture({ ...lecture, durationMinutes: String(lecture.duration_minutes || 0), orderIndex: String(lecture.order_index || 0), videoUrl: lecture.video_url || "", sectionTitle: lecture.section_title || "" })}>
+                        <Pressable
+                          style={[styles.deleteItemBtn, { backgroundColor: "#EEF2FF", marginRight: 4 }]}
+                          onPress={() => {
+                            const parts = splitLectureSectionPath(lecture.section_title);
+                            setFolderEditLecture({
+                              ...lecture,
+                              durationMinutes: String(lecture.duration_minutes || 0),
+                              orderIndex: String(lecture.order_index || 0),
+                              videoUrl: lecture.video_url || "",
+                              sectionTitle: parts.root || "",
+                              section_title: parts.root || "",
+                              lecture_subfolder_title: parts.subfolder || "",
+                            });
+                          }}
+                        >
                           <Ionicons name="pencil" size={14} color={Colors.light.primary} />
                         </Pressable>
                         <Pressable style={styles.deleteItemBtn} onPress={() => deleteLectureMutation.mutate(lecture.id)}>
@@ -2464,6 +2514,8 @@ export default function AdminCourseScreen() {
                     <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>{uploading ? `Uploading... ${uploadProgress}%` : "Upload Video"}</Text>
                   </Pressable>
                   <FormField label="Description" placeholder="What students will learn" value={folderEditLecture?.description || ""} onChangeText={(v) => setFolderEditLecture((p: any) => ({ ...p, description: v }))} />
+                  <FormField label="Folder/Section (optional)" placeholder="e.g., Live Class Recordings" value={folderEditLecture?.section_title || ""} onChangeText={(v) => setFolderEditLecture((p: any) => ({ ...p, section_title: v }))} />
+                  <FormField label="Subfolder (optional)" placeholder="e.g., Number System" value={folderEditLecture?.lecture_subfolder_title || ""} onChangeText={(v) => setFolderEditLecture((p: any) => ({ ...p, lecture_subfolder_title: v }))} />
                   <FormField label="Duration (minutes)" placeholder="45" value={String(folderEditLecture?.duration_minutes || "")} onChangeText={(v) => setFolderEditLecture((p: any) => ({ ...p, duration_minutes: v }))} numeric />
                   <FormField label="Order Index" placeholder="1" value={String(folderEditLecture?.order_index || "")} onChangeText={(v) => setFolderEditLecture((p: any) => ({ ...p, order_index: v }))} numeric />
                   <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 12 }}>
@@ -2475,7 +2527,7 @@ export default function AdminCourseScreen() {
                     <Text style={{ fontSize: 14, fontFamily: "Inter_500Medium", color: Colors.light.text }}>Allow Download</Text>
                   </View>
                 </ScrollView>
-                <ActionButton label="Save Changes" onPress={() => folderEditLecture && updateLectureMutation.mutate({ id: folderEditLecture.id, title: folderEditLecture.title, description: folderEditLecture.description || "", videoUrl: folderEditLecture.video_url, videoType: folderEditLecture.video_type || "youtube", durationMinutes: parseInt(folderEditLecture.duration_minutes) || 0, orderIndex: parseInt(folderEditLecture.order_index) || 0, isFreePreview: folderEditLecture.is_free_preview, sectionTitle: folderEditLecture.section_title, downloadAllowed: folderEditLecture.download_allowed || false })} disabled={!folderEditLecture?.title} loading={updateLectureMutation.isPending} />
+                <ActionButton label="Save Changes" onPress={() => folderEditLecture && updateLectureMutation.mutate({ id: folderEditLecture.id, title: folderEditLecture.title, description: folderEditLecture.description || "", videoUrl: folderEditLecture.video_url, videoType: folderEditLecture.video_type || "youtube", durationMinutes: parseInt(folderEditLecture.duration_minutes) || 0, orderIndex: parseInt(folderEditLecture.order_index) || 0, isFreePreview: folderEditLecture.is_free_preview, sectionTitle: composeLectureSectionPath(folderEditLecture.section_title, folderEditLecture.lecture_subfolder_title), lectureSubfolderTitle: folderEditLecture.lecture_subfolder_title || null, downloadAllowed: folderEditLecture.download_allowed || false })} disabled={!folderEditLecture?.title} loading={updateLectureMutation.isPending} />
               </View>
             </View>
           </Modal>

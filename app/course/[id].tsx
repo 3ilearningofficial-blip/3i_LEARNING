@@ -627,14 +627,29 @@ setTimeout(function() {
     showPurchase();
   };
 
+  const promptLockedCourseContent = () => {
+    showEnrollmentOrPurchaseAlert(() => {
+      Alert.alert(
+        course?.is_free ? "Enroll Required" : "Purchase Required",
+        course?.is_free
+          ? "Please enroll in this course to access this content."
+          : "Please purchase this course to access this content.",
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: course?.is_free ? "Enroll Free" : "Buy Now", onPress: handleEnroll },
+        ],
+      );
+    });
+  };
+
   const handleLecture = (lecture: Lecture) => {
     const st = lecture.section_title || "";
     const isLiveRecording =
       st === DEFAULT_LIVE_RECORDING_SECTION ||
       st.startsWith(`${DEFAULT_LIVE_RECORDING_SECTION} /`);
-    // Free preview lectures are accessible to all; everything else requires enrollment
-    const canAccess = isAdmin || course?.isEnrolled || lecture.is_free_preview;
+    const canAccess = isAdmin || course?.isEnrolled;
     if (!canAccess) {
+      promptLockedCourseContent();
       return;
     }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -665,8 +680,10 @@ setTimeout(function() {
     const attempt = attemptSummary[test.id];
     const isLocked = !isAdmin && !courseData.isEnrolled;
     const handlePress = () => {
-      // Locked — do nothing, item is visually locked
-      if (isLocked) return;
+      if (isLocked) {
+        promptLockedCourseContent();
+        return;
+      }
       if (attempt) {
         setOpenFolder(null);
         setTimeout(() => {
@@ -1092,11 +1109,17 @@ setTimeout(function() {
                         const isLiveFolder = folderKey === "Live Class Recordings";
                         const folderColor = isLiveFolder ? "#DC2626" : "#1A56DB";
                         const folderBg = isLiveFolder ? "#FEE2E2" : "#EEF2FF";
-                        const isLocked = !course.isEnrolled && !course.is_free;
+                        const isLocked = !course.isEnrolled;
                         return (
                           <Pressable key={folderKey}
                             style={[styles.testSectionCard, { borderLeftColor: folderColor }]}
-                            onPress={() => setOpenFolder({ name: folderName, type: "lectures", color: folderColor, items: lectures })}
+                            onPress={() => {
+                              if (!isAdmin && !course.isEnrolled) {
+                                promptLockedCourseContent();
+                                return;
+                              }
+                              setOpenFolder({ name: folderName, type: "lectures", color: folderColor, items: lectures });
+                            }}
                           >
                             <View style={[styles.testSectionIconWrap, { backgroundColor: folderBg }]}>
                               <Ionicons name={isLiveFolder ? "videocam" : "folder"} size={22} color={folderColor} />
@@ -1111,12 +1134,15 @@ setTimeout(function() {
                       })}
                       {/* Lectures without a folder — show directly */}
                       {unfolderedLectures.map((lec) => {
-                        const canAccess = isAdmin || course.isEnrolled || lec.is_free_preview;
+                        const canAccess = isAdmin || course.isEnrolled;
                         return (
                           <View key={lec.id} style={[styles.testCard, { flexDirection: "row", alignItems: "center" }]}>
                             <Pressable style={{ flex: 1, flexDirection: "row", alignItems: "center" }}
                               onPress={() => {
-                                if (!canAccess) return;
+                                if (!canAccess) {
+                                  promptLockedCourseContent();
+                                  return;
+                                }
                                 router.push({ pathname: "/lecture/[id]", params: { id: lec.id, courseId: id, videoUrl: lec.video_url || "", title: lec.title } });
                               }}>
                               <View style={[styles.testColorBar, { backgroundColor: "#1A56DB" }]} />
@@ -1173,12 +1199,19 @@ setTimeout(function() {
                   ]);
                   return Array.from(testFolderNames).map((folderName: any) => {
                     const folderTests = (course.tests || []).filter((t: any) => t.folder_name === folderName);
-                    const isLocked = !course.isEnrolled && !course.is_free;
+                    const isLocked = !course.isEnrolled;
                     const testFolderColor = "#16A34A";
                     return (
                       <Pressable key={`folder_${folderName}`}
                         style={[styles.testSectionCard, { borderLeftColor: testFolderColor }]}
-                        onPress={() => { setFolderTestTypeFilter("all"); setOpenFolder({ name: folderName, type: "tests", color: testFolderColor, items: folderTests }); }}
+                        onPress={() => {
+                          if (!isAdmin && !course.isEnrolled) {
+                            promptLockedCourseContent();
+                            return;
+                          }
+                          setFolderTestTypeFilter("all");
+                          setOpenFolder({ name: folderName, type: "tests", color: testFolderColor, items: folderTests });
+                        }}
                       >
                         <View style={[styles.testSectionIconWrap, { backgroundColor: testFolderColor + "18" }]}>
                           <Ionicons name="folder" size={22} color={testFolderColor} />
@@ -1200,7 +1233,14 @@ setTimeout(function() {
                   return (
                     <Pressable key={section.key}
                       style={[styles.testSectionCard, { borderLeftColor: section.color }]}
-                      onPress={() => { setFolderTestTypeFilter("all"); setOpenFolder({ name: section.label, type: "tests", color: section.color, items: sectionTests }); }}
+                      onPress={() => {
+                        if (!isAdmin && !course.isEnrolled) {
+                          promptLockedCourseContent();
+                          return;
+                        }
+                        setFolderTestTypeFilter("all");
+                        setOpenFolder({ name: section.label, type: "tests", color: section.color, items: sectionTests });
+                      }}
                     >
                       <View style={[styles.testSectionIconWrap, { backgroundColor: section.color + "18" }]}>
                         <Ionicons name={section.icon} size={22} color={section.color} />
@@ -1217,9 +1257,12 @@ setTimeout(function() {
                 {!isTestSeriesCourse && course.tests.filter((t: any) => !t.folder_name).map((test: any) => {
                   const color = TEST_TYPE_COLORS[test.test_type] || "#1A56DB";
                   const attempt = attemptSummary[test.id];
-                  const canAccess = isAdmin || course.isEnrolled || course.is_free;
+                  const canAccess = isAdmin || course.isEnrolled;
                   const handlePress = () => {
-                    if (!canAccess) return;
+                    if (!canAccess) {
+                      promptLockedCourseContent();
+                      return;
+                    }
                     if (attempt) {
                       router.push({
                         pathname: "/test-result/[id]",
@@ -1286,11 +1329,15 @@ setTimeout(function() {
                       {folders.map(([folderKey, materials]) => {
                         const folderName = folderKey;
                         const folderColor = "#DC2626";
-                        const isLocked = !course.isEnrolled && !course.is_free;
+                        const isLocked = !course.isEnrolled;
                         return (
                           <Pressable key={folderKey}
                             style={[styles.testSectionCard, { borderLeftColor: folderColor }]}
                             onPress={() => {
+                              if (!isAdmin && !course.isEnrolled) {
+                                promptLockedCourseContent();
+                                return;
+                              }
                               setOpenFolder({ name: folderName, type: "materials", color: folderColor, items: materials });
                             }}
                           >
@@ -1307,11 +1354,17 @@ setTimeout(function() {
                       })}
                       {/* Materials without a folder — show directly */}
                       {unfolderedMaterials.map((mat) => {
-                        const canAccess = isAdmin || course.isEnrolled || course.is_free;
+                        const canAccess = isAdmin || course.isEnrolled;
                         return (
                           <View key={mat.id} style={[styles.testCard, { flexDirection: "row", alignItems: "center" }]}>
                             <Pressable style={{ flex: 1, flexDirection: "row", alignItems: "center" }}
-                              onPress={() => { if (!canAccess) return; router.push(`/material/${mat.id}`); }}>
+                              onPress={() => {
+                                if (!canAccess) {
+                                  promptLockedCourseContent();
+                                  return;
+                                }
+                                router.push(`/material/${mat.id}`);
+                              }}>
                               <View style={[styles.testColorBar, { backgroundColor: "#DC2626" }]} />
                               <View style={styles.testItemIcon}><Ionicons name={mat.file_type === "pdf" ? "document-text" : mat.file_type === "video" ? "videocam" : "document"} size={22} color="#DC2626" /></View>
                               <View style={styles.testItemInfo}>
@@ -1374,7 +1427,7 @@ setTimeout(function() {
                         <Pressable
                           style={[styles.folderHeader, { borderLeftColor: "#DC2626" }]}
                           onPress={() => {
-                            const canAccess = isAdmin || course.isEnrolled || course.is_free;
+                            const canAccess = isAdmin || course.isEnrolled;
                             if (!canAccess) {
                               showEnrollmentOrPurchaseAlert(() => {
                                 Alert.alert(
@@ -1404,7 +1457,7 @@ setTimeout(function() {
                           style={({ pressed }) => [styles.liveClassItem, pressed && { opacity: 0.85 }]}
                           onPress={() => {
                             // Check enrollment for non-free, non-public classes
-                            const canAccess = isAdmin || course.isEnrolled || course.is_free || (lc as any).is_free_preview;
+                            const canAccess = isAdmin || course.isEnrolled;
                             if (!canAccess) {
                               showEnrollmentOrPurchaseAlert(() => {
                                 Alert.alert(
@@ -1707,7 +1760,7 @@ setTimeout(function() {
               <Text style={{ fontSize: 17, fontFamily: "Inter_700Bold", color: "#fff" }} numberOfLines={1}>{openFolder?.name}</Text>
               <Text style={{ fontSize: 12, color: "rgba(255,255,255,0.6)", fontFamily: "Inter_400Regular" }}>{openFolder?.items.length} {openFolder?.type === "lectures" ? "videos" : openFolder?.type === "materials" ? "files" : openFolder?.type === "tests" ? "tests" : "classes"}</Text>
             </View>
-            {course && !course.isEnrolled && !course.is_free && (
+            {course && !course.isEnrolled && (
               <View style={{ flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "rgba(239,68,68,0.2)", borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 }}>
                 <Ionicons name="lock-closed" size={14} color="#FCA5A5" />
                 <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#FCA5A5" }}>Locked</Text>
@@ -1715,7 +1768,7 @@ setTimeout(function() {
             )}
           </LinearGradient>
           {/* Lock banner for non-enrolled */}
-          {course && !course.isEnrolled && !course.is_free && (
+          {course && !course.isEnrolled && (
             <View style={{ backgroundColor: "#FEF3C7", flexDirection: "row", alignItems: "center", gap: 10, padding: 12, borderBottomWidth: 1, borderBottomColor: "#FDE68A" }}>
               <Ionicons name="lock-closed" size={18} color="#D97706" />
               <Text style={{ flex: 1, fontSize: 13, fontFamily: "Inter_500Medium", color: "#92400E" }}>
@@ -1746,11 +1799,12 @@ setTimeout(function() {
             })}
             {openFolder?.type === "lectures" &&
               openFolder.items.filter((l: any) => l.section_title === openFolder.name).map((lecture: any, idx: number) => {
-              const isLocked = course && !course.isEnrolled && !course.is_free && !lecture.is_free_preview;
+              const isLocked = course && !course.isEnrolled;
               return (
                 <View key={lecture.id} style={styles.lectureItem}>
                   <Pressable style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 12 }} onPress={() => {
                     if (isLocked) {
+                      promptLockedCourseContent();
                       return;
                     }
                     setOpenFolder(null); handleLecture(lecture);
@@ -1798,6 +1852,7 @@ setTimeout(function() {
                   <Pressable style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 12 }}
                     onPress={() => {
                       if (!canAccess) {
+                        promptLockedCourseContent();
                         return;
                       }
                       setOpenFolder(null); router.push(`/material/${mat.id}`);

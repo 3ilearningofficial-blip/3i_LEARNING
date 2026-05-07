@@ -315,8 +315,8 @@ export function registerCourseAccessRoutes({
       const materialsResult = await db.query("SELECT * FROM study_materials WHERE course_id = $1", [courseIdParam]);
       const fullLectures = lecturesResult.rows;
       const fullMaterials = materialsResult.rows;
-      let responseLectures = fullLectures;
-      let responseMaterials = fullMaterials;
+      const responseLectures = fullLectures;
+      const responseMaterials = fullMaterials;
 
       if (user) {
         const enroll = await db.query("SELECT * FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [user.id, courseIdParam]);
@@ -349,10 +349,9 @@ export function registerCourseAccessRoutes({
       }
 
       const hasContentAccess = await canAccessCourseContent(user, courseIdParam);
-      if (!hasContentAccess) {
-        responseLectures = fullLectures.filter((l: any) => l.is_free_preview === true);
-        responseMaterials = fullMaterials.filter((m: any) => m.is_free === true);
-      }
+      // Always return complete course content so unenrolled students can still see
+      // what the course includes. Frontend enforces lock state + purchase prompt.
+      (course as any).hasContentAccess = hasContentAccess;
 
       res.set("Cache-Control", "private, no-store");
       res.json({

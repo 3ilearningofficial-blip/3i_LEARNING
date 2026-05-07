@@ -20,6 +20,18 @@ export function registerAdminLectureRoutes({
   getR2Client,
   recomputeAllEnrollmentsProgressForCourse,
 }: RegisterAdminLectureRoutesDeps): void {
+  const resolveLectureSectionTitle = (
+    sectionTitle: unknown,
+    subfolderTitle: unknown,
+  ): string | null => {
+    const main = String(sectionTitle || "").trim();
+    const sub = String(subfolderTitle || "").trim();
+    if (!main && !sub) return null;
+    if (!sub) return main || null;
+    if (!main) return sub;
+    return `${main} / ${sub}`;
+  };
+
   const inferLectureVideoType = (url: string): string => {
     const u = (url || "").trim().toLowerCase();
     if (!u) return "youtube";
@@ -31,7 +43,7 @@ export function registerAdminLectureRoutes({
 
   app.post("/api/admin/lectures", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { courseId, title, description, videoUrl, fileUrl, videoType, pdfUrl, durationMinutes, orderIndex, isFreePreview, sectionTitle, downloadAllowed } =
+      const { courseId, title, description, videoUrl, fileUrl, videoType, pdfUrl, durationMinutes, orderIndex, isFreePreview, sectionTitle, lectureSubfolderTitle, downloadAllowed } =
         req.body;
       const parsedCourseId = Number(courseId);
       if (!Number.isFinite(parsedCourseId) || parsedCourseId <= 0) {
@@ -50,6 +62,10 @@ export function registerAdminLectureRoutes({
         return res.status(400).json({ message: "Either videoUrl or pdfUrl is required" });
       }
       const effectiveVideoType = String(videoType || "").trim() || inferLectureVideoType(normalizedVideoUrl);
+      const normalizedSectionTitle = resolveLectureSectionTitle(
+        sectionTitle,
+        lectureSubfolderTitle,
+      );
       const result = await db.query(
         `INSERT INTO lectures (course_id, title, description, video_url, video_type, pdf_url, duration_minutes, order_index, is_free_preview, section_title, download_allowed, created_at) 
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
@@ -63,7 +79,7 @@ export function registerAdminLectureRoutes({
           Number(durationMinutes) || 0,
           Number(orderIndex) || 0,
           isFreePreview || false,
-          sectionTitle || null,
+          normalizedSectionTitle,
           downloadAllowed || false,
           Date.now(),
         ]
@@ -89,7 +105,11 @@ export function registerAdminLectureRoutes({
 
   app.put("/api/admin/lectures/:id", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { title, description, videoUrl, videoType, durationMinutes, orderIndex, isFreePreview, sectionTitle, downloadAllowed } = req.body;
+      const { title, description, videoUrl, videoType, durationMinutes, orderIndex, isFreePreview, sectionTitle, lectureSubfolderTitle, downloadAllowed } = req.body;
+      const normalizedSectionTitle = resolveLectureSectionTitle(
+        sectionTitle,
+        lectureSubfolderTitle,
+      );
       await db.query(
         `UPDATE lectures SET title=$1, description=$2, video_url=$3, video_type=$4, duration_minutes=$5, order_index=$6, is_free_preview=$7, section_title=$8, download_allowed=$9 WHERE id=$10`,
         [
@@ -100,7 +120,7 @@ export function registerAdminLectureRoutes({
           parseInt(durationMinutes) || 0,
           parseInt(orderIndex) || 0,
           isFreePreview || false,
-          sectionTitle || null,
+          normalizedSectionTitle,
           downloadAllowed || false,
           req.params.id,
         ]
