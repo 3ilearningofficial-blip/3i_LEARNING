@@ -148,7 +148,7 @@ async function streamMediaGet(
   const rangeHeader = req.headers.range;
 
   if (rangeHeader) {
-    const head = await withTimeout(
+    const head = await withTimeout<any>(
       r2.send(new HeadObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: key })),
       10000,
       "R2 head request timed out"
@@ -188,7 +188,7 @@ async function streamMediaGet(
     const chunkSize = end - start + 1;
 
     const command = new GetObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: key, Range: `bytes=${start}-${end}` });
-    const obj = await withTimeout(r2.send(command), 15000, "R2 media range request timed out");
+    const obj = await withTimeout<any>(r2.send(command), 15000, "R2 media range request timed out");
     if (!obj.Body) {
       res.status(404).json({ message: "File not found" });
       return;
@@ -211,7 +211,7 @@ async function streamMediaGet(
     } else res.status(500).json({ message: "Cannot stream file" });
   } else {
     const command = new GetObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: key });
-    const obj = await withTimeout(r2.send(command), 15000, "R2 media request timed out");
+    const obj = await withTimeout<any>(r2.send(command), 15000, "R2 media request timed out");
     if (!obj.Body) {
       res.status(404).json({ message: "File not found" });
       return;
