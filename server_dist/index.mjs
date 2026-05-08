@@ -9857,7 +9857,7 @@ var app = express();
 var log = console.log;
 Sentry.init({
   dsn: "https://d7c714bdd1391597e651669e7a87ba26@o4511353056264192.ingest.us.sentry.io/4511353198346240",
-  integrations: [nodeProfilingIntegration()],
+  integrations: [Sentry.expressIntegration(), nodeProfilingIntegration()],
   tracesSampleRate: 1,
   profilesSampleRate: 1
 });
@@ -10279,8 +10279,6 @@ function normalizeOtpIdentifier(input) {
   app.use(session(sessionConfig));
   setupApiOriginProtection(app);
   setupApiHostSearchHints(app);
-  app.use(Sentry.Handlers.requestHandler());
-  app.use(Sentry.Handlers.tracingHandler());
   app.get("/api/health/version", (_req, res) => {
     res.json(getBackendVersion());
   });
@@ -10338,7 +10336,7 @@ function normalizeOtpIdentifier(input) {
     res.status(404).send("Not found");
   });
   configureExpoAndLanding(app);
-  app.use(Sentry.Handlers.errorHandler());
+  Sentry.setupExpressErrorHandler(app);
   setupErrorHandler(app);
   const port = parseInt(process.env.PORT || "5000", 10);
   logProductionReleaseHints();
