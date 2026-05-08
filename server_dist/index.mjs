@@ -9838,6 +9838,8 @@ init_pg_rate_limit_store();
 import dotenv from "dotenv";
 import * as path from "path";
 import express from "express";
+import * as Sentry from "@sentry/node";
+import { nodeProfilingIntegration } from "@sentry/profiling-node";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import rateLimit from "express-rate-limit";
@@ -9853,6 +9855,12 @@ if (process.env.NODE_ENV !== "production" || process.env.LOAD_DOTENV === "true")
 }
 var app = express();
 var log = console.log;
+Sentry.init({
+  dsn: "https://d7c714bdd1391597e651669e7a87ba26@o4511353056264192.ingest.us.sentry.io/4511353198346240",
+  integrations: [nodeProfilingIntegration()],
+  tracesSampleRate: 1,
+  profilesSampleRate: 1
+});
 function normalizeDatabaseUrl2(raw) {
   try {
     const parsed = new URL(raw);
@@ -10271,6 +10279,8 @@ function normalizeOtpIdentifier(input) {
   app.use(session(sessionConfig));
   setupApiOriginProtection(app);
   setupApiHostSearchHints(app);
+  app.use(Sentry.Handlers.requestHandler());
+  app.use(Sentry.Handlers.tracingHandler());
   app.get("/api/health/version", (_req, res) => {
     res.json(getBackendVersion());
   });
@@ -10328,6 +10338,7 @@ function normalizeOtpIdentifier(input) {
     res.status(404).send("Not found");
   });
   configureExpoAndLanding(app);
+  app.use(Sentry.Handlers.errorHandler());
   setupErrorHandler(app);
   const port = parseInt(process.env.PORT || "5000", 10);
   logProductionReleaseHints();

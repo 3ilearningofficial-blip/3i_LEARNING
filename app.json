@@ -50,7 +50,15 @@
       "expo-notifications",
       "expo-font",
       "expo-web-browser",
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "@sentry/react-native/expo",
+        {
+          "url": "https://sentry.io/",
+          "project": "3i-learning-app",
+          "organization": "3i-learning"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

@@ -9,6 +9,8 @@ if (process.env.NODE_ENV !== "production" || process.env.LOAD_DOTENV === "true")
 
 import express from "express";
 import type { Request, Response, NextFunction } from "express";
+import * as Sentry from "@sentry/node";
+import { nodeProfilingIntegration } from "@sentry/profiling-node";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import rateLimit from "express-rate-limit";
@@ -20,6 +22,13 @@ import { PgRateLimitStore } from "./pg-rate-limit-store";
 
 const app = express();
 const log = console.log;
+
+Sentry.init({
+  dsn: "https://d7c714bdd1391597e651669e7a87ba26@o4511353056264192.ingest.us.sentry.io/4511353198346240",
+  integrations: [nodeProfilingIntegration()],
+  tracesSampleRate: 1.0,
+  profilesSampleRate: 1.0,
+});
 
 function normalizeDatabaseUrl(raw: string): string {
   try {
@@ -619,6 +628,8 @@ function normalizeOtpIdentifier(input: unknown): string {
   app.use(session(sessionConfig));
   setupApiOriginProtection(app);
   setupApiHostSearchHints(app);
+  app.use(Sentry.Handlers.requestHandler());
+  app.use(Sentry.Handlers.tracingHandler());
 
   // Lightweight version/health endpoint for deploy consistency checks.
   app.get("/api/health/version", (_req: Request, res: Response) => {
@@ -695,6 +706,7 @@ function normalizeOtpIdentifier(input: unknown): string {
   configureExpoAndLanding(app);
 
   // 5) Error handler (must be last)
+  app.use(Sentry.Handlers.errorHandler());
   setupErrorHandler(app);
 
   const port = parseInt(process.env.PORT || "5000", 10);
