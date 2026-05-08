@@ -204,10 +204,76 @@ export function registerAdminAnalyticsRoutes({
   app.get("/api/admin/courses/:id/enrollments", requireAdmin, async (req: Request, res: Response) => {
     try {
       const result = await db.query(
-        `SELECT e.id, e.user_id, u.name AS user_name, u.phone AS user_phone, u.email AS user_email,
-                e.enrolled_at, e.progress_percent, COALESCE(e.status, 'active') AS status
-         FROM enrollments e JOIN users u ON e.user_id = u.id
-         WHERE e.course_id = $1 ORDER BY e.enrolled_at DESC`,
+        `SELECT
+           e.id,
+           e.user_id,
+           u.name AS user_name,
+           u.phone AS user_phone,
+           u.email AS user_email,
+           e.enrolled_at,
+           COALESCE(e.status, 'active') AS status,
+           CASE
+             WHEN (COALESCE(tl.total_lectures, 0) + COALESCE(tt.total_tests, 0)) <= 0 THEN 0
+             ELSE LEAST(
+               100,
+               GREATEST(
+                 0,
+                 ROUND(
+                   100.0 * (COALESCE(lp.lecture_points, 0) + COALESCE(tp.completed_tests, 0))
+                   / NULLIF(COALESCE(tl.total_lectures, 0) + COALESCE(tt.total_tests, 0), 0)
+                 )
+               )
+             )::integer
+           END AS progress_percent
+         FROM enrollments e
+         JOIN users u ON e.user_id = u.id
+         CROSS JOIN LATERAL (
+           SELECT COUNT(*)::numeric AS total_lectures
+           FROM lectures l
+           WHERE l.course_id = $1
+         ) tl
+         CROSS JOIN LATERAL (
+           SELECT COUNT(*)::numeric AS total_tests
+           FROM tests t
+           WHERE t.course_id = $1
+             AND COALESCE(t.is_published, true) = true
+         ) tt
+         LEFT JOIN LATERAL (
+           SELECT
+             COALESCE(
+               SUM(
+                 LEAST(
+                   1.0,
+                   GREATEST(
+                     CASE
+                       WHEN COALESCE(lp2.is_completed, false) THEN 1.0
+                       ELSE GREATEST(0.0, LEAST(100.0, COALESCE(lp2.watch_percent, 0)::numeric)) / 100.0
+                     END,
+                     CASE
+                       WHEN COALESCE(lp2.playback_sessions, 0) > 0 THEN 0.10
+                       ELSE 0.0
+                     END
+                   )
+                 )
+               ),
+               0
+             ) AS lecture_points
+           FROM lecture_progress lp2
+           JOIN lectures l2 ON l2.id = lp2.lecture_id
+           WHERE lp2.user_id = e.user_id
+             AND l2.course_id = $1
+         ) lp ON true
+         LEFT JOIN LATERAL (
+           SELECT COUNT(DISTINCT ta.test_id)::numeric AS completed_tests
+           FROM test_attempts ta
+           JOIN tests t2 ON t2.id = ta.test_id
+           WHERE ta.user_id = e.user_id
+             AND ta.status = 'completed'
+             AND t2.course_id = $1
+             AND COALESCE(t2.is_published, true) = true
+         ) tp ON true
+         WHERE e.course_id = $1
+         ORDER BY e.enrolled_at DESC`,
         [req.params.id]
       );
       res.json(result.rows);

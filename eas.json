@@ -9,12 +9,18 @@
       "distribution": "internal",
       "android": {
         "buildType": "apk"
+      },
+      "ios": {
+        "simulator": false
       }
     },
     "preview": {
       "distribution": "internal",
       "android": {
         "buildType": "apk"
+      },
+      "ios": {
+        "simulator": false
       }
     },
     "production": {
@@ -22,6 +28,9 @@
       "node": "20.19.4",
       "android": {
         "buildType": "app-bundle"
+      },
+      "ios": {
+        "simulator": false
       }
     }
   },
@@ -30,7 +39,8 @@
       "android": {
         "serviceAccountKeyPath": "./google-services.json",
         "track": "production"
-      }
+      },
+      "ios": {}
     }
   }
 }

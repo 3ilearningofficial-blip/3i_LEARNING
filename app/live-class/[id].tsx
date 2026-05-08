@@ -15,6 +15,7 @@ import { liveClassQueryKey } from "@/lib/query-keys";
 import { useAuth } from "@/context/AuthContext";
 import Colors from "@/constants/colors";
 import { useScreenProtection } from "@/lib/useScreenProtection";
+import { useScreenWakeLock } from "@/lib/useScreenWakeLock";
 import { VideoWatermark } from "@/components/VideoWatermark";
 import LiveStudentsPanel from "@/components/LiveStudentsPanel";
 import { filterChatMessages } from "@/lib/chat-utils";
@@ -377,6 +378,10 @@ export default function LiveClassScreen() {
   const [chatMsg, setChatMsg] = useState("");
   const [isVideoLoading, setIsVideoLoading] = useState(true);
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
+  /** Goes true on the first 'play' / onLoad for the current video URL and
+   * stays true until the URL changes. We use it to keep the RN spinner from
+   * flashing again on any later re-render (e.g. after a heartbeat tick). */
+  const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
   const [handRaised, setHandRaised] = useState(false);
   const [countdown, setCountdown] = useState<string | null>(null);
   const [isScreenActive, setIsScreenActive] = useState(true);
@@ -385,6 +390,11 @@ export default function LiveClassScreen() {
   const lastMsgTimeRef = useRef<number>(0);
   const forceFullChatRefreshRef = useRef(false);
   const didAutoplayDirectRecording = useRef(false);
+  const markPlayed = useCallback(() => {
+    setIsVideoLoading(false);
+    setIsVideoPlaying(true);
+    setHasPlayedOnce(true);
+  }, []);
   /** Web: live chat uses SSE when connected; native keeps HTTP polling only. */
   const [chatSseActive, setChatSseActive] = useState(false);
   useEffect(() => {
@@ -430,6 +440,14 @@ export default function LiveClassScreen() {
     if (liveClassData?.is_live) return true;
     return listLiveHint && liveClassData == null;
   }, [liveClassData, listLiveHint]);
+
+  /** Keep the device screen awake while a class is actively playing so the
+   * phone / laptop doesn't sleep mid-stream and trigger a forced reconnect. */
+  useScreenWakeLock(
+    Boolean(liveClassData?.is_live) ||
+      Boolean(liveClassData?.is_completed) ||
+      (listLiveHint && !liveClassData)
+  );
 
   useEffect(() => {
     if (!liveClassData?.course_id) return;
@@ -481,15 +499,28 @@ export default function LiveClassScreen() {
   }, [isScreenActive, liveClassData?.scheduled_at, liveClassData?.is_live, liveClassData?.is_completed, liveClassData, listLiveHint]);
 
   // Viewer heartbeat — count only while class is actually live.
+  // 15s interval is well inside the server's 60s "online" cutoff so a single
+  // dropped request never makes a viewer disappear from the admin's list.
   useEffect(() => {
     if (!id || !isScreenActive || !liveClassData?.is_live || liveClassData?.is_completed) return;
     const sendHeartbeat = () => {
       apiRequest("POST", `/api/live-classes/${id}/viewers/heartbeat`, {}).catch(() => {});
     };
     sendHeartbeat(); // send immediately on mount
-    const interval = setInterval(sendHeartbeat, 32000);
+    const interval = setInterval(sendHeartbeat, 15000);
     return () => clearInterval(interval);
   }, [id, isScreenActive, liveClassData?.is_live, liveClassData?.is_completed]);
+
+  /** When the screen becomes active again (phone unlocked / tab refocused),
+   * force-refresh the viewers + class queries so admin doesn't see "0 viewers"
+   * while waiting for the next poll tick. The heartbeat effect above already
+   * fires an immediate beat on the same isScreenActive flip. */
+  useEffect(() => {
+    if (!id || !isScreenActive) return;
+    if (!liveClassData?.is_live || liveClassData?.is_completed) return;
+    qc.invalidateQueries({ queryKey: [`/api/live-classes/${id}/viewers`] });
+    qc.invalidateQueries({ queryKey: liveClassQueryKey(String(id)) });
+  }, [id, isScreenActive, liveClassData?.is_live, liveClassData?.is_completed, qc]);
 
   const title = liveClassData?.title || paramTitle || "Live Class";
   const topPadding = Platform.OS === "web" ? 16 : insets.top;
@@ -578,6 +609,8 @@ export default function LiveClassScreen() {
   })();
   useEffect(() => {
     didAutoplayDirectRecording.current = false;
+    setHasPlayedOnce(false);
+    setIsVideoLoading(true);
   }, [authenticatedVideoUrl]);
 
   const recordingTokenStatusOverlay = useMemo(() => {
@@ -634,7 +667,7 @@ export default function LiveClassScreen() {
 
   const { data: viewerData } = useQuery<{ count: number; viewers: any[]; visible: boolean }>({
     queryKey: [`/api/live-classes/${id}/viewers`],
-    refetchInterval: (!isScreenActive || !liveClassData?.is_live || liveClassData?.is_completed) ? false : 12000,
+    refetchInterval: (!isScreenActive || !liveClassData?.is_live || liveClassData?.is_completed) ? false : 6000,
     staleTime: 3000,
   });
 
@@ -804,17 +837,17 @@ export default function LiveClassScreen() {
     try {
       const data = JSON.parse(event.nativeEvent.data);
       if (data.event === 'play') {
-        setIsVideoPlaying(true);
+        markPlayed();
       } else if (data.event === 'pause' || data.event === 'ended') {
         setIsVideoPlaying(false);
       }
     } catch (e) {
       // Ignore non-JSON messages
       if (event.nativeEvent.data === 'ready') {
-        setIsVideoPlaying(true); // Assume playing when ready
+        markPlayed();
       }
     }
-  }, []);
+  }, [markPlayed]);
 
   const preventScreenCapture = `
     (function() {
@@ -940,7 +973,7 @@ export default function LiveClassScreen() {
                 )}
               </View>
             )}
-            {isVideoLoading && showAsLiveUI && (
+            {isVideoLoading && !hasPlayedOnce && showAsLiveUI && (
               <View style={styles.loadingOverlay}><ActivityIndicator size="large" color={Colors.light.primary} /></View>
             )}
             {(showAsLiveUI || liveClassData?.is_completed) && videoId && Platform.OS === "web" ? (
@@ -948,7 +981,7 @@ export default function LiveClassScreen() {
                 videoId={videoId}
                 brandingMask={false}
                 clipSeconds={completedClipSeconds}
-                onReady={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }}
+                onReady={markPlayed}
               />
             ) : /* Web: do not use RN WebView for YouTube before go-live — it often collapses; show black stage + waiting overlay. */
             Platform.OS === "web" && videoId && !showAsLiveUI && !liveClassData?.is_completed ? (
@@ -958,7 +991,7 @@ export default function LiveClassScreen() {
                 srcDoc={buildCfHlsPlayerHtml(cfHlsUrl, { liveStream: true })}
                 style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" } as any}
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                onLoad={() => setIsVideoLoading(false)}
+                onLoad={markPlayed}
               />
             ) : !videoId && !isCfHls && !isStreamId && authenticatedVideoUrl && Platform.OS === "web" ? (
               // Direct recording / upload — programmatic play for browser autoplay policies
@@ -970,7 +1003,7 @@ export default function LiveClassScreen() {
                 disablePictureInPicture
                 disableRemotePlayback
                 style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "contain", backgroundColor: "#000" } as any}
-                onLoadedData={() => setIsVideoLoading(false)}
+                onLoadedData={markPlayed}
                 onCanPlay={(e) => {
                   if (didAutoplayDirectRecording.current) return;
                   didAutoplayDirectRecording.current = true;
@@ -994,7 +1027,7 @@ export default function LiveClassScreen() {
               <WebView
                 source={{ html: buildCfHlsPlayerHtml(cfHlsUrl, { liveStream: true }) }}
                 style={{ flex: 1, backgroundColor: "#000" }}
-                onLoad={() => setIsVideoLoading(false)}
+                onLoad={markPlayed}
                 onMessage={handleWebViewMessage}
                 allowsFullscreenVideo mediaPlaybackRequiresUserAction={false}
                 allowsInlineMediaPlayback scrollEnabled={false}
@@ -1005,7 +1038,7 @@ export default function LiveClassScreen() {
               <WebView
                 source={{ html: streamHtml, baseUrl: "https://cloudflarestream.com" }}
                 style={{ flex: 1, backgroundColor: "#000" }}
-                onLoad={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }}
+                onLoad={markPlayed}
                 onMessage={handleWebViewMessage}
                 allowsFullscreenVideo mediaPlaybackRequiresUserAction={false}
                 allowsInlineMediaPlayback scrollEnabled={false}
@@ -1017,7 +1050,7 @@ export default function LiveClassScreen() {
               <WebView
                 source={{ uri: videoUrl }}
                 style={{ flex: 1, backgroundColor: "#000" }}
-                onLoad={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }}
+                onLoad={markPlayed}
                 onMessage={handleWebViewMessage}
                 allowsFullscreenVideo mediaPlaybackRequiresUserAction={false}
                 allowsInlineMediaPlayback scrollEnabled={false}
@@ -1033,7 +1066,7 @@ export default function LiveClassScreen() {
                   baseUrl: "https://www.youtube.com",
                 }}
                 style={{ flex: 1, backgroundColor: "#000" }}
-                onLoad={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }}
+                onLoad={markPlayed}
                 onError={() => {
                   // Fallback to simpler iframe embed for streams where YouTube blocks IFrame API controls.
                   setNativeYoutubeFallback(true);
@@ -1192,7 +1225,7 @@ export default function LiveClassScreen() {
                 )}
               </View>
             )}
-            {isVideoLoading && showAsLiveUI && (
+            {isVideoLoading && !hasPlayedOnce && showAsLiveUI && (
               <View style={styles.loadingOverlay}><ActivityIndicator size="large" color={Colors.light.primary} /></View>
             )}
             {(showAsLiveUI || liveClassData?.is_completed) && videoId && Platform.OS === "web" ? (
@@ -1200,7 +1233,7 @@ export default function LiveClassScreen() {
                 videoId={videoId}
                 brandingMask
                 clipSeconds={completedClipSeconds}
-                onReady={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }}
+                onReady={markPlayed}
               />
             ) : Platform.OS === "web" && videoId && !showAsLiveUI && !liveClassData?.is_completed ? (
               <View style={styles.webScheduledVideoSlot} />
@@ -1209,7 +1242,7 @@ export default function LiveClassScreen() {
                 srcDoc={buildCfHlsPlayerHtml(cfHlsUrl, { liveStream: true })}
                 style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" } as any}
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                onLoad={() => setIsVideoLoading(false)}
+                onLoad={markPlayed}
               />
             ) : !videoId && !isCfHls && !isStreamId && authenticatedVideoUrl && Platform.OS === "web" ? (
               <video
@@ -1220,7 +1253,7 @@ export default function LiveClassScreen() {
                 disablePictureInPicture
                 disableRemotePlayback
                 style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "contain", backgroundColor: "#000" } as any}
-                onLoadedData={() => setIsVideoLoading(false)}
+                onLoadedData={markPlayed}
                 onCanPlay={(e) => {
                   if (didAutoplayDirectRecording.current) return;
                   didAutoplayDirectRecording.current = true;
@@ -1244,7 +1277,7 @@ export default function LiveClassScreen() {
               <WebView
                 source={{ html: buildCfHlsPlayerHtml(cfHlsUrl, { liveStream: true }) }}
                 style={{ flex: 1, backgroundColor: "#000" }}
-                onLoad={() => setIsVideoLoading(false)}
+                onLoad={markPlayed}
                 onMessage={handleWebViewMessage}
                 allowsFullscreenVideo mediaPlaybackRequiresUserAction={false}
                 allowsInlineMediaPlayback scrollEnabled={false}
@@ -1255,7 +1288,7 @@ export default function LiveClassScreen() {
               <WebView
                 source={{ html: streamHtml, baseUrl: "https://cloudflarestream.com" }}
                 style={{ flex: 1, backgroundColor: "#000" }}
-                onLoad={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }}
+                onLoad={markPlayed}
                 onMessage={handleWebViewMessage}
                 allowsFullscreenVideo mediaPlaybackRequiresUserAction={false}
                 allowsInlineMediaPlayback scrollEnabled={false}
@@ -1266,7 +1299,7 @@ export default function LiveClassScreen() {
               <WebView
                 source={{ uri: videoUrl }}
                 style={{ flex: 1, backgroundColor: "#000" }}
-                onLoad={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }}
+                onLoad={markPlayed}
                 onMessage={handleWebViewMessage}
                 allowsFullscreenVideo mediaPlaybackRequiresUserAction={false}
                 allowsInlineMediaPlayback scrollEnabled={false}
@@ -1282,7 +1315,7 @@ export default function LiveClassScreen() {
                   baseUrl: "https://www.youtube.com",
                 }}
                 style={{ flex: 1, backgroundColor: "#000" }}
-                onLoad={() => { setIsVideoLoading(false); setIsVideoPlaying(true); }}
+                onLoad={markPlayed}
                 onError={() => {
                   setNativeYoutubeFallback(true);
                 }}

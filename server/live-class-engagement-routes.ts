@@ -96,6 +96,9 @@ export function registerLiveClassEngagementRoutes({
         return res.status(409).json({ message: "Class is not live" });
       }
       const now = Date.now();
+      // Throttle the UPDATE so back-to-back beats don't churn the row, but
+      // keep the throttle below the client's 15s heartbeat interval so every
+      // regular tick reliably refreshes last_heartbeat.
       await db.query(
         `INSERT INTO live_class_viewers (live_class_id, user_id, user_name, last_heartbeat)
          VALUES ($1, $2, $3, $4)
@@ -103,7 +106,7 @@ export function registerLiveClassEngagementRoutes({
            last_heartbeat = EXCLUDED.last_heartbeat,
            user_name = COALESCE(EXCLUDED.user_name, live_class_viewers.user_name)
          WHERE live_class_viewers.last_heartbeat IS NULL
-            OR EXCLUDED.last_heartbeat - live_class_viewers.last_heartbeat >= 20000`,
+            OR EXCLUDED.last_heartbeat - live_class_viewers.last_heartbeat >= 8000`,
         [req.params.id, user.id, user.name || user.phone || "Anonymous", now]
       );
       res.json({ success: true });
@@ -125,7 +128,9 @@ export function registerLiveClassEngagementRoutes({
         const visible = lcAccess.rows[0]?.show_viewer_count ?? true;
         return res.json({ viewers: [], count: 0, visible });
       }
-      const cutoff = Date.now() - 30000;
+      // 60s online window: forgiving enough to survive a brief screen lock or
+      // network hiccup so admin doesn't see students flicker out and back in.
+      const cutoff = Date.now() - 60000;
       const result = await db.query(
         `SELECT user_name FROM live_class_viewers
          WHERE live_class_id = $1 AND last_heartbeat > $2

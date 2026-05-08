@@ -24,6 +24,7 @@ import Colors from "@/constants/colors";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "@/context/AuthContext";
 import { useDocumentVisibility } from "@/lib/useDocumentVisibility";
+import { useScreenWakeLock } from "@/lib/useScreenWakeLock";
 import { buildRecordingLectureSectionTitle } from "@/lib/recordingSection";
 
 type StreamType = "webrtc" | "rtmp" | "cloudflare";
@@ -167,6 +168,10 @@ export default function BroadcastPage() {
   useAuth();
   const queryClient = useQueryClient();
   const tabVisible = useDocumentVisibility();
+
+  /** Admin is the broadcaster — keep the screen awake the whole time the page
+   * is mounted so RTMP / WebRTC capture doesn't get suspended by an OS sleep. */
+  useScreenWakeLock(true);
 
   const { data: liveClass, isLoading } = useQuery<any>({
     queryKey: liveClassQueryKey(String(liveClassId || "")),

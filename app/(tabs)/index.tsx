@@ -4,6 +4,7 @@ import {
   RefreshControl, Platform, ActivityIndicator, FlatList, Image, useWindowDimensions,
 } from "react-native";
 import { router } from "expo-router";
+import { useFocusEffect } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
@@ -375,11 +376,11 @@ export default function HomeScreen() {
       const data = await res.json().catch(() => []);
       return Array.isArray(data) ? data : [];
     },
-    staleTime: 5 * 60 * 1000,
+    staleTime: 10 * 1000,
     gcTime: 25 * 60 * 1000,
-    refetchInterval: tabVisible ? 3 * 60 * 1000 : 10 * 60 * 1000,
+    refetchInterval: tabVisible ? 60 * 1000 : 3 * 60 * 1000,
     refetchOnMount: true,
-    refetchOnWindowFocus: false,
+    refetchOnWindowFocus: true,
     // Always fetch — even unauthenticated users can see published courses
   });
 
@@ -389,6 +390,13 @@ export default function HomeScreen() {
       refetchCourses();
     }
   }, [user?.id]);
+
+  // Keep course cards fresh when returning from another screen (e.g. admin/content updates).
+  useFocusEffect(
+    useCallback(() => {
+      void refetchCourses();
+    }, [refetchCourses]),
+  );
 
   const dynamicCategories = React.useMemo(() => {
     const combined = [...DEFAULT_CATEGORIES];

@@ -64,8 +64,8 @@ if (menuBtn && menuPanel) {
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
 video { width: 100%; height: 100%; object-fit: contain; background: #000; }
-#overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #0a0a0a; color: #fff; font-family: sans-serif; gap: 12px; }
-#overlay.hidden { display: none; }
+#overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #0a0a0a; color: #fff; font-family: sans-serif; gap: 12px; transition: opacity 200ms ease; }
+#overlay.hidden { opacity: 0; pointer-events: none; }
 .spinner { width: 36px; height: 36px; border: 3px solid #333; border-top-color: #F6821F; border-radius: 50%; animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .msg { font-size: 13px; color: #aaa; text-align: center; }
@@ -86,11 +86,17 @@ var qsel = document.getElementById('qsel');
 var ssel = document.getElementById('ssel');
 var retryCount = 0;
 var hlsRef = null;
+/** True once we've shown live frames at least once in this session.
+ *  After that we never show the full "Connecting..." overlay again -- the
+ *  player simply rebuffers / seeks to live edge silently. */
+var hasPlayedOnce = false;
 ${menuJs}
+function hideOverlay() { overlay.classList.add('hidden'); }
 function showLive() {
-  overlay.classList.add('hidden');
+  hideOverlay();
   if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({ event: 'play' }));
 }
+video.addEventListener('playing', function() { hasPlayedOnce = true; hideOverlay(); });
 function fillQuality(hls) {
   hlsRef = hls;
   if (!qsel || !hls || !hls.levels || hls.levels.length <= 1) {
@@ -123,9 +129,43 @@ if (ssel) {
     video.playbackRate = isNaN(r) ? 1 : r;
   };
 }
+function jumpToLiveEdge() {
+  try {
+    if (hlsRef && typeof hlsRef.liveSyncPosition === 'number' && isFinite(hlsRef.liveSyncPosition)) {
+      video.currentTime = hlsRef.liveSyncPosition;
+      return;
+    }
+  } catch (_) {}
+  try {
+    var b = video.buffered;
+    if (b && b.length > 0) {
+      var endT = b.end(b.length - 1);
+      if (isFinite(endT) && endT > video.currentTime + 1) {
+        video.currentTime = Math.max(0, endT - 1);
+      }
+    }
+  } catch (_) {}
+}
+function softResume() {
+  // Resume after a screen sleep / tab background without showing the full
+  // "Connecting" overlay -- just seek to live edge and play.
+  jumpToLiveEdge();
+  if (video.paused) {
+    video.play().catch(function() {
+      video.muted = true;
+      video.play().catch(function() {});
+    });
+  }
+}
+document.addEventListener('visibilitychange', function() {
+  if (!document.hidden) softResume();
+});
+window.addEventListener('focus', softResume);
+window.addEventListener('online', softResume);
 function tryLoad() {
   if (typeof Hls !== 'undefined' && Hls.isSupported()) {
-    var hls = new Hls({ liveSyncDurationCount: 2, liveMaxLatencyDurationCount: 6, enableWorker: true });
+    if (hlsRef) { try { hlsRef.destroy(); } catch (_) {} hlsRef = null; }
+    var hls = new Hls({ liveSyncDurationCount: 2, liveMaxLatencyDurationCount: 6, enableWorker: true, lowLatencyMode: true });
     hls.loadSource(hlsUrl);
     hls.attachMedia(video);
     hls.on(Hls.Events.MANIFEST_PARSED, function() {
@@ -137,7 +177,21 @@ function tryLoad() {
       if (qsel && hls.currentLevel >= 0) qsel.value = String(hls.currentLevel);
     });
     hls.on(Hls.Events.ERROR, function(e, d) {
-      if (d.fatal) { retryCount++; msg.textContent = 'Connecting... (' + retryCount + ')'; setTimeout(tryLoad, 5000); }
+      if (!d || !d.fatal) return;
+      // Try in-place recovery first so we don't tear the player down on every
+      // tiny stall (which is what produced "Connecting..." after every wake).
+      try {
+        if (d.type === Hls.ErrorTypes.NETWORK_ERROR) { hls.startLoad(); return; }
+        if (d.type === Hls.ErrorTypes.MEDIA_ERROR) { hls.recoverMediaError(); return; }
+      } catch (_) {}
+      retryCount++;
+      // Only show the loud overlay if we've never been live; after first play
+      // we just silently rebuild in the background.
+      if (!hasPlayedOnce) {
+        overlay.classList.remove('hidden');
+        msg.textContent = 'Connecting... (' + retryCount + ')';
+      }
+      setTimeout(tryLoad, 3000);
     });
   } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
     var qrow = document.getElementById('qrow');
@@ -148,7 +202,13 @@ function tryLoad() {
       video.removeEventListener('loadedmetadata', once);
       video.play().then(showLive).catch(function() { showLive(); });
     });
-    video.addEventListener('error', function() { setTimeout(tryLoad, 5000); });
+    video.addEventListener('error', function() {
+      if (!hasPlayedOnce) {
+        overlay.classList.remove('hidden');
+        msg.textContent = 'Connecting...';
+      }
+      setTimeout(tryLoad, 3000);
+    });
   }
 }
 tryLoad();

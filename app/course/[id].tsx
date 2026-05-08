@@ -4,6 +4,7 @@ import {
   Platform, ActivityIndicator, Alert, Modal, Image,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
+import { useFocusEffect } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
@@ -213,7 +214,16 @@ export default function CourseDetailScreen() {
     staleTime: 20 * 1000,
     gcTime: 15 * 60 * 1000,
     refetchInterval: tabVisible ? 60_000 : 5 * 60_000,
+    refetchOnWindowFocus: true,
+    refetchOnMount: true,
   });
+
+  // Refresh course detail immediately when returning to this screen so counts/progress stay current.
+  useFocusEffect(
+    React.useCallback(() => {
+      void refetchCourse();
+    }, [refetchCourse]),
+  );
 
   // Repair paid-but-not-enrolled (legacy server bug). Idempotent; no-op if no paid row.
   useEffect(() => {
