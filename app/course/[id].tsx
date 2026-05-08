@@ -129,7 +129,12 @@ const TEST_SERIES_SECTIONS = [
 
 export default function CourseDetailScreen() {
   useScreenProtection(true);
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, folderName, folderType, folderColor } = useLocalSearchParams<{
+    id: string;
+    folderName?: string;
+    folderType?: "lectures" | "materials" | "live" | "tests";
+    folderColor?: string;
+  }>();
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
   const { user, isAdmin } = useAuth();
@@ -372,6 +377,26 @@ export default function CourseDetailScreen() {
     return [...new Set([...fromLectures, ...fromFolders])];
   };
 
+  const openFolderView = (next: { name: string; type: "lectures" | "materials" | "live" | "tests"; color: string; items: any[] }) => {
+    setOpenFolder(next);
+    router.setParams({
+      id: String(id),
+      folderName: next.name,
+      folderType: next.type,
+      folderColor: next.color,
+    } as any);
+  };
+
+  const closeFolderView = () => {
+    setOpenFolder(null);
+    router.setParams({
+      id: String(id),
+      folderName: undefined,
+      folderType: undefined,
+      folderColor: undefined,
+    } as any);
+  };
+
   const { data: enrolledStudents = [], isPending: enrolledStudentsPending } = useQuery<EnrolledStudent[]>({
     queryKey: ["/api/admin/courses", id, "enrollments"],
     queryFn: async () => {
@@ -588,6 +613,40 @@ setTimeout(function() {
       setIsPaymentPending(false);
     }
   };
+
+  useEffect(() => {
+    if (!course) return;
+    const name = String(folderName || "").trim();
+    const type = String(folderType || "").trim() as "lectures" | "materials" | "live" | "tests";
+    const color = String(folderColor || "").trim() || Colors.light.primary;
+    if (!name || !type) {
+      if (openFolder) setOpenFolder(null);
+      return;
+    }
+    let items: any[] = [];
+    if (type === "lectures") {
+      items = (course.lectures || []).filter((l: any) => {
+        const sec = String(l.section_title || "");
+        return sec === name || sec.startsWith(`${name} /`);
+      });
+    } else if (type === "materials") {
+      items = (course.materials || []).filter((m: any) => String(m.section_title || "") === name);
+    } else if (type === "live") {
+      items = (liveClassesForTab || []).filter((lc: any) => String((lc as any).section_title || "") === name);
+    } else if (type === "tests") {
+      const tests = course.tests || [];
+      const byFolder = tests.filter((t: any) => String(t.folder_name || "") === name);
+      if (byFolder.length > 0) items = byFolder;
+      else {
+        const sectionKey = TEST_SERIES_SECTIONS.find((s) => s.label === name)?.key;
+        items = sectionKey ? tests.filter((t: any) => t.test_type === sectionKey && !t.folder_name) : [];
+      }
+    }
+    setOpenFolder((prev) => {
+      if (prev && prev.name === name && prev.type === type && prev.items.length === items.length) return prev;
+      return { name, type, color, items };
+    });
+  }, [course, liveClassesForTab, folderName, folderType, folderColor]);
 
   const handleEnroll = () => {
     if (!user) { router.push("/(auth)/login"); return; }
@@ -1110,7 +1169,7 @@ setTimeout(function() {
                           <Pressable key={folderKey}
                             style={[styles.testSectionCard, { borderLeftColor: folderColor }]}
                             onPress={() => {
-                              setOpenFolder({ name: folderName, type: "lectures", color: folderColor, items: lectures });
+                              openFolderView({ name: folderName, type: "lectures", color: folderColor, items: lectures });
                             }}
                           >
                             <View style={[styles.testSectionIconWrap, { backgroundColor: folderBg }]}>
@@ -1198,7 +1257,7 @@ setTimeout(function() {
                         style={[styles.testSectionCard, { borderLeftColor: testFolderColor }]}
                         onPress={() => {
                           setFolderTestTypeFilter("all");
-                          setOpenFolder({ name: folderName, type: "tests", color: testFolderColor, items: folderTests });
+                          openFolderView({ name: folderName, type: "tests", color: testFolderColor, items: folderTests });
                         }}
                       >
                         <View style={[styles.testSectionIconWrap, { backgroundColor: testFolderColor + "18" }]}>
@@ -1223,7 +1282,7 @@ setTimeout(function() {
                       style={[styles.testSectionCard, { borderLeftColor: section.color }]}
                       onPress={() => {
                         setFolderTestTypeFilter("all");
-                        setOpenFolder({ name: section.label, type: "tests", color: section.color, items: sectionTests });
+                        openFolderView({ name: section.label, type: "tests", color: section.color, items: sectionTests });
                       }}
                     >
                       <View style={[styles.testSectionIconWrap, { backgroundColor: section.color + "18" }]}>
@@ -1318,7 +1377,7 @@ setTimeout(function() {
                           <Pressable key={folderKey}
                             style={[styles.testSectionCard, { borderLeftColor: folderColor }]}
                             onPress={() => {
-                              setOpenFolder({ name: folderName, type: "materials", color: folderColor, items: materials });
+                              openFolderView({ name: folderName, type: "materials", color: folderColor, items: materials });
                             }}
                           >
                             <View style={[styles.testSectionIconWrap, { backgroundColor: "#FEE2E2" }]}>
@@ -1418,7 +1477,7 @@ setTimeout(function() {
                               });
                               return;
                             }
-                            setOpenFolder({ name: folderName!, type: "live", color: "#DC2626", items: classes });
+                            openFolderView({ name: folderName!, type: "live", color: "#DC2626", items: classes });
                           }}
                         >
                           <View style={[styles.folderIconBox, { backgroundColor: "#FEE2E2" }]}>
@@ -1715,7 +1774,7 @@ setTimeout(function() {
       </Modal>
 
       {/* Folder Content Modal */}
-      <Modal visible={!!openFolder} animationType="slide" onRequestClose={() => setOpenFolder(null)}>
+      <Modal visible={!!openFolder} animationType="slide" onRequestClose={closeFolderView}>
         <View style={{ flex: 1, backgroundColor: Colors.light.background }}>
           {/* Header */}
           <LinearGradient colors={["#0A1628", "#1A2E50"]} style={{ paddingTop: topPadding + 8, paddingHorizontal: 16, paddingBottom: 14, flexDirection: "row", alignItems: "center", gap: 12 }}>
@@ -1728,10 +1787,10 @@ setTimeout(function() {
                     const sec = typeof l.section_title === "string" ? l.section_title : "";
                     return sec === parent || sec.startsWith(`${parent} /`);
                   });
-                  setOpenFolder({ name: parent, type: "lectures", color: openFolder.color, items: parentItems });
+                  openFolderView({ name: parent, type: "lectures", color: openFolder.color, items: parentItems });
                   return;
                 }
-                setOpenFolder(null);
+                closeFolderView();
               }}
             >
               <Ionicons name="arrow-back" size={20} color="#fff" />
@@ -1764,7 +1823,7 @@ setTimeout(function() {
                 <Pressable
                   key={childName}
                   style={[styles.testSectionCard, { marginHorizontal: 12, marginTop: 12, borderLeftColor: openFolder.color }]}
-                  onPress={() => setOpenFolder({ name: childName, type: "lectures", color: openFolder.color, items: childItems })}
+                  onPress={() => openFolderView({ name: childName, type: "lectures", color: openFolder.color, items: childItems })}
                 >
                   <View style={[styles.testSectionIconWrap, { backgroundColor: openFolder.color + "18" }]}>
                     <Ionicons name="folder" size={22} color={openFolder.color} />
