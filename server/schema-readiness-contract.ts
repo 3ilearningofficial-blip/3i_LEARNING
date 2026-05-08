@@ -31,6 +31,7 @@ export const REQUIRED_TABLES = [
   "user_push_tokens",
   "session",
   "express_rate_limit",
+  "otp_challenges",
 ] as const;
 
 export const REQUIRED_COLUMNS: Record<string, string[]> = {
@@ -42,6 +43,9 @@ export const REQUIRED_COLUMNS: Record<string, string[]> = {
     "profile_complete",
     "is_blocked",
     "last_active_at",
+    "otp_send_count",
+    "otp_send_window_start",
+    "otp_send_locked_until",
   ],
   enrollments: ["status", "valid_until"],
   live_classes: [

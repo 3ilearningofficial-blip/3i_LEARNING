@@ -1,7 +1,9 @@
 import type { Express, Request, Response } from "express";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { hashPassword, isScryptHash, verifyLegacySha256, verifyPassword } from "./password-utils";
 import {
   assertLoginAllowedForInstallation,
+  bindDeviceForNativeFirstLogin,
   enforceInstallationBinding,
   finalizeStudentWebSlotsAfterAuth,
 } from "./native-device-binding";
@@ -37,6 +39,68 @@ type RegisterAuthRoutesDeps = {
 
 const GENERIC_LOGIN_ERROR = "Invalid credentials";
 const GENERIC_OTP_ERROR = "Invalid or expired OTP";
+
+// Per-user OTP send throttle: allow 2 sends in a 2-minute window; the 3rd
+// send attempt locks OTP sending for 24h.
+const OTP_SEND_WINDOW_MS = 2 * 60 * 1000;
+const OTP_SEND_MAX_PER_WINDOW = 2;
+const OTP_SEND_LOCK_MS = 24 * 60 * 60 * 1000;
+const OTP_LOCKOUT_MESSAGE = "Too many OTP attempts. Please try again after 24 hours.";
+
+// Short-lived registration token for OTP-verified phones that don't yet have a
+// users row (issued by /api/auth/verify-otp, consumed by /api/auth/register-complete).
+const REGISTRATION_TOKEN_TTL_MS = 15 * 60 * 1000;
+
+function getTokenSecret(): string {
+  return process.env.OTP_HMAC_SECRET || process.env.SESSION_SECRET || "dev-otp-secret";
+}
+
+function toBase64Url(buf: Buffer): string {
+  return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function fromBase64Url(input: string): Buffer {
+  const pad = input.length % 4 === 0 ? "" : "=".repeat(4 - (input.length % 4));
+  return Buffer.from(input.replace(/-/g, "+").replace(/_/g, "/") + pad, "base64");
+}
+
+type RegistrationTokenPayload = {
+  identifier: string;
+  type: "phone" | "email";
+  phone?: string;
+  email?: string;
+  exp: number;
+};
+
+function signRegistrationToken(payload: Omit<RegistrationTokenPayload, "exp">): string {
+  const body: RegistrationTokenPayload = { ...payload, exp: Date.now() + REGISTRATION_TOKEN_TTL_MS };
+  const b64 = toBase64Url(Buffer.from(JSON.stringify(body), "utf8"));
+  const sig = toBase64Url(createHmac("sha256", getTokenSecret()).update(b64).digest());
+  return `${b64}.${sig}`;
+}
+
+function verifyRegistrationToken(token: string | null | undefined): RegistrationTokenPayload | null {
+  if (!token || typeof token !== "string") return null;
+  const dot = token.indexOf(".");
+  if (dot <= 0) return null;
+  const b64 = token.slice(0, dot);
+  const sig = token.slice(dot + 1);
+  const expected = toBase64Url(createHmac("sha256", getTokenSecret()).update(b64).digest());
+  const sigBuf = Buffer.from(sig, "utf8");
+  const expBuf = Buffer.from(expected, "utf8");
+  if (sigBuf.length !== expBuf.length) return null;
+  if (!timingSafeEqual(sigBuf, expBuf)) return null;
+  try {
+    const json = fromBase64Url(b64).toString("utf8");
+    const obj = JSON.parse(json) as RegistrationTokenPayload;
+    if (typeof obj.exp !== "number" || obj.exp < Date.now()) return null;
+    if (obj.type !== "phone" && obj.type !== "email") return null;
+    if (typeof obj.identifier !== "string" || !obj.identifier) return null;
+    return obj;
+  } catch {
+    return null;
+  }
+}
 
 /** Same fields as GET /api/auth/me so the client can show DOB, photo, etc. without a second fetch. */
 function buildSessionUserFromRow(
@@ -82,6 +146,45 @@ function normalizePhone(input: unknown): string {
   return digits;
 }
 
+function normalizeEmail(input: unknown): string {
+  return String(input || "").trim().toLowerCase();
+}
+
+type ThrottleSnapshot = {
+  send_count: number;
+  send_window_start: number | null;
+  send_locked_until: number | null;
+};
+
+type ThrottleDecision =
+  | { ok: true; nextCount: number; nextWindowStart: number; nextLockedUntil: null }
+  | { ok: false; lockedUntil: number; persistLock: boolean };
+
+/**
+ * 2 sends / 2-min window; 3rd send attempt triggers 24h lock. Returns either an "ok" with next
+ * counter values to persist alongside the OTP, or a "no" with the lockedUntil
+ * timestamp to surface to the client. The `persistLock` flag tells the caller
+ * to write `send_locked_until` into the row (true on the 4th attempt; false
+ * when an existing lock is still in effect).
+ */
+function evaluateSendThrottle(snap: ThrottleSnapshot, now: number): ThrottleDecision {
+  if (snap.send_locked_until && Number(snap.send_locked_until) > now) {
+    return { ok: false, lockedUntil: Number(snap.send_locked_until), persistLock: false };
+  }
+  const winStart = snap.send_window_start ? Number(snap.send_window_start) : 0;
+  let count = Number(snap.send_count) || 0;
+  let nextWindowStart = winStart;
+  if (!winStart || now - winStart > OTP_SEND_WINDOW_MS) {
+    nextWindowStart = now;
+    count = 0;
+  }
+  const nextCount = count + 1;
+  if (nextCount > OTP_SEND_MAX_PER_WINDOW) {
+    return { ok: false, lockedUntil: now + OTP_SEND_LOCK_MS, persistLock: true };
+  }
+  return { ok: true, nextCount, nextWindowStart, nextLockedUntil: null };
+}
+
 export function registerAuthRoutes({
   app,
   db,
@@ -94,6 +197,43 @@ export function registerAuthRoutes({
   verifyFirebaseToken,
   runInTransaction,
 }: RegisterAuthRoutesDeps): void {
+  const finalizeAuthenticatedSession = async (
+    req: Request,
+    user: Record<string, any>,
+    deviceId: string | null | undefined,
+    clearOtp: boolean
+  ): Promise<{ success: true; user: ReturnType<typeof buildSessionUserFromRow> }> => {
+    const sessionToken = generateSecureToken();
+    const normalizedDeviceId = deviceId || null;
+    await persistLoginSession(db, user as { id: number; role: string }, sessionToken, normalizedDeviceId, { clearOtp });
+    await finalizeStudentWebSlotsAfterAuth(db, Number(user.id), String(user.role), req);
+    await bindDeviceForNativeFirstLogin(db, Number(user.id), String(user.role), req);
+
+    const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: normalizedDeviceId });
+    await regenerateSession(req);
+    (req.session as any).user = sessionUser;
+    return { success: true, user: sessionUser };
+  };
+
+  const registrationTokenPayloadResponse = (
+    identifier: string,
+    tokenType: "phone" | "email"
+  ) => {
+    const registrationToken = signRegistrationToken({
+      identifier,
+      type: tokenType,
+      phone: tokenType === "phone" ? identifier : undefined,
+      email: tokenType === "email" ? identifier : undefined,
+    });
+    return {
+      success: true,
+      registrationToken,
+      profileComplete: false,
+      identifier,
+      type: tokenType,
+    };
+  };
+
   app.post("/api/auth/send-otp", async (req: Request, res: Response) => {
     try {
       const { identifier, type } = req.body;
@@ -101,69 +241,162 @@ export function registerAuthRoutes({
         return res.status(400).json({ message: "Identifier and type are required" });
       }
 
-      if (type === "phone") {
-        const normalizedPhone = normalizePhone(identifier);
-        if (!normalizedPhone || normalizedPhone.length !== 10) {
+      const isPhone = type === "phone";
+      let normalizedIdentifier: string;
+      if (isPhone) {
+        normalizedIdentifier = normalizePhone(identifier);
+        if (!normalizedIdentifier || normalizedIdentifier.length !== 10) {
           return res.status(400).json({ message: "Valid phone number is required" });
         }
-        await db.query(
-          `INSERT INTO users (name, phone, role)
-           VALUES ($1, $2, $3)
-           ON CONFLICT (phone) DO NOTHING`,
-          [`Student${normalizedPhone.slice(-4)}`, normalizedPhone, "student"]
+      } else if (type === "email") {
+        normalizedIdentifier = normalizeEmail(identifier);
+        if (!normalizedIdentifier || !/.+@.+\..+/.test(normalizedIdentifier)) {
+          return res.status(400).json({ message: "Valid email is required" });
+        }
+      } else {
+        return res.status(400).json({ message: "Invalid identifier type" });
+      }
+
+      const now = Date.now();
+      const otp = generateOTP();
+      const otpHash = hashOtpValue(otp);
+      const otpExpires = now + 10 * 60 * 1000;
+      const isDev = process.env.NODE_ENV !== "production";
+
+      // 1) If a users row already exists for this identifier, throttle + store OTP on that row.
+      const userRow = isPhone
+        ? await db.query(
+            "SELECT id, otp_send_count, otp_send_window_start, otp_send_locked_until FROM users WHERE phone = $1",
+            [normalizedIdentifier]
+          )
+        : await db.query(
+            "SELECT id, otp_send_count, otp_send_window_start, otp_send_locked_until FROM users WHERE LOWER(email) = LOWER($1)",
+            [normalizedIdentifier]
+          );
+
+      if (userRow.rows.length > 0) {
+        const u = userRow.rows[0];
+        const decision = evaluateSendThrottle(
+          {
+            send_count: Number(u.otp_send_count || 0),
+            send_window_start: u.otp_send_window_start != null ? Number(u.otp_send_window_start) : null,
+            send_locked_until: u.otp_send_locked_until != null ? Number(u.otp_send_locked_until) : null,
+          },
+          now
         );
 
-        const lockRow = await db.query("SELECT otp_locked_until FROM users WHERE phone = $1", [normalizedPhone]);
-        const lockedUntil = lockRow.rows[0]?.otp_locked_until != null ? Number(lockRow.rows[0].otp_locked_until) : 0;
-        if (lockedUntil > Date.now()) {
-          return res.status(429).json({ message: "Too many attempts. Please try again later." });
+        if (!decision.ok) {
+          if (decision.persistLock) {
+            await db.query(
+              `UPDATE users SET
+                 otp = NULL, otp_expires_at = NULL,
+                 otp_send_locked_until = $1,
+                 otp_send_count = 0,
+                 otp_send_window_start = $2
+               WHERE id = $3`,
+              [decision.lockedUntil, now, u.id]
+            );
+          }
+          return res.status(429).json({
+            message: OTP_LOCKOUT_MESSAGE,
+            lockedUntil: decision.lockedUntil,
+          });
         }
 
-        const otp = generateOTP();
-        const otpHash = hashOtpValue(otp);
-        const expires = Date.now() + 10 * 60 * 1000;
         await db.query(
-          "UPDATE users SET otp = $1, otp_expires_at = $2, otp_failed_attempts = 0, otp_locked_until = NULL WHERE phone = $3",
-          [otpHash, expires, normalizedPhone]
+          `UPDATE users SET
+             otp = $1,
+             otp_expires_at = $2,
+             otp_failed_attempts = 0,
+             otp_locked_until = NULL,
+             otp_send_count = $3,
+             otp_send_window_start = $4,
+             otp_send_locked_until = NULL
+           WHERE id = $5`,
+          [otpHash, otpExpires, decision.nextCount, decision.nextWindowStart, u.id]
         );
+      } else {
+        // 2) No users row yet — throttle + store OTP on otp_challenges (no junk users row created).
+        const challengeRow = await db.query(
+          "SELECT send_count, send_window_start, send_locked_until FROM otp_challenges WHERE identifier = $1",
+          [normalizedIdentifier]
+        );
+        const snap: ThrottleSnapshot = challengeRow.rows.length > 0
+          ? {
+              send_count: Number(challengeRow.rows[0].send_count || 0),
+              send_window_start: challengeRow.rows[0].send_window_start != null ? Number(challengeRow.rows[0].send_window_start) : null,
+              send_locked_until: challengeRow.rows[0].send_locked_until != null ? Number(challengeRow.rows[0].send_locked_until) : null,
+            }
+          : { send_count: 0, send_window_start: null, send_locked_until: null };
 
-        let smsSent = false;
+        const decision = evaluateSendThrottle(snap, now);
+        if (!decision.ok) {
+          if (decision.persistLock) {
+            await db.query(
+              `INSERT INTO otp_challenges
+                (identifier, type, otp_hash, otp_expires_at, send_count, send_window_start, send_locked_until, created_at, updated_at)
+               VALUES ($1, $2, NULL, NULL, 0, $3, $4, $3, $3)
+               ON CONFLICT (identifier) DO UPDATE SET
+                 type = EXCLUDED.type,
+                 otp_hash = NULL,
+                 otp_expires_at = NULL,
+                 send_count = 0,
+                 send_window_start = EXCLUDED.send_window_start,
+                 send_locked_until = EXCLUDED.send_locked_until,
+                 updated_at = EXCLUDED.updated_at`,
+              [normalizedIdentifier, type, now, decision.lockedUntil]
+            );
+          }
+          return res.status(429).json({
+            message: OTP_LOCKOUT_MESSAGE,
+            lockedUntil: decision.lockedUntil,
+          });
+        }
+
+        await db.query(
+          `INSERT INTO otp_challenges
+            (identifier, type, otp_hash, otp_expires_at, verify_failed_attempts, verify_locked_until,
+             send_count, send_window_start, send_locked_until, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, 0, NULL, $5, $6, NULL, $7, $7)
+           ON CONFLICT (identifier) DO UPDATE SET
+             type = EXCLUDED.type,
+             otp_hash = EXCLUDED.otp_hash,
+             otp_expires_at = EXCLUDED.otp_expires_at,
+             verify_failed_attempts = 0,
+             verify_locked_until = NULL,
+             send_count = EXCLUDED.send_count,
+             send_window_start = EXCLUDED.send_window_start,
+             send_locked_until = NULL,
+             updated_at = EXCLUDED.updated_at`,
+          [normalizedIdentifier, type, otpHash, otpExpires, decision.nextCount, decision.nextWindowStart, now]
+        );
+      }
+
+      // SMS only goes out for phone identifiers; email-OTP is server-stored only.
+      let smsSent = false;
+      if (isPhone) {
         try {
-          smsSent = await sendOTPviaSMS(normalizedPhone, otp);
+          smsSent = await sendOTPviaSMS(normalizedIdentifier, otp);
         } catch (smsErr) {
           console.error("[OTP] SMS sending threw error:", smsErr);
         }
         if (!smsSent) {
           console.log("[OTP] SMS delivery failed, OTP stored in DB");
         }
-
-        const isDev = process.env.NODE_ENV !== "production";
-        return res.json({
-          success: true,
-          message: smsSent ? "OTP sent to your phone" : "OTP sent. If SMS is delayed, please wait 30 seconds and try again.",
-          smsSent,
-          devOtp: isDev ? otp : "",
-        });
       }
 
-      const email = String(identifier).trim().toLowerCase();
-      const lockEmail = await db.query("SELECT otp_locked_until FROM users WHERE email = $1", [email]);
-      const lockedUntilE = lockEmail.rows[0]?.otp_locked_until != null ? Number(lockEmail.rows[0].otp_locked_until) : 0;
-      if (lockedUntilE > Date.now()) {
-        return res.status(429).json({ message: "Too many attempts. Please try again later." });
-      }
-
-      const otp = generateOTP();
-      const otpHash = hashOtpValue(otp);
-      const expires = Date.now() + 10 * 60 * 1000;
-      await db.query(
-        `INSERT INTO users (name, email, otp, otp_expires_at, role)
-         VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (email) DO UPDATE SET otp = EXCLUDED.otp, otp_expires_at = EXCLUDED.otp_expires_at,
-           otp_failed_attempts = 0, otp_locked_until = NULL`,
-        [email.split("@")[0], email, otpHash, expires, "student"]
-      );
-      res.json({ success: true, message: "OTP sent successfully", method: "server" });
+      return res.json({
+        success: true,
+        message: isPhone
+          ? smsSent
+            ? "OTP sent to your phone"
+            : "OTP sent. If SMS is delayed, please wait 30 seconds and try again."
+          : "OTP sent successfully",
+        smsSent,
+        devOtp: isDev ? otp : "",
+        method: isPhone ? undefined : "server",
+        lockedUntil: null,
+      });
     } catch (err) {
       console.error(err);
       res.status(500).json({ message: "Failed to send OTP" });
@@ -177,52 +410,96 @@ export function registerAuthRoutes({
         return res.status(400).json({ message: "Identifier and OTP are required" });
       }
 
-      const result =
-        type === "email"
-          ? await db.query("SELECT * FROM users WHERE email = $1", [identifier])
-          : await db.query("SELECT * FROM users WHERE phone = $1", [identifier]);
-      if (result.rows.length === 0) {
-        return res.status(404).json({ message: "Account not found. Please register first." });
+      const isPhone = type !== "email";
+      const normalizedIdentifier = isPhone ? normalizePhone(identifier) : normalizeEmail(identifier);
+      if (!normalizedIdentifier) {
+        return res.status(400).json({ message: "Identifier and OTP are required" });
       }
 
-      const user = result.rows[0];
-      if (user.is_blocked) return res.status(401).json({ message: GENERIC_OTP_ERROR });
-      const lockedUntil = user.otp_locked_until != null ? Number(user.otp_locked_until) : 0;
-      if (lockedUntil > Date.now()) {
+      // 1) Existing users path — issues a real session (legacy flow).
+      const result = isPhone
+        ? await db.query("SELECT * FROM users WHERE phone = $1", [normalizedIdentifier])
+        : await db.query("SELECT * FROM users WHERE LOWER(email) = LOWER($1)", [normalizedIdentifier]);
+
+      if (result.rows.length > 0) {
+        const user = result.rows[0];
+        if (user.is_blocked) return res.status(401).json({ message: GENERIC_OTP_ERROR });
+        const lockedUntil = user.otp_locked_until != null ? Number(user.otp_locked_until) : 0;
+        if (lockedUntil > Date.now()) {
+          return res.status(429).json({ message: "Too many attempts. Please try again later." });
+        }
+        if (!verifyOtpValue(user.otp, otp)) {
+          const lockMs = Date.now() + 15 * 60 * 1000;
+          await db.query(
+            `UPDATE users SET
+               otp_failed_attempts = LEAST(COALESCE(otp_failed_attempts, 0) + 1, 99),
+               otp_locked_until = CASE WHEN COALESCE(otp_failed_attempts, 0) + 1 >= 5 THEN $1 ELSE otp_locked_until END
+             WHERE id = $2`,
+            [lockMs, user.id]
+          );
+          return res.status(401).json({ message: GENERIC_OTP_ERROR });
+        }
+        if (Date.now() > Number(user.otp_expires_at)) return res.status(401).json({ message: GENERIC_OTP_ERROR });
+
+        const loginGate = await assertLoginAllowedForInstallation(db, req, {
+          userId: user.id,
+          role: user.role,
+          bodyDeviceId: deviceId || null,
+          phone: user.phone,
+          email: user.email,
+        });
+        if (!loginGate.ok) {
+          return res.status(loginGate.httpStatus).json({ message: loginGate.message });
+        }
+
+        const finalized = await finalizeAuthenticatedSession(req, user, deviceId || null, true);
+        return res.json(finalized);
+      }
+
+      // 2) New-user path: verify against otp_challenges, then issue a short-lived
+      //    registrationToken WITHOUT creating a session. Profile-setup will call
+      //    /api/auth/register-complete which is when the users row is finally INSERTed.
+      const chRow = await db.query(
+        "SELECT type, otp_hash, otp_expires_at, verify_failed_attempts, verify_locked_until FROM otp_challenges WHERE identifier = $1",
+        [normalizedIdentifier]
+      );
+      if (chRow.rows.length === 0) {
+        return res.status(404).json({ message: "Account not found. Please register first." });
+      }
+      const ch = chRow.rows[0];
+      const nowMs = Date.now();
+      const verifyLockedUntil = ch.verify_locked_until != null ? Number(ch.verify_locked_until) : 0;
+      if (verifyLockedUntil > nowMs) {
         return res.status(429).json({ message: "Too many attempts. Please try again later." });
       }
-      if (!verifyOtpValue(user.otp, otp)) {
-        const lockMs = Date.now() + 15 * 60 * 1000;
+      if (!verifyOtpValue(ch.otp_hash, otp) || nowMs > Number(ch.otp_expires_at || 0)) {
+        const failCount = Number(ch.verify_failed_attempts || 0) + 1;
+        const lockUntil = failCount >= 5 ? nowMs + 15 * 60 * 1000 : null;
         await db.query(
-          `UPDATE users SET
-             otp_failed_attempts = LEAST(COALESCE(otp_failed_attempts, 0) + 1, 99),
-             otp_locked_until = CASE WHEN COALESCE(otp_failed_attempts, 0) + 1 >= 5 THEN $1 ELSE otp_locked_until END
-           WHERE id = $2`,
-          [lockMs, user.id]
+          `UPDATE otp_challenges SET
+             verify_failed_attempts = $1,
+             verify_locked_until = COALESCE($2, verify_locked_until),
+             updated_at = $3
+           WHERE identifier = $4`,
+          [failCount, lockUntil, nowMs, normalizedIdentifier]
         );
         return res.status(401).json({ message: GENERIC_OTP_ERROR });
       }
-      if (Date.now() > Number(user.otp_expires_at)) return res.status(401).json({ message: GENERIC_OTP_ERROR });
 
-      const loginGate = await assertLoginAllowedForInstallation(db, req, {
-        userId: user.id,
-        role: user.role,
-        bodyDeviceId: deviceId || null,
-        phone: user.phone,
-        email: user.email,
-      });
-      if (!loginGate.ok) {
-        return res.status(loginGate.httpStatus).json({ message: loginGate.message });
-      }
+      // OTP ok: clear OTP fields but keep send-throttle counters so a malicious
+      // verifier can't bypass the 24h lock by completing a verify.
+      await db.query(
+        `UPDATE otp_challenges SET
+           otp_hash = NULL,
+           otp_expires_at = NULL,
+           verify_failed_attempts = 0,
+           verify_locked_until = NULL,
+           updated_at = $1
+         WHERE identifier = $2`,
+        [nowMs, normalizedIdentifier]
+      );
 
-      const sessionToken = generateSecureToken();
-      await persistLoginSession(db, user, sessionToken, deviceId || null, { clearOtp: true });
-      await finalizeStudentWebSlotsAfterAuth(db, user.id, user.role, req);
-
-      const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: deviceId || null });
-      await regenerateSession(req);
-      (req.session as any).user = sessionUser;
-      res.json({ success: true, user: sessionUser });
+      return res.json(registrationTokenPayloadResponse(normalizedIdentifier, isPhone ? "phone" : "email"));
     } catch (err) {
       console.error(err);
       res.status(500).json({ message: "Failed to verify OTP" });
@@ -243,13 +520,11 @@ export function registerAuthRoutes({
         return res.status(400).json({ message: "Phone number mismatch" });
       }
 
-      let result = await db.query("SELECT * FROM users WHERE phone = $1", [claimedPhone]);
+      const result = await db.query("SELECT * FROM users WHERE phone = $1", [claimedPhone]);
       if (result.rows.length === 0) {
-        await db.query(
-          "INSERT INTO users (name, phone, role) VALUES ($1, $2, $3)",
-          [`Student${claimedPhone.slice(-4)}`, claimedPhone, "student"]
-        );
-        result = await db.query("SELECT * FROM users WHERE phone = $1", [claimedPhone]);
+        // Brand-new user — don't create a row, hand back a registrationToken
+        // and let profile-setup finish the registration.
+        return res.json(registrationTokenPayloadResponse(claimedPhone, "phone"));
       }
 
       const user = result.rows[0];
@@ -264,14 +539,8 @@ export function registerAuthRoutes({
         return res.status(loginGate.httpStatus).json({ message: loginGate.message });
       }
 
-      const sessionToken = generateSecureToken();
-      await persistLoginSession(db, user, sessionToken, deviceId || null, { clearOtp: true });
-      await finalizeStudentWebSlotsAfterAuth(db, user.id, user.role, req);
-
-      const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: deviceId || null });
-      await regenerateSession(req);
-      (req.session as any).user = sessionUser;
-      res.json({ success: true, user: sessionUser });
+      const finalized = await finalizeAuthenticatedSession(req, user, deviceId || null, true);
+      res.json(finalized);
     } catch (err) {
       console.error("Firebase verify error:", err);
       res.status(400).json({ message: "Firebase verification failed" });
@@ -371,12 +640,9 @@ export function registerAuthRoutes({
       if (!phoneNumber) return res.status(400).json({ message: "Phone number not found in token" });
 
       const phone = phoneNumber.replace(/^\+91/, "");
-      let result = await db.query("SELECT * FROM users WHERE phone = $1", [phone]);
+      const result = await db.query("SELECT * FROM users WHERE phone = $1", [phone]);
       if (result.rows.length === 0) {
-        result = await db.query(
-          "INSERT INTO users (name, phone, role, created_at) VALUES ($1, $2, $3, $4) RETURNING *",
-          [`Student${phone.slice(-4)}`, phone, "student", Date.now()]
-        );
+        return res.json(registrationTokenPayloadResponse(phone, "phone"));
       }
 
       const user = result.rows[0];
@@ -391,14 +657,8 @@ export function registerAuthRoutes({
         return res.status(loginGate.httpStatus).json({ message: loginGate.message });
       }
 
-      const sessionToken = generateSecureToken();
-      await persistLoginSession(db, user, sessionToken, deviceId || null, { clearOtp: false });
-      await finalizeStudentWebSlotsAfterAuth(db, user.id, user.role, req);
-
-      const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: deviceId || null });
-      await regenerateSession(req);
-      (req.session as any).user = sessionUser;
-      res.json({ success: true, user: sessionUser });
+      const finalized = await finalizeAuthenticatedSession(req, user, deviceId || null, false);
+      res.json(finalized);
     } catch (err: any) {
       console.error("Firebase login error:", err);
       if (err.code === "auth/id-token-expired") {
@@ -490,12 +750,15 @@ export function registerAuthRoutes({
       }
 
       if (result.rows.length === 0) {
-        return res.status(404).json({ message: "Account not found. Please register first." });
+        // No row at all — definitely not registered. Tell the client to send to signup.
+        return res.status(404).json({ message: "register_first" });
       }
       const user = result.rows[0];
       if (user.is_blocked) return res.status(401).json({ message: GENERIC_LOGIN_ERROR });
       if (!user.profile_complete) {
-        return res.status(401).json({ message: GENERIC_LOGIN_ERROR });
+        // Legacy unfinished registration (pre-0014 migration). Send them back to
+        // signup so they can complete profile-setup.
+        return res.status(401).json({ message: "complete_registration" });
       }
 
       if (!user.password_hash) return res.status(401).json({ message: GENERIC_LOGIN_ERROR });
@@ -522,17 +785,111 @@ export function registerAuthRoutes({
         return res.status(gate.httpStatus).json({ message: gate.message });
       }
 
-      const sessionToken = generateSecureToken();
       const dev = typeof deviceId === "string" ? deviceId : null;
-      await persistLoginSession(db, user, sessionToken, dev, { clearOtp: false });
-      await finalizeStudentWebSlotsAfterAuth(db, user.id, user.role, req);
-      const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: dev });
-      await regenerateSession(req);
-      (req.session as any).user = sessionUser;
-      res.json({ success: true, user: sessionUser });
+      const finalized = await finalizeAuthenticatedSession(req, user, dev, false);
+      res.json(finalized);
     } catch (err) {
       console.error("Email login error:", err);
       res.status(500).json({ message: "Login failed" });
+    }
+  });
+
+  /**
+   * Final step of new-user registration: consume the registrationToken (issued
+   * by /api/auth/verify-otp or /api/auth/verify-firebase), create the users row
+   * with the profile fields the student typed on /profile-setup, and start a
+   * session. This is the ONLY path that creates a fresh students row now —
+   * /api/auth/send-otp no longer touches `users`.
+   */
+  app.post("/api/auth/register-complete", async (req: Request, res: Response) => {
+    try {
+      const { registrationToken, name, dateOfBirth, email, photoUrl, password, deviceId } = req.body || {};
+      const payload = verifyRegistrationToken(registrationToken);
+      if (!payload) {
+        return res.status(401).json({ message: "registration_token_invalid" });
+      }
+      const normalizedName = typeof name === "string" ? name.trim() : "";
+      if (!normalizedName) {
+        return res.status(400).json({ message: "Name is required" });
+      }
+
+      const isPhoneFlow = payload.type === "phone";
+      const phone = isPhoneFlow ? payload.identifier : null;
+      const tokenEmail = isPhoneFlow ? null : payload.identifier;
+
+      // Pre-flight conflict checks: someone may have raced and registered with
+      // the same identifier between OTP verify and profile save.
+      const existingByIdentifier = phone
+        ? await db.query("SELECT id FROM users WHERE phone = $1", [phone])
+        : await db.query("SELECT id FROM users WHERE LOWER(email) = LOWER($1)", [tokenEmail!]);
+      if (existingByIdentifier.rows.length > 0) {
+        return res.status(409).json({ message: "Account already exists for this phone/email. Please sign in." });
+      }
+
+      const finalEmail = (typeof email === "string" && email.trim().length > 0)
+        ? email.trim().toLowerCase()
+        : tokenEmail;
+      if (finalEmail) {
+        const conflict = await db.query("SELECT id FROM users WHERE LOWER(email) = LOWER($1)", [finalEmail]);
+        if (conflict.rows.length > 0) {
+          return res.status(409).json({ message: "This email is already in use. Use a different email or sign in." });
+        }
+      }
+
+      const passwordHash = password ? await hashPassword(password) : null;
+      const photo = typeof photoUrl === "string" && photoUrl.length > 0 ? photoUrl : null;
+      const dob = typeof dateOfBirth === "string" && dateOfBirth.length > 0 ? dateOfBirth : null;
+      const now = Date.now();
+
+      const inserted = await db.query(
+        `INSERT INTO users
+          (name, email, phone, role, profile_complete, date_of_birth, photo_url, password_hash, created_at, last_active_at)
+         VALUES ($1, $2, $3, 'student', TRUE, $4, $5, $6, $7, $7)
+         RETURNING *`,
+        [normalizedName, finalEmail, phone, dob, photo, passwordHash, now]
+      );
+      const user = inserted.rows[0];
+
+      // Clean up the one-shot challenge so it can't be reused.
+      await db
+        .query("DELETE FROM otp_challenges WHERE identifier = $1", [payload.identifier])
+        .catch(() => {});
+
+      const gate = await assertLoginAllowedForInstallation(db, req, {
+        userId: user.id,
+        role: user.role,
+        bodyDeviceId: typeof deviceId === "string" ? deviceId : null,
+        phone: user.phone,
+        email: user.email,
+      });
+      if (!gate.ok) {
+        return res.status(gate.httpStatus).json({ message: gate.message });
+      }
+
+      const dev = typeof deviceId === "string" ? deviceId : null;
+      const finalized = await finalizeAuthenticatedSession(req, user, dev, true);
+      const refreshed = await db.query(
+        "SELECT id, name, email, phone, role, session_token, profile_complete, date_of_birth, photo_url FROM users WHERE id = $1",
+        [user.id]
+      );
+      const row = refreshed.rows[0] || user;
+      // Keep response aligned with fresh DB row while preserving the active
+      // session token/device id established above.
+      const responseUser = {
+        ...finalized.user,
+        name: row.name,
+        email: row.email,
+        phone: row.phone,
+        role: row.role,
+        profileComplete: !!row.profile_complete,
+        date_of_birth: row.date_of_birth ?? null,
+        photo_url: row.photo_url ?? null,
+      };
+      (req.session as any).user = responseUser;
+      res.json({ success: true, user: responseUser });
+    } catch (err) {
+      console.error("Register-complete error:", err);
+      res.status(500).json({ message: "Failed to complete registration" });
     }
   });
 
@@ -627,4 +984,3 @@ export function registerAuthRoutes({
     }
   });
 }
-

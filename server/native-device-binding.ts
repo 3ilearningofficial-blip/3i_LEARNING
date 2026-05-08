@@ -146,6 +146,33 @@ export async function finalizeInstallationBindAfterPurchase(db: DbLike, userId: 
   await db.query("UPDATE users SET app_bound_device_id = $1 WHERE id = $2 AND app_bound_device_id IS NULL", [inst, userId]);
 }
 
+/**
+ * Bind native (iOS/Android) installation id on the FIRST successful login for
+ * a student. After this binds, subsequent logins from any other native device
+ * are denied by `assertLoginAllowedForInstallation` and recorded in
+ * `device_block_events` so admins see them at /admin/device-locks.
+ *
+ * No-op for admins, web sessions, missing installation id, or when the user
+ * already has a different bound device (then the `assertLogin...` gate has
+ * already blocked the request before we got here).
+ */
+export async function bindDeviceForNativeFirstLogin(
+  db: DbLike,
+  userId: number,
+  role: string | undefined,
+  req: Request
+): Promise<void> {
+  if (role === "admin") return;
+  const plat = getClientPlatform(req);
+  if (plat !== "ios" && plat !== "android") return;
+  const inst = getInstallationIdFromRequest(req);
+  if (!inst || inst === "web_anon") return;
+  await db.query(
+    "UPDATE users SET app_bound_device_id = $1 WHERE id = $2 AND (app_bound_device_id IS NULL OR app_bound_device_id = '')",
+    [inst, userId]
+  );
+}
+
 /** Legacy single-call helper for routers that forgot pre-check — still used only internally if needed */
 export async function bindInstallationAfterPurchase(
   db: DbLike,

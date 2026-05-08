@@ -1023,6 +1023,8 @@ export default function AdminDashboard() {
   // User action sheet
   const [userActionUser, setUserActionUser] = useState<UserRecord | null>(null);
   const deletingUserIdsRef = useRef<Set<number>>(new Set());
+  // Clean up unfinished signups (legacy "Student7890" placeholder rows)
+  const [cleanupPending, setCleanupPending] = useState(false);
   const [showCourseAccess, setShowCourseAccess] = useState(false);
   const [courseAccessUserId, setCourseAccessUserId] = useState<number | null>(null);
   const [grantingCourseId, setGrantingCourseId] = useState<number | null>(null);
@@ -2907,6 +2909,72 @@ export default function AdminDashboard() {
                           </Text>
                         </View>
                         <Ionicons name="chevron-forward" size={22} color="#9A3412" />
+                      </Pressable>
+                    </View>
+
+                    {/* Clean up unfinished signups (legacy placeholder rows older than 24h) */}
+                    <View style={{ marginBottom: 18, padding: 14, backgroundColor: "#EFF6FF", borderRadius: 14, borderWidth: 1, borderColor: "#BFDBFE" }}>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                        <Ionicons name="trash-outline" size={20} color="#1D4ED8" />
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ fontFamily: "Inter_700Bold", fontSize: 15, color: "#1E3A8A" }}>Clean up unfinished signups</Text>
+                          <Text style={{ fontSize: 12, fontFamily: "Inter_400Regular", color: "#1E40AF", marginTop: 2 }}>
+                            Permanently delete student rows older than 24h that never finished profile-setup and have no enrollments / payments / activity.
+                          </Text>
+                        </View>
+                      </View>
+                      <Pressable
+                        disabled={cleanupPending}
+                        onPress={() => {
+                          const runCleanup = async () => {
+                            setCleanupPending(true);
+                            try {
+                              const res = await apiRequest("POST", "/api/admin/users/cleanup-pending", {});
+                              const data = await res.json();
+                              const deleted = Number(data?.deleted || 0);
+                              const failed = Array.isArray(data?.failed) ? data.failed.length : 0;
+                              await qc.invalidateQueries({ queryKey: ["/api/admin/users"] });
+                              await qc.refetchQueries({ queryKey: ["/api/admin/users"], type: "active" });
+                              const msg = failed > 0
+                                ? `Removed ${deleted} placeholder accounts. ${failed} could not be removed.`
+                                : `Removed ${deleted} unfinished signup${deleted === 1 ? "" : "s"}.`;
+                              if (Platform.OS === "web" && typeof window !== "undefined") window.alert(msg);
+                              else Alert.alert("Cleanup complete", msg);
+                            } catch (err: any) {
+                              const msg = err?.message?.replace(/^\d+:\s*/, "") || "Cleanup failed";
+                              if (Platform.OS === "web" && typeof window !== "undefined") window.alert(msg);
+                              else Alert.alert("Failed", msg);
+                            } finally {
+                              setCleanupPending(false);
+                            }
+                          };
+                          const confirmMsg = "This will permanently delete student rows that never completed profile setup AND have no enrollments / payments / activity AND are older than 24 hours. Continue?";
+                          if (Platform.OS === "web" && typeof window !== "undefined") {
+                            if (window.confirm(confirmMsg)) void runCleanup();
+                          } else {
+                            Alert.alert("Clean up unfinished signups?", confirmMsg, [
+                              { text: "Cancel", style: "cancel" },
+                              { text: "Delete", style: "destructive", onPress: () => void runCleanup() },
+                            ]);
+                          }
+                        }}
+                        style={({ pressed }) => ({
+                          marginTop: 10,
+                          alignSelf: "flex-start",
+                          paddingHorizontal: 14,
+                          paddingVertical: 9,
+                          borderRadius: 10,
+                          backgroundColor: cleanupPending ? "#93C5FD" : "#1D4ED8",
+                          opacity: pressed ? 0.92 : 1,
+                          flexDirection: "row",
+                          alignItems: "center",
+                          gap: 6,
+                        })}
+                      >
+                        {cleanupPending ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="trash" size={14} color="#fff" />}
+                        <Text style={{ color: "#fff", fontSize: 13, fontFamily: "Inter_600SemiBold" }}>
+                          {cleanupPending ? "Cleaning…" : "Run cleanup now"}
+                        </Text>
                       </Pressable>
                     </View>
 

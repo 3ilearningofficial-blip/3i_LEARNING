@@ -2,19 +2,24 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   View, Text, StyleSheet, TextInput, Pressable,
   ScrollView, KeyboardAvoidingView, Platform,
-  ActivityIndicator, Alert, Image,
+  ActivityIndicator, Image,
 } from "react-native";
 import { router } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import { apiRequest } from "@/lib/query-client";
 import { getInstallationId } from "@/lib/installation-id";
 import { useAuth } from "@/context/AuthContext";
 import Colors from "@/constants/colors";
 import { navigateToProfileSetupWithNotice } from "@/lib/profile-completion-ui";
 import { navigateBackFromAuth } from "@/lib/navigate-auth-back";
+import {
+  formatLockCountdown,
+  loadLockedUntil,
+  sendOtpRequest,
+  verifyOtpRequest,
+} from "@/lib/otp-lockout";
 
 export default function LoginScreen() {
   const insets = useSafeAreaInsets();
@@ -27,11 +32,14 @@ export default function LoginScreen() {
   const [isVerifying, setIsVerifying] = useState(false);
   const [error, setError] = useState("");
   const [resendCountdown, setResendCountdown] = useState(0);
+  const [lockedUntil, setLockedUntil] = useState<number | null>(null);
+  const [lockRemainingMs, setLockRemainingMs] = useState(0);
   const resendTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lockTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const startResendCountdown = () => {
     if (resendTimerRef.current) clearInterval(resendTimerRef.current);
-    setResendCountdown(60);
+    setResendCountdown(120);
     resendTimerRef.current = setInterval(() => {
       setResendCountdown((prev) => {
         if (prev <= 1) {
@@ -46,9 +54,47 @@ export default function LoginScreen() {
     }, 1000);
   };
 
+  const startLockCountdown = (until: number) => {
+    setLockedUntil(until);
+    setLockRemainingMs(Math.max(0, until - Date.now()));
+    if (lockTimerRef.current) clearInterval(lockTimerRef.current);
+    lockTimerRef.current = setInterval(() => {
+      const remaining = Math.max(0, until - Date.now());
+      setLockRemainingMs(remaining);
+      if (remaining <= 0) {
+        if (lockTimerRef.current) clearInterval(lockTimerRef.current);
+        lockTimerRef.current = null;
+        setLockedUntil(null);
+      }
+    }, 1000);
+  };
+
+  // Re-hydrate lock countdown when phone is entered (so leaving and re-entering the screen still shows the lock).
+  useEffect(() => {
+    const trimmed = phone.trim();
+    if (!/^\d{10}$/.test(trimmed)) {
+      setLockedUntil(null);
+      setLockRemainingMs(0);
+      if (lockTimerRef.current) {
+        clearInterval(lockTimerRef.current);
+        lockTimerRef.current = null;
+      }
+      return;
+    }
+    let active = true;
+    void loadLockedUntil(trimmed).then((until) => {
+      if (!active || !until) return;
+      startLockCountdown(until);
+    });
+    return () => {
+      active = false;
+    };
+  }, [phone]);
+
   useEffect(() => {
     return () => {
       if (resendTimerRef.current) clearInterval(resendTimerRef.current);
+      if (lockTimerRef.current) clearInterval(lockTimerRef.current);
     };
   }, []);
 
@@ -59,51 +105,41 @@ export default function LoginScreen() {
       setError("Enter a valid 10-digit phone number");
       return;
     }
+    if (lockedUntil && lockedUntil > Date.now()) {
+      setError(`Too many OTP attempts. Try again in ${formatLockCountdown(lockedUntil - Date.now())}.`);
+      return;
+    }
 
     setIsLoading(true);
-    try {
-      const res = await apiRequest("POST", "/api/auth/send-otp", {
-        identifier: trimmed,
-        type: "phone",
-      });
-      const data = await res.json();
+    const result = await sendOtpRequest(trimmed, "phone");
+    setIsLoading(false);
 
-      if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      setOtpSent(true);
-      setDevOtp(data.devOtp || "");
-      startResendCountdown();
-    } catch (err: any) {
-      const msg = (err?.message || "").replace(/^\d+:\s*/, "");
-      setError(msg || "Could not send OTP. Please try again.");
-    } finally {
-      setIsLoading(false);
+    if (!result.ok) {
+      if (result.lockedUntil && result.lockedUntil > Date.now()) {
+        startLockCountdown(result.lockedUntil);
+        setError(`Too many OTP attempts. Try again in ${formatLockCountdown(result.lockedUntil - Date.now())}.`);
+        return;
+      }
+      setError(result.message || "Could not send OTP. Please try again.");
+      return;
     }
+
+    if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setOtpSent(true);
+    setDevOtp(result.devOtp || "");
+    startResendCountdown();
   };
 
   const handleVerifyOTP = async () => {
     if (!otp || otp.length < 4) { setError("Enter the OTP sent to your phone"); return; }
     setError("");
     setIsVerifying(true);
-    try {
-      const deviceId = await getInstallationId();
-      const res = await apiRequest("POST", "/api/auth/verify-otp", {
-        identifier: phone.trim(),
-        type: "phone",
-        otp: otp.trim(),
-        deviceId,
-      });
-      const data = await res.json();
+    const deviceId = await getInstallationId();
+    const result = await verifyOtpRequest(phone.trim(), "phone", otp.trim(), deviceId);
+    setIsVerifying(false);
 
-      if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      await login(data.user);
-
-      if (!data.user.profileComplete) {
-        navigateToProfileSetupWithNotice();
-      } else {
-        router.replace("/(tabs)");
-      }
-    } catch (err: any) {
-      const msg = (err?.message || "").replace(/^\d+:\s*/, "");
+    if (!result.ok) {
+      const msg = result.message || "";
       if (msg.includes("blocked") || msg.includes("Blocked")) {
         setError("This account is blocked. Contact support/admin.");
       } else if (msg.includes("registered device") || msg.includes("another device")) {
@@ -111,9 +147,32 @@ export default function LoginScreen() {
       } else {
         setError(msg || "Invalid OTP. Please try again.");
       }
-    } finally {
-      setIsVerifying(false);
+      return;
     }
+
+    if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+    if (result.registered) {
+      await login(result.user);
+      if (!result.user.profileComplete) {
+        navigateToProfileSetupWithNotice();
+      } else {
+        router.replace("/(tabs)");
+      }
+      return;
+    }
+
+    // New user: hand off the registrationToken to profile-setup. Profile-setup
+    // calls /api/auth/register-complete (which creates the users row) instead
+    // of PUT /api/auth/profile.
+    router.replace({
+      pathname: "/profile-setup",
+      params: {
+        registrationToken: result.registrationToken,
+        registrationIdentifier: result.identifier,
+        registrationType: result.type,
+      },
+    } as any);
   };
 
   return (
@@ -182,14 +241,21 @@ export default function LoginScreen() {
                   <Text style={{ fontSize: 12, fontFamily: "Inter_500Medium", color: "#22C55E", textAlign: "center" }}>Dev OTP: {devOtp}</Text>
                 ) : null}
                 <Text style={{ fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.textMuted, textAlign: "center" }}>
-                  {resendCountdown > 0 ? `Resend OTP in ${resendCountdown}s` : "Didn't receive OTP?"}
+                  {lockedUntil && lockRemainingMs > 0
+                    ? `Try again in ${formatLockCountdown(lockRemainingMs)}`
+                    : resendCountdown > 0
+                    ? `Resend OTP in ${resendCountdown}s`
+                    : "Didn't receive OTP?"}
                 </Text>
-                <Pressable onPress={handleSendOTP} disabled={isLoading || resendCountdown > 0}>
+                <Pressable
+                  onPress={handleSendOTP}
+                  disabled={isLoading || resendCountdown > 0 || (!!lockedUntil && lockRemainingMs > 0)}
+                >
                   <Text
                     style={{
                       fontSize: 13,
                       fontFamily: "Inter_500Medium",
-                      color: (isLoading || resendCountdown > 0) ? Colors.light.textMuted : Colors.light.primary,
+                      color: (isLoading || resendCountdown > 0 || (!!lockedUntil && lockRemainingMs > 0)) ? Colors.light.textMuted : Colors.light.primary,
                       textAlign: "center",
                     }}
                   >
@@ -198,6 +264,16 @@ export default function LoginScreen() {
                 </Pressable>
               </View>
             )}
+
+            {/* 24h send-OTP lock countdown (3 attempts in 2 min limit reached) */}
+            {lockedUntil && lockRemainingMs > 0 ? (
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "#FEF3C7", borderRadius: 10, padding: 12, borderWidth: 1, borderColor: "#FCD34D" }}>
+                <Ionicons name="time-outline" size={16} color="#B45309" />
+                <Text style={{ flex: 1, fontSize: 13, fontFamily: "Inter_500Medium", color: "#92400E" }}>
+                  Too many OTP attempts. Try again in {formatLockCountdown(lockRemainingMs)}.
+                </Text>
+              </View>
+            ) : null}
 
             {/* Error */}
             {!!error && (
@@ -209,9 +285,9 @@ export default function LoginScreen() {
 
             {/* Action button */}
             <Pressable
-              style={({ pressed }) => [styles.sendBtn, pressed && styles.sendBtnPressed, (isLoading || isVerifying) && styles.sendBtnDisabled]}
+              style={({ pressed }) => [styles.sendBtn, pressed && styles.sendBtnPressed, (isLoading || isVerifying || (!!lockedUntil && lockRemainingMs > 0 && !otpSent)) && styles.sendBtnDisabled]}
               onPress={otpSent ? handleVerifyOTP : handleSendOTP}
-              disabled={isLoading || isVerifying}
+              disabled={isLoading || isVerifying || (!!lockedUntil && lockRemainingMs > 0 && !otpSent)}
             >
               <LinearGradient colors={[Colors.light.primary, Colors.light.primaryDark]} style={styles.sendBtnGradient}>
                 {(isLoading || isVerifying) ? (

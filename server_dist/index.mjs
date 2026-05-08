@@ -448,6 +448,17 @@ async function finalizeInstallationBindAfterPurchase(db2, userId, req) {
   await finalizeStudentWebSlotsAfterAuth(db2, userId, role, req);
   await db2.query("UPDATE users SET app_bound_device_id = $1 WHERE id = $2 AND app_bound_device_id IS NULL", [inst, userId]);
 }
+async function bindDeviceForNativeFirstLogin(db2, userId, role, req) {
+  if (role === "admin") return;
+  const plat = getClientPlatform(req);
+  if (plat !== "ios" && plat !== "android") return;
+  const inst = getInstallationIdFromRequest(req);
+  if (!inst || inst === "web_anon") return;
+  await db2.query(
+    "UPDATE users SET app_bound_device_id = $1 WHERE id = $2 AND (app_bound_device_id IS NULL OR app_bound_device_id = '')",
+    [inst, userId]
+  );
+}
 function studentInstallationMatchesActiveSession(row, req, cand, plat) {
   if (!cand || cand === "web_anon") return false;
   const appb = String(row.app_bound_device_id ?? "").trim();
@@ -712,6 +723,45 @@ var init_user_account_purge = __esm({
 });
 
 // server/auth-routes.ts
+import { createHmac as createHmac2, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
+function getTokenSecret() {
+  return process.env.OTP_HMAC_SECRET || process.env.SESSION_SECRET || "dev-otp-secret";
+}
+function toBase64Url(buf) {
+  return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+function fromBase64Url(input) {
+  const pad = input.length % 4 === 0 ? "" : "=".repeat(4 - input.length % 4);
+  return Buffer.from(input.replace(/-/g, "+").replace(/_/g, "/") + pad, "base64");
+}
+function signRegistrationToken(payload) {
+  const body = { ...payload, exp: Date.now() + REGISTRATION_TOKEN_TTL_MS };
+  const b64 = toBase64Url(Buffer.from(JSON.stringify(body), "utf8"));
+  const sig = toBase64Url(createHmac2("sha256", getTokenSecret()).update(b64).digest());
+  return `${b64}.${sig}`;
+}
+function verifyRegistrationToken(token) {
+  if (!token || typeof token !== "string") return null;
+  const dot = token.indexOf(".");
+  if (dot <= 0) return null;
+  const b64 = token.slice(0, dot);
+  const sig = token.slice(dot + 1);
+  const expected = toBase64Url(createHmac2("sha256", getTokenSecret()).update(b64).digest());
+  const sigBuf = Buffer.from(sig, "utf8");
+  const expBuf = Buffer.from(expected, "utf8");
+  if (sigBuf.length !== expBuf.length) return null;
+  if (!timingSafeEqual3(sigBuf, expBuf)) return null;
+  try {
+    const json = fromBase64Url(b64).toString("utf8");
+    const obj = JSON.parse(json);
+    if (typeof obj.exp !== "number" || obj.exp < Date.now()) return null;
+    if (obj.type !== "phone" && obj.type !== "email") return null;
+    if (typeof obj.identifier !== "string" || !obj.identifier) return null;
+    return obj;
+  } catch {
+    return null;
+  }
+}
 function buildSessionUserFromRow(row, opts) {
   return {
     id: row.id,
@@ -747,6 +797,26 @@ function normalizePhone(input) {
   if (digits.length >= 10) return digits.slice(-10);
   return digits;
 }
+function normalizeEmail(input) {
+  return String(input || "").trim().toLowerCase();
+}
+function evaluateSendThrottle(snap, now) {
+  if (snap.send_locked_until && Number(snap.send_locked_until) > now) {
+    return { ok: false, lockedUntil: Number(snap.send_locked_until), persistLock: false };
+  }
+  const winStart = snap.send_window_start ? Number(snap.send_window_start) : 0;
+  let count = Number(snap.send_count) || 0;
+  let nextWindowStart = winStart;
+  if (!winStart || now - winStart > OTP_SEND_WINDOW_MS) {
+    nextWindowStart = now;
+    count = 0;
+  }
+  const nextCount = count + 1;
+  if (nextCount > OTP_SEND_MAX_PER_WINDOW) {
+    return { ok: false, lockedUntil: now + OTP_SEND_LOCK_MS, persistLock: true };
+  }
+  return { ok: true, nextCount, nextWindowStart, nextLockedUntil: null };
+}
 function registerAuthRoutes({
   app: app2,
   db: db2,
@@ -759,69 +829,174 @@ function registerAuthRoutes({
   verifyFirebaseToken: verifyFirebaseToken2,
   runInTransaction: runInTransaction2
 }) {
+  const finalizeAuthenticatedSession = async (req, user, deviceId, clearOtp) => {
+    const sessionToken = generateSecureToken2();
+    const normalizedDeviceId = deviceId || null;
+    await persistLoginSession(db2, user, sessionToken, normalizedDeviceId, { clearOtp });
+    await finalizeStudentWebSlotsAfterAuth(db2, Number(user.id), String(user.role), req);
+    await bindDeviceForNativeFirstLogin(db2, Number(user.id), String(user.role), req);
+    const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: normalizedDeviceId });
+    await regenerateSession(req);
+    req.session.user = sessionUser;
+    return { success: true, user: sessionUser };
+  };
+  const registrationTokenPayloadResponse = (identifier, tokenType) => {
+    const registrationToken = signRegistrationToken({
+      identifier,
+      type: tokenType,
+      phone: tokenType === "phone" ? identifier : void 0,
+      email: tokenType === "email" ? identifier : void 0
+    });
+    return {
+      success: true,
+      registrationToken,
+      profileComplete: false,
+      identifier,
+      type: tokenType
+    };
+  };
   app2.post("/api/auth/send-otp", async (req, res) => {
     try {
       const { identifier, type } = req.body;
       if (!identifier || !type) {
         return res.status(400).json({ message: "Identifier and type are required" });
       }
-      if (type === "phone") {
-        const normalizedPhone = normalizePhone(identifier);
-        if (!normalizedPhone || normalizedPhone.length !== 10) {
+      const isPhone = type === "phone";
+      let normalizedIdentifier;
+      if (isPhone) {
+        normalizedIdentifier = normalizePhone(identifier);
+        if (!normalizedIdentifier || normalizedIdentifier.length !== 10) {
           return res.status(400).json({ message: "Valid phone number is required" });
         }
-        await db2.query(
-          `INSERT INTO users (name, phone, role)
-           VALUES ($1, $2, $3)
-           ON CONFLICT (phone) DO NOTHING`,
-          [`Student${normalizedPhone.slice(-4)}`, normalizedPhone, "student"]
-        );
-        const lockRow = await db2.query("SELECT otp_locked_until FROM users WHERE phone = $1", [normalizedPhone]);
-        const lockedUntil = lockRow.rows[0]?.otp_locked_until != null ? Number(lockRow.rows[0].otp_locked_until) : 0;
-        if (lockedUntil > Date.now()) {
-          return res.status(429).json({ message: "Too many attempts. Please try again later." });
+      } else if (type === "email") {
+        normalizedIdentifier = normalizeEmail(identifier);
+        if (!normalizedIdentifier || !/.+@.+\..+/.test(normalizedIdentifier)) {
+          return res.status(400).json({ message: "Valid email is required" });
         }
-        const otp2 = generateOTP2();
-        const otpHash2 = hashOtpValue2(otp2);
-        const expires2 = Date.now() + 10 * 60 * 1e3;
-        await db2.query(
-          "UPDATE users SET otp = $1, otp_expires_at = $2, otp_failed_attempts = 0, otp_locked_until = NULL WHERE phone = $3",
-          [otpHash2, expires2, normalizedPhone]
+      } else {
+        return res.status(400).json({ message: "Invalid identifier type" });
+      }
+      const now = Date.now();
+      const otp = generateOTP2();
+      const otpHash = hashOtpValue2(otp);
+      const otpExpires = now + 10 * 60 * 1e3;
+      const isDev = process.env.NODE_ENV !== "production";
+      const userRow = isPhone ? await db2.query(
+        "SELECT id, otp_send_count, otp_send_window_start, otp_send_locked_until FROM users WHERE phone = $1",
+        [normalizedIdentifier]
+      ) : await db2.query(
+        "SELECT id, otp_send_count, otp_send_window_start, otp_send_locked_until FROM users WHERE LOWER(email) = LOWER($1)",
+        [normalizedIdentifier]
+      );
+      if (userRow.rows.length > 0) {
+        const u = userRow.rows[0];
+        const decision = evaluateSendThrottle(
+          {
+            send_count: Number(u.otp_send_count || 0),
+            send_window_start: u.otp_send_window_start != null ? Number(u.otp_send_window_start) : null,
+            send_locked_until: u.otp_send_locked_until != null ? Number(u.otp_send_locked_until) : null
+          },
+          now
         );
-        let smsSent = false;
+        if (!decision.ok) {
+          if (decision.persistLock) {
+            await db2.query(
+              `UPDATE users SET
+                 otp = NULL, otp_expires_at = NULL,
+                 otp_send_locked_until = $1,
+                 otp_send_count = 0,
+                 otp_send_window_start = $2
+               WHERE id = $3`,
+              [decision.lockedUntil, now, u.id]
+            );
+          }
+          return res.status(429).json({
+            message: OTP_LOCKOUT_MESSAGE,
+            lockedUntil: decision.lockedUntil
+          });
+        }
+        await db2.query(
+          `UPDATE users SET
+             otp = $1,
+             otp_expires_at = $2,
+             otp_failed_attempts = 0,
+             otp_locked_until = NULL,
+             otp_send_count = $3,
+             otp_send_window_start = $4,
+             otp_send_locked_until = NULL
+           WHERE id = $5`,
+          [otpHash, otpExpires, decision.nextCount, decision.nextWindowStart, u.id]
+        );
+      } else {
+        const challengeRow = await db2.query(
+          "SELECT send_count, send_window_start, send_locked_until FROM otp_challenges WHERE identifier = $1",
+          [normalizedIdentifier]
+        );
+        const snap = challengeRow.rows.length > 0 ? {
+          send_count: Number(challengeRow.rows[0].send_count || 0),
+          send_window_start: challengeRow.rows[0].send_window_start != null ? Number(challengeRow.rows[0].send_window_start) : null,
+          send_locked_until: challengeRow.rows[0].send_locked_until != null ? Number(challengeRow.rows[0].send_locked_until) : null
+        } : { send_count: 0, send_window_start: null, send_locked_until: null };
+        const decision = evaluateSendThrottle(snap, now);
+        if (!decision.ok) {
+          if (decision.persistLock) {
+            await db2.query(
+              `INSERT INTO otp_challenges
+                (identifier, type, otp_hash, otp_expires_at, send_count, send_window_start, send_locked_until, created_at, updated_at)
+               VALUES ($1, $2, NULL, NULL, 0, $3, $4, $3, $3)
+               ON CONFLICT (identifier) DO UPDATE SET
+                 type = EXCLUDED.type,
+                 otp_hash = NULL,
+                 otp_expires_at = NULL,
+                 send_count = 0,
+                 send_window_start = EXCLUDED.send_window_start,
+                 send_locked_until = EXCLUDED.send_locked_until,
+                 updated_at = EXCLUDED.updated_at`,
+              [normalizedIdentifier, type, now, decision.lockedUntil]
+            );
+          }
+          return res.status(429).json({
+            message: OTP_LOCKOUT_MESSAGE,
+            lockedUntil: decision.lockedUntil
+          });
+        }
+        await db2.query(
+          `INSERT INTO otp_challenges
+            (identifier, type, otp_hash, otp_expires_at, verify_failed_attempts, verify_locked_until,
+             send_count, send_window_start, send_locked_until, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, 0, NULL, $5, $6, NULL, $7, $7)
+           ON CONFLICT (identifier) DO UPDATE SET
+             type = EXCLUDED.type,
+             otp_hash = EXCLUDED.otp_hash,
+             otp_expires_at = EXCLUDED.otp_expires_at,
+             verify_failed_attempts = 0,
+             verify_locked_until = NULL,
+             send_count = EXCLUDED.send_count,
+             send_window_start = EXCLUDED.send_window_start,
+             send_locked_until = NULL,
+             updated_at = EXCLUDED.updated_at`,
+          [normalizedIdentifier, type, otpHash, otpExpires, decision.nextCount, decision.nextWindowStart, now]
+        );
+      }
+      let smsSent = false;
+      if (isPhone) {
         try {
-          smsSent = await sendOTPviaSMS2(normalizedPhone, otp2);
+          smsSent = await sendOTPviaSMS2(normalizedIdentifier, otp);
         } catch (smsErr) {
           console.error("[OTP] SMS sending threw error:", smsErr);
         }
         if (!smsSent) {
           console.log("[OTP] SMS delivery failed, OTP stored in DB");
         }
-        const isDev = process.env.NODE_ENV !== "production";
-        return res.json({
-          success: true,
-          message: smsSent ? "OTP sent to your phone" : "OTP sent. If SMS is delayed, please wait 30 seconds and try again.",
-          smsSent,
-          devOtp: isDev ? otp2 : ""
-        });
       }
-      const email = String(identifier).trim().toLowerCase();
-      const lockEmail = await db2.query("SELECT otp_locked_until FROM users WHERE email = $1", [email]);
-      const lockedUntilE = lockEmail.rows[0]?.otp_locked_until != null ? Number(lockEmail.rows[0].otp_locked_until) : 0;
-      if (lockedUntilE > Date.now()) {
-        return res.status(429).json({ message: "Too many attempts. Please try again later." });
-      }
-      const otp = generateOTP2();
-      const otpHash = hashOtpValue2(otp);
-      const expires = Date.now() + 10 * 60 * 1e3;
-      await db2.query(
-        `INSERT INTO users (name, email, otp, otp_expires_at, role)
-         VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (email) DO UPDATE SET otp = EXCLUDED.otp, otp_expires_at = EXCLUDED.otp_expires_at,
-           otp_failed_attempts = 0, otp_locked_until = NULL`,
-        [email.split("@")[0], email, otpHash, expires, "student"]
-      );
-      res.json({ success: true, message: "OTP sent successfully", method: "server" });
+      return res.json({
+        success: true,
+        message: isPhone ? smsSent ? "OTP sent to your phone" : "OTP sent. If SMS is delayed, please wait 30 seconds and try again." : "OTP sent successfully",
+        smsSent,
+        devOtp: isDev ? otp : "",
+        method: isPhone ? void 0 : "server",
+        lockedUntil: null
+      });
     } catch (err) {
       console.error(err);
       res.status(500).json({ message: "Failed to send OTP" });
@@ -833,45 +1008,81 @@ function registerAuthRoutes({
       if (!identifier || !otp) {
         return res.status(400).json({ message: "Identifier and OTP are required" });
       }
-      const result = type === "email" ? await db2.query("SELECT * FROM users WHERE email = $1", [identifier]) : await db2.query("SELECT * FROM users WHERE phone = $1", [identifier]);
-      if (result.rows.length === 0) {
+      const isPhone = type !== "email";
+      const normalizedIdentifier = isPhone ? normalizePhone(identifier) : normalizeEmail(identifier);
+      if (!normalizedIdentifier) {
+        return res.status(400).json({ message: "Identifier and OTP are required" });
+      }
+      const result = isPhone ? await db2.query("SELECT * FROM users WHERE phone = $1", [normalizedIdentifier]) : await db2.query("SELECT * FROM users WHERE LOWER(email) = LOWER($1)", [normalizedIdentifier]);
+      if (result.rows.length > 0) {
+        const user = result.rows[0];
+        if (user.is_blocked) return res.status(401).json({ message: GENERIC_OTP_ERROR });
+        const lockedUntil = user.otp_locked_until != null ? Number(user.otp_locked_until) : 0;
+        if (lockedUntil > Date.now()) {
+          return res.status(429).json({ message: "Too many attempts. Please try again later." });
+        }
+        if (!verifyOtpValue2(user.otp, otp)) {
+          const lockMs = Date.now() + 15 * 60 * 1e3;
+          await db2.query(
+            `UPDATE users SET
+               otp_failed_attempts = LEAST(COALESCE(otp_failed_attempts, 0) + 1, 99),
+               otp_locked_until = CASE WHEN COALESCE(otp_failed_attempts, 0) + 1 >= 5 THEN $1 ELSE otp_locked_until END
+             WHERE id = $2`,
+            [lockMs, user.id]
+          );
+          return res.status(401).json({ message: GENERIC_OTP_ERROR });
+        }
+        if (Date.now() > Number(user.otp_expires_at)) return res.status(401).json({ message: GENERIC_OTP_ERROR });
+        const loginGate = await assertLoginAllowedForInstallation(db2, req, {
+          userId: user.id,
+          role: user.role,
+          bodyDeviceId: deviceId || null,
+          phone: user.phone,
+          email: user.email
+        });
+        if (!loginGate.ok) {
+          return res.status(loginGate.httpStatus).json({ message: loginGate.message });
+        }
+        const finalized = await finalizeAuthenticatedSession(req, user, deviceId || null, true);
+        return res.json(finalized);
+      }
+      const chRow = await db2.query(
+        "SELECT type, otp_hash, otp_expires_at, verify_failed_attempts, verify_locked_until FROM otp_challenges WHERE identifier = $1",
+        [normalizedIdentifier]
+      );
+      if (chRow.rows.length === 0) {
         return res.status(404).json({ message: "Account not found. Please register first." });
       }
-      const user = result.rows[0];
-      if (user.is_blocked) return res.status(401).json({ message: GENERIC_OTP_ERROR });
-      const lockedUntil = user.otp_locked_until != null ? Number(user.otp_locked_until) : 0;
-      if (lockedUntil > Date.now()) {
+      const ch = chRow.rows[0];
+      const nowMs = Date.now();
+      const verifyLockedUntil = ch.verify_locked_until != null ? Number(ch.verify_locked_until) : 0;
+      if (verifyLockedUntil > nowMs) {
         return res.status(429).json({ message: "Too many attempts. Please try again later." });
       }
-      if (!verifyOtpValue2(user.otp, otp)) {
-        const lockMs = Date.now() + 15 * 60 * 1e3;
+      if (!verifyOtpValue2(ch.otp_hash, otp) || nowMs > Number(ch.otp_expires_at || 0)) {
+        const failCount = Number(ch.verify_failed_attempts || 0) + 1;
+        const lockUntil = failCount >= 5 ? nowMs + 15 * 60 * 1e3 : null;
         await db2.query(
-          `UPDATE users SET
-             otp_failed_attempts = LEAST(COALESCE(otp_failed_attempts, 0) + 1, 99),
-             otp_locked_until = CASE WHEN COALESCE(otp_failed_attempts, 0) + 1 >= 5 THEN $1 ELSE otp_locked_until END
-           WHERE id = $2`,
-          [lockMs, user.id]
+          `UPDATE otp_challenges SET
+             verify_failed_attempts = $1,
+             verify_locked_until = COALESCE($2, verify_locked_until),
+             updated_at = $3
+           WHERE identifier = $4`,
+          [failCount, lockUntil, nowMs, normalizedIdentifier]
         );
         return res.status(401).json({ message: GENERIC_OTP_ERROR });
       }
-      if (Date.now() > Number(user.otp_expires_at)) return res.status(401).json({ message: GENERIC_OTP_ERROR });
-      const loginGate = await assertLoginAllowedForInstallation(db2, req, {
-        userId: user.id,
-        role: user.role,
-        bodyDeviceId: deviceId || null,
-        phone: user.phone,
-        email: user.email
-      });
-      if (!loginGate.ok) {
-        return res.status(loginGate.httpStatus).json({ message: loginGate.message });
-      }
-      const sessionToken = generateSecureToken2();
-      await persistLoginSession(db2, user, sessionToken, deviceId || null, { clearOtp: true });
-      await finalizeStudentWebSlotsAfterAuth(db2, user.id, user.role, req);
-      const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: deviceId || null });
-      await regenerateSession(req);
-      req.session.user = sessionUser;
-      res.json({ success: true, user: sessionUser });
+      await db2.query(
+        `UPDATE otp_challenges SET
+           otp_hash = NULL,
+           otp_expires_at = NULL,
+           verify_failed_attempts = 0,
+           verify_locked_until = NULL,
+           updated_at = $1
+         WHERE identifier = $2`,
+        [nowMs, normalizedIdentifier]
+      );
+      return res.json(registrationTokenPayloadResponse(normalizedIdentifier, isPhone ? "phone" : "email"));
     } catch (err) {
       console.error(err);
       res.status(500).json({ message: "Failed to verify OTP" });
@@ -889,13 +1100,9 @@ function registerAuthRoutes({
       if (!tokenPhone || !claimedPhone || tokenPhone !== claimedPhone) {
         return res.status(400).json({ message: "Phone number mismatch" });
       }
-      let result = await db2.query("SELECT * FROM users WHERE phone = $1", [claimedPhone]);
+      const result = await db2.query("SELECT * FROM users WHERE phone = $1", [claimedPhone]);
       if (result.rows.length === 0) {
-        await db2.query(
-          "INSERT INTO users (name, phone, role) VALUES ($1, $2, $3)",
-          [`Student${claimedPhone.slice(-4)}`, claimedPhone, "student"]
-        );
-        result = await db2.query("SELECT * FROM users WHERE phone = $1", [claimedPhone]);
+        return res.json(registrationTokenPayloadResponse(claimedPhone, "phone"));
       }
       const user = result.rows[0];
       const loginGate = await assertLoginAllowedForInstallation(db2, req, {
@@ -908,13 +1115,8 @@ function registerAuthRoutes({
       if (!loginGate.ok) {
         return res.status(loginGate.httpStatus).json({ message: loginGate.message });
       }
-      const sessionToken = generateSecureToken2();
-      await persistLoginSession(db2, user, sessionToken, deviceId || null, { clearOtp: true });
-      await finalizeStudentWebSlotsAfterAuth(db2, user.id, user.role, req);
-      const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: deviceId || null });
-      await regenerateSession(req);
-      req.session.user = sessionUser;
-      res.json({ success: true, user: sessionUser });
+      const finalized = await finalizeAuthenticatedSession(req, user, deviceId || null, true);
+      res.json(finalized);
     } catch (err) {
       console.error("Firebase verify error:", err);
       res.status(400).json({ message: "Firebase verification failed" });
@@ -1008,12 +1210,9 @@ function registerAuthRoutes({
       const phoneNumber = decoded.phone_number;
       if (!phoneNumber) return res.status(400).json({ message: "Phone number not found in token" });
       const phone = phoneNumber.replace(/^\+91/, "");
-      let result = await db2.query("SELECT * FROM users WHERE phone = $1", [phone]);
+      const result = await db2.query("SELECT * FROM users WHERE phone = $1", [phone]);
       if (result.rows.length === 0) {
-        result = await db2.query(
-          "INSERT INTO users (name, phone, role, created_at) VALUES ($1, $2, $3, $4) RETURNING *",
-          [`Student${phone.slice(-4)}`, phone, "student", Date.now()]
-        );
+        return res.json(registrationTokenPayloadResponse(phone, "phone"));
       }
       const user = result.rows[0];
       const loginGate = await assertLoginAllowedForInstallation(db2, req, {
@@ -1026,13 +1225,8 @@ function registerAuthRoutes({
       if (!loginGate.ok) {
         return res.status(loginGate.httpStatus).json({ message: loginGate.message });
       }
-      const sessionToken = generateSecureToken2();
-      await persistLoginSession(db2, user, sessionToken, deviceId || null, { clearOtp: false });
-      await finalizeStudentWebSlotsAfterAuth(db2, user.id, user.role, req);
-      const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: deviceId || null });
-      await regenerateSession(req);
-      req.session.user = sessionUser;
-      res.json({ success: true, user: sessionUser });
+      const finalized = await finalizeAuthenticatedSession(req, user, deviceId || null, false);
+      res.json(finalized);
     } catch (err) {
       console.error("Firebase login error:", err);
       if (err.code === "auth/id-token-expired") {
@@ -1119,12 +1313,12 @@ function registerAuthRoutes({
         result = await db2.query("SELECT * FROM users WHERE LOWER(email) = LOWER($1)", [identifier]);
       }
       if (result.rows.length === 0) {
-        return res.status(404).json({ message: "Account not found. Please register first." });
+        return res.status(404).json({ message: "register_first" });
       }
       const user = result.rows[0];
       if (user.is_blocked) return res.status(401).json({ message: GENERIC_LOGIN_ERROR });
       if (!user.profile_complete) {
-        return res.status(401).json({ message: GENERIC_LOGIN_ERROR });
+        return res.status(401).json({ message: "complete_registration" });
       }
       if (!user.password_hash) return res.status(401).json({ message: GENERIC_LOGIN_ERROR });
       let matched = false;
@@ -1148,17 +1342,85 @@ function registerAuthRoutes({
       if (!gate.ok) {
         return res.status(gate.httpStatus).json({ message: gate.message });
       }
-      const sessionToken = generateSecureToken2();
       const dev = typeof deviceId === "string" ? deviceId : null;
-      await persistLoginSession(db2, user, sessionToken, dev, { clearOtp: false });
-      await finalizeStudentWebSlotsAfterAuth(db2, user.id, user.role, req);
-      const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: dev });
-      await regenerateSession(req);
-      req.session.user = sessionUser;
-      res.json({ success: true, user: sessionUser });
+      const finalized = await finalizeAuthenticatedSession(req, user, dev, false);
+      res.json(finalized);
     } catch (err) {
       console.error("Email login error:", err);
       res.status(500).json({ message: "Login failed" });
+    }
+  });
+  app2.post("/api/auth/register-complete", async (req, res) => {
+    try {
+      const { registrationToken, name, dateOfBirth, email, photoUrl, password, deviceId } = req.body || {};
+      const payload = verifyRegistrationToken(registrationToken);
+      if (!payload) {
+        return res.status(401).json({ message: "registration_token_invalid" });
+      }
+      const normalizedName = typeof name === "string" ? name.trim() : "";
+      if (!normalizedName) {
+        return res.status(400).json({ message: "Name is required" });
+      }
+      const isPhoneFlow = payload.type === "phone";
+      const phone = isPhoneFlow ? payload.identifier : null;
+      const tokenEmail = isPhoneFlow ? null : payload.identifier;
+      const existingByIdentifier = phone ? await db2.query("SELECT id FROM users WHERE phone = $1", [phone]) : await db2.query("SELECT id FROM users WHERE LOWER(email) = LOWER($1)", [tokenEmail]);
+      if (existingByIdentifier.rows.length > 0) {
+        return res.status(409).json({ message: "Account already exists for this phone/email. Please sign in." });
+      }
+      const finalEmail = typeof email === "string" && email.trim().length > 0 ? email.trim().toLowerCase() : tokenEmail;
+      if (finalEmail) {
+        const conflict = await db2.query("SELECT id FROM users WHERE LOWER(email) = LOWER($1)", [finalEmail]);
+        if (conflict.rows.length > 0) {
+          return res.status(409).json({ message: "This email is already in use. Use a different email or sign in." });
+        }
+      }
+      const passwordHash = password ? await hashPassword(password) : null;
+      const photo = typeof photoUrl === "string" && photoUrl.length > 0 ? photoUrl : null;
+      const dob = typeof dateOfBirth === "string" && dateOfBirth.length > 0 ? dateOfBirth : null;
+      const now = Date.now();
+      const inserted = await db2.query(
+        `INSERT INTO users
+          (name, email, phone, role, profile_complete, date_of_birth, photo_url, password_hash, created_at, last_active_at)
+         VALUES ($1, $2, $3, 'student', TRUE, $4, $5, $6, $7, $7)
+         RETURNING *`,
+        [normalizedName, finalEmail, phone, dob, photo, passwordHash, now]
+      );
+      const user = inserted.rows[0];
+      await db2.query("DELETE FROM otp_challenges WHERE identifier = $1", [payload.identifier]).catch(() => {
+      });
+      const gate = await assertLoginAllowedForInstallation(db2, req, {
+        userId: user.id,
+        role: user.role,
+        bodyDeviceId: typeof deviceId === "string" ? deviceId : null,
+        phone: user.phone,
+        email: user.email
+      });
+      if (!gate.ok) {
+        return res.status(gate.httpStatus).json({ message: gate.message });
+      }
+      const dev = typeof deviceId === "string" ? deviceId : null;
+      const finalized = await finalizeAuthenticatedSession(req, user, dev, true);
+      const refreshed = await db2.query(
+        "SELECT id, name, email, phone, role, session_token, profile_complete, date_of_birth, photo_url FROM users WHERE id = $1",
+        [user.id]
+      );
+      const row = refreshed.rows[0] || user;
+      const responseUser = {
+        ...finalized.user,
+        name: row.name,
+        email: row.email,
+        phone: row.phone,
+        role: row.role,
+        profileComplete: !!row.profile_complete,
+        date_of_birth: row.date_of_birth ?? null,
+        photo_url: row.photo_url ?? null
+      };
+      req.session.user = responseUser;
+      res.json({ success: true, user: responseUser });
+    } catch (err) {
+      console.error("Register-complete error:", err);
+      res.status(500).json({ message: "Failed to complete registration" });
     }
   });
   app2.put("/api/auth/profile", async (req, res) => {
@@ -1247,7 +1509,7 @@ function registerAuthRoutes({
     }
   });
 }
-var GENERIC_LOGIN_ERROR, GENERIC_OTP_ERROR;
+var GENERIC_LOGIN_ERROR, GENERIC_OTP_ERROR, OTP_SEND_WINDOW_MS, OTP_SEND_MAX_PER_WINDOW, OTP_SEND_LOCK_MS, OTP_LOCKOUT_MESSAGE, REGISTRATION_TOKEN_TTL_MS;
 var init_auth_routes = __esm({
   "server/auth-routes.ts"() {
     "use strict";
@@ -1257,6 +1519,11 @@ var init_auth_routes = __esm({
     init_user_account_purge();
     GENERIC_LOGIN_ERROR = "Invalid credentials";
     GENERIC_OTP_ERROR = "Invalid or expired OTP";
+    OTP_SEND_WINDOW_MS = 2 * 60 * 1e3;
+    OTP_SEND_MAX_PER_WINDOW = 2;
+    OTP_SEND_LOCK_MS = 24 * 60 * 60 * 1e3;
+    OTP_LOCKOUT_MESSAGE = "Too many OTP attempts. Please try again after 24 hours.";
+    REGISTRATION_TOKEN_TTL_MS = 15 * 60 * 1e3;
   }
 });
 
@@ -2627,7 +2894,7 @@ function registerLiveClassEngagementRoutes({
            last_heartbeat = EXCLUDED.last_heartbeat,
            user_name = COALESCE(EXCLUDED.user_name, live_class_viewers.user_name)
          WHERE live_class_viewers.last_heartbeat IS NULL
-            OR EXCLUDED.last_heartbeat - live_class_viewers.last_heartbeat >= 20000`,
+            OR EXCLUDED.last_heartbeat - live_class_viewers.last_heartbeat >= 8000`,
         [req.params.id, user.id, user.name || user.phone || "Anonymous", now]
       );
       res.json({ success: true });
@@ -2648,7 +2915,7 @@ function registerLiveClassEngagementRoutes({
         const visible2 = lcAccess.rows[0]?.show_viewer_count ?? true;
         return res.json({ viewers: [], count: 0, visible: visible2 });
       }
-      const cutoff = Date.now() - 3e4;
+      const cutoff = Date.now() - 6e4;
       const result = await db2.query(
         `SELECT user_name FROM live_class_viewers
          WHERE live_class_id = $1 AND last_heartbeat > $2
@@ -3818,10 +4085,76 @@ function registerAdminAnalyticsRoutes({
   app2.get("/api/admin/courses/:id/enrollments", requireAdmin, async (req, res) => {
     try {
       const result = await db2.query(
-        `SELECT e.id, e.user_id, u.name AS user_name, u.phone AS user_phone, u.email AS user_email,
-                e.enrolled_at, e.progress_percent, COALESCE(e.status, 'active') AS status
-         FROM enrollments e JOIN users u ON e.user_id = u.id
-         WHERE e.course_id = $1 ORDER BY e.enrolled_at DESC`,
+        `SELECT
+           e.id,
+           e.user_id,
+           u.name AS user_name,
+           u.phone AS user_phone,
+           u.email AS user_email,
+           e.enrolled_at,
+           COALESCE(e.status, 'active') AS status,
+           CASE
+             WHEN (COALESCE(tl.total_lectures, 0) + COALESCE(tt.total_tests, 0)) <= 0 THEN 0
+             ELSE LEAST(
+               100,
+               GREATEST(
+                 0,
+                 ROUND(
+                   100.0 * (COALESCE(lp.lecture_points, 0) + COALESCE(tp.completed_tests, 0))
+                   / NULLIF(COALESCE(tl.total_lectures, 0) + COALESCE(tt.total_tests, 0), 0)
+                 )
+               )
+             )::integer
+           END AS progress_percent
+         FROM enrollments e
+         JOIN users u ON e.user_id = u.id
+         CROSS JOIN LATERAL (
+           SELECT COUNT(*)::numeric AS total_lectures
+           FROM lectures l
+           WHERE l.course_id = $1
+         ) tl
+         CROSS JOIN LATERAL (
+           SELECT COUNT(*)::numeric AS total_tests
+           FROM tests t
+           WHERE t.course_id = $1
+             AND COALESCE(t.is_published, true) = true
+         ) tt
+         LEFT JOIN LATERAL (
+           SELECT
+             COALESCE(
+               SUM(
+                 LEAST(
+                   1.0,
+                   GREATEST(
+                     CASE
+                       WHEN COALESCE(lp2.is_completed, false) THEN 1.0
+                       ELSE GREATEST(0.0, LEAST(100.0, COALESCE(lp2.watch_percent, 0)::numeric)) / 100.0
+                     END,
+                     CASE
+                       WHEN COALESCE(lp2.playback_sessions, 0) > 0 THEN 0.10
+                       ELSE 0.0
+                     END
+                   )
+                 )
+               ),
+               0
+             ) AS lecture_points
+           FROM lecture_progress lp2
+           JOIN lectures l2 ON l2.id = lp2.lecture_id
+           WHERE lp2.user_id = e.user_id
+             AND l2.course_id = $1
+         ) lp ON true
+         LEFT JOIN LATERAL (
+           SELECT COUNT(DISTINCT ta.test_id)::numeric AS completed_tests
+           FROM test_attempts ta
+           JOIN tests t2 ON t2.id = ta.test_id
+           WHERE ta.user_id = e.user_id
+             AND ta.status = 'completed'
+             AND t2.course_id = $1
+             AND COALESCE(t2.is_published, true) = true
+         ) tp ON true
+         WHERE e.course_id = $1
+         ORDER BY e.enrolled_at DESC`,
         [req.params.id]
       );
       res.json(result.rows);
@@ -4807,6 +5140,41 @@ function registerAdminUsersAndContentRoutes({
     } catch (err) {
       console.error("[Admin] reset-device-binding:", err);
       res.status(500).json({ message: "Failed to reset device binding" });
+    }
+  });
+  app2.post("/api/admin/users/cleanup-pending", requireAdmin, async (_req, res) => {
+    try {
+      const cutoff = Date.now() - 24 * 60 * 60 * 1e3;
+      const candidates = await db2.query(
+        `SELECT u.id
+         FROM users u
+         WHERE COALESCE(u.role, 'student') = 'student'
+           AND COALESCE(u.profile_complete, FALSE) = FALSE
+           AND COALESCE(u.created_at, 0) < $1
+           AND NOT EXISTS (SELECT 1 FROM enrollments e WHERE e.user_id = u.id)
+           AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.user_id = u.id)
+           AND NOT EXISTS (SELECT 1 FROM lecture_progress lp WHERE lp.user_id = u.id)
+           AND NOT EXISTS (SELECT 1 FROM test_attempts ta WHERE ta.user_id = u.id)
+         LIMIT 1000`,
+        [cutoff]
+      );
+      const ids = candidates.rows.map((r) => Number(r.id)).filter((n) => Number.isFinite(n));
+      const deleted = [];
+      const failed = [];
+      for (const id of ids) {
+        try {
+          await runInTransaction2((tx) => purgeStudentAccountById(tx, id));
+          deleted.push(id);
+        } catch (err) {
+          failed.push({ id, error: String(err?.message || err) });
+        }
+      }
+      await db2.query("DELETE FROM otp_challenges WHERE updated_at < $1", [cutoff]).catch(() => {
+      });
+      res.json({ success: true, deleted: deleted.length, ids: deleted, failed });
+    } catch (err) {
+      console.error("[Admin] cleanup-pending:", err);
+      res.status(500).json({ message: "Failed to clean up pending signups" });
     }
   });
   app2.get("/api/admin/users", requireAdmin, async (_req, res) => {
@@ -8064,10 +8432,10 @@ function registerCourseAccessRoutes({
       if (!r2Response.Body) {
         return res.status(404).json({ message: "File not found in storage" });
       }
-      const { createHmac: createHmac2 } = await import("crypto");
+      const { createHmac: createHmac3 } = await import("crypto");
       const timestamp = Date.now();
       const watermarkData = `${tokenData.user_id}:${timestamp}`;
-      const hmac = createHmac2("sha256", process.env.SESSION_SECRET || "default-secret").update(watermarkData).digest("hex");
+      const hmac = createHmac3("sha256", process.env.SESSION_SECRET || "default-secret").update(watermarkData).digest("hex");
       const watermarkToken = `${watermarkData}:${hmac}`;
       res.setHeader("Content-Type", r2Response.ContentType || "application/octet-stream");
       res.setHeader("Content-Disposition", "attachment");
@@ -8866,7 +9234,8 @@ var init_schema_readiness_contract = __esm({
       "live_class_recording_progress",
       "user_push_tokens",
       "session",
-      "express_rate_limit"
+      "express_rate_limit",
+      "otp_challenges"
     ];
     REQUIRED_COLUMNS = {
       users: [
@@ -8876,7 +9245,10 @@ var init_schema_readiness_contract = __esm({
         "web_device_id_desktop",
         "profile_complete",
         "is_blocked",
-        "last_active_at"
+        "last_active_at",
+        "otp_send_count",
+        "otp_send_window_start",
+        "otp_send_locked_until"
       ],
       enrollments: ["status", "valid_until"],
       live_classes: [

@@ -7,13 +7,18 @@ import { router, useLocalSearchParams } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { apiRequest } from "@/lib/query-client";
 import { getInstallationId } from "@/lib/installation-id";
 import { useAuth } from "@/context/AuthContext";
 import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 import { navigateToProfileSetupWithNotice } from "@/lib/profile-completion-ui";
 import { navigateBackFromAuth } from "@/lib/navigate-auth-back";
+import {
+  formatLockCountdown,
+  loadLockedUntil,
+  sendOtpRequest,
+  verifyOtpRequest,
+} from "@/lib/otp-lockout";
 
 export default function OTPScreen() {
   const insets = useSafeAreaInsets();
@@ -23,15 +28,33 @@ export default function OTPScreen() {
   const [countdown, setCountdown] = useState(30);
   const [canResend, setCanResend] = useState(false);
   const [resending, setResending] = useState(false);
+  const [lockedUntil, setLockedUntil] = useState<number | null>(null);
+  const [lockRemainingMs, setLockRemainingMs] = useState(0);
   const inputs = useRef<(TextInput | null)[]>([]);
   const countdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lockTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const { login } = useAuth();
+
+  const startLockCountdown = (until: number) => {
+    setLockedUntil(until);
+    setLockRemainingMs(Math.max(0, until - Date.now()));
+    if (lockTimerRef.current) clearInterval(lockTimerRef.current);
+    lockTimerRef.current = setInterval(() => {
+      const remaining = Math.max(0, until - Date.now());
+      setLockRemainingMs(remaining);
+      if (remaining <= 0) {
+        if (lockTimerRef.current) clearInterval(lockTimerRef.current);
+        lockTimerRef.current = null;
+        setLockedUntil(null);
+      }
+    }, 1000);
+  };
 
   const startResendCountdown = () => {
     if (countdownTimerRef.current) {
       clearInterval(countdownTimerRef.current);
     }
-    setCountdown(30);
+    setCountdown(120);
     setCanResend(false);
     countdownTimerRef.current = setInterval(() => {
       setCountdown((prev) => {
@@ -55,8 +78,25 @@ export default function OTPScreen() {
         clearInterval(countdownTimerRef.current);
         countdownTimerRef.current = null;
       }
+      if (lockTimerRef.current) {
+        clearInterval(lockTimerRef.current);
+        lockTimerRef.current = null;
+      }
     };
   }, []);
+
+  // Re-hydrate lock countdown if a lock is already active for this phone.
+  useEffect(() => {
+    if (!phone) return;
+    let active = true;
+    void loadLockedUntil(phone).then((until) => {
+      if (!active || !until) return;
+      startLockCountdown(until);
+    });
+    return () => {
+      active = false;
+    };
+  }, [phone]);
 
   // Show dev OTP box when SMS fails — user taps to fill
   useEffect(() => {
@@ -92,28 +132,13 @@ export default function OTPScreen() {
     const code = otpValue || otp.join("");
     if (code.length !== 6) { Alert.alert("Error", "Enter the 6-digit OTP"); return; }
     setIsLoading(true);
-    try {
-      const deviceId = await getInstallationId();
-      const res = await apiRequest("POST", "/api/auth/verify-otp", {
-        identifier: phone,
-        type: "phone",
-        otp: code,
-        deviceId,
-      });
-      const data = await res.json();
-      if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      await login(data.user);
-      console.log("[OTP] user:", JSON.stringify({ id: data.user.id, role: data.user.role, profileComplete: data.user.profileComplete, name: data.user.name }));
-      if (!data.user.profileComplete) {
-        console.log("[OTP] → profile-setup");
-        navigateToProfileSetupWithNotice();
-      } else {
-        console.log("[OTP] → tabs");
-        router.replace("/(tabs)");
-      }
-    } catch (err: any) {
+    const deviceId = await getInstallationId();
+    const result = await verifyOtpRequest(phone, "phone", code, deviceId);
+    setIsLoading(false);
+
+    if (!result.ok) {
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      const msg = err?.message || "";
+      const msg = result.message || "";
       if (msg.includes("not found") || msg.includes("register first") || msg.includes("404")) {
         Alert.alert("Register First", "No account exists for this phone number. Please register first.");
       } else if (msg.includes("blocked") || msg.includes("Blocked")) {
@@ -127,29 +152,58 @@ export default function OTPScreen() {
       }
       setOtp(["", "", "", "", "", ""]);
       inputs.current[0]?.focus();
-    } finally {
-      setIsLoading(false);
+      return;
     }
+
+    if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+    if (result.registered) {
+      await login(result.user);
+      if (!result.user.profileComplete) {
+        navigateToProfileSetupWithNotice();
+      } else {
+        router.replace("/(tabs)");
+      }
+      return;
+    }
+
+    // New user (no users row yet): pass registrationToken to profile-setup so
+    // /api/auth/register-complete can finish the signup.
+    router.replace({
+      pathname: "/profile-setup",
+      params: {
+        registrationToken: result.registrationToken,
+        registrationIdentifier: result.identifier,
+        registrationType: result.type,
+      },
+    } as any);
   };
 
   const handleResend = async () => {
     if (resending) return;
+    if (lockedUntil && lockedUntil > Date.now()) {
+      Alert.alert("Please Wait", `Too many OTP attempts. Try again in ${formatLockCountdown(lockedUntil - Date.now())}.`);
+      return;
+    }
     setResending(true);
-    try {
-      const res = await apiRequest("POST", "/api/auth/send-otp", { identifier: phone, type: "phone" });
-      const data = await res.json();
-      startResendCountdown();
-      setOtp(["", "", "", "", "", ""]);
-      inputs.current[0]?.focus();
-      Alert.alert("OTP Sent", data.smsSent ? "A new OTP has been sent to your phone." : "OTP sent. If SMS is delayed, please wait and try again.");
-      if (data.devOtp) {
-        const digits = data.devOtp.split("");
-        setOtp(digits);
+    const result = await sendOtpRequest(phone, "phone");
+    setResending(false);
+    if (!result.ok) {
+      if (result.lockedUntil && result.lockedUntil > Date.now()) {
+        startLockCountdown(result.lockedUntil);
+        Alert.alert("Please Wait", `Too many OTP attempts. Try again in ${formatLockCountdown(result.lockedUntil - Date.now())}.`);
+        return;
       }
-    } catch {
-      Alert.alert("Error", "Failed to resend OTP. Check your internet connection.");
-    } finally {
-      setResending(false);
+      Alert.alert("Error", result.message || "Failed to resend OTP. Check your internet connection.");
+      return;
+    }
+    startResendCountdown();
+    setOtp(["", "", "", "", "", ""]);
+    inputs.current[0]?.focus();
+    Alert.alert("OTP Sent", result.smsSent ? "A new OTP has been sent to your phone." : "OTP sent. If SMS is delayed, please wait and try again.");
+    if (result.devOtp) {
+      const digits = result.devOtp.split("");
+      setOtp(digits);
     }
   };
 
@@ -226,8 +280,19 @@ export default function OTPScreen() {
             </LinearGradient>
           </Pressable>
 
+          {lockedUntil && lockRemainingMs > 0 ? (
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "#FEF3C7", borderRadius: 10, padding: 12, borderWidth: 1, borderColor: "#FCD34D" }}>
+              <Ionicons name="time-outline" size={16} color="#B45309" />
+              <Text style={{ flex: 1, fontSize: 13, fontFamily: "Inter_500Medium", color: "#92400E" }}>
+                Too many OTP attempts. Try again in {formatLockCountdown(lockRemainingMs)}.
+              </Text>
+            </View>
+          ) : null}
+
           <View style={styles.resendContainer}>
-            {canResend ? (
+            {lockedUntil && lockRemainingMs > 0 ? (
+              <Text style={styles.countdownText}>Resend in {formatLockCountdown(lockRemainingMs)}</Text>
+            ) : canResend ? (
               <Pressable onPress={handleResend} disabled={resending}>
                 {resending ? (
                   <ActivityIndicator size="small" color={Colors.light.accent} />

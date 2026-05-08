@@ -13,6 +13,7 @@ import * as ImagePicker from "expo-image-picker";
 import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
 import { myPaymentsQueryKey } from "@/lib/query-keys";
 import { getInstallationId } from "@/lib/installation-id";
+import { sendOtpRequest, verifyOtpRequest } from "@/lib/otp-lockout";
 import { useAuth } from "@/context/AuthContext";
 import Colors from "@/constants/colors";
 
@@ -198,7 +199,11 @@ export default function ProfileScreen() {
       const identifier = (preferEmail && profile?.email) ? profile.email : (profile?.phone || profile?.email);
       const type = (preferEmail && profile?.email) ? "email" : "phone";
       if (!identifier) { setPwdError("No email or phone on file."); setOtpLoading(false); return; }
-      await apiRequest("POST", "/api/auth/send-otp", { identifier, type });
+      const sendResult = await sendOtpRequest(identifier, type as "phone" | "email");
+      if (!sendResult.ok) {
+        setPwdError(sendResult.message || "Failed to send OTP. Try again.");
+        return;
+      }
       setOtpSent(true);
     } catch (err: any) {
       setPwdError("Failed to send OTP. Try again.");
@@ -218,13 +223,16 @@ export default function ProfileScreen() {
       // Verify OTP first
       const identifier = user?.email || user?.phone;
       const type = user?.email ? "email" : "phone";
-      const verifyRes = await apiRequest("POST", "/api/auth/verify-otp", {
-        identifier,
-        type,
-        otp: otpCode,
-        deviceId: await getInstallationId(),
-      });
-      const verifyData = await verifyRes.json();
+      const verifyResult = await verifyOtpRequest(
+        String(identifier || ""),
+        (type as "phone" | "email"),
+        otpCode,
+        await getInstallationId()
+      );
+      if (!verifyResult.ok) {
+        setPwdError(verifyResult.message || "Invalid OTP.");
+        return;
+      }
       // Now change password (no old password needed since OTP verified)
       await apiRequest("POST", "/api/auth/change-password", { newPassword: newPwd });
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);

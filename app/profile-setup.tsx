@@ -3,13 +3,14 @@ import {
   View, Text, StyleSheet, TextInput, Pressable, ScrollView,
   Platform, ActivityIndicator, Alert, Image, KeyboardAvoidingView,
 } from "react-native";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
 import { apiRequest } from "@/lib/query-client";
+import { getInstallationId } from "@/lib/installation-id";
 import { uploadToR2 } from "@/lib/r2-upload";
 import {
   PROFILE_PERMANENT_FIELDS_NOTICE,
@@ -24,6 +25,13 @@ import Colors from "@/constants/colors";
 export default function ProfileSetupScreen() {
   const insets = useSafeAreaInsets();
   const { user, updateUser, login } = useAuth();
+  const params = useLocalSearchParams<{
+    registrationToken?: string;
+    registrationIdentifier?: string;
+    registrationType?: string;
+  }>();
+  const registrationToken = typeof params.registrationToken === "string" ? params.registrationToken : "";
+  const isNewUserFlow = !!registrationToken && !user;
 
   const [name, setName] = useState(
     // Pre-fill if name is already a real name (not the auto-generated "StudentXXXX")
@@ -120,14 +128,33 @@ export default function ProfileSetupScreen() {
     const performSave = async () => {
       setIsLoading(true);
       try {
-        const res = await apiRequest("PUT", "/api/auth/profile", {
-          name: trimmedName,
-          dateOfBirth: trimmedDob,
-          email: trimmedEmail,
-          photoUrl: photoUri || undefined,
-          password,
-        });
-        const data = await res.json();
+        let data: any;
+        if (isNewUserFlow) {
+          // New-user flow: backend has no `users` row yet (we removed the
+          // pre-OTP-verify INSERT). /api/auth/register-complete consumes the
+          // short-lived registrationToken issued by /api/auth/verify-otp,
+          // creates the row with profile_complete=TRUE, and starts a session.
+          const deviceId = await getInstallationId();
+          const res = await apiRequest("POST", "/api/auth/register-complete", {
+            registrationToken,
+            name: trimmedName,
+            dateOfBirth: trimmedDob,
+            email: trimmedEmail,
+            photoUrl: photoUri || undefined,
+            password,
+            deviceId,
+          });
+          data = await res.json();
+        } else {
+          const res = await apiRequest("PUT", "/api/auth/profile", {
+            name: trimmedName,
+            dateOfBirth: trimmedDob,
+            email: trimmedEmail,
+            photoUrl: photoUri || undefined,
+            password,
+          });
+          data = await res.json();
+        }
         if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         if (data?.user) {
           await login(data.user);
@@ -147,7 +174,16 @@ export default function ProfileSetupScreen() {
         }
       } catch (err: any) {
         console.error("Profile save error:", err);
-        setError(err?.message || "Failed to save profile. Please try again.");
+        const msg = err?.message || "";
+        if (msg.includes("registration_token_invalid") || msg.includes("401")) {
+          setError("Your registration link has expired. Please sign up again.");
+          setTimeout(() => router.replace("/(auth)/login"), 1500);
+        } else if (msg.includes("Account already exists") || msg.includes("409")) {
+          setError("This phone/email is already registered. Please sign in instead.");
+          setTimeout(() => router.replace("/(auth)/email-login"), 1500);
+        } else {
+          setError(msg || "Failed to save profile. Please try again.");
+        }
       } finally {
         setIsLoading(false);
       }

@@ -195,6 +195,57 @@ export function registerAdminUsersAndContentRoutes({
     }
   });
 
+  /**
+   * One-shot cleanup for the legacy `Student7890` placeholder rows that the
+   * old /api/auth/send-otp used to insert before OTP verify (see migration
+   * 0014). Deletes student rows that have not completed profile-setup, are
+   * older than 24h, and have NO activity at all (no enrollments, payments,
+   * lecture progress, test attempts, daily missions, downloads, push tokens,
+   * etc.). Uses `purgeStudentAccountById` for full FK-safe cleanup.
+   */
+  app.post("/api/admin/users/cleanup-pending", requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+      const candidates = await db.query(
+        `SELECT u.id
+         FROM users u
+         WHERE COALESCE(u.role, 'student') = 'student'
+           AND COALESCE(u.profile_complete, FALSE) = FALSE
+           AND COALESCE(u.created_at, 0) < $1
+           AND NOT EXISTS (SELECT 1 FROM enrollments e WHERE e.user_id = u.id)
+           AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.user_id = u.id)
+           AND NOT EXISTS (SELECT 1 FROM lecture_progress lp WHERE lp.user_id = u.id)
+           AND NOT EXISTS (SELECT 1 FROM test_attempts ta WHERE ta.user_id = u.id)
+         LIMIT 1000`,
+        [cutoff]
+      );
+
+      const ids: number[] = candidates.rows.map((r: any) => Number(r.id)).filter((n: number) => Number.isFinite(n));
+      const deleted: number[] = [];
+      const failed: Array<{ id: number; error: string }> = [];
+
+      for (const id of ids) {
+        try {
+          await runInTransaction((tx) => purgeStudentAccountById(tx, id));
+          deleted.push(id);
+        } catch (err: any) {
+          failed.push({ id, error: String(err?.message || err) });
+        }
+      }
+
+      // Also expire any orphaned otp_challenges rows older than 24h so they
+      // don't accumulate forever for spam phone numbers.
+      await db
+        .query("DELETE FROM otp_challenges WHERE updated_at < $1", [cutoff])
+        .catch(() => {});
+
+      res.json({ success: true, deleted: deleted.length, ids: deleted, failed });
+    } catch (err) {
+      console.error("[Admin] cleanup-pending:", err);
+      res.status(500).json({ message: "Failed to clean up pending signups" });
+    }
+  });
+
   app.get("/api/admin/users", requireAdmin, async (_req: Request, res: Response) => {
     try {
       const colsResult = await db.query(

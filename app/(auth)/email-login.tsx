@@ -30,12 +30,14 @@ export default function EmailLoginScreen() {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+  const [needsSignup, setNeedsSignup] = useState<null | "not_found" | "incomplete">(null);
 
   const handleLogin = async () => {
     setError("");
     const identifier = email.trim().toLowerCase();
     if (!identifier) { setError("Please enter your phone number or email."); return; }
     if (!password) { setError("Please enter your password."); return; }
+    setNeedsSignup(null);
 
     setIsLoading(true);
     try {
@@ -55,12 +57,19 @@ export default function EmailLoginScreen() {
       }
     } catch (err: any) {
       const msg = (err?.message || "").replace(/^\d+:\s*/, "");
-      if (msg.includes("blocked") || msg.includes("Blocked")) {
+      if (msg.includes("register_first")) {
+        setNeedsSignup("not_found");
+        setError("");
+      } else if (msg.includes("complete_registration")) {
+        setNeedsSignup("incomplete");
+        setError("");
+      } else if (msg.includes("blocked") || msg.includes("Blocked")) {
         setError("This account is blocked. Contact support/admin.");
       } else if (msg.includes("registered device") || msg.includes("another device")) {
         setError("This account is active on another device/browser. Use the original one or contact support.");
       } else if (msg.includes("not found") || msg.includes("Not found") || msg.includes("404")) {
-        setError("Account not found. Please sign up first.");
+        setNeedsSignup("not_found");
+        setError("");
       } else if (msg.includes("401") || msg.includes("Invalid") || msg.includes("incorrect") || msg.includes("Incorrect")) {
         setError("Incorrect password. Try again or use Phone OTP.");
       } else if (msg.includes("No password")) {
@@ -101,6 +110,26 @@ export default function EmailLoginScreen() {
                 <Text style={styles.incompleteBannerText}>{PROFILE_INCOMPLETE_ALERT_MESSAGE}</Text>
                 <Pressable style={styles.incompleteBannerBtn} onPress={goProfileSetupAllowWeb}>
                   <Text style={styles.incompleteBannerBtnText}>Go to profile setup</Text>
+                  <Ionicons name="arrow-forward" size={16} color="#fff" />
+                </Pressable>
+              </View>
+            </View>
+          ) : null}
+
+          {needsSignup ? (
+            <View style={styles.incompleteBanner}>
+              <Ionicons name="information-circle-outline" size={22} color={Colors.light.primary} />
+              <View style={{ flex: 1, gap: 8 }}>
+                <Text style={styles.incompleteBannerTitle}>
+                  {needsSignup === "incomplete" ? "Finish creating your account" : "Please register/signup first"}
+                </Text>
+                <Text style={styles.incompleteBannerText}>
+                  {needsSignup === "incomplete"
+                    ? "We found a phone/email but your registration was never completed. Please sign up to create your account."
+                    : "We couldn't find an account with that phone or email. Please sign up first to create your account."}
+                </Text>
+                <Pressable style={styles.incompleteBannerBtn} onPress={() => router.replace("/(auth)/login" as any)}>
+                  <Text style={styles.incompleteBannerBtnText}>Sign Up with Phone OTP</Text>
                   <Ionicons name="arrow-forward" size={16} color="#fff" />
                 </Pressable>
               </View>
