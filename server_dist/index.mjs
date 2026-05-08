@@ -8,6 +8,88 @@ var __export = (target, all) => {
     __defProp(target, name, { get: all[name], enumerable: true });
 };
 
+// server/pg-rate-limit-store.ts
+async function takeSupportPostSlotPg(pool2, userId, windowMs, max) {
+  const key = `support_post:user:${userId}`;
+  const store = new PgRateLimitStore(pool2);
+  store.init({ windowMs });
+  const { totalHits, resetTime } = await store.increment(key);
+  if (totalHits > max) {
+    await store.decrement(key);
+    const retryAfterSec = Math.max(1, Math.ceil((resetTime.getTime() - Date.now()) / 1e3));
+    return { ok: false, retryAfterSec };
+  }
+  return { ok: true };
+}
+var PgRateLimitStore;
+var init_pg_rate_limit_store = __esm({
+  "server/pg-rate-limit-store.ts"() {
+    "use strict";
+    PgRateLimitStore = class {
+      constructor(pool2) {
+        this.pool = pool2;
+      }
+      pool;
+      windowMs = 6e4;
+      /** Marks this store as shared across instances (express-rate-limit contract). */
+      localKeys = false;
+      init(options) {
+        this.windowMs = options.windowMs;
+      }
+      async get(key) {
+        const r = await this.pool.query(
+          `SELECT total_hits, reset_time_ms FROM express_rate_limit WHERE bucket_key = $1`,
+          [key]
+        );
+        if (r.rows.length === 0) return void 0;
+        const row = r.rows[0];
+        return {
+          totalHits: Number(row.total_hits),
+          resetTime: new Date(Number(row.reset_time_ms))
+        };
+      }
+      async increment(key) {
+        const now = Date.now();
+        const win = this.windowMs;
+        const ins = await this.pool.query(
+          `INSERT INTO express_rate_limit (bucket_key, total_hits, reset_time_ms)
+       VALUES ($1, 1, $2 + $3::bigint)
+       ON CONFLICT (bucket_key) DO UPDATE SET
+         total_hits = CASE
+           WHEN express_rate_limit.reset_time_ms <= $2::bigint THEN 1
+           ELSE express_rate_limit.total_hits + 1
+         END,
+         reset_time_ms = CASE
+           WHEN express_rate_limit.reset_time_ms <= $2::bigint THEN $2::bigint + $3::bigint
+           ELSE express_rate_limit.reset_time_ms
+         END
+       RETURNING total_hits, reset_time_ms`,
+          [key, now, win]
+        );
+        const row = ins.rows[0];
+        return {
+          totalHits: Number(row.total_hits),
+          resetTime: new Date(Number(row.reset_time_ms))
+        };
+      }
+      async decrement(key) {
+        await this.pool.query(
+          `UPDATE express_rate_limit SET total_hits = GREATEST(0, total_hits - 1) WHERE bucket_key = $1`,
+          [key]
+        );
+      }
+      async resetKey(key) {
+        await this.pool.query(`DELETE FROM express_rate_limit WHERE bucket_key = $1`, [key]);
+      }
+      async resetAll() {
+        await this.pool.query(`DELETE FROM express_rate_limit`);
+      }
+      shutdown() {
+      }
+    };
+  }
+});
+
 // server/firebase.ts
 import * as admin from "firebase-admin";
 function getFirebaseAdmin() {
@@ -100,9 +182,10 @@ var init_security_utils = __esm({
 
 // server/user-sessions.ts
 async function resolveUserBySessionToken(db2, token) {
+  const minCreatedAt = Date.now() - SESSION_MAX_AGE_MS;
   const primary = await db2.query(
-    "SELECT * FROM users WHERE session_token = $1 AND COALESCE(is_blocked, FALSE) = FALSE",
-    [token]
+    "SELECT * FROM users WHERE session_token = $1 AND COALESCE(is_blocked, FALSE) = FALSE AND (last_active_at IS NULL OR last_active_at >= $2)",
+    [token, minCreatedAt]
   );
   if (primary.rows.length > 0) {
     return { row: primary.rows[0], matchedVia: "primary" };
@@ -110,8 +193,8 @@ async function resolveUserBySessionToken(db2, token) {
   const extra = await db2.query(
     `SELECT u.* FROM users u
      INNER JOIN user_sessions s ON s.user_id = u.id AND s.session_token = $1
-     WHERE u.role = 'admin' AND COALESCE(u.is_blocked, FALSE) = FALSE`,
-    [token]
+     WHERE u.role = 'admin' AND COALESCE(u.is_blocked, FALSE) = FALSE AND s.created_at >= $2`,
+    [token, minCreatedAt]
   );
   if (extra.rows.length > 0) {
     return { row: extra.rows[0], matchedVia: "extra" };
@@ -120,13 +203,17 @@ async function resolveUserBySessionToken(db2, token) {
 }
 async function userHasSessionToken(db2, userId, token) {
   if (!token) return false;
-  const u = await db2.query("SELECT session_token, role FROM users WHERE id = $1", [userId]);
+  const minCreatedAt = Date.now() - SESSION_MAX_AGE_MS;
+  const u = await db2.query("SELECT session_token, role, last_active_at FROM users WHERE id = $1", [userId]);
   if (u.rows.length === 0) return false;
-  if (u.rows[0].session_token === token) return true;
+  if (u.rows[0].session_token === token) {
+    const la = Number(u.rows[0].last_active_at || 0);
+    if (!la || la >= minCreatedAt) return true;
+  }
   if (u.rows[0].role !== "admin") return false;
   const s = await db2.query(
-    "SELECT 1 FROM user_sessions WHERE user_id = $1 AND session_token = $2",
-    [userId, token]
+    "SELECT 1 FROM user_sessions WHERE user_id = $1 AND session_token = $2 AND created_at >= $3",
+    [userId, token, minCreatedAt]
   );
   return s.rows.length > 0;
 }
@@ -148,7 +235,7 @@ async function persistLoginSession(db2, user, token, deviceId, opts) {
       );
     } else if (opts.clearOtp) {
       await db2.query(
-        "UPDATE users SET otp = NULL, otp_expires_at = NULL, last_active_at = $1, device_id = COALESCE($2, device_id) WHERE id = $3",
+        "UPDATE users SET otp = NULL, otp_expires_at = NULL, otp_failed_attempts = 0, otp_locked_until = NULL, last_active_at = $1, device_id = COALESCE($2, device_id) WHERE id = $3",
         [now, deviceId, user.id]
       );
     } else {
@@ -160,15 +247,22 @@ async function persistLoginSession(db2, user, token, deviceId, opts) {
     return;
   }
   await db2.query("DELETE FROM user_sessions WHERE user_id = $1", [user.id]);
-  const otpClause = opts.clearOtp !== false ? "otp = NULL, otp_expires_at = NULL, " : "";
+  const otpClause = opts.clearOtp !== false ? "otp = NULL, otp_expires_at = NULL, otp_failed_attempts = 0, otp_locked_until = NULL, " : "";
   await db2.query(
     `UPDATE users SET ${otpClause}device_id = $1, session_token = $2, last_active_at = $3 WHERE id = $4`,
     [deviceId || null, token, now, user.id]
   );
 }
+async function revokeSessionTokenForUser(db2, userId, token) {
+  if (!token) return;
+  await db2.query("DELETE FROM user_sessions WHERE user_id = $1 AND session_token = $2", [userId, token]);
+  await db2.query("UPDATE users SET session_token = NULL WHERE id = $1 AND session_token = $2", [userId, token]);
+}
+var SESSION_MAX_AGE_MS;
 var init_user_sessions = __esm({
   "server/user-sessions.ts"() {
     "use strict";
+    SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
   }
 });
 
@@ -533,32 +627,83 @@ var init_password_utils = __esm({
 // server/user-account-purge.ts
 async function purgeStudentAccountById(db2, userId) {
   const id = userId;
-  const q = async (sql) => {
-    await db2.query(sql, [id]).catch(() => {
-    });
+  let spSeq = 0;
+  const withSavepoint = async (label, fn) => {
+    const spName = `purge_sp_${spSeq++}`;
+    await db2.query(`SAVEPOINT ${spName}`);
+    try {
+      const out = await fn();
+      await db2.query(`RELEASE SAVEPOINT ${spName}`);
+      return out;
+    } catch (err) {
+      await db2.query(`ROLLBACK TO SAVEPOINT ${spName}`).catch(() => {
+      });
+      await db2.query(`RELEASE SAVEPOINT ${spName}`).catch(() => {
+      });
+      err.purgeStep = label;
+      throw err;
+    }
   };
-  await q("DELETE FROM user_sessions WHERE user_id = $1");
-  await q("DELETE FROM lecture_progress WHERE user_id = $1");
-  await q("DELETE FROM live_class_recording_progress WHERE user_id = $1");
-  await q("DELETE FROM live_chat_messages WHERE user_id = $1");
-  await q("DELETE FROM live_class_hand_raises WHERE user_id = $1");
-  await q("DELETE FROM live_class_viewers WHERE user_id = $1");
-  await q("DELETE FROM device_block_events WHERE user_id = $1");
-  await q("DELETE FROM user_missions WHERE user_id = $1");
-  await q("DELETE FROM doubts WHERE user_id = $1");
-  await q("DELETE FROM media_tokens WHERE user_id = $1");
-  await q("DELETE FROM download_tokens WHERE user_id = $1");
-  await q("DELETE FROM test_attempts WHERE user_id = $1");
-  await q("DELETE FROM enrollments WHERE user_id = $1");
-  await q("DELETE FROM notifications WHERE user_id = $1");
-  await q("DELETE FROM payments WHERE user_id = $1");
-  await q("DELETE FROM book_purchases WHERE user_id = $1");
-  await q("DELETE FROM book_click_tracking WHERE user_id = $1");
-  await q("DELETE FROM folder_purchases WHERE user_id = $1");
-  await q("DELETE FROM support_messages WHERE user_id = $1");
-  await q("DELETE FROM user_downloads WHERE user_id = $1");
-  await q("DELETE FROM mission_attempts WHERE user_id = $1");
-  await db2.query("DELETE FROM users WHERE id = $1", [id]);
+  const safeDeleteByUser = async (tableName) => {
+    try {
+      await withSavepoint(tableName, async () => {
+        await db2.query(`DELETE FROM ${tableName} WHERE user_id = $1`, [id]);
+      });
+    } catch (err) {
+      const code = String(err?.code || "");
+      if (code === "42P01" || code === "42703") return;
+      throw new Error(
+        `[purge:${tableName}] code=${code || "unknown"} constraint=${String(err?.constraint || "")} detail=${String(err?.detail || err?.message || "")}`
+      );
+    }
+  };
+  try {
+    const discovered = await db2.query(
+      `SELECT DISTINCT table_name
+       FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND column_name = 'user_id'
+         AND table_name <> 'users'`
+    );
+    for (const row of discovered.rows) {
+      const tableName = String(row.table_name || "");
+      if (!/^[a-z_][a-z0-9_]*$/.test(tableName)) continue;
+      await safeDeleteByUser(tableName);
+    }
+  } catch {
+  }
+  await safeDeleteByUser("user_push_tokens");
+  await safeDeleteByUser("user_sessions");
+  await safeDeleteByUser("lecture_progress");
+  await safeDeleteByUser("live_class_recording_progress");
+  await safeDeleteByUser("live_chat_messages");
+  await safeDeleteByUser("live_class_hand_raises");
+  await safeDeleteByUser("live_class_viewers");
+  await safeDeleteByUser("device_block_events");
+  await safeDeleteByUser("user_missions");
+  await safeDeleteByUser("doubts");
+  await safeDeleteByUser("media_tokens");
+  await safeDeleteByUser("download_tokens");
+  await safeDeleteByUser("test_attempts");
+  await safeDeleteByUser("test_purchases");
+  await safeDeleteByUser("question_reports");
+  await safeDeleteByUser("enrollments");
+  await safeDeleteByUser("notifications");
+  await safeDeleteByUser("payments");
+  await safeDeleteByUser("book_purchases");
+  await safeDeleteByUser("book_click_tracking");
+  await safeDeleteByUser("folder_purchases");
+  await safeDeleteByUser("support_messages");
+  await safeDeleteByUser("user_downloads");
+  await safeDeleteByUser("mission_attempts");
+  await withSavepoint("users", async () => {
+    await db2.query("DELETE FROM users WHERE id = $1", [id]);
+  }).catch((err) => {
+    const code = String(err?.code || "");
+    throw new Error(
+      `[purge:users] code=${code || "unknown"} constraint=${String(err?.constraint || "")} detail=${String(err?.detail || err?.message || "")}`
+    );
+  });
 }
 var init_user_account_purge = __esm({
   "server/user-account-purge.ts"() {
@@ -581,6 +726,27 @@ function buildSessionUserFromRow(row, opts) {
     photo_url: row.photo_url ?? null
   };
 }
+function regenerateSession(req) {
+  return new Promise((resolve2, reject) => {
+    req.session.regenerate((err) => {
+      if (err) reject(err);
+      else resolve2();
+    });
+  });
+}
+function destroySession(req) {
+  return new Promise((resolve2, reject) => {
+    req.session.destroy((err) => {
+      if (err) reject(err);
+      else resolve2();
+    });
+  });
+}
+function normalizePhone(input) {
+  const digits = String(input || "").replace(/\D/g, "");
+  if (digits.length >= 10) return digits.slice(-10);
+  return digits;
+}
 function registerAuthRoutes({
   app: app2,
   db: db2,
@@ -590,7 +756,8 @@ function registerAuthRoutes({
   verifyOtpValue: verifyOtpValue2,
   generateSecureToken: generateSecureToken2,
   sendOTPviaSMS: sendOTPviaSMS2,
-  verifyFirebaseToken: verifyFirebaseToken2
+  verifyFirebaseToken: verifyFirebaseToken2,
+  runInTransaction: runInTransaction2
 }) {
   app2.post("/api/auth/send-otp", async (req, res) => {
     try {
@@ -599,20 +766,31 @@ function registerAuthRoutes({
         return res.status(400).json({ message: "Identifier and type are required" });
       }
       if (type === "phone") {
-        const existing2 = await db2.query("SELECT id FROM users WHERE phone = $1", [identifier]);
-        if (existing2.rows.length === 0) {
-          await db2.query(
-            "INSERT INTO users (name, phone, role) VALUES ($1, $2, $3)",
-            [`Student${identifier.slice(-4)}`, identifier, "student"]
-          );
+        const normalizedPhone = normalizePhone(identifier);
+        if (!normalizedPhone || normalizedPhone.length !== 10) {
+          return res.status(400).json({ message: "Valid phone number is required" });
+        }
+        await db2.query(
+          `INSERT INTO users (name, phone, role)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (phone) DO NOTHING`,
+          [`Student${normalizedPhone.slice(-4)}`, normalizedPhone, "student"]
+        );
+        const lockRow = await db2.query("SELECT otp_locked_until FROM users WHERE phone = $1", [normalizedPhone]);
+        const lockedUntil = lockRow.rows[0]?.otp_locked_until != null ? Number(lockRow.rows[0].otp_locked_until) : 0;
+        if (lockedUntil > Date.now()) {
+          return res.status(429).json({ message: "Too many attempts. Please try again later." });
         }
         const otp2 = generateOTP2();
         const otpHash2 = hashOtpValue2(otp2);
         const expires2 = Date.now() + 10 * 60 * 1e3;
-        await db2.query("UPDATE users SET otp = $1, otp_expires_at = $2 WHERE phone = $3", [otpHash2, expires2, identifier]);
+        await db2.query(
+          "UPDATE users SET otp = $1, otp_expires_at = $2, otp_failed_attempts = 0, otp_locked_until = NULL WHERE phone = $3",
+          [otpHash2, expires2, normalizedPhone]
+        );
         let smsSent = false;
         try {
-          smsSent = await sendOTPviaSMS2(identifier, otp2);
+          smsSent = await sendOTPviaSMS2(normalizedPhone, otp2);
         } catch (smsErr) {
           console.error("[OTP] SMS sending threw error:", smsErr);
         }
@@ -627,18 +805,22 @@ function registerAuthRoutes({
           devOtp: isDev ? otp2 : ""
         });
       }
+      const email = String(identifier).trim().toLowerCase();
+      const lockEmail = await db2.query("SELECT otp_locked_until FROM users WHERE email = $1", [email]);
+      const lockedUntilE = lockEmail.rows[0]?.otp_locked_until != null ? Number(lockEmail.rows[0].otp_locked_until) : 0;
+      if (lockedUntilE > Date.now()) {
+        return res.status(429).json({ message: "Too many attempts. Please try again later." });
+      }
       const otp = generateOTP2();
       const otpHash = hashOtpValue2(otp);
       const expires = Date.now() + 10 * 60 * 1e3;
-      const existing = await db2.query("SELECT id FROM users WHERE email = $1", [identifier]);
-      if (existing.rows.length === 0) {
-        await db2.query(
-          "INSERT INTO users (name, email, otp, otp_expires_at, role) VALUES ($1, $2, $3, $4, $5)",
-          [identifier.split("@")[0], identifier, otpHash, expires, "student"]
-        );
-      } else {
-        await db2.query("UPDATE users SET otp = $1, otp_expires_at = $2 WHERE email = $3", [otpHash, expires, identifier]);
-      }
+      await db2.query(
+        `INSERT INTO users (name, email, otp, otp_expires_at, role)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (email) DO UPDATE SET otp = EXCLUDED.otp, otp_expires_at = EXCLUDED.otp_expires_at,
+           otp_failed_attempts = 0, otp_locked_until = NULL`,
+        [email.split("@")[0], email, otpHash, expires, "student"]
+      );
       res.json({ success: true, message: "OTP sent successfully", method: "server" });
     } catch (err) {
       console.error(err);
@@ -652,11 +834,27 @@ function registerAuthRoutes({
         return res.status(400).json({ message: "Identifier and OTP are required" });
       }
       const result = type === "email" ? await db2.query("SELECT * FROM users WHERE email = $1", [identifier]) : await db2.query("SELECT * FROM users WHERE phone = $1", [identifier]);
-      if (result.rows.length === 0) return res.status(404).json({ message: "User not found" });
+      if (result.rows.length === 0) {
+        return res.status(404).json({ message: "Account not found. Please register first." });
+      }
       const user = result.rows[0];
-      if (user.is_blocked) return res.status(403).json({ message: "Your account has been blocked. Please contact support." });
-      if (!verifyOtpValue2(user.otp, otp)) return res.status(400).json({ message: "Invalid OTP" });
-      if (Date.now() > Number(user.otp_expires_at)) return res.status(400).json({ message: "OTP expired" });
+      if (user.is_blocked) return res.status(401).json({ message: GENERIC_OTP_ERROR });
+      const lockedUntil = user.otp_locked_until != null ? Number(user.otp_locked_until) : 0;
+      if (lockedUntil > Date.now()) {
+        return res.status(429).json({ message: "Too many attempts. Please try again later." });
+      }
+      if (!verifyOtpValue2(user.otp, otp)) {
+        const lockMs = Date.now() + 15 * 60 * 1e3;
+        await db2.query(
+          `UPDATE users SET
+             otp_failed_attempts = LEAST(COALESCE(otp_failed_attempts, 0) + 1, 99),
+             otp_locked_until = CASE WHEN COALESCE(otp_failed_attempts, 0) + 1 >= 5 THEN $1 ELSE otp_locked_until END
+           WHERE id = $2`,
+          [lockMs, user.id]
+        );
+        return res.status(401).json({ message: GENERIC_OTP_ERROR });
+      }
+      if (Date.now() > Number(user.otp_expires_at)) return res.status(401).json({ message: GENERIC_OTP_ERROR });
       const loginGate = await assertLoginAllowedForInstallation(db2, req, {
         userId: user.id,
         role: user.role,
@@ -671,6 +869,7 @@ function registerAuthRoutes({
       await persistLoginSession(db2, user, sessionToken, deviceId || null, { clearOtp: true });
       await finalizeStudentWebSlotsAfterAuth(db2, user.id, user.role, req);
       const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: deviceId || null });
+      await regenerateSession(req);
       req.session.user = sessionUser;
       res.json({ success: true, user: sessionUser });
     } catch (err) {
@@ -685,16 +884,18 @@ function registerAuthRoutes({
         return res.status(400).json({ message: "ID token and phone are required" });
       }
       const decoded = await verifyFirebaseToken2(idToken);
-      if (!decoded.phone_number || !decoded.phone_number.endsWith(phoneNumber)) {
+      const claimedPhone = normalizePhone(phoneNumber);
+      const tokenPhone = normalizePhone(decoded.phone_number);
+      if (!tokenPhone || !claimedPhone || tokenPhone !== claimedPhone) {
         return res.status(400).json({ message: "Phone number mismatch" });
       }
-      let result = await db2.query("SELECT * FROM users WHERE phone = $1", [phoneNumber]);
+      let result = await db2.query("SELECT * FROM users WHERE phone = $1", [claimedPhone]);
       if (result.rows.length === 0) {
         await db2.query(
           "INSERT INTO users (name, phone, role) VALUES ($1, $2, $3)",
-          [`Student${phoneNumber.slice(-4)}`, phoneNumber, "student"]
+          [`Student${claimedPhone.slice(-4)}`, claimedPhone, "student"]
         );
-        result = await db2.query("SELECT * FROM users WHERE phone = $1", [phoneNumber]);
+        result = await db2.query("SELECT * FROM users WHERE phone = $1", [claimedPhone]);
       }
       const user = result.rows[0];
       const loginGate = await assertLoginAllowedForInstallation(db2, req, {
@@ -711,6 +912,7 @@ function registerAuthRoutes({
       await persistLoginSession(db2, user, sessionToken, deviceId || null, { clearOtp: true });
       await finalizeStudentWebSlotsAfterAuth(db2, user.id, user.role, req);
       const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: deviceId || null });
+      await regenerateSession(req);
       req.session.user = sessionUser;
       res.json({ success: true, user: sessionUser });
     } catch (err) {
@@ -745,6 +947,7 @@ function registerAuthRoutes({
               req.session.user = null;
               return res.status(401).json({ message: "device_binding_mismatch" });
             }
+            await finalizeStudentWebSlotsAfterAuth(db2, row.id, row.role, req);
             req.session.user = fresh;
             return res.json(fresh);
           }
@@ -778,6 +981,7 @@ function registerAuthRoutes({
         req.session.user = null;
         return res.status(401).json({ message: "device_binding_mismatch" });
       }
+      await finalizeStudentWebSlotsAfterAuth(db2, sessionUser.id, row.role, req);
       const effectiveToken = tok || row.session_token;
       const fresh = {
         ...sessionUser,
@@ -826,6 +1030,7 @@ function registerAuthRoutes({
       await persistLoginSession(db2, user, sessionToken, deviceId || null, { clearOtp: false });
       await finalizeStudentWebSlotsAfterAuth(db2, user.id, user.role, req);
       const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: deviceId || null });
+      await regenerateSession(req);
       req.session.user = sessionUser;
       res.json({ success: true, user: sessionUser });
     } catch (err) {
@@ -836,8 +1041,40 @@ function registerAuthRoutes({
       res.status(500).json({ message: "Authentication failed" });
     }
   });
-  app2.post("/api/auth/logout", (req, res) => {
-    req.session.user = null;
+  app2.post("/api/auth/logout", async (req, res) => {
+    const cookie = req.session?.cookie;
+    const sessionUser = req.session?.user;
+    let revokeUserId = sessionUser?.id ? Number(sessionUser.id) : null;
+    let revokeToken = sessionUser?.sessionToken || null;
+    if (!revokeToken) {
+      const authHeader = req.headers.authorization;
+      if (authHeader?.startsWith("Bearer ")) revokeToken = authHeader.slice(7).trim();
+    }
+    if (!revokeUserId && revokeToken) {
+      const resolved = await resolveUserBySessionToken(db2, revokeToken).catch(() => null);
+      if (resolved?.row?.id) revokeUserId = Number(resolved.row.id);
+    }
+    if (revokeUserId && revokeToken) {
+      await revokeSessionTokenForUser(db2, revokeUserId, revokeToken).catch(() => {
+      });
+    }
+    try {
+      await destroySession(req);
+    } catch (err) {
+      console.error("[auth] logout destroy failed:", err);
+      return res.status(500).json({ message: "Logout failed" });
+    }
+    if (cookie) {
+      res.clearCookie("connect.sid", {
+        path: cookie.path || "/",
+        httpOnly: cookie.httpOnly !== false,
+        secure: !!cookie.secure,
+        sameSite: cookie.sameSite,
+        domain: cookie.domain
+      });
+    } else {
+      res.clearCookie("connect.sid", { path: "/" });
+    }
     res.json({ success: true });
   });
   app2.delete("/api/auth/account", async (req, res) => {
@@ -847,8 +1084,22 @@ function registerAuthRoutes({
       if (user.role === "admin") {
         return res.status(403).json({ message: "Admin accounts cannot be deleted here. Contact support." });
       }
-      await purgeStudentAccountById(db2, user.id);
-      req.session.user = null;
+      await runInTransaction2((tx) => purgeStudentAccountById(tx, user.id));
+      const cookie = req.session?.cookie;
+      try {
+        await destroySession(req);
+      } catch {
+        req.session.user = null;
+      }
+      if (cookie) {
+        res.clearCookie("connect.sid", {
+          path: cookie.path || "/",
+          httpOnly: cookie.httpOnly !== false,
+          secure: !!cookie.secure,
+          sameSite: cookie.sameSite,
+          domain: cookie.domain
+        });
+      }
       res.json({ success: true });
     } catch (err) {
       console.error("Delete account error:", err);
@@ -867,13 +1118,15 @@ function registerAuthRoutes({
       } else {
         result = await db2.query("SELECT * FROM users WHERE LOWER(email) = LOWER($1)", [identifier]);
       }
-      if (result.rows.length === 0) return res.status(404).json({ message: "Account not found. Please sign up first." });
-      const user = result.rows[0];
-      if (user.is_blocked) return res.status(403).json({ message: "Your account has been blocked. Please contact support." });
-      if (!user.profile_complete) {
-        return res.status(401).json({ message: "Profile not complete. Please sign in with Phone OTP to complete your profile first." });
+      if (result.rows.length === 0) {
+        return res.status(404).json({ message: "Account not found. Please register first." });
       }
-      if (!user.password_hash) return res.status(401).json({ message: "No password set. Please use Phone OTP to sign in, then set a password in Profile." });
+      const user = result.rows[0];
+      if (user.is_blocked) return res.status(401).json({ message: GENERIC_LOGIN_ERROR });
+      if (!user.profile_complete) {
+        return res.status(401).json({ message: GENERIC_LOGIN_ERROR });
+      }
+      if (!user.password_hash) return res.status(401).json({ message: GENERIC_LOGIN_ERROR });
       let matched = false;
       if (isScryptHash(user.password_hash)) {
         matched = await verifyPassword(password, user.password_hash);
@@ -884,7 +1137,7 @@ function registerAuthRoutes({
           await db2.query("UPDATE users SET password_hash = $1 WHERE id = $2", [migratedHash, user.id]);
         }
       }
-      if (!matched) return res.status(401).json({ message: "Incorrect password. Try again or use Phone OTP." });
+      if (!matched) return res.status(401).json({ message: GENERIC_LOGIN_ERROR });
       const gate = await assertLoginAllowedForInstallation(db2, req, {
         userId: user.id,
         role: user.role,
@@ -900,6 +1153,7 @@ function registerAuthRoutes({
       await persistLoginSession(db2, user, sessionToken, dev, { clearOtp: false });
       await finalizeStudentWebSlotsAfterAuth(db2, user.id, user.role, req);
       const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: dev });
+      await regenerateSession(req);
       req.session.user = sessionUser;
       res.json({ success: true, user: sessionUser });
     } catch (err) {
@@ -985,6 +1239,7 @@ function registerAuthRoutes({
     }
   });
 }
+var GENERIC_LOGIN_ERROR, GENERIC_OTP_ERROR;
 var init_auth_routes = __esm({
   "server/auth-routes.ts"() {
     "use strict";
@@ -992,10 +1247,13 @@ var init_auth_routes = __esm({
     init_native_device_binding();
     init_user_sessions();
     init_user_account_purge();
+    GENERIC_LOGIN_ERROR = "Invalid credentials";
+    GENERIC_OTP_ERROR = "Invalid or expired OTP";
   }
 });
 
 // server/pdf-routes.ts
+import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 function isPrivateOrLocalHost(hostname) {
   const lower = hostname.toLowerCase();
@@ -1011,6 +1269,15 @@ function isPrivateOrLocalHost(hostname) {
     return false;
   }
   return lower === "::1" || lower.startsWith("fe80:") || lower.startsWith("fc") || lower.startsWith("fd");
+}
+async function resolveToPublicAddress(hostname) {
+  try {
+    const resolved = await lookup(hostname, { all: true });
+    if (!resolved.length) return false;
+    return resolved.every((entry) => !isPrivateOrLocalHost(entry.address));
+  } catch {
+    return false;
+  }
 }
 function registerPdfRoutes({ app: app2, db: db2, getAuthUser: getAuthUser2 }) {
   app2.get("/api/pdf-viewer", async (req, res) => {
@@ -1044,6 +1311,7 @@ html,body{width:100%;height:100%;background:#2a2a2a;overflow:auto;font-family:-a
 .page-info{color:#888;font-size:12px;padding:4px 0}
 .error{position:fixed;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;color:#ccc;padding:32px;text-align:center;background:#2a2a2a;z-index:20}
 .error h3{font-size:18px;color:#fff}.error p{font-size:13px;color:#999;line-height:1.5}
+.error button{margin-top:8px;padding:10px 18px;background:#1A56DB;border:none;border-radius:8px;color:#fff;font-size:13px;cursor:pointer}
 @keyframes spin{to{transform:rotate(360deg)}}
 @media print{body{display:none!important}}
 </style>
@@ -1082,12 +1350,30 @@ pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/p
       renderPage(1);
     });
   }
-  renderPdf(pdfUrl).catch(function(){
-    document.getElementById('loading').style.display='none';
+  function showError(canRetry){
+    var loading=document.getElementById('loading');if(loading)loading.style.display='none';
+    var existing=document.querySelector('.error');if(existing)existing.remove();
     var d=document.createElement('div');d.className='error';
-    d.innerHTML='<h3>Unable to load PDF</h3><p>Please try again or contact support.</p>';
+    var h=document.createElement('h3');h.textContent='Unable to load PDF';d.appendChild(h);
+    var p=document.createElement('p');p.textContent='The file is taking longer than expected. Check your connection and try again.';d.appendChild(p);
+    if(canRetry){
+      var b=document.createElement('button');b.type='button';b.textContent='Try again';
+      b.addEventListener('click',function(){d.remove();var l=document.getElementById('loading');if(l)l.style.display='flex';attempt(0);});
+      d.appendChild(b);
+    }
     document.body.appendChild(d);
-  });
+  }
+  function attempt(retryCount){
+    renderPdf(pdfUrl).catch(function(){
+      // One automatic retry \u2014 most R2 timeouts are transient cold-read stalls.
+      if(retryCount<1){
+        setTimeout(function(){attempt(retryCount+1);},1500);
+        return;
+      }
+      showError(true);
+    });
+  }
+  attempt(0);
   document.addEventListener('contextmenu',function(e){e.preventDefault();});
   document.addEventListener('keydown',function(e){
     if(e.key==='PrintScreen'||(e.ctrlKey&&(e.key==='p'||e.key==='P'||e.key==='s'||e.key==='S'))){e.preventDefault();}
@@ -1126,9 +1412,12 @@ pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/p
         const hostname = parsedUrl.hostname.toLowerCase();
         const isAllowedHost = PDF_PROXY_ALLOWED_HOSTS.has(hostname);
         const isGoogleDrive = hostname.includes("drive.google.com") || hostname.includes("docs.google.com");
-        const isPdfUrl = parsedUrl.pathname.toLowerCase().endsWith(".pdf");
-        if (!isAllowedHost && !isPdfUrl) {
-          return res.status(400).json({ message: "Only trusted hosts and PDF links are allowed" });
+        if (!isAllowedHost) {
+          return res.status(400).json({ message: "Only trusted hosts are allowed" });
+        }
+        const dnsSafe = await resolveToPublicAddress(parsedUrl.hostname);
+        if (!dnsSafe) {
+          return res.status(403).json({ message: "Blocked host" });
         }
         if (isGoogleDrive) {
           const fileIdMatch = currentUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
@@ -1227,13 +1516,35 @@ var init_course_access_utils = __esm({
 });
 
 // server/payment-routes.ts
+function httpStatusForCourseVerifyError(message) {
+  switch (message) {
+    case "Invalid payment signature":
+      return 400;
+    case "Payment order not found":
+      return 404;
+    case "Payment does not belong to this user":
+      return 403;
+    case "Course mismatch":
+      return 400;
+    case "This course has ended":
+      return 410;
+    case "Course not found":
+      return 404;
+    case "Payment kind mismatch":
+    case "Payment user mismatch":
+    case "Payment course mismatch":
+      return 400;
+    default:
+      return 500;
+  }
+}
 function registerPaymentRoutes({
   app: app2,
   db: db2,
   getAuthUser: getAuthUser2,
   getRazorpay: getRazorpay2,
   verifyPaymentSignature: verifyPaymentSignature2,
-  cacheInvalidate: cacheInvalidate2
+  runInTransaction: runInTransaction2
 }) {
   const verifyOrderOwnershipAndAmount = async ({
     orderId,
@@ -1256,25 +1567,47 @@ function registerPaymentRoutes({
     if (!noteItemId || noteItemId !== expectedItemId) throw new Error("Payment item mismatch");
     if (!orderAmount || orderAmount !== expectedAmount) throw new Error("Payment amount mismatch");
   };
-  const ensureCourseEnrollment = async (paymentRow) => {
-    const paidCourseResult = await db2.query("SELECT * FROM courses WHERE id = $1", [paymentRow.course_id]);
+  const verifyCourseOrderOwnership = async ({
+    orderId,
+    expectedUserId,
+    expectedCourseId
+  }) => {
+    const razorpay = getRazorpay2();
+    const order = await razorpay.orders.fetch(orderId);
+    const notes = order.notes || {};
+    const noteUserId = Number(notes.userId || 0);
+    const noteCourseId = Number(notes.courseId || 0);
+    const noteKind = String(notes.kind || "");
+    if (noteKind && noteKind !== "course") throw new Error("Payment kind mismatch");
+    if (!noteUserId || noteUserId !== expectedUserId) throw new Error("Payment user mismatch");
+    if (!noteCourseId || noteCourseId !== expectedCourseId) throw new Error("Payment course mismatch");
+  };
+  const ensureCourseEnrollment = async (exec, paymentRow) => {
+    const paidCourseResult = await exec.query("SELECT * FROM courses WHERE id = $1", [paymentRow.course_id]);
     const paidCourse = paidCourseResult.rows[0];
     if (!paidCourse) throw new Error("Course not found");
-    const alreadyEnrolled = await db2.query(
-      "SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2",
-      [paymentRow.user_id, paymentRow.course_id]
-    );
-    if (alreadyEnrolled.rows.length > 0) return;
     const at = Date.now();
     const vu = computeEnrollmentValidUntil(paidCourse, at);
-    await db2.query(
-      "INSERT INTO enrollments (user_id, course_id, enrolled_at, valid_until) VALUES ($1, $2, $3, $4)",
-      [paymentRow.user_id, paymentRow.course_id, at, vu]
+    const existing = await exec.query(
+      "SELECT id, valid_until, status FROM enrollments WHERE user_id = $1 AND course_id = $2 FOR UPDATE",
+      [paymentRow.user_id, paymentRow.course_id]
     );
-    await db2.query(
-      "UPDATE courses SET total_students = COALESCE(total_students, 0) + 1 WHERE id = $1",
-      [paymentRow.course_id]
-    );
+    if (existing.rows.length === 0) {
+      await exec.query(
+        `INSERT INTO enrollments (user_id, course_id, enrolled_at, valid_until, status)
+         VALUES ($1, $2, $3, $4, 'active')`,
+        [paymentRow.user_id, paymentRow.course_id, at, vu]
+      );
+      await exec.query("UPDATE courses SET total_students = COALESCE(total_students, 0) + 1 WHERE id = $1", [
+        paymentRow.course_id
+      ]);
+    } else {
+      await exec.query(
+        `UPDATE enrollments SET enrolled_at = $1, valid_until = $2, status = 'active'
+         WHERE user_id = $3 AND course_id = $4`,
+        [at, vu, paymentRow.user_id, paymentRow.course_id]
+      );
+    }
   };
   const completeCoursePaymentByOrder = async ({
     orderId,
@@ -1287,36 +1620,38 @@ function registerPaymentRoutes({
     if (!isValid) {
       throw new Error("Invalid payment signature");
     }
-    const paymentRecord = await db2.query(
-      "SELECT * FROM payments WHERE razorpay_order_id = $1",
-      [orderId]
-    );
-    if (paymentRecord.rows.length === 0) {
-      throw new Error("Payment order not found");
-    }
-    const paymentRow = paymentRecord.rows[0];
-    if (expectedUserId && paymentRow.user_id !== expectedUserId) {
-      throw new Error("Payment does not belong to this user");
-    }
-    if (expectedCourseId && paymentRow.course_id !== expectedCourseId) {
-      throw new Error("Course mismatch");
-    }
-    if (paymentRow.status !== "paid") {
-      const paidCourseResult = await db2.query("SELECT * FROM courses WHERE id = $1", [paymentRow.course_id]);
-      const paidCourse = paidCourseResult.rows[0];
-      if (!paidCourse) throw new Error("Course not found");
-      const endTsPaid = paidCourse.end_date != null && String(paidCourse.end_date).trim() !== "" ? Date.parse(String(paidCourse.end_date).trim()) : null;
-      if (Number.isFinite(endTsPaid) && endTsPaid < Date.now()) {
-        throw new Error("This course has ended");
-      }
-      await db2.query(
-        "UPDATE payments SET razorpay_payment_id = $1, razorpay_signature = $2, status = $3 WHERE razorpay_order_id = $4",
-        [paymentId, signature, "paid", orderId]
+    const result = await runInTransaction2(async (tx) => {
+      const paymentRecord = await tx.query(
+        "SELECT * FROM payments WHERE razorpay_order_id = $1 FOR UPDATE",
+        [orderId]
       );
-    }
-    await ensureCourseEnrollment(paymentRow);
-    cacheInvalidate2?.("courses:");
-    return { userId: paymentRow.user_id, courseId: paymentRow.course_id };
+      if (paymentRecord.rows.length === 0) {
+        throw new Error("Payment order not found");
+      }
+      const paymentRow = paymentRecord.rows[0];
+      if (expectedUserId && paymentRow.user_id !== expectedUserId) {
+        throw new Error("Payment does not belong to this user");
+      }
+      if (expectedCourseId && paymentRow.course_id !== expectedCourseId) {
+        throw new Error("Course mismatch");
+      }
+      if (paymentRow.status !== "paid") {
+        const paidCourseResult = await tx.query("SELECT * FROM courses WHERE id = $1", [paymentRow.course_id]);
+        const paidCourse = paidCourseResult.rows[0];
+        if (!paidCourse) throw new Error("Course not found");
+        const endTsPaid = paidCourse.end_date != null && String(paidCourse.end_date).trim() !== "" ? Date.parse(String(paidCourse.end_date).trim()) : null;
+        if (Number.isFinite(endTsPaid) && endTsPaid < Date.now()) {
+          throw new Error("This course has ended");
+        }
+        await tx.query(
+          "UPDATE payments SET razorpay_payment_id = $1, razorpay_signature = $2, status = $3 WHERE razorpay_order_id = $4",
+          [paymentId, signature, "paid", orderId]
+        );
+      }
+      await ensureCourseEnrollment(tx, paymentRow);
+      return { userId: paymentRow.user_id, courseId: paymentRow.course_id };
+    });
+    return result;
   };
   app2.post("/api/payments/track-click", async (req, res) => {
     try {
@@ -1326,29 +1661,34 @@ function registerPaymentRoutes({
       if (!courseId) return res.json({ ok: true });
       const course = await db2.query("SELECT price FROM courses WHERE id = $1", [courseId]);
       const price = course.rows[0]?.price || 0;
-      const existing = await db2.query(
-        "SELECT id, click_count FROM payments WHERE user_id = $1 AND course_id = $2 AND (status = 'created' OR status IS NULL) ORDER BY created_at DESC LIMIT 1",
+      const pricePaisa = Math.round(parseFloat(String(price)) * 100);
+      const now = Date.now();
+      const updated = await db2.query(
+        `UPDATE payments AS p
+         SET click_count = COALESCE(p.click_count, 1) + 1,
+             status = 'created'
+         FROM (
+           SELECT id FROM payments
+           WHERE user_id = $1 AND course_id = $2
+             AND (status = 'created' OR status IS NULL)
+             AND (razorpay_order_id IS NULL OR btrim(razorpay_order_id) = '')
+           ORDER BY created_at DESC
+           LIMIT 1
+         ) AS sub
+         WHERE p.id = sub.id
+         RETURNING p.id`,
         [user.id, courseId]
       );
-      if (existing.rows.length > 0) {
-        const currentCount = parseInt(existing.rows[0].click_count) || 1;
-        const newCount = currentCount + 1;
-        await db2.query(
-          "UPDATE payments SET click_count = $1, status = 'created' WHERE id = $2 RETURNING id, click_count",
-          [newCount, existing.rows[0].id]
-        );
-      } else {
+      if (updated.rows.length === 0) {
         const paid = await db2.query(
           "SELECT id FROM payments WHERE user_id = $1 AND course_id = $2 AND status = 'paid' LIMIT 1",
           [user.id, courseId]
         );
         if (paid.rows.length === 0) {
-          const pricePaisa = Math.round(parseFloat(String(price)) * 100);
           await db2.query(
             `INSERT INTO payments (user_id, course_id, amount, status, click_count, created_at)
-             VALUES ($1, $2, $3, 'created', 1, $4)
-             ON CONFLICT (user_id, course_id) DO UPDATE SET click_count = payments.click_count + 1`,
-            [user.id, courseId, pricePaisa, Date.now()]
+             VALUES ($1, $2, $3, 'created', 1, $4)`,
+            [user.id, courseId, pricePaisa, now]
           );
         }
       }
@@ -1371,31 +1711,36 @@ function registerPaymentRoutes({
       if (Number.isFinite(endTs) && endTs < Date.now()) {
         return res.status(400).json({ message: "This course has ended" });
       }
-      const existingEnrollment = await db2.query("SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2", [user.id, courseId]);
-      if (existingEnrollment.rows.length > 0) return res.status(400).json({ message: "Already enrolled" });
+      const existingEnrollment = await db2.query(
+        "SELECT valid_until, status FROM enrollments WHERE user_id = $1 AND course_id = $2 LIMIT 1",
+        [user.id, courseId]
+      );
+      if (existingEnrollment.rows.length > 0) {
+        const er = existingEnrollment.rows[0];
+        const statusOk = er.status == null || String(er.status).toLowerCase() === "active";
+        if (statusOk && !isEnrollmentExpired(er)) {
+          return res.status(400).json({ message: "Already enrolled" });
+        }
+      }
       const amount = Math.round(parseFloat(course.price) * 100);
       const razorpay = getRazorpay2();
       const order = await razorpay.orders.create({
         amount,
         currency: "INR",
         receipt: `course_${courseId}_user_${user.id}_${Date.now()}`,
-        notes: { courseId: courseId.toString(), userId: user.id.toString(), courseTitle: course.title }
+        notes: { courseId: courseId.toString(), userId: user.id.toString(), courseTitle: course.title, kind: "course" }
       });
       console.log("[Payments] create-order success");
-      const existingPayment = await db2.query(
-        "SELECT id FROM payments WHERE user_id = $1 AND course_id = $2 AND status = 'created' ORDER BY created_at DESC LIMIT 1",
-        [user.id, courseId]
-      );
-      if (existingPayment.rows.length > 0) {
-        await db2.query(
-          "UPDATE payments SET razorpay_order_id = $1, amount = $2 WHERE id = $3",
-          [order.id, amount, existingPayment.rows[0].id]
-        );
-      } else {
+      try {
         await db2.query(
           "INSERT INTO payments (user_id, course_id, razorpay_order_id, amount, status, click_count, created_at) VALUES ($1, $2, $3, $4, 'created', 1, $5)",
           [user.id, courseId, order.id, amount, Date.now()]
         );
+      } catch (insertErr) {
+        if (insertErr?.code === "23505") {
+          return res.status(409).json({ message: "Duplicate payment order; try again" });
+        }
+        throw insertErr;
       }
       res.json({
         orderId: order.id,
@@ -1434,7 +1779,12 @@ function registerPaymentRoutes({
       res.json({ success: true, message: "Payment verified and enrolled successfully" });
     } catch (err) {
       console.error("Verify payment error:", err);
-      res.status(500).json({ message: "Payment verification failed" });
+      const msg = err instanceof Error ? err.message : "";
+      const status = httpStatusForCourseVerifyError(msg);
+      if (status === 500) {
+        return res.status(500).json({ message: "Payment verification failed" });
+      }
+      return res.status(status).json({ message: msg || "Payment verification failed" });
     }
   });
   app2.post("/api/payments/sync-enrollment", async (req, res) => {
@@ -1452,8 +1802,7 @@ function registerPaymentRoutes({
       if (pay.rows.length === 0) {
         return res.json({ ok: true, fixed: false, message: "No paid order for this course" });
       }
-      await ensureCourseEnrollment(pay.rows[0]);
-      cacheInvalidate2?.("courses:");
+      await ensureCourseEnrollment(db2, pay.rows[0]);
       return res.json({ ok: true, fixed: true, message: "Enrollment synced" });
     } catch (err) {
       console.error("sync-enrollment error:", err);
@@ -1472,11 +1821,24 @@ function registerPaymentRoutes({
       if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
         return res.redirect(fail);
       }
+      const isValid = verifyPaymentSignature2(razorpay_order_id, razorpay_payment_id, razorpay_signature);
+      if (!isValid) return res.redirect(fail);
+      const paymentRecord = await db2.query("SELECT * FROM payments WHERE razorpay_order_id = $1", [razorpay_order_id]);
+      if (paymentRecord.rows.length === 0) return res.redirect(fail);
+      const paymentRow = paymentRecord.rows[0];
+      await verifyCourseOrderOwnership({
+        orderId: razorpay_order_id,
+        expectedUserId: paymentRow.user_id,
+        expectedCourseId: paymentRow.course_id
+      });
+      const preBind = await assertNativePaidPurchaseInstallation(db2, paymentRow.user_id, req);
+      if (!preBind.ok) return res.redirect(fail);
       const result = await completeCoursePaymentByOrder({
         orderId: razorpay_order_id,
         paymentId: razorpay_payment_id,
         signature: razorpay_signature
       });
+      await finalizeInstallationBindAfterPurchase(db2, result.userId, req);
       return res.redirect(`${frontendBase}/course/${result.courseId}?payment=success`);
     } catch (err) {
       console.error("[Payments] redirect verify failed:", err);
@@ -1535,10 +1897,13 @@ function registerPaymentRoutes({
         expectedItemId: testId,
         expectedAmount
       });
+      const preTest = await assertNativePaidPurchaseInstallation(db2, userId, req);
+      if (!preTest.ok) return res.redirect(fail);
       await db2.query(
         "INSERT INTO test_purchases (user_id, test_id, razorpay_order_id, razorpay_payment_id, created_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (user_id, test_id) DO NOTHING",
         [userId, testId, razorpay_order_id, razorpay_payment_id, Date.now()]
       );
+      await finalizeInstallationBindAfterPurchase(db2, userId, req);
       return res.redirect(`${frontendBase}/test-series?payment=success&testId=${testId}`);
     } catch (err) {
       console.error("[Tests] verify-redirect failed:", err);
@@ -1598,13 +1963,43 @@ var init_payment_routes = __esm({
   }
 });
 
+// server/sse-listen-budget.ts
+function sseListenCapFromPoolMax(poolMax) {
+  const poolClamp = Math.max(5, poolMax);
+  const fromEnv = parseInt(process.env.PG_LISTEN_SSE_MAX_CONCURRENT || "", 10);
+  if (Number.isFinite(fromEnv) && fromEnv > 0) {
+    return Math.min(fromEnv, poolClamp);
+  }
+  return poolClamp;
+}
+function tryAcquireSseListen(poolMax) {
+  const cap = sseListenCapFromPoolMax(poolMax);
+  if (activeListenStreams >= cap) return false;
+  activeListenStreams += 1;
+  return true;
+}
+function releaseSseListen() {
+  activeListenStreams = Math.max(0, activeListenStreams - 1);
+}
+var activeListenStreams;
+var init_sse_listen_budget = __esm({
+  "server/sse-listen-budget.ts"() {
+    "use strict";
+    activeListenStreams = 0;
+  }
+});
+
 // server/support-routes.ts
 function registerSupportRoutes({
   app: app2,
   db: db2,
+  pool: pool2,
+  listenPool: listenPool2,
   getAuthUser: getAuthUser2,
+  requireAuth,
   requireAdmin
 }) {
+  const listenPoolMax = listenPool2.options.max ?? 32;
   app2.get("/api/support/messages", async (req, res) => {
     try {
       const user = await getAuthUser2(req);
@@ -1613,13 +2008,119 @@ function registerSupportRoutes({
         "SELECT * FROM support_messages WHERE user_id = $1 ORDER BY created_at ASC",
         [user.id]
       );
+      res.json(result.rows);
+    } catch {
+      res.status(500).json({ message: "Failed to fetch messages" });
+    }
+  });
+  app2.get("/api/support/messages/stream", requireAuth, async (req, res) => {
+    const user = req.user;
+    const myUserId = Number(user?.id);
+    if (!Number.isFinite(myUserId)) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    if (!tryAcquireSseListen(listenPoolMax)) {
+      return res.status(503).json({ message: "Too many realtime connections; try again shortly." });
+    }
+    let closed = false;
+    let listenClient = null;
+    const cleanup = async () => {
+      if (closed) return;
+      closed = true;
+      releaseSseListen();
+      const c = listenClient;
+      listenClient = null;
+      if (!c) return;
+      try {
+        c.removeAllListeners("notification");
+        await c.query("UNLISTEN support_chat");
+      } catch {
+      }
+      try {
+        c.release();
+      } catch {
+      }
+    };
+    try {
+      listenClient = await listenPool2.connect();
+    } catch (e) {
+      console.error("[Support SSE] listen pool connect failed", e);
+      releaseSseListen();
+      return res.status(503).json({ message: "Realtime unavailable" });
+    }
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders?.();
+    const onNotify = (msg) => {
+      if (closed) return;
+      void (async () => {
+        try {
+          const payload = JSON.parse(String(msg.payload || "{}"));
+          if (Number(payload.userId) !== myUserId) return;
+          const mid = Number(payload.id);
+          if (!Number.isFinite(mid)) return;
+          const row = await db2.query("SELECT * FROM support_messages WHERE id = $1 AND user_id = $2 LIMIT 1", [mid, myUserId]);
+          if (row.rows.length === 0) return;
+          res.write(`data: ${JSON.stringify(row.rows[0])}
+
+`);
+        } catch {
+        }
+      })();
+    };
+    const conn = listenClient;
+    if (!conn) {
+      releaseSseListen();
+      return res.status(503).json({ message: "Realtime unavailable" });
+    }
+    conn.on("notification", onNotify);
+    try {
+      await conn.query("LISTEN support_chat");
+    } catch (e) {
+      console.error("[Support SSE] LISTEN failed", e);
+      await cleanup();
+      try {
+        res.write(`event: error
+data: ${JSON.stringify({ message: "Realtime unavailable" })}
+
+`);
+      } catch {
+      }
+      res.end();
+      return;
+    }
+    const ping = setInterval(() => {
+      if (closed) return;
+      try {
+        res.write(`: ping ${Date.now()}
+
+`);
+      } catch {
+      }
+    }, 25e3);
+    req.on("close", () => {
+      clearInterval(ping);
+      void cleanup();
+    });
+    try {
+      res.write(": stream ok\n\n");
+    } catch {
+      void cleanup();
+    }
+  });
+  app2.post("/api/support/messages/mark-read", async (req, res) => {
+    try {
+      const user = await getAuthUser2(req);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
       await db2.query(
         "UPDATE support_messages SET is_read = TRUE WHERE user_id = $1 AND sender = 'admin' AND is_read = FALSE",
         [user.id]
       );
-      res.json(result.rows);
+      res.json({ ok: true });
     } catch {
-      res.status(500).json({ message: "Failed to fetch messages" });
+      res.status(500).json({ message: "Failed to mark messages read" });
     }
   });
   app2.post("/api/support/messages", async (req, res) => {
@@ -1628,6 +2129,12 @@ function registerSupportRoutes({
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const { message } = req.body;
       if (!message?.trim()) return res.status(400).json({ message: "Message required" });
+      const slot = await takeSupportPostSlotPg(pool2, user.id, SUPPORT_POST_WINDOW_MS, SUPPORT_POST_MAX);
+      if (!slot.ok) {
+        return res.status(429).json({
+          message: `Too many messages. Try again in about ${slot.retryAfterSec} seconds.`
+        });
+      }
       const result = await db2.query(
         "INSERT INTO support_messages (user_id, sender, message, created_at) VALUES ($1, 'user', $2, $3) RETURNING *",
         [user.id, message.trim().slice(0, 1e3), Date.now()]
@@ -1660,13 +2167,116 @@ function registerSupportRoutes({
         "SELECT * FROM support_messages WHERE user_id = $1 ORDER BY created_at ASC",
         [req.params.userId]
       );
+      res.json(result.rows);
+    } catch {
+      res.status(500).json({ message: "Failed to fetch messages" });
+    }
+  });
+  app2.get("/api/admin/support/messages/:userId/stream", requireAdmin, async (req, res) => {
+    const threadUserId = Number(req.params.userId);
+    if (!Number.isFinite(threadUserId) || threadUserId <= 0) {
+      return res.status(400).json({ message: "Invalid user" });
+    }
+    if (!tryAcquireSseListen(listenPoolMax)) {
+      return res.status(503).json({ message: "Too many realtime connections; try again shortly." });
+    }
+    let closed = false;
+    let listenClient = null;
+    const cleanup = async () => {
+      if (closed) return;
+      closed = true;
+      releaseSseListen();
+      const c = listenClient;
+      listenClient = null;
+      if (!c) return;
+      try {
+        c.removeAllListeners("notification");
+        await c.query("UNLISTEN support_chat");
+      } catch {
+      }
+      try {
+        c.release();
+      } catch {
+      }
+    };
+    try {
+      listenClient = await listenPool2.connect();
+    } catch (e) {
+      console.error("[SupportAdmin SSE] listen pool connect failed", e);
+      releaseSseListen();
+      return res.status(503).json({ message: "Realtime unavailable" });
+    }
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders?.();
+    const onNotify = (msg) => {
+      if (closed) return;
+      void (async () => {
+        try {
+          const payload = JSON.parse(String(msg.payload || "{}"));
+          if (Number(payload.userId) !== threadUserId) return;
+          const mid = Number(payload.id);
+          if (!Number.isFinite(mid)) return;
+          const row = await db2.query("SELECT * FROM support_messages WHERE id = $1 AND user_id = $2 LIMIT 1", [mid, threadUserId]);
+          if (row.rows.length === 0) return;
+          res.write(`data: ${JSON.stringify(row.rows[0])}
+
+`);
+        } catch {
+        }
+      })();
+    };
+    const adminConn = listenClient;
+    if (!adminConn) {
+      releaseSseListen();
+      return res.status(503).json({ message: "Realtime unavailable" });
+    }
+    adminConn.on("notification", onNotify);
+    try {
+      await adminConn.query("LISTEN support_chat");
+    } catch (e) {
+      console.error("[SupportAdmin SSE] LISTEN failed", e);
+      await cleanup();
+      try {
+        res.write(`event: error
+data: ${JSON.stringify({ message: "Realtime unavailable" })}
+
+`);
+      } catch {
+      }
+      res.end();
+      return;
+    }
+    const ping = setInterval(() => {
+      if (closed) return;
+      try {
+        res.write(`: ping ${Date.now()}
+
+`);
+      } catch {
+      }
+    }, 25e3);
+    req.on("close", () => {
+      clearInterval(ping);
+      void cleanup();
+    });
+    try {
+      res.write(": stream ok\n\n");
+    } catch {
+      void cleanup();
+    }
+  });
+  app2.post("/api/admin/support/messages/:userId/mark-read", requireAdmin, async (req, res) => {
+    try {
       await db2.query(
         "UPDATE support_messages SET is_read = TRUE WHERE user_id = $1 AND sender = 'user' AND is_read = FALSE",
         [req.params.userId]
       );
-      res.json(result.rows);
+      res.json({ ok: true });
     } catch {
-      res.status(500).json({ message: "Failed to fetch messages" });
+      res.status(500).json({ message: "Failed to mark messages read" });
     }
   });
   app2.post("/api/admin/support/messages/:userId", requireAdmin, async (req, res) => {
@@ -1683,9 +2293,14 @@ function registerSupportRoutes({
     }
   });
 }
+var SUPPORT_POST_WINDOW_MS, SUPPORT_POST_MAX;
 var init_support_routes = __esm({
   "server/support-routes.ts"() {
     "use strict";
+    init_pg_rate_limit_store();
+    init_sse_listen_budget();
+    SUPPORT_POST_WINDOW_MS = 10 * 60 * 1e3;
+    SUPPORT_POST_MAX = 20;
   }
 });
 
@@ -1736,10 +2351,12 @@ async function checkLiveClassAccess(req, res, db2, getAuthUser2, liveClassId) {
 function registerLiveChatRoutes({
   app: app2,
   db: db2,
+  listenPool: listenPool2,
   getAuthUser: getAuthUser2,
   requireAuth,
   requireAdmin
 }) {
+  const listenPoolMax = listenPool2.options.max ?? 32;
   app2.get("/api/live-classes/:id/chat", async (req, res) => {
     try {
       const hasAccess = await checkLiveClassAccess(req, res, db2, getAuthUser2, req.params.id);
@@ -1759,13 +2376,116 @@ function registerLiveChatRoutes({
       res.status(500).json({ message: "Failed to fetch chat" });
     }
   });
+  app2.get("/api/live-classes/:id/chat/stream", requireAuth, async (req, res) => {
+    const hasAccess = await checkLiveClassAccess(req, res, db2, getAuthUser2, req.params.id);
+    if (!hasAccess) return;
+    if (!tryAcquireSseListen(listenPoolMax)) {
+      return res.status(503).json({ message: "Too many realtime connections; try again shortly." });
+    }
+    const liveClassIdStr = String(req.params.id);
+    let closed = false;
+    let listenClient = null;
+    const cleanup = async () => {
+      if (closed) return;
+      closed = true;
+      releaseSseListen();
+      const c = listenClient;
+      listenClient = null;
+      if (!c) return;
+      try {
+        c.removeAllListeners("notification");
+        await c.query("UNLISTEN live_chat");
+      } catch {
+      }
+      try {
+        c.release();
+      } catch {
+      }
+    };
+    try {
+      listenClient = await listenPool2.connect();
+    } catch (e) {
+      console.error("[LiveChat SSE] listen pool connect failed", e);
+      releaseSseListen();
+      return res.status(503).json({ message: "Realtime unavailable" });
+    }
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders?.();
+    const onNotify = (msg) => {
+      if (closed) return;
+      void (async () => {
+        try {
+          const payload = JSON.parse(String(msg.payload || "{}"));
+          if (String(payload.liveClassId ?? "") !== liveClassIdStr) return;
+          const mid = Number(payload.id);
+          if (!Number.isFinite(mid)) return;
+          const row = await db2.query(
+            "SELECT * FROM live_chat_messages WHERE id = $1 AND live_class_id = $2 LIMIT 1",
+            [mid, liveClassIdStr]
+          );
+          if (row.rows.length === 0) return;
+          res.write(`data: ${JSON.stringify(row.rows[0])}
+
+`);
+        } catch {
+        }
+      })();
+    };
+    const conn = listenClient;
+    if (!conn) {
+      releaseSseListen();
+      return res.status(503).json({ message: "Realtime unavailable" });
+    }
+    conn.on("notification", onNotify);
+    try {
+      await conn.query("LISTEN live_chat");
+    } catch (e) {
+      console.error("[LiveChat SSE] LISTEN failed", e);
+      await cleanup();
+      try {
+        res.write(`event: error
+data: ${JSON.stringify({ message: "Realtime unavailable" })}
+
+`);
+      } catch {
+      }
+      res.end();
+      return;
+    }
+    const ping = setInterval(() => {
+      if (closed) return;
+      try {
+        res.write(`: ping ${Date.now()}
+
+`);
+      } catch {
+      }
+    }, 25e3);
+    req.on("close", () => {
+      clearInterval(ping);
+      void cleanup();
+    });
+    try {
+      res.write(": stream ok\n\n");
+    } catch {
+      void cleanup();
+    }
+  });
   app2.post("/api/live-classes/:id/chat", requireAuth, async (req, res) => {
     try {
       const hasAccess = await checkLiveClassAccess(req, res, db2, getAuthUser2, req.params.id);
       if (!hasAccess) return;
+      const user = req.user;
+      const lc = await db2.query("SELECT is_live, is_completed FROM live_classes WHERE id = $1", [req.params.id]);
+      const liveClass = lc.rows[0];
+      if (user?.role !== "admin" && (!liveClass?.is_live || liveClass?.is_completed)) {
+        return res.status(403).json({ message: "Chat is available only during live class." });
+      }
       const { message } = req.body;
       if (!message || !message.trim()) return res.status(400).json({ message: "Message is required" });
-      const user = req.user;
       const result = await db2.query(
         `INSERT INTO live_chat_messages (live_class_id, user_id, user_name, message, is_admin, created_at) 
          VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
@@ -1789,6 +2509,26 @@ var init_live_chat_routes = __esm({
   "server/live-chat-routes.ts"() {
     "use strict";
     init_live_class_access();
+    init_sse_listen_budget();
+  }
+});
+
+// server/listen-pool.ts
+import { Pool } from "pg";
+function createListenPool(connectionString) {
+  const max = Math.min(100, Math.max(5, parseInt(process.env.PG_LISTEN_POOL_MAX || "32", 10) || 32));
+  return new Pool({
+    connectionString,
+    ssl: process.env.PGSSL_NO_VERIFY === "true" && process.env.NODE_ENV !== "production" ? { rejectUnauthorized: false } : { rejectUnauthorized: true },
+    max,
+    min: 0,
+    connectionTimeoutMillis: 15e3,
+    idleTimeoutMillis: 12e4
+  });
+}
+var init_listen_pool = __esm({
+  "server/listen-pool.ts"() {
+    "use strict";
   }
 });
 
@@ -1863,16 +2603,24 @@ function registerLiveClassEngagementRoutes({
   app2.post("/api/live-classes/:id/viewers/heartbeat", requireAuth, async (req, res) => {
     try {
       const user = req.user;
-      const lcResult = await db2.query("SELECT course_id, is_free_preview FROM live_classes WHERE id = $1", [req.params.id]);
+      const lcResult = await db2.query("SELECT course_id, is_free_preview, is_live, is_completed FROM live_classes WHERE id = $1", [req.params.id]);
       if (lcResult.rows.length === 0) return res.status(404).json({ message: "Live class not found" });
       if (!await userCanAccessLiveClassContent(db2, user, lcResult.rows[0])) {
         return res.status(403).json({ message: "Access denied" });
       }
+      if (!lcResult.rows[0].is_live || lcResult.rows[0].is_completed) {
+        return res.status(409).json({ message: "Class is not live" });
+      }
+      const now = Date.now();
       await db2.query(
         `INSERT INTO live_class_viewers (live_class_id, user_id, user_name, last_heartbeat)
          VALUES ($1, $2, $3, $4)
-         ON CONFLICT (live_class_id, user_id) DO UPDATE SET last_heartbeat = $4, user_name = $3`,
-        [req.params.id, user.id, user.name || user.phone || "Anonymous", Date.now()]
+         ON CONFLICT (live_class_id, user_id) DO UPDATE SET
+           last_heartbeat = EXCLUDED.last_heartbeat,
+           user_name = COALESCE(EXCLUDED.user_name, live_class_viewers.user_name)
+         WHERE live_class_viewers.last_heartbeat IS NULL
+            OR EXCLUDED.last_heartbeat - live_class_viewers.last_heartbeat >= 20000`,
+        [req.params.id, user.id, user.name || user.phone || "Anonymous", now]
       );
       res.json({ success: true });
     } catch (err) {
@@ -1883,10 +2631,14 @@ function registerLiveClassEngagementRoutes({
   app2.get("/api/live-classes/:id/viewers", requireAuth, async (req, res) => {
     try {
       const user = req.user;
-      const lcAccess = await db2.query("SELECT course_id, is_free_preview, show_viewer_count FROM live_classes WHERE id = $1", [req.params.id]);
+      const lcAccess = await db2.query("SELECT course_id, is_free_preview, show_viewer_count, is_live, is_completed FROM live_classes WHERE id = $1", [req.params.id]);
       if (lcAccess.rows.length === 0) return res.status(404).json({ message: "Live class not found" });
       if (!await userCanAccessLiveClassContent(db2, user, lcAccess.rows[0])) {
         return res.status(403).json({ message: "Access denied" });
+      }
+      if (!lcAccess.rows[0].is_live || lcAccess.rows[0].is_completed) {
+        const visible2 = lcAccess.rows[0]?.show_viewer_count ?? true;
+        return res.json({ viewers: [], count: 0, visible: visible2 });
       }
       const cutoff = Date.now() - 3e4;
       const result = await db2.query(
@@ -1905,10 +2657,13 @@ function registerLiveClassEngagementRoutes({
   app2.post("/api/live-classes/:id/raise-hand", requireAuth, async (req, res) => {
     try {
       const user = req.user;
-      const lcResult = await db2.query("SELECT course_id, is_free_preview FROM live_classes WHERE id = $1", [req.params.id]);
+      const lcResult = await db2.query("SELECT course_id, is_free_preview, is_live, is_completed FROM live_classes WHERE id = $1", [req.params.id]);
       if (lcResult.rows.length === 0) return res.status(404).json({ message: "Live class not found" });
       if (!await userCanAccessLiveClassContent(db2, user, lcResult.rows[0])) {
         return res.status(403).json({ message: "Access denied" });
+      }
+      if (!lcResult.rows[0].is_live || lcResult.rows[0].is_completed) {
+        return res.status(409).json({ message: "Hand raise is available only during live class" });
       }
       await db2.query(
         `INSERT INTO live_class_hand_raises (live_class_id, user_id, user_name, raised_at)
@@ -1925,10 +2680,13 @@ function registerLiveClassEngagementRoutes({
   app2.delete("/api/live-classes/:id/raise-hand", requireAuth, async (req, res) => {
     try {
       const user = req.user;
-      const lcResult = await db2.query("SELECT course_id, is_free_preview FROM live_classes WHERE id = $1", [req.params.id]);
+      const lcResult = await db2.query("SELECT course_id, is_free_preview, is_live, is_completed FROM live_classes WHERE id = $1", [req.params.id]);
       if (lcResult.rows.length === 0) return res.status(404).json({ message: "Live class not found" });
       if (!await userCanAccessLiveClassContent(db2, user, lcResult.rows[0])) {
         return res.status(403).json({ message: "Access denied" });
+      }
+      if (!lcResult.rows[0].is_live || lcResult.rows[0].is_completed) {
+        return res.status(409).json({ message: "Hand raise is available only during live class" });
       }
       await db2.query("DELETE FROM live_class_hand_raises WHERE live_class_id = $1 AND user_id = $2", [req.params.id, user.id]);
       res.json({ success: true });
@@ -2153,10 +2911,14 @@ function registerLiveStreamRoutes({
       throw new Error("Live class not found");
     }
     const liveClass = lcResult.rows[0];
+    if (liveClass.recording_deleted_at) {
+      return { lectureId: null, lectureIds: [] };
+    }
     const title = liveClass.title;
     const peers = await db2.query("SELECT * FROM live_classes WHERE title = $1 ORDER BY id", [title]);
     const lectureIds = [];
     for (const row of peers.rows) {
+      if (row.recording_deleted_at) continue;
       const endedAt = Number(row.ended_at || Date.now());
       const durationMins = row.started_at ? Math.max(1, Math.round((endedAt - Number(row.started_at)) / 6e4)) : 0;
       await db2.query(
@@ -2180,31 +2942,48 @@ function registerLiveStreamRoutes({
         row.lecture_subfolder_title,
         sectionTitle
       );
-      const existingLecture = await db2.query(
-        "SELECT id FROM lectures WHERE course_id = $1 AND title = $2 AND video_url = $3 LIMIT 1",
-        [row.course_id, row.title, recordingUrl]
+      const lectureResult = await db2.query(
+        `INSERT INTO lectures (
+           course_id,
+           title,
+           description,
+           video_url,
+           video_type,
+           duration_minutes,
+           order_index,
+           is_free_preview,
+           section_title,
+           live_class_id,
+           live_class_finalized,
+           created_at
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE, $11)
+         ON CONFLICT (live_class_id) WHERE live_class_id IS NOT NULL
+         DO UPDATE SET
+           course_id = EXCLUDED.course_id,
+           title = EXCLUDED.title,
+           description = EXCLUDED.description,
+           video_url = EXCLUDED.video_url,
+           video_type = EXCLUDED.video_type,
+           duration_minutes = EXCLUDED.duration_minutes,
+           section_title = EXCLUDED.section_title,
+           live_class_finalized = TRUE
+         RETURNING id`,
+        [
+          row.course_id,
+          row.title,
+          row.description || "",
+          recordingUrl,
+          inferVideoType(recordingUrl),
+          durationMins,
+          maxOrder.rows[0].next_order,
+          false,
+          recordSection,
+          row.id,
+          Date.now()
+        ]
       );
-      if (existingLecture.rows.length > 0) {
-        lectureIds.push(Number(existingLecture.rows[0].id));
-      } else {
-        const lectureResult = await db2.query(
-          `INSERT INTO lectures (course_id, title, description, video_url, video_type, duration_minutes, order_index, is_free_preview, section_title, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
-          [
-            row.course_id,
-            row.title,
-            row.description || "",
-            recordingUrl,
-            inferVideoType(recordingUrl),
-            durationMins,
-            maxOrder.rows[0].next_order,
-            false,
-            recordSection,
-            Date.now()
-          ]
-        );
-        lectureIds.push(lectureResult.rows[0].id);
-      }
+      lectureIds.push(Number(lectureResult.rows[0]?.id));
       await db2.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [
         row.course_id
       ]);
@@ -2292,9 +3071,21 @@ function registerLiveStreamRoutes({
       const accountId = process.env.CF_STREAM_ACCOUNT_ID || process.env.R2_ACCOUNT_ID;
       const apiToken = process.env.CF_STREAM_API_TOKEN;
       if (!accountId || !apiToken) return res.status(500).json({ message: "CF Stream credentials not configured" });
-      const lcResult = await db2.query("SELECT id, title, cf_stream_uid FROM live_classes WHERE id = $1", [req.params.id]);
-      const uid = lcResult.rows[0]?.cf_stream_uid;
-      const liveTitle = String(lcResult.rows[0]?.title || "").trim();
+      const lcResult = await db2.query(
+        "SELECT id, title, cf_stream_uid, is_completed, recording_url, recording_deleted_at FROM live_classes WHERE id = $1",
+        [req.params.id]
+      );
+      if (lcResult.rows.length === 0) return res.status(404).json({ message: "Live class not found" });
+      const current = lcResult.rows[0];
+      const uid = current?.cf_stream_uid;
+      const liveTitle = String(current?.title || "").trim();
+      const existingRecordingUrl = String(current?.recording_url || "").trim();
+      if (current?.recording_deleted_at) {
+        return res.json({ success: true, alreadyEnded: true, recordingDeleted: true });
+      }
+      if (current?.is_completed === true && !!existingRecordingUrl) {
+        return res.json({ success: true, alreadyEnded: true, recordingUrl: existingRecordingUrl });
+      }
       const endedAtNow = Date.now();
       await db2.query(
         "UPDATE live_classes SET is_live = FALSE, ended_at = COALESCE(ended_at, $1), is_completed = TRUE WHERE id = $2",
@@ -2302,47 +3093,53 @@ function registerLiveStreamRoutes({
       ).catch(() => {
       });
       if (!uid) return res.json({ success: true });
+      res.json({ success: true, recordingPending: true });
       const getLatestRecording = async () => getLatestRecordingForLiveInput(accountId, apiToken, uid);
-      let recordingUrl = null;
-      const maxPolls = Number(process.env.CF_STREAM_END_MAX_POLLS || 48);
-      const pollMs = Number(process.env.CF_STREAM_END_POLL_MS || 5e3);
-      for (let i = 0; i < maxPolls; i += 1) {
-        const latest = await getLatestRecording();
-        if (latest) {
-          const archived = await archiveCloudflareRecordingToR2(latest.recordingUid);
-          recordingUrl = archived || latest.manifestUrl;
-          break;
-        }
-        await new Promise((resolve2) => setTimeout(resolve2, pollMs));
-      }
-      if (!recordingUrl && liveTitle) {
-        const viaSearch = await findRecordingViaStreamSearch(accountId, apiToken, liveTitle, uid);
-        if (viaSearch) {
-          const archived = await archiveCloudflareRecordingToR2(viaSearch.recordingUid);
-          recordingUrl = archived || viaSearch.manifestUrl;
-          console.log(`[CF Stream] Resolved recording via stream search title="${liveTitle.slice(0, 60)}"`);
-        }
-      }
-      if (recordingUrl) {
+      void (async () => {
         try {
-          await saveRecordingForClassAndPeers(String(req.params.id), recordingUrl);
-        } catch (saveErr) {
-          console.warn("[CF Stream] recording save after stream end failed:", saveErr);
+          let recordingUrl = null;
+          const maxPolls = Number(process.env.CF_STREAM_END_MAX_POLLS || 48);
+          const pollMs = Number(process.env.CF_STREAM_END_POLL_MS || 5e3);
+          for (let i = 0; i < maxPolls; i += 1) {
+            const latest = await getLatestRecording();
+            if (latest) {
+              const archived = await archiveCloudflareRecordingToR2(latest.recordingUid);
+              recordingUrl = archived || latest.manifestUrl;
+              break;
+            }
+            await new Promise((resolve2) => setTimeout(resolve2, pollMs));
+          }
+          if (!recordingUrl && liveTitle) {
+            const viaSearch = await findRecordingViaStreamSearch(accountId, apiToken, liveTitle, uid);
+            if (viaSearch) {
+              const archived = await archiveCloudflareRecordingToR2(viaSearch.recordingUid);
+              recordingUrl = archived || viaSearch.manifestUrl;
+              console.log(`[CF Stream] Resolved recording via stream search title="${liveTitle.slice(0, 60)}"`);
+            }
+          }
+          if (recordingUrl) {
+            try {
+              await saveRecordingForClassAndPeers(String(req.params.id), recordingUrl);
+            } catch (saveErr) {
+              console.warn("[CF Stream] recording save after stream end failed:", saveErr);
+            }
+          } else {
+            console.warn(
+              `[CF Stream] No recording URL after end for live_class=${req.params.id} live_input_uid=${uid}. Leaving live_input in place for retry/archive sweep.`
+            );
+          }
+          if (recordingUrl) {
+            await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/live_inputs/${uid}`, {
+              method: "DELETE",
+              headers: { Authorization: `Bearer ${apiToken}` }
+            }).catch(() => {
+            });
+          }
+          console.log(`[CF Stream] Ended live input uid=${uid} saved=${Boolean(recordingUrl)}`);
+        } catch (err) {
+          console.error("[CF Stream] End background finalize error:", err);
         }
-      } else {
-        console.warn(
-          `[CF Stream] No recording URL after end for live_class=${req.params.id} live_input_uid=${uid}. Leaving live_input in place for retry/archive sweep.`
-        );
-      }
-      if (recordingUrl) {
-        await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/live_inputs/${uid}`, {
-          method: "DELETE",
-          headers: { Authorization: `Bearer ${apiToken}` }
-        }).catch(() => {
-        });
-      }
-      console.log(`[CF Stream] Ended live input uid=${uid} saved=${Boolean(recordingUrl)}`);
-      res.json({ success: true, recordingUrl });
+      })();
     } catch (err) {
       console.error("[CF Stream] End error:", err);
       res.status(500).json({ message: "Failed to end stream" });
@@ -2371,12 +3168,13 @@ function registerLiveStreamRoutes({
     isArchiveSweepRunning = true;
     try {
       const pending = await db2.query(
-        `SELECT id, title, description, course_id, started_at, lecture_section_title, lecture_subfolder_title, recording_url, cf_stream_uid
+        `SELECT id, title, description, course_id, started_at, lecture_section_title, lecture_subfolder_title, recording_url, cf_stream_uid, recording_deleted_at
          FROM live_classes
          WHERE stream_type = 'cloudflare'
            AND is_completed = TRUE
            AND ended_at IS NOT NULL
            AND ended_at > (EXTRACT(EPOCH FROM NOW()) * 1000 - 14 * 24 * 60 * 60 * 1000)
+           AND recording_deleted_at IS NULL
            AND (recording_url IS NULL OR recording_url ILIKE 'https://videodelivery.net/%/manifest/video.m3u8')
          ORDER BY ended_at DESC NULLS LAST
          LIMIT 8`
@@ -2404,8 +3202,8 @@ function registerLiveStreamRoutes({
         if (!archivedUrl) continue;
         await db2.query("UPDATE live_classes SET recording_url = $1 WHERE id = $2", [archivedUrl, row.id]);
         const patchedLecture = await db2.query(
-          "UPDATE lectures SET video_url = $1, video_type = 'r2' WHERE title = $2 AND video_url = $3",
-          [archivedUrl, row.title, currentUrl]
+          "UPDATE lectures SET video_url = $1, video_type = 'r2', live_class_finalized = TRUE WHERE live_class_id = $2 RETURNING id",
+          [archivedUrl, row.id]
         ).catch(() => {
         });
         if (row.course_id) {
@@ -2422,12 +3220,28 @@ function registerLiveStreamRoutes({
               void 0
             );
             await db2.query(
-              `INSERT INTO lectures (course_id, title, description, video_url, video_type, duration_minutes, order_index, is_free_preview, section_title, created_at)
-               SELECT $1, $2, $3, $4, 'r2', $5, $6, FALSE, $7, $8
-               WHERE NOT EXISTS (
-                 SELECT 1 FROM lectures
-                 WHERE course_id = $1 AND title = $2 AND video_url = $4
-               )`,
+              `INSERT INTO lectures (
+                 course_id,
+                 title,
+                 description,
+                 video_url,
+                 video_type,
+                 duration_minutes,
+                 order_index,
+                 is_free_preview,
+                 section_title,
+                 live_class_id,
+                 live_class_finalized,
+                 created_at
+               )
+               VALUES ($1, $2, $3, $4, 'r2', $5, $6, FALSE, $7, $8, TRUE, $9)
+               ON CONFLICT (live_class_id) WHERE live_class_id IS NOT NULL
+               DO UPDATE SET
+                 video_url = EXCLUDED.video_url,
+                 video_type = EXCLUDED.video_type,
+                 duration_minutes = EXCLUDED.duration_minutes,
+                 section_title = EXCLUDED.section_title,
+                 live_class_finalized = TRUE`,
               [
                 row.course_id,
                 row.title,
@@ -2436,6 +3250,7 @@ function registerLiveStreamRoutes({
                 durationMins,
                 maxOrder.rows[0].next_order,
                 sectionTitle,
+                row.id,
                 Date.now()
               ]
             );
@@ -3100,9 +3915,9 @@ function registerAdminEnrollmentRoutes({
   app: app2,
   db: db2,
   requireAdmin,
-  cacheInvalidate: cacheInvalidate2,
   deleteDownloadsForUser: deleteDownloadsForUser2,
-  deleteDownloadsForCourse: deleteDownloadsForCourse2
+  deleteDownloadsForCourse: deleteDownloadsForCourse2,
+  runInTransaction: runInTransaction2
 }) {
   app2.put("/api/admin/enrollments/:id", requireAdmin, async (req, res) => {
     try {
@@ -3145,17 +3960,17 @@ function registerAdminEnrollmentRoutes({
     try {
       const courseId = req.params.id;
       await deleteDownloadsForCourse2(parseInt(Array.isArray(courseId) ? courseId[0] : courseId));
-      await db2.query("DELETE FROM test_attempts WHERE test_id IN (SELECT id FROM tests WHERE course_id = $1)", [courseId]);
-      await db2.query("DELETE FROM questions WHERE test_id IN (SELECT id FROM tests WHERE course_id = $1)", [courseId]);
-      await db2.query("DELETE FROM tests WHERE course_id = $1", [courseId]);
-      await db2.query("DELETE FROM lectures WHERE course_id = $1", [courseId]);
-      await db2.query("DELETE FROM enrollments WHERE course_id = $1", [courseId]);
-      await db2.query("DELETE FROM payments WHERE course_id = $1", [courseId]);
-      await db2.query("DELETE FROM study_materials WHERE course_id = $1", [courseId]);
-      await db2.query("DELETE FROM live_classes WHERE course_id = $1", [courseId]);
-      await db2.query("DELETE FROM courses WHERE id = $1", [courseId]);
-      cacheInvalidate2("courses:");
-      cacheInvalidate2("tests:");
+      await runInTransaction2(async (tx) => {
+        await tx.query("DELETE FROM test_attempts WHERE test_id IN (SELECT id FROM tests WHERE course_id = $1)", [courseId]);
+        await tx.query("DELETE FROM questions WHERE test_id IN (SELECT id FROM tests WHERE course_id = $1)", [courseId]);
+        await tx.query("DELETE FROM tests WHERE course_id = $1", [courseId]);
+        await tx.query("DELETE FROM lectures WHERE course_id = $1", [courseId]);
+        await tx.query("DELETE FROM enrollments WHERE course_id = $1", [courseId]);
+        await tx.query("DELETE FROM payments WHERE course_id = $1", [courseId]);
+        await tx.query("DELETE FROM study_materials WHERE course_id = $1", [courseId]);
+        await tx.query("DELETE FROM live_classes WHERE course_id = $1", [courseId]);
+        await tx.query("DELETE FROM courses WHERE id = $1", [courseId]);
+      });
       res.json({ success: true });
     } catch (err) {
       console.error("Delete course error:", err);
@@ -3169,6 +3984,29 @@ var init_admin_enrollment_routes = __esm({
   }
 });
 
+// server/async-utils.ts
+async function withTimeout(promise, timeoutMs, message) {
+  let timer = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+function isTimeoutError(err) {
+  return /timed out/i.test(String(err?.message ?? ""));
+}
+var init_async_utils = __esm({
+  "server/async-utils.ts"() {
+    "use strict";
+  }
+});
+
 // server/admin-lecture-routes.ts
 function registerAdminLectureRoutes({
   app: app2,
@@ -3177,6 +4015,14 @@ function registerAdminLectureRoutes({
   getR2Client,
   recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse2
 }) {
+  const resolveLectureSectionTitle = (sectionTitle, subfolderTitle) => {
+    const main = String(sectionTitle || "").trim();
+    const sub = String(subfolderTitle || "").trim();
+    if (!main && !sub) return null;
+    if (!sub) return main || null;
+    if (!main) return sub;
+    return `${main} / ${sub}`;
+  };
   const inferLectureVideoType = (url) => {
     const u = (url || "").trim().toLowerCase();
     if (!u) return "youtube";
@@ -3187,7 +4033,7 @@ function registerAdminLectureRoutes({
   };
   app2.post("/api/admin/lectures", requireAdmin, async (req, res) => {
     try {
-      const { courseId, title, description, videoUrl, fileUrl, videoType, pdfUrl, durationMinutes, orderIndex, isFreePreview, sectionTitle, downloadAllowed } = req.body;
+      const { courseId, title, description, videoUrl, fileUrl, videoType, pdfUrl, durationMinutes, orderIndex, isFreePreview, sectionTitle, lectureSubfolderTitle, downloadAllowed } = req.body;
       const parsedCourseId = Number(courseId);
       if (!Number.isFinite(parsedCourseId) || parsedCourseId <= 0) {
         return res.status(400).json({ message: "Invalid courseId" });
@@ -3205,6 +4051,10 @@ function registerAdminLectureRoutes({
         return res.status(400).json({ message: "Either videoUrl or pdfUrl is required" });
       }
       const effectiveVideoType = String(videoType || "").trim() || inferLectureVideoType(normalizedVideoUrl);
+      const normalizedSectionTitle = resolveLectureSectionTitle(
+        sectionTitle,
+        lectureSubfolderTitle
+      );
       const result = await db2.query(
         `INSERT INTO lectures (course_id, title, description, video_url, video_type, pdf_url, duration_minutes, order_index, is_free_preview, section_title, download_allowed, created_at) 
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
@@ -3218,7 +4068,7 @@ function registerAdminLectureRoutes({
           Number(durationMinutes) || 0,
           Number(orderIndex) || 0,
           isFreePreview || false,
-          sectionTitle || null,
+          normalizedSectionTitle,
           downloadAllowed || false,
           Date.now()
         ]
@@ -3243,7 +4093,11 @@ function registerAdminLectureRoutes({
   });
   app2.put("/api/admin/lectures/:id", requireAdmin, async (req, res) => {
     try {
-      const { title, description, videoUrl, videoType, durationMinutes, orderIndex, isFreePreview, sectionTitle, downloadAllowed } = req.body;
+      const { title, description, videoUrl, videoType, durationMinutes, orderIndex, isFreePreview, sectionTitle, lectureSubfolderTitle, downloadAllowed } = req.body;
+      const normalizedSectionTitle = resolveLectureSectionTitle(
+        sectionTitle,
+        lectureSubfolderTitle
+      );
       await db2.query(
         `UPDATE lectures SET title=$1, description=$2, video_url=$3, video_type=$4, duration_minutes=$5, order_index=$6, is_free_preview=$7, section_title=$8, download_allowed=$9 WHERE id=$10`,
         [
@@ -3254,7 +4108,7 @@ function registerAdminLectureRoutes({
           parseInt(durationMinutes) || 0,
           parseInt(orderIndex) || 0,
           isFreePreview || false,
-          sectionTitle || null,
+          normalizedSectionTitle,
           downloadAllowed || false,
           req.params.id
         ]
@@ -3266,10 +4120,43 @@ function registerAdminLectureRoutes({
   });
   app2.delete("/api/admin/lectures/:id", requireAdmin, async (req, res) => {
     try {
-      const lec = await db2.query("SELECT course_id, video_url FROM lectures WHERE id = $1", [req.params.id]);
-      if (lec.rows.length > 0) {
-        const lecture = lec.rows[0];
-        if (lecture.video_url) {
+      let lec;
+      try {
+        lec = await db2.query(
+          "SELECT course_id, video_url, live_class_id FROM lectures WHERE id = $1",
+          [req.params.id]
+        );
+      } catch (_err) {
+        lec = await db2.query(
+          "SELECT course_id, video_url FROM lectures WHERE id = $1",
+          [req.params.id]
+        );
+      }
+      if (lec.rows.length === 0) {
+        return res.json({ success: true });
+      }
+      const lecture = lec.rows[0];
+      await db2.query("DELETE FROM lectures WHERE id = $1", [req.params.id]);
+      await db2.query(
+        "UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1",
+        [lecture.course_id]
+      );
+      if (lecture.live_class_id) {
+        try {
+          await db2.query(
+            "UPDATE live_classes SET recording_deleted_at = $1 WHERE id = $2",
+            [Date.now(), lecture.live_class_id]
+          );
+        } catch (markErr) {
+          console.warn(
+            "[AdminLectures] could not mark live_classes.recording_deleted_at:",
+            markErr instanceof Error ? markErr.message : markErr
+          );
+        }
+      }
+      res.json({ success: true });
+      if (lecture.video_url && typeof lecture.video_url === "string") {
+        void (async () => {
           try {
             const { DeleteObjectCommand } = await import("@aws-sdk/client-s3");
             const r2 = await getR2Client();
@@ -3277,7 +4164,7 @@ function registerAdminLectureRoutes({
             if (r2Key.startsWith("http")) {
               try {
                 const url = new URL(r2Key);
-                r2Key = url.pathname.substring(1);
+                r2Key = url.pathname.replace(/^\/+/, "");
               } catch (_e) {
               }
             }
@@ -3285,56 +4172,38 @@ function registerAdminLectureRoutes({
               Bucket: process.env.R2_BUCKET_NAME,
               Key: r2Key
             });
-            await r2.send(deleteCommand);
+            await withTimeout(r2.send(deleteCommand), 4e3, "R2 delete timed out");
             console.log(`[R2] Deleted lecture file: ${r2Key}`);
           } catch (r2Err) {
-            console.error("[R2] Failed to delete lecture file:", r2Err);
+            console.error(
+              "[R2] Failed to delete lecture file (non-fatal):",
+              r2Err instanceof Error ? r2Err.message : r2Err
+            );
           }
-        }
-        await db2.query("DELETE FROM lectures WHERE id = $1", [req.params.id]);
-        await db2.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [
-          lecture.course_id
-        ]);
+        })();
       }
-      res.json({ success: true });
     } catch (err) {
       console.error("Delete lecture error:", err);
-      res.status(500).json({ message: "Failed to delete lecture" });
+      if (!res.headersSent) {
+        res.status(500).json({ message: "Failed to delete lecture" });
+      }
     }
   });
 }
 var init_admin_lecture_routes = __esm({
   "server/admin-lecture-routes.ts"() {
     "use strict";
+    init_async_utils();
   }
 });
 
 // server/push-notifications.ts
-async function ensurePushTable(db2) {
-  if (pushTableReady) return;
-  await db2.query(`
-    CREATE TABLE IF NOT EXISTS user_push_tokens (
-      id SERIAL PRIMARY KEY,
-      user_id INTEGER NOT NULL,
-      expo_push_token TEXT NOT NULL UNIQUE,
-      platform TEXT,
-      is_active BOOLEAN NOT NULL DEFAULT TRUE,
-      created_at BIGINT NOT NULL,
-      last_seen_at BIGINT NOT NULL
-    )
-  `);
-  await db2.query(
-    "CREATE INDEX IF NOT EXISTS idx_user_push_tokens_user_active ON user_push_tokens(user_id, is_active)"
-  );
-  pushTableReady = true;
-}
 function chunkArray(arr, size) {
   const out = [];
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
   return out;
 }
 async function registerPushToken(db2, userId, token, platform) {
-  await ensurePushTable(db2);
   const now = Date.now();
   await db2.query(
     `INSERT INTO user_push_tokens (user_id, expo_push_token, platform, is_active, created_at, last_seen_at)
@@ -3349,21 +4218,18 @@ async function registerPushToken(db2, userId, token, platform) {
   );
 }
 async function unregisterPushToken(db2, userId, token) {
-  await ensurePushTable(db2);
   await db2.query(
     "UPDATE user_push_tokens SET is_active = FALSE, last_seen_at = $1 WHERE user_id = $2 AND expo_push_token = $3",
     [Date.now(), userId, token]
   );
 }
 async function unregisterAllPushTokens(db2, userId) {
-  await ensurePushTable(db2);
   await db2.query("UPDATE user_push_tokens SET is_active = FALSE, last_seen_at = $1 WHERE user_id = $2", [
     Date.now(),
     userId
   ]);
 }
 async function sendPushToUsers(db2, userIds, payload) {
-  await ensurePushTable(db2);
   const uniqueUserIds = [...new Set(userIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0))];
   if (!uniqueUserIds.length) return { sent: 0, tokens: 0 };
   const tokenResult = await db2.query(
@@ -3415,11 +4281,9 @@ async function sendPushToUsers(db2, userIds, payload) {
   }
   return { sent, tokens: tokens.length };
 }
-var pushTableReady;
 var init_push_notifications = __esm({
   "server/push-notifications.ts"() {
     "use strict";
-    pushTableReady = false;
   }
 });
 
@@ -3476,10 +4340,12 @@ function registerAdminTestRoutes({
         const notifTitle = "\u{1F4DD} New Test Added";
         const notifMessage = `"${title}" has been added in ${courseTitle}.`;
         const now = Date.now();
-        for (const uid of recipientIds) {
+        if (recipientIds.length > 0) {
           await db2.query(
-            "INSERT INTO notifications (user_id, title, message, type, created_at) VALUES ($1, $2, $3, $4, $5)",
-            [uid, notifTitle, notifMessage, "info", now]
+            `INSERT INTO notifications (user_id, title, message, type, created_at)
+               SELECT u, $2::text, $3::text, $4::text, $5::bigint
+               FROM unnest($1::int[]) AS u`,
+            [recipientIds, notifTitle, notifMessage, "info", now]
           ).catch(() => {
           });
         }
@@ -3691,6 +4557,13 @@ function registerAdminQuestionBulkRoutes({
       if (!testId || !req.file) {
         return res.status(400).json({ message: !testId ? "testId is required" : "PDF file is required \u2014 make sure you selected a .pdf file" });
       }
+      if (!/application\/pdf/i.test(String(req.file.mimetype || ""))) {
+        return res.status(400).json({
+          success: false,
+          error: "Only PDF files are allowed for bulk upload",
+          message: "Please select a valid .pdf file"
+        });
+      }
       const parser = new PDFParse2({ data: req.file.buffer });
       const result = await parser.getText();
       const text = result.text;
@@ -3699,14 +4572,20 @@ function registerAdminQuestionBulkRoutes({
       console.log("[bulk-pdf] parsed questions:", parsed.length);
       if (parsed.length === 0) {
         return res.status(400).json({
-          message: "No questions could be parsed from the PDF. Make sure questions are numbered (Q1, 1., etc.) with options labeled A, B, C, D.",
-          rawTextPreview: text.substring(0, 500)
+          success: false,
+          error: "No questions could be parsed from this PDF",
+          message: "Make sure questions are numbered (Q1, 1., etc.) with options labeled A, B, C, D.",
+          data: { rawTextPreview: text.substring(0, 500) }
         });
       }
-      res.json({ success: true, count: parsed.length, questions: parsed });
+      res.json({ success: true, data: { count: parsed.length, questions: parsed } });
     } catch (err) {
       console.error("[bulk-pdf] error:", err);
-      res.status(500).json({ message: `Failed to parse PDF: ${err?.message || "unknown error"}` });
+      res.status(500).json({
+        success: false,
+        error: "Failed to parse PDF",
+        message: `Failed to parse PDF: ${err?.message || "unknown error"}`
+      });
     }
   });
   app2.post("/api/admin/questions/bulk-save", requireAdmin, async (req, res) => {
@@ -3744,7 +4623,8 @@ function registerAdminUsersAndContentRoutes({
   app: app2,
   db: db2,
   requireAdmin,
-  deleteDownloadsForUser: deleteDownloadsForUser2
+  deleteDownloadsForUser: deleteDownloadsForUser2,
+  runInTransaction: runInTransaction2
 }) {
   app2.post("/api/admin/study-materials", requireAdmin, async (req, res) => {
     try {
@@ -3785,10 +4665,12 @@ function registerAdminUsersAndContentRoutes({
         const notifTitle = "\u{1F4D8} New Material Added";
         const notifMessage = `"${normalizedTitle}" has been added in ${courseTitle}.`;
         const now = Date.now();
-        for (const uid of recipientIds) {
+        if (recipientIds.length > 0) {
           await db2.query(
-            "INSERT INTO notifications (user_id, title, message, type, created_at) VALUES ($1, $2, $3, $4, $5)",
-            [uid, notifTitle, notifMessage, "info", now]
+            `INSERT INTO notifications (user_id, title, message, type, created_at)
+               SELECT u, $2::text, $3::text, $4::text, $5::bigint
+               FROM unnest($1::int[]) AS u`,
+            [recipientIds, notifTitle, notifMessage, "info", now]
           ).catch(() => {
           });
         }
@@ -3908,21 +4790,39 @@ function registerAdminUsersAndContentRoutes({
   });
   app2.get("/api/admin/users", requireAdmin, async (_req, res) => {
     try {
-      const result = await db2.query(
-        `SELECT id, name, email, phone, role, created_at,
-                COALESCE(is_blocked, FALSE) AS is_blocked,
-                last_active_at
-         FROM users ORDER BY created_at DESC NULLS LAST`
+      const colsResult = await db2.query(
+        "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users'"
       );
-      res.json(result.rows);
+      const cols = new Set(colsResult.rows.map((r) => String(r.column_name)));
+      if (!cols.has("id")) return res.status(500).json({ message: "Users table missing id column" });
+      const field = (name, fallbackSql) => cols.has(name) ? name : `${fallbackSql} AS ${name}`;
+      const selectSql = [
+        "id",
+        field("name", "NULL"),
+        field("email", "NULL"),
+        field("phone", "NULL"),
+        field("role", "'student'"),
+        field("created_at", "NULL"),
+        field("is_blocked", "FALSE"),
+        field("last_active_at", "NULL")
+      ].join(", ");
+      const orderSql = cols.has("created_at") ? "created_at DESC NULLS LAST" : "id DESC";
+      const result = await db2.query(`SELECT ${selectSql} FROM users ORDER BY ${orderSql}`);
+      res.json(
+        result.rows.map((r) => ({
+          id: r.id,
+          name: r.name ?? `User${r.id}`,
+          email: r.email ?? null,
+          phone: r.phone ?? null,
+          role: r.role ?? "student",
+          created_at: r.created_at ?? null,
+          is_blocked: !!r.is_blocked,
+          last_active_at: r.last_active_at ?? null
+        }))
+      );
     } catch (err) {
       console.error("Admin users error:", err);
-      try {
-        const result = await db2.query("SELECT id, name, email, phone, role, created_at, FALSE AS is_blocked, NULL AS last_active_at FROM users ORDER BY id DESC");
-        res.json(result.rows);
-      } catch {
-        res.status(500).json({ message: "Failed to fetch users" });
-      }
+      res.status(500).json({ message: "Failed to fetch users" });
     }
   });
   app2.put("/api/admin/users/:id/block", requireAdmin, async (req, res) => {
@@ -3945,12 +4845,24 @@ function registerAdminUsersAndContentRoutes({
     try {
       const userId = parseInt(String(req.params.id), 10);
       if (!Number.isFinite(userId)) return res.status(400).json({ message: "Invalid user id" });
+      const requester = req.user;
+      if (requester?.id && Number(requester.id) === userId) {
+        return res.status(400).json({ message: "You cannot remove your own admin account" });
+      }
+      const userRow = await db2.query("SELECT id, role FROM users WHERE id = $1 LIMIT 1", [userId]);
+      if (userRow.rows.length === 0) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      if (String(userRow.rows[0].role || "").toLowerCase() === "admin") {
+        return res.status(400).json({ message: "Admin accounts cannot be removed from this action" });
+      }
       await deleteDownloadsForUser2(userId);
-      await purgeStudentAccountById(db2, userId);
+      await runInTransaction2((tx) => purgeStudentAccountById(tx, userId));
       res.json({ success: true });
     } catch (err) {
       console.error("Delete user error:", err);
-      res.status(500).json({ message: "Failed to delete user" });
+      const e = err;
+      res.status(500).json({ message: "Failed to delete user", code: e?.code || null, detail: e?.message || null });
     }
   });
 }
@@ -4073,10 +4985,12 @@ function registerAdminDailyMissionRoutes({
           const notifTitle = "\u{1F3AF} New Daily Mission";
           const notifMessage = `"${title}" has been added to ${courseTitle}.`;
           const now = Date.now();
-          for (const uid of recipientIds) {
+          if (recipientIds.length > 0) {
             await db2.query(
-              "INSERT INTO notifications (user_id, title, message, type, created_at) VALUES ($1, $2, $3, $4, $5)",
-              [uid, notifTitle, notifMessage, "info", now]
+              `INSERT INTO notifications (user_id, title, message, type, created_at)
+                 SELECT u, $2::text, $3::text, $4::text, $5::bigint
+                 FROM unnest($1::int[]) AS u`,
+              [recipientIds, notifTitle, notifMessage, "info", now]
             ).catch(() => {
             });
           }
@@ -4183,10 +5097,12 @@ function registerAdminNotificationRoutes({
         [title, message, target || "all", courseId || null, userIds.length, imageUrl || null, now]
       );
       const adminNotifId = insertResult.rows[0]?.id || null;
-      for (const uid of userIds) {
+      if (userIds.length > 0) {
         await db2.query(
-          "INSERT INTO notifications (user_id, title, message, type, created_at, expires_at, admin_notif_id, image_url) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-          [uid, title, message, type || "info", now, expiresAt, adminNotifId, imageUrl || null]
+          `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at, admin_notif_id, image_url)
+           SELECT u, $2::text, $3::text, $4::text, $5::bigint, $6::bigint, $7, $8::text
+           FROM unnest($1::int[]) AS u`,
+          [userIds, title, message, type || "info", now, expiresAt, adminNotifId, imageUrl || null]
         );
       }
       await sendPushToUsers(db2, userIds.map((id) => Number(id)), {
@@ -4261,8 +5177,7 @@ var init_admin_notification_routes = __esm({
 function registerAdminCourseCrudRoutes({
   app: app2,
   db: db2,
-  requireAdmin,
-  cacheInvalidate: cacheInvalidate2
+  requireAdmin
 }) {
   app2.post("/api/admin/courses", requireAdmin, async (req, res) => {
     try {
@@ -4275,7 +5190,6 @@ function registerAdminCourseCrudRoutes({
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, TRUE, $17) RETURNING *`,
         [title, description, teacherName || "3i Learning", price || 0, originalPrice || 0, category || "Mathematics", isFree || false, level || "Beginner", durationHours || 0, courseType || "live", subject || "", startDate || null, endDate || null, vm, thumbnail || null, coverColor || autoColor, Date.now()]
       );
-      cacheInvalidate2("courses:");
       res.json(result.rows[0]);
     } catch (err) {
       console.error("Create course error:", err?.message || err);
@@ -4290,7 +5204,6 @@ function registerAdminCourseCrudRoutes({
         `UPDATE courses SET title=$1, description=$2, teacher_name=$3, price=$4, original_price=$5, category=$6, is_free=$7, level=$8, duration_hours=$9, is_published=$10, total_tests=COALESCE($11, total_tests), subject=COALESCE($12, subject), course_type=COALESCE($13, course_type), start_date=COALESCE($14, start_date), end_date=COALESCE($15, end_date), validity_months=COALESCE($16, validity_months), thumbnail=COALESCE($17, thumbnail), cover_color=COALESCE($18, cover_color) WHERE id=$19`,
         [title, description, teacherName, price, originalPrice, category, isFree, level, durationHours, isPublished, totalTests, subject, courseType, startDate, endDate, vm, thumbnail ?? null, coverColor ?? null, req.params.id]
       );
-      cacheInvalidate2("courses:");
       res.json({ success: true });
     } catch {
       res.status(500).json({ message: "Failed to update course" });
@@ -4492,10 +5405,13 @@ function registerBookRoutes({
       const userId = parseInt(n.userId || "0", 10);
       if (!bookId || !userId) return res.redirect(fail);
       await verifyBookOrder(razorpay_order_id, userId, bookId);
+      const preBk = await assertNativePaidPurchaseInstallation(db2, userId, req);
+      if (!preBk.ok) return res.redirect(fail);
       await db2.query(
         "INSERT INTO book_purchases (user_id, book_id, purchased_at) VALUES ($1, $2, $3) ON CONFLICT (user_id, book_id) DO NOTHING",
         [userId, bookId, Date.now()]
       );
+      await finalizeInstallationBindAfterPurchase(db2, userId, req);
       await db2.query("DELETE FROM book_click_tracking WHERE user_id = $1 AND book_id = $2", [userId, bookId]).catch(() => {
       });
       return res.redirect(`${frontendBase}/store?payment=success&bookId=${bookId}`);
@@ -4950,6 +5866,21 @@ function registerStudentMissionMaterialRoutes({
   db: db2,
   getAuthUser: getAuthUser2
 }) {
+  const hasActiveCourseEnrollment = async (userId, courseId) => {
+    const e = await db2.query(
+      "SELECT valid_until FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL) LIMIT 1",
+      [userId, courseId]
+    );
+    if (e.rows.length === 0) return false;
+    return !isEnrollmentExpired(e.rows[0]);
+  };
+  const canAccessMission = async (user, mission) => {
+    if (mission?.mission_type === "free_practice") return true;
+    if (!user?.id) return false;
+    if (user.role === "admin") return true;
+    if (!mission?.course_id) return false;
+    return hasActiveCourseEnrollment(Number(user.id), Number(mission.course_id));
+  };
   app2.get("/api/daily-missions", async (req, res) => {
     try {
       const user = await getAuthUser2(req);
@@ -4963,8 +5894,6 @@ function registerStudentMissionMaterialRoutes({
       query += " ORDER BY mission_date DESC LIMIT 20";
       const result = await db2.query(query, params);
       if (user) {
-        const userEnrollments = await db2.query("SELECT course_id FROM enrollments WHERE user_id = $1", [user.id]);
-        const enrolledCourseIds = new Set(userEnrollments.rows.map((e) => e.course_id));
         const missionIds = result.rows.map((m) => Number(m.id)).filter((id) => Number.isFinite(id));
         const userMissionMap = /* @__PURE__ */ new Map();
         if (missionIds.length > 0) {
@@ -4976,7 +5905,35 @@ function registerStudentMissionMaterialRoutes({
             userMissionMap.set(Number(um.mission_id), um);
           });
         }
+        const enrolledCourseIds = /* @__PURE__ */ new Set();
+        if (user.role !== "admin") {
+          const courseIds = [
+            ...new Set(
+              result.rows.map((m) => Number(m.course_id)).filter((cid) => Number.isFinite(cid) && cid > 0)
+            )
+          ];
+          if (courseIds.length > 0) {
+            const enr = await db2.query(
+              `SELECT course_id, valid_until FROM enrollments
+               WHERE user_id = $1 AND course_id = ANY($2::int[])
+                 AND (status = 'active' OR status IS NULL)`,
+              [user.id, courseIds]
+            );
+            for (const row of enr.rows) {
+              if (!isEnrollmentExpired(row)) enrolledCourseIds.add(Number(row.course_id));
+            }
+          }
+        }
+        const missionAccessible = (mission) => {
+          if (mission?.mission_type === "free_practice") return true;
+          if (user.role === "admin") return true;
+          const cid = Number(mission?.course_id);
+          if (!Number.isFinite(cid) || cid <= 0) return false;
+          return enrolledCourseIds.has(cid);
+        };
         for (const mission of result.rows) {
+          mission.isAccessible = missionAccessible(mission);
+          if (!mission.isAccessible && user.role !== "admin") continue;
           const um = userMissionMap.get(Number(mission.id));
           mission.isCompleted = !!um?.is_completed;
           mission.userScore = um?.score || 0;
@@ -4984,10 +5941,13 @@ function registerStudentMissionMaterialRoutes({
           mission.userAnswers = um?.answers || {};
           mission.userIncorrect = um?.incorrect || 0;
           mission.userSkipped = um?.skipped || 0;
-          mission.isAccessible = mission.mission_type === "free_practice" || (mission.course_id ? enrolledCourseIds.has(mission.course_id) : enrolledCourseIds.size > 0);
+        }
+        if (user.role !== "admin") {
+          result.rows = result.rows.filter((m) => !!m.isAccessible);
         }
       } else {
         for (const mission of result.rows) mission.isAccessible = mission.mission_type === "free_practice";
+        result.rows = result.rows.filter((m) => !!m.isAccessible);
       }
       res.json(result.rows);
     } catch (err) {
@@ -5019,6 +5979,11 @@ function registerStudentMissionMaterialRoutes({
     try {
       const user = await getAuthUser2(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
+      const missionRes = await db2.query("SELECT * FROM daily_missions WHERE id = $1 LIMIT 1", [req.params.id]);
+      if (missionRes.rows.length === 0) return res.status(404).json({ message: "Mission not found" });
+      const mission = missionRes.rows[0];
+      const allowed = await canAccessMission(user, mission);
+      if (!allowed) return res.status(403).json({ message: "Access denied" });
       const { score, timeTaken, answers, incorrect, skipped } = req.body;
       await db2.query(
         `INSERT INTO user_missions (user_id, mission_id, is_completed, score, completed_at, time_taken, answers, incorrect, skipped) 
@@ -5034,17 +5999,49 @@ function registerStudentMissionMaterialRoutes({
   });
   app2.get("/api/study-materials", async (req, res) => {
     try {
+      const user = await getAuthUser2(req);
       const { free } = req.query;
-      let query = "SELECT * FROM study_materials";
-      const params = [];
-      if (free === "true") query += " WHERE is_free = TRUE";
-      query += " ORDER BY created_at DESC";
-      const result = await db2.query(query, params);
-      let folders = [];
-      if (free === "true") {
-        const foldersResult = await db2.query("SELECT * FROM standalone_folders WHERE type = 'material' AND (is_hidden = FALSE OR is_hidden IS NULL) ORDER BY created_at ASC");
-        folders = foldersResult.rows;
+      const now = Date.now();
+      const loadFolders = async () => {
+        if (free !== "true") return [];
+        const foldersResult = await db2.query(
+          "SELECT * FROM standalone_folders WHERE type = 'material' AND (is_hidden = FALSE OR is_hidden IS NULL) ORDER BY created_at ASC"
+        );
+        return foldersResult.rows;
+      };
+      if (user?.role === "admin") {
+        let query = "SELECT * FROM study_materials";
+        if (free === "true") query += " WHERE is_free = TRUE";
+        query += " ORDER BY created_at DESC";
+        const result2 = await db2.query(query, []);
+        const folders2 = await loadFolders();
+        res.set("Cache-Control", "private, no-store");
+        return res.json({ materials: result2.rows, folders: folders2 });
       }
+      if (!user) {
+        const result2 = await db2.query(
+          "SELECT id, title, description, file_type, course_id, is_free, section_title, download_allowed, created_at, file_url FROM study_materials WHERE is_free = TRUE ORDER BY created_at DESC"
+        );
+        const folders2 = await loadFolders();
+        res.set("Cache-Control", "private, no-store");
+        return res.json({ materials: result2.rows, folders: folders2 });
+      }
+      const result = await db2.query(
+        `SELECT sm.*
+         FROM study_materials sm
+         WHERE sm.is_free = TRUE
+           OR (sm.course_id IS NULL AND sm.is_free = TRUE)
+            OR EXISTS (
+              SELECT 1 FROM enrollments e
+              WHERE e.user_id = $1
+                AND e.course_id = sm.course_id
+                AND (e.status = 'active' OR e.status IS NULL)
+                AND (e.valid_until IS NULL OR e.valid_until > $2)
+            )
+         ORDER BY sm.created_at DESC`,
+        [user.id, now]
+      );
+      const folders = await loadFolders();
       res.set("Cache-Control", "private, no-store");
       res.json({ materials: result.rows, folders });
     } catch {
@@ -5398,10 +6395,13 @@ function registerTestFolderRoutes({
       const userId = Number(notes.userId || 0);
       if (!folderId || !userId) return res.redirect(fail);
       await verifyFolderOrder(razorpay_order_id, userId, folderId);
+      const pre = await assertNativePaidPurchaseInstallation(db2, userId, req);
+      if (!pre.ok) return res.redirect(fail);
       await db2.query(
         "INSERT INTO folder_purchases (user_id, folder_id, amount, payment_id, created_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (user_id, folder_id) DO NOTHING",
         [userId, folderId, null, razorpay_payment_id, Date.now()]
       );
+      await finalizeInstallationBindAfterPurchase(db2, userId, req);
       return res.redirect(`${frontendBase}/test-folder/${folderId}?payment=success`);
     } catch (err) {
       console.error("Test folder verify-redirect error:", err);
@@ -5449,6 +6449,13 @@ var init_test_access_guards = __esm({
 });
 
 // server/test-core-routes.ts
+function sanitizeQuestionsForClient(rows, isAdmin) {
+  if (isAdmin) return rows;
+  return rows.map((q) => {
+    const { correct_option: _c, explanation: _e, solution_image_url: _s, ...rest } = q;
+    return rest;
+  });
+}
 function registerTestCoreRoutes({
   app: app2,
   db: db2,
@@ -5516,7 +6523,8 @@ function registerTestCoreRoutes({
         if (!a.ok) return res.status(403).json({ message: a.message });
       }
       const questionsResult = await db2.query("SELECT * FROM questions WHERE test_id = $1 ORDER BY order_index", [req.params.id]);
-      res.json({ ...test, questions: questionsResult.rows });
+      const isAdmin = user.role === "admin";
+      res.json({ ...test, questions: sanitizeQuestionsForClient(questionsResult.rows, isAdmin) });
     } catch {
       res.status(500).json({ message: "Failed to fetch test" });
     }
@@ -5613,7 +6621,7 @@ function registerTestCoreRoutes({
       });
     } catch (err) {
       console.error("[Attempt] Submit error:", err);
-      res.status(500).json({ message: "Failed to submit test", detail: String(err) });
+      res.status(500).json({ message: "Failed to submit test" });
     }
   });
 }
@@ -5672,6 +6680,23 @@ function registerTestAttemptRoutes({
       const attemptRes = await db2.query("SELECT * FROM test_attempts WHERE id = $1 AND user_id = $2", [req.params.attemptId, user.id]);
       if (attemptRes.rows.length === 0) return res.status(404).json({ message: "Attempt not found" });
       const attempt = attemptRes.rows[0];
+      const requestedTestId = Number(req.params.id);
+      if (!Number.isFinite(requestedTestId) || Number(attempt.test_id) !== requestedTestId) {
+        return res.status(403).json({ message: "Attempt does not belong to this test" });
+      }
+      const testRes = await db2.query(
+        `SELECT t.*, c.is_free AS course_is_free, sf.is_free AS folder_is_free
+         FROM tests t
+         LEFT JOIN courses c ON t.course_id = c.id
+         LEFT JOIN standalone_folders sf ON t.mini_course_id = sf.id
+         WHERE t.id = $1`,
+        [requestedTestId]
+      );
+      if (testRes.rows.length === 0) return res.status(404).json({ message: "Test not found" });
+      if (user.role !== "admin") {
+        const access = await assertTestAccess(db2, user, testRes.rows[0], String(requestedTestId));
+        if (!access.ok) return res.status(403).json({ message: access.message });
+      }
       const answers = typeof attempt.answers === "string" ? JSON.parse(attempt.answers) : attempt.answers || {};
       const questionsRes = await db2.query("SELECT * FROM questions WHERE test_id = $1 ORDER BY order_index", [req.params.id]);
       const questions = questionsRes.rows;
@@ -5826,7 +6851,7 @@ function registerTestAttemptRoutes({
            ta.correct, ta.incorrect, ta.attempted, ta.time_taken_seconds, ta.completed_at
          FROM test_attempts ta
          WHERE ta.user_id = $1 AND ta.status = 'completed'
-         ORDER BY ta.test_id, ta.completed_at ASC`,
+         ORDER BY ta.test_id, ta.completed_at DESC`,
         [user.id]
       );
       const summary = {};
@@ -5902,6 +6927,32 @@ function registerLiveClassRoutes({
     void cf_stream_rtmp_url;
     return safe;
   };
+  const stripPublicPlaybackFields = (row) => {
+    if (!row || typeof row !== "object") return row;
+    const {
+      recording_url,
+      cf_playback_hls,
+      youtube_url,
+      cf_stream_uid,
+      stream_url,
+      meeting_url,
+      join_url,
+      zoom_meeting_id,
+      google_meet_link,
+      ...rest
+    } = row;
+    void recording_url;
+    void cf_playback_hls;
+    void youtube_url;
+    void cf_stream_uid;
+    void stream_url;
+    void meeting_url;
+    void join_url;
+    void zoom_meeting_id;
+    void google_meet_link;
+    return rest;
+  };
+  const toPublicUpcomingDto = (row) => stripPublicPlaybackFields(sanitizeLiveClass(row));
   app2.get("/api/live-classes", async (req, res) => {
     try {
       const { courseId, admin: admin2 } = req.query;
@@ -6026,7 +7077,7 @@ function registerLiveClassRoutes({
       `);
       console.log(`[UpcomingClasses] returning ${result.rows.length} classes`);
       res.set("Cache-Control", "private, no-store");
-      res.json(result.rows.map(sanitizeLiveClass));
+      res.json(result.rows.map(toPublicUpcomingDto));
     } catch (err) {
       console.error("[UpcomingClasses] error:", err);
       res.set("Cache-Control", "private, no-store");
@@ -6046,8 +7097,10 @@ function registerLiveClassRoutes({
       }
       const hasAccess = await userCanAccessLiveClassContent(db2, user, lc);
       const canViewStreamSecrets = user?.role === "admin";
+      const base = canViewStreamSecrets ? lc : sanitizeLiveClass(lc);
+      const payload = canViewStreamSecrets || hasAccess ? base : stripPublicPlaybackFields(base);
       res.set("Cache-Control", "private, no-store");
-      res.json({ ...canViewStreamSecrets ? lc : sanitizeLiveClass(lc), is_enrolled: isEnrolled, has_access: hasAccess });
+      res.json({ ...payload, is_enrolled: isEnrolled, has_access: hasAccess });
     } catch {
       res.status(500).json({ message: "Failed to fetch live class" });
     }
@@ -6144,11 +7197,6 @@ function registerAdminLiveClassManageRoutes({
             ).trim();
             if (!urlForPeer) continue;
             const vType = inferVideoType(urlForPeer);
-            const exists = await db2.query(
-              "SELECT 1 FROM lectures WHERE course_id = $1 AND title = $2 AND video_url = $3 LIMIT 1",
-              [peer.course_id, peer.title, urlForPeer]
-            );
-            if (exists.rows.length > 0) continue;
             const maxOrder = await db2.query("SELECT COALESCE(MAX(order_index), 0) + 1 as next_order FROM lectures WHERE course_id = $1", [peer.course_id]);
             const durationMins = peer.started_at && peer.ended_at ? Math.max(1, Math.round((Number(peer.ended_at) - Number(peer.started_at)) / 6e4)) : peer.duration_minutes != null ? Number(peer.duration_minutes) : liveClassOnly.duration_minutes != null ? Number(liveClassOnly.duration_minutes) : 0;
             const sectionForLecture = buildRecordingLectureSectionTitle(
@@ -6157,7 +7205,17 @@ function registerAdminLiveClassManageRoutes({
               st
             );
             await db2.query(
-              "INSERT INTO lectures (course_id, title, description, video_url, video_type, duration_minutes, order_index, is_free_preview, section_title, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+              `INSERT INTO lectures (
+                 course_id, title, description, video_url, video_type, duration_minutes,
+                 order_index, is_free_preview, section_title, live_class_id, live_class_finalized, created_at
+               ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE, $11)
+               ON CONFLICT (live_class_id) WHERE live_class_id IS NOT NULL
+               DO UPDATE SET
+                 video_url = EXCLUDED.video_url,
+                 video_type = EXCLUDED.video_type,
+                 duration_minutes = EXCLUDED.duration_minutes,
+                 section_title = EXCLUDED.section_title,
+                 live_class_finalized = TRUE`,
               [
                 peer.course_id,
                 peer.title,
@@ -6168,6 +7226,7 @@ function registerAdminLiveClassManageRoutes({
                 maxOrder.rows[0].next_order,
                 false,
                 sectionForLecture,
+                peer.id,
                 Date.now()
               ]
             );
@@ -6187,15 +7246,17 @@ function registerAdminLiveClassManageRoutes({
         const recipients = liveClass.is_free_preview === true || liveClass.is_public === true ? await db2.query("SELECT id AS user_id FROM users WHERE role = 'student'") : await db2.query("SELECT user_id FROM enrollments WHERE course_id = $1", [liveClass.course_id]);
         const expiresAt = Date.now() + 6 * 36e5;
         const recipientIds = recipients.rows.map((e) => Number(e.user_id));
-        for (const e of recipients.rows) {
-          await db2.query("INSERT INTO notifications (user_id, title, message, type, created_at, expires_at) VALUES ($1, $2, $3, $4, $5, $6)", [
-            e.user_id,
-            "\u{1F534} Live Class Started!",
-            '"' + liveClass.title + '" is live now. Join now!',
-            "info",
-            Date.now(),
-            expiresAt
-          ]);
+        const notifTitle = "\u{1F534} Live Class Started!";
+        const notifMessage = '"' + liveClass.title + '" is live now. Join now!';
+        const now = Date.now();
+        if (recipientIds.length > 0) {
+          await db2.query(
+            `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
+               SELECT u, $2::text, $3::text, 'info', $4::bigint, $5::bigint
+               FROM unnest($1::int[]) AS u`,
+            [recipientIds, notifTitle, notifMessage, now, expiresAt]
+          ).catch(() => {
+          });
         }
         await sendPushToUsers(db2, recipientIds, {
           title: "\u{1F534} Live Class Started!",
@@ -6235,32 +7296,34 @@ function registerAdminLiveClassManageRoutes({
         ).catch(() => {
         });
         const otherClasses = await db2.query("SELECT course_id FROM live_classes WHERE id != $1 AND title = $2 AND is_completed IS NOT TRUE AND course_id IS NOT NULL", [req.params.id, liveClass.title]).catch(() => ({ rows: [] }));
-        const expiresAt = Date.now() + 12 * 36e5;
+        const peerExpiresAt = Date.now() + 12 * 36e5;
         const extraRecipients = /* @__PURE__ */ new Set();
         for (const other of otherClasses.rows) {
           const enrolled = await db2.query("SELECT user_id FROM enrollments WHERE course_id = $1", [other.course_id]).catch(() => ({ rows: [] }));
           for (const e of enrolled.rows) {
             extraRecipients.add(Number(e.user_id));
-            await db2.query("INSERT INTO notifications (user_id, title, message, type, created_at, expires_at) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING", [
-              e.user_id,
-              "\u{1F534} Live Class Started!",
-              '"' + liveClass.title + '" is live now. Join now!',
-              "info",
-              Date.now(),
-              expiresAt
-            ]).catch(() => {
-            });
           }
         }
+        const peerNotifTitle = "\u{1F534} Live Class Started!";
+        const peerNotifMessage = '"' + liveClass.title + '" is live now. Join now!';
+        const peerNow = Date.now();
         if (extraRecipients.size > 0) {
-          await sendPushToUsers(db2, [...extraRecipients], {
+          const peerIds = [...extraRecipients];
+          await db2.query(
+            `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
+               SELECT u, $2::text, $3::text, 'info', $4::bigint, $5::bigint
+               FROM unnest($1::int[]) AS u`,
+            [peerIds, peerNotifTitle, peerNotifMessage, peerNow, peerExpiresAt]
+          ).catch(() => {
+          });
+          await sendPushToUsers(db2, peerIds, {
             title: "\u{1F534} Live Class Started!",
             body: `"${liveClass.title}" is live now. Join now!`,
             data: { type: "live_class_started", liveClassId: liveClass.id, courseId: liveClass.course_id || null }
           });
         }
       }
-      const shouldConvertToLecture = (convertToLecture === true || isCompleted === true || isLive === false || liveClass.is_completed === true) && (isCompleted === true || liveClass.is_completed === true) && (liveClass.youtube_url || liveClass.recording_url || liveClass.cf_playback_hls);
+      const shouldConvertToLecture = convertToLecture === true && (isCompleted === true || liveClass.is_completed === true) && !liveClass.recording_deleted_at && (liveClass.youtube_url || liveClass.recording_url || liveClass.cf_playback_hls);
       if (shouldConvertToLecture) {
         await db2.query("DELETE FROM notifications WHERE title IN ('\u{1F534} Live Class Started!', '\u{1F534} Live Class Starting Now!', '\u23F0 Live Class in 30 minutes!') AND message ILIKE $1", ["%" + liveClass.title + "%"]).catch(() => {
         });
@@ -6272,11 +7335,6 @@ function registerAdminLiveClassManageRoutes({
           ).trim();
           if (!urlForPeer) continue;
           const vType = inferVideoType(urlForPeer);
-          const exists = await db2.query(
-            "SELECT 1 FROM lectures WHERE course_id = $1 AND title = $2 AND video_url = $3 LIMIT 1",
-            [peer.course_id, peer.title, urlForPeer]
-          );
-          if (exists.rows.length > 0) continue;
           const maxOrder = await db2.query("SELECT COALESCE(MAX(order_index), 0) + 1 as next_order FROM lectures WHERE course_id = $1", [peer.course_id]);
           const durationMins = peer.started_at && peer.ended_at ? Math.max(1, Math.round((Number(peer.ended_at) - Number(peer.started_at)) / 6e4)) : peer.duration_minutes != null ? Number(peer.duration_minutes) : liveClass.duration_minutes != null ? Number(liveClass.duration_minutes) : 0;
           const targetSection = buildRecordingLectureSectionTitle(
@@ -6285,7 +7343,17 @@ function registerAdminLiveClassManageRoutes({
             sectionTitle
           );
           await db2.query(
-            "INSERT INTO lectures (course_id, title, description, video_url, video_type, duration_minutes, order_index, is_free_preview, section_title, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+            `INSERT INTO lectures (
+               course_id, title, description, video_url, video_type, duration_minutes,
+               order_index, is_free_preview, section_title, live_class_id, live_class_finalized, created_at
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE, $11)
+             ON CONFLICT (live_class_id) WHERE live_class_id IS NOT NULL
+             DO UPDATE SET
+               video_url = EXCLUDED.video_url,
+               video_type = EXCLUDED.video_type,
+               duration_minutes = EXCLUDED.duration_minutes,
+               section_title = EXCLUDED.section_title,
+               live_class_finalized = TRUE`,
             [
               peer.course_id,
               peer.title,
@@ -6296,6 +7364,7 @@ function registerAdminLiveClassManageRoutes({
               maxOrder.rows[0].next_order,
               false,
               targetSection,
+              peer.id,
               Date.now()
             ]
           );
@@ -6411,10 +7480,53 @@ function registerCourseAccessRoutes({
   db: db2,
   getAuthUser: getAuthUser2,
   generateSecureToken: generateSecureToken2,
-  cacheInvalidate: cacheInvalidate2,
   getR2Client,
   updateCourseProgress: updateCourseProgress2
 }) {
+  const assertTrackDownloadAllowed = async (user, itemType, itemId) => {
+    const roleNorm = String(user.role ?? "student").toLowerCase();
+    if (roleNorm !== "student" && roleNorm !== "admin") {
+      return { ok: false, status: 401, message: "Not authenticated" };
+    }
+    const bypass = roleNorm === "admin";
+    if (itemType !== "lecture" && itemType !== "material") {
+      return { ok: false, status: 400, message: "Invalid itemType" };
+    }
+    let courseId = null;
+    let materialIsFree = false;
+    let downloadAllowed = false;
+    if (itemType === "lecture") {
+      const lectureResult = await db2.query("SELECT course_id, download_allowed FROM lectures WHERE id = $1", [itemId]);
+      if (lectureResult.rows.length === 0) return { ok: false, status: 404, message: "Lecture not found" };
+      courseId = lectureResult.rows[0].course_id;
+      downloadAllowed = !!lectureResult.rows[0].download_allowed;
+    } else {
+      const materialResult = await db2.query("SELECT course_id, download_allowed, is_free FROM study_materials WHERE id = $1", [itemId]);
+      if (materialResult.rows.length === 0) return { ok: false, status: 404, message: "Material not found" };
+      courseId = materialResult.rows[0].course_id;
+      downloadAllowed = !!materialResult.rows[0].download_allowed;
+      materialIsFree = !!materialResult.rows[0].is_free;
+    }
+    if (!downloadAllowed) return { ok: false, status: 403, message: "Download not allowed for this item" };
+    const courseIdResolved = courseId == null ? null : Math.trunc(Number(courseId));
+    if (itemType === "material" && courseIdResolved === null && !bypass && !materialIsFree) {
+      return { ok: false, status: 403, message: "This material requires purchase" };
+    }
+    if (courseIdResolved !== null && !bypass) {
+      const enrollmentResult = await db2.query(
+        "SELECT id, valid_until FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)",
+        [user.id, courseIdResolved]
+      );
+      if (enrollmentResult.rows.length === 0) {
+        return { ok: false, status: 403, message: "Not enrolled in this course" };
+      }
+      const row = enrollmentResult.rows[0];
+      if (isEnrollmentExpired(row)) {
+        return { ok: false, status: 403, message: "Course access has expired" };
+      }
+    }
+    return { ok: true };
+  };
   const normalizeStorageKey = (raw) => {
     const trimmed = String(raw || "").trim();
     if (!trimmed) return "";
@@ -6428,6 +7540,26 @@ function registerCourseAccessRoutes({
     }
     return trimmed.replace(/^\/+/, "");
   };
+  const canonicalMediaRelativeKey = (raw) => {
+    let s = normalizeStorageKey(raw);
+    if (!s) return "";
+    s = s.replace(/^\/+/, "");
+    const proxy = "api/media/";
+    if (s.toLowerCase().startsWith(proxy)) {
+      s = s.slice(proxy.length).replace(/^\/+/, "");
+    }
+    try {
+      s = decodeURIComponent(s);
+    } catch {
+    }
+    return s.replace(/^\/+/, "").replace(/\/+$/g, "");
+  };
+  const mediaKeyMatchVariants = (raw) => {
+    const k = canonicalMediaRelativeKey(raw);
+    if (!k || k.includes("..")) return [];
+    const set = /* @__PURE__ */ new Set([k, `api/media/${k}`, `/api/media/${k}`]);
+    return [...set];
+  };
   const toR2ObjectKey = (raw) => {
     let key = normalizeStorageKey(raw);
     if (!key) return "";
@@ -6440,8 +7572,13 @@ function registerCourseAccessRoutes({
     return key.replace(/^\/+/, "").replace(/\/+$/g, "");
   };
   const userCanMintMediaToken = async (user, requestedKeyRaw) => {
-    const requestedKey = normalizeStorageKey(requestedKeyRaw);
-    if (!requestedKey) return false;
+    const variants = mediaKeyMatchVariants(requestedKeyRaw);
+    if (variants.length === 0) return false;
+    const roleNorm = String(user.role ?? "").toLowerCase();
+    if (roleNorm === "admin") {
+      return true;
+    }
+    const now = Date.now();
     const lectureMatch = await db2.query(
       `SELECT l.id
        FROM lectures l
@@ -6451,9 +7588,8 @@ function registerCourseAccessRoutes({
         AND (e.status = 'active' OR e.status IS NULL)
        WHERE l.video_url IS NOT NULL
          AND (
-           l.video_url = $2
-           OR regexp_replace(l.video_url, '^https?://[^/]+/', '') = $2
-           OR l.video_url LIKE '%' || $2
+           regexp_replace(regexp_replace(COALESCE(l.video_url, ''), '^https?://[^/]+/', ''), '^/+', '') = ANY($2::text[])
+           OR regexp_replace(COALESCE(l.video_url, ''), '^https?://[^/]+/', '') = ANY($2::text[])
          )
          AND (
            l.course_id IS NULL
@@ -6464,7 +7600,7 @@ function registerCourseAccessRoutes({
            )
          )
        LIMIT 1`,
-      [user.id, requestedKey, Date.now()]
+      [user.id, variants, now]
     );
     if (lectureMatch.rows.length > 0) return true;
     const materialMatch = await db2.query(
@@ -6476,9 +7612,8 @@ function registerCourseAccessRoutes({
         AND (e.status = 'active' OR e.status IS NULL)
        WHERE sm.file_url IS NOT NULL
          AND (
-           sm.file_url = $2
-           OR regexp_replace(sm.file_url, '^https?://[^/]+/', '') = $2
-           OR sm.file_url LIKE '%' || $2
+           regexp_replace(regexp_replace(COALESCE(sm.file_url, ''), '^https?://[^/]+/', ''), '^/+', '') = ANY($2::text[])
+           OR regexp_replace(COALESCE(sm.file_url, ''), '^https?://[^/]+/', '') = ANY($2::text[])
          )
          AND (
            sm.course_id IS NULL
@@ -6489,9 +7624,19 @@ function registerCourseAccessRoutes({
            )
          )
        LIMIT 1`,
-      [user.id, requestedKey, Date.now()]
+      [user.id, variants, now]
     );
     return materialMatch.rows.length > 0;
+  };
+  const canAccessCourseContent = async (user, courseId) => {
+    if (!user) return false;
+    if (user.role === "admin") return true;
+    const enroll = await db2.query(
+      "SELECT * FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)",
+      [user.id, courseId]
+    );
+    if (enroll.rows.length === 0) return false;
+    return !isEnrollmentExpired(enroll.rows[0]);
   };
   app2.post("/api/media-token", async (req, res) => {
     try {
@@ -6503,7 +7648,8 @@ function registerCourseAccessRoutes({
       if (!allowed) return res.status(403).json({ message: "You do not have access to this media file" });
       const token = generateSecureToken2();
       const expiresAt = Date.now() + 10 * 60 * 1e3;
-      await db2.query("INSERT INTO media_tokens (token, user_id, file_key, expires_at) VALUES ($1, $2, $3, $4)", [token, user.id, normalizeStorageKey(fileKey), expiresAt]);
+      const storedKey = canonicalMediaRelativeKey(fileKey) || normalizeStorageKey(fileKey);
+      await db2.query("INSERT INTO media_tokens (token, user_id, file_key, expires_at) VALUES ($1, $2, $3, $4)", [token, user.id, storedKey, expiresAt]);
       db2.query("DELETE FROM media_tokens WHERE expires_at < $1", [Date.now()]).catch(() => {
       });
       res.set("Cache-Control", "private, no-store");
@@ -6516,7 +7662,15 @@ function registerCourseAccessRoutes({
     try {
       const user = await getAuthUser2(req);
       const { category, search } = req.query;
-      let query = user?.role === "admin" ? "SELECT c.*, (SELECT COUNT(*) FROM study_materials sm WHERE sm.course_id = c.id) AS total_materials FROM courses c WHERE 1=1" : "SELECT c.*, (SELECT COUNT(*) FROM study_materials sm WHERE sm.course_id = c.id) AS total_materials FROM courses c WHERE c.is_published = TRUE";
+      let query = user?.role === "admin" ? `SELECT c.*,
+               (SELECT COUNT(*) FROM lectures l WHERE l.course_id = c.id) AS total_lectures,
+               (SELECT COUNT(*) FROM tests t WHERE t.course_id = c.id AND t.is_published = TRUE) AS total_tests,
+               (SELECT COUNT(*) FROM study_materials sm WHERE sm.course_id = c.id) AS total_materials
+             FROM courses c WHERE 1=1` : `SELECT c.*,
+               (SELECT COUNT(*) FROM lectures l WHERE l.course_id = c.id) AS total_lectures,
+               (SELECT COUNT(*) FROM tests t WHERE t.course_id = c.id AND t.is_published = TRUE) AS total_tests,
+               (SELECT COUNT(*) FROM study_materials sm WHERE sm.course_id = c.id) AS total_materials
+             FROM courses c WHERE c.is_published = TRUE`;
       const params = [];
       if (search) {
         params.push(`%${search}%`);
@@ -6579,6 +7733,10 @@ function registerCourseAccessRoutes({
       const lecturesResult = await db2.query("SELECT * FROM lectures WHERE course_id = $1 ORDER BY order_index", [courseIdParam]);
       const testsResult = await db2.query("SELECT * FROM tests WHERE course_id = $1 AND is_published = TRUE ORDER BY created_at DESC, id DESC", [courseIdParam]);
       const materialsResult = await db2.query("SELECT * FROM study_materials WHERE course_id = $1", [courseIdParam]);
+      const fullLectures = lecturesResult.rows;
+      const fullMaterials = materialsResult.rows;
+      const responseLectures = fullLectures;
+      const responseMaterials = fullMaterials;
       if (user) {
         const enroll = await db2.query("SELECT * FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [user.id, courseIdParam]);
         const row = enroll.rows[0];
@@ -6606,13 +7764,15 @@ function registerCourseAccessRoutes({
           });
         }
       }
+      const hasContentAccess = await canAccessCourseContent(user, courseIdParam);
+      course.hasContentAccess = hasContentAccess;
       res.set("Cache-Control", "private, no-store");
       res.json({
         ...course,
-        total_materials: materialsResult.rows.length,
-        lectures: lecturesResult.rows,
+        total_materials: responseMaterials.length,
+        lectures: responseLectures,
         tests: testsResult.rows,
-        materials: materialsResult.rows
+        materials: responseMaterials
       });
     } catch (err) {
       console.error(err);
@@ -6646,9 +7806,16 @@ function registerCourseAccessRoutes({
       }
       const at = Date.now();
       const vu = computeEnrollmentValidUntil(courseRow, at);
-      await db2.query("INSERT INTO enrollments (user_id, course_id, enrolled_at, valid_until) VALUES ($1, $2, $3, $4)", [user.id, req.params.id, at, vu]);
-      await db2.query("UPDATE courses SET total_students = COALESCE(total_students, 0) + 1 WHERE id = $1", [req.params.id]);
-      cacheInvalidate2("courses:");
+      const ins = await db2.query(
+        `INSERT INTO enrollments (user_id, course_id, enrolled_at, valid_until, status)
+         VALUES ($1, $2, $3, $4, 'active')
+         ON CONFLICT (user_id, course_id) DO NOTHING
+         RETURNING id`,
+        [user.id, req.params.id, at, vu]
+      );
+      if (ins.rows.length > 0) {
+        await db2.query("UPDATE courses SET total_students = COALESCE(total_students, 0) + 1 WHERE id = $1", [req.params.id]);
+      }
       res.json({ success: true });
     } catch (err) {
       console.error("Enroll error:", err);
@@ -6682,7 +7849,13 @@ function registerCourseAccessRoutes({
          LEFT JOIN courses c ON sm.course_id = c.id
          LEFT JOIN enrollments e ON e.user_id = ud.user_id AND e.course_id = c.id
          WHERE ud.user_id = $1 AND ud.item_type = 'material' AND sm.download_allowed = TRUE
-         AND (e.valid_until IS NULL OR e.valid_until > $2 OR c.id IS NULL)
+         AND (
+           c.id IS NULL
+           OR (
+             (e.status = 'active' OR e.status IS NULL)
+             AND (e.valid_until IS NULL OR e.valid_until > $2)
+           )
+         )
          ORDER BY ud.downloaded_at DESC`,
         [user.id, Date.now()]
       );
@@ -6696,7 +7869,13 @@ function registerCourseAccessRoutes({
          LEFT JOIN courses c ON l.course_id = c.id
          LEFT JOIN enrollments e ON e.user_id = ud.user_id AND e.course_id = c.id
          WHERE ud.user_id = $1 AND ud.item_type = 'lecture' AND l.download_allowed = TRUE
-         AND (e.valid_until IS NULL OR e.valid_until > $2 OR c.id IS NULL)
+         AND (
+           c.id IS NULL
+           OR (
+             (e.status = 'active' OR e.status IS NULL)
+             AND (e.valid_until IS NULL OR e.valid_until > $2)
+           )
+         )
          ORDER BY ud.downloaded_at DESC`,
         [user.id, Date.now()]
       );
@@ -6715,9 +7894,13 @@ function registerCourseAccessRoutes({
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const { itemType, itemId, localFilename } = req.body;
       if (!itemType || !itemId) return res.status(400).json({ message: "itemType and itemId required" });
+      const idNum = parseInt(String(itemId), 10);
+      if (!Number.isFinite(idNum)) return res.status(400).json({ message: "Invalid itemId" });
+      const gate = await assertTrackDownloadAllowed(user, String(itemType), idNum);
+      if (!gate.ok) return res.status(gate.status).json({ message: gate.message });
       await db2.query(
         "INSERT INTO user_downloads (user_id, item_type, item_id, local_filename) VALUES ($1, $2, $3, $4) ON CONFLICT (user_id, item_type, item_id) DO UPDATE SET downloaded_at = EXTRACT(EPOCH FROM NOW()) * 1000, local_filename = EXCLUDED.local_filename",
-        [user.id, itemType, itemId, localFilename || null]
+        [user.id, itemType, idNum, localFilename || null]
       );
       res.json({ success: true });
     } catch {
@@ -6751,6 +7934,7 @@ function registerCourseAccessRoutes({
       const id = parseInt(String(itemId));
       if (isNaN(id)) return res.status(400).json({ message: "Invalid itemId" });
       let courseId = null;
+      let materialIsFree = false;
       let downloadAllowed = false;
       let r2Key = null;
       if (itemType === "lecture") {
@@ -6768,7 +7952,7 @@ function registerCourseAccessRoutes({
         const pu = lecture.pdf_url != null ? String(lecture.pdf_url).trim() : "";
         r2Key = vu || pu || null;
       } else if (itemType === "material") {
-        const materialResult = await db2.query("SELECT course_id, download_allowed, file_url FROM study_materials WHERE id = $1", [id]);
+        const materialResult = await db2.query("SELECT course_id, download_allowed, file_url, is_free FROM study_materials WHERE id = $1", [id]);
         if (materialResult.rows.length === 0) {
           return res.status(404).json({ message: "Material not found" });
         }
@@ -6776,6 +7960,7 @@ function registerCourseAccessRoutes({
         courseId = material.course_id;
         downloadAllowed = material.download_allowed;
         r2Key = material.file_url;
+        materialIsFree = !!material.is_free;
       }
       const courseIdNumeric = courseId == null ? null : Number(courseId);
       const courseIdResolved = courseIdNumeric != null && Number.isFinite(courseIdNumeric) ? Math.trunc(courseIdNumeric) : null;
@@ -6784,6 +7969,9 @@ function registerCourseAccessRoutes({
       }
       if (!r2Key) {
         return res.status(404).json({ message: "File URL not found" });
+      }
+      if (itemType === "material" && courseIdResolved === null && !bypassEnrollment && !materialIsFree) {
+        return res.status(403).json({ message: "This material requires purchase" });
       }
       if (courseIdResolved !== null && !bypassEnrollment) {
         const enrollmentResult = await db2.query(
@@ -6823,15 +8011,23 @@ function registerCourseAccessRoutes({
   });
   app2.get("/api/download-proxy", async (req, res) => {
     try {
+      const user = await getAuthUser2(req);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
       const { token } = req.query;
       if (!token || typeof token !== "string") {
         return res.status(400).json({ message: "Token required" });
       }
-      const tokenResult = await db2.query("SELECT * FROM download_tokens WHERE token = $1 AND expires_at > $2", [token, Date.now()]);
+      const tokenResult = await db2.query(
+        "DELETE FROM download_tokens WHERE token = $1 AND expires_at > $2 RETURNING *",
+        [token, Date.now()]
+      );
       if (tokenResult.rows.length === 0) {
         return res.status(403).json({ message: "Token invalid or expired" });
       }
       const tokenData = tokenResult.rows[0];
+      if (Number(tokenData.user_id) !== Number(user.id)) {
+        return res.status(403).json({ message: "Token does not belong to this user" });
+      }
       const { GetObjectCommand } = await import("@aws-sdk/client-s3");
       const r2 = await getR2Client();
       const command = new GetObjectCommand({
@@ -6857,10 +8053,6 @@ function registerCourseAccessRoutes({
       }
       const stream = r2Response.Body;
       stream.pipe(res);
-      stream.on("end", () => {
-        db2.query("DELETE FROM download_tokens WHERE token = $1", [token]).catch(() => {
-        });
-      });
       stream.on("error", (err) => {
         console.error("[download-proxy] Stream error:", err);
         if (!res.headersSent) {
@@ -6936,6 +8128,13 @@ var init_r2_path_utils = __esm({
 });
 
 // server/upload-routes.ts
+function getPublicApiBaseUrl(req) {
+  const configured = String(process.env.PUBLIC_API_BASE_URL || "").trim();
+  if (configured) return configured.replace(/\/+$/, "");
+  const protocol = req.headers["x-forwarded-proto"] || req.protocol || "http";
+  const host = req.headers["x-forwarded-host"] || req.headers.host || `localhost:${process.env.PORT || 5e3}`;
+  return `${protocol}://${host}`;
+}
 function buildPresignedObjectKey(body) {
   const { filename, folder: rawFolder = "uploads", subfolder: rawSub } = body;
   if (!filename) return { error: "filename required" };
@@ -6990,13 +8189,17 @@ function registerUploadRoutes({
       const { ListObjectsV2Command } = await import("@aws-sdk/client-s3");
       const r2 = await getR2Client();
       const prefix = `${LIVE_CLASS_RECORDING_ROOT}/`;
-      const out = await r2.send(
-        new ListObjectsV2Command({
-          Bucket: process.env.R2_BUCKET_NAME,
-          Prefix: prefix,
-          Delimiter: "/",
-          MaxKeys: 1e3
-        })
+      const out = await withTimeout(
+        r2.send(
+          new ListObjectsV2Command({
+            Bucket: process.env.R2_BUCKET_NAME,
+            Prefix: prefix,
+            Delimiter: "/",
+            MaxKeys: 1e3
+          })
+        ),
+        6e3,
+        "R2 list folders timed out"
       );
       const fromPrefixes = (out.CommonPrefixes || []).map((c) => c.Prefix?.replace(prefix, "").replace(/\/$/, "") || "").filter(Boolean);
       const fromKeys = (out.Contents || []).map((c) => c.Key).filter((k) => !!k).map((k) => {
@@ -7008,6 +8211,10 @@ function registerUploadRoutes({
       const names = [.../* @__PURE__ */ new Set([...fromPrefixes, ...fromKeys])].sort();
       res.json({ folders: names });
     } catch (err) {
+      if (isTimeoutError(err)) {
+        console.warn("[R2] List subfolders timed out, returning empty list");
+        return res.json({ folders: [], degraded: true });
+      }
       console.error("[R2] List subfolders error:", err);
       res.status(500).json({ message: "Failed to list folders" });
     }
@@ -7055,9 +8262,7 @@ function registerUploadRoutes({
         ContentType: contentType
       });
       const uploadUrl = await getSignedUrl(r2, command, { expiresIn: 600 });
-      const protocol = req.headers["x-forwarded-proto"] || req.protocol || "http";
-      const host = req.headers["x-forwarded-host"] || req.headers.host || `localhost:${process.env.PORT || 5e3}`;
-      const publicUrl = `${protocol}://${host}/api/media/${key}`;
+      const publicUrl = `${getPublicApiBaseUrl(req)}/api/media/${key}`;
       console.log(`[R2] Presigned URL generated for ${key}, public: ${publicUrl}`);
       res.json({ uploadUrl, publicUrl, key });
     } catch (err) {
@@ -7094,9 +8299,7 @@ function registerUploadRoutes({
           ContentType: file.mimetype
         })
       );
-      const protocol = req.headers["x-forwarded-proto"] || req.protocol || "http";
-      const host = req.headers["x-forwarded-host"] || req.headers.host || `localhost:${process.env.PORT || 5e3}`;
-      const publicUrl = `${protocol}://${host}/api/media/${key}`;
+      const publicUrl = `${getPublicApiBaseUrl(req)}/api/media/${key}`;
       console.log(`[R2] Server upload complete: ${key} (${file.size} bytes)`);
       res.json({ publicUrl, key });
     } catch (err) {
@@ -7122,10 +8325,20 @@ var init_upload_routes = __esm({
   "server/upload-routes.ts"() {
     "use strict";
     init_r2_path_utils();
+    init_async_utils();
   }
 });
 
 // server/media-stream-routes.ts
+async function r2GetWithRetry(send, label) {
+  try {
+    return await withTimeout(send(), R2_GET_TIMEOUT_MS, label);
+  } catch (err) {
+    if (!isTimeoutError(err)) throw err;
+    await new Promise((r) => setTimeout(r, 250));
+    return await withTimeout(send(), R2_GET_TIMEOUT_MS, label);
+  }
+}
 async function streamMediaGet(req, res, db2, getAuthUser2, getR2Client, key) {
   if (!key || key === "/") {
     res.status(400).json({ message: "No file key" });
@@ -7134,15 +8347,27 @@ async function streamMediaGet(req, res, db2, getAuthUser2, getR2Client, key) {
   const mediaToken = req.query.token;
   let userId = null;
   let userRole = "student";
+  let authenticatedViaMediaToken = false;
   if (mediaToken) {
     const tokenResult = await db2.query("SELECT user_id FROM media_tokens WHERE token = $1 AND expires_at > $2 AND file_key = $3", [mediaToken, Date.now(), key]);
     if (tokenResult.rows.length === 0) {
       res.status(401).json({ message: "Token expired or invalid" });
       return;
     }
-    userId = tokenResult.rows[0].user_id;
-    const userResult = await db2.query("SELECT role FROM users WHERE id = $1", [userId]);
-    if (userResult.rows.length > 0) userRole = userResult.rows[0].role;
+    const tokenUserId = tokenResult.rows[0].user_id;
+    const sessionUser = await getAuthUser2(req);
+    if (sessionUser && sessionUser.id !== tokenUserId) {
+      res.status(401).json({ message: "Unauthorized" });
+      return;
+    }
+    userId = tokenUserId;
+    if (sessionUser && sessionUser.id === tokenUserId) {
+      userRole = sessionUser.role;
+    } else {
+      const roleRow = await db2.query("SELECT role FROM users WHERE id = $1 LIMIT 1", [tokenUserId]);
+      userRole = String(roleRow.rows[0]?.role ?? "student");
+    }
+    authenticatedViaMediaToken = true;
   } else {
     const user = await getAuthUser2(req);
     if (!user) {
@@ -7152,7 +8377,7 @@ async function streamMediaGet(req, res, db2, getAuthUser2, getR2Client, key) {
     userId = user.id;
     userRole = user.role;
   }
-  if (userRole !== "admin") {
+  if (!authenticatedViaMediaToken && userRole !== "admin") {
     const normalizedKey = key.replace(/^\/+/, "");
     const keyVariants = Array.from(/* @__PURE__ */ new Set([
       normalizedKey,
@@ -7206,6 +8431,9 @@ async function streamMediaGet(req, res, db2, getAuthUser2, getR2Client, key) {
             return;
           }
         }
+      } else {
+        res.status(403).json({ message: "Forbidden" });
+        return;
       }
     }
   }
@@ -7213,14 +8441,50 @@ async function streamMediaGet(req, res, db2, getAuthUser2, getR2Client, key) {
   const r2 = await getR2Client();
   const rangeHeader = req.headers.range;
   if (rangeHeader) {
-    const head = await r2.send(new HeadObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: key }));
+    const head = await withTimeout(
+      r2.send(new HeadObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: key })),
+      R2_HEAD_TIMEOUT_MS,
+      "R2 head request timed out"
+    );
     const totalSize = head.ContentLength || 0;
-    const parts = rangeHeader.replace(/bytes=/, "").split("-");
-    const start = parseInt(parts[0], 10);
-    const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+    const m = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim());
+    if (!m || totalSize <= 0) {
+      res.status(416);
+      res.setHeader("Content-Range", `bytes */${totalSize}`);
+      res.json({ message: "Invalid range" });
+      return;
+    }
+    const startRaw = m[1];
+    const endRaw = m[2];
+    let start = 0;
+    let end = totalSize - 1;
+    if (startRaw === "" && endRaw !== "") {
+      const suffix = Number.parseInt(endRaw, 10);
+      if (!Number.isFinite(suffix) || suffix <= 0) {
+        res.status(416);
+        res.setHeader("Content-Range", `bytes */${totalSize}`);
+        res.json({ message: "Invalid range" });
+        return;
+      }
+      start = Math.max(totalSize - suffix, 0);
+    } else {
+      start = Number.parseInt(startRaw, 10);
+      end = endRaw ? Number.parseInt(endRaw, 10) : totalSize - 1;
+    }
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start >= totalSize || end < start) {
+      res.status(416);
+      res.setHeader("Content-Range", `bytes */${totalSize}`);
+      res.json({ message: "Invalid range" });
+      return;
+    }
+    if (end >= totalSize) end = totalSize - 1;
     const chunkSize = end - start + 1;
-    const command = new GetObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: key, Range: `bytes=${start}-${end}` });
-    const obj = await r2.send(command);
+    const obj = await r2GetWithRetry(
+      () => r2.send(
+        new GetObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: key, Range: `bytes=${start}-${end}` })
+      ),
+      "R2 media range request timed out"
+    );
     if (!obj.Body) {
       res.status(404).json({ message: "File not found" });
       return;
@@ -7230,7 +8494,8 @@ async function streamMediaGet(req, res, db2, getAuthUser2, getR2Client, key) {
     res.setHeader("Accept-Ranges", "bytes");
     res.setHeader("Content-Length", String(chunkSize));
     if (head.ContentType) res.setHeader("Content-Type", head.ContentType);
-    res.setHeader("Cache-Control", "private, no-store");
+    const isPdf = typeof head.ContentType === "string" && /pdf/i.test(head.ContentType);
+    res.setHeader("Cache-Control", isPdf ? "private, max-age=300" : "private, no-store");
     res.setHeader("Content-Disposition", "inline");
     const stream = obj.Body;
     if (typeof stream.pipe === "function") stream.pipe(res);
@@ -7239,8 +8504,10 @@ async function streamMediaGet(req, res, db2, getAuthUser2, getR2Client, key) {
       res.end(Buffer.from(bytes));
     } else res.status(500).json({ message: "Cannot stream file" });
   } else {
-    const command = new GetObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: key });
-    const obj = await r2.send(command);
+    const obj = await r2GetWithRetry(
+      () => r2.send(new GetObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: key })),
+      "R2 media request timed out"
+    );
     if (!obj.Body) {
       res.status(404).json({ message: "File not found" });
       return;
@@ -7248,7 +8515,8 @@ async function streamMediaGet(req, res, db2, getAuthUser2, getR2Client, key) {
     if (obj.ContentType) res.setHeader("Content-Type", obj.ContentType);
     if (obj.ContentLength) res.setHeader("Content-Length", String(obj.ContentLength));
     res.setHeader("Accept-Ranges", "bytes");
-    res.setHeader("Cache-Control", "private, no-store");
+    const isPdf = typeof obj.ContentType === "string" && /pdf/i.test(obj.ContentType);
+    res.setHeader("Cache-Control", isPdf ? "private, max-age=300" : "private, no-store");
     res.setHeader("Content-Disposition", "inline");
     const stream = obj.Body;
     if (typeof stream.pipe === "function") stream.pipe(res);
@@ -7270,6 +8538,9 @@ function registerMediaStreamRoutes({
       await streamMediaGet(req, res, db2, getAuthUser2, getR2Client, key);
     } catch (err) {
       console.error("[R2 Proxy] Error:", err?.message || err);
+      if (String(err?.message || "").toLowerCase().includes("timed out")) {
+        return res.status(504).json({ message: "Media upstream timeout" });
+      }
       if (err?.name === "NoSuchKey") return res.status(404).json({ message: "File not found" });
       if (!res.headersSent) res.status(500).json({ message: "Failed to fetch file" });
     }
@@ -7280,15 +8551,35 @@ function registerMediaStreamRoutes({
       await streamMediaGet(req, res, db2, getAuthUser2, getR2Client, key);
     } catch (err) {
       console.error("[R2 Proxy] Error:", err?.message || err);
+      if (String(err?.message || "").toLowerCase().includes("timed out")) {
+        return res.status(504).json({ message: "Media upstream timeout" });
+      }
+      if (err?.name === "NoSuchKey") return res.status(404).json({ message: "File not found" });
+      if (!res.headersSent) res.status(500).json({ message: "Failed to fetch file" });
+    }
+  });
+  app2.get(/^\/api\/media\/(.+)$/, async (req, res) => {
+    try {
+      const key = String(req.params?.[0] || "").replace(/^\/+/, "");
+      await streamMediaGet(req, res, db2, getAuthUser2, getR2Client, key);
+    } catch (err) {
+      console.error("[R2 Proxy] Error:", err?.message || err);
+      if (String(err?.message || "").toLowerCase().includes("timed out")) {
+        return res.status(504).json({ message: "Media upstream timeout" });
+      }
       if (err?.name === "NoSuchKey") return res.status(404).json({ message: "File not found" });
       if (!res.headersSent) res.status(500).json({ message: "Failed to fetch file" });
     }
   });
 }
+var R2_HEAD_TIMEOUT_MS, R2_GET_TIMEOUT_MS;
 var init_media_stream_routes = __esm({
   "server/media-stream-routes.ts"() {
     "use strict";
     init_course_access_utils();
+    init_async_utils();
+    R2_HEAD_TIMEOUT_MS = 15e3;
+    R2_GET_TIMEOUT_MS = 3e4;
   }
 });
 
@@ -7513,7 +8804,7 @@ var init_ai_tutor_service = __esm({
 });
 
 // server/schema-readiness-contract.ts
-var REQUIRED_TABLES, REQUIRED_COLUMNS;
+var REQUIRED_TABLES, REQUIRED_COLUMNS, REQUIRED_UNIQUE_INDEX_SPECS;
 var init_schema_readiness_contract = __esm({
   "server/schema-readiness-contract.ts"() {
     "use strict";
@@ -7546,7 +8837,10 @@ var init_schema_readiness_contract = __esm({
       "site_settings",
       "question_reports",
       "user_sessions",
-      "live_class_recording_progress"
+      "live_class_recording_progress",
+      "user_push_tokens",
+      "session",
+      "express_rate_limit"
     ];
     REQUIRED_COLUMNS = {
       users: [
@@ -7569,21 +8863,53 @@ var init_schema_readiness_contract = __esm({
         "cf_stream_uid",
         "cf_playback_hls",
         "lecture_section_title",
-        "lecture_subfolder_title"
+        "lecture_subfolder_title",
+        "recording_deleted_at"
       ],
       notifications: ["source", "expires_at", "is_hidden", "admin_notif_id", "image_url"],
       courses: ["subject", "cover_color", "pyq_count", "mock_count", "practice_count"],
-      lectures: ["download_allowed", "section_title"],
+      lectures: ["download_allowed", "section_title", "live_class_id", "live_class_finalized"],
       study_materials: ["download_allowed", "section_title"],
       tests: ["difficulty", "scheduled_at", "price", "mini_course_id"],
       questions: ["image_url", "solution_image_url"],
       lecture_progress: ["playback_sessions", "last_session_ping_at"],
       standalone_folders: ["category", "price", "original_price", "is_free", "description", "validity_months"]
     };
+    REQUIRED_UNIQUE_INDEX_SPECS = [
+      { table: "enrollments", columns: ["user_id", "course_id"] },
+      { table: "user_downloads", columns: ["user_id", "item_type", "item_id"] },
+      { table: "user_missions", columns: ["user_id", "mission_id"] },
+      { table: "payments", columns: ["razorpay_order_id"] },
+      { table: "lecture_progress", columns: ["user_id", "lecture_id"] },
+      { table: "live_class_viewers", columns: ["live_class_id", "user_id"] },
+      { table: "live_class_hand_raises", columns: ["live_class_id", "user_id"] },
+      { table: "book_purchases", columns: ["user_id", "book_id"] },
+      { table: "folder_purchases", columns: ["user_id", "folder_id"] },
+      { table: "test_purchases", columns: ["user_id", "test_id"] },
+      { table: "question_reports", columns: ["question_id", "user_id"] },
+      { table: "book_click_tracking", columns: ["user_id", "book_id"] },
+      { table: "site_settings", columns: ["key"] },
+      { table: "user_push_tokens", columns: ["expo_push_token"] },
+      { table: "users", columns: ["phone"] },
+      { table: "users", columns: ["email"] }
+    ];
   }
 });
 
 // server/db-readiness.ts
+function parseIndexColumns(value) {
+  if (Array.isArray(value)) {
+    return value.map((c) => String(c));
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return [];
+    const inner = trimmed.startsWith("{") && trimmed.endsWith("}") ? trimmed.slice(1, -1) : trimmed;
+    if (!inner) return [];
+    return inner.split(",").map((part) => part.replace(/^"+|"+$/g, "").trim()).filter(Boolean);
+  }
+  return [];
+}
 async function checkDatabaseReadiness(db2) {
   await db2.query("SELECT 1");
   const tableRows = await db2.query(
@@ -7616,15 +8942,38 @@ async function checkDatabaseReadiness(db2) {
       }
     }
   }
+  const indexRows = await db2.query(
+    `SELECT
+       t.relname AS table_name,
+       i.indisunique AS is_unique,
+       ARRAY_AGG(a.attname ORDER BY k.ordinality) AS cols
+     FROM pg_index i
+     JOIN pg_class t ON t.oid = i.indrelid
+     JOIN pg_namespace n ON n.oid = t.relnamespace
+     JOIN LATERAL unnest(i.indkey) WITH ORDINALITY AS k(attnum, ordinality) ON TRUE
+     JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
+     WHERE n.nspname = 'public'
+     GROUP BY t.relname, i.indisunique, i.indexrelid`
+  );
+  const presentUniqueKeys = /* @__PURE__ */ new Set();
+  for (const row of indexRows.rows) {
+    if (!row.is_unique) continue;
+    const table = String(row.table_name);
+    const cols = parseIndexColumns(row.cols);
+    presentUniqueKeys.add(`${table}|${cols.join(",")}`);
+  }
+  const missingIndexes = REQUIRED_UNIQUE_INDEX_SPECS.map((s) => `${s.table}|${s.columns.join(",")}`).filter((sig) => !presentUniqueKeys.has(sig));
   return {
-    ok: missingTables.length === 0 && missingColumns.length === 0,
+    ok: missingTables.length === 0 && missingColumns.length === 0 && missingIndexes.length === 0,
     checks: {
       db: true,
       tables: missingTables.length === 0,
-      columns: missingColumns.length === 0
+      columns: missingColumns.length === 0,
+      indexes: missingIndexes.length === 0
     },
     missingTables,
-    missingColumns
+    missingColumns,
+    missingIndexes
   };
 }
 var init_db_readiness = __esm({
@@ -7640,9 +8989,10 @@ __export(routes_exports, {
   registerRoutes: () => registerRoutes
 });
 import { createServer } from "node:http";
-import { Pool } from "pg";
+import { Pool as Pool2 } from "pg";
 import multer from "multer";
 import { createRequire as createRequire2 } from "module";
+import { randomInt } from "node:crypto";
 function normalizeDatabaseUrl(raw) {
   try {
     const parsed = new URL(raw);
@@ -7653,6 +9003,29 @@ function normalizeDatabaseUrl(raw) {
     return parsed.toString();
   } catch {
     return raw;
+  }
+}
+async function runInTransaction(fn) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const exec = {
+      query: async (text, params) => {
+        const r = await client.query(text, params);
+        return { rows: r.rows };
+      }
+    };
+    const out = await fn(exec);
+    await client.query("COMMIT");
+    return out;
+  } catch (e) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {
+    }
+    throw e;
+  } finally {
+    client.release();
   }
 }
 async function dbQuery(text, params, options) {
@@ -7686,23 +9059,26 @@ async function dbQuery(text, params, options) {
     }
   }
 }
-function cacheInvalidate(pattern) {
-  for (const key of cache.keys()) {
-    if (key.startsWith(pattern)) cache.delete(key);
-  }
-}
 function generateOTP() {
-  return Math.floor(1e5 + Math.random() * 9e5).toString();
+  return String(randomInt(1e5, 1e6));
 }
 async function getAuthUser(req) {
-  const user = await getAuthUserFromRequest(req, db);
-  if (!user) return null;
-  const boundOk = await enforceInstallationBinding(db, req, user.id, user.role);
-  if (!boundOk) {
-    req.session.user = null;
-    return null;
+  const r = req;
+  let p = r[authUserLazyKey];
+  if (!p) {
+    p = (async () => {
+      const user = await getAuthUserFromRequest(req, db);
+      if (!user) return null;
+      const boundOk = await enforceInstallationBinding(db, req, user.id, user.role);
+      if (!boundOk) {
+        req.session.user = null;
+        return null;
+      }
+      return user;
+    })();
+    r[authUserLazyKey] = p;
   }
-  return user;
+  return p;
 }
 async function sendOTPviaSMS(phone, otp) {
   const apiKey = process.env.FAST2SMS_API_KEY;
@@ -7806,10 +9182,45 @@ async function updateCourseProgress(userId, courseId) {
 async function recomputeAllEnrollmentsProgressForCourse(courseId) {
   const cid = String(courseId);
   try {
-    const enr = await db.query("SELECT user_id FROM enrollments WHERE course_id = $1 AND (status = 'active' OR status IS NULL)", [cid]);
-    for (const row of enr.rows) {
-      await updateCourseProgress(row.user_id, courseId);
-    }
+    await db.query(
+      `UPDATE enrollments AS e
+       SET progress_percent = calc.pct
+       FROM (
+         SELECT
+           en.user_id,
+           en.course_id,
+           CASE
+             WHEN (COALESCE(tl.total_lec, 0) + COALESCE(tt.total_tests, 0)) <= 0 THEN 0
+             ELSE LEAST(100, GREATEST(0, ROUND(
+               (100.0 * (COALESCE(cl.done_lec, 0) + COALESCE(ct.done_tests, 0)))
+               / NULLIF(COALESCE(tl.total_lec, 0) + COALESCE(tt.total_tests, 0), 0)
+             )))
+           END::integer AS pct
+         FROM enrollments en
+         CROSS JOIN LATERAL (
+           SELECT COUNT(*)::bigint AS total_lec FROM lectures WHERE course_id = $1
+         ) tl
+         CROSS JOIN LATERAL (
+           SELECT COUNT(*)::bigint AS total_tests FROM tests WHERE course_id = $1 AND is_published = TRUE
+         ) tt
+         LEFT JOIN LATERAL (
+           SELECT COUNT(*)::bigint AS done_lec
+           FROM lecture_progress lp
+           INNER JOIN lectures l ON lp.lecture_id = l.id AND l.course_id = $1
+           WHERE lp.user_id = en.user_id AND lp.is_completed = TRUE
+         ) cl ON TRUE
+         LEFT JOIN LATERAL (
+           SELECT COUNT(DISTINCT test_id)::bigint AS done_tests
+           FROM test_attempts ta
+           WHERE ta.user_id = en.user_id
+             AND ta.status = 'completed'
+             AND ta.test_id IN (SELECT id FROM tests WHERE course_id = $1)
+         ) ct ON TRUE
+         WHERE en.course_id::text = $1 AND (en.status = 'active' OR en.status IS NULL)
+       ) AS calc
+       WHERE e.user_id = calc.user_id AND e.course_id = calc.course_id`,
+      [cid]
+    );
   } catch (err) {
     console.error("[Progress] recomputeAllEnrollmentsProgressForCourse failed:", err);
   }
@@ -7962,7 +9373,8 @@ async function registerRoutes(app2) {
           message: "Database schema is not fully migrated",
           checks: readiness.checks,
           missingTables: readiness.missingTables,
-          missingColumns: readiness.missingColumns
+          missingColumns: readiness.missingColumns,
+          missingIndexes: readiness.missingIndexes
         });
       }
       return res.json({
@@ -7972,6 +9384,23 @@ async function registerRoutes(app2) {
     } catch (err) {
       return res.status(503).json({ ok: false, message: err?.message || "DB not ready" });
     }
+  });
+  async function requireAuth(req, res, next) {
+    const user = await getAuthUser(req);
+    if (!user) {
+      return res.status(401).json({ message: "Login required" });
+    }
+    req.user = user;
+    next();
+  }
+  registerSupportRoutes({
+    app: app2,
+    db,
+    pool,
+    listenPool,
+    getAuthUser,
+    requireAuth,
+    requireAdmin
   });
   app2.use("/api", async (req, res, next) => {
     try {
@@ -8000,7 +9429,8 @@ async function registerRoutes(app2) {
     verifyOtpValue,
     generateSecureToken: () => generateSecureToken(),
     sendOTPviaSMS,
-    verifyFirebaseToken
+    verifyFirebaseToken,
+    runInTransaction
   });
   registerPaymentRoutes({
     app: app2,
@@ -8008,13 +9438,7 @@ async function registerRoutes(app2) {
     getAuthUser,
     getRazorpay,
     verifyPaymentSignature,
-    cacheInvalidate
-  });
-  registerSupportRoutes({
-    app: app2,
-    db,
-    getAuthUser,
-    requireAdmin
+    runInTransaction
   });
   registerBookRoutes({
     app: app2,
@@ -8065,14 +9489,6 @@ async function registerRoutes(app2) {
     requireAdmin,
     generateAIAnswer
   });
-  async function requireAuth(req, res, next) {
-    const user = await getAuthUser(req);
-    if (!user) {
-      return res.status(401).json({ message: "Login required" });
-    }
-    req.user = user;
-    next();
-  }
   app2.post("/api/push/register", requireAuth, async (req, res) => {
     try {
       const user = req.user;
@@ -8207,7 +9623,6 @@ async function registerRoutes(app2) {
     db,
     getAuthUser,
     generateSecureToken,
-    cacheInvalidate: (prefix) => cacheInvalidate(prefix ?? ""),
     getR2Client,
     updateCourseProgress
   });
@@ -8232,8 +9647,7 @@ async function registerRoutes(app2) {
   registerAdminCourseCrudRoutes({
     app: app2,
     db,
-    requireAdmin,
-    cacheInvalidate
+    requireAdmin
   });
   registerAdminCourseImportRoutes({
     app: app2,
@@ -8257,9 +9671,9 @@ async function registerRoutes(app2) {
     app: app2,
     db,
     requireAdmin,
-    cacheInvalidate,
     deleteDownloadsForUser,
-    deleteDownloadsForCourse
+    deleteDownloadsForCourse,
+    runInTransaction
   });
   registerAdminLectureRoutes({
     app: app2,
@@ -8278,14 +9692,15 @@ async function registerRoutes(app2) {
     app: app2,
     db,
     requireAdmin,
-    upload,
+    upload: uploadPdf,
     PDFParse
   });
   registerAdminUsersAndContentRoutes({
     app: app2,
     db,
     requireAdmin,
-    deleteDownloadsForUser
+    deleteDownloadsForUser,
+    runInTransaction
   });
   registerAdminNotificationRoutes({
     app: app2,
@@ -8306,6 +9721,7 @@ async function registerRoutes(app2) {
   registerLiveChatRoutes({
     app: app2,
     db,
+    listenPool,
     getAuthUser,
     requireAuth,
     requireAdmin
@@ -8327,7 +9743,7 @@ async function registerRoutes(app2) {
   const httpServer = createServer(app2);
   return httpServer;
 }
-var require3, PDFParse, upload, uploadLarge, databaseUrlRaw, databaseUrl, pool, db, generateAIAnswer, cache;
+var require3, PDFParse, upload, uploadPdf, uploadLarge, databaseUrlRaw, databaseUrl, pgPoolMax, pool, listenPool, db, generateAIAnswer, authUserLazyKey;
 var init_routes = __esm({
   "server/routes.ts"() {
     "use strict";
@@ -8341,6 +9757,7 @@ var init_routes = __esm({
     init_payment_routes();
     init_support_routes();
     init_live_chat_routes();
+    init_listen_pool();
     init_live_class_engagement_routes();
     init_live_stream_routes();
     init_site_settings_routes();
@@ -8375,16 +9792,26 @@ var init_routes = __esm({
     require3 = createRequire2(import.meta.url);
     ({ PDFParse } = require3("pdf-parse"));
     upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+    uploadPdf = multer({
+      storage: multer.memoryStorage(),
+      limits: { fileSize: 10 * 1024 * 1024 },
+      fileFilter: (_req, file, cb) => {
+        const mimetype = String(file?.mimetype || "").toLowerCase();
+        if (mimetype === "application/pdf") return cb(null, true);
+        return cb(new Error("Only PDF files are allowed"));
+      }
+    });
     uploadLarge = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } });
     databaseUrlRaw = process.env.DATABASE_URL;
     databaseUrl = databaseUrlRaw ? normalizeDatabaseUrl(databaseUrlRaw) : void 0;
     if (!databaseUrl) {
       throw new Error("DATABASE_URL must be set");
     }
-    pool = new Pool({
+    pgPoolMax = Math.min(50, Math.max(1, parseInt(process.env.PG_POOL_MAX || "10", 10) || 10));
+    pool = new Pool2({
       connectionString: databaseUrl,
       ssl: process.env.PGSSL_NO_VERIFY === "true" && process.env.NODE_ENV !== "production" ? { rejectUnauthorized: false } : { rejectUnauthorized: true },
-      max: 10,
+      max: pgPoolMax,
       min: 1,
       connectionTimeoutMillis: 1e4,
       idleTimeoutMillis: 1e4,
@@ -8394,21 +9821,20 @@ var init_routes = __esm({
     pool.on("error", (err) => {
       console.error("[Pool] Idle client error (connection dropped by Neon):", err.message);
     });
+    listenPool = createListenPool(databaseUrl);
+    listenPool.on("error", (err) => {
+      console.error("[ListenPool] Idle client error:", err.message);
+    });
     db = {
       query: (text, params, options) => dbQuery(text, params, options)
     };
     generateAIAnswer = createGenerateAIAnswer(db);
-    cache = /* @__PURE__ */ new Map();
-    setInterval(() => {
-      const now = Date.now();
-      for (const [key, entry] of cache.entries()) {
-        if (now > entry.expiresAt) cache.delete(key);
-      }
-    }, 5 * 60 * 1e3);
+    authUserLazyKey = /* @__PURE__ */ Symbol("authUserLazy");
   }
 });
 
 // server/index.ts
+init_pg_rate_limit_store();
 import dotenv from "dotenv";
 import * as path from "path";
 import express from "express";
@@ -8418,6 +9844,7 @@ import rateLimit from "express-rate-limit";
 import { ipKeyGenerator } from "express-rate-limit";
 import compression from "compression";
 import * as fs from "fs";
+import pg from "pg";
 import cors from "cors";
 if (process.env.NODE_ENV !== "production" || process.env.LOAD_DOTENV === "true") {
   dotenv.config({
@@ -8767,7 +10194,7 @@ function setupApiHostSearchHints(app2) {
   });
 }
 function setupErrorHandler(app2) {
-  app2.use((err, _req, res, next) => {
+  app2.use((err, req, res, next) => {
     const error = err;
     const status = error.status || error.statusCode || 500;
     const message = status >= 500 && process.env.NODE_ENV === "production" ? "Internal Server Error" : error.message || "Internal Server Error";
@@ -8775,8 +10202,20 @@ function setupErrorHandler(app2) {
     if (res.headersSent) {
       return next(err);
     }
+    const origin = req.get("origin");
+    if (origin && isTrustedOrigin(origin)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+      res.setHeader("Vary", "Origin");
+    }
     return res.status(status).json({ message });
   });
+}
+function normalizeOtpIdentifier(input) {
+  const raw = String(input || "").trim().toLowerCase();
+  const digits = raw.replace(/\D/g, "");
+  if (digits.length >= 10) return `phone:${digits.slice(-10)}`;
+  return `id:${raw || "global"}`;
 }
 (async () => {
   const { registerRoutes: registerRoutes2 } = await Promise.resolve().then(() => (init_routes(), routes_exports));
@@ -8804,6 +10243,7 @@ function setupErrorHandler(app2) {
     }
     next();
   });
+  const sessionCookieDomain = (process.env.SESSION_COOKIE_DOMAIN || "").trim() || void 0;
   const sessionConfig = {
     secret: process.env.SESSION_SECRET || (isProduction ? (() => {
       throw new Error("SESSION_SECRET must be set in production");
@@ -8815,7 +10255,8 @@ function setupErrorHandler(app2) {
       // HTTPS only in production
       httpOnly: true,
       sameSite: "lax",
-      maxAge: 7 * 24 * 60 * 60 * 1e3
+      maxAge: 7 * 24 * 60 * 60 * 1e3,
+      ...isProduction && sessionCookieDomain ? { domain: sessionCookieDomain } : {}
     }
   };
   if (isProduction && process.env.DATABASE_URL) {
@@ -8823,7 +10264,8 @@ function setupErrorHandler(app2) {
     sessionConfig.store = new PgSession({
       conString: normalizeDatabaseUrl2(process.env.DATABASE_URL),
       tableName: "session",
-      createTableIfMissing: true
+      // Table is created by migrations/0011_distributed_rate_limits_and_session.sql
+      createTableIfMissing: false
     });
   }
   app.use(session(sessionConfig));
@@ -8832,36 +10274,49 @@ function setupErrorHandler(app2) {
   app.get("/api/health/version", (_req, res) => {
     res.json(getBackendVersion());
   });
+  const rateLimitPgSsl = process.env.PGSSL_NO_VERIFY === "true" && process.env.NODE_ENV !== "production" ? { rejectUnauthorized: false } : { rejectUnauthorized: true };
+  const rateLimitPool = typeof process.env.DATABASE_URL === "string" && process.env.DATABASE_URL.trim().length > 0 ? new pg.Pool({
+    connectionString: normalizeDatabaseUrl2(process.env.DATABASE_URL),
+    max: 5,
+    min: 0,
+    connectionTimeoutMillis: 8e3,
+    ssl: rateLimitPgSsl
+  }) : null;
+  const otpSendStore = rateLimitPool ? new PgRateLimitStore(rateLimitPool) : void 0;
+  const otpVerifyStore = rateLimitPool ? new PgRateLimitStore(rateLimitPool) : void 0;
+  const globalApiStore = rateLimitPool ? new PgRateLimitStore(rateLimitPool) : void 0;
   const otpSendLimiter = rateLimit({
     windowMs: 15 * 60 * 1e3,
-    max: 200,
+    max: 20,
     message: { message: "Too many requests, please try again later" },
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req) => {
-      return `${ipKeyGenerator(req.ip || "")}:${req.body?.identifier || "global"}`;
-    }
+      return `${ipKeyGenerator(req.ip || "")}:${normalizeOtpIdentifier(req.body?.identifier)}`;
+    },
+    ...otpSendStore ? { store: otpSendStore } : {}
   });
   const otpVerifyLimiter = rateLimit({
     windowMs: 15 * 60 * 1e3,
-    max: 300,
+    max: 30,
     message: { message: "Too many requests, please try again later" },
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req) => {
-      return `${ipKeyGenerator(req.ip || "")}:${req.body?.identifier || "global"}`;
-    }
+      return `${ipKeyGenerator(req.ip || "")}:${normalizeOtpIdentifier(req.body?.identifier)}`;
+    },
+    ...otpVerifyStore ? { store: otpVerifyStore } : {}
   });
   app.use("/api/auth/send-otp", otpSendLimiter);
   app.use("/api/auth/verify-otp", otpVerifyLimiter);
   const globalApiLimiter = rateLimit({
     windowMs: 60 * 1e3,
-    max: 300,
-    // 300 req/min per IP — plenty for normal use
+    max: 600,
     message: { message: "Too many requests, please slow down" },
     standardHeaders: true,
     legacyHeaders: false,
-    skip: (req) => req.path.startsWith("/api/auth/send-otp") || req.path.startsWith("/api/auth/verify-otp")
+    skip: (req) => req.path.startsWith("/api/auth/send-otp") || req.path.startsWith("/api/auth/verify-otp"),
+    ...globalApiStore ? { store: globalApiStore } : {}
   });
   app.use("/api", globalApiLimiter);
   const server = await registerRoutes2(app);
