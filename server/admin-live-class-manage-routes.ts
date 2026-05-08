@@ -375,6 +375,7 @@ export function registerAdminLiveClassManageRoutes({
   app.put("/api/admin/study-materials/:id", requireAdmin, async (req: Request, res: Response) => {
     try {
       const { title, description, fileUrl, fileType, isFree, sectionTitle, downloadAllowed } = req.body;
+      const existing = await db.query("SELECT course_id FROM study_materials WHERE id = $1 LIMIT 1", [req.params.id]);
       await db.query(`UPDATE study_materials SET title=$1, description=$2, file_url=$3, file_type=$4, is_free=$5, section_title=$6, download_allowed=$7 WHERE id=$8`, [
         title,
         description || "",
@@ -385,6 +386,9 @@ export function registerAdminLiveClassManageRoutes({
         downloadAllowed || false,
         req.params.id,
       ]);
+      if (existing.rows[0]?.course_id) {
+        await recomputeAllEnrollmentsProgressForCourse(existing.rows[0].course_id);
+      }
       res.json({ success: true });
     } catch {
       res.status(500).json({ message: "Failed to update material" });
@@ -424,6 +428,7 @@ export function registerAdminLiveClassManageRoutes({
       await db.query("DELETE FROM study_materials WHERE id = $1", [req.params.id]);
       if (courseId) {
         await db.query("UPDATE courses SET total_materials = (SELECT COUNT(*) FROM study_materials WHERE course_id = $1) WHERE id = $1", [courseId]);
+        await recomputeAllEnrollmentsProgressForCourse(courseId);
       }
       res.json({ success: true });
     } catch (err) {

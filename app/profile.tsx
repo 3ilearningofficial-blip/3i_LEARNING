@@ -99,6 +99,11 @@ export default function ProfileScreen() {
       input.onchange = async (e: any) => {
         const file = e.target.files?.[0];
         if (!file) return;
+        const MAX_BYTES = 8 * 1024 * 1024;
+        if (file.size > MAX_BYTES) {
+          Alert.alert("Image too large", "Please choose an image smaller than 8 MB.");
+          return;
+        }
         const reader = new FileReader();
         reader.onload = async (ev) => {
           const uri = ev.target?.result as string;
@@ -114,7 +119,7 @@ export default function ProfileScreen() {
     if (status !== "granted") { Alert.alert("Permission needed", "Please allow photo library access."); return; }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true, aspect: [1, 1], quality: 0.7, base64: true,
+      allowsEditing: true, aspect: [1, 1], quality: 0.5, base64: true,
     });
     if (!result.canceled && result.assets[0]) {
       const asset = result.assets[0];
@@ -125,12 +130,14 @@ export default function ProfileScreen() {
   };
 
   const savePhoto = async (uri: string) => {
+    const previousPhoto = photoUri || profile?.photo_url || null;
     setIsSavingPhoto(true);
     try {
-      await apiRequest("PUT", "/api/auth/profile", { name: user?.name, photoUrl: uri });
+      await apiRequest("PUT", "/api/auth/profile", { photoUrl: uri });
       updateUser({ photo_url: uri });
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (_e) {
+      setPhotoUri(previousPhoto);
       Alert.alert("Error", "Failed to save photo.");
     } finally {
       setIsSavingPhoto(false);

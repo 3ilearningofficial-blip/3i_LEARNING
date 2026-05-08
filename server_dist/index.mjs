@@ -1166,13 +1166,21 @@ function registerAuthRoutes({
       const user = await getAuthUser2(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const { name, dateOfBirth, email, photoUrl, password } = req.body;
-      if (!name) return res.status(400).json({ message: "Name is required" });
+      const normalizedName = typeof name === "string" ? name.trim() : void 0;
+      if (name !== void 0 && !normalizedName) return res.status(400).json({ message: "Name is required" });
+      if (normalizedName === void 0 && dateOfBirth === void 0 && email === void 0 && photoUrl === void 0 && !password) {
+        return res.status(400).json({ message: "No profile fields provided" });
+      }
       let passwordHash = null;
       if (password) {
         passwordHash = await hashPassword(password);
       }
-      const updates = ["name = $1"];
-      const params = [name];
+      const updates = [];
+      const params = [];
+      if (normalizedName !== void 0) {
+        params.push(normalizedName);
+        updates.push(`name = $${params.length}`);
+      }
       if (dateOfBirth !== void 0) {
         params.push(dateOfBirth || null);
         updates.push(`date_of_birth = $${params.length}`);
@@ -4015,13 +4023,19 @@ function registerAdminLectureRoutes({
   getR2Client,
   recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse2
 }) {
+  const normalizeSectionSegments = (value) => String(value || "").split("/").map((s) => s.trim()).filter(Boolean);
   const resolveLectureSectionTitle = (sectionTitle, subfolderTitle) => {
-    const main = String(sectionTitle || "").trim();
-    const sub = String(subfolderTitle || "").trim();
-    if (!main && !sub) return null;
-    if (!sub) return main || null;
-    if (!main) return sub;
-    return `${main} / ${sub}`;
+    const mainSeg = normalizeSectionSegments(sectionTitle);
+    const subSeg = normalizeSectionSegments(subfolderTitle);
+    if (!mainSeg.length && !subSeg.length) return null;
+    if (!subSeg.length) return mainSeg.join(" / ") || null;
+    if (!mainSeg.length) return subSeg.join(" / ");
+    const mainTail = mainSeg.slice(-subSeg.length).join(" / ");
+    const subPath = subSeg.join(" / ");
+    if (mainTail === subPath) return mainSeg.join(" / ");
+    const subHead = subSeg.slice(0, mainSeg.length).join(" / ");
+    if (subHead === mainSeg.join(" / ")) return subSeg.join(" / ");
+    return [...mainSeg, ...subSeg].join(" / ");
   };
   const inferLectureVideoType = (url) => {
     const u = (url || "").trim().toLowerCase();
@@ -4113,6 +4127,10 @@ function registerAdminLectureRoutes({
           req.params.id
         ]
       );
+      const row = await db2.query("SELECT course_id FROM lectures WHERE id = $1 LIMIT 1", [req.params.id]);
+      if (row.rows[0]?.course_id) {
+        await recomputeAllEnrollmentsProgressForCourse2(row.rows[0].course_id);
+      }
       res.json({ success: true });
     } catch {
       res.status(500).json({ message: "Failed to update lecture" });
@@ -4141,6 +4159,7 @@ function registerAdminLectureRoutes({
         "UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1",
         [lecture.course_id]
       );
+      await recomputeAllEnrollmentsProgressForCourse2(lecture.course_id);
       if (lecture.live_class_id) {
         try {
           await db2.query(
@@ -4624,7 +4643,8 @@ function registerAdminUsersAndContentRoutes({
   db: db2,
   requireAdmin,
   deleteDownloadsForUser: deleteDownloadsForUser2,
-  runInTransaction: runInTransaction2
+  runInTransaction: runInTransaction2,
+  recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse2
 }) {
   app2.post("/api/admin/study-materials", requireAdmin, async (req, res) => {
     try {
@@ -4658,6 +4678,7 @@ function registerAdminUsersAndContentRoutes({
       );
       if (parsedCourseId) {
         await db2.query("UPDATE courses SET total_materials = (SELECT COUNT(*) FROM study_materials WHERE course_id = $1) WHERE id = $1", [parsedCourseId]);
+        await recomputeAllEnrollmentsProgressForCourse2(parsedCourseId);
         const courseInfo = await db2.query("SELECT title FROM courses WHERE id = $1", [parsedCourseId]).catch(() => ({ rows: [] }));
         const courseTitle = String(courseInfo.rows[0]?.title || "your course");
         const recipients = await db2.query("SELECT user_id FROM enrollments WHERE course_id = $1", [parsedCourseId]).catch(() => ({ rows: [] }));
@@ -7414,6 +7435,7 @@ function registerAdminLiveClassManageRoutes({
   app2.put("/api/admin/study-materials/:id", requireAdmin, async (req, res) => {
     try {
       const { title, description, fileUrl, fileType, isFree, sectionTitle, downloadAllowed } = req.body;
+      const existing = await db2.query("SELECT course_id FROM study_materials WHERE id = $1 LIMIT 1", [req.params.id]);
       await db2.query(`UPDATE study_materials SET title=$1, description=$2, file_url=$3, file_type=$4, is_free=$5, section_title=$6, download_allowed=$7 WHERE id=$8`, [
         title,
         description || "",
@@ -7424,6 +7446,9 @@ function registerAdminLiveClassManageRoutes({
         downloadAllowed || false,
         req.params.id
       ]);
+      if (existing.rows[0]?.course_id) {
+        await recomputeAllEnrollmentsProgressForCourse2(existing.rows[0].course_id);
+      }
       res.json({ success: true });
     } catch {
       res.status(500).json({ message: "Failed to update material" });
@@ -7458,6 +7483,7 @@ function registerAdminLiveClassManageRoutes({
       await db2.query("DELETE FROM study_materials WHERE id = $1", [req.params.id]);
       if (courseId) {
         await db2.query("UPDATE courses SET total_materials = (SELECT COUNT(*) FROM study_materials WHERE course_id = $1) WHERE id = $1", [courseId]);
+        await recomputeAllEnrollmentsProgressForCourse2(courseId);
       }
       res.json({ success: true });
     } catch (err) {
@@ -9152,6 +9178,7 @@ async function updateCourseTestCounts(courseId) {
       practice_count = (SELECT COUNT(*) FROM tests WHERE course_id = $1 AND test_type = 'practice')
     WHERE id = $1
   `, [id]);
+  await recomputeAllEnrollmentsProgressForCourse(id);
 }
 async function updateCourseProgress(userId, courseId) {
   const cid = String(courseId);
@@ -9700,7 +9727,8 @@ async function registerRoutes(app2) {
     db,
     requireAdmin,
     deleteDownloadsForUser,
-    runInTransaction
+    runInTransaction,
+    recomputeAllEnrollmentsProgressForCourse
   });
   registerAdminNotificationRoutes({
     app: app2,

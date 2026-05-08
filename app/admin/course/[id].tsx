@@ -162,19 +162,32 @@ const LIVE_RECORDING_ROOT = DEFAULT_LIVE_RECORDING_SECTION;
 function splitLectureSectionPath(sectionTitle: unknown): { root: string; subfolder: string } {
   const raw = String(sectionTitle || "").trim();
   if (!raw) return { root: "", subfolder: "" };
-  if (raw === LIVE_RECORDING_ROOT) return { root: LIVE_RECORDING_ROOT, subfolder: "" };
-  const prefix = `${LIVE_RECORDING_ROOT} / `;
-  if (raw.startsWith(prefix)) return { root: LIVE_RECORDING_ROOT, subfolder: raw.slice(prefix.length).trim() };
-  return { root: raw, subfolder: "" };
+  const parts = raw
+    .split("/")
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (parts.length <= 1) return { root: parts[0] || "", subfolder: "" };
+  return { root: parts.slice(0, -1).join(" / "), subfolder: parts[parts.length - 1] || "" };
 }
 
 function composeLectureSectionPath(sectionTitle: unknown, subfolderTitle: unknown): string | null {
-  const root = String(sectionTitle || "").trim();
-  const subfolder = String(subfolderTitle || "").trim();
-  if (!root && !subfolder) return null;
-  if (!subfolder) return root || null;
-  if (!root) return subfolder;
-  return `${root} / ${subfolder}`;
+  const mainParts = String(sectionTitle || "")
+    .split("/")
+    .map((p) => p.trim())
+    .filter(Boolean);
+  const subParts = String(subfolderTitle || "")
+    .split("/")
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (!mainParts.length && !subParts.length) return null;
+  if (!subParts.length) return mainParts.join(" / ") || null;
+  if (!mainParts.length) return subParts.join(" / ");
+
+  const mainPath = mainParts.join(" / ");
+  const subPath = subParts.join(" / ");
+  if (mainPath.endsWith(` / ${subPath}`) || mainPath === subPath) return mainPath;
+  if (subPath.startsWith(`${mainPath} /`)) return subPath;
+  return [...mainParts, ...subParts].join(" / ");
 }
 
 export default function AdminCourseScreen() {
@@ -2319,15 +2332,16 @@ export default function AdminCourseScreen() {
                         <Pressable
                           style={[styles.deleteItemBtn, { backgroundColor: "#EEF2FF", marginRight: 4 }]}
                           onPress={() => {
-                            const parts = splitLectureSectionPath(lecture.section_title);
                             setFolderEditLecture({
                               ...lecture,
                               durationMinutes: String(lecture.duration_minutes || 0),
                               orderIndex: String(lecture.order_index || 0),
                               videoUrl: lecture.video_url || "",
-                              sectionTitle: parts.root || "",
-                              section_title: parts.root || "",
-                              lecture_subfolder_title: parts.subfolder || "",
+                              // Inside folder edit, keep the current folder path as base.
+                              // Subfolder input should append relative path from this location.
+                              sectionTitle: String(lecture.section_title || ""),
+                              section_title: String(lecture.section_title || ""),
+                              lecture_subfolder_title: "",
                             });
                           }}
                         >

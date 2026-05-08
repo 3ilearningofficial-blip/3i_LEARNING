@@ -343,6 +343,7 @@ async function updateCourseTestCounts(courseId: number | string) {
       practice_count = (SELECT COUNT(*) FROM tests WHERE course_id = $1 AND test_type = 'practice')
     WHERE id = $1
   `, [id]);
+  await recomputeAllEnrollmentsProgressForCourse(id);
 }
 
 // Recompute course progress for a user based on ALL content: lectures + tests + live class recordings
@@ -964,6 +965,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     requireAdmin,
     deleteDownloadsForUser,
     runInTransaction,
+    recomputeAllEnrollmentsProgressForCourse,
   });
 
   registerAdminNotificationRoutes({

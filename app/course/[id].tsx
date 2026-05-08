@@ -685,29 +685,25 @@ setTimeout(function() {
         return;
       }
       if (attempt) {
-        setOpenFolder(null);
-        setTimeout(() => {
-          router.push({
-            pathname: "/test-result/[id]",
-            params: {
-              id: String(test.id),
-              score: String(attempt.score ?? 0),
-              totalMarks: String(attempt.total_marks ?? 0),
-              correct: String(attempt.correct ?? 0),
-              incorrect: String(attempt.incorrect ?? 0),
-              totalAttempts: String(attempt.attempted ?? 0),
-              totalQuestions: String(test.total_questions),
-              percentage: String(attempt.percentage ?? "0"),
-              weakTopics: "",
-              attemptId: String(attempt.attempt_id ?? ""),
-              testType: test.test_type ?? "",
-              timeTakenSeconds: String(attempt.time_taken_seconds ?? 0),
-            },
-          });
-        }, 50);
+        router.push({
+          pathname: "/test-result/[id]",
+          params: {
+            id: String(test.id),
+            score: String(attempt.score ?? 0),
+            totalMarks: String(attempt.total_marks ?? 0),
+            correct: String(attempt.correct ?? 0),
+            incorrect: String(attempt.incorrect ?? 0),
+            totalAttempts: String(attempt.attempted ?? 0),
+            totalQuestions: String(test.total_questions),
+            percentage: String(attempt.percentage ?? "0"),
+            weakTopics: "",
+            attemptId: String(attempt.attempt_id ?? ""),
+            testType: test.test_type ?? "",
+            timeTakenSeconds: String(attempt.time_taken_seconds ?? 0),
+          },
+        });
       } else {
-        setOpenFolder(null);
-        setTimeout(() => router.push(`/test/${test.id}`), 50);
+        router.push(`/test/${test.id}`);
       }
     };
     return (
@@ -1022,7 +1018,7 @@ setTimeout(function() {
             </View>
 
             {/* Price */}
-            {!course.isEnrolled && (
+            {!isAdmin && !course.isEnrolled && (
               <View style={[styles.aboutSection, { backgroundColor: Colors.light.secondary }]}>
                 <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
                   <View>
@@ -1109,15 +1105,11 @@ setTimeout(function() {
                         const isLiveFolder = folderKey === "Live Class Recordings";
                         const folderColor = isLiveFolder ? "#DC2626" : "#1A56DB";
                         const folderBg = isLiveFolder ? "#FEE2E2" : "#EEF2FF";
-                        const isLocked = !course.isEnrolled;
+                        const isLocked = !isAdmin && !course.isEnrolled;
                         return (
                           <Pressable key={folderKey}
                             style={[styles.testSectionCard, { borderLeftColor: folderColor }]}
                             onPress={() => {
-                              if (!isAdmin && !course.isEnrolled) {
-                                promptLockedCourseContent();
-                                return;
-                              }
                               setOpenFolder({ name: folderName, type: "lectures", color: folderColor, items: lectures });
                             }}
                           >
@@ -1199,16 +1191,12 @@ setTimeout(function() {
                   ]);
                   return Array.from(testFolderNames).map((folderName: any) => {
                     const folderTests = (course.tests || []).filter((t: any) => t.folder_name === folderName);
-                    const isLocked = !course.isEnrolled;
+                    const isLocked = !isAdmin && !course.isEnrolled;
                     const testFolderColor = "#16A34A";
                     return (
                       <Pressable key={`folder_${folderName}`}
                         style={[styles.testSectionCard, { borderLeftColor: testFolderColor }]}
                         onPress={() => {
-                          if (!isAdmin && !course.isEnrolled) {
-                            promptLockedCourseContent();
-                            return;
-                          }
                           setFolderTestTypeFilter("all");
                           setOpenFolder({ name: folderName, type: "tests", color: testFolderColor, items: folderTests });
                         }}
@@ -1234,10 +1222,6 @@ setTimeout(function() {
                     <Pressable key={section.key}
                       style={[styles.testSectionCard, { borderLeftColor: section.color }]}
                       onPress={() => {
-                        if (!isAdmin && !course.isEnrolled) {
-                          promptLockedCourseContent();
-                          return;
-                        }
                         setFolderTestTypeFilter("all");
                         setOpenFolder({ name: section.label, type: "tests", color: section.color, items: sectionTests });
                       }}
@@ -1329,15 +1313,11 @@ setTimeout(function() {
                       {folders.map(([folderKey, materials]) => {
                         const folderName = folderKey;
                         const folderColor = "#DC2626";
-                        const isLocked = !course.isEnrolled;
+                        const isLocked = !isAdmin && !course.isEnrolled;
                         return (
                           <Pressable key={folderKey}
                             style={[styles.testSectionCard, { borderLeftColor: folderColor }]}
                             onPress={() => {
-                              if (!isAdmin && !course.isEnrolled) {
-                                promptLockedCourseContent();
-                                return;
-                              }
                               setOpenFolder({ name: folderName, type: "materials", color: folderColor, items: materials });
                             }}
                           >
@@ -1582,7 +1562,7 @@ setTimeout(function() {
         </View>
       )}
 
-      {!course.isEnrolled && !enrollSuccess && (
+      {!isAdmin && !course.isEnrolled && !enrollSuccess && (
         <View style={[styles.enrollBar, { paddingBottom: bottomPadding + 12 }]}>
           {!!enrollError && (
             <View style={{ backgroundColor: "#FEE2E2", borderRadius: 8, padding: 8, marginBottom: 8, flexDirection: "row", alignItems: "center", gap: 6 }}>
@@ -1760,7 +1740,7 @@ setTimeout(function() {
               <Text style={{ fontSize: 17, fontFamily: "Inter_700Bold", color: "#fff" }} numberOfLines={1}>{openFolder?.name}</Text>
               <Text style={{ fontSize: 12, color: "rgba(255,255,255,0.6)", fontFamily: "Inter_400Regular" }}>{openFolder?.items.length} {openFolder?.type === "lectures" ? "videos" : openFolder?.type === "materials" ? "files" : openFolder?.type === "tests" ? "tests" : "classes"}</Text>
             </View>
-            {course && !course.isEnrolled && (
+            {course && !isAdmin && !course.isEnrolled && (
               <View style={{ flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "rgba(239,68,68,0.2)", borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 }}>
                 <Ionicons name="lock-closed" size={14} color="#FCA5A5" />
                 <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#FCA5A5" }}>Locked</Text>
@@ -1768,7 +1748,7 @@ setTimeout(function() {
             )}
           </LinearGradient>
           {/* Lock banner for non-enrolled */}
-          {course && !course.isEnrolled && (
+          {course && !isAdmin && !course.isEnrolled && (
             <View style={{ backgroundColor: "#FEF3C7", flexDirection: "row", alignItems: "center", gap: 10, padding: 12, borderBottomWidth: 1, borderBottomColor: "#FDE68A" }}>
               <Ionicons name="lock-closed" size={18} color="#D97706" />
               <Text style={{ flex: 1, fontSize: 13, fontFamily: "Inter_500Medium", color: "#92400E" }}>
@@ -1799,7 +1779,7 @@ setTimeout(function() {
             })}
             {openFolder?.type === "lectures" &&
               openFolder.items.filter((l: any) => l.section_title === openFolder.name).map((lecture: any, idx: number) => {
-              const isLocked = course && !course.isEnrolled;
+              const isLocked = !!(course && !isAdmin && !course.isEnrolled);
               return (
                 <View key={lecture.id} style={styles.lectureItem}>
                   <Pressable style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 12 }} onPress={() => {
@@ -1807,7 +1787,7 @@ setTimeout(function() {
                       promptLockedCourseContent();
                       return;
                     }
-                    setOpenFolder(null); handleLecture(lecture);
+                    handleLecture(lecture);
                   }}>
                     <View style={[styles.lectureNumber, lecture.isCompleted && styles.lectureNumberDone]}>
                       {lecture.isCompleted ? <Ionicons name="checkmark" size={16} color="#fff" /> : <Text style={styles.lectureNumberText}>{idx + 1}</Text>}
@@ -1855,7 +1835,7 @@ setTimeout(function() {
                         promptLockedCourseContent();
                         return;
                       }
-                      setOpenFolder(null); router.push(`/material/${mat.id}`);
+                      router.push(`/material/${mat.id}`);
                     }}>
                     <View style={styles.materialIcon}><Ionicons name={!canAccess ? "lock-closed" : mat.file_type === "video" ? "videocam" : mat.file_type === "link" ? "link" : "document-text"} size={22} color={!canAccess ? Colors.light.textMuted : "#DC2626"} /></View>
                     <View style={styles.materialInfo}>
@@ -1921,7 +1901,6 @@ setTimeout(function() {
             })()}
             {openFolder?.type === "live" && openFolder.items.map((lc: any) => (              <Pressable key={lc.id} style={({ pressed }) => [styles.liveClassItem, pressed && { opacity: 0.85 }]}
                 onPress={() => {
-                  setOpenFolder(null);
                   router.push({
                     pathname: "/live-class/[id]",
                     params: {

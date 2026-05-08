@@ -12,6 +12,7 @@ type RegisterAdminUsersAndContentRoutesDeps = {
   requireAdmin: (req: Request, res: Response, next: () => void) => any;
   deleteDownloadsForUser: (userId: number, courseId?: number) => Promise<void>;
   runInTransaction: <T>(fn: (tx: DbClient) => Promise<T>) => Promise<T>;
+  recomputeAllEnrollmentsProgressForCourse: (courseId: number | string) => Promise<void>;
 };
 
 export function registerAdminUsersAndContentRoutes({
@@ -20,6 +21,7 @@ export function registerAdminUsersAndContentRoutes({
   requireAdmin,
   deleteDownloadsForUser,
   runInTransaction,
+  recomputeAllEnrollmentsProgressForCourse,
 }: RegisterAdminUsersAndContentRoutesDeps): void {
   app.post("/api/admin/study-materials", requireAdmin, async (req: Request, res: Response) => {
     try {
@@ -53,6 +55,7 @@ export function registerAdminUsersAndContentRoutes({
       );
       if (parsedCourseId) {
         await db.query("UPDATE courses SET total_materials = (SELECT COUNT(*) FROM study_materials WHERE course_id = $1) WHERE id = $1", [parsedCourseId]);
+        await recomputeAllEnrollmentsProgressForCourse(parsedCourseId);
         const courseInfo = await db.query("SELECT title FROM courses WHERE id = $1", [parsedCourseId]).catch(() => ({ rows: [] as any[] }));
         const courseTitle = String(courseInfo.rows[0]?.title || "your course");
         const recipients = await db.query("SELECT user_id FROM enrollments WHERE course_id = $1", [parsedCourseId]).catch(() => ({ rows: [] as any[] }));

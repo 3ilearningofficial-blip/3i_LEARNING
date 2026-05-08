@@ -541,15 +541,29 @@ export function registerAuthRoutes({
       const user = await getAuthUser(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const { name, dateOfBirth, email, photoUrl, password } = req.body;
-      if (!name) return res.status(400).json({ message: "Name is required" });
+      const normalizedName = typeof name === "string" ? name.trim() : undefined;
+      if (name !== undefined && !normalizedName) return res.status(400).json({ message: "Name is required" });
+      if (
+        normalizedName === undefined &&
+        dateOfBirth === undefined &&
+        email === undefined &&
+        photoUrl === undefined &&
+        !password
+      ) {
+        return res.status(400).json({ message: "No profile fields provided" });
+      }
 
       let passwordHash: string | null = null;
       if (password) {
         passwordHash = await hashPassword(password);
       }
 
-      const updates: string[] = ["name = $1"];
-      const params: unknown[] = [name];
+      const updates: string[] = [];
+      const params: unknown[] = [];
+      if (normalizedName !== undefined) {
+        params.push(normalizedName);
+        updates.push(`name = $${params.length}`);
+      }
       if (dateOfBirth !== undefined) { params.push(dateOfBirth || null); updates.push(`date_of_birth = $${params.length}`); }
       if (email !== undefined) { params.push(email || null); updates.push(`email = COALESCE($${params.length}, email)`); }
       if (photoUrl !== undefined) { params.push(photoUrl || null); updates.push(`photo_url = $${params.length}`); }

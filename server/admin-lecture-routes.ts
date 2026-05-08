@@ -20,16 +20,32 @@ export function registerAdminLectureRoutes({
   getR2Client,
   recomputeAllEnrollmentsProgressForCourse,
 }: RegisterAdminLectureRoutesDeps): void {
+  const normalizeSectionSegments = (value: unknown): string[] =>
+    String(value || "")
+      .split("/")
+      .map((s) => s.trim())
+      .filter(Boolean);
+
   const resolveLectureSectionTitle = (
     sectionTitle: unknown,
     subfolderTitle: unknown,
   ): string | null => {
-    const main = String(sectionTitle || "").trim();
-    const sub = String(subfolderTitle || "").trim();
-    if (!main && !sub) return null;
-    if (!sub) return main || null;
-    if (!main) return sub;
-    return `${main} / ${sub}`;
+    const mainSeg = normalizeSectionSegments(sectionTitle);
+    const subSeg = normalizeSectionSegments(subfolderTitle);
+    if (!mainSeg.length && !subSeg.length) return null;
+    if (!subSeg.length) return mainSeg.join(" / ") || null;
+    if (!mainSeg.length) return subSeg.join(" / ");
+
+    // If subfolder is same as the tail of main path, keep main (avoid duplicate nesting).
+    const mainTail = mainSeg.slice(-subSeg.length).join(" / ");
+    const subPath = subSeg.join(" / ");
+    if (mainTail === subPath) return mainSeg.join(" / ");
+
+    // If subfolder contains the full main path, trust it as full absolute path.
+    const subHead = subSeg.slice(0, mainSeg.length).join(" / ");
+    if (subHead === mainSeg.join(" / ")) return subSeg.join(" / ");
+
+    return [...mainSeg, ...subSeg].join(" / ");
   };
 
   const inferLectureVideoType = (url: string): string => {
@@ -125,6 +141,10 @@ export function registerAdminLectureRoutes({
           req.params.id,
         ]
       );
+      const row = await db.query("SELECT course_id FROM lectures WHERE id = $1 LIMIT 1", [req.params.id]);
+      if (row.rows[0]?.course_id) {
+        await recomputeAllEnrollmentsProgressForCourse(row.rows[0].course_id);
+      }
       res.json({ success: true });
     } catch {
       res.status(500).json({ message: "Failed to update lecture" });
@@ -164,6 +184,7 @@ export function registerAdminLectureRoutes({
         "UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1",
         [lecture.course_id],
       );
+      await recomputeAllEnrollmentsProgressForCourse(lecture.course_id);
 
       // 2) If this lecture was created from a live class, tombstone the live class so
       //    the async VOD finalize loop / archive sweep does not re-insert it.

@@ -80,6 +80,21 @@ function resolveWelcomeMediaUrl(raw: string, apiBase: string): string {
   }
 }
 
+function extractMediaKey(urlLike: string, apiBase: string): string | null {
+  const normalized = normalizeWelcomeImageUrl(urlLike);
+  if (!normalized) return null;
+  try {
+    const abs = /^https?:\/\//i.test(normalized)
+      ? new URL(normalized)
+      : new URL(resolveWelcomeMediaUrl(normalized, apiBase));
+    const match = abs.pathname.match(/\/api\/media\/(.+)$/i);
+    if (!match?.[1]) return null;
+    return decodeURIComponent(match[1]).replace(/^\/+/, "");
+  } catch {
+    return null;
+  }
+}
+
 function PankajSirPhoto({ uriRaw, extraStyle }: { uriRaw: string; extraStyle?: StyleProp<ImageStyle> }) {
   const normalized = React.useMemo(() => normalizeWelcomeImageUrl(uriRaw), [uriRaw]);
   const [failed, setFailed] = React.useState(false);
@@ -308,6 +323,36 @@ export default function WelcomeScreen() {
     () => resolveWelcomeMediaUrl(pankajPhotoUrl, apiOrigin),
     [pankajPhotoUrl, apiOrigin]
   );
+  const pankajMediaKey = React.useMemo(
+    () => extractMediaKey(pankajPhotoResolved, apiOrigin),
+    [pankajPhotoResolved, apiOrigin]
+  );
+  const { data: pankajMediaToken } = useQuery<{ token?: string }>({
+    queryKey: ["/api/media-token", "welcome-pankaj", pankajMediaKey, user?.id || "anon"],
+    queryFn: async () => {
+      if (!pankajMediaKey) return {};
+      const url = new URL("/api/media-token", getApiUrl());
+      const res = await authFetch(url.toString(), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fileKey: pankajMediaKey }),
+      });
+      if (!res.ok) return {};
+      return res.json();
+    },
+    enabled: !!pankajMediaKey && !!user?.id,
+    staleTime: 5 * 60 * 1000,
+  });
+  const pankajPhotoWithToken = React.useMemo(() => {
+    if (!pankajPhotoResolved || !pankajMediaToken?.token) return pankajPhotoResolved;
+    try {
+      const u = new URL(pankajPhotoResolved);
+      u.searchParams.set("token", pankajMediaToken.token);
+      return u.toString();
+    } catch {
+      return pankajPhotoResolved;
+    }
+  }, [pankajPhotoResolved, pankajMediaToken?.token]);
 
   const myCourseTitle = s("welcome_my_course_title", "My Courses");
   const myCourseIntro = s("welcome_my_course_intro", "");
@@ -482,7 +527,7 @@ export default function WelcomeScreen() {
               >
                 <View style={[styles.pankajRow, styles.pankajRowStacked]}>
                   {!!pankajPhotoUrl.trim() ? (
-                    <PankajSirPhoto uriRaw={pankajPhotoResolved} extraStyle={styles.pankajPhotoMobile} />
+                    <PankajSirPhoto uriRaw={pankajPhotoWithToken} extraStyle={styles.pankajPhotoMobile} />
                   ) : (
                     <View style={[styles.pankajPhotoPlaceholder, styles.pankajPhotoMobile]}>
                       <Ionicons name="person" size={42} color={Colors.light.textMuted} />
@@ -498,7 +543,7 @@ export default function WelcomeScreen() {
             ) : (
               <View style={[styles.pankajRow, !isWide && styles.pankajRowStacked]}>
                 {!!pankajPhotoUrl.trim() ? (
-                  <PankajSirPhoto uriRaw={pankajPhotoResolved} extraStyle={!isWide ? styles.pankajPhotoMobile : undefined} />
+                  <PankajSirPhoto uriRaw={pankajPhotoWithToken} extraStyle={!isWide ? styles.pankajPhotoMobile : undefined} />
                 ) : (
                   <View style={[styles.pankajPhotoPlaceholder, !isWide && styles.pankajPhotoMobile]}>
                     <Ionicons name="person" size={42} color={Colors.light.textMuted} />
