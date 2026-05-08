@@ -129,12 +129,7 @@ const TEST_SERIES_SECTIONS = [
 
 export default function CourseDetailScreen() {
   useScreenProtection(true);
-  const { id, folderName, folderType, folderColor } = useLocalSearchParams<{
-    id: string;
-    folderName?: string;
-    folderType?: "lectures" | "materials" | "live" | "tests";
-    folderColor?: string;
-  }>();
+  const { id } = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
   const { user, isAdmin } = useAuth();
@@ -142,11 +137,8 @@ export default function CourseDetailScreen() {
   const [activeTab, setActiveTab] = useState("About");
   const [expandedSection, setExpandedSection] = useState<string | null>(null);
   const [expandedTestSection, setExpandedTestSection] = useState<string | null>(null);
-  // Folder modal
-  const [openFolder, setOpenFolder] = useState<{ name: string; type: "lectures" | "materials" | "live" | "tests"; color: string; items: any[] } | null>(null);
   const [paymentWebViewHtml, setPaymentWebViewHtml] = useState<string | null>(null);
   const [testTypeFilter, setTestTypeFilter] = useState<string>("all");
-  const [folderTestTypeFilter, setFolderTestTypeFilter] = useState<string>("all");
   const [isPaymentPending, setIsPaymentPending] = useState(false);
 
   // After Razorpay redirect (iOS / Android web), show result and clean URL
@@ -353,47 +345,17 @@ export default function CourseDetailScreen() {
   const LIVE_ROOT = DEFAULT_LIVE_RECORDING_SECTION;
   const getLectureRootName = (name: string) =>
     name.startsWith(`${LIVE_ROOT} /`) ? LIVE_ROOT : name;
-  const getDirectLectureSubfolders = (parentName: string): string[] => {
-    const prefix = `${parentName} / `;
-    const fromLectures = (course?.lectures || [])
-      .map((l: any) => l.section_title)
-      .filter((n: any) => typeof n === "string" && n.startsWith(prefix))
-      .map((n: string) => {
-        const rest = n.slice(prefix.length);
-        const head = rest.split(" / ")[0]?.trim();
-        return head ? `${parentName} / ${head}` : "";
-      })
-      .filter(Boolean);
-    const fromFolders = (courseFolders || [])
-      .filter((f: any) => f.type === "lecture")
-      .map((f: any) => f.name)
-      .filter((n: any) => typeof n === "string" && n.startsWith(prefix))
-      .map((n: string) => {
-        const rest = n.slice(prefix.length);
-        const head = rest.split(" / ")[0]?.trim();
-        return head ? `${parentName} / ${head}` : "";
-      })
-      .filter(Boolean);
-    return [...new Set([...fromLectures, ...fromFolders])];
-  };
 
-  const openFolderView = (next: { name: string; type: "lectures" | "materials" | "live" | "tests"; color: string; items: any[] }) => {
-    setOpenFolder(next);
-    router.setParams({
-      id: String(id),
-      folderName: next.name,
-      folderType: next.type,
-      folderColor: next.color,
-    } as any);
-  };
-
-  const closeFolderView = () => {
-    setOpenFolder(null);
-    router.setParams({
-      id: String(id),
-      folderName: undefined,
-      folderType: undefined,
-      folderColor: undefined,
+  /** Push to the dedicated folder route so back navigation through nested content works correctly on Android. */
+  const openFolderView = (next: { name: string; type: "lectures" | "materials" | "live" | "tests"; color: string }) => {
+    router.push({
+      pathname: "/course-folder/[id]/[type]/[name]",
+      params: {
+        id: String(id),
+        type: next.type,
+        name: encodeURIComponent(next.name),
+        color: next.color,
+      },
     } as any);
   };
 
@@ -613,40 +575,6 @@ setTimeout(function() {
       setIsPaymentPending(false);
     }
   };
-
-  useEffect(() => {
-    if (!course) return;
-    const name = String(folderName || "").trim();
-    const type = String(folderType || "").trim() as "lectures" | "materials" | "live" | "tests";
-    const color = String(folderColor || "").trim() || Colors.light.primary;
-    if (!name || !type) {
-      if (openFolder) setOpenFolder(null);
-      return;
-    }
-    let items: any[] = [];
-    if (type === "lectures") {
-      items = (course.lectures || []).filter((l: any) => {
-        const sec = String(l.section_title || "");
-        return sec === name || sec.startsWith(`${name} /`);
-      });
-    } else if (type === "materials") {
-      items = (course.materials || []).filter((m: any) => String(m.section_title || "") === name);
-    } else if (type === "live") {
-      items = (liveClassesForTab || []).filter((lc: any) => String((lc as any).section_title || "") === name);
-    } else if (type === "tests") {
-      const tests = course.tests || [];
-      const byFolder = tests.filter((t: any) => String(t.folder_name || "") === name);
-      if (byFolder.length > 0) items = byFolder;
-      else {
-        const sectionKey = TEST_SERIES_SECTIONS.find((s) => s.label === name)?.key;
-        items = sectionKey ? tests.filter((t: any) => t.test_type === sectionKey && !t.folder_name) : [];
-      }
-    }
-    setOpenFolder((prev) => {
-      if (prev && prev.name === name && prev.type === type && prev.items.length === items.length) return prev;
-      return { name, type, color, items };
-    });
-  }, [course, liveClassesForTab, folderName, folderType, folderColor]);
 
   const handleEnroll = () => {
     if (!user) { router.push("/(auth)/login"); return; }
@@ -1169,7 +1097,7 @@ setTimeout(function() {
                           <Pressable key={folderKey}
                             style={[styles.testSectionCard, { borderLeftColor: folderColor }]}
                             onPress={() => {
-                              openFolderView({ name: folderName, type: "lectures", color: folderColor, items: lectures });
+                              openFolderView({ name: folderName, type: "lectures", color: folderColor });
                             }}
                           >
                             <View style={[styles.testSectionIconWrap, { backgroundColor: folderBg }]}>
@@ -1256,8 +1184,7 @@ setTimeout(function() {
                       <Pressable key={`folder_${folderName}`}
                         style={[styles.testSectionCard, { borderLeftColor: testFolderColor }]}
                         onPress={() => {
-                          setFolderTestTypeFilter("all");
-                          openFolderView({ name: folderName, type: "tests", color: testFolderColor, items: folderTests });
+                          openFolderView({ name: folderName, type: "tests", color: testFolderColor });
                         }}
                       >
                         <View style={[styles.testSectionIconWrap, { backgroundColor: testFolderColor + "18" }]}>
@@ -1281,8 +1208,7 @@ setTimeout(function() {
                     <Pressable key={section.key}
                       style={[styles.testSectionCard, { borderLeftColor: section.color }]}
                       onPress={() => {
-                        setFolderTestTypeFilter("all");
-                        openFolderView({ name: section.label, type: "tests", color: section.color, items: sectionTests });
+                        openFolderView({ name: section.label, type: "tests", color: section.color });
                       }}
                     >
                       <View style={[styles.testSectionIconWrap, { backgroundColor: section.color + "18" }]}>
@@ -1377,7 +1303,7 @@ setTimeout(function() {
                           <Pressable key={folderKey}
                             style={[styles.testSectionCard, { borderLeftColor: folderColor }]}
                             onPress={() => {
-                              openFolderView({ name: folderName, type: "materials", color: folderColor, items: materials });
+                              openFolderView({ name: folderName, type: "materials", color: folderColor });
                             }}
                           >
                             <View style={[styles.testSectionIconWrap, { backgroundColor: "#FEE2E2" }]}>
@@ -1477,7 +1403,7 @@ setTimeout(function() {
                               });
                               return;
                             }
-                            openFolderView({ name: folderName!, type: "live", color: "#DC2626", items: classes });
+                            openFolderView({ name: folderName!, type: "live", color: "#DC2626" });
                           }}
                         >
                           <View style={[styles.folderIconBox, { backgroundColor: "#FEE2E2" }]}>
@@ -1773,217 +1699,6 @@ setTimeout(function() {
         </Pressable>
       </Modal>
 
-      {/* Folder Content Modal */}
-      <Modal visible={!!openFolder} animationType="slide" onRequestClose={closeFolderView}>
-        <View style={{ flex: 1, backgroundColor: Colors.light.background }}>
-          {/* Header */}
-          <LinearGradient colors={["#0A1628", "#1A2E50"]} style={{ paddingTop: topPadding + 8, paddingHorizontal: 16, paddingBottom: 14, flexDirection: "row", alignItems: "center", gap: 12 }}>
-            <Pressable
-              style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" }}
-              onPress={() => {
-                if (openFolder?.type === "lectures" && openFolder.name.includes(" / ")) {
-                  const parent = openFolder.name.split(" / ").slice(0, -1).join(" / ");
-                  const parentItems = (course?.lectures || []).filter((l: any) => {
-                    const sec = typeof l.section_title === "string" ? l.section_title : "";
-                    return sec === parent || sec.startsWith(`${parent} /`);
-                  });
-                  openFolderView({ name: parent, type: "lectures", color: openFolder.color, items: parentItems });
-                  return;
-                }
-                closeFolderView();
-              }}
-            >
-              <Ionicons name="arrow-back" size={20} color="#fff" />
-            </Pressable>
-            <View style={{ flex: 1 }}>
-              <Text style={{ fontSize: 17, fontFamily: "Inter_700Bold", color: "#fff" }} numberOfLines={1}>{openFolder?.name}</Text>
-              <Text style={{ fontSize: 12, color: "rgba(255,255,255,0.6)", fontFamily: "Inter_400Regular" }}>{openFolder?.items.length} {openFolder?.type === "lectures" ? "videos" : openFolder?.type === "materials" ? "files" : openFolder?.type === "tests" ? "tests" : "classes"}</Text>
-            </View>
-            {course && !isAdmin && !course.isEnrolled && (
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "rgba(239,68,68,0.2)", borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 }}>
-                <Ionicons name="lock-closed" size={14} color="#FCA5A5" />
-                <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#FCA5A5" }}>Locked</Text>
-              </View>
-            )}
-          </LinearGradient>
-          {/* Lock banner for non-enrolled */}
-          {course && !isAdmin && !course.isEnrolled && (
-            <View style={{ backgroundColor: "#FEF3C7", flexDirection: "row", alignItems: "center", gap: 10, padding: 12, borderBottomWidth: 1, borderBottomColor: "#FDE68A" }}>
-              <Ionicons name="lock-closed" size={18} color="#D97706" />
-              <Text style={{ flex: 1, fontSize: 13, fontFamily: "Inter_500Medium", color: "#92400E" }}>
-                Enroll in this course to access all content
-              </Text>
-            </View>
-          )}
-          {/* Content */}
-          <ScrollView contentContainerStyle={{ paddingBottom: bottomPadding + 20 }}>
-            {openFolder?.type === "lectures" && getDirectLectureSubfolders(openFolder.name).map((childName) => {
-              const childItems = (course?.lectures || []).filter((l: any) => l.section_title === childName);
-              return (
-                <Pressable
-                  key={childName}
-                  style={[styles.testSectionCard, { marginHorizontal: 12, marginTop: 12, borderLeftColor: openFolder.color }]}
-                  onPress={() => openFolderView({ name: childName, type: "lectures", color: openFolder.color, items: childItems })}
-                >
-                  <View style={[styles.testSectionIconWrap, { backgroundColor: openFolder.color + "18" }]}>
-                    <Ionicons name="folder" size={22} color={openFolder.color} />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.testSectionTitle}>{childName.replace(`${openFolder.name} / `, "")}</Text>
-                    <Text style={styles.testSectionCount}>{childItems.length} {childItems.length === 1 ? "video" : "videos"}</Text>
-                  </View>
-                  <Ionicons name="chevron-forward" size={20} color={Colors.light.textMuted} />
-                </Pressable>
-              );
-            })}
-            {openFolder?.type === "lectures" &&
-              openFolder.items.filter((l: any) => l.section_title === openFolder.name).map((lecture: any, idx: number) => {
-              const isLocked = !!(course && !isAdmin && !course.isEnrolled);
-              return (
-                <View key={lecture.id} style={styles.lectureItem}>
-                  <Pressable style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 12 }} onPress={() => {
-                    if (isLocked) {
-                      promptLockedCourseContent();
-                      return;
-                    }
-                    handleLecture(lecture);
-                  }}>
-                    <View style={[styles.lectureNumber, lecture.isCompleted && styles.lectureNumberDone]}>
-                      {lecture.isCompleted ? <Ionicons name="checkmark" size={16} color="#fff" /> : <Text style={styles.lectureNumberText}>{idx + 1}</Text>}
-                    </View>
-                    <View style={styles.lectureInfo}>
-                      <Text style={styles.lectureTitle}>{lecture.title}</Text>
-                      <View style={styles.lectureMetaRow}>
-                        <Ionicons name="time-outline" size={12} color={Colors.light.textMuted} />
-                        <Text style={styles.lectureMeta}>
-                          {typeof lecture.section_title === "string" &&
-                          lecture.section_title.startsWith("Live Class Recordings") &&
-                          lecture.created_at
-                            ? `${new Date(Number(lecture.created_at)).toLocaleDateString(undefined, {
-                                year: "numeric",
-                                month: "short",
-                                day: "numeric",
-                              })} · ${lecture.duration_minutes > 0 ? `${lecture.duration_minutes} min` : "—"}`
-                            : lecture.duration_minutes > 0
-                              ? `${lecture.duration_minutes} min`
-                              : "—"}
-                        </Text>
-                        {lecture.is_free_preview && <View style={styles.previewBadge}><Text style={styles.previewBadgeText}>Preview</Text></View>}
-                      </View>
-                    </View>
-                    {isLocked ? <Ionicons name="lock-closed" size={18} color={Colors.light.textMuted} /> : <Ionicons name="play-circle" size={22} color={openFolder.color} />}
-                  </Pressable>
-                  <DownloadButton
-                    itemType="lecture"
-                    itemId={lecture.id}
-                    downloadAllowed={lecture.download_allowed || false}
-                    isEnrolled={course.isEnrolled}
-                    title={lecture.title || 'Lecture'}
-                    fileType={(lecture as { pdf_url?: string; video_url?: string }).pdf_url && !(lecture as { video_url?: string }).video_url ? 'pdf' : 'video'}
-                  />
-                </View>
-              );
-            })}
-            {openFolder?.type === "materials" && openFolder.items.map((mat: any) => {
-              const canAccess = isAdmin || (course?.isEnrolled ?? false);
-              return (
-                <View key={mat.id} style={[styles.materialItem, !canAccess && { opacity: 0.5 }]}>
-                  <Pressable style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 12 }}
-                    onPress={() => {
-                      if (!canAccess) {
-                        promptLockedCourseContent();
-                        return;
-                      }
-                      router.push(`/material/${mat.id}`);
-                    }}>
-                    <View style={styles.materialIcon}><Ionicons name={!canAccess ? "lock-closed" : mat.file_type === "video" ? "videocam" : mat.file_type === "link" ? "link" : "document-text"} size={22} color={!canAccess ? Colors.light.textMuted : "#DC2626"} /></View>
-                    <View style={styles.materialInfo}>
-                      <Text style={styles.materialTitle}>{mat.title}</Text>
-                      {mat.description && <Text style={styles.materialDesc} numberOfLines={1}>{mat.description}</Text>}
-                      <Text style={styles.materialType}>{(mat.file_type || "pdf").toUpperCase()}{!mat.download_allowed ? " · View Only" : ""}</Text>
-                    </View>
-                  </Pressable>
-                  <DownloadButton
-                    itemType="material"
-                    itemId={mat.id}
-                    downloadAllowed={mat.download_allowed || false}
-                    isEnrolled={course.isEnrolled}
-                    title={mat.title || 'Material'}
-                    fileType={mat.file_type || 'pdf'}
-                  />
-                </View>
-              );
-            })}
-            {openFolder?.type === "tests" && course && (() => {
-              const TEST_SECTIONS = [
-                { key: "practice", label: "Practice", icon: "fitness" as const, color: "#1A56DB" },
-                { key: "test", label: "Test", icon: "document-text" as const, color: "#059669" },
-                { key: "pyq", label: "PYQs", icon: "time" as const, color: "#F59E0B" },
-                { key: "mock", label: "Mock", icon: "trophy" as const, color: "#DC2626" },
-              ];
-              const allItems = openFolder.items;
-              const filtered = folderTestTypeFilter === "all" ? allItems : allItems.filter((t: any) => t.test_type === folderTestTypeFilter);
-              return (
-                <>
-                  {/* Filter chips */}
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ backgroundColor: "#F9FAFB", borderBottomWidth: 1, borderBottomColor: "#E5E7EB", maxHeight: 56 }} contentContainerStyle={{ paddingHorizontal: 16, paddingVertical: 10, gap: 8, flexDirection: "row" }}>
-                    <Pressable
-                      style={[styles.filterChip, folderTestTypeFilter === "all" && styles.filterChipActive]}
-                      onPress={() => setFolderTestTypeFilter("all")}
-                    >
-                      <Text style={[styles.filterChipText, folderTestTypeFilter === "all" && styles.filterChipTextActive]}>All ({allItems.length})</Text>
-                    </Pressable>
-                    {TEST_SECTIONS.map((s) => {
-                      const count = allItems.filter((t: any) => t.test_type === s.key).length;
-                      if (count === 0) return null;
-                      return (
-                        <Pressable key={s.key}
-                          style={[styles.filterChip, folderTestTypeFilter === s.key && styles.filterChipActive, folderTestTypeFilter === s.key && { backgroundColor: s.color, borderColor: s.color }]}
-                          onPress={() => setFolderTestTypeFilter(s.key)}
-                        >
-                          <Ionicons name={s.icon} size={13} color={folderTestTypeFilter === s.key ? "#fff" : s.color} />
-                          <Text style={[styles.filterChipText, folderTestTypeFilter === s.key && { color: "#fff" }]}>{s.label} ({count})</Text>
-                        </Pressable>
-                      );
-                    })}
-                  </ScrollView>
-                  {filtered.length === 0 ? (
-                    <View style={{ paddingVertical: 40, alignItems: "center", gap: 8 }}>
-                      <Ionicons name="document-text-outline" size={40} color={Colors.light.textMuted} />
-                      <Text style={{ fontSize: 14, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>No tests in this category</Text>
-                    </View>
-                  ) : (
-                    filtered.map((test: any) => renderTestItem(test, course!))
-                  )}
-                </>
-              );
-            })()}
-            {openFolder?.type === "live" && openFolder.items.map((lc: any) => (              <Pressable key={lc.id} style={({ pressed }) => [styles.liveClassItem, pressed && { opacity: 0.85 }]}
-                onPress={() => {
-                  router.push({
-                    pathname: "/live-class/[id]",
-                    params: {
-                      id: lc.id,
-                      videoUrl: lc.youtube_url ?? "",
-                      title: lc.title ?? "",
-                      listIsLive: lc.is_live ? "1" : "0",
-                    },
-                  });
-                }}>
-                <LinearGradient colors={lc.is_live ? ["#DC2626", "#EF4444"] : lc.is_completed ? ["#1A56DB", "#3B82F6"] : ["#6B7280", "#9CA3AF"]} style={styles.liveStatusBadge}>
-                  {lc.is_live ? (<><View style={styles.liveDot} /><Text style={styles.liveStatusText}>LIVE</Text></>) : lc.is_completed ? <Ionicons name="play" size={14} color="#fff" /> : <Ionicons name="time" size={14} color="#fff" />}
-                </LinearGradient>
-                <View style={styles.liveClassInfo}>
-                  <Text style={styles.liveClassTitle}>{lc.title}</Text>
-                  {lc.description ? <Text style={styles.liveClassDesc} numberOfLines={1}>{lc.description}</Text> : null}
-                  <Text style={styles.liveClassTime}>{lc.is_live ? "Happening now" : lc.is_completed ? "Recording available" : new Date(Number(lc.scheduled_at)).toLocaleString()}</Text>
-                </View>
-                <Ionicons name={lc.is_live || lc.is_completed ? "play-circle" : "calendar"} size={24} color={lc.is_live ? "#DC2626" : lc.is_completed ? Colors.light.primary : Colors.light.textMuted} />
-              </Pressable>
-            ))}
-          </ScrollView>
-        </View>
-      </Modal>
     </View>
   );
 }

@@ -121,6 +121,7 @@ function RootLayoutNav() {
     // Incomplete profile: still allow browsing/purchase flows (e.g. return from Razorpay to /course/...?payment=success)
     const incompleteUserAllowedTopSegments = new Set([
       "course",
+      "course-folder",
       "store",
       "lecture",
       "test",
@@ -185,6 +186,7 @@ function RootLayoutNav() {
       <Stack.Screen name="store" options={{ headerShown: false }} />
       <Stack.Screen name="notifications" options={{ headerShown: false }} />
       <Stack.Screen name="course/[id]" options={{ headerShown: false }} />
+      <Stack.Screen name="course-folder/[id]/[type]/[name]" options={{ headerShown: false }} />
       <Stack.Screen name="lecture/[id]" options={{ headerShown: false }} />
       <Stack.Screen name="test/[id]" options={{ headerShown: false }} />
       <Stack.Screen name="test-result/[id]" options={{ headerShown: false }} />
