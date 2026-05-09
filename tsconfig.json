@@ -1,4 +1,5 @@
 {
+  "extends": "./tsconfig.expo-base.json",
   "$schema": "https://json.schemastore.org/tsconfig",
   "compilerOptions": {
     "allowJs": true,
@@ -42,6 +43,5 @@
     "**/*.tsx",
     ".expo/types/**/*.ts",
     "expo-env.d.ts"
-  ],
-  "extends": "./node_modules/expo/tsconfig.base.json"
+  ]
 }
