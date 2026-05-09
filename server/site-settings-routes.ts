@@ -15,17 +15,28 @@ export function registerSiteSettingsRoutes({
   db,
   requireAdmin,
 }: RegisterSiteSettingsRoutesDeps): void {
+  let lastSettingsCache: Record<string, string> | null = null;
+  let lastSettingsCacheAt = 0;
+  const cacheTtlMs = Math.max(5_000, Number(process.env.SITE_SETTINGS_CACHE_MS || "15000"));
+
   app.get("/api/site-settings", async (_req: Request, res: Response) => {
     try {
       res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
       res.setHeader("Pragma", "no-cache");
       res.setHeader("Expires", "0");
+      const now = Date.now();
+      if (lastSettingsCache && now - lastSettingsCacheAt <= cacheTtlMs) {
+        return res.json(lastSettingsCache);
+      }
       const result = await db.query("SELECT key, value FROM site_settings");
       const settings: Record<string, string> = {};
       for (const row of result.rows) settings[row.key] = row.value;
+      lastSettingsCache = settings;
+      lastSettingsCacheAt = now;
       res.json(settings);
     } catch (err) {
       console.error("[SiteSettings] Fetch error:", err);
+      if (lastSettingsCache) return res.json(lastSettingsCache);
       res.json({});
     }
   });
@@ -40,6 +51,9 @@ export function registerSiteSettingsRoutes({
           [key, String(value), Date.now()]
         );
       }
+      // Keep cache coherent after writes.
+      lastSettingsCache = null;
+      lastSettingsCacheAt = 0;
       res.json({ success: true });
     } catch (err) {
       console.error("[SiteSettings] Save error:", err);

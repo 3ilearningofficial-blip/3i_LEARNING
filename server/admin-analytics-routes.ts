@@ -59,21 +59,31 @@ export function registerAdminAnalyticsRoutes({
       // Course revenue must not JOIN payments next to enrollments (cartesian = doubled sums).
       // Payouts are stored in paise (Razorpay); response amounts use rupees for this API.
 
+      const safeRows = async (query: Promise<{ rows: any[] }>, fallbackRows: any[] = []) => {
+        try {
+          const result = await query;
+          return result.rows;
+        } catch {
+          return fallbackRows;
+        }
+      };
+
       const [
-        revenueResult,
-        enrollResult,
-        lifetimeResult,
-        lifetimeEnrollResult,
-        courseBreakdown,
-        recentPurchases,
-        failedTransactions,
-        abandonedResult,
-        bookPurchases,
-        lifetimeBookRevenue,
-        bookAbandonedResult,
-        testPurchases,
-        lifetimeTestRevenue,
+        revenueRows,
+        enrollRows,
+        lifetimeRows,
+        lifetimeEnrollRows,
+        courseBreakdownRows,
+        recentPurchasesRows,
+        failedTransactionRows,
+        abandonedRows,
+        bookPurchaseRows,
+        lifetimeBookRevenueRows,
+        bookAbandonedRows,
+        testPurchaseRows,
+        lifetimeTestRevenueRows,
       ] = await Promise.all([
+        safeRows(
         db.query(
           `SELECT COALESCE(SUM(
               (CASE
@@ -88,8 +98,10 @@ export function registerAdminAnalyticsRoutes({
            WHERE p.status = 'paid'${paymentWhere}`,
           rangeParams
         ),
-        db.query(`SELECT COUNT(*) as total_enrollments FROM enrollments e WHERE 1=1${enrollWhere}`, rangeParams),
-        db.query(
+        [{ total_revenue: "0" }]
+        ),
+        safeRows(db.query(`SELECT COUNT(*) as total_enrollments FROM enrollments e WHERE 1=1${enrollWhere}`, rangeParams), [{ total_enrollments: "0" }]),
+        safeRows(db.query(
           `SELECT COALESCE(SUM(
               (CASE
                 WHEN p.amount IS NOT NULL AND c.price IS NOT NULL
@@ -101,9 +113,9 @@ export function registerAdminAnalyticsRoutes({
            FROM payments p
            JOIN courses c ON c.id = p.course_id
            WHERE p.status = 'paid'`
-        ),
-        db.query(`SELECT COUNT(*) as cnt FROM enrollments`),
-        db.query(`
+        ), [{ lifetime_revenue: "0" }]),
+        safeRows(db.query(`SELECT COUNT(*) as cnt FROM enrollments`), [{ cnt: "0" }]),
+        safeRows(db.query(`
           SELECT c.id, c.title, c.category, c.price, c.is_free, c.course_type,
                  COUNT(DISTINCT e.id) as enrollment_count,
                  (COALESCE((
@@ -122,8 +134,8 @@ export function registerAdminAnalyticsRoutes({
           LEFT JOIN enrollments e ON e.course_id = c.id${enrollJoin}
           GROUP BY c.id, c.title, c.category, c.price, c.is_free, c.course_type
           ORDER BY enrollment_count DESC
-        `, range ? rangeParams : []),
-        db.query(`
+        `, range ? rangeParams : [])),
+        safeRows(db.query(`
           SELECT p.id, p.created_at,
                  (CASE
                     WHEN p.amount IS NOT NULL AND c.price IS NOT NULL
@@ -138,8 +150,8 @@ export function registerAdminAnalyticsRoutes({
           JOIN courses c ON c.id = p.course_id
           WHERE p.status = 'paid'${paymentWhere}
           ORDER BY p.created_at DESC LIMIT 20
-        `, rangeParams),
-        db.query(`
+        `, rangeParams)),
+        safeRows(db.query(`
           SELECT pf.id,
                  pf.created_at,
                  pf.source,
@@ -169,8 +181,8 @@ export function registerAdminAnalyticsRoutes({
           LEFT JOIN users u ON u.id = COALESCE(pf.user_id, p.user_id)
           LEFT JOIN courses c ON c.id = COALESCE(pf.course_id, p.course_id)${failedWhere}
           ORDER BY pf.created_at DESC LIMIT 100
-        `, rangeParams).catch(() => ({ rows: [] })),
-        db.query(`
+        `, rangeParams)),
+        safeRows(db.query(`
           SELECT MIN(p.id) as id, MAX(p.created_at) as created_at, MAX(p.amount) as amount,
                  SUM(COALESCE(p.click_count, 1)) as click_count,
                  u.name as user_name, u.phone as user_phone, u.email as user_email,
@@ -181,8 +193,8 @@ export function registerAdminAnalyticsRoutes({
           WHERE (p.status = 'created' OR p.status IS NULL)
           GROUP BY p.user_id, p.course_id, u.name, u.phone, u.email, c.title, c.category, c.price
           ORDER BY click_count DESC, MAX(p.created_at) DESC LIMIT 100
-        `),
-        db.query(`
+        `)),
+        safeRows(db.query(`
           SELECT bp.id, bp.purchased_at as created_at, b.price as amount,
                  u.name as user_name, u.phone as user_phone, u.email as user_email,
                  b.title as book_title, b.author, b.cover_url
@@ -191,9 +203,9 @@ export function registerAdminAnalyticsRoutes({
           JOIN books b ON b.id = bp.book_id
           WHERE 1=1${bookWhere}
           ORDER BY bp.purchased_at DESC LIMIT 100
-        `, rangeParams),
-        db.query(`SELECT COALESCE(SUM(b.price), 0) as total FROM book_purchases bp JOIN books b ON b.id = bp.book_id`),
-        db.query(`
+        `, rangeParams)),
+        safeRows(db.query(`SELECT COALESCE(SUM(b.price), 0) as total FROM book_purchases bp JOIN books b ON b.id = bp.book_id`), [{ total: "0" }]),
+        safeRows(db.query(`
           SELECT bct.id, bct.created_at, bct.click_count,
                  u.name as user_name, u.phone as user_phone, u.email as user_email,
                  b.title as book_title, b.author, b.price
@@ -201,8 +213,8 @@ export function registerAdminAnalyticsRoutes({
           JOIN users u ON u.id = bct.user_id
           JOIN books b ON b.id = bct.book_id
           ORDER BY bct.click_count DESC, bct.created_at DESC LIMIT 100
-        `),
-        db.query(`
+        `)),
+        safeRows(db.query(`
           SELECT tp.id, tp.created_at, t.price as amount,
                  u.name as user_name, u.phone as user_phone, u.email as user_email,
                  t.title as test_title, t.test_type
@@ -210,24 +222,24 @@ export function registerAdminAnalyticsRoutes({
           JOIN users u ON u.id = tp.user_id
           JOIN tests t ON t.id = tp.test_id
           ORDER BY tp.created_at DESC LIMIT 100
-        `).catch(() => ({ rows: [] })),
-        db.query(`SELECT COALESCE(SUM(t.price), 0) as total FROM test_purchases tp JOIN tests t ON t.id = tp.test_id`).catch(() => ({ rows: [{ total: 0 }] })),
+        `)),
+        safeRows(db.query(`SELECT COALESCE(SUM(t.price), 0) as total FROM test_purchases tp JOIN tests t ON t.id = tp.test_id`), [{ total: "0" }]),
       ]);
 
       res.json({
-        totalEnrollments: parseInt(enrollResult.rows[0]?.total_enrollments || "0"),
-        totalRevenue: parseFloat(revenueResult.rows[0]?.total_revenue || "0"),
-        lifetimeRevenue: parseFloat(lifetimeResult.rows[0]?.lifetime_revenue || "0"),
-        lifetimeEnrollments: parseInt(lifetimeEnrollResult.rows[0]?.cnt || "0"),
-        lifetimeBookRevenue: parseFloat(lifetimeBookRevenue.rows[0]?.total || "0"),
-        lifetimeTestRevenue: parseFloat(lifetimeTestRevenue.rows[0]?.total || "0"),
-        courseBreakdown: courseBreakdown.rows,
-        recentPurchases: recentPurchases.rows,
-        failedTransactions: failedTransactions.rows,
-        abandonedCheckouts: abandonedResult.rows,
-        bookPurchases: bookPurchases.rows,
-        bookAbandonedCheckouts: bookAbandonedResult.rows,
-        testPurchases: testPurchases.rows,
+        totalEnrollments: parseInt(enrollRows[0]?.total_enrollments || "0"),
+        totalRevenue: parseFloat(revenueRows[0]?.total_revenue || "0"),
+        lifetimeRevenue: parseFloat(lifetimeRows[0]?.lifetime_revenue || "0"),
+        lifetimeEnrollments: parseInt(lifetimeEnrollRows[0]?.cnt || "0"),
+        lifetimeBookRevenue: parseFloat(lifetimeBookRevenueRows[0]?.total || "0"),
+        lifetimeTestRevenue: parseFloat(lifetimeTestRevenueRows[0]?.total || "0"),
+        courseBreakdown: courseBreakdownRows,
+        recentPurchases: recentPurchasesRows,
+        failedTransactions: failedTransactionRows,
+        abandonedCheckouts: abandonedRows,
+        bookPurchases: bookPurchaseRows,
+        bookAbandonedCheckouts: bookAbandonedRows,
+        testPurchases: testPurchaseRows,
       });
     } catch (err) {
       console.error("Analytics error:", err);

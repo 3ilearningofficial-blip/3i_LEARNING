@@ -353,9 +353,11 @@ export function registerPaymentRoutes({
   });
 
   app.post("/api/payments/verify", async (req: Request, res: Response) => {
+    let authUserId: number | null = null;
     try {
       const user = await getAuthUser(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
+      authUserId = Number(user.id) || null;
 
       const { razorpay_order_id, razorpay_payment_id, razorpay_signature, courseId } = req.body;
       if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
@@ -380,7 +382,7 @@ export function registerPaymentRoutes({
       console.error("Verify payment error:", err);
       const msg = err instanceof Error ? err.message : "";
       await logPaymentFailure({
-        userId: user?.id ?? null,
+        userId: authUserId,
         courseId: Number((req.body as any)?.courseId) || null,
         orderId: (req.body as any)?.razorpay_order_id || null,
         paymentId: (req.body as any)?.razorpay_payment_id || null,

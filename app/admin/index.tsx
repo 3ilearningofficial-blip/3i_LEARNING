@@ -174,8 +174,9 @@ function AnalyticsTab() {
       const key = String(row?.reason || "Unknown failure").trim() || "Unknown failure";
       acc[key] = (acc[key] || 0) + 1;
       return acc;
-    }, {})
-  )
+    }, {} as Record<string, number>)
+  ) as [string, number][]
+  const topFailedReasonSummary = failedReasonSummary
     .sort((x, y) => y[1] - x[1])
     .slice(0, 3);
   const courseAbandoned = a.abandonedCheckouts || [];
@@ -404,9 +405,9 @@ function AnalyticsTab() {
             </Pressable>
             {expandedSection === "failed" && (
               <>
-                {failedReasonSummary.length > 0 && (
+                {topFailedReasonSummary.length > 0 && (
                   <View style={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: 8, flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
-                    {failedReasonSummary.map(([reason, count]) => (
+                    {topFailedReasonSummary.map(([reason, count]) => (
                       <View key={reason} style={{ flexDirection: "row", alignItems: "center", gap: 6, borderRadius: 999, backgroundColor: "#FEF2F2", borderWidth: 1, borderColor: "#FECACA", paddingHorizontal: 10, paddingVertical: 6, maxWidth: "100%" }}>
                         <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: "#B91C1C" }}>{count}</Text>
                         <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: "#7F1D1D" }} numberOfLines={1}>{reason}</Text>

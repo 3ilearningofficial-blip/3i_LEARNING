@@ -17,6 +17,9 @@ export function registerLiveClassRoutes({
   db,
   getAuthUser,
 }: RegisterLiveClassRoutesDeps): void {
+  let upcomingCache: any[] = [];
+  let upcomingCacheAt = 0;
+  const upcomingCacheTtlMs = Math.max(10_000, Number(process.env.UPCOMING_CLASSES_CACHE_MS || "30000"));
   const sanitizeLiveClass = (row: any) => {
     if (!row || typeof row !== "object") return row;
     const { cf_stream_key, cf_stream_rtmp_url, ...safe } = row;
@@ -170,6 +173,11 @@ export function registerLiveClassRoutes({
 
   app.get("/api/upcoming-classes", async (_req: Request, res: Response) => {
     try {
+      const now = Date.now();
+      if (upcomingCache.length > 0 && now - upcomingCacheAt <= upcomingCacheTtlMs) {
+        res.set("Cache-Control", "private, no-store");
+        return res.json(upcomingCache);
+      }
       const result = await db.query(`
         SELECT lc.*, c.title as course_title, c.is_free as course_is_free, c.category as course_category
         FROM live_classes lc
@@ -182,10 +190,14 @@ export function registerLiveClassRoutes({
       `);
       console.log(`[UpcomingClasses] returning ${result.rows.length} classes`);
       res.set("Cache-Control", "private, no-store");
-      res.json(result.rows.map(toPublicUpcomingDto));
+      const payload = result.rows.map(toPublicUpcomingDto);
+      upcomingCache = payload;
+      upcomingCacheAt = now;
+      res.json(payload);
     } catch (err) {
       console.error("[UpcomingClasses] error:", err);
       res.set("Cache-Control", "private, no-store");
+      if (upcomingCache.length > 0) return res.json(upcomingCache);
       res.json([]);
     }
   });

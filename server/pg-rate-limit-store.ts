@@ -16,56 +16,80 @@ export class PgRateLimitStore {
   }
 
   async get(key: string): Promise<{ totalHits: number; resetTime: Date } | undefined> {
-    const r = await this.pool.query(
-      `SELECT total_hits, reset_time_ms FROM express_rate_limit WHERE bucket_key = $1`,
-      [key]
-    );
-    if (r.rows.length === 0) return undefined;
-    const row = r.rows[0] as { total_hits: number; reset_time_ms: string | number };
-    return {
-      totalHits: Number(row.total_hits),
-      resetTime: new Date(Number(row.reset_time_ms)),
-    };
+    try {
+      const r = await this.pool.query(
+        `SELECT total_hits, reset_time_ms FROM express_rate_limit WHERE bucket_key = $1`,
+        [key]
+      );
+      if (r.rows.length === 0) return undefined;
+      const row = r.rows[0] as { total_hits: number; reset_time_ms: string | number };
+      return {
+        totalHits: Number(row.total_hits),
+        resetTime: new Date(Number(row.reset_time_ms)),
+      };
+    } catch (err) {
+      // Keep API available when store has transient DB issues.
+      console.error("[RateLimitStore] get failed:", err);
+      return undefined;
+    }
   }
 
   async increment(key: string): Promise<{ totalHits: number; resetTime: Date }> {
     const now = Date.now();
     const win = this.windowMs;
-    const ins = await this.pool.query(
-      `INSERT INTO express_rate_limit (bucket_key, total_hits, reset_time_ms)
-       VALUES ($1, 1, $2 + $3::bigint)
-       ON CONFLICT (bucket_key) DO UPDATE SET
-         total_hits = CASE
-           WHEN express_rate_limit.reset_time_ms <= $2::bigint THEN 1
-           ELSE express_rate_limit.total_hits + 1
-         END,
-         reset_time_ms = CASE
-           WHEN express_rate_limit.reset_time_ms <= $2::bigint THEN $2::bigint + $3::bigint
-           ELSE express_rate_limit.reset_time_ms
-         END
-       RETURNING total_hits, reset_time_ms`,
-      [key, now, win]
-    );
-    const row = ins.rows[0] as { total_hits: number; reset_time_ms: string | number };
-    return {
-      totalHits: Number(row.total_hits),
-      resetTime: new Date(Number(row.reset_time_ms)),
-    };
+    try {
+      const ins = await this.pool.query(
+        `INSERT INTO express_rate_limit (bucket_key, total_hits, reset_time_ms)
+         VALUES ($1, 1, $2 + $3::bigint)
+         ON CONFLICT (bucket_key) DO UPDATE SET
+           total_hits = CASE
+             WHEN express_rate_limit.reset_time_ms <= $2::bigint THEN 1
+             ELSE express_rate_limit.total_hits + 1
+           END,
+           reset_time_ms = CASE
+             WHEN express_rate_limit.reset_time_ms <= $2::bigint THEN $2::bigint + $3::bigint
+             ELSE express_rate_limit.reset_time_ms
+           END
+         RETURNING total_hits, reset_time_ms`,
+        [key, now, win]
+      );
+      const row = ins.rows[0] as { total_hits: number; reset_time_ms: string | number };
+      return {
+        totalHits: Number(row.total_hits),
+        resetTime: new Date(Number(row.reset_time_ms)),
+      };
+    } catch (err) {
+      // Fail-open fallback.
+      console.error("[RateLimitStore] increment failed:", err);
+      return { totalHits: 1, resetTime: new Date(now + win) };
+    }
   }
 
   async decrement(key: string): Promise<void> {
-    await this.pool.query(
-      `UPDATE express_rate_limit SET total_hits = GREATEST(0, total_hits - 1) WHERE bucket_key = $1`,
-      [key]
-    );
+    try {
+      await this.pool.query(
+        `UPDATE express_rate_limit SET total_hits = GREATEST(0, total_hits - 1) WHERE bucket_key = $1`,
+        [key]
+      );
+    } catch (err) {
+      console.error("[RateLimitStore] decrement failed:", err);
+    }
   }
 
   async resetKey(key: string): Promise<void> {
-    await this.pool.query(`DELETE FROM express_rate_limit WHERE bucket_key = $1`, [key]);
+    try {
+      await this.pool.query(`DELETE FROM express_rate_limit WHERE bucket_key = $1`, [key]);
+    } catch (err) {
+      console.error("[RateLimitStore] resetKey failed:", err);
+    }
   }
 
   async resetAll(): Promise<void> {
-    await this.pool.query(`DELETE FROM express_rate_limit`);
+    try {
+      await this.pool.query(`DELETE FROM express_rate_limit`);
+    } catch (err) {
+      console.error("[RateLimitStore] resetAll failed:", err);
+    }
   }
 
   shutdown(): void {

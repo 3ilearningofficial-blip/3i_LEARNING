@@ -158,10 +158,19 @@ async function dbQuery(text: string, params?: unknown[], options?: DbQueryOption
       return result;
     } catch (err: any) {
       const elapsedMs = Date.now() - startedAt;
-      const isTransient = err.message?.includes("Connection terminated") ||
-        err.message?.includes("connection timeout") ||
-        err.code === "ECONNRESET" ||
-        err.code === "ECONNREFUSED";
+      const message = String(err?.message || "").toLowerCase();
+      const code = String(err?.code || "").toUpperCase();
+      const isTransient =
+        message.includes("connection terminated") ||
+        message.includes("connection timeout") ||
+        message.includes("getaddrinfo eai_again") ||
+        message.includes("timeout exceeded when trying to connect") ||
+        code === "ECONNRESET" ||
+        code === "ECONNREFUSED" ||
+        code === "EAI_AGAIN" ||
+        code === "ETIMEDOUT" ||
+        code === "57P01" || // admin_shutdown
+        code === "57P03";   // cannot_connect_now
       if (isTransient && attempt < 3) {
         console.warn("[DB] Transient error on attempt " + attempt + ", retrying...");
         await new Promise(r => setTimeout(r, 200 * attempt));
