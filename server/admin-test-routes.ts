@@ -90,31 +90,67 @@ export function registerAdminTestRoutes({
 
   app.post("/api/admin/questions", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const questions = Array.isArray(req.body) ? req.body : [req.body];
-      for (const q of questions) {
+      const rawList = Array.isArray(req.body) ? req.body : [req.body];
+      const testId = rawList[0]?.testId;
+      if (!testId) {
+        return res.status(400).json({ message: "testId is required" });
+      }
+
+      async function assignNextOrderInsert(q: any): Promise<number> {
+        const insertAfter = q.insertAfterQuestionId ?? q.afterQuestionId;
+        const parsedAfter =
+          insertAfter !== undefined && insertAfter !== null && insertAfter !== ""
+            ? parseInt(String(insertAfter), 10)
+            : NaN;
+
+        if (Number.isFinite(parsedAfter)) {
+          const ref = await db.query(
+            `SELECT order_index FROM questions WHERE id = $1 AND test_id = $2`,
+            [parsedAfter, testId]
+          );
+          if (ref.rows.length > 0) {
+            const k = Number(ref.rows[0].order_index ?? 0);
+            await db.query(
+              `UPDATE questions SET order_index = order_index + 1 WHERE test_id = $1 AND order_index > $2`,
+              [testId, k]
+            );
+            return k + 1;
+          }
+        }
+
+        const maxRow = await db.query(`SELECT COALESCE(MAX(order_index), 0)::numeric AS m FROM questions WHERE test_id = $1`, [testId]);
+        const max = Number(maxRow.rows[0]?.m ?? 0);
+        return max + 1;
+      }
+
+      for (const q of rawList) {
+        const { insertAfterQuestionId: _a, afterQuestionId: _b, orderIndex: _ignoredOrder, ...rest } = q;
+        const orderIndex = await assignNextOrderInsert(q);
+
         await db.query(
           `INSERT INTO questions (test_id, question_text, option_a, option_b, option_c, option_d, correct_option, explanation, topic, difficulty, marks, negative_marks, order_index, image_url, solution_image_url) 
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
           [
-            q.testId,
-            q.questionText,
-            q.optionA,
-            q.optionB,
-            q.optionC,
-            q.optionD,
-            q.correctOption,
-            q.explanation,
-            q.topic,
-            q.difficulty || "medium",
-            q.marks || 4,
-            q.negativeMarks || 1,
-            q.orderIndex || 0,
-            q.imageUrl || null,
-            q.solutionImageUrl || null,
+            rest.testId,
+            rest.questionText,
+            rest.optionA,
+            rest.optionB,
+            rest.optionC,
+            rest.optionD,
+            rest.correctOption,
+            rest.explanation,
+            rest.topic,
+            rest.difficulty || "medium",
+            rest.marks ?? 4,
+            rest.negativeMarks ?? 1,
+            orderIndex,
+            rest.imageUrl || null,
+            rest.solutionImageUrl || null,
           ]
         );
       }
-      await db.query("UPDATE tests SET total_questions = (SELECT COUNT(*) FROM questions WHERE test_id = $1) WHERE id = $1", [questions[0].testId]);
+
+      await db.query("UPDATE tests SET total_questions = (SELECT COUNT(*) FROM questions WHERE test_id = $1) WHERE id = $1", [testId]);
       res.json({ success: true });
     } catch (err) {
       console.error(err);

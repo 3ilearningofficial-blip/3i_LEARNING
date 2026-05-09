@@ -2,6 +2,8 @@ import React, { useState } from "react";
 import {
   View, Text, Modal, ScrollView, Pressable, TextInput,
   ActivityIndicator, Platform, Alert, StyleSheet, Image,
+  type StyleProp,
+  type ViewStyle,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -21,15 +23,35 @@ interface ParsedQuestion {
   solutionImageUrl: string;
 }
 
+export function emptyParsedQuestion(): ParsedQuestion {
+  return {
+    questionText: "",
+    optionA: "",
+    optionB: "",
+    optionC: "",
+    optionD: "",
+    correctOption: "A",
+    explanation: "",
+    imageUrl: "",
+    solutionImageUrl: "",
+  };
+}
+
+function cloneParsedQuestion(q: ParsedQuestion): ParsedQuestion {
+  return { ...q };
+}
+
 interface Props {
   visible: boolean;
   testId: number | null;
   onClose: () => void;
   onSaved: () => void;
   bottomPadding?: number;
+  /** Layer above sibling modals on web (RN Modal root). */
+  modalStyle?: StyleProp<ViewStyle>;
 }
 
-export default function BulkUploadModal({ visible, testId, onClose, onSaved, bottomPadding = 16 }: Props) {
+export default function BulkUploadModal({ visible, testId, onClose, onSaved, bottomPadding = 16, modalStyle }: Props) {
   const qc = useQueryClient();
   const [mode, setMode] = useState<"text" | "pdf">("text");
   const [bulkText, setBulkText] = useState("");
@@ -183,10 +205,28 @@ export default function BulkUploadModal({ visible, testId, onClose, onSaved, bot
     setParsedQuestions(prev => prev ? prev.filter((_, i) => i !== idx) : prev);
   };
 
+  const insertBlankBelow = (idx: number) => {
+    setParsedQuestions(prev => {
+      if (!prev) return prev;
+      const next = [...prev];
+      next.splice(idx + 1, 0, emptyParsedQuestion());
+      return next;
+    });
+  };
+
+  const duplicateBelow = (idx: number) => {
+    setParsedQuestions(prev => {
+      if (!prev) return prev;
+      const next = [...prev];
+      next.splice(idx + 1, 0, cloneParsedQuestion(prev[idx]));
+      return next;
+    });
+  };
+
   const isParsing = parseTextMutation.isPending || parsePdfMutation.isPending;
 
   return (
-    <Modal visible={visible} animationType="slide" transparent={false} onRequestClose={handleClose}>
+    <Modal visible={visible} animationType="slide" transparent={false} onRequestClose={handleClose} style={modalStyle}>
       <View style={{ flex: 1, backgroundColor: Colors.light.background }}>
         {/* Header */}
         <View style={{ backgroundColor: "#0A1628", paddingTop: Platform.OS === "web" ? 16 : 44, paddingHorizontal: 16, paddingBottom: 14, flexDirection: "row", alignItems: "center", gap: 12 }}>
@@ -222,7 +262,8 @@ export default function BulkUploadModal({ visible, testId, onClose, onSaved, bot
           // Editable preview
           <ScrollView contentContainerStyle={{ padding: 16, gap: 16, paddingBottom: bottomPadding + 40 }}>
             {parsedQuestions.map((q, idx) => (
-              <View key={idx} style={styles.qCard}>
+              <View key={idx}>
+              <View style={styles.qCard}>
                 <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
                   <View style={{ backgroundColor: Colors.light.primary, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4 }}>
                     <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: "#fff" }}>Q{idx + 1}</Text>
@@ -232,7 +273,7 @@ export default function BulkUploadModal({ visible, testId, onClose, onSaved, bot
                   </Pressable>
                 </View>
                 <Text style={styles.fieldLabel}>Question *</Text>
-                <TextInput style={[styles.input, styles.inputMulti]} value={q.questionText} onChangeText={(v) => updateQ(idx, "questionText", v)} multiline placeholder="Question text" placeholderTextColor={Colors.light.textMuted} />
+                <TextInput style={[styles.input, styles.inputMulti]} value={q.questionText} onChangeText={(v) => updateQ(idx, "questionText", v)} multiline blurOnSubmit={false} placeholder="Question text (Enter for new line)" placeholderTextColor={Colors.light.textMuted} />
                 {(["optionA", "optionB", "optionC", "optionD"] as const).map((opt, oi) => {
                   const letter = ["A", "B", "C", "D"][oi];
                   const isCorrect = q.correctOption === letter;
@@ -270,6 +311,23 @@ export default function BulkUploadModal({ visible, testId, onClose, onSaved, bot
                   onUrlChange={(v) => updateQ(idx, "solutionImageUrl", v)}
                   placeholder="Paste solution image URL or upload"
                 />
+              </View>
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, paddingVertical: 10 }}>
+                <Pressable
+                  style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: Colors.light.primary, backgroundColor: `${Colors.light.primary}10` }}
+                  onPress={() => insertBlankBelow(idx)}
+                >
+                  <Ionicons name="add-circle-outline" size={18} color={Colors.light.primary} />
+                  <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>Add question below</Text>
+                </Pressable>
+                <Pressable
+                  style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: "#9333EA", backgroundColor: "#F5F3FF" }}
+                  onPress={() => duplicateBelow(idx)}
+                >
+                  <Ionicons name="copy-outline" size={18} color="#9333EA" />
+                  <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: "#9333EA" }}>Duplicate below</Text>
+                </Pressable>
+              </View>
               </View>
             ))}
             <Pressable

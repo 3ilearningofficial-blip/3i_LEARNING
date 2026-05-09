@@ -1210,6 +1210,10 @@ export default function AdminDashboard() {
   const [bulkQText, setBulkQText] = useState("");
   const [bulkQResult, setBulkQResult] = useState<{ count: number; questions: any[] } | null>(null);
   const [showBulkUploadModal, setShowBulkUploadModal] = useState<number | null>(null);
+  /** Standalone test: insert new manual question after this question id (API order_index) */
+  const [standaloneAddQuestionAfterId, setStandaloneAddQuestionAfterId] = useState<number | null>(null);
+  /** True while Add form was opened from Questions list via "Add below"; dismiss/success restores list */
+  const standaloneResumeQuestionListAfterAddRef = useRef(false);
   const [newQ, setNewQ] = useState({ questionText: "", optionA: "", optionB: "", optionC: "", optionD: "", correctOption: "A", explanation: "", topic: "", marks: "4", negativeMarks: "1", difficulty: "moderate", imageUrl: "", solutionImageUrl: "" });
 
   // Books state
@@ -1761,6 +1765,35 @@ export default function AdminDashboard() {
     } catch { setTestQuestionsList([]); } finally { setTestQuestionsLoading(false); }
   };
 
+  const dismissStandaloneTestQuestionsLayer = () => {
+    if (showBulkQ) {
+      setShowBulkQ(false);
+      return;
+    }
+    if (showAddQ) {
+      setShowAddQ(false);
+      setStandaloneAddQuestionAfterId(null);
+      if (standaloneResumeQuestionListAfterAddRef.current && showTestQuestions != null) {
+        setShowViewQuestions(true);
+        loadTestQuestions(showTestQuestions);
+      }
+      standaloneResumeQuestionListAfterAddRef.current = false;
+      return;
+    }
+    if (showViewQuestions) {
+      setShowViewQuestions(false);
+      return;
+    }
+    setShowTestQuestions(null);
+    setShowAddQ(false);
+    setShowBulkQ(false);
+    setBulkQResult(null);
+    setShowViewQuestions(false);
+    setTestQuestionsList([]);
+    setStandaloneAddQuestionAfterId(null);
+    standaloneResumeQuestionListAfterAddRef.current = false;
+  };
+
   const { data: adminTests = [], isLoading: testsLoading } = useQuery<any[]>({
     queryKey: ["/api/admin/tests"],
     queryFn: async () => {
@@ -1812,9 +1845,16 @@ export default function AdminDashboard() {
       const res = await apiRequest("POST", "/api/admin/questions", data);
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (_data: unknown, variables: any) => {
       qc.invalidateQueries({ queryKey: ["/api/admin/tests"] });
+      const tid = variables?.testId ?? showTestQuestions;
+      setStandaloneAddQuestionAfterId(null);
       setShowAddQ(false);
+      if (tid) {
+        if (standaloneResumeQuestionListAfterAddRef.current) setShowViewQuestions(true);
+        loadTestQuestions(tid);
+      }
+      standaloneResumeQuestionListAfterAddRef.current = false;
       setNewQ({ questionText: "", optionA: "", optionB: "", optionC: "", optionD: "", correctOption: "A", explanation: "", topic: "", marks: "4", negativeMarks: "1", difficulty: "moderate", imageUrl: "", solutionImageUrl: "" });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       Alert.alert("Success", "Question added!");
@@ -4608,14 +4648,15 @@ export default function AdminDashboard() {
               <View style={styles.formField}>
                 <Text style={styles.formLabel}>Questions ({missionQuestions.length})</Text>
                 {missionQuestions.map((q, idx) => (
-                  <View key={idx} style={styles.missionQCard}>
+                  <React.Fragment key={idx}>
+                  <View style={styles.missionQCard}>
                     <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
                       <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>Q{idx + 1}</Text>
                       <Pressable onPress={() => setMissionQuestions((prev) => prev.filter((_, i) => i !== idx))}>
                         <Ionicons name="close-circle" size={20} color="#EF4444" />
                       </Pressable>
                     </View>
-                    <TextInput style={styles.formInput} placeholder="Question text" placeholderTextColor={Colors.light.textMuted} value={q.question} onChangeText={(v) => { const nq = [...missionQuestions]; nq[idx] = { ...nq[idx], question: v }; setMissionQuestions(nq); }} />
+                    <TextInput style={[styles.formInput, { minHeight: 88, textAlignVertical: "top" }]} placeholder="Question text (Enter for new line)" placeholderTextColor={Colors.light.textMuted} value={q.question} onChangeText={(v) => { const nq = [...missionQuestions]; nq[idx] = { ...nq[idx], question: v }; setMissionQuestions(nq); }} multiline blurOnSubmit={false} />
                     {["A", "B", "C", "D"].map((letter, optIdx) => (
                       <View key={letter} style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4 }}>
                         <Pressable onPress={() => { const nq = [...missionQuestions]; nq[idx] = { ...nq[idx], correct: letter }; setMissionQuestions(nq); }}
@@ -4633,14 +4674,31 @@ export default function AdminDashboard() {
                       <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Question Image (optional)</Text>
                       <AdminImageBoxInline imageUrl={q.image_url} onUrlChange={(v) => { const nq = [...missionQuestions]; nq[idx] = { ...nq[idx], image_url: v }; setMissionQuestions(nq); }} />
                     </View>
-                    <TextInput style={[styles.formInput, { marginTop: 4, height: 60 }]} placeholder="Solution / Explanation (optional)" placeholderTextColor={Colors.light.textMuted} value={q.solution} onChangeText={(v) => { const nq = [...missionQuestions]; nq[idx] = { ...nq[idx], solution: v }; setMissionQuestions(nq); }} multiline />
+                    <TextInput style={[styles.formInput, { marginTop: 4, minHeight: 72, textAlignVertical: "top" }]} placeholder="Solution / Explanation (optional)" placeholderTextColor={Colors.light.textMuted} value={q.solution} onChangeText={(v) => { const nq = [...missionQuestions]; nq[idx] = { ...nq[idx], solution: v }; setMissionQuestions(nq); }} multiline blurOnSubmit={false} />
                     <View style={{ marginTop: 4, gap: 4 }}>
                       <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Solution Image (optional)</Text>
                       <AdminImageBoxInline imageUrl={q.solution_image_url} onUrlChange={(v) => { const nq = [...missionQuestions]; nq[idx] = { ...nq[idx], solution_image_url: v }; setMissionQuestions(nq); }} />
                     </View>
                   </View>
+                  <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, paddingVertical: 10 }}>
+                    <Pressable
+                      style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: Colors.light.primary, backgroundColor: `${Colors.light.primary}12` }}
+                      onPress={() => setMissionQuestions((prev) => { const n = [...prev]; n.splice(idx + 1, 0, { question: "", options: ["", "", "", ""], correct: "A", topic: "", subtopic: "", marks: "", solution: "", image_url: "", solution_image_url: "" }); return n; })}
+                    >
+                      <Ionicons name="add-circle-outline" size={17} color={Colors.light.primary} />
+                      <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>Add below</Text>
+                    </Pressable>
+                    <Pressable
+                      style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: "#9333EA", backgroundColor: "#F5F3FF" }}
+                      onPress={() => setMissionQuestions((prev) => { const n = [...prev]; const src = prev[idx]; const copy = { ...src, options: [...(src.options || ["", "", "", ""])] }; n.splice(idx + 1, 0, copy); return n; })}
+                    >
+                      <Ionicons name="copy-outline" size={17} color="#9333EA" />
+                      <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: "#9333EA" }}>Duplicate below</Text>
+                    </Pressable>
+                  </View>
+                  </React.Fragment>
                 ))}
-                <Pressable style={styles.addQBtn} onPress={() => setMissionQuestions((prev) => [...prev, { question: "", options: ["", "", "", ""], correct: "A", topic: "", subtopic: "", marks: "", time_limit: "", solution: "", image_url: "", solution_image_url: "" }])}>
+                <Pressable style={styles.addQBtn} onPress={() => setMissionQuestions((prev) => [...prev, { question: "", options: ["", "", "", ""], correct: "A", topic: "", subtopic: "", marks: "", solution: "", image_url: "", solution_image_url: "" }])}>
                   <Ionicons name="add-circle-outline" size={18} color={Colors.light.primary} />
                   <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>Add Question</Text>
                 </Pressable>
@@ -5043,8 +5101,8 @@ export default function AdminDashboard() {
         </View>
       </Modal>
 
-      <Modal visible={showCreateTest} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
+      <Modal visible={showCreateTest} animationType="slide" transparent style={Platform.OS === "web" ? { zIndex: 91000 } : undefined}>
+        <View style={[styles.modalOverlay, Platform.OS === "web" ? { zIndex: 91000, elevation: 80 } : null]}>
           <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Create Test</Text>
@@ -5161,15 +5219,20 @@ export default function AdminDashboard() {
         </View>
       </Modal>
 
-      <Modal visible={showTestQuestions !== null} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
+      <Modal visible={showTestQuestions !== null} animationType="slide" transparent onRequestClose={dismissStandaloneTestQuestionsLayer} style={Platform.OS === "web" ? { zIndex: 92000 } : undefined}>
+        <View style={[styles.modalOverlay, Platform.OS === "web" ? { zIndex: 92000, elevation: 85 } : null]}>
           <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16, maxHeight: "90%" }]}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>
-                {showBulkQ ? "Bulk Upload Questions" : "Add Question"}
-              </Text>
-              <Pressable onPress={() => { setShowTestQuestions(null); setShowAddQ(false); setShowBulkQ(false); setBulkQResult(null); setShowViewQuestions(false); setTestQuestionsList([]); }}>
-                <Ionicons name="close" size={24} color={Colors.light.text} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.modalTitle}>
+                  {showBulkQ ? "Bulk Upload Questions" : showAddQ ? (standaloneAddQuestionAfterId ? "Add Question Below" : "Add Question") : showViewQuestions ? "Questions" : "Test Questions"}
+                </Text>
+                {!!showAddQ && !!standaloneAddQuestionAfterId && (
+                  <Text style={{ fontSize: 11, fontFamily: "Inter_400Regular", color: Colors.light.textMuted, marginTop: 2 }}>New question is inserted after the selected one.</Text>
+                )}
+              </View>
+              <Pressable onPress={dismissStandaloneTestQuestionsLayer} accessibilityLabel="Close or go back">
+                <Ionicons name={showBulkQ || showAddQ || showViewQuestions ? "chevron-back" : "close"} size={24} color={Colors.light.text} />
               </Pressable>
             </View>
             {!showBulkQ && !showAddQ && !showViewQuestions && (
@@ -5182,7 +5245,7 @@ export default function AdminDashboard() {
                   </View>
                   <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
                 </Pressable>
-                <Pressable style={styles.testActionBtnLarge} onPress={() => setShowAddQ(true)}>
+                <Pressable style={styles.testActionBtnLarge} onPress={() => { standaloneResumeQuestionListAfterAddRef.current = false; setStandaloneAddQuestionAfterId(null); setShowAddQ(true); }}>
                   <Ionicons name="create-outline" size={22} color={Colors.light.primary} />
                   <View style={{ flex: 1 }}>
                     <Text style={{ fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Add Manually</Text>
@@ -5210,30 +5273,73 @@ export default function AdminDashboard() {
             )}
             {showViewQuestions && (
               <ScrollView style={styles.modalScroll}>
-                <Pressable style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 12 }} onPress={() => setShowViewQuestions(false)}>
+                <Pressable style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 12 }} onPress={dismissStandaloneTestQuestionsLayer}>
                   <Ionicons name="arrow-back" size={16} color={Colors.light.primary} />
                   <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>Back</Text>
                 </Pressable>
                 {testQuestionsLoading ? <ActivityIndicator color={Colors.light.primary} /> : testQuestionsList.length === 0 ? (
                   <Text style={{ fontSize: 14, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", textAlign: "center", paddingVertical: 20 }}>No questions yet</Text>
                 ) : testQuestionsList.map((q: any, idx: number) => (
-                  <View key={q.id} style={{ backgroundColor: Colors.light.background, borderRadius: 12, padding: 12, marginBottom: 10, borderWidth: 1, borderColor: Colors.light.border }}>
-                    <View style={{ flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
-                      <Text style={{ flex: 1, fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.text }}>Q{idx + 1}. {q.question_text}</Text>
-                      <View style={{ flexDirection: "row", gap: 6 }}>
-                        <Pressable style={{ padding: 6, backgroundColor: "#EEF2FF", borderRadius: 8 }} onPress={() => setEditQuestion({ id: q.id, questionText: q.question_text, optionA: q.option_a, optionB: q.option_b, optionC: q.option_c, optionD: q.option_d, correctOption: q.correct_option, explanation: q.explanation || "", topic: q.topic || "", marks: String(q.marks || 1), negativeMarks: String(q.negative_marks || 0), difficulty: q.difficulty || "moderate", imageUrl: q.image_url || "", solutionImageUrl: q.solution_image_url || "" })}>
-                          <Ionicons name="pencil-outline" size={16} color={Colors.light.primary} />
-                        </Pressable>
-                        <Pressable style={{ padding: 6, backgroundColor: "#FEE2E2", borderRadius: 8 }} onPress={() => {
-                          if (Platform.OS === "web") { if (window.confirm("Delete this question?")) deleteQuestionMutation.mutate(q.id); }
-                          else Alert.alert("Delete", "Delete this question?", [{ text: "Cancel" }, { text: "Delete", style: "destructive", onPress: () => deleteQuestionMutation.mutate(q.id) }]);
-                        }}>
-                          <Ionicons name="trash-outline" size={16} color="#EF4444" />
-                        </Pressable>
+                  <View key={q.id} style={{ marginBottom: 10 }}>
+                    <View style={{ backgroundColor: Colors.light.background, borderRadius: 12, padding: 12, borderWidth: 1, borderColor: Colors.light.border }}>
+                      <View style={{ flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
+                        <Text style={{ flex: 1, fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.text }}>Q{idx + 1}. {q.question_text}</Text>
+                        <View style={{ flexDirection: "row", gap: 6 }}>
+                          <Pressable style={{ padding: 6, backgroundColor: "#EEF2FF", borderRadius: 8 }} onPress={() => setEditQuestion({ id: q.id, questionText: q.question_text, optionA: q.option_a, optionB: q.option_b, optionC: q.option_c, optionD: q.option_d, correctOption: q.correct_option, explanation: q.explanation || "", topic: q.topic || "", marks: String(q.marks || 1), negativeMarks: String(q.negative_marks || 0), difficulty: q.difficulty || "moderate", imageUrl: q.image_url || "", solutionImageUrl: q.solution_image_url || "" })}>
+                            <Ionicons name="pencil-outline" size={16} color={Colors.light.primary} />
+                          </Pressable>
+                          <Pressable style={{ padding: 6, backgroundColor: "#FEE2E2", borderRadius: 8 }} onPress={() => {
+                            if (Platform.OS === "web") { if (window.confirm("Delete this question?")) deleteQuestionMutation.mutate(q.id); }
+                            else Alert.alert("Delete", "Delete this question?", [{ text: "Cancel" }, { text: "Delete", style: "destructive", onPress: () => deleteQuestionMutation.mutate(q.id) }]);
+                          }}>
+                            <Ionicons name="trash-outline" size={16} color="#EF4444" />
+                          </Pressable>
+                        </View>
                       </View>
+                      <Text style={{ fontSize: 11, color: "#22C55E", fontFamily: "Inter_500Medium", marginTop: 4 }}>✓ {q[`option_${q.correct_option?.toLowerCase()}`]}</Text>
+                      {q.topic ? <Text style={{ fontSize: 11, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>{q.topic}</Text> : null}
                     </View>
-                    <Text style={{ fontSize: 11, color: "#22C55E", fontFamily: "Inter_500Medium", marginTop: 4 }}>✓ {q[`option_${q.correct_option?.toLowerCase()}`]}</Text>
-                    {q.topic ? <Text style={{ fontSize: 11, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>{q.topic}</Text> : null}
+                    <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, paddingVertical: 10 }}>
+                      <Pressable
+                        style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: Colors.light.primary, backgroundColor: `${Colors.light.primary}12` }}
+                        onPress={() => {
+                          standaloneResumeQuestionListAfterAddRef.current = true;
+                          setStandaloneAddQuestionAfterId(q.id);
+                          setShowViewQuestions(false);
+                          setShowAddQ(true);
+                        }}
+                      >
+                        <Ionicons name="add-circle-outline" size={17} color={Colors.light.primary} />
+                        <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>Add below</Text>
+                      </Pressable>
+                      <Pressable
+                        style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: "#9333EA", backgroundColor: "#F5F3FF" }}
+                        disabled={addQuestionMutation.isPending}
+                        onPress={() => {
+                          const co = String(q.correct_option || "A").toUpperCase().slice(0, 1);
+                          addQuestionMutation.mutate({
+                            testId: showTestQuestions!,
+                            insertAfterQuestionId: q.id,
+                            questionText: q.question_text,
+                            optionA: q.option_a || "",
+                            optionB: q.option_b || "",
+                            optionC: q.option_c || "",
+                            optionD: q.option_d || "",
+                            correctOption: ["A", "B", "C", "D"].includes(co) ? co : "A",
+                            explanation: q.explanation || "",
+                            topic: q.topic || "",
+                            marks: parseInt(String(q.marks), 10) || 4,
+                            negativeMarks: parseInt(String(q.negative_marks), 10) || 1,
+                            difficulty: q.difficulty || "moderate",
+                            imageUrl: q.image_url || null,
+                            solutionImageUrl: q.solution_image_url || null,
+                          });
+                        }}
+                      >
+                        <Ionicons name="copy-outline" size={17} color="#9333EA" />
+                        <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: "#9333EA" }}>Duplicate below</Text>
+                      </Pressable>
+                    </View>
                   </View>
                 ))}
               </ScrollView>
@@ -5242,7 +5348,7 @@ export default function AdminDashboard() {
               <ScrollView style={styles.modalScroll}>
                 <View style={styles.formField}>
                   <Text style={styles.formLabel}>Question *</Text>
-                  <TextInput style={[styles.formInput, styles.formInputMulti]} placeholder="Enter question text" placeholderTextColor={Colors.light.textMuted} value={newQ.questionText} onChangeText={(v) => setNewQ(p => ({ ...p, questionText: v }))} multiline numberOfLines={3} />
+                  <TextInput style={[styles.formInput, styles.formInputMulti]} placeholder="Enter question text (Enter for new line)" placeholderTextColor={Colors.light.textMuted} value={newQ.questionText} onChangeText={(v) => setNewQ(p => ({ ...p, questionText: v }))} multiline blurOnSubmit={false} numberOfLines={3} />
                 </View>
                 {[
                   { key: "optionA", label: "Option A *" },
@@ -5267,7 +5373,7 @@ export default function AdminDashboard() {
                 </View>
                 <View style={styles.formField}>
                   <Text style={styles.formLabel}>Explanation</Text>
-                  <TextInput style={[styles.formInput, styles.formInputMulti]} placeholder="Why this answer?" placeholderTextColor={Colors.light.textMuted} value={newQ.explanation} onChangeText={(v) => setNewQ(p => ({ ...p, explanation: v }))} multiline numberOfLines={2} />
+                  <TextInput style={[styles.formInput, styles.formInputMulti]} placeholder="Why this answer?" placeholderTextColor={Colors.light.textMuted} value={newQ.explanation} onChangeText={(v) => setNewQ(p => ({ ...p, explanation: v }))} multiline blurOnSubmit={false} numberOfLines={2} />
                 </View>
                 <View style={styles.formField}>
                   <Text style={styles.formLabel}>Difficulty</Text>
@@ -5308,7 +5414,8 @@ export default function AdminDashboard() {
                 <Pressable
                   style={[styles.createBtn, !newQ.questionText && styles.createBtnDisabled]}
                   onPress={() => newQ.questionText && addQuestionMutation.mutate({
-                    testId: showTestQuestions,
+                    testId: showTestQuestions!,
+                    ...(standaloneAddQuestionAfterId != null ? { insertAfterQuestionId: standaloneAddQuestionAfterId } : {}),
                     questionText: newQ.questionText, optionA: newQ.optionA, optionB: newQ.optionB,
                     optionC: newQ.optionC, optionD: newQ.optionD, correctOption: newQ.correctOption,
                     explanation: newQ.explanation, marks: parseInt(newQ.marks) || 4, negativeMarks: parseInt(newQ.negativeMarks) || 1,
@@ -5366,6 +5473,111 @@ export default function AdminDashboard() {
                 </Pressable>
               </ScrollView>
             )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Edit Question — after test sheet so it stacks above on web */}
+      <Modal visible={!!editQuestion} animationType="slide" transparent onRequestClose={() => setEditQuestion(null)}>
+        <View style={[styles.modalOverlay, { zIndex: 100000, elevation: 100 }]}>
+          <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
+            <View style={styles.modalHeader}>
+              <Pressable onPress={() => setEditQuestion(null)} hitSlop={10}>
+                <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
+              </Pressable>
+              <Text style={[styles.modalTitle, { flex: 1, marginHorizontal: 8 }]}>Edit Question</Text>
+              <Pressable onPress={() => setEditQuestion(null)} hitSlop={10}>
+                <Ionicons name="close" size={24} color={Colors.light.text} />
+              </Pressable>
+            </View>
+            <ScrollView style={styles.modalScroll}>
+              <View style={styles.formField}>
+                <Text style={styles.formLabel}>Question *</Text>
+                <TextInput style={[styles.formInput, { height: 80, textAlignVertical: "top" }]} value={editQuestion?.questionText || ""} onChangeText={(v) => setEditQuestion((p: any) => ({ ...p, questionText: v }))} placeholder="Question text" placeholderTextColor={Colors.light.textMuted} multiline blurOnSubmit={false} />
+              </View>
+              <View style={styles.formField}>
+                <Text style={styles.formLabel}>Question Image (optional)</Text>
+                <View style={{ flexDirection: "row", gap: 8 }}>
+                  <TextInput style={[styles.formInput, { flex: 1 }]} value={editQuestion?.imageUrl || ""} onChangeText={(v) => setEditQuestion((p: any) => ({ ...p, imageUrl: v }))} placeholder="Paste URL or upload" placeholderTextColor={Colors.light.textMuted} autoCapitalize="none" />
+                  <Pressable style={{ backgroundColor: "#EEF2FF", borderRadius: 10, paddingHorizontal: 12, alignItems: "center", justifyContent: "center" }}
+                    onPress={() => {
+                      if (Platform.OS === "web") {
+                        const input = document.createElement("input"); input.type = "file"; input.accept = "image/*";
+                        input.onchange = async (e: any) => { const file = e.target.files?.[0]; if (!file) return;
+                          try { const blobUrl = URL.createObjectURL(file); const { publicUrl } = await uploadToR2(blobUrl, file.name, file.type || "image/jpeg", "images"); URL.revokeObjectURL(blobUrl); setEditQuestion((p: any) => ({ ...p, imageUrl: publicUrl })); } catch {} };
+                        input.click();
+                      }
+                    }}>
+                    <Ionicons name="cloud-upload-outline" size={18} color={Colors.light.primary} />
+                  </Pressable>
+                </View>
+                {!!editQuestion?.imageUrl && <Image source={{ uri: editQuestion.imageUrl }} style={{ width: "100%", height: 120, borderRadius: 8, marginTop: 6 }} resizeMode="contain" />}
+              </View>
+              {["A", "B", "C", "D"].map((letter) => (
+                <View key={letter} style={[styles.formField, { flexDirection: "row", alignItems: "center", gap: 8 }]}>
+                  <Pressable onPress={() => setEditQuestion((p: any) => ({ ...p, correctOption: letter }))}
+                    style={{ width: 26, height: 26, borderRadius: 13, borderWidth: 2, borderColor: editQuestion?.correctOption === letter ? "#22C55E" : Colors.light.border, backgroundColor: editQuestion?.correctOption === letter ? "#22C55E" : "transparent", alignItems: "center", justifyContent: "center" }}>
+                    {editQuestion?.correctOption === letter && <Ionicons name="checkmark" size={14} color="#fff" />}
+                  </Pressable>
+                  <TextInput style={[styles.formInput, { flex: 1 }]} value={editQuestion?.[`option${letter}`] || ""} onChangeText={(v) => setEditQuestion((p: any) => ({ ...p, [`option${letter}`]: v }))} placeholder={`Option ${letter}`} placeholderTextColor={Colors.light.textMuted} />
+                </View>
+              ))}
+              <View style={styles.formField}>
+                <Text style={styles.formLabel}>Explanation</Text>
+                <TextInput style={[styles.formInput, { height: 60, textAlignVertical: "top" }]} value={editQuestion?.explanation || ""} onChangeText={(v) => setEditQuestion((p: any) => ({ ...p, explanation: v }))} placeholder="Solution explanation" placeholderTextColor={Colors.light.textMuted} multiline blurOnSubmit={false} />
+              </View>
+              <View style={styles.formField}>
+                <Text style={styles.formLabel}>Solution Image (optional)</Text>
+                <View style={{ flexDirection: "row", gap: 8 }}>
+                  <TextInput style={[styles.formInput, { flex: 1 }]} value={editQuestion?.solutionImageUrl || ""} onChangeText={(v) => setEditQuestion((p: any) => ({ ...p, solutionImageUrl: v }))} placeholder="Paste URL or upload" placeholderTextColor={Colors.light.textMuted} autoCapitalize="none" />
+                  <Pressable style={{ backgroundColor: "#EEF2FF", borderRadius: 10, paddingHorizontal: 12, alignItems: "center", justifyContent: "center" }}
+                    onPress={() => {
+                      if (Platform.OS === "web") {
+                        const input = document.createElement("input"); input.type = "file"; input.accept = "image/*";
+                        input.onchange = async (e: any) => { const file = e.target.files?.[0]; if (!file) return;
+                          try { const blobUrl = URL.createObjectURL(file); const { publicUrl } = await uploadToR2(blobUrl, file.name, file.type || "image/jpeg", "images"); URL.revokeObjectURL(blobUrl); setEditQuestion((p: any) => ({ ...p, solutionImageUrl: publicUrl })); } catch {} };
+                        input.click();
+                      }
+                    }}>
+                    <Ionicons name="cloud-upload-outline" size={18} color={Colors.light.primary} />
+                  </Pressable>
+                </View>
+                {!!editQuestion?.solutionImageUrl && <Image source={{ uri: editQuestion.solutionImageUrl }} style={{ width: "100%", height: 120, borderRadius: 8, marginTop: 6 }} resizeMode="contain" />}
+              </View>
+              <View style={styles.formField}>
+                <Text style={styles.formLabel}>Difficulty</Text>
+                <View style={{ flexDirection: "row", gap: 8 }}>
+                  {["easy","moderate","hard"].map((d) => (
+                    <Pressable key={d} onPress={() => setEditQuestion((p: any) => ({ ...p, difficulty: d }))} style={{ flex: 1, paddingVertical: 8, borderRadius: 8, alignItems: "center", backgroundColor: (editQuestion?.difficulty || "moderate") === d ? (d === "easy" ? "#22C55E" : d === "moderate" ? "#F59E0B" : "#EF4444") : "#F3F4F6" }}>
+                      <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: (editQuestion?.difficulty || "moderate") === d ? "#fff" : Colors.light.text, textTransform: "capitalize" }}>{d}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </View>
+              <View style={{ flexDirection: "row", gap: 12 }}>
+                <View style={[styles.formField, { flex: 1 }]}>
+                  <Text style={styles.formLabel}>Topic</Text>
+                  <TextInput style={styles.formInput} value={editQuestion?.topic || ""} onChangeText={(v) => setEditQuestion((p: any) => ({ ...p, topic: v }))} placeholder="Topic" placeholderTextColor={Colors.light.textMuted} />
+                </View>
+                <View style={[styles.formField, { flex: 1 }]}>
+                  <Text style={styles.formLabel}>Correct Marks</Text>
+                  <TextInput style={styles.formInput} value={editQuestion?.marks || ""} onChangeText={(v) => setEditQuestion((p: any) => ({ ...p, marks: v }))} placeholder="4" placeholderTextColor={Colors.light.textMuted} keyboardType="numeric" />
+                </View>
+                <View style={[styles.formField, { flex: 1 }]}>
+                  <Text style={styles.formLabel}>Negative Marks</Text>
+                  <TextInput style={styles.formInput} value={editQuestion?.negativeMarks || ""} onChangeText={(v) => setEditQuestion((p: any) => ({ ...p, negativeMarks: v }))} placeholder="1" placeholderTextColor={Colors.light.textMuted} keyboardType="numeric" />
+                </View>
+              </View>
+            </ScrollView>
+            <Pressable
+              style={[styles.createBtn, !editQuestion?.questionText && styles.createBtnDisabled]}
+              disabled={!editQuestion?.questionText || updateQuestionMutation.isPending}
+              onPress={() => editQuestion && updateQuestionMutation.mutate({ id: editQuestion.id, questionText: editQuestion.questionText, optionA: editQuestion.optionA, optionB: editQuestion.optionB, optionC: editQuestion.optionC, optionD: editQuestion.optionD, correctOption: editQuestion.correctOption, explanation: editQuestion.explanation, topic: editQuestion.topic, marks: editQuestion.marks, negativeMarks: editQuestion.negativeMarks, difficulty: editQuestion.difficulty, imageUrl: editQuestion.imageUrl, solutionImageUrl: editQuestion.solutionImageUrl })}
+            >
+              <LinearGradient colors={[Colors.light.primary, Colors.light.primaryDark]} style={styles.createBtnGrad}>
+                {updateQuestionMutation.isPending ? <ActivityIndicator color="#fff" /> : <Text style={styles.createBtnText}>Save Question</Text>}
+              </LinearGradient>
+            </Pressable>
           </View>
         </View>
       </Modal>
@@ -5474,6 +5686,7 @@ export default function AdminDashboard() {
         onClose={() => setShowBulkUploadModal(null)}
         onSaved={() => { qc.invalidateQueries({ queryKey: ["/api/admin/tests"] }); setShowBulkUploadModal(null); }}
         bottomPadding={bottomPadding}
+        modalStyle={Platform.OS === "web" ? { zIndex: 93000 } : undefined}
       />
 
       {/* Mission Leaderboard Modal */}
@@ -5610,106 +5823,6 @@ export default function AdminDashboard() {
               </ScrollView>
             );
           })()}
-        </View>
-      </Modal>
-
-      {/* Edit Question Modal */}
-      <Modal visible={!!editQuestion} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Edit Question</Text>
-              <Pressable onPress={() => setEditQuestion(null)}><Ionicons name="close" size={24} color={Colors.light.text} /></Pressable>
-            </View>
-            <ScrollView style={styles.modalScroll}>
-              <View style={styles.formField}>
-                <Text style={styles.formLabel}>Question *</Text>
-                <TextInput style={[styles.formInput, { height: 80, textAlignVertical: "top" }]} value={editQuestion?.questionText || ""} onChangeText={(v) => setEditQuestion((p: any) => ({ ...p, questionText: v }))} placeholder="Question text" placeholderTextColor={Colors.light.textMuted} multiline />
-              </View>
-              <View style={styles.formField}>
-                <Text style={styles.formLabel}>Question Image (optional)</Text>
-                <View style={{ flexDirection: "row", gap: 8 }}>
-                  <TextInput style={[styles.formInput, { flex: 1 }]} value={editQuestion?.imageUrl || ""} onChangeText={(v) => setEditQuestion((p: any) => ({ ...p, imageUrl: v }))} placeholder="Paste URL or upload" placeholderTextColor={Colors.light.textMuted} autoCapitalize="none" />
-                  <Pressable style={{ backgroundColor: "#EEF2FF", borderRadius: 10, paddingHorizontal: 12, alignItems: "center", justifyContent: "center" }}
-                    onPress={() => {
-                      if (Platform.OS === "web") {
-                        const input = document.createElement("input"); input.type = "file"; input.accept = "image/*";
-                        input.onchange = async (e: any) => { const file = e.target.files?.[0]; if (!file) return;
-                          try { const blobUrl = URL.createObjectURL(file); const { publicUrl } = await uploadToR2(blobUrl, file.name, file.type || "image/jpeg", "images"); URL.revokeObjectURL(blobUrl); setEditQuestion((p: any) => ({ ...p, imageUrl: publicUrl })); } catch {} };
-                        input.click();
-                      }
-                    }}>
-                    <Ionicons name="cloud-upload-outline" size={18} color={Colors.light.primary} />
-                  </Pressable>
-                </View>
-                {!!editQuestion?.imageUrl && <Image source={{ uri: editQuestion.imageUrl }} style={{ width: "100%", height: 120, borderRadius: 8, marginTop: 6 }} resizeMode="contain" />}
-              </View>
-              {["A", "B", "C", "D"].map((letter) => (
-                <View key={letter} style={[styles.formField, { flexDirection: "row", alignItems: "center", gap: 8 }]}>
-                  <Pressable onPress={() => setEditQuestion((p: any) => ({ ...p, correctOption: letter }))}
-                    style={{ width: 26, height: 26, borderRadius: 13, borderWidth: 2, borderColor: editQuestion?.correctOption === letter ? "#22C55E" : Colors.light.border, backgroundColor: editQuestion?.correctOption === letter ? "#22C55E" : "transparent", alignItems: "center", justifyContent: "center" }}>
-                    {editQuestion?.correctOption === letter && <Ionicons name="checkmark" size={14} color="#fff" />}
-                  </Pressable>
-                  <TextInput style={[styles.formInput, { flex: 1 }]} value={editQuestion?.[`option${letter}`] || ""} onChangeText={(v) => setEditQuestion((p: any) => ({ ...p, [`option${letter}`]: v }))} placeholder={`Option ${letter}`} placeholderTextColor={Colors.light.textMuted} />
-                </View>
-              ))}
-              <View style={styles.formField}>
-                <Text style={styles.formLabel}>Explanation</Text>
-                <TextInput style={[styles.formInput, { height: 60, textAlignVertical: "top" }]} value={editQuestion?.explanation || ""} onChangeText={(v) => setEditQuestion((p: any) => ({ ...p, explanation: v }))} placeholder="Solution explanation" placeholderTextColor={Colors.light.textMuted} multiline />
-              </View>
-              <View style={styles.formField}>
-                <Text style={styles.formLabel}>Solution Image (optional)</Text>
-                <View style={{ flexDirection: "row", gap: 8 }}>
-                  <TextInput style={[styles.formInput, { flex: 1 }]} value={editQuestion?.solutionImageUrl || ""} onChangeText={(v) => setEditQuestion((p: any) => ({ ...p, solutionImageUrl: v }))} placeholder="Paste URL or upload" placeholderTextColor={Colors.light.textMuted} autoCapitalize="none" />
-                  <Pressable style={{ backgroundColor: "#EEF2FF", borderRadius: 10, paddingHorizontal: 12, alignItems: "center", justifyContent: "center" }}
-                    onPress={() => {
-                      if (Platform.OS === "web") {
-                        const input = document.createElement("input"); input.type = "file"; input.accept = "image/*";
-                        input.onchange = async (e: any) => { const file = e.target.files?.[0]; if (!file) return;
-                          try { const blobUrl = URL.createObjectURL(file); const { publicUrl } = await uploadToR2(blobUrl, file.name, file.type || "image/jpeg", "images"); URL.revokeObjectURL(blobUrl); setEditQuestion((p: any) => ({ ...p, solutionImageUrl: publicUrl })); } catch {} };
-                        input.click();
-                      }
-                    }}>
-                    <Ionicons name="cloud-upload-outline" size={18} color={Colors.light.primary} />
-                  </Pressable>
-                </View>
-                {!!editQuestion?.solutionImageUrl && <Image source={{ uri: editQuestion.solutionImageUrl }} style={{ width: "100%", height: 120, borderRadius: 8, marginTop: 6 }} resizeMode="contain" />}
-              </View>
-              <View style={styles.formField}>
-                <Text style={styles.formLabel}>Difficulty</Text>
-                <View style={{ flexDirection: "row", gap: 8 }}>
-                  {["easy","moderate","hard"].map((d) => (
-                    <Pressable key={d} onPress={() => setEditQuestion((p: any) => ({ ...p, difficulty: d }))} style={{ flex: 1, paddingVertical: 8, borderRadius: 8, alignItems: "center", backgroundColor: (editQuestion?.difficulty || "moderate") === d ? (d === "easy" ? "#22C55E" : d === "moderate" ? "#F59E0B" : "#EF4444") : "#F3F4F6" }}>
-                      <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: (editQuestion?.difficulty || "moderate") === d ? "#fff" : Colors.light.text, textTransform: "capitalize" }}>{d}</Text>
-                    </Pressable>
-                  ))}
-                </View>
-              </View>
-              <View style={{ flexDirection: "row", gap: 12 }}>
-                <View style={[styles.formField, { flex: 1 }]}>
-                  <Text style={styles.formLabel}>Topic</Text>
-                  <TextInput style={styles.formInput} value={editQuestion?.topic || ""} onChangeText={(v) => setEditQuestion((p: any) => ({ ...p, topic: v }))} placeholder="Topic" placeholderTextColor={Colors.light.textMuted} />
-                </View>
-                <View style={[styles.formField, { flex: 1 }]}>
-                  <Text style={styles.formLabel}>Correct Marks</Text>
-                  <TextInput style={styles.formInput} value={editQuestion?.marks || ""} onChangeText={(v) => setEditQuestion((p: any) => ({ ...p, marks: v }))} placeholder="4" placeholderTextColor={Colors.light.textMuted} keyboardType="numeric" />
-                </View>
-                <View style={[styles.formField, { flex: 1 }]}>
-                  <Text style={styles.formLabel}>Negative Marks</Text>
-                  <TextInput style={styles.formInput} value={editQuestion?.negativeMarks || ""} onChangeText={(v) => setEditQuestion((p: any) => ({ ...p, negativeMarks: v }))} placeholder="1" placeholderTextColor={Colors.light.textMuted} keyboardType="numeric" />
-                </View>
-              </View>
-            </ScrollView>
-            <Pressable
-              style={[styles.createBtn, !editQuestion?.questionText && styles.createBtnDisabled]}
-              disabled={!editQuestion?.questionText || updateQuestionMutation.isPending}
-              onPress={() => editQuestion && updateQuestionMutation.mutate({ id: editQuestion.id, questionText: editQuestion.questionText, optionA: editQuestion.optionA, optionB: editQuestion.optionB, optionC: editQuestion.optionC, optionD: editQuestion.optionD, correctOption: editQuestion.correctOption, explanation: editQuestion.explanation, topic: editQuestion.topic, marks: editQuestion.marks, negativeMarks: editQuestion.negativeMarks, difficulty: editQuestion.difficulty, imageUrl: editQuestion.imageUrl, solutionImageUrl: editQuestion.solutionImageUrl })}
-            >
-              <LinearGradient colors={[Colors.light.primary, Colors.light.primaryDark]} style={styles.createBtnGrad}>
-                {updateQuestionMutation.isPending ? <ActivityIndicator color="#fff" /> : <Text style={styles.createBtnText}>Save Question</Text>}
-              </LinearGradient>
-            </Pressable>
-          </View>
         </View>
       </Modal>
 
@@ -5882,8 +5995,8 @@ export default function AdminDashboard() {
       </Modal>
 
       {/* Edit Admin Test Modal */}
-      <Modal visible={!!editAdminTest} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
+      <Modal visible={!!editAdminTest} animationType="slide" transparent style={Platform.OS === "web" ? { zIndex: 93500 } : undefined}>
+        <View style={[styles.modalOverlay, Platform.OS === "web" ? { zIndex: 93500, elevation: 88 } : null]}>
           <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Edit Test</Text>
@@ -6072,14 +6185,15 @@ export default function AdminDashboard() {
               <View style={styles.formField}>
                 <Text style={styles.formLabel}>Questions ({editMission?.questions?.length || 0})</Text>
                 {(editMission?.questions || []).map((q: any, idx: number) => (
-                  <View key={idx} style={styles.missionQCard}>
+                  <React.Fragment key={idx}>
+                  <View style={styles.missionQCard}>
                     <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
                       <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>Q{idx + 1}</Text>
                       <Pressable onPress={() => setEditMission((p: any) => ({ ...p, questions: p.questions.filter((_: any, i: number) => i !== idx) }))}>
                         <Ionicons name="close-circle" size={20} color="#EF4444" />
                       </Pressable>
                     </View>
-                    <TextInput style={styles.formInput} placeholder="Question text" placeholderTextColor={Colors.light.textMuted} value={q.question} onChangeText={(v) => { const nq = [...editMission.questions]; nq[idx] = { ...nq[idx], question: v }; setEditMission((p: any) => ({ ...p, questions: nq })); }} />
+                    <TextInput style={[styles.formInput, { minHeight: 88, textAlignVertical: "top" }]} placeholder="Question text (Enter for new line)" placeholderTextColor={Colors.light.textMuted} value={q.question} onChangeText={(v) => { const nq = [...editMission.questions]; nq[idx] = { ...nq[idx], question: v }; setEditMission((p: any) => ({ ...p, questions: nq })); }} multiline blurOnSubmit={false} />
                     {["A", "B", "C", "D"].map((letter, optIdx) => (
                       <View key={letter} style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4 }}>
                         <Pressable onPress={() => { const nq = [...editMission.questions]; nq[idx] = { ...nq[idx], correct: letter }; setEditMission((p: any) => ({ ...p, questions: nq })); }}
@@ -6091,8 +6205,45 @@ export default function AdminDashboard() {
                       </View>
                     ))}
                     <TextInput style={[styles.formInput, { marginTop: 4 }]} placeholder="Topic" placeholderTextColor={Colors.light.textMuted} value={q.topic || ""} onChangeText={(v) => { const nq = [...editMission.questions]; nq[idx] = { ...nq[idx], topic: v }; setEditMission((p: any) => ({ ...p, questions: nq })); }} />
+                    <TextInput style={[styles.formInput, { marginTop: 4 }]} placeholder="Subtopic (optional)" placeholderTextColor={Colors.light.textMuted} value={q.subtopic || ""} onChangeText={(v) => { const nq = [...editMission.questions]; nq[idx] = { ...nq[idx], subtopic: v }; setEditMission((p: any) => ({ ...p, questions: nq })); }} />
                     <TextInput style={[styles.formInput, { marginTop: 4 }]} placeholder="Marks (optional)" placeholderTextColor={Colors.light.textMuted} value={q.marks || ""} keyboardType="numeric" onChangeText={(v) => { const nq = [...editMission.questions]; nq[idx] = { ...nq[idx], marks: v }; setEditMission((p: any) => ({ ...p, questions: nq })); }} />
+                    <View style={{ marginTop: 8, gap: 4 }}>
+                      <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Question Image (optional)</Text>
+                      <AdminImageBoxInline imageUrl={q.image_url || ""} onUrlChange={(v) => { const nq = [...editMission.questions]; nq[idx] = { ...nq[idx], image_url: v }; setEditMission((p: any) => ({ ...p, questions: nq })); }} />
+                    </View>
+                    <TextInput style={[styles.formInput, { marginTop: 4, minHeight: 72, textAlignVertical: "top" }]} placeholder="Solution / Explanation (optional)" placeholderTextColor={Colors.light.textMuted} value={q.solution || ""} onChangeText={(v) => { const nq = [...editMission.questions]; nq[idx] = { ...nq[idx], solution: v }; setEditMission((p: any) => ({ ...p, questions: nq })); }} multiline blurOnSubmit={false} />
+                    <View style={{ marginTop: 4, gap: 4 }}>
+                      <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Solution Image (optional)</Text>
+                      <AdminImageBoxInline imageUrl={q.solution_image_url || ""} onUrlChange={(v) => { const nq = [...editMission.questions]; nq[idx] = { ...nq[idx], solution_image_url: v }; setEditMission((p: any) => ({ ...p, questions: nq })); }} />
+                    </View>
                   </View>
+                  <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, paddingVertical: 10 }}>
+                    <Pressable
+                      style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: Colors.light.primary, backgroundColor: `${Colors.light.primary}12` }}
+                      onPress={() => setEditMission((p: any) => {
+                        const list = [...(p.questions || [])];
+                        list.splice(idx + 1, 0, { question: "", options: ["", "", "", ""], correct: "A", topic: "", subtopic: "", marks: "", solution: "", image_url: "", solution_image_url: "" });
+                        return { ...p, questions: list };
+                      })}
+                    >
+                      <Ionicons name="add-circle-outline" size={17} color={Colors.light.primary} />
+                      <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>Add below</Text>
+                    </Pressable>
+                    <Pressable
+                      style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: "#9333EA", backgroundColor: "#F5F3FF" }}
+                      onPress={() => setEditMission((p: any) => {
+                        const list = [...(p.questions || [])];
+                        const src = list[idx];
+                        const copy = { ...src, options: [...(src.options || ["", "", "", ""])] };
+                        list.splice(idx + 1, 0, copy);
+                        return { ...p, questions: list };
+                      })}
+                    >
+                      <Ionicons name="copy-outline" size={17} color="#9333EA" />
+                      <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: "#9333EA" }}>Duplicate below</Text>
+                    </Pressable>
+                  </View>
+                  </React.Fragment>
                 ))}
                 <Pressable style={styles.addQBtn} onPress={() => setEditMission((p: any) => ({ ...p, questions: [...(p.questions || []), { question: "", options: ["","","",""], correct: "A", topic: "", marks: "", solution: "", image_url: "", solution_image_url: "", subtopic: "" }] }))}>
                   <Ionicons name="add-circle-outline" size={18} color={Colors.light.primary} />

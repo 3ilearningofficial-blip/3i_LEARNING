@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable, TextInput,
   Platform, ActivityIndicator, Alert, Modal, Switch, Image, Linking,
@@ -208,10 +208,14 @@ export default function AdminCourseScreen() {
   const [showAddLecture, setShowAddLecture] = useState(false);
   const [showAddTest, setShowAddTest] = useState(false);
   const [showAddQuestion, setShowAddQuestion] = useState<number | null>(null);
+  /** Insert manual add immediately after this question id when saving */
+  const [addQuestionAfterId, setAddQuestionAfterId] = useState<number | null>(null);
   const [showViewQuestions, setShowViewQuestions] = useState<number | null>(null); // test id for viewing questions
   const [questionsList, setQuestionsList] = useState<any[]>([]);
   const [questionsLoading, setQuestionsLoading] = useState(false);
   const [editQuestion, setEditQuestion] = useState<any>(null);
+  /** When opening Add Question from the Questions modal, reopen that modal after close/success */
+  const resumeQuestionsModalAfterAddRef = useRef<number | null>(null);
   const [showAddMaterial, setShowAddMaterial] = useState(false);
   const [showAddLiveClass, setShowAddLiveClass] = useState(false);
   const [showEditCourse, setShowEditCourse] = useState(false);
@@ -593,17 +597,50 @@ export default function AdminCourseScreen() {
     onError: () => Alert.alert("Error", "Failed to create test"),
   });
 
+  type AddQuestionMutationVars = {
+    testId: number;
+    data: NewQuestion;
+    insertAfterQuestionId?: number | null;
+    /** True when duplicating from the Questions list (stay on list and reload). */
+    duplicateRefresh?: boolean;
+  };
+
   const addQuestionMutation = useMutation({
-    mutationFn: async ({ testId, data }: { testId: number; data: NewQuestion }) => {
-      await apiRequest("POST", "/api/admin/questions", [{
-        testId, ...data,
-        marks: parseInt(data.marks), negativeMarks: parseFloat(data.negativeMarks),
-        imageUrl: data.imageUrl || null, solutionImageUrl: data.solutionImageUrl || null,
-      }]);
+    mutationFn: async ({ testId, data, insertAfterQuestionId }: AddQuestionMutationVars) => {
+      const row: Record<string, unknown> = {
+        testId,
+        questionText: data.questionText,
+        optionA: data.optionA,
+        optionB: data.optionB,
+        optionC: data.optionC || "",
+        optionD: data.optionD || "",
+        correctOption: data.correctOption,
+        explanation: data.explanation || "",
+        topic: data.topic || "",
+        difficulty: (data as any).difficulty || "moderate",
+        marks: parseInt(String(data.marks), 10) || 4,
+        negativeMarks: parseFloat(String(data.negativeMarks)) || 1,
+        imageUrl: data.imageUrl || null,
+        solutionImageUrl: data.solutionImageUrl || null,
+      };
+      if (insertAfterQuestionId != null && Number.isFinite(insertAfterQuestionId)) {
+        row.insertAfterQuestionId = insertAfterQuestionId;
+      }
+      await apiRequest("POST", "/api/admin/questions", [row]);
     },
-    onSuccess: () => {
+    onSuccess: (_data, variables: AddQuestionMutationVars) => {
       qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] });
-      setShowAddQuestion(null); setNewQuestion(emptyQuestion);
+      const resumeId = resumeQuestionsModalAfterAddRef.current;
+      resumeQuestionsModalAfterAddRef.current = null;
+      setShowAddQuestion(null);
+      setNewQuestion(emptyQuestion);
+      setAddQuestionAfterId(null);
+      if (resumeId != null) {
+        setShowViewQuestions(resumeId);
+        void loadQuestions(resumeId);
+      } else if (variables.duplicateRefresh && variables.testId) {
+        void loadQuestions(variables.testId);
+      }
       Alert.alert("Success", "Question added!");
     },
     onError: () => Alert.alert("Error", "Failed to add question"),
@@ -701,6 +738,18 @@ export default function AdminCourseScreen() {
       if (res.ok) setQuestionsList(await res.json());
     } catch {}
     setQuestionsLoading(false);
+  };
+
+  const closeAddQuestionModal = () => {
+    const resumeId = resumeQuestionsModalAfterAddRef.current;
+    resumeQuestionsModalAfterAddRef.current = null;
+    setShowAddQuestion(null);
+    setNewQuestion(emptyQuestion);
+    setAddQuestionAfterId(null);
+    if (resumeId != null) {
+      setShowViewQuestions(resumeId);
+      void loadQuestions(resumeId);
+    }
   };
 
   const updateQuestionMutation = useMutation({
@@ -1066,7 +1115,7 @@ export default function AdminCourseScreen() {
                 </View>
                 <Text style={styles.testCardMeta}>{test.total_questions} questions · {test.duration_minutes}min · {test.test_type}</Text>
                 <View style={styles.testUploadRow}>
-                  <Pressable style={styles.testUploadBtn} onPress={() => setShowAddQuestion(test.id)}>
+                  <Pressable style={styles.testUploadBtn} onPress={() => { resumeQuestionsModalAfterAddRef.current = null; setShowAddQuestion(test.id); }}>
                     <Ionicons name="add-circle-outline" size={16} color={Colors.light.primary} />
                     <Text style={styles.testUploadBtnText}>Add Questions</Text>
                   </Pressable>
@@ -1731,224 +1780,6 @@ export default function AdminCourseScreen() {
         </View>
       </Modal>
 
-      {/* View/Edit Questions Modal */}
-      <Modal visible={showViewQuestions !== null} animationType="slide" transparent={false}>
-        <View style={{ flex: 1, backgroundColor: Colors.light.background }}>
-          <LinearGradient colors={["#0A1628", "#1A2E50"]} style={{ paddingTop: topPadding + 8, paddingHorizontal: 16, paddingBottom: 14, flexDirection: "row", alignItems: "center", gap: 12 }}>
-            <Pressable style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" }} onPress={() => { setShowViewQuestions(null); setQuestionsList([]); setEditQuestion(null); }}>
-              <Ionicons name="arrow-back" size={20} color="#fff" />
-            </Pressable>
-            <Text style={{ fontSize: 17, fontFamily: "Inter_700Bold", color: "#fff", flex: 1 }}>Questions ({questionsList.length})</Text>
-            <Pressable style={{ flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: Colors.light.primary, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8 }}
-              onPress={() => { if (showViewQuestions) setShowAddQuestion(showViewQuestions); setShowViewQuestions(null); }}>
-              <Ionicons name="add" size={16} color="#fff" />
-              <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: "#fff" }}>Add</Text>
-            </Pressable>
-          </LinearGradient>
-          {questionsLoading ? (
-            <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}><ActivityIndicator size="large" color={Colors.light.primary} /></View>
-          ) : (
-            <ScrollView contentContainerStyle={{ padding: 16, gap: 12 }}>
-              {questionsList.length === 0 && (
-                <View style={{ alignItems: "center", paddingVertical: 40, gap: 8 }}>
-                  <Ionicons name="help-circle-outline" size={48} color={Colors.light.textMuted} />
-                  <Text style={{ fontSize: 15, fontFamily: "Inter_500Medium", color: Colors.light.textMuted }}>No questions yet</Text>
-                </View>
-              )}
-              {questionsList.map((q: any, idx: number) => (
-                <View key={q.id} style={{ backgroundColor: "#fff", borderRadius: 14, padding: 14, gap: 8, borderWidth: 1, borderColor: Colors.light.border }}>
-                  {editQuestion?.id === q.id ? (
-                    <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 500 }}>
-                      <View style={{ gap: 10 }}>
-                        {/* Question text */}
-                        <TextInput style={[styles.formInput, { minHeight: 70, textAlignVertical: "top" }]} multiline value={editQuestion.question_text} onChangeText={(v) => setEditQuestion((p: any) => ({ ...p, question_text: v }))} placeholder="Question text" placeholderTextColor={Colors.light.textMuted} />
-                        {/* Question image URL */}
-                        <View style={{ gap: 4 }}>
-                          <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Question Image (optional)</Text>
-                          <View style={{ flexDirection: "row", gap: 8 }}>
-                            <TextInput style={[styles.formInput, { flex: 1 }]} value={editQuestion.image_url || ""} onChangeText={(v) => setEditQuestion((p: any) => ({ ...p, image_url: v }))} placeholder="Paste URL or upload" placeholderTextColor={Colors.light.textMuted} autoCapitalize="none" />
-                            <Pressable style={{ backgroundColor: "#EEF2FF", borderRadius: 10, paddingHorizontal: 12, alignItems: "center", justifyContent: "center" }}
-                              onPress={() => pickFileAndUpload("images", "image/*", (url) => setEditQuestion((p: any) => ({ ...p, image_url: url })))}>
-                              <Ionicons name="cloud-upload-outline" size={18} color={Colors.light.primary} />
-                            </Pressable>
-                          </View>
-                          {!!editQuestion.image_url && (
-                            <View style={{ position: "relative" }}>
-                              <Image source={{ uri: editQuestion.image_url }} style={{ width: "100%", height: 120, borderRadius: 8 }} resizeMode="contain" />
-                              <Pressable onPress={() => setEditQuestion((p: any) => ({ ...p, image_url: "" }))} style={{ position: "absolute", top: 4, right: 4, backgroundColor: "#EF4444", borderRadius: 12, width: 24, height: 24, alignItems: "center", justifyContent: "center" }}>
-                                <Ionicons name="close" size={14} color="#fff" />
-                              </Pressable>
-                            </View>
-                          )}
-                        </View>
-                        {/* Options */}
-                        {["A","B","C","D"].map((opt) => (
-                          <View key={opt} style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                            <Pressable onPress={() => setEditQuestion((p: any) => ({ ...p, correct_option: opt }))} style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: editQuestion.correct_option === opt ? "#22C55E" : "#F3F4F6", alignItems: "center", justifyContent: "center", borderWidth: 2, borderColor: editQuestion.correct_option === opt ? "#22C55E" : "#E5E7EB" }}>
-                              <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: editQuestion.correct_option === opt ? "#fff" : Colors.light.text }}>{opt}</Text>
-                            </Pressable>
-                            <TextInput style={[styles.formInput, { flex: 1 }]} value={editQuestion[`option_${opt.toLowerCase()}`]} onChangeText={(v) => setEditQuestion((p: any) => ({ ...p, [`option_${opt.toLowerCase()}`]: v }))} placeholder={`Option ${opt}`} placeholderTextColor={Colors.light.textMuted} />
-                          </View>
-                        ))}
-                        {/* Explanation */}
-                        <TextInput style={[styles.formInput, { minHeight: 50, textAlignVertical: "top" }]} multiline value={editQuestion.explanation || ""} onChangeText={(v) => setEditQuestion((p: any) => ({ ...p, explanation: v }))} placeholder="Explanation (optional)" placeholderTextColor={Colors.light.textMuted} />
-                        {/* Solution image URL */}
-                        <View style={{ gap: 4 }}>
-                          <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Solution Image (optional)</Text>
-                          <View style={{ flexDirection: "row", gap: 8 }}>
-                            <TextInput style={[styles.formInput, { flex: 1 }]} value={editQuestion.solution_image_url || ""} onChangeText={(v) => setEditQuestion((p: any) => ({ ...p, solution_image_url: v }))} placeholder="Paste URL or upload" placeholderTextColor={Colors.light.textMuted} autoCapitalize="none" />
-                            <Pressable style={{ backgroundColor: "#EEF2FF", borderRadius: 10, paddingHorizontal: 12, alignItems: "center", justifyContent: "center" }}
-                              onPress={() => pickFileAndUpload("images", "image/*", (url) => setEditQuestion((p: any) => ({ ...p, solution_image_url: url })))}>
-                              <Ionicons name="cloud-upload-outline" size={18} color={Colors.light.primary} />
-                            </Pressable>
-                          </View>
-                          {!!editQuestion.solution_image_url && (
-                            <View style={{ position: "relative" }}>
-                              <Image source={{ uri: editQuestion.solution_image_url }} style={{ width: "100%", height: 120, borderRadius: 8 }} resizeMode="contain" />
-                              <Pressable onPress={() => setEditQuestion((p: any) => ({ ...p, solution_image_url: "" }))} style={{ position: "absolute", top: 4, right: 4, backgroundColor: "#EF4444", borderRadius: 12, width: 24, height: 24, alignItems: "center", justifyContent: "center" }}>
-                                <Ionicons name="close" size={14} color="#fff" />
-                              </Pressable>
-                            </View>
-                          )}
-                        </View>
-                        {/* Difficulty */}
-                        <View style={{ gap: 4 }}>
-                          <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Difficulty</Text>
-                          <View style={{ flexDirection: "row", gap: 8 }}>
-                            {["easy","moderate","hard"].map((d) => (
-                              <Pressable key={d} onPress={() => setEditQuestion((p: any) => ({ ...p, difficulty: d }))} style={{ flex: 1, paddingVertical: 8, borderRadius: 8, alignItems: "center", backgroundColor: (editQuestion.difficulty || "moderate") === d ? (d === "easy" ? "#22C55E" : d === "moderate" ? "#F59E0B" : "#EF4444") : "#F3F4F6" }}>
-                                <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: (editQuestion.difficulty || "moderate") === d ? "#fff" : Colors.light.text, textTransform: "capitalize" }}>{d}</Text>
-                              </Pressable>
-                            ))}
-                          </View>
-                        </View>
-                        {/* Marks row */}
-                        <View style={{ flexDirection: "row", gap: 10 }}>
-                          <View style={{ flex: 1, gap: 4 }}>
-                            <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Correct Marks</Text>
-                            <TextInput style={styles.formInput} value={String(editQuestion.marks ?? 4)} onChangeText={(v) => setEditQuestion((p: any) => ({ ...p, marks: v }))} keyboardType="numeric" placeholder="4" placeholderTextColor={Colors.light.textMuted} />
-                          </View>
-                          <View style={{ flex: 1, gap: 4 }}>
-                            <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Negative Marks</Text>
-                            <TextInput style={styles.formInput} value={String(editQuestion.negative_marks ?? 1)} onChangeText={(v) => setEditQuestion((p: any) => ({ ...p, negative_marks: v }))} keyboardType="numeric" placeholder="1" placeholderTextColor={Colors.light.textMuted} />
-                          </View>
-                        </View>
-                        {/* Save / Cancel */}
-                        <View style={{ flexDirection: "row", gap: 8, paddingTop: 4 }}>
-                          <Pressable style={{ flex: 1, backgroundColor: Colors.light.primary, borderRadius: 10, paddingVertical: 12, alignItems: "center" }} onPress={() => updateQuestionMutation.mutate({ id: editQuestion.id, questionText: editQuestion.question_text, optionA: editQuestion.option_a, optionB: editQuestion.option_b, optionC: editQuestion.option_c, optionD: editQuestion.option_d, correctOption: editQuestion.correct_option, explanation: editQuestion.explanation || "", topic: editQuestion.topic || "", marks: parseFloat(editQuestion.marks) || 4, negativeMarks: parseFloat(editQuestion.negative_marks) || 1, difficulty: editQuestion.difficulty || "moderate", imageUrl: editQuestion.image_url || null, solutionImageUrl: editQuestion.solution_image_url || null })}>
-                            <Text style={{ fontSize: 14, fontFamily: "Inter_600SemiBold", color: "#fff" }}>Save</Text>
-                          </Pressable>
-                          <Pressable style={{ flex: 1, backgroundColor: "#F3F4F6", borderRadius: 10, paddingVertical: 12, alignItems: "center" }} onPress={() => setEditQuestion(null)}>
-                            <Text style={{ fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Cancel</Text>
-                          </Pressable>
-                        </View>
-                      </View>
-                    </ScrollView>
-                  ) : (
-                    <>
-                      <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 8 }}>
-                        <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: Colors.light.textMuted, minWidth: 24 }}>Q{idx + 1}.</Text>
-                        <Text style={{ flex: 1, fontSize: 14, fontFamily: "Inter_500Medium", color: Colors.light.text }}>{q.question_text}</Text>
-                      </View>
-                      {["A","B","C","D"].map((opt) => (
-                        <View key={opt} style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingLeft: 24 }}>
-                          <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: q.correct_option === opt ? "#DCFCE7" : "#F3F4F6", alignItems: "center", justifyContent: "center" }}>
-                            <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: q.correct_option === opt ? "#16A34A" : Colors.light.textMuted }}>{opt}</Text>
-                          </View>
-                          <Text style={{ fontSize: 13, fontFamily: "Inter_400Regular", color: q.correct_option === opt ? "#16A34A" : Colors.light.text }}>{q[`option_${opt.toLowerCase()}`]}</Text>
-                        </View>
-                      ))}
-                      <View style={{ flexDirection: "row", gap: 8, paddingTop: 4 }}>
-                        <Pressable style={{ flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "#EEF2FF", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 }} onPress={() => setEditQuestion({ ...q })}>
-                          <Ionicons name="pencil-outline" size={14} color={Colors.light.primary} />
-                          <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>Edit</Text>
-                        </Pressable>
-                        <Pressable style={{ flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "#FEE2E2", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 }} onPress={() => {
-                          if (Platform.OS === "web") { if (window.confirm("Delete this question?")) deleteQuestionMutation.mutate(q.id); }
-                          else Alert.alert("Delete", "Delete this question?", [{ text: "Cancel", style: "cancel" }, { text: "Delete", style: "destructive", onPress: () => deleteQuestionMutation.mutate(q.id) }]);
-                        }}>
-                          <Ionicons name="trash-outline" size={14} color="#EF4444" />
-                          <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#EF4444" }}>Delete</Text>
-                        </Pressable>
-                      </View>
-                    </>
-                  )}
-                </View>
-              ))}
-            </ScrollView>
-          )}
-        </View>
-      </Modal>
-
-      {/* Add Question Modal */}
-      <Modal visible={showAddQuestion !== null} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Add Question</Text>
-              <Pressable onPress={() => { setShowAddQuestion(null); setNewQuestion(emptyQuestion); }}>
-                <Ionicons name="close" size={24} color={Colors.light.text} />
-              </Pressable>
-            </View>
-            <ScrollView style={{ maxHeight: 480 }} showsVerticalScrollIndicator={false}>
-              <FormField label="Question *" placeholder="Enter the question text" value={newQuestion.questionText} onChangeText={(v) => setNewQuestion(p => ({ ...p, questionText: v }))} multiline />
-              <FormField label="Option A *" placeholder="First option" value={newQuestion.optionA} onChangeText={(v) => setNewQuestion(p => ({ ...p, optionA: v }))} />
-              <FormField label="Option B *" placeholder="Second option" value={newQuestion.optionB} onChangeText={(v) => setNewQuestion(p => ({ ...p, optionB: v }))} />
-              <FormField label="Option C" placeholder="Third option" value={newQuestion.optionC} onChangeText={(v) => setNewQuestion(p => ({ ...p, optionC: v }))} />
-              <FormField label="Option D" placeholder="Fourth option" value={newQuestion.optionD} onChangeText={(v) => setNewQuestion(p => ({ ...p, optionD: v }))} />
-              <View style={styles.formField}>
-                <Text style={styles.formLabel}>Correct Option</Text>
-                <View style={{ flexDirection: "row", gap: 8 }}>
-                  {["A", "B", "C", "D"].map((opt) => (
-                    <Pressable key={opt} onPress={() => setNewQuestion(p => ({ ...p, correctOption: opt }))}
-                      style={{ flex: 1, paddingVertical: 10, borderRadius: 10, borderWidth: 2, alignItems: "center",
-                        borderColor: newQuestion.correctOption === opt ? "#22C55E" : Colors.light.border,
-                        backgroundColor: newQuestion.correctOption === opt ? "#DCFCE7" : "transparent" }}>
-                      <Text style={{ fontSize: 14, fontFamily: "Inter_700Bold", color: newQuestion.correctOption === opt ? "#16A34A" : Colors.light.textMuted }}>{opt}</Text>
-                    </Pressable>
-                  ))}
-                </View>
-              </View>
-              <FormField label="Topic" placeholder="e.g., Trigonometry" value={newQuestion.topic} onChangeText={(v) => setNewQuestion(p => ({ ...p, topic: v }))} />
-              <FormField label="Explanation (optional)" placeholder="Solution explanation" value={newQuestion.explanation} onChangeText={(v) => setNewQuestion(p => ({ ...p, explanation: v }))} multiline />
-              <View style={styles.formField}>
-                <Text style={styles.formLabel}>Difficulty</Text>
-                <View style={{ flexDirection: "row", gap: 8 }}>
-                  {(["easy", "moderate", "hard"] as const).map((d) => {
-                    const diffColors: Record<string, string> = { easy: "#22C55E", moderate: "#F59E0B", hard: "#EF4444" };
-                    const active = (newQuestion as any).difficulty === d;
-                    return (
-                      <Pressable key={d} onPress={() => setNewQuestion(p => ({ ...p, difficulty: d } as any))}
-                        style={{ flex: 1, paddingVertical: 9, borderRadius: 10, borderWidth: 2, alignItems: "center",
-                          borderColor: active ? diffColors[d] : Colors.light.border,
-                          backgroundColor: active ? diffColors[d] + "18" : "transparent" }}>
-                        <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: active ? diffColors[d] : Colors.light.textMuted, textTransform: "capitalize" }}>{d}</Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-              </View>
-              <FormField label="Marks for correct" placeholder="4" value={newQuestion.marks} onChangeText={(v) => setNewQuestion(p => ({ ...p, marks: v }))} numeric />
-              <FormField label="Negative marks for wrong" placeholder="1" value={newQuestion.negativeMarks} onChangeText={(v) => setNewQuestion(p => ({ ...p, negativeMarks: v }))} numeric />
-              {/* Question Image */}
-              <Text style={styles.formLabel}>Question Image (optional)</Text>
-              <Text style={{ fontSize: 11, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", marginBottom: 6 }}>Recommended: 800×400px, JPG/PNG, max 2MB</Text>
-              <AdminImageBox imageUrl={newQuestion.imageUrl} onUrlChange={(v) => setNewQuestion(p => ({ ...p, imageUrl: v }))} />
-              {/* Solution Image */}
-              <Text style={styles.formLabel}>Solution Image (optional)</Text>
-              <Text style={{ fontSize: 11, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", marginBottom: 6 }}>Recommended: 800×400px, JPG/PNG, max 2MB</Text>
-              <AdminImageBox imageUrl={newQuestion.solutionImageUrl} onUrlChange={(v) => setNewQuestion(p => ({ ...p, solutionImageUrl: v }))} />
-            </ScrollView>
-            <ActionButton
-              label="Add Question"
-              onPress={() => { if (showAddQuestion) addQuestionMutation.mutate({ testId: showAddQuestion, data: newQuestion }); }}
-              disabled={!newQuestion.questionText || !newQuestion.optionA || !newQuestion.optionB}
-              loading={addQuestionMutation.isPending}
-            />
-          </View>
-        </View>
-      </Modal>
-
       {/* Add Material Modal */}
       <Modal visible={showAddMaterial} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
@@ -2056,13 +1887,6 @@ export default function AdminCourseScreen() {
         </View>
       </Modal>
 
-      <BulkUploadModal
-        visible={showBulkUpload !== null}
-        testId={showBulkUpload}
-        onClose={() => setShowBulkUpload(null)}
-        onSaved={() => { qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] }); setShowBulkUpload(null); }}
-        bottomPadding={bottomPadding}
-      />
       <Modal visible={showEditCourse} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
@@ -2253,7 +2077,7 @@ export default function AdminCourseScreen() {
                           </View>
                           <Text style={styles.testCardMeta}>{test.total_questions} questions · {test.duration_minutes}min · {test.test_type}</Text>
                           <View style={styles.testUploadRow}>
-                            <Pressable style={styles.testUploadBtn} onPress={() => { setOpenAdminFolder(null); setFolderAddMode(false); setTimeout(() => setShowAddQuestion(test.id), 300); }}>
+                            <Pressable style={styles.testUploadBtn} onPress={() => { setOpenAdminFolder(null); setFolderAddMode(false); setTimeout(() => { resumeQuestionsModalAfterAddRef.current = null; setShowAddQuestion(test.id); }, 300); }}>
                               <Ionicons name="add-circle-outline" size={16} color={Colors.light.primary} />
                               <Text style={styles.testUploadBtnText}>Add Questions</Text>
                             </Pressable>
@@ -2764,6 +2588,313 @@ export default function AdminCourseScreen() {
           </Modal>
         </View>
       </Modal>
+
+      {/* View/Edit Questions + Add Question + BulkUpload: after folder modal so they stack above on web */}
+      {/* View/Edit Questions Modal */}
+      <Modal visible={showViewQuestions !== null} animationType="slide" transparent={false} style={Platform.OS === "web" ? { zIndex: 100002 } : undefined}>
+        <View style={{ flex: 1, backgroundColor: Colors.light.background }}>
+          <LinearGradient colors={["#0A1628", "#1A2E50"]} style={{ paddingTop: topPadding + 8, paddingHorizontal: 16, paddingBottom: 14, flexDirection: "row", alignItems: "center", gap: 12, zIndex: 10, elevation: 10, position: "relative" }}>
+            <Pressable style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" }} onPress={() => {
+              if (editQuestion != null) { setEditQuestion(null); return; }
+              setShowViewQuestions(null); setQuestionsList([]); setEditQuestion(null);
+            }}>
+              <Ionicons name="arrow-back" size={20} color="#fff" />
+            </Pressable>
+            <Text style={{ fontSize: 17, fontFamily: "Inter_700Bold", color: "#fff", flex: 1 }}>
+              {editQuestion != null ? "Edit question" : `Questions (${questionsList.length})`}
+            </Text>
+            {editQuestion == null && (
+              <Pressable style={{ flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: Colors.light.primary, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8 }}
+                onPress={() => {
+                  if (showViewQuestions) {
+                    resumeQuestionsModalAfterAddRef.current = showViewQuestions;
+                    setAddQuestionAfterId(null);
+                    setShowAddQuestion(showViewQuestions);
+                    setShowViewQuestions(null);
+                  }
+                }}>
+                <Ionicons name="add" size={16} color="#fff" />
+                <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: "#fff" }}>Add</Text>
+              </Pressable>
+            )}
+          </LinearGradient>
+          {questionsLoading ? (
+            <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}><ActivityIndicator size="large" color={Colors.light.primary} /></View>
+          ) : (
+            <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16, gap: 12, flexGrow: 1 }} keyboardShouldPersistTaps="handled">
+              {questionsList.length === 0 && (
+                <View style={{ alignItems: "center", paddingVertical: 40, gap: 8 }}>
+                  <Ionicons name="help-circle-outline" size={48} color={Colors.light.textMuted} />
+                  <Text style={{ fontSize: 15, fontFamily: "Inter_500Medium", color: Colors.light.textMuted }}>No questions yet</Text>
+                </View>
+              )}
+              {questionsList.map((q: any, idx: number) => (
+                <View key={q.id} style={{ gap: 8 }}>
+                <View style={{
+                  gap: 8,
+                  ...(editQuestion?.id === q.id ? { zIndex: 1000, elevation: 24, position: "relative" as const } : {}),
+                  backgroundColor: "#fff", borderRadius: 14, padding: 14, borderWidth: 1, borderColor: Colors.light.border,
+                }}>
+                  {editQuestion?.id === q.id ? (
+                    <View style={{ gap: 10 }}>
+                        {/* Question text */}
+                        <TextInput style={[styles.formInput, { minHeight: 70, textAlignVertical: "top" }]} multiline value={editQuestion.question_text} onChangeText={(v) => setEditQuestion((p: any) => ({ ...p, question_text: v }))} placeholder="Question text" placeholderTextColor={Colors.light.textMuted} />
+                        {/* Question image URL */}
+                        <View style={{ gap: 4 }}>
+                          <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Question Image (optional)</Text>
+                          <View style={{ flexDirection: "row", gap: 8 }}>
+                            <TextInput style={[styles.formInput, { flex: 1 }]} value={editQuestion.image_url || ""} onChangeText={(v) => setEditQuestion((p: any) => ({ ...p, image_url: v }))} placeholder="Paste URL or upload" placeholderTextColor={Colors.light.textMuted} autoCapitalize="none" />
+                            <Pressable style={{ backgroundColor: "#EEF2FF", borderRadius: 10, paddingHorizontal: 12, alignItems: "center", justifyContent: "center" }}
+                              onPress={() => pickFileAndUpload("images", "image/*", (url) => setEditQuestion((p: any) => ({ ...p, image_url: url })))}>
+                              <Ionicons name="cloud-upload-outline" size={18} color={Colors.light.primary} />
+                            </Pressable>
+                          </View>
+                          {!!editQuestion.image_url && (
+                            <View style={{ position: "relative" }}>
+                              <Image source={{ uri: editQuestion.image_url }} style={{ width: "100%", height: 120, borderRadius: 8 }} resizeMode="contain" />
+                              <Pressable onPress={() => setEditQuestion((p: any) => ({ ...p, image_url: "" }))} style={{ position: "absolute", top: 4, right: 4, backgroundColor: "#EF4444", borderRadius: 12, width: 24, height: 24, alignItems: "center", justifyContent: "center" }}>
+                                <Ionicons name="close" size={14} color="#fff" />
+                              </Pressable>
+                            </View>
+                          )}
+                        </View>
+                        {/* Options */}
+                        {["A","B","C","D"].map((opt) => (
+                          <View key={opt} style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                            <Pressable onPress={() => setEditQuestion((p: any) => ({ ...p, correct_option: opt }))} style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: editQuestion.correct_option === opt ? "#22C55E" : "#F3F4F6", alignItems: "center", justifyContent: "center", borderWidth: 2, borderColor: editQuestion.correct_option === opt ? "#22C55E" : "#E5E7EB" }}>
+                              <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: editQuestion.correct_option === opt ? "#fff" : Colors.light.text }}>{opt}</Text>
+                            </Pressable>
+                            <TextInput style={[styles.formInput, { flex: 1 }]} value={editQuestion[`option_${opt.toLowerCase()}`]} onChangeText={(v) => setEditQuestion((p: any) => ({ ...p, [`option_${opt.toLowerCase()}`]: v }))} placeholder={`Option ${opt}`} placeholderTextColor={Colors.light.textMuted} />
+                          </View>
+                        ))}
+                        {/* Explanation */}
+                        <TextInput style={[styles.formInput, { minHeight: 50, textAlignVertical: "top" }]} multiline value={editQuestion.explanation || ""} onChangeText={(v) => setEditQuestion((p: any) => ({ ...p, explanation: v }))} placeholder="Explanation (optional)" placeholderTextColor={Colors.light.textMuted} />
+                        {/* Solution image URL */}
+                        <View style={{ gap: 4 }}>
+                          <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Solution Image (optional)</Text>
+                          <View style={{ flexDirection: "row", gap: 8 }}>
+                            <TextInput style={[styles.formInput, { flex: 1 }]} value={editQuestion.solution_image_url || ""} onChangeText={(v) => setEditQuestion((p: any) => ({ ...p, solution_image_url: v }))} placeholder="Paste URL or upload" placeholderTextColor={Colors.light.textMuted} autoCapitalize="none" />
+                            <Pressable style={{ backgroundColor: "#EEF2FF", borderRadius: 10, paddingHorizontal: 12, alignItems: "center", justifyContent: "center" }}
+                              onPress={() => pickFileAndUpload("images", "image/*", (url) => setEditQuestion((p: any) => ({ ...p, solution_image_url: url })))}>
+                              <Ionicons name="cloud-upload-outline" size={18} color={Colors.light.primary} />
+                            </Pressable>
+                          </View>
+                          {!!editQuestion.solution_image_url && (
+                            <View style={{ position: "relative" }}>
+                              <Image source={{ uri: editQuestion.solution_image_url }} style={{ width: "100%", height: 120, borderRadius: 8 }} resizeMode="contain" />
+                              <Pressable onPress={() => setEditQuestion((p: any) => ({ ...p, solution_image_url: "" }))} style={{ position: "absolute", top: 4, right: 4, backgroundColor: "#EF4444", borderRadius: 12, width: 24, height: 24, alignItems: "center", justifyContent: "center" }}>
+                                <Ionicons name="close" size={14} color="#fff" />
+                              </Pressable>
+                            </View>
+                          )}
+                        </View>
+                        {/* Difficulty */}
+                        <View style={{ gap: 4 }}>
+                          <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Difficulty</Text>
+                          <View style={{ flexDirection: "row", gap: 8 }}>
+                            {["easy","moderate","hard"].map((d) => (
+                              <Pressable key={d} onPress={() => setEditQuestion((p: any) => ({ ...p, difficulty: d }))} style={{ flex: 1, paddingVertical: 8, borderRadius: 8, alignItems: "center", backgroundColor: (editQuestion.difficulty || "moderate") === d ? (d === "easy" ? "#22C55E" : d === "moderate" ? "#F59E0B" : "#EF4444") : "#F3F4F6" }}>
+                                <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: (editQuestion.difficulty || "moderate") === d ? "#fff" : Colors.light.text, textTransform: "capitalize" }}>{d}</Text>
+                              </Pressable>
+                            ))}
+                          </View>
+                        </View>
+                        {/* Marks row */}
+                        <View style={{ flexDirection: "row", gap: 10 }}>
+                          <View style={{ flex: 1, gap: 4 }}>
+                            <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Correct Marks</Text>
+                            <TextInput style={styles.formInput} value={String(editQuestion.marks ?? 4)} onChangeText={(v) => setEditQuestion((p: any) => ({ ...p, marks: v }))} keyboardType="numeric" placeholder="4" placeholderTextColor={Colors.light.textMuted} />
+                          </View>
+                          <View style={{ flex: 1, gap: 4 }}>
+                            <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Negative Marks</Text>
+                            <TextInput style={styles.formInput} value={String(editQuestion.negative_marks ?? 1)} onChangeText={(v) => setEditQuestion((p: any) => ({ ...p, negative_marks: v }))} keyboardType="numeric" placeholder="1" placeholderTextColor={Colors.light.textMuted} />
+                          </View>
+                        </View>
+                        {/* Save / Cancel */}
+                        <View style={{ flexDirection: "row", gap: 8, paddingTop: 4 }}>
+                          <Pressable style={{ flex: 1, backgroundColor: Colors.light.primary, borderRadius: 10, paddingVertical: 12, alignItems: "center" }} onPress={() => updateQuestionMutation.mutate({ id: editQuestion.id, questionText: editQuestion.question_text, optionA: editQuestion.option_a, optionB: editQuestion.option_b, optionC: editQuestion.option_c, optionD: editQuestion.option_d, correctOption: editQuestion.correct_option, explanation: editQuestion.explanation || "", topic: editQuestion.topic || "", marks: parseFloat(editQuestion.marks) || 4, negativeMarks: parseFloat(editQuestion.negative_marks) || 1, difficulty: editQuestion.difficulty || "moderate", imageUrl: editQuestion.image_url || null, solutionImageUrl: editQuestion.solution_image_url || null })}>
+                            <Text style={{ fontSize: 14, fontFamily: "Inter_600SemiBold", color: "#fff" }}>Save</Text>
+                          </Pressable>
+                          <Pressable style={{ flex: 1, backgroundColor: "#F3F4F6", borderRadius: 10, paddingVertical: 12, alignItems: "center" }} onPress={() => setEditQuestion(null)}>
+                            <Text style={{ fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Cancel</Text>
+                          </Pressable>
+                        </View>
+                    </View>
+                  ) : (
+                    <>
+                      <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 8 }}>
+                        <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: Colors.light.textMuted, minWidth: 24 }}>Q{idx + 1}.</Text>
+                        <Text style={{ flex: 1, fontSize: 14, fontFamily: "Inter_500Medium", color: Colors.light.text }}>{q.question_text}</Text>
+                      </View>
+                      {["A","B","C","D"].map((opt) => (
+                        <View key={opt} style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingLeft: 24 }}>
+                          <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: q.correct_option === opt ? "#DCFCE7" : "#F3F4F6", alignItems: "center", justifyContent: "center" }}>
+                            <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: q.correct_option === opt ? "#16A34A" : Colors.light.textMuted }}>{opt}</Text>
+                          </View>
+                          <Text style={{ fontSize: 13, fontFamily: "Inter_400Regular", color: q.correct_option === opt ? "#16A34A" : Colors.light.text }}>{q[`option_${opt.toLowerCase()}`]}</Text>
+                        </View>
+                      ))}
+                      <View style={{ flexDirection: "row", gap: 8, paddingTop: 4 }}>
+                        <Pressable style={{ flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "#EEF2FF", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 }} onPress={() => setEditQuestion({ ...q })}>
+                          <Ionicons name="pencil-outline" size={14} color={Colors.light.primary} />
+                          <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>Edit</Text>
+                        </Pressable>
+                        <Pressable style={{ flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "#FEE2E2", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 }} onPress={() => {
+                          if (Platform.OS === "web") { if (window.confirm("Delete this question?")) deleteQuestionMutation.mutate(q.id); }
+                          else Alert.alert("Delete", "Delete this question?", [{ text: "Cancel", style: "cancel" }, { text: "Delete", style: "destructive", onPress: () => deleteQuestionMutation.mutate(q.id) }]);
+                        }}>
+                          <Ionicons name="trash-outline" size={14} color="#EF4444" />
+                          <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#EF4444" }}>Delete</Text>
+                        </Pressable>
+                      </View>
+                    </>
+                  )}
+                </View>
+                {editQuestion?.id !== q.id && showViewQuestions !== null ? (
+                  <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, paddingVertical: 4 }}>
+                    <Pressable
+                      style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: Colors.light.primary, backgroundColor: `${Colors.light.primary}10` }}
+                      onPress={() => {
+                        if (showViewQuestions != null) resumeQuestionsModalAfterAddRef.current = showViewQuestions;
+                        setAddQuestionAfterId(q.id);
+                        setNewQuestion(emptyQuestion);
+                        setShowAddQuestion(showViewQuestions);
+                        setShowViewQuestions(null);
+                      }}
+                    >
+                      <Ionicons name="add-circle-outline" size={17} color={Colors.light.primary} />
+                      <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>Add below</Text>
+                    </Pressable>
+                    <Pressable
+                      style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: "#9333EA", backgroundColor: "#F5F3FF" }}
+                      disabled={addQuestionMutation.isPending}
+                      onPress={() => {
+                        const co = String(q.correct_option || "A").toUpperCase().slice(0, 1);
+                        addQuestionMutation.mutate({
+                          testId: showViewQuestions!,
+                          insertAfterQuestionId: q.id,
+                          duplicateRefresh: true,
+                          data: {
+                            questionText: q.question_text || "",
+                            optionA: q.option_a || "",
+                            optionB: q.option_b || "",
+                            optionC: q.option_c || "",
+                            optionD: q.option_d || "",
+                            correctOption: ["A", "B", "C", "D"].includes(co) ? co : "A",
+                            explanation: q.explanation || "",
+                            topic: q.topic || "",
+                            marks: String(q.marks ?? 4),
+                            negativeMarks: String(q.negative_marks ?? 1),
+                            difficulty: q.difficulty || "moderate",
+                            imageUrl: q.image_url || "",
+                            solutionImageUrl: q.solution_image_url || "",
+                          },
+                        });
+                      }}
+                    >
+                      <Ionicons name="copy-outline" size={17} color="#9333EA" />
+                      <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: "#9333EA" }}>Duplicate below</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
+                </View>
+              ))}
+            </ScrollView>
+          )}
+        </View>
+      </Modal>
+
+      {/* Add Question Modal */}
+      <Modal visible={showAddQuestion !== null} animationType="slide" transparent onRequestClose={closeAddQuestionModal} style={Platform.OS === "web" ? { zIndex: 100003 } : undefined}>
+        <View style={[styles.modalOverlay, Platform.OS === "web" ? { zIndex: 100003, elevation: 120 } : { elevation: 120 }]}>
+          <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
+            <View style={styles.modalHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.modalTitle}>{addQuestionAfterId ? "Add Question Below" : "Add Question"}</Text>
+                {!!addQuestionAfterId && (
+                  <Text style={{ fontSize: 11, fontFamily: "Inter_400Regular", color: Colors.light.textMuted, marginTop: 2 }}>Inserted after the selected question when you save.</Text>
+                )}
+              </View>
+              <Pressable onPress={closeAddQuestionModal}>
+                <Ionicons name="close" size={24} color={Colors.light.text} />
+              </Pressable>
+            </View>
+            <ScrollView style={{ maxHeight: 480 }} showsVerticalScrollIndicator={false}>
+              <FormField label="Question *" placeholder="Enter the question text" value={newQuestion.questionText} onChangeText={(v) => setNewQuestion(p => ({ ...p, questionText: v }))} multiline />
+              <FormField label="Option A *" placeholder="First option" value={newQuestion.optionA} onChangeText={(v) => setNewQuestion(p => ({ ...p, optionA: v }))} />
+              <FormField label="Option B *" placeholder="Second option" value={newQuestion.optionB} onChangeText={(v) => setNewQuestion(p => ({ ...p, optionB: v }))} />
+              <FormField label="Option C" placeholder="Third option" value={newQuestion.optionC} onChangeText={(v) => setNewQuestion(p => ({ ...p, optionC: v }))} />
+              <FormField label="Option D" placeholder="Fourth option" value={newQuestion.optionD} onChangeText={(v) => setNewQuestion(p => ({ ...p, optionD: v }))} />
+              <View style={styles.formField}>
+                <Text style={styles.formLabel}>Correct Option</Text>
+                <View style={{ flexDirection: "row", gap: 8 }}>
+                  {["A", "B", "C", "D"].map((opt) => (
+                    <Pressable key={opt} onPress={() => setNewQuestion(p => ({ ...p, correctOption: opt }))}
+                      style={{ flex: 1, paddingVertical: 10, borderRadius: 10, borderWidth: 2, alignItems: "center",
+                        borderColor: newQuestion.correctOption === opt ? "#22C55E" : Colors.light.border,
+                        backgroundColor: newQuestion.correctOption === opt ? "#DCFCE7" : "transparent" }}>
+                      <Text style={{ fontSize: 14, fontFamily: "Inter_700Bold", color: newQuestion.correctOption === opt ? "#16A34A" : Colors.light.textMuted }}>{opt}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </View>
+              <FormField label="Topic" placeholder="e.g., Trigonometry" value={newQuestion.topic} onChangeText={(v) => setNewQuestion(p => ({ ...p, topic: v }))} />
+              <FormField label="Explanation (optional)" placeholder="Solution explanation" value={newQuestion.explanation} onChangeText={(v) => setNewQuestion(p => ({ ...p, explanation: v }))} multiline />
+              <View style={styles.formField}>
+                <Text style={styles.formLabel}>Difficulty</Text>
+                <View style={{ flexDirection: "row", gap: 8 }}>
+                  {(["easy", "moderate", "hard"] as const).map((d) => {
+                    const diffColors: Record<string, string> = { easy: "#22C55E", moderate: "#F59E0B", hard: "#EF4444" };
+                    const active = (newQuestion as any).difficulty === d;
+                    return (
+                      <Pressable key={d} onPress={() => setNewQuestion(p => ({ ...p, difficulty: d } as any))}
+                        style={{ flex: 1, paddingVertical: 9, borderRadius: 10, borderWidth: 2, alignItems: "center",
+                          borderColor: active ? diffColors[d] : Colors.light.border,
+                          backgroundColor: active ? diffColors[d] + "18" : "transparent" }}>
+                        <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: active ? diffColors[d] : Colors.light.textMuted, textTransform: "capitalize" }}>{d}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </View>
+              <FormField label="Marks for correct" placeholder="4" value={newQuestion.marks} onChangeText={(v) => setNewQuestion(p => ({ ...p, marks: v }))} numeric />
+              <FormField label="Negative marks for wrong" placeholder="1" value={newQuestion.negativeMarks} onChangeText={(v) => setNewQuestion(p => ({ ...p, negativeMarks: v }))} numeric />
+              {/* Question Image */}
+              <Text style={styles.formLabel}>Question Image (optional)</Text>
+              <Text style={{ fontSize: 11, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", marginBottom: 6 }}>Recommended: 800×400px, JPG/PNG, max 2MB</Text>
+              <AdminImageBox imageUrl={newQuestion.imageUrl} onUrlChange={(v) => setNewQuestion(p => ({ ...p, imageUrl: v }))} />
+              {/* Solution Image */}
+              <Text style={styles.formLabel}>Solution Image (optional)</Text>
+              <Text style={{ fontSize: 11, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", marginBottom: 6 }}>Recommended: 800×400px, JPG/PNG, max 2MB</Text>
+              <AdminImageBox imageUrl={newQuestion.solutionImageUrl} onUrlChange={(v) => setNewQuestion(p => ({ ...p, solutionImageUrl: v }))} />
+            </ScrollView>
+            <ActionButton
+              label="Add Question"
+              onPress={() => {
+                if (showAddQuestion) {
+                  addQuestionMutation.mutate({
+                    testId: showAddQuestion,
+                    data: newQuestion,
+                    insertAfterQuestionId: addQuestionAfterId ?? undefined,
+                  });
+                }
+              }}
+              disabled={!newQuestion.questionText || !newQuestion.optionA || !newQuestion.optionB}
+              loading={addQuestionMutation.isPending}
+            />
+          </View>
+        </View>
+      </Modal>
+
+      <BulkUploadModal
+        visible={showBulkUpload !== null}
+        testId={showBulkUpload}
+        onClose={() => setShowBulkUpload(null)}
+        onSaved={() => { qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] }); setShowBulkUpload(null); }}
+        bottomPadding={bottomPadding}
+        modalStyle={Platform.OS === "web" ? { zIndex: 100004 } : undefined}
+      />
+
     </View>
   );
 }
@@ -2837,6 +2968,7 @@ function FormField({
         value={value}
         onChangeText={onChangeText}
         multiline={multiline}
+        blurOnSubmit={multiline ? false : undefined}
         numberOfLines={multiline ? 3 : 1}
         keyboardType={numeric ? "numeric" : "default"}
         autoCapitalize={autoCapitalize || "sentences"}

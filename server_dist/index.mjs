@@ -37,52 +37,74 @@ var init_pg_rate_limit_store = __esm({
         this.windowMs = options.windowMs;
       }
       async get(key) {
-        const r = await this.pool.query(
-          `SELECT total_hits, reset_time_ms FROM express_rate_limit WHERE bucket_key = $1`,
-          [key]
-        );
-        if (r.rows.length === 0) return void 0;
-        const row = r.rows[0];
-        return {
-          totalHits: Number(row.total_hits),
-          resetTime: new Date(Number(row.reset_time_ms))
-        };
+        try {
+          const r = await this.pool.query(
+            `SELECT total_hits, reset_time_ms FROM express_rate_limit WHERE bucket_key = $1`,
+            [key]
+          );
+          if (r.rows.length === 0) return void 0;
+          const row = r.rows[0];
+          return {
+            totalHits: Number(row.total_hits),
+            resetTime: new Date(Number(row.reset_time_ms))
+          };
+        } catch (err) {
+          console.error("[RateLimitStore] get failed:", err);
+          return void 0;
+        }
       }
       async increment(key) {
         const now = Date.now();
         const win = this.windowMs;
-        const ins = await this.pool.query(
-          `INSERT INTO express_rate_limit (bucket_key, total_hits, reset_time_ms)
-       VALUES ($1, 1, $2 + $3::bigint)
-       ON CONFLICT (bucket_key) DO UPDATE SET
-         total_hits = CASE
-           WHEN express_rate_limit.reset_time_ms <= $2::bigint THEN 1
-           ELSE express_rate_limit.total_hits + 1
-         END,
-         reset_time_ms = CASE
-           WHEN express_rate_limit.reset_time_ms <= $2::bigint THEN $2::bigint + $3::bigint
-           ELSE express_rate_limit.reset_time_ms
-         END
-       RETURNING total_hits, reset_time_ms`,
-          [key, now, win]
-        );
-        const row = ins.rows[0];
-        return {
-          totalHits: Number(row.total_hits),
-          resetTime: new Date(Number(row.reset_time_ms))
-        };
+        try {
+          const ins = await this.pool.query(
+            `INSERT INTO express_rate_limit (bucket_key, total_hits, reset_time_ms)
+         VALUES ($1, 1, $2 + $3::bigint)
+         ON CONFLICT (bucket_key) DO UPDATE SET
+           total_hits = CASE
+             WHEN express_rate_limit.reset_time_ms <= $2::bigint THEN 1
+             ELSE express_rate_limit.total_hits + 1
+           END,
+           reset_time_ms = CASE
+             WHEN express_rate_limit.reset_time_ms <= $2::bigint THEN $2::bigint + $3::bigint
+             ELSE express_rate_limit.reset_time_ms
+           END
+         RETURNING total_hits, reset_time_ms`,
+            [key, now, win]
+          );
+          const row = ins.rows[0];
+          return {
+            totalHits: Number(row.total_hits),
+            resetTime: new Date(Number(row.reset_time_ms))
+          };
+        } catch (err) {
+          console.error("[RateLimitStore] increment failed:", err);
+          return { totalHits: 1, resetTime: new Date(now + win) };
+        }
       }
       async decrement(key) {
-        await this.pool.query(
-          `UPDATE express_rate_limit SET total_hits = GREATEST(0, total_hits - 1) WHERE bucket_key = $1`,
-          [key]
-        );
+        try {
+          await this.pool.query(
+            `UPDATE express_rate_limit SET total_hits = GREATEST(0, total_hits - 1) WHERE bucket_key = $1`,
+            [key]
+          );
+        } catch (err) {
+          console.error("[RateLimitStore] decrement failed:", err);
+        }
       }
       async resetKey(key) {
-        await this.pool.query(`DELETE FROM express_rate_limit WHERE bucket_key = $1`, [key]);
+        try {
+          await this.pool.query(`DELETE FROM express_rate_limit WHERE bucket_key = $1`, [key]);
+        } catch (err) {
+          console.error("[RateLimitStore] resetKey failed:", err);
+        }
       }
       async resetAll() {
-        await this.pool.query(`DELETE FROM express_rate_limit`);
+        try {
+          await this.pool.query(`DELETE FROM express_rate_limit`);
+        } catch (err) {
+          console.error("[RateLimitStore] resetAll failed:", err);
+        }
       }
       shutdown() {
       }
@@ -1821,6 +1843,42 @@ function registerPaymentRoutes({
   verifyPaymentSignature: verifyPaymentSignature2,
   runInTransaction: runInTransaction2
 }) {
+  db2.query(
+    `CREATE TABLE IF NOT EXISTS payment_failures (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER,
+      course_id INTEGER,
+      razorpay_order_id TEXT,
+      razorpay_payment_id TEXT,
+      source TEXT,
+      reason TEXT,
+      raw_error TEXT,
+      created_at BIGINT NOT NULL
+    )`
+  ).catch((err) => {
+    console.error("[Payments] failed to ensure payment_failures table:", err);
+  });
+  const logPaymentFailure = async (payload) => {
+    try {
+      await db2.query(
+        `INSERT INTO payment_failures
+         (user_id, course_id, razorpay_order_id, razorpay_payment_id, source, reason, raw_error, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [
+          payload.userId ?? null,
+          payload.courseId ?? null,
+          payload.orderId ?? null,
+          payload.paymentId ?? null,
+          payload.source,
+          payload.reason ?? null,
+          payload.rawError == null ? null : JSON.stringify(payload.rawError),
+          Date.now()
+        ]
+      );
+    } catch (err) {
+      console.error("[Payments] failed to log payment failure:", err);
+    }
+  };
   const verifyOrderOwnershipAndAmount = async ({
     orderId,
     expectedKind,
@@ -2031,9 +2089,11 @@ function registerPaymentRoutes({
     }
   });
   app2.post("/api/payments/verify", async (req, res) => {
+    let authUserId = null;
     try {
       const user = await getAuthUser2(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
+      authUserId = Number(user.id) || null;
       const { razorpay_order_id, razorpay_payment_id, razorpay_signature, courseId } = req.body;
       if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
         return res.status(400).json({ message: "Payment details are required" });
@@ -2055,6 +2115,15 @@ function registerPaymentRoutes({
     } catch (err) {
       console.error("Verify payment error:", err);
       const msg = err instanceof Error ? err.message : "";
+      await logPaymentFailure({
+        userId: authUserId,
+        courseId: Number(req.body?.courseId) || null,
+        orderId: req.body?.razorpay_order_id || null,
+        paymentId: req.body?.razorpay_payment_id || null,
+        source: "verify",
+        reason: msg || "Payment verification failed",
+        rawError: err instanceof Error ? { message: err.message, stack: err.stack } : err
+      });
       const status = httpStatusForCourseVerifyError(msg);
       if (status === 500) {
         return res.status(500).json({ message: "Payment verification failed" });
@@ -2094,12 +2163,35 @@ function registerPaymentRoutes({
         razorpay_signature
       } = req.body || {};
       if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+        await logPaymentFailure({
+          orderId: razorpay_order_id || null,
+          paymentId: razorpay_payment_id || null,
+          source: "verify_redirect",
+          reason: "Missing redirect payment fields",
+          rawError: req.body || null
+        });
         return res.redirect(fail);
       }
       const isValid = verifyPaymentSignature2(razorpay_order_id, razorpay_payment_id, razorpay_signature);
-      if (!isValid) return res.redirect(fail);
+      if (!isValid) {
+        await logPaymentFailure({
+          orderId: razorpay_order_id,
+          paymentId: razorpay_payment_id,
+          source: "verify_redirect",
+          reason: "Invalid payment signature"
+        });
+        return res.redirect(fail);
+      }
       const paymentRecord = await db2.query("SELECT * FROM payments WHERE razorpay_order_id = $1", [razorpay_order_id]);
-      if (paymentRecord.rows.length === 0) return res.redirect(fail);
+      if (paymentRecord.rows.length === 0) {
+        await logPaymentFailure({
+          orderId: razorpay_order_id,
+          paymentId: razorpay_payment_id,
+          source: "verify_redirect",
+          reason: "Payment order not found"
+        });
+        return res.redirect(fail);
+      }
       const paymentRow = paymentRecord.rows[0];
       await verifyCourseOrderOwnership({
         orderId: razorpay_order_id,
@@ -2107,7 +2199,17 @@ function registerPaymentRoutes({
         expectedCourseId: paymentRow.course_id
       });
       const preBind = await assertNativePaidPurchaseInstallation(db2, paymentRow.user_id, req);
-      if (!preBind.ok) return res.redirect(fail);
+      if (!preBind.ok) {
+        await logPaymentFailure({
+          userId: paymentRow.user_id,
+          courseId: paymentRow.course_id,
+          orderId: razorpay_order_id,
+          paymentId: razorpay_payment_id,
+          source: "verify_redirect",
+          reason: preBind.message || "device_binding_mismatch"
+        });
+        return res.redirect(fail);
+      }
       const result = await completeCoursePaymentByOrder({
         orderId: razorpay_order_id,
         paymentId: razorpay_payment_id,
@@ -2117,7 +2219,32 @@ function registerPaymentRoutes({
       return res.redirect(`${frontendBase}/course/${result.courseId}?payment=success`);
     } catch (err) {
       console.error("[Payments] redirect verify failed:", err);
+      await logPaymentFailure({
+        orderId: req.body?.razorpay_order_id || null,
+        paymentId: req.body?.razorpay_payment_id || null,
+        source: "verify_redirect",
+        reason: "Redirect verification failed",
+        rawError: err instanceof Error ? { message: err.message, stack: err.stack } : err
+      });
       return res.redirect(fail);
+    }
+  });
+  app2.post("/api/payments/track-failure", async (req, res) => {
+    try {
+      const user = await getAuthUser2(req);
+      const body = req.body || {};
+      await logPaymentFailure({
+        userId: user?.id ?? null,
+        courseId: Number(body.courseId) || null,
+        orderId: typeof body.razorpay_order_id === "string" ? body.razorpay_order_id : null,
+        paymentId: typeof body.razorpay_payment_id === "string" ? body.razorpay_payment_id : null,
+        source: "client_callback",
+        reason: typeof body.reason === "string" ? body.reason : "Client payment failed callback",
+        rawError: body.error ?? null
+      });
+      res.json({ ok: true });
+    } catch {
+      res.json({ ok: true });
     }
   });
   app2.post("/api/tests/create-order", async (req, res) => {
@@ -3571,17 +3698,27 @@ function registerSiteSettingsRoutes({
   db: db2,
   requireAdmin
 }) {
+  let lastSettingsCache = null;
+  let lastSettingsCacheAt = 0;
+  const cacheTtlMs = Math.max(5e3, Number(process.env.SITE_SETTINGS_CACHE_MS || "15000"));
   app2.get("/api/site-settings", async (_req, res) => {
     try {
       res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
       res.setHeader("Pragma", "no-cache");
       res.setHeader("Expires", "0");
+      const now = Date.now();
+      if (lastSettingsCache && now - lastSettingsCacheAt <= cacheTtlMs) {
+        return res.json(lastSettingsCache);
+      }
       const result = await db2.query("SELECT key, value FROM site_settings");
       const settings = {};
       for (const row of result.rows) settings[row.key] = row.value;
+      lastSettingsCache = settings;
+      lastSettingsCacheAt = now;
       res.json(settings);
     } catch (err) {
       console.error("[SiteSettings] Fetch error:", err);
+      if (lastSettingsCache) return res.json(lastSettingsCache);
       res.json({});
     }
   });
@@ -3595,6 +3732,8 @@ function registerSiteSettingsRoutes({
           [key, String(value), Date.now()]
         );
       }
+      lastSettingsCache = null;
+      lastSettingsCacheAt = 0;
       res.json({ success: true });
     } catch (err) {
       console.error("[SiteSettings] Save error:", err);
@@ -3938,25 +4077,36 @@ function registerAdminAnalyticsRoutes({
       const range = buildRange();
       const rangeParams = range ? [range.start, range.endExclusive] : [];
       const paymentWhere = range ? " AND p.created_at >= $1 AND p.created_at < $2" : "";
+      const failedWhere = range ? " WHERE pf.created_at >= $1 AND pf.created_at < $2" : "";
       const enrollWhere = range ? " AND e.enrolled_at >= $1 AND e.enrolled_at < $2" : "";
       const bookWhere = range ? " AND bp.purchased_at >= $1 AND bp.purchased_at < $2" : "";
       const enrollJoin = range ? " AND e.enrolled_at >= $1 AND e.enrolled_at < $2" : "";
+      const safeRows = async (query, fallbackRows = []) => {
+        try {
+          const result = await query;
+          return result.rows;
+        } catch {
+          return fallbackRows;
+        }
+      };
       const [
-        revenueResult,
-        enrollResult,
-        lifetimeResult,
-        lifetimeEnrollResult,
-        courseBreakdown,
-        recentPurchases,
-        abandonedResult,
-        bookPurchases,
-        lifetimeBookRevenue,
-        bookAbandonedResult,
-        testPurchases,
-        lifetimeTestRevenue
+        revenueRows,
+        enrollRows,
+        lifetimeRows,
+        lifetimeEnrollRows,
+        courseBreakdownRows,
+        recentPurchasesRows,
+        failedTransactionRows,
+        abandonedRows,
+        bookPurchaseRows,
+        lifetimeBookRevenueRows,
+        bookAbandonedRows,
+        testPurchaseRows,
+        lifetimeTestRevenueRows
       ] = await Promise.all([
-        db2.query(
-          `SELECT COALESCE(SUM(
+        safeRows(
+          db2.query(
+            `SELECT COALESCE(SUM(
               (CASE
                 WHEN p.amount IS NOT NULL AND c.price IS NOT NULL
                   AND p.amount::numeric = c.price::numeric
@@ -3967,10 +4117,12 @@ function registerAdminAnalyticsRoutes({
            FROM payments p
            JOIN courses c ON c.id = p.course_id
            WHERE p.status = 'paid'${paymentWhere}`,
-          rangeParams
+            rangeParams
+          ),
+          [{ total_revenue: "0" }]
         ),
-        db2.query(`SELECT COUNT(*) as total_enrollments FROM enrollments e WHERE 1=1${enrollWhere}`, rangeParams),
-        db2.query(
+        safeRows(db2.query(`SELECT COUNT(*) as total_enrollments FROM enrollments e WHERE 1=1${enrollWhere}`, rangeParams), [{ total_enrollments: "0" }]),
+        safeRows(db2.query(
           `SELECT COALESCE(SUM(
               (CASE
                 WHEN p.amount IS NOT NULL AND c.price IS NOT NULL
@@ -3982,9 +4134,9 @@ function registerAdminAnalyticsRoutes({
            FROM payments p
            JOIN courses c ON c.id = p.course_id
            WHERE p.status = 'paid'`
-        ),
-        db2.query(`SELECT COUNT(*) as cnt FROM enrollments`),
-        db2.query(`
+        ), [{ lifetime_revenue: "0" }]),
+        safeRows(db2.query(`SELECT COUNT(*) as cnt FROM enrollments`), [{ cnt: "0" }]),
+        safeRows(db2.query(`
           SELECT c.id, c.title, c.category, c.price, c.is_free, c.course_type,
                  COUNT(DISTINCT e.id) as enrollment_count,
                  (COALESCE((
@@ -4003,8 +4155,8 @@ function registerAdminAnalyticsRoutes({
           LEFT JOIN enrollments e ON e.course_id = c.id${enrollJoin}
           GROUP BY c.id, c.title, c.category, c.price, c.is_free, c.course_type
           ORDER BY enrollment_count DESC
-        `, range ? rangeParams : []),
-        db2.query(`
+        `, range ? rangeParams : [])),
+        safeRows(db2.query(`
           SELECT p.id, p.created_at,
                  (CASE
                     WHEN p.amount IS NOT NULL AND c.price IS NOT NULL
@@ -4019,8 +4171,39 @@ function registerAdminAnalyticsRoutes({
           JOIN courses c ON c.id = p.course_id
           WHERE p.status = 'paid'${paymentWhere}
           ORDER BY p.created_at DESC LIMIT 20
-        `, rangeParams),
-        db2.query(`
+        `, rangeParams)),
+        safeRows(db2.query(`
+          SELECT pf.id,
+                 pf.created_at,
+                 pf.source,
+                 pf.reason,
+                 pf.razorpay_order_id,
+                 pf.razorpay_payment_id,
+                 pf.course_id,
+                 COALESCE(pf.user_id, p.user_id) AS user_id,
+                 COALESCE(pf.course_id, p.course_id) AS effective_course_id,
+                 COALESCE(
+                   (CASE
+                      WHEN p.amount IS NOT NULL AND c.price IS NOT NULL
+                        AND p.amount::numeric = c.price::numeric
+                      THEN (ROUND(c.price::numeric * 100))::integer
+                      ELSE p.amount
+                    END) / 100.0,
+                   c.price::numeric,
+                   0
+                 ) AS amount,
+                 u.name AS user_name,
+                 u.phone AS user_phone,
+                 u.email AS user_email,
+                 c.title AS course_title,
+                 c.category
+          FROM payment_failures pf
+          LEFT JOIN payments p ON p.razorpay_order_id = pf.razorpay_order_id
+          LEFT JOIN users u ON u.id = COALESCE(pf.user_id, p.user_id)
+          LEFT JOIN courses c ON c.id = COALESCE(pf.course_id, p.course_id)${failedWhere}
+          ORDER BY pf.created_at DESC LIMIT 100
+        `, rangeParams)),
+        safeRows(db2.query(`
           SELECT MIN(p.id) as id, MAX(p.created_at) as created_at, MAX(p.amount) as amount,
                  SUM(COALESCE(p.click_count, 1)) as click_count,
                  u.name as user_name, u.phone as user_phone, u.email as user_email,
@@ -4031,8 +4214,8 @@ function registerAdminAnalyticsRoutes({
           WHERE (p.status = 'created' OR p.status IS NULL)
           GROUP BY p.user_id, p.course_id, u.name, u.phone, u.email, c.title, c.category, c.price
           ORDER BY click_count DESC, MAX(p.created_at) DESC LIMIT 100
-        `),
-        db2.query(`
+        `)),
+        safeRows(db2.query(`
           SELECT bp.id, bp.purchased_at as created_at, b.price as amount,
                  u.name as user_name, u.phone as user_phone, u.email as user_email,
                  b.title as book_title, b.author, b.cover_url
@@ -4041,9 +4224,9 @@ function registerAdminAnalyticsRoutes({
           JOIN books b ON b.id = bp.book_id
           WHERE 1=1${bookWhere}
           ORDER BY bp.purchased_at DESC LIMIT 100
-        `, rangeParams),
-        db2.query(`SELECT COALESCE(SUM(b.price), 0) as total FROM book_purchases bp JOIN books b ON b.id = bp.book_id`),
-        db2.query(`
+        `, rangeParams)),
+        safeRows(db2.query(`SELECT COALESCE(SUM(b.price), 0) as total FROM book_purchases bp JOIN books b ON b.id = bp.book_id`), [{ total: "0" }]),
+        safeRows(db2.query(`
           SELECT bct.id, bct.created_at, bct.click_count,
                  u.name as user_name, u.phone as user_phone, u.email as user_email,
                  b.title as book_title, b.author, b.price
@@ -4051,8 +4234,8 @@ function registerAdminAnalyticsRoutes({
           JOIN users u ON u.id = bct.user_id
           JOIN books b ON b.id = bct.book_id
           ORDER BY bct.click_count DESC, bct.created_at DESC LIMIT 100
-        `),
-        db2.query(`
+        `)),
+        safeRows(db2.query(`
           SELECT tp.id, tp.created_at, t.price as amount,
                  u.name as user_name, u.phone as user_phone, u.email as user_email,
                  t.title as test_title, t.test_type
@@ -4060,26 +4243,39 @@ function registerAdminAnalyticsRoutes({
           JOIN users u ON u.id = tp.user_id
           JOIN tests t ON t.id = tp.test_id
           ORDER BY tp.created_at DESC LIMIT 100
-        `).catch(() => ({ rows: [] })),
-        db2.query(`SELECT COALESCE(SUM(t.price), 0) as total FROM test_purchases tp JOIN tests t ON t.id = tp.test_id`).catch(() => ({ rows: [{ total: 0 }] }))
+        `)),
+        safeRows(db2.query(`SELECT COALESCE(SUM(t.price), 0) as total FROM test_purchases tp JOIN tests t ON t.id = tp.test_id`), [{ total: "0" }])
       ]);
       res.json({
-        totalEnrollments: parseInt(enrollResult.rows[0]?.total_enrollments || "0"),
-        totalRevenue: parseFloat(revenueResult.rows[0]?.total_revenue || "0"),
-        lifetimeRevenue: parseFloat(lifetimeResult.rows[0]?.lifetime_revenue || "0"),
-        lifetimeEnrollments: parseInt(lifetimeEnrollResult.rows[0]?.cnt || "0"),
-        lifetimeBookRevenue: parseFloat(lifetimeBookRevenue.rows[0]?.total || "0"),
-        lifetimeTestRevenue: parseFloat(lifetimeTestRevenue.rows[0]?.total || "0"),
-        courseBreakdown: courseBreakdown.rows,
-        recentPurchases: recentPurchases.rows,
-        abandonedCheckouts: abandonedResult.rows,
-        bookPurchases: bookPurchases.rows,
-        bookAbandonedCheckouts: bookAbandonedResult.rows,
-        testPurchases: testPurchases.rows
+        totalEnrollments: parseInt(enrollRows[0]?.total_enrollments || "0"),
+        totalRevenue: parseFloat(revenueRows[0]?.total_revenue || "0"),
+        lifetimeRevenue: parseFloat(lifetimeRows[0]?.lifetime_revenue || "0"),
+        lifetimeEnrollments: parseInt(lifetimeEnrollRows[0]?.cnt || "0"),
+        lifetimeBookRevenue: parseFloat(lifetimeBookRevenueRows[0]?.total || "0"),
+        lifetimeTestRevenue: parseFloat(lifetimeTestRevenueRows[0]?.total || "0"),
+        courseBreakdown: courseBreakdownRows,
+        recentPurchases: recentPurchasesRows,
+        failedTransactions: failedTransactionRows,
+        abandonedCheckouts: abandonedRows,
+        bookPurchases: bookPurchaseRows,
+        bookAbandonedCheckouts: bookAbandonedRows,
+        testPurchases: testPurchaseRows
       });
     } catch (err) {
       console.error("Analytics error:", err);
       res.status(500).json({ message: "Failed to fetch analytics" });
+    }
+  });
+  app2.post("/api/admin/analytics/reset-abandoned", requireAdmin, async (_req, res) => {
+    try {
+      await Promise.all([
+        db2.query("UPDATE payments SET status = 'reset' WHERE status = 'created' OR status IS NULL"),
+        db2.query("DELETE FROM book_click_tracking")
+      ]);
+      res.json({ success: true });
+    } catch (err) {
+      console.error("Reset abandoned analytics error:", err);
+      res.status(500).json({ message: "Failed to reset abandoned analytics data" });
     }
   });
   app2.get("/api/admin/courses/:id/enrollments", requireAdmin, async (req, res) => {
@@ -4714,31 +4910,58 @@ function registerAdminTestRoutes({
   });
   app2.post("/api/admin/questions", requireAdmin, async (req, res) => {
     try {
-      const questions = Array.isArray(req.body) ? req.body : [req.body];
-      for (const q of questions) {
+      const rawList = Array.isArray(req.body) ? req.body : [req.body];
+      const testId = rawList[0]?.testId;
+      if (!testId) {
+        return res.status(400).json({ message: "testId is required" });
+      }
+      async function assignNextOrderInsert(q) {
+        const insertAfter = q.insertAfterQuestionId ?? q.afterQuestionId;
+        const parsedAfter = insertAfter !== void 0 && insertAfter !== null && insertAfter !== "" ? parseInt(String(insertAfter), 10) : NaN;
+        if (Number.isFinite(parsedAfter)) {
+          const ref = await db2.query(
+            `SELECT order_index FROM questions WHERE id = $1 AND test_id = $2`,
+            [parsedAfter, testId]
+          );
+          if (ref.rows.length > 0) {
+            const k = Number(ref.rows[0].order_index ?? 0);
+            await db2.query(
+              `UPDATE questions SET order_index = order_index + 1 WHERE test_id = $1 AND order_index > $2`,
+              [testId, k]
+            );
+            return k + 1;
+          }
+        }
+        const maxRow = await db2.query(`SELECT COALESCE(MAX(order_index), 0)::numeric AS m FROM questions WHERE test_id = $1`, [testId]);
+        const max = Number(maxRow.rows[0]?.m ?? 0);
+        return max + 1;
+      }
+      for (const q of rawList) {
+        const { insertAfterQuestionId: _a, afterQuestionId: _b, orderIndex: _ignoredOrder, ...rest } = q;
+        const orderIndex = await assignNextOrderInsert(q);
         await db2.query(
           `INSERT INTO questions (test_id, question_text, option_a, option_b, option_c, option_d, correct_option, explanation, topic, difficulty, marks, negative_marks, order_index, image_url, solution_image_url) 
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
           [
-            q.testId,
-            q.questionText,
-            q.optionA,
-            q.optionB,
-            q.optionC,
-            q.optionD,
-            q.correctOption,
-            q.explanation,
-            q.topic,
-            q.difficulty || "medium",
-            q.marks || 4,
-            q.negativeMarks || 1,
-            q.orderIndex || 0,
-            q.imageUrl || null,
-            q.solutionImageUrl || null
+            rest.testId,
+            rest.questionText,
+            rest.optionA,
+            rest.optionB,
+            rest.optionC,
+            rest.optionD,
+            rest.correctOption,
+            rest.explanation,
+            rest.topic,
+            rest.difficulty || "medium",
+            rest.marks ?? 4,
+            rest.negativeMarks ?? 1,
+            orderIndex,
+            rest.imageUrl || null,
+            rest.solutionImageUrl || null
           ]
         );
       }
-      await db2.query("UPDATE tests SET total_questions = (SELECT COUNT(*) FROM questions WHERE test_id = $1) WHERE id = $1", [questions[0].testId]);
+      await db2.query("UPDATE tests SET total_questions = (SELECT COUNT(*) FROM questions WHERE test_id = $1) WHERE id = $1", [testId]);
       res.json({ success: true });
     } catch (err) {
       console.error(err);
@@ -5212,6 +5435,23 @@ function registerAdminUsersAndContentRoutes({
     } catch (err) {
       console.error("Admin users error:", err);
       res.status(500).json({ message: "Failed to fetch users" });
+    }
+  });
+  app2.get("/api/admin/users/:id/enrollments", requireAdmin, async (req, res) => {
+    try {
+      const userId = parseInt(String(req.params.id), 10);
+      if (!Number.isFinite(userId)) return res.status(400).json({ message: "Invalid user id" });
+      const result = await db2.query(
+        `SELECT course_id
+         FROM enrollments
+         WHERE user_id = $1`,
+        [userId]
+      );
+      const courseIds = result.rows.map((r) => Number(r.course_id)).filter((n) => Number.isFinite(n));
+      res.json({ courseIds });
+    } catch (err) {
+      console.error("Admin user enrollments error:", err);
+      res.status(500).json({ message: "Failed to fetch user enrollments" });
     }
   });
   app2.put("/api/admin/users/:id/block", requireAdmin, async (req, res) => {
@@ -7309,6 +7549,9 @@ function registerLiveClassRoutes({
   db: db2,
   getAuthUser: getAuthUser2
 }) {
+  let upcomingCache = [];
+  let upcomingCacheAt = 0;
+  const upcomingCacheTtlMs = Math.max(1e4, Number(process.env.UPCOMING_CLASSES_CACHE_MS || "30000"));
   const sanitizeLiveClass = (row) => {
     if (!row || typeof row !== "object") return row;
     const { cf_stream_key, cf_stream_rtmp_url, ...safe } = row;
@@ -7454,6 +7697,11 @@ function registerLiveClassRoutes({
   });
   app2.get("/api/upcoming-classes", async (_req, res) => {
     try {
+      const now = Date.now();
+      if (upcomingCache.length > 0 && now - upcomingCacheAt <= upcomingCacheTtlMs) {
+        res.set("Cache-Control", "private, no-store");
+        return res.json(upcomingCache);
+      }
       const result = await db2.query(`
         SELECT lc.*, c.title as course_title, c.is_free as course_is_free, c.category as course_category
         FROM live_classes lc
@@ -7466,10 +7714,14 @@ function registerLiveClassRoutes({
       `);
       console.log(`[UpcomingClasses] returning ${result.rows.length} classes`);
       res.set("Cache-Control", "private, no-store");
-      res.json(result.rows.map(toPublicUpcomingDto));
+      const payload = result.rows.map(toPublicUpcomingDto);
+      upcomingCache = payload;
+      upcomingCacheAt = now;
+      res.json(payload);
     } catch (err) {
       console.error("[UpcomingClasses] error:", err);
       res.set("Cache-Control", "private, no-store");
+      if (upcomingCache.length > 0) return res.json(upcomingCache);
       res.json([]);
     }
   });
@@ -9441,7 +9693,10 @@ async function dbQuery(text, params, options) {
       return result;
     } catch (err) {
       const elapsedMs = Date.now() - startedAt;
-      const isTransient = err.message?.includes("Connection terminated") || err.message?.includes("connection timeout") || err.code === "ECONNRESET" || err.code === "ECONNREFUSED";
+      const message = String(err?.message || "").toLowerCase();
+      const code = String(err?.code || "").toUpperCase();
+      const isTransient = message.includes("connection terminated") || message.includes("connection timeout") || message.includes("getaddrinfo eai_again") || message.includes("timeout exceeded when trying to connect") || code === "ECONNRESET" || code === "ECONNREFUSED" || code === "EAI_AGAIN" || code === "ETIMEDOUT" || code === "57P01" || // admin_shutdown
+      code === "57P03";
       if (isTransient && attempt < 3) {
         console.warn("[DB] Transient error on attempt " + attempt + ", retrying...");
         await new Promise((r) => setTimeout(r, 200 * attempt));
