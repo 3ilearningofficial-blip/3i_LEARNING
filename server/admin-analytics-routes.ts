@@ -52,6 +52,7 @@ export function registerAdminAnalyticsRoutes({
       const range = buildRange();
       const rangeParams = range ? [range.start, range.endExclusive] : [];
       const paymentWhere = range ? " AND p.created_at >= $1 AND p.created_at < $2" : "";
+      const failedWhere = range ? " WHERE pf.created_at >= $1 AND pf.created_at < $2" : "";
       const enrollWhere = range ? " AND e.enrolled_at >= $1 AND e.enrolled_at < $2" : "";
       const bookWhere = range ? " AND bp.purchased_at >= $1 AND bp.purchased_at < $2" : "";
       const enrollJoin = range ? " AND e.enrolled_at >= $1 AND e.enrolled_at < $2" : "";
@@ -65,6 +66,7 @@ export function registerAdminAnalyticsRoutes({
         lifetimeEnrollResult,
         courseBreakdown,
         recentPurchases,
+        failedTransactions,
         abandonedResult,
         bookPurchases,
         lifetimeBookRevenue,
@@ -138,6 +140,37 @@ export function registerAdminAnalyticsRoutes({
           ORDER BY p.created_at DESC LIMIT 20
         `, rangeParams),
         db.query(`
+          SELECT pf.id,
+                 pf.created_at,
+                 pf.source,
+                 pf.reason,
+                 pf.razorpay_order_id,
+                 pf.razorpay_payment_id,
+                 pf.course_id,
+                 COALESCE(pf.user_id, p.user_id) AS user_id,
+                 COALESCE(pf.course_id, p.course_id) AS effective_course_id,
+                 COALESCE(
+                   (CASE
+                      WHEN p.amount IS NOT NULL AND c.price IS NOT NULL
+                        AND p.amount::numeric = c.price::numeric
+                      THEN (ROUND(c.price::numeric * 100))::integer
+                      ELSE p.amount
+                    END) / 100.0,
+                   c.price::numeric,
+                   0
+                 ) AS amount,
+                 u.name AS user_name,
+                 u.phone AS user_phone,
+                 u.email AS user_email,
+                 c.title AS course_title,
+                 c.category
+          FROM payment_failures pf
+          LEFT JOIN payments p ON p.razorpay_order_id = pf.razorpay_order_id
+          LEFT JOIN users u ON u.id = COALESCE(pf.user_id, p.user_id)
+          LEFT JOIN courses c ON c.id = COALESCE(pf.course_id, p.course_id)${failedWhere}
+          ORDER BY pf.created_at DESC LIMIT 100
+        `, rangeParams).catch(() => ({ rows: [] })),
+        db.query(`
           SELECT MIN(p.id) as id, MAX(p.created_at) as created_at, MAX(p.amount) as amount,
                  SUM(COALESCE(p.click_count, 1)) as click_count,
                  u.name as user_name, u.phone as user_phone, u.email as user_email,
@@ -190,6 +223,7 @@ export function registerAdminAnalyticsRoutes({
         lifetimeTestRevenue: parseFloat(lifetimeTestRevenue.rows[0]?.total || "0"),
         courseBreakdown: courseBreakdown.rows,
         recentPurchases: recentPurchases.rows,
+        failedTransactions: failedTransactions.rows,
         abandonedCheckouts: abandonedResult.rows,
         bookPurchases: bookPurchases.rows,
         bookAbandonedCheckouts: bookAbandonedResult.rows,
@@ -198,6 +232,19 @@ export function registerAdminAnalyticsRoutes({
     } catch (err) {
       console.error("Analytics error:", err);
       res.status(500).json({ message: "Failed to fetch analytics" });
+    }
+  });
+
+  app.post("/api/admin/analytics/reset-abandoned", requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      await Promise.all([
+        db.query("UPDATE payments SET status = 'reset' WHERE status = 'created' OR status IS NULL"),
+        db.query("DELETE FROM book_click_tracking"),
+      ]);
+      res.json({ success: true });
+    } catch (err) {
+      console.error("Reset abandoned analytics error:", err);
+      res.status(500).json({ message: "Failed to reset abandoned analytics data" });
     }
   });
 

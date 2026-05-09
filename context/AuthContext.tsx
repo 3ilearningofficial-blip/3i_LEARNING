@@ -71,6 +71,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (res.ok) {
         const data = await res.json();
         if (typeof data?.id !== "number") {
+          if (Platform.OS !== "web" && stored) {
+            // Native safety: if secure token lookup is temporarily unavailable,
+            // keep last known session instead of force-logging out.
+            setUser(stored);
+            return;
+          }
           setUser(null);
           await removeStoredAuthUser();
           queryClient.clear();

@@ -517,6 +517,12 @@ export default function CourseDetailScreen() {
         const rzp = new (window as any).Razorpay(options);
         if (!useRedirectCheckout) {
           rzp.on("payment.failed", (response: { error?: { description?: string; code?: string } }) => {
+            apiRequest("POST", "/api/payments/track-failure", {
+              courseId: courseIdNum,
+              razorpay_order_id: orderData.orderId,
+              reason: response?.error?.description || response?.error?.code || "Payment failed",
+              error: response?.error || null,
+            }).catch(() => {});
             setIsPaymentPending(false);
             const err =
               response?.error?.description ||
@@ -1641,6 +1647,11 @@ setTimeout(function() {
                     setPaymentWebViewHtml(null);
                     setIsPaymentPending(false);
                   } else if (data.type === "payment_failed") {
+                    apiRequest("POST", "/api/payments/track-failure", {
+                      courseId: parseInt(id as string),
+                      reason: data.error || "Payment failed",
+                      error: data || null,
+                    }).catch(() => {});
                     setPaymentWebViewHtml(null);
                     setIsPaymentPending(false);
                     Alert.alert("Payment Failed", data.error || "Payment could not be completed.");

@@ -54,6 +54,53 @@ export function registerPaymentRoutes({
   verifyPaymentSignature,
   runInTransaction,
 }: RegisterPaymentRoutesDeps): void {
+  // Best-effort bootstrap; analytics also handles missing table safely.
+  db.query(
+    `CREATE TABLE IF NOT EXISTS payment_failures (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER,
+      course_id INTEGER,
+      razorpay_order_id TEXT,
+      razorpay_payment_id TEXT,
+      source TEXT,
+      reason TEXT,
+      raw_error TEXT,
+      created_at BIGINT NOT NULL
+    )`
+  ).catch((err) => {
+    console.error("[Payments] failed to ensure payment_failures table:", err);
+  });
+
+  const logPaymentFailure = async (payload: {
+    userId?: number | null;
+    courseId?: number | null;
+    orderId?: string | null;
+    paymentId?: string | null;
+    source: string;
+    reason?: string | null;
+    rawError?: unknown;
+  }) => {
+    try {
+      await db.query(
+        `INSERT INTO payment_failures
+         (user_id, course_id, razorpay_order_id, razorpay_payment_id, source, reason, raw_error, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [
+          payload.userId ?? null,
+          payload.courseId ?? null,
+          payload.orderId ?? null,
+          payload.paymentId ?? null,
+          payload.source,
+          payload.reason ?? null,
+          payload.rawError == null ? null : JSON.stringify(payload.rawError),
+          Date.now(),
+        ]
+      );
+    } catch (err) {
+      console.error("[Payments] failed to log payment failure:", err);
+    }
+  };
+
   const verifyOrderOwnershipAndAmount = async ({
     orderId,
     expectedKind,
@@ -332,6 +379,15 @@ export function registerPaymentRoutes({
     } catch (err) {
       console.error("Verify payment error:", err);
       const msg = err instanceof Error ? err.message : "";
+      await logPaymentFailure({
+        userId: user?.id ?? null,
+        courseId: Number((req.body as any)?.courseId) || null,
+        orderId: (req.body as any)?.razorpay_order_id || null,
+        paymentId: (req.body as any)?.razorpay_payment_id || null,
+        source: "verify",
+        reason: msg || "Payment verification failed",
+        rawError: err instanceof Error ? { message: err.message, stack: err.stack } : err,
+      });
       const status = httpStatusForCourseVerifyError(msg);
       if (status === 500) {
         return res.status(500).json({ message: "Payment verification failed" });
@@ -375,12 +431,35 @@ export function registerPaymentRoutes({
         razorpay_signature,
       } = req.body || {};
       if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+        await logPaymentFailure({
+          orderId: razorpay_order_id || null,
+          paymentId: razorpay_payment_id || null,
+          source: "verify_redirect",
+          reason: "Missing redirect payment fields",
+          rawError: req.body || null,
+        });
         return res.redirect(fail);
       }
       const isValid = verifyPaymentSignature(razorpay_order_id, razorpay_payment_id, razorpay_signature);
-      if (!isValid) return res.redirect(fail);
+      if (!isValid) {
+        await logPaymentFailure({
+          orderId: razorpay_order_id,
+          paymentId: razorpay_payment_id,
+          source: "verify_redirect",
+          reason: "Invalid payment signature",
+        });
+        return res.redirect(fail);
+      }
       const paymentRecord = await db.query("SELECT * FROM payments WHERE razorpay_order_id = $1", [razorpay_order_id]);
-      if (paymentRecord.rows.length === 0) return res.redirect(fail);
+      if (paymentRecord.rows.length === 0) {
+        await logPaymentFailure({
+          orderId: razorpay_order_id,
+          paymentId: razorpay_payment_id,
+          source: "verify_redirect",
+          reason: "Payment order not found",
+        });
+        return res.redirect(fail);
+      }
       const paymentRow = paymentRecord.rows[0] as { user_id: number; course_id: number };
       await verifyCourseOrderOwnership({
         orderId: razorpay_order_id,
@@ -388,7 +467,17 @@ export function registerPaymentRoutes({
         expectedCourseId: paymentRow.course_id,
       });
       const preBind = await assertNativePaidPurchaseInstallation(db, paymentRow.user_id, req);
-      if (!preBind.ok) return res.redirect(fail);
+      if (!preBind.ok) {
+        await logPaymentFailure({
+          userId: paymentRow.user_id,
+          courseId: paymentRow.course_id,
+          orderId: razorpay_order_id,
+          paymentId: razorpay_payment_id,
+          source: "verify_redirect",
+          reason: preBind.message || "device_binding_mismatch",
+        });
+        return res.redirect(fail);
+      }
       const result = await completeCoursePaymentByOrder({
         orderId: razorpay_order_id,
         paymentId: razorpay_payment_id,
@@ -398,7 +487,34 @@ export function registerPaymentRoutes({
       return res.redirect(`${frontendBase}/course/${result.courseId}?payment=success`);
     } catch (err) {
       console.error("[Payments] redirect verify failed:", err);
+      await logPaymentFailure({
+        orderId: (req.body as any)?.razorpay_order_id || null,
+        paymentId: (req.body as any)?.razorpay_payment_id || null,
+        source: "verify_redirect",
+        reason: "Redirect verification failed",
+        rawError: err instanceof Error ? { message: err.message, stack: err.stack } : err,
+      });
       return res.redirect(fail);
+    }
+  });
+
+  // Explicit client-side payment failed callback logging.
+  app.post("/api/payments/track-failure", async (req: Request, res: Response) => {
+    try {
+      const user = await getAuthUser(req);
+      const body = (req.body || {}) as Record<string, any>;
+      await logPaymentFailure({
+        userId: user?.id ?? null,
+        courseId: Number(body.courseId) || null,
+        orderId: typeof body.razorpay_order_id === "string" ? body.razorpay_order_id : null,
+        paymentId: typeof body.razorpay_payment_id === "string" ? body.razorpay_payment_id : null,
+        source: "client_callback",
+        reason: typeof body.reason === "string" ? body.reason : "Client payment failed callback",
+        rawError: body.error ?? null,
+      });
+      res.json({ ok: true });
+    } catch {
+      res.json({ ok: true });
     }
   });
 

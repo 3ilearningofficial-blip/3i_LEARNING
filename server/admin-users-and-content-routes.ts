@@ -285,6 +285,27 @@ export function registerAdminUsersAndContentRoutes({
     }
   });
 
+  /** Course IDs where this student already has an enrollment row. */
+  app.get("/api/admin/users/:id/enrollments", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const userId = parseInt(String(req.params.id), 10);
+      if (!Number.isFinite(userId)) return res.status(400).json({ message: "Invalid user id" });
+      const result = await db.query(
+        `SELECT course_id
+         FROM enrollments
+         WHERE user_id = $1`,
+        [userId]
+      );
+      const courseIds = result.rows
+        .map((r: any) => Number(r.course_id))
+        .filter((n: number) => Number.isFinite(n));
+      res.json({ courseIds });
+    } catch (err) {
+      console.error("Admin user enrollments error:", err);
+      res.status(500).json({ message: "Failed to fetch user enrollments" });
+    }
+  });
+
   app.put("/api/admin/users/:id/block", requireAdmin, async (req: Request, res: Response) => {
     try {
       const { blocked } = req.body;
