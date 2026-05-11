@@ -19,6 +19,7 @@ import { DownloadButton } from "@/components/DownloadButton";
 import { VideoWatermark } from "@/components/VideoWatermark";
 import { buildYouTubePhoneWebSrcDoc } from "@/lib/buildYouTubePhoneWebSrcDoc";
 import { buildCfHlsPlayerHtml } from "@/lib/buildCfHlsPlayerHtml";
+import { extractMediaFileKey } from "@/lib/media-key";
 
 const mediaTokenCache = new Map<string, { token: string; expiresAt: number }>();
 const MEDIA_TOKEN_REFRESH_SKEW_MS = 60 * 1000;
@@ -491,11 +492,7 @@ export default function LectureScreen() {
     }
   }
   videoUrl = toHttpsMediaUrl(videoUrl);
-  const fileKey = (() => {
-    if (!rawVideoUrl || !rawVideoUrl.includes("/api/media/")) return null;
-    const path = rawVideoUrl.startsWith("/") ? rawVideoUrl : rawVideoUrl.replace(/^https?:\/\/[^/]+/, "");
-    return path.replace(/^\/api\/media\//, "");
-  })();
+  const fileKey = extractMediaFileKey(rawVideoUrl);
   const userScopedMediaKey = fileKey ? `${String(user?.id || 0)}:${fileKey}` : null;
   useEffect(() => {
     if (!fileKey || !userScopedMediaKey) {
@@ -544,6 +541,8 @@ export default function LectureScreen() {
       ? `${baseUrl}/api/media/${fileKey}?token=${mediaToken}`
       : videoUrl,
   ) || videoUrl;
+  const isSecuringPlayback = !!fileKey && !mediaToken && !mediaTokenError;
+  const canMountPlayer = !fileKey || !!mediaToken;
 
   const title = lectureData?.title || paramTitle || "Lecture";
 
@@ -761,7 +760,7 @@ export default function LectureScreen() {
           </View>
         )}
         
-        {((isLoading && !hasError) || (!!fileKey && !mediaToken && !mediaTokenError)) && !mediaTokenError && (
+        {((isLoading && !hasError) || isSecuringPlayback) && !mediaTokenError && (
           <View style={styles.loadingOverlay}>
             <ActivityIndicator size="large" color={Colors.light.primary} />
             <Text style={styles.loadingText}>{fileKey && !mediaToken ? "Securing playback…" : "Loading video..."}</Text>
@@ -777,11 +776,11 @@ export default function LectureScreen() {
             </Pressable>
           </View>
         )}
-        {!hasError && videoId && Platform.OS === "web" ? (
+        {!hasError && canMountPlayer && videoId && Platform.OS === "web" ? (
           <WebYouTubePlayer key={`yt-web-${playerRetryTick}`} videoId={videoId} onReady={() => setIsLoading(false)} />
-        ) : !hasError && isStreamId && Platform.OS === "web" ? (
+        ) : !hasError && canMountPlayer && isStreamId && Platform.OS === "web" ? (
           <WebCloudflareStreamPlayer key={`cf-web-${playerRetryTick}`} videoId={playbackUrl} onReady={() => setIsLoading(false)} />
-        ) : !hasError && isCfHls && Platform.OS === "web" ? (
+        ) : !hasError && canMountPlayer && isCfHls && Platform.OS === "web" ? (
           <iframe
             key={`hls-web-${playerRetryTick}`}
             srcDoc={buildCfHlsPlayerHtml(playbackUrl)}
@@ -789,7 +788,7 @@ export default function LectureScreen() {
             allow="autoplay; fullscreen"
             onLoad={() => { setIsLoading(false); }}
           />
-        ) : !hasError && videoId && nativeYouTubeHtml && Platform.OS !== "web" ? (
+        ) : !hasError && canMountPlayer && videoId && nativeYouTubeHtml && Platform.OS !== "web" ? (
           <WebView
             key={`yt-native-${playerRetryTick}`}
             source={{ html: nativeYouTubeHtml, baseUrl: "https://www.youtube.com" }}
@@ -808,7 +807,7 @@ export default function LectureScreen() {
             setSupportMultipleWindows={false}
             originWhitelist={["*"]}
           />
-        ) : !hasError && isStreamId && streamHtml ? (
+        ) : !hasError && canMountPlayer && isStreamId && streamHtml ? (
           <WebView
             key={`cf-native-${playerRetryTick}`}
             source={{ html: streamHtml, baseUrl: "https://cloudflarestream.com" }}
@@ -826,7 +825,7 @@ export default function LectureScreen() {
             mixedContentMode="compatibility"
             originWhitelist={["*"]}
           />
-        ) : !hasError && isCfHls && Platform.OS !== "web" ? (
+        ) : !hasError && canMountPlayer && isCfHls && Platform.OS !== "web" ? (
           <WebView
             key={`hls-native-${playerRetryTick}`}
             source={{ html: buildCfHlsPlayerHtml(playbackUrl) }}
@@ -844,14 +843,14 @@ export default function LectureScreen() {
             mixedContentMode="compatibility"
             originWhitelist={["*"]}
           />
-        ) : !hasError && isDirect && Platform.OS === "web" ? (
+        ) : !hasError && canMountPlayer && isDirect && Platform.OS === "web" ? (
           <WebDirectVideoPlayer
             key={`direct-web-${playerRetryTick}`}
             url={playbackUrl}
             onReady={() => setIsLoading(false)}
             onError={handlePlaybackError}
           />
-        ) : !hasError && isDirect && Platform.OS !== "web" ? (
+        ) : !hasError && canMountPlayer && isDirect && Platform.OS !== "web" ? (
           <WebView
             key={`direct-native-${playerRetryTick}`}
             source={{ html: directVideoHtml }}
@@ -869,7 +868,7 @@ export default function LectureScreen() {
             mixedContentMode="compatibility"
             originWhitelist={["*"]}
           />
-        ) : !hasError && !videoId && !isDirect && !isStreamId && !isCfHls ? (
+        ) : !hasError && canMountPlayer && !videoId && !isDirect && !isStreamId && !isCfHls ? (
           <View style={styles.errorOverlay}>
             <Ionicons name="videocam-off-outline" size={40} color={Colors.light.textMuted} />
             <Text style={styles.errorTitle}>No video available</Text>

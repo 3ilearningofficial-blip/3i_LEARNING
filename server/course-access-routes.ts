@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { computeEnrollmentValidUntil, isEnrollmentExpired } from "./course-access-utils";
+import { canonicalMediaKey, mediaKeyMatchVariants } from "./media-key-utils";
 
 type DbQueryResult = {
   rows: any[];
@@ -82,118 +83,72 @@ export function registerCourseAccessRoutes({
     return { ok: true };
   };
 
-  const normalizeStorageKey = (raw: string): string => {
-    const trimmed = String(raw || "").trim();
-    if (!trimmed) return "";
-    if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-      try {
-        const parsed = new URL(trimmed);
-        return decodeURIComponent(parsed.pathname.replace(/^\/+/, ""));
-      } catch {
-        return trimmed;
-      }
-    }
-    return trimmed.replace(/^\/+/, "");
-  };
+  const toR2ObjectKey = (raw: string): string => canonicalMediaKey(raw);
 
-  /** Path after host + optional `/api/media/` — matches client `fileKey` and DB `video_url` / `file_url` variants. */
-  const canonicalMediaRelativeKey = (raw: string): string => {
-    let s = normalizeStorageKey(raw);
-    if (!s) return "";
-    s = s.replace(/^\/+/, "");
-    const proxy = "api/media/";
-    if (s.toLowerCase().startsWith(proxy)) {
-      s = s.slice(proxy.length).replace(/^\/+/, "");
-    }
-    try {
-      s = decodeURIComponent(s);
-    } catch {
-      /* keep */
-    }
-    return s.replace(/^\/+/, "").replace(/\/+$/g, "");
-  };
+  type MediaTokenAccessDecision =
+    | { allowed: true; reason: "allowed" }
+    | { allowed: false; reason: "invalid_key" | "no_match" | "not_enrolled" | "expired" };
 
-  const mediaKeyMatchVariants = (raw: string): string[] => {
-    const k = canonicalMediaRelativeKey(raw);
-    if (!k || k.includes("..")) return [];
-    const set = new Set<string>([k, `api/media/${k}`, `/api/media/${k}`]);
-    return [...set];
-  };
-
-  /** Buckets use keys like `folder/file.pdf`. App URLs use `/api/media/folder/file.pdf` — strip that proxy prefix for GetObject. */
-  const toR2ObjectKey = (raw: string): string => {
-    let key = normalizeStorageKey(raw);
-    if (!key) return "";
-    const proxy = "api/media/";
-    if (key.toLowerCase().startsWith(proxy)) key = key.slice(proxy.length).replace(/^\/+/, "");
-    try {
-      key = decodeURIComponent(key);
-    } catch {
-      /* keep */
-    }
-    return key.replace(/^\/+/, "").replace(/\/+$/g, "");
-  };
-
-  const userCanMintMediaToken = async (user: AuthUser, requestedKeyRaw: string): Promise<boolean> => {
+  const userCanMintMediaToken = async (user: AuthUser, requestedKeyRaw: string): Promise<MediaTokenAccessDecision> => {
     const variants = mediaKeyMatchVariants(requestedKeyRaw);
-    if (variants.length === 0) return false;
+    if (variants.length === 0) return { allowed: false, reason: "invalid_key" };
 
     const roleNorm = String(user.role ?? "").toLowerCase();
     if (roleNorm === "admin") {
-      return true;
+      return { allowed: true, reason: "allowed" };
     }
 
-    const now = Date.now();
-
     const lectureMatch = await db.query(
-      `SELECT l.id
+      `SELECT l.course_id, l.is_free_preview
        FROM lectures l
-       LEFT JOIN enrollments e
-         ON e.user_id = $1
-        AND e.course_id = l.course_id
-        AND (e.status = 'active' OR e.status IS NULL)
        WHERE l.video_url IS NOT NULL
          AND (
-           regexp_replace(regexp_replace(COALESCE(l.video_url, ''), '^https?://[^/]+/', ''), '^/+', '') = ANY($2::text[])
-           OR regexp_replace(COALESCE(l.video_url, ''), '^https?://[^/]+/', '') = ANY($2::text[])
-         )
-         AND (
-           l.course_id IS NULL
-           OR l.is_free_preview = TRUE
-           OR (
-             e.id IS NOT NULL
-             AND (e.valid_until IS NULL OR e.valid_until > $3)
-           )
+           regexp_replace(regexp_replace(COALESCE(l.video_url, ''), '^https?://[^/]+/', ''), '^/+', '') = ANY($1::text[])
+           OR regexp_replace(COALESCE(l.video_url, ''), '^https?://[^/]+/', '') = ANY($1::text[])
          )
        LIMIT 1`,
-      [user.id, variants, now]
+      [variants]
     );
-    if (lectureMatch.rows.length > 0) return true;
+    if (lectureMatch.rows.length > 0) {
+      const row = lectureMatch.rows[0];
+      if (!row.course_id || row.is_free_preview) return { allowed: true, reason: "allowed" };
+      const enrollment = await db.query(
+        "SELECT id, valid_until FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL) LIMIT 1",
+        [user.id, row.course_id]
+      );
+      if (enrollment.rows.length === 0) return { allowed: false, reason: "not_enrolled" };
+      if (isEnrollmentExpired(enrollment.rows[0])) {
+        return { allowed: false, reason: "expired" };
+      }
+      return { allowed: true, reason: "allowed" };
+    }
 
     const materialMatch = await db.query(
-      `SELECT sm.id
+      `SELECT sm.course_id, sm.is_free
        FROM study_materials sm
-       LEFT JOIN enrollments e
-         ON e.user_id = $1
-        AND e.course_id = sm.course_id
-        AND (e.status = 'active' OR e.status IS NULL)
        WHERE sm.file_url IS NOT NULL
          AND (
-           regexp_replace(regexp_replace(COALESCE(sm.file_url, ''), '^https?://[^/]+/', ''), '^/+', '') = ANY($2::text[])
-           OR regexp_replace(COALESCE(sm.file_url, ''), '^https?://[^/]+/', '') = ANY($2::text[])
-         )
-         AND (
-           sm.course_id IS NULL
-           OR sm.is_free = TRUE
-           OR (
-             e.id IS NOT NULL
-             AND (e.valid_until IS NULL OR e.valid_until > $3)
-           )
+           regexp_replace(regexp_replace(COALESCE(sm.file_url, ''), '^https?://[^/]+/', ''), '^/+', '') = ANY($1::text[])
+           OR regexp_replace(COALESCE(sm.file_url, ''), '^https?://[^/]+/', '') = ANY($1::text[])
          )
        LIMIT 1`,
-      [user.id, variants, now]
+      [variants]
     );
-    return materialMatch.rows.length > 0;
+    if (materialMatch.rows.length > 0) {
+      const row = materialMatch.rows[0];
+      if (!row.course_id || row.is_free) return { allowed: true, reason: "allowed" };
+      const enrollment = await db.query(
+        "SELECT id, valid_until FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL) LIMIT 1",
+        [user.id, row.course_id]
+      );
+      if (enrollment.rows.length === 0) return { allowed: false, reason: "not_enrolled" };
+      if (isEnrollmentExpired(enrollment.rows[0])) {
+        return { allowed: false, reason: "expired" };
+      }
+      return { allowed: true, reason: "allowed" };
+    }
+
+    return { allowed: false, reason: "no_match" };
   };
 
   const canAccessCourseContent = async (user: AuthUser | null, courseId: string): Promise<boolean> => {
@@ -213,11 +168,15 @@ export function registerCourseAccessRoutes({
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const { fileKey } = req.body;
       if (!fileKey || typeof fileKey !== "string") return res.status(400).json({ message: "fileKey required" });
-      const allowed = await userCanMintMediaToken(user, fileKey);
-      if (!allowed) return res.status(403).json({ message: "You do not have access to this media file" });
+      const decision = await userCanMintMediaToken(user, fileKey);
+      if (!decision.allowed) {
+        console.warn("[media-token] denied", { userId: user.id, reason: decision.reason });
+        return res.status(403).json({ message: "You do not have access to this media file" });
+      }
       const token = generateSecureToken();
       const expiresAt = Date.now() + 10 * 60 * 1000;
-      const storedKey = canonicalMediaRelativeKey(fileKey) || normalizeStorageKey(fileKey);
+      const storedKey = canonicalMediaKey(fileKey);
+      if (!storedKey) return res.status(400).json({ message: "Invalid media file key" });
       await db.query("INSERT INTO media_tokens (token, user_id, file_key, expires_at) VALUES ($1, $2, $3, $4)", [token, user.id, storedKey, expiresAt]);
       db.query("DELETE FROM media_tokens WHERE expires_at < $1", [Date.now()]).catch(() => {});
       res.set("Cache-Control", "private, no-store");

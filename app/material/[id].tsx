@@ -18,6 +18,7 @@ import { useVideoScreenProtection } from "@/lib/useVideoScreenProtection";
 import { isAndroidWeb } from "@/lib/useAndroidWebGate";
 import AndroidWebGate from "@/components/AndroidWebGate";
 import { DownloadButton } from "@/components/DownloadButton";
+import { extractMediaFileKey } from "@/lib/media-key";
 
 const mediaTokenCache = new Map<string, { token: string; expiresAt: number }>();
 const MEDIA_TOKEN_TTL_MS = 50 * 1000;
@@ -408,17 +409,14 @@ export default function MaterialViewerScreen() {
   const apiBaseUrl = getBaseUrl();
 
   // Extract the R2 file key from the URL for token generation
-  const fileKey = (() => {
-    const raw = material?.file_url || "";
-    if (!raw || !raw.includes("/api/media/")) return null;
-    const path = raw.startsWith("/") ? raw : raw.replace(/^https?:\/\/[^/]+/, "");
-    return path.replace(/^\/api\/media\//, "");
-  })();
+  const fileKey = extractMediaFileKey(material?.file_url);
 
   // Fetch a short-lived media token for PDF/video viewing (avoids srcDoc cookie issues)
   useEffect(() => {
     if (!fileKey || !material) {
+      setMediaToken(null);
       setMediaTokenError(null);
+      setLoading(false);
       return;
     }
     if (isGDrive || isYouTube) return; // not needed for these
@@ -429,6 +427,7 @@ export default function MaterialViewerScreen() {
       return;
     }
     let cancelled = false;
+    setMediaToken(null);
     setMediaTokenError(null);
     void (async () => {
       const r = await fetchMediaToken(fileKey);
@@ -438,6 +437,7 @@ export default function MaterialViewerScreen() {
         mediaTokenCache.set(fileKey, { token: r.token, expiresAt: Date.now() + MEDIA_TOKEN_TTL_MS });
         return;
       }
+      setMediaToken(null);
       const msg =
         r.status === 401
           ? "Sign in again to open this file (session expired)."
@@ -445,6 +445,7 @@ export default function MaterialViewerScreen() {
             ? "You do not have access to this material."
             : r.message || `Could not unlock file (${r.status}).`;
       setMediaTokenError(msg);
+      setLoading(false);
     })();
     return () => {
       cancelled = true;

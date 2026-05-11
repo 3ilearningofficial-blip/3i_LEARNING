@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { isEnrollmentExpired } from "./course-access-utils";
+import { canonicalMediaKey, mediaKeyMatchVariants } from "./media-key-utils";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -48,7 +49,8 @@ async function streamMediaGet(
   getR2Client: () => Promise<any>,
   key: string
 ): Promise<void> {
-  if (!key || key === "/") {
+  const canonicalKey = canonicalMediaKey(key);
+  if (!canonicalKey || canonicalKey === "/") {
     res.status(400).json({ message: "No file key" });
     return;
   }
@@ -58,7 +60,7 @@ async function streamMediaGet(
   let authenticatedViaMediaToken = false;
 
   if (mediaToken) {
-    const tokenResult = await db.query("SELECT user_id FROM media_tokens WHERE token = $1 AND expires_at > $2 AND file_key = $3", [mediaToken, Date.now(), key]);
+    const tokenResult = await db.query("SELECT user_id FROM media_tokens WHERE token = $1 AND expires_at > $2 AND file_key = $3", [mediaToken, Date.now(), canonicalKey]);
     if (tokenResult.rows.length === 0) {
       res.status(401).json({ message: "Token expired or invalid" });
       return;
@@ -91,13 +93,7 @@ async function streamMediaGet(
 
   // Media token mint already validates entitlement for this user + key.
   if (!authenticatedViaMediaToken && userRole !== "admin") {
-    const normalizedKey = key.replace(/^\/+/, "");
-    const keyVariants = Array.from(new Set([
-      normalizedKey,
-      `/${normalizedKey}`,
-      decodeURIComponent(normalizedKey),
-      `/${decodeURIComponent(normalizedKey)}`,
-    ])).filter(Boolean);
+    const keyVariants = mediaKeyMatchVariants(canonicalKey);
 
     const matResult = await db.query(
       `SELECT course_id, is_free
@@ -158,7 +154,7 @@ async function streamMediaGet(
 
   if (rangeHeader) {
     const head = await withTimeout<any>(
-      r2.send(new HeadObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: key })),
+      r2.send(new HeadObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: canonicalKey })),
       R2_HEAD_TIMEOUT_MS,
       "R2 head request timed out"
     );
@@ -199,7 +195,7 @@ async function streamMediaGet(
     const obj = await r2GetWithRetry<any>(
       () =>
         r2.send(
-          new GetObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: key, Range: `bytes=${start}-${end}` }),
+          new GetObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: canonicalKey, Range: `bytes=${start}-${end}` }),
         ),
       "R2 media range request timed out",
     );
@@ -228,7 +224,7 @@ async function streamMediaGet(
     } else res.status(500).json({ message: "Cannot stream file" });
   } else {
     const obj = await r2GetWithRetry<any>(
-      () => r2.send(new GetObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: key })),
+      () => r2.send(new GetObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: canonicalKey })),
       "R2 media request timed out",
     );
     if (!obj.Body) {

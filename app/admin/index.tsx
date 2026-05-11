@@ -4649,6 +4649,34 @@ export default function AdminDashboard() {
                 <Text style={styles.formLabel}>Questions ({missionQuestions.length})</Text>
                 {missionQuestions.map((q, idx) => (
                   <React.Fragment key={idx}>
+                  {idx > 0 && (
+                    <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, paddingBottom: 10 }}>
+                      <Pressable
+                        style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: Colors.light.primary, backgroundColor: `${Colors.light.primary}12` }}
+                        onPress={() => setMissionQuestions((prev) => {
+                          const n = [...prev];
+                          n.splice(idx, 0, { question: "", options: ["", "", "", ""], correct: "A", topic: "", subtopic: "", marks: "", solution: "", image_url: "", solution_image_url: "" });
+                          return n;
+                        })}
+                      >
+                        <Ionicons name="add-circle-outline" size={17} color={Colors.light.primary} />
+                        <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>Add between</Text>
+                      </Pressable>
+                      <Pressable
+                        style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: "#9333EA", backgroundColor: "#F5F3FF" }}
+                        onPress={() => setMissionQuestions((prev) => {
+                          const n = [...prev];
+                          const src = prev[idx - 1];
+                          const copy = { ...src, options: [...(src.options || ["", "", "", ""])] };
+                          n.splice(idx, 0, copy);
+                          return n;
+                        })}
+                      >
+                        <Ionicons name="copy-outline" size={17} color="#9333EA" />
+                        <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: "#9333EA" }}>Duplicate above</Text>
+                      </Pressable>
+                    </View>
+                  )}
                   <View style={styles.missionQCard}>
                     <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
                       <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>Q{idx + 1}</Text>
@@ -4656,7 +4684,7 @@ export default function AdminDashboard() {
                         <Ionicons name="close-circle" size={20} color="#EF4444" />
                       </Pressable>
                     </View>
-                    <TextInput style={[styles.formInput, { minHeight: 88, textAlignVertical: "top" }]} placeholder="Question text (Enter for new line)" placeholderTextColor={Colors.light.textMuted} value={q.question} onChangeText={(v) => { const nq = [...missionQuestions]; nq[idx] = { ...nq[idx], question: v }; setMissionQuestions(nq); }} multiline blurOnSubmit={false} />
+                    <TextInput style={[styles.formInput, { minHeight: 88, textAlignVertical: "top" }]} placeholder="Question text (Enter for new line)" placeholderTextColor={Colors.light.textMuted} value={q.question} onChangeText={(v) => { const nq = [...missionQuestions]; nq[idx] = { ...nq[idx], question: v }; setMissionQuestions(nq); }} multiline blurOnSubmit={false} returnKeyType="default" />
                     {["A", "B", "C", "D"].map((letter, optIdx) => (
                       <View key={letter} style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4 }}>
                         <Pressable onPress={() => { const nq = [...missionQuestions]; nq[idx] = { ...nq[idx], correct: letter }; setMissionQuestions(nq); }}
@@ -6186,6 +6214,34 @@ export default function AdminDashboard() {
                 <Text style={styles.formLabel}>Questions ({editMission?.questions?.length || 0})</Text>
                 {(editMission?.questions || []).map((q: any, idx: number) => (
                   <React.Fragment key={idx}>
+                  {idx > 0 && (
+                    <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, paddingBottom: 10 }}>
+                      <Pressable
+                        style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: Colors.light.primary, backgroundColor: `${Colors.light.primary}12` }}
+                        onPress={() => setEditMission((p: any) => {
+                          const list = [...(p.questions || [])];
+                          list.splice(idx, 0, { question: "", options: ["", "", "", ""], correct: "A", topic: "", subtopic: "", marks: "", solution: "", image_url: "", solution_image_url: "" });
+                          return { ...p, questions: list };
+                        })}
+                      >
+                        <Ionicons name="add-circle-outline" size={17} color={Colors.light.primary} />
+                        <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>Add between</Text>
+                      </Pressable>
+                      <Pressable
+                        style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: "#9333EA", backgroundColor: "#F5F3FF" }}
+                        onPress={() => setEditMission((p: any) => {
+                          const list = [...(p.questions || [])];
+                          const src = list[idx - 1];
+                          const copy = { ...src, options: [...(src.options || ["", "", "", ""])] };
+                          list.splice(idx, 0, copy);
+                          return { ...p, questions: list };
+                        })}
+                      >
+                        <Ionicons name="copy-outline" size={17} color="#9333EA" />
+                        <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: "#9333EA" }}>Duplicate above</Text>
+                      </Pressable>
+                    </View>
+                  )}
                   <View style={styles.missionQCard}>
                     <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
                       <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>Q{idx + 1}</Text>
@@ -6193,7 +6249,7 @@ export default function AdminDashboard() {
                         <Ionicons name="close-circle" size={20} color="#EF4444" />
                       </Pressable>
                     </View>
-                    <TextInput style={[styles.formInput, { minHeight: 88, textAlignVertical: "top" }]} placeholder="Question text (Enter for new line)" placeholderTextColor={Colors.light.textMuted} value={q.question} onChangeText={(v) => { const nq = [...editMission.questions]; nq[idx] = { ...nq[idx], question: v }; setEditMission((p: any) => ({ ...p, questions: nq })); }} multiline blurOnSubmit={false} />
+                    <TextInput style={[styles.formInput, { minHeight: 88, textAlignVertical: "top" }]} placeholder="Question text (Enter for new line)" placeholderTextColor={Colors.light.textMuted} value={q.question} onChangeText={(v) => { const nq = [...editMission.questions]; nq[idx] = { ...nq[idx], question: v }; setEditMission((p: any) => ({ ...p, questions: nq })); }} multiline blurOnSubmit={false} returnKeyType="default" />
                     {["A", "B", "C", "D"].map((letter, optIdx) => (
                       <View key={letter} style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4 }}>
                         <Pressable onPress={() => { const nq = [...editMission.questions]; nq[idx] = { ...nq[idx], correct: letter }; setEditMission((p: any) => ({ ...p, questions: nq })); }}
