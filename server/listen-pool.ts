@@ -5,7 +5,9 @@ import { Pool } from "pg";
  * Keeps `LISTEN` traffic off the main API pool configured in routes.ts.
  */
 export function createListenPool(connectionString: string): Pool {
-  const max = Math.min(100, Math.max(5, parseInt(process.env.PG_LISTEN_POOL_MAX || "32", 10) || 32));
+  const defaultMax = process.env.NODE_ENV === "production" ? 12 : 20;
+  const parsedMax = parseInt(process.env.PG_LISTEN_POOL_MAX || String(defaultMax), 10) || defaultMax;
+  const max = Math.min(40, Math.max(2, parsedMax));
   return new Pool({
     connectionString,
     ssl:

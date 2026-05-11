@@ -66,6 +66,23 @@ const uploadPdf = multer({
 });
 const uploadLarge = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } });
 
+function isTransientPgError(err: any): boolean {
+  const message = String(err?.message || "").toLowerCase();
+  const code = String(err?.code || "").toUpperCase();
+  return (
+    message.includes("connection terminated") ||
+    message.includes("connection timeout") ||
+    message.includes("getaddrinfo eai_again") ||
+    message.includes("timeout exceeded when trying to connect") ||
+    code === "ECONNRESET" ||
+    code === "ECONNREFUSED" ||
+    code === "EAI_AGAIN" ||
+    code === "ETIMEDOUT" ||
+    code === "57P01" || // admin_shutdown
+    code === "57P03" // cannot_connect_now
+  );
+}
+
 function normalizeDatabaseUrl(raw: string): string {
   try {
     const parsed = new URL(raw);
@@ -100,6 +117,11 @@ const pool = new Pool({
   idleTimeoutMillis: 10000,   // release idle connections quickly (Neon closes them anyway)
   statement_timeout: 25000,
 });
+console.log("[DB] Main pool configured", {
+  max: pgPoolMax,
+  nodeEnv: process.env.NODE_ENV || "development",
+  sslNoVerify: process.env.PGSSL_NO_VERIFY === "true",
+});
 
 // Prevent unhandled 'error' event from crashing the process
 // Neon serverless drops idle connections — this is expected
@@ -108,6 +130,19 @@ pool.on("error", (err) => {
 });
 
 const listenPool = createListenPool(databaseUrl);
+console.log("[DB] Listen pool configured", {
+  max: Math.min(
+    40,
+    Math.max(
+      2,
+      parseInt(
+        process.env.PG_LISTEN_POOL_MAX || (process.env.NODE_ENV === "production" ? "12" : "20"),
+        10
+      ) || (process.env.NODE_ENV === "production" ? 12 : 20)
+    )
+  ),
+  sseCap: Math.max(10, parseInt(process.env.PG_LISTEN_SSE_MAX_CONCURRENT || "100", 10) || 100),
+});
 listenPool.on("error", (err) => {
   console.error("[ListenPool] Idle client error:", err.message);
 });
@@ -116,28 +151,37 @@ listenPool.on("error", (err) => {
 async function runInTransaction<T>(
   fn: (client: { query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }> }) => Promise<T>
 ): Promise<T> {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const exec = {
-      query: async (text: string, params?: unknown[]) => {
-        const r = await client.query(text, params);
-        return { rows: r.rows };
-      },
-    };
-    const out = await fn(exec);
-    await client.query("COMMIT");
-    return out;
-  } catch (e) {
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const client = await pool.connect();
     try {
-      await client.query("ROLLBACK");
-    } catch {
-      /* ignore rollback errors */
+      await client.query("BEGIN");
+      const exec = {
+        query: async (text: string, params?: unknown[]) => {
+          const r = await client.query(text, params);
+          return { rows: r.rows };
+        },
+      };
+      const out = await fn(exec);
+      await client.query("COMMIT");
+      return out;
+    } catch (e: any) {
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        /* ignore rollback errors */
+      }
+      if (isTransientPgError(e) && attempt < maxAttempts) {
+        console.warn("[DB] Transient transaction error, retrying", { attempt, code: e?.code, message: e?.message });
+        await new Promise((resolve) => setTimeout(resolve, 200 * attempt));
+        continue;
+      }
+      throw e;
+    } finally {
+      client.release();
     }
-    throw e;
-  } finally {
-    client.release();
   }
+  throw new Error("Transaction failed after retries");
 }
 
 type DbQueryOptions = { logSlow?: boolean };
@@ -158,19 +202,7 @@ async function dbQuery(text: string, params?: unknown[], options?: DbQueryOption
       return result;
     } catch (err: any) {
       const elapsedMs = Date.now() - startedAt;
-      const message = String(err?.message || "").toLowerCase();
-      const code = String(err?.code || "").toUpperCase();
-      const isTransient =
-        message.includes("connection terminated") ||
-        message.includes("connection timeout") ||
-        message.includes("getaddrinfo eai_again") ||
-        message.includes("timeout exceeded when trying to connect") ||
-        code === "ECONNRESET" ||
-        code === "ECONNREFUSED" ||
-        code === "EAI_AGAIN" ||
-        code === "ETIMEDOUT" ||
-        code === "57P01" || // admin_shutdown
-        code === "57P03";   // cannot_connect_now
+      const isTransient = isTransientPgError(err);
       if (isTransient && attempt < 3) {
         console.warn("[DB] Transient error on attempt " + attempt + ", retrying...");
         await new Promise(r => setTimeout(r, 200 * attempt));
@@ -485,6 +517,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
     console.warn(
       "[DB] Legacy startup schema flags were requested, but runtime schema mutation is now disabled. Run SQL migrations before starting the server."
     );
+  }
+  try {
+    const readiness = await checkDatabaseReadiness(db);
+    if (!readiness.ok) {
+      const missingTables = new Set((readiness.missingTables || []).map((v) => String(v).toLowerCase()));
+      const missingColumns = new Set((readiness.missingColumns || []).map((v) => String(v).toLowerCase()));
+      const authCriticalIssues: string[] = [];
+      if (missingTables.has("user_sessions")) authCriticalIssues.push("missing table: user_sessions");
+      if (missingTables.has("session")) authCriticalIssues.push("missing table: session");
+      if (missingTables.has("express_rate_limit")) authCriticalIssues.push("missing table: express_rate_limit");
+      if (missingColumns.has("users.password_hash")) authCriticalIssues.push("missing column: users.password_hash");
+
+      if (authCriticalIssues.length > 0) {
+        console.warn("[DB] Auth-critical readiness issues detected", {
+          issues: authCriticalIssues,
+        });
+      }
+    }
+  } catch (err) {
+    console.warn("[DB] Startup readiness preflight failed:", err);
   }
 
   // ==================== LIVE CLASS NOTIFICATION + TOKEN CLEANUP SCHEDULERS ====================

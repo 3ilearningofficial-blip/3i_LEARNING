@@ -738,9 +738,16 @@ export function registerAuthRoutes({
   app.post("/api/auth/email-login", async (req: Request, res: Response) => {
     try {
       const { email, password, deviceId } = req.body || {};
-      if (!email || !password) return res.status(400).json({ message: "Phone/email and password are required" });
-
+      if (typeof email !== "string" || typeof password !== "string") {
+        return res.status(400).json({ message: "Phone/email and password are required" });
+      }
       const identifier = email.trim().toLowerCase();
+      const normalizedPassword = password.trim();
+      if (!identifier || !normalizedPassword) {
+        return res.status(400).json({ message: "Phone/email and password are required" });
+      }
+
+      console.log("[Auth] email-login: lookup start", { identifierType: /^\d{10}$/.test(identifier) ? "phone" : "email" });
       const isPhone = /^\d{10}$/.test(identifier);
       let result;
       if (isPhone) {
@@ -763,17 +770,27 @@ export function registerAuthRoutes({
 
       if (!user.password_hash) return res.status(401).json({ message: GENERIC_LOGIN_ERROR });
       let matched = false;
-      if (isScryptHash(user.password_hash)) {
-        matched = await verifyPassword(password, user.password_hash);
-      } else {
-        matched = verifyLegacySha256(password, user.id, user.password_hash);
-        if (matched) {
-          const migratedHash = await hashPassword(password);
-          await db.query("UPDATE users SET password_hash = $1 WHERE id = $2", [migratedHash, user.id]);
+      try {
+        console.log("[Auth] email-login: verify start", { userId: user.id, hashType: isScryptHash(user.password_hash) ? "scrypt" : "legacy" });
+        if (isScryptHash(user.password_hash)) {
+          matched = await verifyPassword(normalizedPassword, user.password_hash);
+        } else {
+          matched = verifyLegacySha256(normalizedPassword, user.id, user.password_hash);
+          if (matched) {
+            const migratedHash = await hashPassword(normalizedPassword);
+            await db.query("UPDATE users SET password_hash = $1 WHERE id = $2", [migratedHash, user.id]);
+          }
         }
+      } catch (verifyErr) {
+        console.warn("[Auth] email-login: password verification failed with malformed hash/user data", {
+          userId: user.id,
+          error: verifyErr instanceof Error ? verifyErr.message : "unknown_error",
+        });
+        return res.status(401).json({ message: GENERIC_LOGIN_ERROR });
       }
       if (!matched) return res.status(401).json({ message: GENERIC_LOGIN_ERROR });
 
+      console.log("[Auth] email-login: device gate start", { userId: user.id });
       const gate = await assertLoginAllowedForInstallation(db, req, {
         userId: user.id,
         role: user.role,
@@ -786,6 +803,7 @@ export function registerAuthRoutes({
       }
 
       const dev = typeof deviceId === "string" ? deviceId : null;
+      console.log("[Auth] email-login: finalize session start", { userId: user.id });
       const finalized = await finalizeAuthenticatedSession(req, user, dev, false);
       res.json(finalized);
     } catch (err) {

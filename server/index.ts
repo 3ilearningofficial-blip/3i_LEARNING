@@ -614,6 +614,10 @@ function normalizeOtpIdentifier(input: unknown): string {
       // Table is created by migrations/0011_distributed_rate_limits_and_session.sql
       createTableIfMissing: false,
     });
+    const sessionStoreWithEvents = sessionConfig.store as session.Store & { on?: (event: string, listener: (...args: any[]) => void) => void };
+    sessionStoreWithEvents.on?.("error", (err: unknown) => {
+      console.error("[SessionStore] error:", err);
+    });
   }
 
   // 3) Auth/session and API protection middleware
@@ -640,6 +644,16 @@ function normalizeOtpIdentifier(input: unknown): string {
           ssl: rateLimitPgSsl,
         })
       : null;
+  if (rateLimitPool) {
+    console.log("[DB] Rate-limit pool configured", {
+      max: 5,
+      nodeEnv: process.env.NODE_ENV || "development",
+      sslNoVerify: process.env.PGSSL_NO_VERIFY === "true",
+    });
+    rateLimitPool.on("error", (err) => {
+      console.error("[RateLimitPool] idle client error:", err.message);
+    });
+  }
 
   const otpSendStore = rateLimitPool ? new PgRateLimitStore(rateLimitPool) : undefined;
   const otpVerifyStore = rateLimitPool ? new PgRateLimitStore(rateLimitPool) : undefined;

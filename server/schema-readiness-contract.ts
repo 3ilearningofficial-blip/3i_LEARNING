@@ -36,6 +36,7 @@ export const REQUIRED_TABLES = [
 
 export const REQUIRED_COLUMNS: Record<string, string[]> = {
   users: [
+    "password_hash",
     "session_token",
     "app_bound_device_id",
     "web_device_id_phone",
