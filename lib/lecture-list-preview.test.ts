@@ -61,10 +61,15 @@ describe("getLectureListPreviewSpec", () => {
     expect(spec).toEqual({ kind: "image", uri: "https://img.youtube.com/vi/dQw4w9WgXcQ/mqdefault.jpg" });
   });
 
-  it("returns placeholder for api media mp4", () => {
+  it("returns securedVideo for api media mp4", () => {
     expect(getLectureListPreviewSpec("/api/media/live-class-recording/x.mp4", null)).toEqual({
-      kind: "placeholder",
+      kind: "securedVideo",
+      fileKey: "live-class-recording/x.mp4",
     });
+  });
+
+  it("returns placeholder for api media HLS (no client poster path)", () => {
+    expect(getLectureListPreviewSpec("/api/media/videos/lesson.m3u8", null)).toEqual({ kind: "placeholder" });
   });
 
   it("returns pdf when only pdf_url", () => {

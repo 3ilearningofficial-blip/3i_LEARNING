@@ -3,6 +3,7 @@ import { View, Image, StyleSheet } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import Colors from "@/constants/colors";
 import { getLectureListPreviewSpec } from "@/lib/lecture-list-preview";
+import { SecuredVideoListThumbnail } from "@/components/SecuredVideoListThumbnail";
 
 /** Wider than tall so video stills (16:9) read clearly in course lecture lists. */
 const PREVIEW_WIDTH = 128;
@@ -34,6 +35,10 @@ export function LectureListPreview({ videoUrl, pdfUrl }: Props) {
         />
       </View>
     );
+  }
+
+  if (spec.kind === "securedVideo") {
+    return <SecuredVideoListThumbnail fileKey={spec.fileKey} width={PREVIEW_WIDTH} height={PREVIEW_HEIGHT} />;
   }
 
   const isPdf = spec.kind === "pdf";

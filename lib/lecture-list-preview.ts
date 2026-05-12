@@ -1,7 +1,10 @@
+import { extractMediaFileKey } from "./media-key";
+
 export type LectureListPreviewSpec =
   | { kind: "image"; uri: string }
   | { kind: "pdf" }
-  | { kind: "placeholder" };
+  | { kind: "placeholder" }
+  | { kind: "securedVideo"; fileKey: string };
 
 function trimUrl(s: string | undefined | null): string {
   return String(s || "").trim();
@@ -44,9 +47,18 @@ function youtubeThumbnailUrl(videoId: string): string {
   return `https://img.youtube.com/vi/${videoId}/mqdefault.jpg`;
 }
 
+/** R2-backed lecture files we can try to poster-frame in the client (native / web). */
+function canExtractPosterFromSecuredVideoFileKey(fileKey: string): boolean {
+  const lower = fileKey.toLowerCase();
+  if (lower.endsWith(".pdf")) return false;
+  if (lower.endsWith(".m3u8")) return false;
+  return true;
+}
+
 /**
  * Resolves what to show in the lecture list preview column (no network I/O).
- * Stream / YouTube → remote still image; PDF-only → pdf icon; R2 /api/media → placeholder.
+ * YouTube / Cloudflare Stream → public still URL; app `/api/media/` videos → client frame grab;
+ * PDF-only → pdf icon; else placeholder.
  */
 export function getLectureListPreviewSpec(
   videoUrl: string | undefined | null,
@@ -60,6 +72,10 @@ export function getLectureListPreviewSpec(
     if (yt) return { kind: "image", uri: youtubeThumbnailUrl(yt) };
     const uid = extractCfStreamUid(v);
     if (uid) return { kind: "image", uri: cfStreamThumbnailUrl(uid) };
+    const fileKey = extractMediaFileKey(v);
+    if (fileKey && canExtractPosterFromSecuredVideoFileKey(fileKey)) {
+      return { kind: "securedVideo", fileKey };
+    }
     return { kind: "placeholder" };
   }
 
