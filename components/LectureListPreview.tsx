@@ -45,7 +45,7 @@ export function LectureListPreview({ videoUrl, pdfUrl }: Props) {
       <Ionicons
         name={isPdf ? "document-text" : "videocam"}
         size={28}
-        color="rgba(255,255,255,0.88)"
+        color="#fff"
       />
     </View>
   );
@@ -57,7 +57,7 @@ const styles = StyleSheet.create({
     height: PREVIEW_HEIGHT,
     borderRadius: 8,
     overflow: "hidden",
-    backgroundColor: Colors.light.dark,
+    backgroundColor: Colors.light.primary,
   },
   image: {
     width: PREVIEW_WIDTH,
@@ -66,6 +66,6 @@ const styles = StyleSheet.create({
   fallback: {
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#1e293b",
+    backgroundColor: Colors.light.primary,
   },
 });
