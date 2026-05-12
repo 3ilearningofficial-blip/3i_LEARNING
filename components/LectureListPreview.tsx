@@ -4,7 +4,9 @@ import { Ionicons } from "@expo/vector-icons";
 import Colors from "@/constants/colors";
 import { getLectureListPreviewSpec } from "@/lib/lecture-list-preview";
 
-const PREVIEW_SIZE = 60;
+/** Wider than tall so video stills (16:9) read clearly in course lecture lists. */
+const PREVIEW_WIDTH = 128;
+const PREVIEW_HEIGHT = 72;
 
 type Props = {
   videoUrl?: string | null;
@@ -42,7 +44,7 @@ export function LectureListPreview({ videoUrl, pdfUrl }: Props) {
     >
       <Ionicons
         name={isPdf ? "document-text" : "videocam"}
-        size={22}
+        size={28}
         color="rgba(255,255,255,0.88)"
       />
     </View>
@@ -51,15 +53,15 @@ export function LectureListPreview({ videoUrl, pdfUrl }: Props) {
 
 const styles = StyleSheet.create({
   wrap: {
-    width: PREVIEW_SIZE,
-    height: PREVIEW_SIZE,
+    width: PREVIEW_WIDTH,
+    height: PREVIEW_HEIGHT,
     borderRadius: 8,
     overflow: "hidden",
     backgroundColor: Colors.light.dark,
   },
   image: {
-    width: PREVIEW_SIZE,
-    height: PREVIEW_SIZE,
+    width: PREVIEW_WIDTH,
+    height: PREVIEW_HEIGHT,
   },
   fallback: {
     alignItems: "center",
