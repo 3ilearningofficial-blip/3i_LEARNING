@@ -327,7 +327,7 @@ export default function WelcomeScreen() {
     () => extractMediaKey(pankajPhotoResolved, apiOrigin),
     [pankajPhotoResolved, apiOrigin]
   );
-  const { data: pankajMediaToken } = useQuery<{ token?: string }>({
+  const { data: pankajMediaToken } = useQuery<{ token?: string; readUrl?: string }>({
     queryKey: ["/api/media-token", "welcome-pankaj", pankajMediaKey, user?.id || "anon"],
     queryFn: async () => {
       if (!pankajMediaKey) return {};
@@ -344,7 +344,10 @@ export default function WelcomeScreen() {
     staleTime: 5 * 60 * 1000,
   });
   const pankajPhotoWithToken = React.useMemo(() => {
-    if (!pankajPhotoResolved || !pankajMediaToken?.token) return pankajPhotoResolved;
+    if (!pankajPhotoResolved) return pankajPhotoResolved;
+    const direct = pankajMediaToken?.readUrl;
+    if (direct && typeof direct === "string") return direct;
+    if (!pankajMediaToken?.token) return pankajPhotoResolved;
     try {
       const u = new URL(pankajPhotoResolved);
       u.searchParams.set("token", pankajMediaToken.token);
@@ -352,7 +355,7 @@ export default function WelcomeScreen() {
     } catch {
       return pankajPhotoResolved;
     }
-  }, [pankajPhotoResolved, pankajMediaToken?.token]);
+  }, [pankajPhotoResolved, pankajMediaToken?.token, pankajMediaToken?.readUrl]);
 
   const myCourseTitle = s("welcome_my_course_title", "My Courses");
   const myCourseIntro = s("welcome_my_course_intro", "");

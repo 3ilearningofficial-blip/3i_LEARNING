@@ -20,8 +20,7 @@ import AndroidWebGate from "@/components/AndroidWebGate";
 import { DownloadButton } from "@/components/DownloadButton";
 import { extractMediaFileKey } from "@/lib/media-key";
 
-const mediaTokenCache = new Map<string, { token: string; expiresAt: number }>();
-const MEDIA_TOKEN_TTL_MS = 50 * 1000;
+const mediaTokenCache = new Map<string, { token: string; expiresAt: number; readUrl?: string }>();
 
 function getIconName(fileType: string): keyof typeof Ionicons.glyphMap {
   switch (fileType) {
@@ -331,6 +330,7 @@ export default function MaterialViewerScreen() {
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const [loading, setLoading] = useState(true);
   const [mediaToken, setMediaToken] = useState<string | null>(null);
+  const [mediaReadUrl, setMediaReadUrl] = useState<string | null>(null);
   const [mediaTokenError, setMediaTokenError] = useState<string | null>(null);
   const [mediaTokenRetryTick, setMediaTokenRetryTick] = useState(0);
   const qc = useQueryClient();
@@ -415,6 +415,7 @@ export default function MaterialViewerScreen() {
   useEffect(() => {
     if (!fileKey || !material) {
       setMediaToken(null);
+      setMediaReadUrl(null);
       setMediaTokenError(null);
       setLoading(false);
       return;
@@ -423,20 +424,28 @@ export default function MaterialViewerScreen() {
     const cached = mediaTokenCache.get(fileKey);
     if (cached && cached.expiresAt > Date.now()) {
       setMediaToken(cached.token);
+      setMediaReadUrl(cached.readUrl ?? null);
       setMediaTokenError(null);
       return;
     }
     let cancelled = false;
     setMediaToken(null);
+    setMediaReadUrl(null);
     setMediaTokenError(null);
     void (async () => {
       const r = await fetchMediaToken(fileKey);
       if (cancelled) return;
       if (r.ok) {
         setMediaToken(r.token);
-        mediaTokenCache.set(fileKey, { token: r.token, expiresAt: Date.now() + MEDIA_TOKEN_TTL_MS });
+        setMediaReadUrl(r.readUrl ?? null);
+        mediaTokenCache.set(fileKey, {
+          token: r.token,
+          expiresAt: r.expiresAt,
+          ...(r.readUrl ? { readUrl: r.readUrl } : {}),
+        });
         return;
       }
+      setMediaReadUrl(null);
       setMediaToken(null);
       const msg =
         r.status === 401
@@ -455,7 +464,7 @@ export default function MaterialViewerScreen() {
   // Authenticated URL with token (always use API base — never the Vercel preview origin on web)
   const tokenizedUrl = toHttpsMediaUrl(
     mediaToken && fileKey
-      ? `${apiBaseUrl}/api/media/${fileKey}?token=${mediaToken}`
+      ? mediaReadUrl || `${apiBaseUrl}/api/media/${fileKey}?token=${mediaToken}`
       : (fileUrl || "")
   ) || fileUrl;
 

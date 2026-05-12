@@ -23,8 +23,33 @@ import { withTimeout, isTimeoutError } from "./async-utils";
 // R2 timeouts: cold reads from the India region routinely take 8–12 s, so the previous
 // 10/15 s ceilings often pushed PDFs and videos into a 504. We give R2 a longer window
 // here and add a single retry below for the GetObject path.
+// Align any reverse-proxy read_timeout (nginx, Cloudflare origin rules) to exceed
+// R2_HEAD_TIMEOUT_MS + R2_GET_TIMEOUT_MS (+ retry) or use presigned readUrl from /api/media-token.
 const R2_HEAD_TIMEOUT_MS = 15000;
 const R2_GET_TIMEOUT_MS = 30000;
+
+const R2_HEAD_META_TTL_MS = 5 * 60 * 1000;
+const R2_HEAD_META_MAX = 400;
+type R2HeadMetaEntry = { contentLength: number; contentType: string | undefined; storedAt: number };
+const r2HeadMetaLru = new Map<string, R2HeadMetaEntry>();
+
+function r2HeadMetaGet(key: string): R2HeadMetaEntry | null {
+  const row = r2HeadMetaLru.get(key);
+  if (!row) return null;
+  if (Date.now() - row.storedAt > R2_HEAD_META_TTL_MS) {
+    r2HeadMetaLru.delete(key);
+    return null;
+  }
+  return row;
+}
+
+function r2HeadMetaSet(key: string, contentLength: number, contentType: string | undefined) {
+  if (r2HeadMetaLru.size >= R2_HEAD_META_MAX) {
+    const oldest = r2HeadMetaLru.keys().next().value;
+    if (oldest) r2HeadMetaLru.delete(oldest);
+  }
+  r2HeadMetaLru.set(key, { contentLength, contentType, storedAt: Date.now() });
+}
 
 async function r2GetWithRetry<T>(
   send: () => Promise<T>,
@@ -142,8 +167,31 @@ async function streamMediaGet(
           }
         }
       } else {
-        res.status(403).json({ message: "Forbidden" });
-        return;
+        const lcResult = await db.query(
+          `SELECT course_id, is_free_preview
+           FROM live_classes
+           WHERE recording_url = ANY($1::text[])
+              OR regexp_replace(recording_url, '^https?://[^/]+/', '') = ANY($1::text[])
+              OR regexp_replace(recording_url, '^https?://[^/]+', '') = ANY($1::text[])
+           LIMIT 1`,
+          [keyVariants],
+        );
+        if (lcResult.rows.length > 0) {
+          const lc = lcResult.rows[0];
+          if (lc.course_id && !lc.is_free_preview) {
+            const enrolled = await db.query(
+              "SELECT valid_until FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL) LIMIT 1",
+              [userId, lc.course_id],
+            );
+            if (enrolled.rows.length === 0 || isEnrollmentExpired(enrolled.rows[0])) {
+              res.status(403).json({ message: "Enrollment required" });
+              return;
+            }
+          }
+        } else {
+          res.status(403).json({ message: "Forbidden" });
+          return;
+        }
       }
     }
   }
@@ -153,12 +201,22 @@ async function streamMediaGet(
   const rangeHeader = req.headers.range;
 
   if (rangeHeader) {
-    const head = await withTimeout<any>(
-      r2.send(new HeadObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: canonicalKey })),
-      R2_HEAD_TIMEOUT_MS,
-      "R2 head request timed out"
-    );
-    const totalSize = head.ContentLength || 0;
+    const cachedHead = r2HeadMetaGet(canonicalKey);
+    let totalSize: number;
+    let headContentType: string | undefined;
+    if (cachedHead) {
+      totalSize = cachedHead.contentLength;
+      headContentType = cachedHead.contentType;
+    } else {
+      const head = await withTimeout<any>(
+        r2.send(new HeadObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: canonicalKey })),
+        R2_HEAD_TIMEOUT_MS,
+        "R2 head request timed out",
+      );
+      totalSize = head.ContentLength || 0;
+      headContentType = head.ContentType;
+      if (totalSize > 0) r2HeadMetaSet(canonicalKey, totalSize, headContentType);
+    }
     const m = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim());
     if (!m || totalSize <= 0) {
       res.status(416);
@@ -208,11 +266,11 @@ async function streamMediaGet(
     res.setHeader("Content-Range", `bytes ${start}-${end}/${totalSize}`);
     res.setHeader("Accept-Ranges", "bytes");
     res.setHeader("Content-Length", String(chunkSize));
-    if (head.ContentType) res.setHeader("Content-Type", head.ContentType);
+    if (headContentType) res.setHeader("Content-Type", headContentType);
     // PDF range responses can be safely cached privately for a few minutes — pdf.js
     // re-requests range chunks repeatedly on page navigation. All other content stays
     // no-store so signed-token access controls aren't undermined.
-    const isPdf = typeof head.ContentType === "string" && /pdf/i.test(head.ContentType);
+    const isPdf = typeof headContentType === "string" && /pdf/i.test(headContentType);
     res.setHeader("Cache-Control", isPdf ? "private, max-age=300" : "private, no-store");
     res.setHeader("Content-Disposition", "inline");
 
@@ -231,6 +289,9 @@ async function streamMediaGet(
       res.status(404).json({ message: "File not found" });
       return;
     }
+
+    const fullLen = Number(obj.ContentLength);
+    if (Number.isFinite(fullLen) && fullLen > 0) r2HeadMetaSet(canonicalKey, fullLen, obj.ContentType);
 
     if (obj.ContentType) res.setHeader("Content-Type", obj.ContentType);
     if (obj.ContentLength) res.setHeader("Content-Length", String(obj.ContentLength));

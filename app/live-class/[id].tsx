@@ -22,8 +22,7 @@ import { filterChatMessages } from "@/lib/chat-utils";
 import { buildYouTubePhoneWebSrcDoc } from "@/lib/buildYouTubePhoneWebSrcDoc";
 import { buildCfHlsPlayerHtml } from "@/lib/buildCfHlsPlayerHtml";
 
-const mediaTokenCache = new Map<string, { token: string; expiresAt: number }>();
-const MEDIA_TOKEN_TTL_MS = 50 * 1000;
+const mediaTokenCache = new Map<string, { token: string; expiresAt: number; readUrl?: string }>();
 
 function getYouTubeVideoId(url: string): string {
   if (!url) return "";
@@ -553,6 +552,7 @@ export default function LiveClassScreen() {
 
   // For /api/media/ recording URLs, get a token so mobile web can play them
   const [recordingToken, setRecordingToken] = useState<string | null>(null);
+  const [recordingReadUrl, setRecordingReadUrl] = useState<string | null>(null);
   const [recordingTokenError, setRecordingTokenError] = useState<string | null>(null);
   const [recordingTokenRetryTick, setRecordingTokenRetryTick] = useState(0);
   const recordingFileKey = (() => {
@@ -564,24 +564,32 @@ export default function LiveClassScreen() {
   useEffect(() => {
     if (!recordingFileKey || !userScopedRecordingKey) {
       setRecordingToken(null);
+      setRecordingReadUrl(null);
       setRecordingTokenError(null);
       return;
     }
     const cached = mediaTokenCache.get(userScopedRecordingKey);
     if (cached && cached.expiresAt > Date.now()) {
       setRecordingToken(cached.token);
+      setRecordingReadUrl(cached.readUrl ?? null);
       setRecordingTokenError(null);
       return;
     }
     let cancelled = false;
     setRecordingToken(null);
+    setRecordingReadUrl(null);
     setRecordingTokenError(null);
     void (async () => {
       const result = await fetchMediaToken(recordingFileKey);
       if (cancelled) return;
       if (result.ok && result.token) {
         setRecordingToken(result.token);
-        mediaTokenCache.set(userScopedRecordingKey, { token: result.token, expiresAt: Date.now() + MEDIA_TOKEN_TTL_MS });
+        setRecordingReadUrl(result.readUrl ?? null);
+        mediaTokenCache.set(userScopedRecordingKey, {
+          token: result.token,
+          expiresAt: result.expiresAt,
+          ...(result.readUrl ? { readUrl: result.readUrl } : {}),
+        });
         return;
       }
       if (!result.ok) {
@@ -602,10 +610,9 @@ export default function LiveClassScreen() {
   const authenticatedVideoUrl = (() => {
     if (!recordingFileKey) return toHttpsMediaUrl(videoUrl);
     if (!recordingToken) return toHttpsMediaUrl(videoUrl);
-    if (Platform.OS === "web" && typeof window !== "undefined") {
-      return toHttpsMediaUrl(`${getBaseUrl()}/api/media/${recordingFileKey}?token=${recordingToken}`);
-    }
-    return toHttpsMediaUrl(videoUrl);
+    return toHttpsMediaUrl(
+      recordingReadUrl || `${getBaseUrl()}/api/media/${recordingFileKey}?token=${recordingToken}`,
+    );
   })();
   useEffect(() => {
     didAutoplayDirectRecording.current = false;

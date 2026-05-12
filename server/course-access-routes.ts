@@ -1,6 +1,7 @@
 import type { Express, Request, Response } from "express";
 import { computeEnrollmentValidUntil, isEnrollmentExpired } from "./course-access-utils";
 import { canonicalMediaKey, mediaKeyMatchVariants } from "./media-key-utils";
+import { presignR2GetObject } from "./r2-presign-read";
 
 type DbQueryResult = {
   rows: any[];
@@ -101,16 +102,47 @@ export function registerCourseAccessRoutes({
     const lectureMatch = await db.query(
       `SELECT l.course_id, l.is_free_preview
        FROM lectures l
-       WHERE l.video_url IS NOT NULL
-         AND (
+       WHERE (
+         (l.video_url IS NOT NULL AND (
            regexp_replace(regexp_replace(COALESCE(l.video_url, ''), '^https?://[^/]+/', ''), '^/+', '') = ANY($1::text[])
            OR regexp_replace(COALESCE(l.video_url, ''), '^https?://[^/]+/', '') = ANY($1::text[])
-         )
+         ))
+         OR
+         (l.pdf_url IS NOT NULL AND (
+           regexp_replace(regexp_replace(COALESCE(l.pdf_url, ''), '^https?://[^/]+/', ''), '^/+', '') = ANY($1::text[])
+           OR regexp_replace(COALESCE(l.pdf_url, ''), '^https?://[^/]+/', '') = ANY($1::text[])
+         ))
+       )
        LIMIT 1`,
       [variants]
     );
     if (lectureMatch.rows.length > 0) {
       const row = lectureMatch.rows[0];
+      if (!row.course_id || row.is_free_preview) return { allowed: true, reason: "allowed" };
+      const enrollment = await db.query(
+        "SELECT id, valid_until FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL) LIMIT 1",
+        [user.id, row.course_id]
+      );
+      if (enrollment.rows.length === 0) return { allowed: false, reason: "not_enrolled" };
+      if (isEnrollmentExpired(enrollment.rows[0])) {
+        return { allowed: false, reason: "expired" };
+      }
+      return { allowed: true, reason: "allowed" };
+    }
+
+    const liveClassMatch = await db.query(
+      `SELECT lc.course_id, lc.is_free_preview
+       FROM live_classes lc
+       WHERE lc.recording_url IS NOT NULL
+         AND (
+           regexp_replace(regexp_replace(COALESCE(lc.recording_url, ''), '^https?://[^/]+/', ''), '^/+', '') = ANY($1::text[])
+           OR regexp_replace(COALESCE(lc.recording_url, ''), '^https?://[^/]+/', '') = ANY($1::text[])
+         )
+       LIMIT 1`,
+      [variants]
+    );
+    if (liveClassMatch.rows.length > 0) {
+      const row = liveClassMatch.rows[0];
       if (!row.course_id || row.is_free_preview) return { allowed: true, reason: "allowed" };
       const enrollment = await db.query(
         "SELECT id, valid_until FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL) LIMIT 1",
@@ -179,8 +211,10 @@ export function registerCourseAccessRoutes({
       if (!storedKey) return res.status(400).json({ message: "Invalid media file key" });
       await db.query("INSERT INTO media_tokens (token, user_id, file_key, expires_at) VALUES ($1, $2, $3, $4)", [token, user.id, storedKey, expiresAt]);
       db.query("DELETE FROM media_tokens WHERE expires_at < $1", [Date.now()]).catch(() => {});
+      const ttlSec = Math.max(60, Math.floor((expiresAt - Date.now()) / 1000));
+      const readUrl = await presignR2GetObject(getR2Client, storedKey, ttlSec);
       res.set("Cache-Control", "private, no-store");
-      res.json({ token, expiresAt });
+      res.json(readUrl ? { token, expiresAt, readUrl } : { token, expiresAt });
     } catch {
       res.status(500).json({ message: "Failed to generate token" });
     }

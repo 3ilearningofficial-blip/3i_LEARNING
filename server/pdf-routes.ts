@@ -1,6 +1,8 @@
 import type { Express, Request, Response } from "express";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
+import { canonicalMediaKey } from "./media-key-utils";
+import { presignR2GetObject } from "./r2-presign-read";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -10,6 +12,7 @@ type RegisterPdfRoutesDeps = {
   app: Express;
   db: DbClient;
   getAuthUser: (req: Request) => Promise<{ id: number } | null>;
+  getR2Client: () => Promise<any>;
 };
 
 const MAX_PDF_PROXY_BYTES = 30 * 1024 * 1024;
@@ -47,21 +50,44 @@ async function resolveToPublicAddress(hostname: string): Promise<boolean> {
   }
 }
 
-export function registerPdfRoutes({ app, db, getAuthUser }: RegisterPdfRoutesDeps): void {
+function publicApiBaseUrl(): string {
+  const raw = String(process.env.PUBLIC_API_BASE_URL || process.env.API_PUBLIC_URL || "").trim().replace(/\/+$/, "");
+  if (raw) return raw;
+  return "https://api.3ilearning.in";
+}
+
+function mediaProxyUrl(publicBase: string, fileKey: string, token: string): string {
+  const encPath = fileKey.split("/").filter(Boolean).map(encodeURIComponent).join("/");
+  return `${publicBase}/api/media/${encPath}?token=${encodeURIComponent(token)}`;
+}
+
+export function registerPdfRoutes({ app, db, getAuthUser, getR2Client }: RegisterPdfRoutesDeps): void {
   app.get("/api/pdf-viewer", async (req: Request, res: Response) => {
     const { token, key } = req.query;
     if (!token || !key || typeof token !== "string" || typeof key !== "string") {
       return res.status(400).send("Missing token or key");
     }
-    const tokenResult = await db.query(
-      "SELECT user_id FROM media_tokens WHERE token = $1 AND expires_at > $2 AND file_key = $3",
-      [token, Date.now(), key]
-    ).catch(() => ({ rows: [] }));
+    const fileKey = canonicalMediaKey(key);
+    if (!fileKey) {
+      return res.status(400).send("Invalid key");
+    }
+    const tokenResult = await db
+      .query("SELECT user_id, expires_at FROM media_tokens WHERE token = $1 AND expires_at > $2 AND file_key = $3", [
+        token,
+        Date.now(),
+        fileKey,
+      ])
+      .catch(() => ({ rows: [] as any[] }));
     if (!tokenResult.rows.length) {
       return res.status(401).send("Token expired or invalid");
     }
-    const origin = `${req.headers["x-forwarded-proto"] || req.protocol}://${req.headers["x-forwarded-host"] || req.headers.host}`;
-    const pdfUrl = `${origin}/api/media/${key}?token=${token}`;
+    const expiresAt = Number(tokenResult.rows[0].expires_at);
+    const expMs = Number.isFinite(expiresAt) ? expiresAt : Date.now() + 10 * 60 * 1000;
+    const ttlSec = Math.max(60, Math.floor((expMs - Date.now()) / 1000));
+    const readUrl = await presignR2GetObject(getR2Client, fileKey, ttlSec);
+    const publicBase = publicApiBaseUrl();
+    const pdfUrl = readUrl || mediaProxyUrl(publicBase, fileKey, token);
+    const withCredentials = !readUrl;
     const html = `<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
@@ -90,8 +116,9 @@ html,body{width:100%;height:100%;background:#2a2a2a;overflow:auto;font-family:-a
 pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 (function(){
   var pdfUrl=${JSON.stringify(pdfUrl)};
+  var withCredentials=${JSON.stringify(withCredentials)};
   function renderPdf(url){
-    return pdfjsLib.getDocument({url:url,withCredentials:true}).promise.then(function(pdf){
+    return pdfjsLib.getDocument({url:url,withCredentials:withCredentials}).promise.then(function(pdf){
       document.getElementById('loading').style.display='none';
       var viewer=document.getElementById('viewer');
       viewer.innerHTML='';

@@ -21,7 +21,7 @@ import { buildYouTubePhoneWebSrcDoc } from "@/lib/buildYouTubePhoneWebSrcDoc";
 import { buildCfHlsPlayerHtml } from "@/lib/buildCfHlsPlayerHtml";
 import { extractMediaFileKey } from "@/lib/media-key";
 
-const mediaTokenCache = new Map<string, { token: string; expiresAt: number }>();
+const mediaTokenCache = new Map<string, { token: string; expiresAt: number; readUrl?: string }>();
 const MEDIA_TOKEN_REFRESH_SKEW_MS = 60 * 1000;
 
 function getYouTubeVideoId(url: string): string {
@@ -477,6 +477,7 @@ export default function LectureScreen() {
   const rawVideoUrl = lectureData?.video_url || paramVideoUrl || "";
   const baseUrl = getBaseUrl();
   const [mediaToken, setMediaToken] = useState<string | null>(null);
+  const [mediaReadUrl, setMediaReadUrl] = useState<string | null>(null);
   let videoUrl = rawVideoUrl;
 
   if (!rawVideoUrl.startsWith('file://')) {
@@ -497,12 +498,14 @@ export default function LectureScreen() {
   useEffect(() => {
     if (!fileKey || !userScopedMediaKey) {
       setMediaToken(null);
+      setMediaReadUrl(null);
       setMediaTokenError(null);
       return;
     }
     const cached = mediaTokenCache.get(userScopedMediaKey);
     if (cached && cached.expiresAt > Date.now()) {
       setMediaToken(cached.token);
+      setMediaReadUrl(cached.readUrl ?? null);
       setMediaTokenError(null);
       return;
     }
@@ -513,15 +516,22 @@ export default function LectureScreen() {
       if (cancelled) return;
       if (r.ok) {
         setMediaToken(r.token);
-        mediaTokenCache.set(userScopedMediaKey, { token: r.token, expiresAt: r.expiresAt });
+        setMediaReadUrl(r.readUrl ?? null);
+        mediaTokenCache.set(userScopedMediaKey, {
+          token: r.token,
+          expiresAt: r.expiresAt,
+          ...(r.readUrl ? { readUrl: r.readUrl } : {}),
+        });
         return;
       }
+      setMediaReadUrl(null);
       const msg =
         r.status === 401
           ? "Sign in again to play this video (session expired)."
           : r.status === 403
             ? "You do not have access to this file. If you are enrolled, pull to refresh the course page and retry."
             : r.message || `Could not unlock playback (${r.status}).`;
+      setMediaReadUrl(null);
       setMediaTokenError(msg);
     })();
     return () => {
@@ -538,7 +548,7 @@ export default function LectureScreen() {
   }, [fileKey, userScopedMediaKey, mediaToken]);
   const authenticatedVideoUrl = toHttpsMediaUrl(
     fileKey && mediaToken
-      ? `${baseUrl}/api/media/${fileKey}?token=${mediaToken}`
+      ? mediaReadUrl || `${baseUrl}/api/media/${fileKey}?token=${mediaToken}`
       : videoUrl,
   ) || videoUrl;
   const isSecuringPlayback = !!fileKey && !mediaToken && !mediaTokenError;

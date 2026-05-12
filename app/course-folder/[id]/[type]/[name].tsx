@@ -18,6 +18,7 @@ import Colors from "@/constants/colors";
 import { useScreenProtection } from "@/lib/useScreenProtection";
 import { useAuth } from "@/context/AuthContext";
 import { DownloadButton } from "@/components/DownloadButton";
+import { LectureListPreview } from "@/components/LectureListPreview";
 import { DEFAULT_LIVE_RECORDING_SECTION } from "@/lib/recordingSection";
 import { useDocumentVisibility } from "@/lib/useDocumentVisibility";
 
@@ -435,6 +436,7 @@ export default function CourseFolderScreen() {
                 <View style={[styles.lectureNumber, lecture.isCompleted && styles.lectureNumberDone]}>
                   {lecture.isCompleted ? <Ionicons name="checkmark" size={16} color="#fff" /> : <Text style={styles.lectureNumberText}>{idx + 1}</Text>}
                 </View>
+                <LectureListPreview videoUrl={lecture.video_url} pdfUrl={lecture.pdf_url} />
                 <View style={styles.lectureInfo}>
                   <Text style={styles.lectureTitle}>{lecture.title}</Text>
                   <View style={styles.lectureMetaRow}>

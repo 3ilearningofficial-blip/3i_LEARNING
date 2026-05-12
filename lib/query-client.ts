@@ -362,7 +362,7 @@ export async function apiRequest(
 }
 
 export type MediaTokenResult =
-  | { ok: true; token: string; expiresAt: number }
+  | { ok: true; token: string; expiresAt: number; readUrl?: string }
   | { ok: false; status: number; message: string };
 
 /** POST /api/media-token without throwing — players should show 401/403 instead of spinning forever. */
@@ -399,11 +399,14 @@ export async function fetchMediaToken(fileKey: string): Promise<MediaTokenResult
     const payload = unwrapApiEnvelope(await res.json());
     const tok = typeof (payload as any)?.token === "string" ? (payload as any).token : null;
     const exp = Number((payload as any)?.expiresAt);
+    const readUrlRaw = (payload as any)?.readUrl;
+    const readUrl = typeof readUrlRaw === "string" && readUrlRaw.startsWith("http") ? readUrlRaw : undefined;
     if (!tok) return { ok: false, status: 500, message: "Missing token in response" };
     return {
       ok: true,
       token: tok,
       expiresAt: Number.isFinite(exp) ? exp : Date.now() + 9 * 60 * 1000,
+      ...(readUrl ? { readUrl } : {}),
     };
   } catch {
     return { ok: false, status: res.status, message: "Invalid token response" };

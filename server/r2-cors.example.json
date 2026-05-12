@@ -1,0 +1,23 @@
+[
+  {
+    "AllowedOrigins": [
+      "https://3ilearning.in",
+      "https://www.3ilearning.in",
+      "https://api.3ilearning.in",
+      "http://localhost:8081",
+      "http://localhost:19006",
+      "http://127.0.0.1:8081"
+    ],
+    "AllowedMethods": ["GET", "HEAD"],
+    "AllowedHeaders": ["*"],
+    "ExposeHeaders": [
+      "Content-Length",
+      "Content-Type",
+      "Content-Range",
+      "Accept-Ranges",
+      "ETag",
+      "Last-Modified"
+    ],
+    "MaxAgeSeconds": 3600
+  }
+]

@@ -2626,7 +2626,7 @@ export default function AdminCourseScreen() {
                 <View style={{ alignItems: "center", paddingVertical: 40, gap: 8 }}>
                   <Ionicons name="help-circle-outline" size={48} color={Colors.light.textMuted} />
                   <Text style={{ fontSize: 15, fontFamily: "Inter_500Medium", color: Colors.light.textMuted }}>No questions yet</Text>
-                </View>
+    </View>
               )}
               {questionsList.map((q: any, idx: number) => (
                 <View key={q.id} style={{ gap: 8 }}>

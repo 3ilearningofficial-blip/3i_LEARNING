@@ -1072,7 +1072,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     getR2Client,
   });
 
-  registerPdfRoutes({ app, db, getAuthUser });
+  registerPdfRoutes({ app, db, getAuthUser, getR2Client });
 
   const httpServer = createServer(app);
   return httpServer;
