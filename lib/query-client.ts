@@ -106,7 +106,9 @@ export function getBaseUrl(): string {
   if (Platform.OS === "web" && typeof window !== "undefined") {
     const host = window.location.hostname;
     if (host === "3ilearning.in" || host === "www.3ilearning.in") {
-      return "https://api.3ilearning.in";
+      // Same-origin `/api` is proxied to the real API (see vercel.json). Avoids relying on
+      // separate DNS for api.* when apex already loads (common ISP/DNS failure mode).
+      return normalizeBaseUrl(window.location.origin);
     }
     if (host === "localhost" || host === "127.0.0.1") {
       return "http://localhost:5000";

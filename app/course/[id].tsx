@@ -1156,7 +1156,7 @@ setTimeout(function() {
                                   {lec.download_allowed ? " · Download" : ""}
                                 </Text>
                               </View>
-                              {!canAccess ? <Ionicons name="lock-closed" size={18} color={Colors.light.textMuted} /> : <Ionicons name="play-circle" size={20} color="#1A56DB" />}
+                              {!canAccess ? <Ionicons name="lock-closed" size={18} color={Colors.light.textMuted} /> : null}
                             </Pressable>
                             <DownloadButton
                               itemType="lecture"

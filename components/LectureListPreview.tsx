@@ -9,6 +9,11 @@ import { SecuredVideoListThumbnail } from "@/components/SecuredVideoListThumbnai
 const PREVIEW_WIDTH = 128;
 const PREVIEW_HEIGHT = 72;
 
+const PREVIEW_SURFACE = "#FFFFFF";
+const PREVIEW_BORDER = "#E2EAFF";
+const VIDEO_ICON_RED = "#DC2626";
+const VIDEO_CIRCLE_BG = "#FEE2E2";
+
 type Props = {
   videoUrl?: string | null;
   pdfUrl?: string | null;
@@ -26,7 +31,7 @@ export function LectureListPreview({ videoUrl, pdfUrl }: Props) {
 
   if (spec.kind === "image" && !imageFailed) {
     return (
-      <View style={styles.wrap} accessibilityLabel="Video preview">
+      <View style={styles.wrapSurface} accessibilityLabel="Video preview">
         <Image
           source={{ uri: spec.uri }}
           style={styles.image}
@@ -44,25 +49,29 @@ export function LectureListPreview({ videoUrl, pdfUrl }: Props) {
   const isPdf = spec.kind === "pdf";
   return (
     <View
-      style={[styles.wrap, styles.fallback]}
+      style={[styles.wrapSurface, styles.fallback]}
       accessibilityLabel={isPdf ? "PDF lecture" : "Video lecture"}
     >
-      <Ionicons
-        name={isPdf ? "document-text" : "videocam"}
-        size={28}
-        color="#fff"
-      />
+      <View style={[styles.iconCircle, isPdf ? styles.iconCirclePdf : null]}>
+        <Ionicons
+          name={isPdf ? "document-text" : "videocam"}
+          size={22}
+          color={isPdf ? Colors.light.primary : VIDEO_ICON_RED}
+        />
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  wrap: {
+  wrapSurface: {
     width: PREVIEW_WIDTH,
     height: PREVIEW_HEIGHT,
     borderRadius: 8,
     overflow: "hidden",
-    backgroundColor: Colors.light.primary,
+    backgroundColor: PREVIEW_SURFACE,
+    borderWidth: 1,
+    borderColor: PREVIEW_BORDER,
   },
   image: {
     width: PREVIEW_WIDTH,
@@ -71,6 +80,16 @@ const styles = StyleSheet.create({
   fallback: {
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: Colors.light.primary,
+  },
+  iconCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: VIDEO_CIRCLE_BG,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  iconCirclePdf: {
+    backgroundColor: "#EEF2FF",
   },
 });

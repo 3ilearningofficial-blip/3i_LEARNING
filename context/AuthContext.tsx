@@ -61,7 +61,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const fetchMe = async () =>
         fetch(url.toString(), { credentials: "include", headers: await buildHeaders() });
 
-      let res = await fetchMe();
+      let res: Response;
+      if (Platform.OS === "web") {
+        try {
+          res = await fetchMe();
+        } catch {
+          await new Promise((r) => setTimeout(r, 400));
+          res = await fetchMe();
+        }
+      } else {
+        res = await fetchMe();
+      }
       // One retry on web for transient cookie/network races after navigation or tab restore.
       if (Platform.OS === "web" && !res.ok && (res.status === 401 || res.status === 403 || res.status === 502)) {
         await new Promise((r) => setTimeout(r, 400));
@@ -179,14 +189,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     setUnauthorizedHandler(async () => {
       if (Platform.OS === "web") {
-        // Playback routes can trigger best-effort background calls; don't hard-logout on transient 401s there.
-        const onPlaybackRoute =
+        // Playback + admin: background calls may 401 during flaky API; don't hard-logout immediately.
+        const suppressHardLogoutRoute =
           pathname.startsWith("/lecture/") ||
           pathname.startsWith("/live-class/") ||
-          pathname.startsWith("/material/");
-        if (onPlaybackRoute) return;
+          pathname.startsWith("/material/") ||
+          pathname.startsWith("/admin");
+        if (suppressHardLogoutRoute) return;
         // Confirm whether session is actually invalid before clearing user on web.
         // This avoids false logout from endpoint-specific/transient 401s.
+        const storedForMe = await getStoredAuthUser();
+        const tokenForMe = await getStoredToken();
         try {
           const meUrl = new URL("/api/auth/me", getApiUrl());
           const headers: Record<string, string> = {};
@@ -202,8 +215,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               return;
             }
           }
+          const transient = meRes.status === 502 || meRes.status === 503 || meRes.status === 504;
+          if (transient && storedForMe && tokenForMe) return;
         } catch {
-          // fall through to logout
+          if (storedForMe && tokenForMe) return;
         }
         setUser(null);
         await removeStoredAuthUser();

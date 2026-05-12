@@ -1,11 +1,15 @@
 import React, { useEffect, useState } from "react";
-import { View, Image, StyleSheet, ActivityIndicator, Platform } from "react-native";
+import { View, Image, StyleSheet, Platform } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as VideoThumbnails from "expo-video-thumbnails";
-import Colors from "@/constants/colors";
 import { fetchMediaToken, getApiUrl } from "@/lib/query-client";
 import { buildMediaUrlWithToken } from "@/lib/media-playback-url";
 import { captureVideoPosterWeb } from "@/lib/web-video-poster-capture";
+
+const PREVIEW_SURFACE = "#FFFFFF";
+const PREVIEW_BORDER = "#E2EAFF";
+const VIDEO_ICON_RED = "#DC2626";
+const VIDEO_CIRCLE_BG = "#FEE2E2";
 
 type Props = {
   fileKey: string;
@@ -74,7 +78,7 @@ export function SecuredVideoListThumbnail({ fileKey, width, height }: Props) {
 
   if (uri) {
     return (
-      <View style={[styles.wrap, { width, height }]} accessibilityLabel="Video preview">
+      <View style={[styles.wrapSurface, { width, height }]} accessibilityLabel="Video preview">
         <Image source={{ uri }} style={[styles.image, { width, height }]} resizeMode="cover" />
       </View>
     );
@@ -82,35 +86,44 @@ export function SecuredVideoListThumbnail({ fileKey, width, height }: Props) {
 
   if (failed) {
     return (
-      <View style={[styles.wrap, styles.fallback, { width, height }]} accessibilityLabel="Video lecture">
-        <Ionicons name="videocam" size={26} color="rgba(255,255,255,0.9)" />
+      <View style={[styles.wrapSurface, styles.centered, { width, height }]} accessibilityLabel="Video lecture">
+        <View style={styles.iconCircle}>
+          <Ionicons name="videocam" size={22} color={VIDEO_ICON_RED} />
+        </View>
       </View>
     );
   }
 
   return (
-    <View style={[styles.wrap, styles.loading, { width, height }]} accessibilityLabel="Loading video preview">
-      <ActivityIndicator size="small" color="#fff" />
+    <View style={[styles.wrapSurface, styles.centered, { width, height }]} accessibilityLabel="Loading video preview">
+      <View style={styles.iconCircle}>
+        <Ionicons name="videocam" size={22} color={VIDEO_ICON_RED} />
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  wrap: {
+  wrapSurface: {
     borderRadius: 8,
     overflow: "hidden",
-    backgroundColor: Colors.light.primary,
+    backgroundColor: PREVIEW_SURFACE,
+    borderWidth: 1,
+    borderColor: PREVIEW_BORDER,
   },
   image: {
     borderRadius: 8,
   },
-  loading: {
+  centered: {
     alignItems: "center",
     justifyContent: "center",
   },
-  fallback: {
+  iconCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: VIDEO_CIRCLE_BG,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#64748B",
   },
 });

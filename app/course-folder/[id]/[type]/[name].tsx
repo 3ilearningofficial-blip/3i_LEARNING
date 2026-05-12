@@ -457,7 +457,7 @@ export default function CourseFolderScreen() {
                     {lecture.is_free_preview && <View style={styles.previewBadge}><Text style={styles.previewBadgeText}>Preview</Text></View>}
                   </View>
                 </View>
-                {isLocked ? <Ionicons name="lock-closed" size={18} color={Colors.light.textMuted} /> : <Ionicons name="play-circle" size={22} color={color} />}
+                {isLocked ? <Ionicons name="lock-closed" size={18} color={Colors.light.textMuted} /> : null}
               </Pressable>
               <DownloadButton
                 itemType="lecture"
