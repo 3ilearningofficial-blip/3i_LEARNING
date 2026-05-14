@@ -1,4 +1,5 @@
--- Per-user OTP send throttle (3 sends per 2-min window, then 24h lock) and a
+-- Per-user OTP send throttle (3 OTP sends per cycle, 2 minutes between sends,
+-- then 24h lock) and a staging table for unverified phone/email registrations
 -- staging table for unverified phone/email registrations so we no longer create
 -- a `users` row at /api/auth/send-otp time. Only after the OTP is verified AND
 -- the profile-setup screen is saved do we INSERT into `users`.

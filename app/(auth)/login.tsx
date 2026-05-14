@@ -19,6 +19,7 @@ import {
   loadLockedUntil,
   sendOtpRequest,
   verifyOtpRequest,
+  secondsUntilTimestamp,
 } from "@/lib/otp-lockout";
 
 export default function LoginScreen() {
@@ -37,9 +38,10 @@ export default function LoginScreen() {
   const resendTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lockTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const startResendCountdown = () => {
+  const startResendCountdownSeconds = (seconds: number) => {
     if (resendTimerRef.current) clearInterval(resendTimerRef.current);
-    setResendCountdown(120);
+    const sec = Math.max(0, Math.ceil(seconds));
+    setResendCountdown(sec);
     resendTimerRef.current = setInterval(() => {
       setResendCountdown((prev) => {
         if (prev <= 1) {
@@ -52,6 +54,10 @@ export default function LoginScreen() {
         return prev - 1;
       });
     }, 1000);
+  };
+
+  const startResendCountdown = () => {
+    startResendCountdownSeconds(120);
   };
 
   const startLockCountdown = (until: number) => {
@@ -116,8 +122,13 @@ export default function LoginScreen() {
 
     if (!result.ok) {
       if (result.lockedUntil && result.lockedUntil > Date.now()) {
-        startLockCountdown(result.lockedUntil);
-        setError(`Too many OTP attempts. Try again in ${formatLockCountdown(result.lockedUntil - Date.now())}.`);
+        if (result.cooldownOnly) {
+          startResendCountdownSeconds(secondsUntilTimestamp(result.lockedUntil));
+          setError(`Wait ${formatLockCountdown(result.lockedUntil - Date.now())} before requesting another OTP.`);
+        } else {
+          startLockCountdown(result.lockedUntil);
+          setError(`Too many OTP attempts. Try again in ${formatLockCountdown(result.lockedUntil - Date.now())}.`);
+        }
         return;
       }
       setError(result.message || "Could not send OTP. Please try again.");
@@ -127,7 +138,12 @@ export default function LoginScreen() {
     if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setOtpSent(true);
     setDevOtp(result.devOtp || "");
-    startResendCountdown();
+    setError("");
+    if (result.lockedUntil && result.lockedUntil > Date.now()) {
+      startLockCountdown(result.lockedUntil);
+    } else {
+      startResendCountdown();
+    }
   };
 
   const handleVerifyOTP = async () => {

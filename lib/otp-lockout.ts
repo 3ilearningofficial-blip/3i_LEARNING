@@ -3,10 +3,9 @@ import { Platform } from "react-native";
 import { getApiUrl, attachInstallationHeaders } from "./query-client";
 
 /**
- * Helpers for the per-user OTP send throttle (3 sends per 2-min window, then
- * 24h lock — enforced by the server via `users.otp_send_locked_until` and
- * `otp_challenges.send_locked_until`). The frontend persists the lockedUntil
- * timestamp so the countdown survives app/page restarts.
+ * Helpers for the per-user OTP send throttle (3 sends per cycle with 2-minute
+ * spacing, then 24h lock — enforced on the server). The frontend persists
+ * `lockedUntil` only for the 24h quota lock so the countdown survives restarts.
  */
 
 const STORAGE_PREFIX = "otpLock:";
@@ -23,12 +22,16 @@ export type SendOtpResult =
       smsSent?: boolean;
       devOtp?: string;
       message?: string;
+      /** Present after the 3rd OTP in a cycle — client should show 24h lock UI. */
+      lockedUntil?: number | null;
     }
   | {
       ok: false;
       status: number;
       message: string;
       lockedUntil: number | null;
+      /** True when server rejected due to 2-minute spacing (do not persist as 24h lock). */
+      cooldownOnly?: boolean;
     };
 
 export type VerifyOtpResult =
@@ -85,14 +88,18 @@ export async function sendOtpRequest(
       body = {};
     }
 
-    if (res.status === 429 || (typeof body?.lockedUntil === "number" && body.lockedUntil > Date.now())) {
+    if (res.status === 429) {
       const lockedUntil = typeof body?.lockedUntil === "number" ? body.lockedUntil : Date.now() + 24 * 60 * 60 * 1000;
-      await persistLockedUntil(identifier, lockedUntil);
+      const cooldownOnly = body?.reason === "cooldown";
+      if (!cooldownOnly) {
+        await persistLockedUntil(identifier, lockedUntil);
+      }
       return {
         ok: false,
         status: res.status || 429,
         message: body?.message || "Too many OTP attempts. Please try again later.",
         lockedUntil,
+        cooldownOnly,
       };
     }
 
@@ -105,13 +112,18 @@ export async function sendOtpRequest(
       };
     }
 
-    // Successful send clears any stored lock for this identifier.
-    await clearLockedUntil(identifier);
+    const lockFromBody = typeof body?.lockedUntil === "number" ? body.lockedUntil : null;
+    if (lockFromBody != null && lockFromBody > Date.now()) {
+      await persistLockedUntil(identifier, lockFromBody);
+    } else {
+      await clearLockedUntil(identifier);
+    }
     return {
       ok: true,
       smsSent: !!body?.smsSent,
       devOtp: body?.devOtp || "",
       message: body?.message,
+      lockedUntil: lockFromBody,
     };
   } catch (err: any) {
     return {
@@ -212,4 +224,9 @@ export function formatLockCountdown(ms: number): string {
   if (h > 0) return `${h}h ${m}m ${s}s`;
   if (m > 0) return `${m}m ${s}s`;
   return `${s}s`;
+}
+
+/** Seconds until `untilMs` (for resend cooldown UI). */
+export function secondsUntilTimestamp(untilMs: number): number {
+  return Math.max(0, Math.ceil((untilMs - Date.now()) / 1000));
 }

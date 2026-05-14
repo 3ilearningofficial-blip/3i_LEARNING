@@ -13,7 +13,7 @@ import * as ImagePicker from "expo-image-picker";
 import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
 import { myPaymentsQueryKey } from "@/lib/query-keys";
 import { getInstallationId } from "@/lib/installation-id";
-import { sendOtpRequest, verifyOtpRequest } from "@/lib/otp-lockout";
+import { sendOtpRequest, verifyOtpRequest, formatLockCountdown } from "@/lib/otp-lockout";
 import { useAuth } from "@/context/AuthContext";
 import Colors from "@/constants/colors";
 
@@ -201,7 +201,15 @@ export default function ProfileScreen() {
       if (!identifier) { setPwdError("No email or phone on file."); setOtpLoading(false); return; }
       const sendResult = await sendOtpRequest(identifier, type as "phone" | "email");
       if (!sendResult.ok) {
-        setPwdError(sendResult.message || "Failed to send OTP. Try again.");
+        if (sendResult.lockedUntil && sendResult.lockedUntil > Date.now()) {
+          setPwdError(
+            sendResult.cooldownOnly
+              ? `Wait ${formatLockCountdown(sendResult.lockedUntil - Date.now())} before requesting another OTP.`
+              : sendResult.message || "Too many OTP attempts. Try again later."
+          );
+        } else {
+          setPwdError(sendResult.message || "Failed to send OTP. Try again.");
+        }
         return;
       }
       setOtpSent(true);

@@ -18,6 +18,7 @@ import {
   loadLockedUntil,
   sendOtpRequest,
   verifyOtpRequest,
+  secondsUntilTimestamp,
 } from "@/lib/otp-lockout";
 
 export default function OTPScreen() {
@@ -50,11 +51,12 @@ export default function OTPScreen() {
     }, 1000);
   };
 
-  const startResendCountdown = () => {
+  const startResendCountdownSeconds = (seconds: number) => {
     if (countdownTimerRef.current) {
       clearInterval(countdownTimerRef.current);
     }
-    setCountdown(120);
+    const sec = Math.max(0, Math.ceil(seconds));
+    setCountdown(sec);
     setCanResend(false);
     countdownTimerRef.current = setInterval(() => {
       setCountdown((prev) => {
@@ -69,6 +71,10 @@ export default function OTPScreen() {
         return prev - 1;
       });
     }, 1000);
+  };
+
+  const startResendCountdown = () => {
+    startResendCountdownSeconds(120);
   };
 
   useEffect(() => {
@@ -190,14 +196,23 @@ export default function OTPScreen() {
     setResending(false);
     if (!result.ok) {
       if (result.lockedUntil && result.lockedUntil > Date.now()) {
-        startLockCountdown(result.lockedUntil);
-        Alert.alert("Please Wait", `Too many OTP attempts. Try again in ${formatLockCountdown(result.lockedUntil - Date.now())}.`);
+        if (result.cooldownOnly) {
+          startResendCountdownSeconds(secondsUntilTimestamp(result.lockedUntil));
+          Alert.alert("Please wait", `Try again in ${formatLockCountdown(result.lockedUntil - Date.now())}.`);
+        } else {
+          startLockCountdown(result.lockedUntil);
+          Alert.alert("Please Wait", `Too many OTP attempts. Try again in ${formatLockCountdown(result.lockedUntil - Date.now())}.`);
+        }
         return;
       }
       Alert.alert("Error", result.message || "Failed to resend OTP. Check your internet connection.");
       return;
     }
-    startResendCountdown();
+    if (result.lockedUntil && result.lockedUntil > Date.now()) {
+      startLockCountdown(result.lockedUntil);
+    } else {
+      startResendCountdown();
+    }
     setOtp(["", "", "", "", "", ""]);
     inputs.current[0]?.focus();
     Alert.alert("OTP Sent", result.smsSent ? "A new OTP has been sent to your phone." : "OTP sent. If SMS is delayed, please wait and try again.");

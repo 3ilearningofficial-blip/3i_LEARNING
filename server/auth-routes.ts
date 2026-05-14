@@ -40,12 +40,14 @@ type RegisterAuthRoutesDeps = {
 const GENERIC_LOGIN_ERROR = "Invalid credentials";
 const GENERIC_OTP_ERROR = "Invalid or expired OTP";
 
-// Per-user OTP send throttle: allow 2 sends in a 2-minute window; the 3rd
-// send attempt locks OTP sending for 24h.
-const OTP_SEND_WINDOW_MS = 2 * 60 * 1000;
-const OTP_SEND_MAX_PER_WINDOW = 2;
+// Per-user OTP send policy: min 2 minutes between sends; up to 3 OTP sends per
+// cycle; after the 3rd successful send, lock further sends for 24h. (Counters
+// reset when the 24h lock expires.)
+const OTP_RESEND_COOLDOWN_MS = 2 * 60 * 1000;
+const OTP_SENDS_PER_CYCLE = 3;
 const OTP_SEND_LOCK_MS = 24 * 60 * 60 * 1000;
 const OTP_LOCKOUT_MESSAGE = "Too many OTP attempts. Please try again after 24 hours.";
+const OTP_COOLDOWN_MESSAGE = "Please wait before requesting another OTP.";
 
 // Short-lived registration token for OTP-verified phones that don't yet have a
 // users row (issued by /api/auth/verify-otp, consumed by /api/auth/register-complete).
@@ -152,37 +154,44 @@ function normalizeEmail(input: unknown): string {
 
 type ThrottleSnapshot = {
   send_count: number;
-  send_window_start: number | null;
+  /** Millis of last accepted send-otp (cooldown anchor). */
+  last_send_at: number | null;
   send_locked_until: number | null;
 };
 
 type ThrottleDecision =
-  | { ok: true; nextCount: number; nextWindowStart: number; nextLockedUntil: null }
-  | { ok: false; lockedUntil: number; persistLock: boolean };
+  | {
+      ok: true;
+      nextCount: number;
+      lastSendAt: number;
+      /** When this send completes the 3rd OTP in the cycle, block further sends until this time. */
+      newSendLockedUntil: number | null;
+    }
+  | { ok: false; lockedUntil: number; reason: "quota" | "cooldown" };
 
 /**
- * 2 sends / 2-min window; 3rd send attempt triggers 24h lock. Returns either an "ok" with next
- * counter values to persist alongside the OTP, or a "no" with the lockedUntil
- * timestamp to surface to the client. The `persistLock` flag tells the caller
- * to write `send_locked_until` into the row (true on the 4th attempt; false
- * when an existing lock is still in effect).
+ * Enforces: (1) active 24h lock → deny; (2) min 2 min between sends → deny with cooldown;
+ * (3) at most 3 sends per cycle → after 3rd send, caller persists 24h lock.
  */
-function evaluateSendThrottle(snap: ThrottleSnapshot, now: number): ThrottleDecision {
-  if (snap.send_locked_until && Number(snap.send_locked_until) > now) {
-    return { ok: false, lockedUntil: Number(snap.send_locked_until), persistLock: false };
+function evaluateOtpSendThrottle(snap: ThrottleSnapshot, now: number): ThrottleDecision {
+  const lockedUntil = snap.send_locked_until != null ? Number(snap.send_locked_until) : null;
+  if (lockedUntil != null && lockedUntil > now) {
+    return { ok: false, lockedUntil, reason: "quota" };
   }
-  const winStart = snap.send_window_start ? Number(snap.send_window_start) : 0;
+  const lastSend = snap.last_send_at != null ? Number(snap.last_send_at) : null;
+  if (lastSend != null && now - lastSend < OTP_RESEND_COOLDOWN_MS) {
+    return { ok: false, lockedUntil: lastSend + OTP_RESEND_COOLDOWN_MS, reason: "cooldown" };
+  }
   let count = Number(snap.send_count) || 0;
-  let nextWindowStart = winStart;
-  if (!winStart || now - winStart > OTP_SEND_WINDOW_MS) {
-    nextWindowStart = now;
+  if (lockedUntil != null && lockedUntil <= now) {
     count = 0;
   }
-  const nextCount = count + 1;
-  if (nextCount > OTP_SEND_MAX_PER_WINDOW) {
-    return { ok: false, lockedUntil: now + OTP_SEND_LOCK_MS, persistLock: true };
+  if (count >= OTP_SENDS_PER_CYCLE) {
+    return { ok: false, lockedUntil: now + OTP_SEND_LOCK_MS, reason: "quota" };
   }
-  return { ok: true, nextCount, nextWindowStart, nextLockedUntil: null };
+  const nextCount = count + 1;
+  const newSendLockedUntil = nextCount >= OTP_SENDS_PER_CYCLE ? now + OTP_SEND_LOCK_MS : null;
+  return { ok: true, nextCount, lastSendAt: now, newSendLockedUntil };
 }
 
 export function registerAuthRoutes({
@@ -263,6 +272,8 @@ export function registerAuthRoutes({
       const otpExpires = now + 10 * 60 * 1000;
       const isDev = process.env.NODE_ENV !== "production";
 
+      let lockedUntilForClient: number | null = null;
+
       // 1) If a users row already exists for this identifier, throttle + store OTP on that row.
       const userRow = isPhone
         ? await db.query(
@@ -276,30 +287,34 @@ export function registerAuthRoutes({
 
       if (userRow.rows.length > 0) {
         const u = userRow.rows[0];
-        const decision = evaluateSendThrottle(
+        let locked = u.otp_send_locked_until != null ? Number(u.otp_send_locked_until) : null;
+        let count = Number(u.otp_send_count || 0);
+        let lastSend = u.otp_send_window_start != null ? Number(u.otp_send_window_start) : null;
+
+        if (locked != null && locked <= now) {
+          await db.query(
+            `UPDATE users SET otp_send_locked_until = NULL, otp_send_count = 0 WHERE id = $1`,
+            [u.id]
+          );
+          locked = null;
+          count = 0;
+        }
+
+        const decision = evaluateOtpSendThrottle(
           {
-            send_count: Number(u.otp_send_count || 0),
-            send_window_start: u.otp_send_window_start != null ? Number(u.otp_send_window_start) : null,
-            send_locked_until: u.otp_send_locked_until != null ? Number(u.otp_send_locked_until) : null,
+            send_count: count,
+            last_send_at: lastSend,
+            send_locked_until: locked,
           },
           now
         );
 
         if (!decision.ok) {
-          if (decision.persistLock) {
-            await db.query(
-              `UPDATE users SET
-                 otp = NULL, otp_expires_at = NULL,
-                 otp_send_locked_until = $1,
-                 otp_send_count = 0,
-                 otp_send_window_start = $2
-               WHERE id = $3`,
-              [decision.lockedUntil, now, u.id]
-            );
-          }
+          const msg = decision.reason === "cooldown" ? OTP_COOLDOWN_MESSAGE : OTP_LOCKOUT_MESSAGE;
           return res.status(429).json({
-            message: OTP_LOCKOUT_MESSAGE,
+            message: msg,
             lockedUntil: decision.lockedUntil,
+            reason: decision.reason,
           });
         }
 
@@ -311,45 +326,51 @@ export function registerAuthRoutes({
              otp_locked_until = NULL,
              otp_send_count = $3,
              otp_send_window_start = $4,
-             otp_send_locked_until = NULL
-           WHERE id = $5`,
-          [otpHash, otpExpires, decision.nextCount, decision.nextWindowStart, u.id]
+             otp_send_locked_until = $5
+           WHERE id = $6`,
+          [otpHash, otpExpires, decision.nextCount, decision.lastSendAt, decision.newSendLockedUntil, u.id]
         );
+        lockedUntilForClient = decision.newSendLockedUntil;
       } else {
         // 2) No users row yet — throttle + store OTP on otp_challenges (no junk users row created).
         const challengeRow = await db.query(
           "SELECT send_count, send_window_start, send_locked_until FROM otp_challenges WHERE identifier = $1",
           [normalizedIdentifier]
         );
-        const snap: ThrottleSnapshot = challengeRow.rows.length > 0
-          ? {
-              send_count: Number(challengeRow.rows[0].send_count || 0),
-              send_window_start: challengeRow.rows[0].send_window_start != null ? Number(challengeRow.rows[0].send_window_start) : null,
-              send_locked_until: challengeRow.rows[0].send_locked_until != null ? Number(challengeRow.rows[0].send_locked_until) : null,
-            }
-          : { send_count: 0, send_window_start: null, send_locked_until: null };
+        let locked: number | null = null;
+        let count = 0;
+        let lastSend: number | null = null;
+        if (challengeRow.rows.length > 0) {
+          const r = challengeRow.rows[0];
+          locked = r.send_locked_until != null ? Number(r.send_locked_until) : null;
+          count = Number(r.send_count || 0);
+          lastSend = r.send_window_start != null ? Number(r.send_window_start) : null;
 
-        const decision = evaluateSendThrottle(snap, now);
-        if (!decision.ok) {
-          if (decision.persistLock) {
+          if (locked != null && locked <= now) {
             await db.query(
-              `INSERT INTO otp_challenges
-                (identifier, type, otp_hash, otp_expires_at, send_count, send_window_start, send_locked_until, created_at, updated_at)
-               VALUES ($1, $2, NULL, NULL, 0, $3, $4, $3, $3)
-               ON CONFLICT (identifier) DO UPDATE SET
-                 type = EXCLUDED.type,
-                 otp_hash = NULL,
-                 otp_expires_at = NULL,
-                 send_count = 0,
-                 send_window_start = EXCLUDED.send_window_start,
-                 send_locked_until = EXCLUDED.send_locked_until,
-                 updated_at = EXCLUDED.updated_at`,
-              [normalizedIdentifier, type, now, decision.lockedUntil]
+              `UPDATE otp_challenges SET send_locked_until = NULL, send_count = 0, updated_at = $2 WHERE identifier = $1`,
+              [normalizedIdentifier, now]
             );
+            locked = null;
+            count = 0;
           }
+        }
+
+        const decision = evaluateOtpSendThrottle(
+          {
+            send_count: count,
+            last_send_at: lastSend,
+            send_locked_until: locked,
+          },
+          now
+        );
+
+        if (!decision.ok) {
+          const msg = decision.reason === "cooldown" ? OTP_COOLDOWN_MESSAGE : OTP_LOCKOUT_MESSAGE;
           return res.status(429).json({
-            message: OTP_LOCKOUT_MESSAGE,
+            message: msg,
             lockedUntil: decision.lockedUntil,
+            reason: decision.reason,
           });
         }
 
@@ -357,7 +378,7 @@ export function registerAuthRoutes({
           `INSERT INTO otp_challenges
             (identifier, type, otp_hash, otp_expires_at, verify_failed_attempts, verify_locked_until,
              send_count, send_window_start, send_locked_until, created_at, updated_at)
-           VALUES ($1, $2, $3, $4, 0, NULL, $5, $6, NULL, $7, $7)
+           VALUES ($1, $2, $3, $4, 0, NULL, $5, $6, $7, $8, $8)
            ON CONFLICT (identifier) DO UPDATE SET
              type = EXCLUDED.type,
              otp_hash = EXCLUDED.otp_hash,
@@ -366,10 +387,20 @@ export function registerAuthRoutes({
              verify_locked_until = NULL,
              send_count = EXCLUDED.send_count,
              send_window_start = EXCLUDED.send_window_start,
-             send_locked_until = NULL,
+             send_locked_until = EXCLUDED.send_locked_until,
              updated_at = EXCLUDED.updated_at`,
-          [normalizedIdentifier, type, otpHash, otpExpires, decision.nextCount, decision.nextWindowStart, now]
+          [
+            normalizedIdentifier,
+            type,
+            otpHash,
+            otpExpires,
+            decision.nextCount,
+            decision.lastSendAt,
+            decision.newSendLockedUntil,
+            now,
+          ]
         );
+        lockedUntilForClient = decision.newSendLockedUntil;
       }
 
       // SMS only goes out for phone identifiers; email-OTP is server-stored only.
@@ -395,7 +426,7 @@ export function registerAuthRoutes({
         smsSent,
         devOtp: isDev ? otp : "",
         method: isPhone ? undefined : "server",
-        lockedUntil: null,
+        lockedUntil: lockedUntilForClient,
       });
     } catch (err) {
       console.error(err);
