@@ -67,6 +67,16 @@ async function doFetch(url: string, init: RequestInit): Promise<Response> {
   return expoFetch(url, init as any) as unknown as Response;
 }
 
+/** Some 200 responses are wrapped as `{ success: true, data: inner }` (see server/index.ts setupApiResponseFormat). */
+function unwrapApiSuccessEnvelope(body: unknown): unknown {
+  if (!body || typeof body !== "object") return body;
+  const b = body as Record<string, unknown>;
+  if (b.success === true && b.data != null && typeof b.data === "object" && !Array.isArray(b.data)) {
+    return b.data;
+  }
+  return body;
+}
+
 /** POST /api/auth/send-otp without throwing on 429, so we can read lockedUntil. */
 export async function sendOtpRequest(
   identifier: string,
@@ -158,19 +168,20 @@ export async function verifyOtpRequest(
       body = {};
     }
     if (!res.ok) {
-      return { ok: false, status: res.status, message: body?.message || `Request failed (${res.status})` };
+      return { ok: false, status: res.status, message: body?.message || body?.error || `Request failed (${res.status})` };
     }
-    if (body?.registrationToken) {
+    const inner = unwrapApiSuccessEnvelope(body) as Record<string, unknown>;
+    if (inner?.registrationToken) {
       return {
         ok: true,
         registered: false,
-        registrationToken: String(body.registrationToken),
-        identifier: String(body.identifier || identifier),
-        type: (body.type === "email" ? "email" : "phone") as SendOtpType,
+        registrationToken: String(inner.registrationToken),
+        identifier: String(inner.identifier || identifier),
+        type: (inner.type === "email" ? "email" : "phone") as SendOtpType,
       };
     }
-    if (body?.user) {
-      return { ok: true, registered: true, user: body.user };
+    if (inner?.user) {
+      return { ok: true, registered: true, user: inner.user };
     }
     return { ok: false, status: res.status, message: "Unexpected verify-otp response" };
   } catch (err: any) {
