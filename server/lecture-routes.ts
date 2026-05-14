@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { isEnrollmentExpired } from "./course-access-utils";
+import { sanitizeLectureRowForClient } from "./lecture-payload-utils";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -49,7 +50,7 @@ export function registerLectureRoutes({
       if (!access.allowed) return res.status(403).json({ message: "Enrollment required to access this lecture" });
       const lecture = access.lecture;
 
-      res.json(lecture);
+      res.json(sanitizeLectureRowForClient(lecture as Record<string, unknown>));
     } catch {
       res.status(500).json({ message: "Failed to fetch lecture" });
     }

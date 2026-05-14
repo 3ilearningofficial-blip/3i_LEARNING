@@ -59,7 +59,7 @@ export function registerAdminLectureRoutes({
 
   app.post("/api/admin/lectures", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { courseId, title, description, videoUrl, fileUrl, videoType, pdfUrl, durationMinutes, orderIndex, isFreePreview, sectionTitle, lectureSubfolderTitle, downloadAllowed } =
+      const { courseId, title, description, transcript, videoUrl, fileUrl, videoType, pdfUrl, durationMinutes, orderIndex, isFreePreview, sectionTitle, lectureSubfolderTitle, downloadAllowed } =
         req.body;
       const parsedCourseId = Number(courseId);
       if (!Number.isFinite(parsedCourseId) || parsedCourseId <= 0) {
@@ -82,13 +82,15 @@ export function registerAdminLectureRoutes({
         sectionTitle,
         lectureSubfolderTitle,
       );
+      const transcriptText = transcript != null ? String(transcript) : "";
       const result = await db.query(
-        `INSERT INTO lectures (course_id, title, description, video_url, video_type, pdf_url, duration_minutes, order_index, is_free_preview, section_title, download_allowed, created_at) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
+        `INSERT INTO lectures (course_id, title, description, transcript, video_url, video_type, pdf_url, duration_minutes, order_index, is_free_preview, section_title, download_allowed, created_at) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
         [
           parsedCourseId,
           String(title).trim(),
           description || "",
+          transcriptText,
           normalizedVideoUrl || null,
           effectiveVideoType,
           normalizedPdfUrl || null,
@@ -121,16 +123,19 @@ export function registerAdminLectureRoutes({
 
   app.put("/api/admin/lectures/:id", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { title, description, videoUrl, videoType, durationMinutes, orderIndex, isFreePreview, sectionTitle, lectureSubfolderTitle, downloadAllowed } = req.body;
+      const { title, description, transcript, videoUrl, videoType, durationMinutes, orderIndex, isFreePreview, sectionTitle, lectureSubfolderTitle, downloadAllowed } = req.body;
       const normalizedSectionTitle = resolveLectureSectionTitle(
         sectionTitle,
         lectureSubfolderTitle,
       );
+      const patchTranscript = Object.prototype.hasOwnProperty.call(req.body, "transcript");
+      const transcriptVal = patchTranscript ? String(transcript ?? "") : "";
       await db.query(
-        `UPDATE lectures SET title=$1, description=$2, video_url=$3, video_type=$4, duration_minutes=$5, order_index=$6, is_free_preview=$7, section_title=$8, download_allowed=$9 WHERE id=$10`,
+        `UPDATE lectures SET title=$1, description=$2, transcript = CASE WHEN $11::boolean THEN $3::text ELSE transcript END, video_url=$4, video_type=$5, duration_minutes=$6, order_index=$7, is_free_preview=$8, section_title=$9, download_allowed=$10 WHERE id=$12`,
         [
           title,
           description || "",
+          transcriptVal,
           videoUrl,
           videoType || "youtube",
           parseInt(durationMinutes) || 0,
@@ -138,6 +143,7 @@ export function registerAdminLectureRoutes({
           isFreePreview || false,
           normalizedSectionTitle,
           downloadAllowed || false,
+          patchTranscript,
           req.params.id,
         ]
       );

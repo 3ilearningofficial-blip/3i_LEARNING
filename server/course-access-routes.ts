@@ -2,6 +2,7 @@ import type { Express, Request, Response } from "express";
 import { computeEnrollmentValidUntil, isEnrollmentExpired } from "./course-access-utils";
 import { canonicalMediaKey, mediaKeyMatchVariants } from "./media-key-utils";
 import { presignR2GetObject } from "./r2-presign-read";
+import { sanitizeLectureRowForClient } from "./lecture-payload-utils";
 
 type DbQueryResult = {
   rows: any[];
@@ -308,7 +309,7 @@ export function registerCourseAccessRoutes({
       const materialsResult = await db.query("SELECT * FROM study_materials WHERE course_id = $1", [courseIdParam]);
       const fullLectures = lecturesResult.rows;
       const fullMaterials = materialsResult.rows;
-      const responseLectures = fullLectures;
+      const responseLectures = fullLectures.map((row) => sanitizeLectureRowForClient(row as Record<string, unknown>));
       const responseMaterials = fullMaterials;
 
       if (user) {

@@ -2,6 +2,41 @@ type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
 };
 
+/** `auto` tries Gemini first, then OpenAI. `openai` / `gemini` force a single provider. */
+export type AiProviderMode = "auto" | "gemini" | "openai";
+
+export function getAiProviderMode(): AiProviderMode {
+  const raw = (process.env.AI_PROVIDER || "auto").trim().toLowerCase();
+  if (raw === "openai" || raw === "gemini" || raw === "auto") return raw;
+  return "auto";
+}
+
+/** Non-secret snapshot for `/api/health/ai-providers` and ops checks. */
+export function getAiTutorHealthSnapshot(): {
+  geminiConfigured: boolean;
+  openaiConfigured: boolean;
+  openaiModel: string;
+  aiProvider: AiProviderMode;
+  resolvedOrder: string[];
+} {
+  const geminiConfigured = !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY)?.trim();
+  const openaiConfigured = !!process.env.OPENAI_API_KEY?.trim();
+  const openaiModel = (process.env.OPENAI_MODEL || "gpt-4o-mini").trim();
+  const aiProvider = getAiProviderMode();
+  let resolvedOrder: string[] = [];
+  if (aiProvider === "openai") {
+    resolvedOrder = openaiConfigured ? ["openai"] : [];
+  } else if (aiProvider === "gemini") {
+    resolvedOrder = geminiConfigured ? ["gemini"] : [];
+  } else {
+    if (geminiConfigured) resolvedOrder.push("gemini");
+    if (openaiConfigured) resolvedOrder.push("openai");
+  }
+  return { geminiConfigured, openaiConfigured, openaiModel, aiProvider, resolvedOrder };
+}
+
+const TRANSCRIPT_CONTEXT_CHARS = 8000;
+
 export function createGenerateAIAnswer(db: DbClient) {
   return async function generateAIAnswer(question: string, topic?: string, userId?: number): Promise<string> {
     const q = String(question || "").trim();
@@ -38,7 +73,8 @@ export function createGenerateAIAnswer(db: DbClient) {
     try {
       if (userId) {
         const lectures = await db.query(
-          `SELECT l.title, COALESCE(l.description, '') AS description, COALESCE(c.title, '') AS course_title
+          `SELECT l.title, COALESCE(l.description, '') AS description, COALESCE(l.transcript, '') AS transcript,
+                  COALESCE(c.title, '') AS course_title
            FROM lectures l
            JOIN enrollments e ON e.course_id = l.course_id AND e.user_id = $1
            LEFT JOIN courses c ON c.id = l.course_id
@@ -48,11 +84,15 @@ export function createGenerateAIAnswer(db: DbClient) {
           [userId]
         );
         for (const row of lectures.rows) {
-          const text = `${row.title}. ${row.description}`.trim();
+          const transcriptPart = String(row.transcript || "").trim();
+          const transcriptChunk = transcriptPart ? transcriptPart.slice(0, TRANSCRIPT_CONTEXT_CHARS) : "";
+          const text = [String(row.title || "").trim(), String(row.description || "").trim(), transcriptChunk]
+            .filter(Boolean)
+            .join(". ");
           snippets.push({
             source: "lecture",
             title: `${row.course_title || "Course"} - ${row.title || "Lecture"}`,
-            text,
+            text: text || String(row.title || ""),
             score: scoreSnippet(text),
           });
         }
@@ -125,9 +165,13 @@ export function createGenerateAIAnswer(db: DbClient) {
       "Answer format:\n" +
       "1) Short concept summary\n2) Step-by-step solution\n3) Final answer\n4) One similar practice question";
 
+    const logLlmHttpFailure = (provider: string, status: number, bodyPreview: string) => {
+      console.warn(`[AI Tutor] ${provider} HTTP ${status}`, bodyPreview.slice(0, 500));
+    };
+
     const callGemini = async (): Promise<string | null> => {
       const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-      if (!apiKey) return null;
+      if (!apiKey?.trim()) return null;
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 18000);
       try {
@@ -144,11 +188,21 @@ export function createGenerateAIAnswer(db: DbClient) {
             }),
           }
         );
-        if (!res.ok) return null;
+        if (!res.ok) {
+          let preview = "";
+          try {
+            preview = JSON.stringify(await res.json());
+          } catch {
+            preview = await res.text().catch(() => "");
+          }
+          logLlmHttpFailure("Gemini", res.status, preview);
+          return null;
+        }
         const data = (await res.json()) as any;
         const text = data?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text || "").join("\n").trim();
         return text || null;
-      } catch {
+      } catch (e) {
+        console.warn("[AI Tutor] Gemini request failed:", e instanceof Error ? e.message : e);
         return null;
       } finally {
         clearTimeout(timer);
@@ -157,7 +211,8 @@ export function createGenerateAIAnswer(db: DbClient) {
 
     const callOpenAI = async (): Promise<string | null> => {
       const apiKey = process.env.OPENAI_API_KEY;
-      if (!apiKey) return null;
+      if (!apiKey?.trim()) return null;
+      const model = (process.env.OPENAI_MODEL || "gpt-4o-mini").trim();
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 18000);
       try {
@@ -169,7 +224,7 @@ export function createGenerateAIAnswer(db: DbClient) {
             Authorization: `Bearer ${apiKey}`,
           },
           body: JSON.stringify({
-            model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+            model,
             temperature: 0.25,
             max_tokens: 900,
             messages: [
@@ -178,17 +233,35 @@ export function createGenerateAIAnswer(db: DbClient) {
             ],
           }),
         });
-        if (!res.ok) return null;
+        if (!res.ok) {
+          let preview = "";
+          try {
+            preview = JSON.stringify(await res.json());
+          } catch {
+            preview = await res.text().catch(() => "");
+          }
+          logLlmHttpFailure("OpenAI", res.status, preview);
+          return null;
+        }
         const data = (await res.json()) as any;
         return data?.choices?.[0]?.message?.content?.trim() || null;
-      } catch {
+      } catch (e) {
+        console.warn("[AI Tutor] OpenAI request failed:", e instanceof Error ? e.message : e);
         return null;
       } finally {
         clearTimeout(timer);
       }
     };
 
-    const llmAnswer = (await callGemini()) || (await callOpenAI());
+    const mode = getAiProviderMode();
+    let llmAnswer: string | null = null;
+    if (mode === "openai") {
+      llmAnswer = await callOpenAI();
+    } else if (mode === "gemini") {
+      llmAnswer = await callGemini();
+    } else {
+      llmAnswer = (await callGemini()) || (await callOpenAI());
+    }
     if (llmAnswer) return llmAnswer;
 
     const topicContext = t ? `Topic: ${t}. ` : "";

@@ -18,6 +18,7 @@ import compression from "compression";
 import * as fs from "fs";
 import pg from "pg";
 import { PgRateLimitStore } from "./pg-rate-limit-store";
+import { getAiTutorHealthSnapshot } from "./ai-tutor-service";
 
 const app = express();
 const log = console.log;
@@ -293,7 +294,7 @@ function logProductionReleaseHints() {
 
   const schedulerRole = process.env.RUN_BACKGROUND_SCHEDULERS === "false" ? "api-only" : "scheduler-enabled";
   log(
-    `[startup] production mode | scheduler_role=${schedulerRole} | health=/api/health/version,/api/health/ready`
+    `[startup] production mode | scheduler_role=${schedulerRole} | health=/api/health/version,/api/health/ready,/api/health/ai-providers`
   );
 
   if (
@@ -628,6 +629,10 @@ function normalizeOtpIdentifier(input: unknown): string {
   // Lightweight version/health endpoint for deploy consistency checks.
   app.get("/api/health/version", (_req: Request, res: Response) => {
     res.json(getBackendVersion());
+  });
+
+  app.get("/api/health/ai-providers", (_req: Request, res: Response) => {
+    res.json({ ok: true, ...getAiTutorHealthSnapshot() });
   });
 
   const rateLimitPgSsl =
