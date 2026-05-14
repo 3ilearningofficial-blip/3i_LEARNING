@@ -14,6 +14,8 @@
     "db:migrate": "drizzle-kit migrate --config drizzle.config.ts",
     "db:check": "npx tsx scripts/db-ready-check.ts",
     "db:apply-sql": "npx tsx scripts/apply-sql-migrations.ts",
+    "db:repair-0014-checksum": "npx tsx scripts/repair-migration-checksum.ts migrations/0014_otp_challenges_and_send_throttle.sql",
+    "db:repair-0014-checksum:apply": "npx tsx scripts/repair-migration-checksum.ts migrations/0014_otp_challenges_and_send_throttle.sql --apply",
     "start": "npx expo start",
     "test": "npx vitest run",
     "test:env": "node --env-file=.env node_modules/vitest/vitest.mjs --run",
