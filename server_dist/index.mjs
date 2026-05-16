@@ -8800,7 +8800,7 @@ var init_classroom_sync = __esm({
     init_auth_utils();
     init_live_class_access();
     require3 = createRequire2(import.meta.url);
-    ({ WebSocketServer } = require3("ws"));
+    WebSocketServer = require3("ws").Server;
     rooms = /* @__PURE__ */ new Map();
   }
 });
