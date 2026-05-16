@@ -8702,7 +8702,7 @@ var init_classroom_routes = __esm({
 
 // server/classroom-sync.ts
 import { URL as URL2 } from "node:url";
-import { WebSocketServer } from "ws";
+import { createRequire as createRequire2 } from "node:module";
 import { TLSocketRoom, InMemorySyncStorage } from "@tldraw/sync-core";
 function sanitizeRoomId(roomId) {
   return roomId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 120);
@@ -8763,8 +8763,8 @@ function attachClassroomSyncServer(httpServer, db2) {
     const url = new URL2(req.url || "", "http://localhost");
     const match = url.pathname.match(/^\/classroom-sync\/([^/]+)$/);
     if (!match) return;
-    wss.handleUpgrade(req, socket, head, (ws) => {
-      void handleConnection(ws, req, match[1], db2);
+    wss.handleUpgrade(req, socket, head, (socketConn) => {
+      void handleConnection(socketConn, req, match[1], db2);
     });
   });
 }
@@ -8793,12 +8793,14 @@ async function handleConnection(ws, req, rawRoomId, db2) {
     ws.send(msg);
   }
 }
-var rooms;
+var require3, WebSocketServer, rooms;
 var init_classroom_sync = __esm({
   "server/classroom-sync.ts"() {
     "use strict";
     init_auth_utils();
     init_live_class_access();
+    require3 = createRequire2(import.meta.url);
+    ({ WebSocketServer } = require3("ws"));
     rooms = /* @__PURE__ */ new Map();
   }
 });
@@ -10153,7 +10155,7 @@ __export(routes_exports, {
 import { createServer } from "node:http";
 import { Pool as Pool2 } from "pg";
 import multer from "multer";
-import { createRequire as createRequire2 } from "module";
+import { createRequire as createRequire3 } from "module";
 import { randomInt } from "node:crypto";
 function isTransientPgError(err) {
   const message = String(err?.message || "").toLowerCase();
@@ -10949,7 +10951,7 @@ async function registerRoutes(app2) {
   attachClassroomSyncServer(httpServer, db);
   return httpServer;
 }
-var require3, PDFParse, upload, uploadPdf, uploadLarge, databaseUrlRaw, databaseUrl, pgPoolMax, pool, listenPool, db, generateAIAnswer, authUserLazyKey;
+var require4, PDFParse, upload, uploadPdf, uploadLarge, databaseUrlRaw, databaseUrl, pgPoolMax, pool, listenPool, db, generateAIAnswer, authUserLazyKey;
 var init_routes = __esm({
   "server/routes.ts"() {
     "use strict";
@@ -10997,8 +10999,8 @@ var init_routes = __esm({
     init_ai_tutor_service();
     init_db_readiness();
     init_push_notifications();
-    require3 = createRequire2(import.meta.url);
-    ({ PDFParse } = require3("pdf-parse"));
+    require4 = createRequire3(import.meta.url);
+    ({ PDFParse } = require4("pdf-parse"));
     upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
     uploadPdf = multer({
       storage: multer.memoryStorage(),

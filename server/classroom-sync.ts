@@ -1,7 +1,15 @@
 import type { Server } from "node:http";
 import type { IncomingMessage } from "node:http";
 import { URL } from "node:url";
-import { WebSocketServer, type WebSocket } from "ws";
+import { createRequire } from "node:module";
+import type { WebSocket } from "ws";
+
+const require = createRequire(import.meta.url);
+const { WebSocketServer } = require("ws") as {
+  WebSocketServer: new (
+    options?: import("ws").ServerOptions
+  ) => import("ws").WebSocketServer;
+};
 import { TLSocketRoom, InMemorySyncStorage } from "@tldraw/sync-core";
 import { getAuthUserFromRequest } from "./auth-utils";
 import type { DbClient } from "./classroom-sync-types";
@@ -87,8 +95,8 @@ export function attachClassroomSyncServer(httpServer: Server, db: DbClient): voi
     const match = url.pathname.match(/^\/classroom-sync\/([^/]+)$/);
     if (!match) return;
 
-    wss.handleUpgrade(req, socket, head, (ws) => {
-      void handleConnection(ws, req, match[1], db);
+    wss.handleUpgrade(req, socket, head, (socketConn) => {
+      void handleConnection(socketConn, req, match[1], db);
     });
   });
 }
