@@ -42,7 +42,9 @@ function makeOrLoadRoom(roomId: string): TLSocketRoom {
 }
 
 function parseSessionId(url: URL): string {
-  const sid = url.searchParams.get("sessionId");
+  const sid =
+    url.searchParams.get("syncClientId") ||
+    url.searchParams.get("sessionId");
   if (sid && sid.trim()) return sid.trim().slice(0, 128);
   return `sess-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }

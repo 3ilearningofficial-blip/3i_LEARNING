@@ -15,11 +15,9 @@ export async function buildClassroomSyncUriWithAuth(
   const uri = buildClassroomSyncUri(liveClassId, preview);
   if (Platform.OS !== "web") return uri;
   const token = await getStoredAuthToken();
-  const sessionId =
-    typeof crypto !== "undefined" && crypto.randomUUID
-      ? crypto.randomUUID()
-      : `sess-${Date.now()}`;
-  const params = new URLSearchParams({ sessionId });
+  // Do not use `sessionId` — reserved by @tldraw/sync useSync for its own query param.
+  const params = new URLSearchParams();
   if (token) params.set("access_token", token);
-  return `${uri}?${params.toString()}`;
+  const qs = params.toString();
+  return qs ? `${uri}?${qs}` : uri;
 }

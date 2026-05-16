@@ -53,6 +53,10 @@ interface LiveClassItem {
   id: number;
   title: string;
   youtube_url: string;
+  recording_url?: string | null;
+  cf_playback_hls?: string | null;
+  board_snapshot_url?: string | null;
+  stream_type?: string | null;
   is_live: boolean;
   is_completed: boolean;
   is_public: boolean;
@@ -1284,7 +1288,27 @@ export default function AdminCourseScreen() {
                     <Pressable
                       style={{ flexDirection: "row", alignItems: "center", gap: 5, backgroundColor: "#DCFCE7", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 }}
                       onPress={() => {
-                        const run = () => updateLiveClassMutation.mutate({ lcId: lc.id, convertToLecture: true, sectionTitle: "Live Class Recordings" });
+                        const hasRecording = !!(
+                          lc.recording_url ||
+                          lc.youtube_url ||
+                          lc.cf_playback_hls ||
+                          lc.board_snapshot_url
+                        );
+                        if (!hasRecording) {
+                          const hint =
+                            String(lc.stream_type || "").toLowerCase() === "classroom"
+                              ? "Interactive Classroom has no recording yet. Tap Upload to R2 and upload a video (or board export), then Save as Lecture."
+                              : "Upload a recording first (Upload to R2), then Save as Lecture.";
+                          if (Platform.OS === "web") window.alert(hint);
+                          else Alert.alert("No recording", hint);
+                          return;
+                        }
+                        const run = () =>
+                          updateLiveClassMutation.mutate({
+                            lcId: lc.id,
+                            convertToLecture: true,
+                            sectionTitle: "Live Class Recordings",
+                          });
                         if (Platform.OS === "web") {
                           if (window.confirm("Save this recording as a lecture under Lectures → Live Class Recordings?")) run();
                         } else {

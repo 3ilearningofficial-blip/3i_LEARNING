@@ -9,6 +9,8 @@ export function useLiveKitRoom(
   const roomRef = useRef<Room | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
+  const [micEnabled, setMicEnabled] = useState(true);
+  const [camEnabled, setCamEnabled] = useState(true);
   const [localVideoEl, setLocalVideoEl] = useState<HTMLVideoElement | null>(null);
   const [remoteVideoEl, setRemoteVideoEl] = useState<HTMLVideoElement | null>(null);
 
@@ -51,6 +53,8 @@ export function useLiveKitRoom(
         if (tokenPayload.canPublish) {
           await room.localParticipant.setCameraEnabled(true);
           await room.localParticipant.setMicrophoneEnabled(true);
+          setMicEnabled(room.localParticipant.isMicrophoneEnabled);
+          setCamEnabled(room.localParticipant.isCameraEnabled);
           attachLocal();
         } else {
           attachRemoteTeacher();
@@ -71,20 +75,24 @@ export function useLiveKitRoom(
   const toggleMic = async () => {
     const room = roomRef.current;
     if (!room) return;
-    const enabledMic = room.localParticipant.isMicrophoneEnabled;
-    await room.localParticipant.setMicrophoneEnabled(!enabledMic);
+    const next = !room.localParticipant.isMicrophoneEnabled;
+    await room.localParticipant.setMicrophoneEnabled(next);
+    setMicEnabled(next);
   };
 
   const toggleCam = async () => {
     const room = roomRef.current;
     if (!room) return;
-    const enabledCam = room.localParticipant.isCameraEnabled;
-    await room.localParticipant.setCameraEnabled(!enabledCam);
+    const next = !room.localParticipant.isCameraEnabled;
+    await room.localParticipant.setCameraEnabled(next);
+    setCamEnabled(next);
   };
 
   return {
     error,
     connected,
+    micEnabled,
+    camEnabled,
     setLocalVideoEl,
     setRemoteVideoEl,
     toggleMic,

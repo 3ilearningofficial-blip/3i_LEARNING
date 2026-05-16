@@ -14,10 +14,8 @@ const videoStyle = { width: "100%", height: "100%", objectFit: "cover" as const,
 
 export default function TeacherVideoPanel({ liveClassId, enabled = true }: Props) {
   const { data: tokenPayload, isLoading, error: tokenError } = useClassroomToken(liveClassId, enabled);
-  const { error, connected, setLocalVideoEl, toggleMic, toggleCam } = useLiveKitRoom(
-    tokenPayload,
-    enabled && Platform.OS === "web"
-  );
+  const { error, connected, micEnabled, camEnabled, setLocalVideoEl, toggleMic, toggleCam } =
+    useLiveKitRoom(tokenPayload, enabled && Platform.OS === "web");
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
@@ -46,11 +44,21 @@ export default function TeacherVideoPanel({ liveClassId, enabled = true }: Props
         )}
       </View>
       <View style={styles.controls}>
-        <Pressable style={styles.ctrlBtn} onPress={() => void toggleMic()}>
-          <Ionicons name="mic" size={18} color="#fff" />
+        <Pressable
+          style={[styles.ctrlBtn, !micEnabled && styles.ctrlBtnOff]}
+          onPress={() => void toggleMic()}
+        >
+          <Ionicons name={micEnabled ? "mic" : "mic-off"} size={18} color={micEnabled ? "#fff" : "#FCA5A5"} />
         </Pressable>
-        <Pressable style={styles.ctrlBtn} onPress={() => void toggleCam()}>
-          <Ionicons name="videocam" size={18} color="#fff" />
+        <Pressable
+          style={[styles.ctrlBtn, !camEnabled && styles.ctrlBtnOff]}
+          onPress={() => void toggleCam()}
+        >
+          <Ionicons
+            name={camEnabled ? "videocam" : "videocam-off"}
+            size={18}
+            color={camEnabled ? "#fff" : "#FCA5A5"}
+          />
         </Pressable>
       </View>
     </View>
@@ -76,5 +84,10 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.15)",
     alignItems: "center",
     justifyContent: "center",
+  },
+  ctrlBtnOff: {
+    backgroundColor: "rgba(220,38,38,0.35)",
+    borderWidth: 1,
+    borderColor: "rgba(252,165,165,0.6)",
   },
 });

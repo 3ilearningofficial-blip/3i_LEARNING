@@ -8417,7 +8417,7 @@ function registerAdminLiveClassManageRoutes({
           });
         }
       }
-      const shouldConvertToLecture = convertToLecture === true && (isCompleted === true || liveClass.is_completed === true) && !liveClass.recording_deleted_at && (liveClass.youtube_url || liveClass.recording_url || liveClass.cf_playback_hls);
+      const shouldConvertToLecture = convertToLecture === true && (isCompleted === true || liveClass.is_completed === true) && !liveClass.recording_deleted_at && (liveClass.youtube_url || liveClass.recording_url || liveClass.cf_playback_hls || liveClass.board_snapshot_url);
       if (shouldConvertToLecture) {
         await db2.query("DELETE FROM notifications WHERE title IN ('\u{1F534} Live Class Started!', '\u{1F534} Live Class Starting Now!', '\u23F0 Live Class in 30 minutes!') AND message ILIKE $1", ["%" + liveClass.title + "%"]).catch(() => {
         });
@@ -8425,7 +8425,7 @@ function registerAdminLiveClassManageRoutes({
         for (const peer of sameTitle.rows) {
           if (!peer.course_id) continue;
           const urlForPeer = String(
-            peer.recording_url || peer.cf_playback_hls || peer.youtube_url || liveClass.recording_url || liveClass.cf_playback_hls || liveClass.youtube_url || ""
+            peer.recording_url || peer.cf_playback_hls || peer.youtube_url || peer.board_snapshot_url || liveClass.recording_url || liveClass.cf_playback_hls || liveClass.youtube_url || liveClass.board_snapshot_url || ""
           ).trim();
           if (!urlForPeer) continue;
           const vType = inferVideoType(urlForPeer);
@@ -8725,7 +8725,7 @@ function makeOrLoadRoom(roomId) {
   return room;
 }
 function parseSessionId(url) {
-  const sid = url.searchParams.get("sessionId");
+  const sid = url.searchParams.get("syncClientId") || url.searchParams.get("sessionId");
   if (sid && sid.trim()) return sid.trim().slice(0, 128);
   return `sess-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }

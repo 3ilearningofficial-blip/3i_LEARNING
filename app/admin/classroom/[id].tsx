@@ -63,13 +63,26 @@ export default function AdminClassroomPage() {
       });
       qc.invalidateQueries({ queryKey: liveClassesQueryKey() });
       qc.invalidateQueries({ queryKey: liveClassQueryKey(liveClassId) });
-      router.replace("/admin" as any);
+
+      const courseId = liveClass?.course_id;
+      const msg =
+        "Class ended. Interactive Classroom does not auto-record video yet. " +
+        "Open the course → Live tab → Upload to R2 (or paste a recording URL), then tap Save as Lecture " +
+        "to add it under Lectures → Live Class Recordings.";
+      if (Platform.OS === "web") window.alert(msg);
+      else Alert.alert("Class ended", msg);
+
+      if (courseId) {
+        router.replace(`/admin/course/${courseId}` as any);
+      } else {
+        router.replace("/admin" as any);
+      }
     } catch (err: any) {
       if (Platform.OS === "web") window.alert(err?.message || "Failed to end class");
       else Alert.alert("Error", err?.message || "Failed to end class");
       setIsEnding(false);
     }
-  }, [liveClassId, qc]);
+  }, [liveClassId, qc, liveClass?.course_id]);
 
   if (Platform.OS !== "web") {
     return (

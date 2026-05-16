@@ -262,7 +262,10 @@ export function registerAdminLiveClassManageRoutes({
         convertToLecture === true &&
         (isCompleted === true || liveClass.is_completed === true) &&
         !liveClass.recording_deleted_at &&
-        (liveClass.youtube_url || liveClass.recording_url || liveClass.cf_playback_hls);
+        (liveClass.youtube_url ||
+          liveClass.recording_url ||
+          liveClass.cf_playback_hls ||
+          liveClass.board_snapshot_url);
       if (shouldConvertToLecture) {
         await db
           .query("DELETE FROM notifications WHERE title IN ('🔴 Live Class Started!', '🔴 Live Class Starting Now!', '⏰ Live Class in 30 minutes!') AND message ILIKE $1", ['%' + liveClass.title + '%'])
@@ -274,9 +277,11 @@ export function registerAdminLiveClassManageRoutes({
             peer.recording_url ||
             peer.cf_playback_hls ||
             peer.youtube_url ||
+            peer.board_snapshot_url ||
             liveClass.recording_url ||
             liveClass.cf_playback_hls ||
             liveClass.youtube_url ||
+            liveClass.board_snapshot_url ||
             ""
           ).trim();
           if (!urlForPeer) continue;
