@@ -1080,6 +1080,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     requireAuth,
     requireAdmin,
     getAuthUser,
+    recomputeAllEnrollmentsProgressForCourse,
   });
 
   registerPdfRoutes({ app, db, getAuthUser, getR2Client });

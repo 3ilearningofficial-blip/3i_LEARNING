@@ -21,6 +21,7 @@ import { getYouTubeVideoId } from "@/lib/youtube-utils";
 import { uploadToR2 } from "@/lib/r2-upload";
 import LiveChatPanel from "@/components/LiveChatPanel";
 import LiveStudentsPanel from "@/components/LiveStudentsPanel";
+import LiveClassRecordingTimer from "@/components/LiveClassRecordingTimer";
 import Colors from "@/constants/colors";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "@/context/AuthContext";
@@ -187,6 +188,8 @@ export default function BroadcastPage() {
   });
 
   const streamType = normalizeStreamType(liveClass?.stream_type) || "webrtc";
+  const isLive = !!liveClass?.is_live && !liveClass?.is_completed;
+  const liveStartedAt = Number(liveClass?.started_at || 0) || null;
 
   useEffect(() => {
     if (liveClass && normalizeStreamType(liveClass.stream_type) === "classroom") {
@@ -465,6 +468,11 @@ export default function BroadcastPage() {
       <View style={styles.main}>
         {/* LEFT: Stream Area (3/4) */}
         <View style={styles.streamArea}>
+          {isLive && (
+            <View style={styles.liveTimerOverlay} pointerEvents="none">
+              <LiveClassRecordingTimer startedAt={liveStartedAt} active />
+            </View>
+          )}
           {streamType === "webrtc" ? (
             <>
               {/* WebRTC video feed */}
@@ -806,6 +814,12 @@ const styles = StyleSheet.create({
     flex: 3,
     backgroundColor: "#000",
     position: "relative",
+  },
+  liveTimerOverlay: {
+    position: "absolute",
+    top: 12,
+    left: 12,
+    zIndex: 30,
   },
   noWebrtc: {
     flex: 1,

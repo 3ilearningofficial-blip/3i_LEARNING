@@ -19,6 +19,7 @@ import type { TldrawClassroomHandle } from "@/components/classroom/TldrawClassro
 import { finalizeClassroomLiveSession } from "@/lib/classroom/finalizeClassroomLive";
 import { buildRecordingLectureSectionTitle } from "@/lib/recordingSection";
 import TeacherVideoPanel from "@/components/classroom/TeacherVideoPanel";
+import LiveClassRecordingTimer from "@/components/LiveClassRecordingTimer";
 import LiveChatPanel from "@/components/LiveChatPanel";
 import LiveStudentsPanel from "@/components/LiveStudentsPanel";
 import Colors from "@/constants/colors";
@@ -42,7 +43,11 @@ export default function AdminClassroomPage() {
       return payload?.data ?? payload;
     },
     enabled: !!liveClassId,
+    refetchInterval: (q) => ((q.state.data as any)?.is_live ? 15000 : false),
   });
+
+  const isLive = !!liveClass?.is_live && !liveClass?.is_completed;
+  const startedAt = Number(liveClass?.started_at || 0) || null;
 
   const chatMode = (liveClass?.chat_mode as "public" | "private") || "public";
   const showViewerCount = liveClass?.show_viewer_count ?? true;
@@ -128,10 +133,14 @@ export default function AdminClassroomPage() {
         <Text style={styles.headerTitle} numberOfLines={1}>
           {liveClass?.title || "Live class"}
         </Text>
-        <View style={styles.livePill}>
-          <View style={styles.liveDot} />
-          <Text style={styles.liveText}>LIVE</Text>
-        </View>
+        {isLive ? (
+          <LiveClassRecordingTimer startedAt={startedAt} active compact />
+        ) : (
+          <View style={styles.livePill}>
+            <View style={styles.liveDot} />
+            <Text style={styles.liveText}>LIVE</Text>
+          </View>
+        )}
         <Pressable style={styles.endBtn} onPress={handleEndClass} disabled={isEnding}>
           {isEnding ? (
             <ActivityIndicator size="small" color="#fff" />
@@ -143,6 +152,11 @@ export default function AdminClassroomPage() {
 
       <View style={styles.main}>
         <View style={styles.boardArea}>
+          {isLive && (
+            <View style={styles.boardTimerOverlay} pointerEvents="none">
+              <LiveClassRecordingTimer startedAt={startedAt} active />
+            </View>
+          )}
           <TldrawClassroom ref={boardRef} liveClassId={liveClassId} readonly={false} />
         </View>
 
@@ -235,6 +249,13 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     overflow: "hidden",
     backgroundColor: "#0a0a0a",
+    position: "relative",
+  },
+  boardTimerOverlay: {
+    position: "absolute",
+    top: 12,
+    left: 12,
+    zIndex: 20,
   },
   sidePanel: {
     flex: 1,

@@ -14,26 +14,21 @@ export type LiveClassRecordingMeta = {
 export async function exportClassroomBoardPng(editor: Editor | null): Promise<Blob | null> {
   if (!editor) return null;
   try {
-    const ids = [...editor.getCurrentPageShapeIds()];
-    if (ids.length === 0) return null;
-    const editorAny = editor as Editor & {
-      toImage?: (shapeIds: string[], opts: { format: string; background: boolean }) => Promise<{ blob: Blob }>;
-    };
-    if (typeof editorAny.toImage === "function") {
-      const { blob } = await editorAny.toImage(ids, { format: "png", background: true });
-      return blob || null;
-    }
-  } catch {
-    // fall through
+    const shapeIds = [...editor.getCurrentPageShapeIds()];
+    if (shapeIds.length === 0) return null;
+    const { blob } = await editor.toImage(shapeIds, { format: "png", background: true });
+    return blob || null;
+  } catch (e) {
+    console.warn("[Classroom] board export failed:", e);
+    return null;
   }
-  return null;
 }
 
 export async function finalizeClassroomLiveSession(
   liveClassId: string,
   liveClass: LiveClassRecordingMeta,
   editor: Editor | null
-): Promise<{ savedToLectures: boolean; recordingUrl?: string }> {
+): Promise<{ savedToLectures: boolean; recordingUrl?: string; lectureIds?: number[] }> {
   const subfolder = String(liveClass.lecture_subfolder_title || "").trim() || undefined;
   const sectionTitle = buildRecordingLectureSectionTitle(
     liveClass.lecture_section_title,
@@ -66,17 +61,19 @@ export async function finalizeClassroomLiveSession(
     }
   }
 
-  if (recordingUrl) {
-    await apiRequest("POST", `/api/admin/live-classes/${liveClassId}/recording`, {
-      recordingUrl,
-      sectionTitle,
-    });
-    return { savedToLectures: true, recordingUrl };
-  }
-
-  await apiRequest("PUT", `/api/admin/live-classes/${liveClassId}`, {
-    isLive: false,
-    isCompleted: true,
+  const res = await apiRequest("POST", `/api/admin/live-classes/${liveClassId}/classroom/finalize`, {
+    recordingUrl: recordingUrl || undefined,
+    boardSnapshotUrl: recordingUrl || undefined,
+    sectionTitle,
   });
-  return { savedToLectures: true };
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.message || "Failed to save class to lectures");
+  }
+  const data = await res.json();
+  return {
+    savedToLectures: true,
+    recordingUrl: data.recordingUrl || recordingUrl || undefined,
+    lectureIds: data.lectureIds,
+  };
 }

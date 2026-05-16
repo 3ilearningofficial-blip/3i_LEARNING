@@ -266,6 +266,7 @@ export function registerAdminLiveClassManageRoutes({
       // ran when `isCompleted` was sent in the same PUT body. Also allow `recording_url` (R2) when youtube_url is empty.
       // Auto-publish recording into course lectures whenever class is completed.
       // Explicit convertToLecture still works, but completion should no longer depend on manual action.
+      const isClassroomStream = String(liveClass.stream_type || "").toLowerCase() === "classroom";
       const shouldConvertToLecture =
         convertToLecture === true &&
         (isCompleted === true || liveClass.is_completed === true) &&
@@ -273,70 +274,16 @@ export function registerAdminLiveClassManageRoutes({
         (liveClass.youtube_url ||
           liveClass.recording_url ||
           liveClass.cf_playback_hls ||
-          liveClass.board_snapshot_url);
+          liveClass.board_snapshot_url ||
+          isClassroomStream);
       if (shouldConvertToLecture) {
         await db
           .query("DELETE FROM notifications WHERE title IN ('🔴 Live Class Started!', '🔴 Live Class Starting Now!', '⏰ Live Class in 30 minutes!') AND message ILIKE $1", ['%' + liveClass.title + '%'])
           .catch(() => {});
-        const sameTitle = await db.query("SELECT * FROM live_classes WHERE title = $1", [liveClass.title]);
-        for (const peer of sameTitle.rows) {
-          if (!peer.course_id) continue;
-          const urlForPeer = String(
-            peer.recording_url ||
-            peer.cf_playback_hls ||
-            peer.youtube_url ||
-            peer.board_snapshot_url ||
-            liveClass.recording_url ||
-            liveClass.cf_playback_hls ||
-            liveClass.youtube_url ||
-            liveClass.board_snapshot_url ||
-            ""
-          ).trim();
-          if (!urlForPeer) continue;
-          const vType = inferVideoType(urlForPeer);
-          const maxOrder = await db.query("SELECT COALESCE(MAX(order_index), 0) + 1 as next_order FROM lectures WHERE course_id = $1", [peer.course_id]);
-          const durationMins =
-            peer.started_at && peer.ended_at
-              ? Math.max(1, Math.round((Number(peer.ended_at) - Number(peer.started_at)) / 60000))
-              : peer.duration_minutes != null
-                ? Number(peer.duration_minutes)
-                : liveClass.duration_minutes != null
-                  ? Number(liveClass.duration_minutes)
-                  : 0;
-          const targetSection = buildRecordingLectureSectionTitle(
-            peer.lecture_section_title,
-            peer.lecture_subfolder_title,
-            sectionTitle
-          );
-          await db.query(
-            `INSERT INTO lectures (
-               course_id, title, description, video_url, video_type, duration_minutes,
-               order_index, is_free_preview, section_title, live_class_id, live_class_finalized, created_at
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE, $11)
-             ON CONFLICT (live_class_id) WHERE live_class_id IS NOT NULL
-             DO UPDATE SET
-               video_url = EXCLUDED.video_url,
-               video_type = EXCLUDED.video_type,
-               duration_minutes = EXCLUDED.duration_minutes,
-               section_title = EXCLUDED.section_title,
-               live_class_finalized = TRUE`,
-            [
-              peer.course_id,
-              peer.title,
-              peer.description || "",
-              urlForPeer,
-              vType,
-              durationMins,
-              maxOrder.rows[0].next_order,
-              false,
-              targetSection,
-              peer.id,
-              Date.now(),
-            ]
-          );
-          await db.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [peer.course_id]);
-          await recomputeAllEnrollmentsProgressForCourse(peer.course_id);
-        }
+        await convertLiveClassTitlePeersToLectures(db, liveClass, {
+          sectionTitleOverride: sectionTitle,
+          recomputeCourseProgress: recomputeAllEnrollmentsProgressForCourse,
+        });
       }
       if (isCompleted && !convertToLecture && liveClass.title) {
         await db
@@ -372,7 +319,9 @@ export function registerAdminLiveClassManageRoutes({
       if (isCompleted === true && convertToLecture !== true) {
         const refreshed = await db.query("SELECT * FROM live_classes WHERE id = $1", [req.params.id]);
         const updated = refreshed.rows[0] || liveClass;
-        if (String(updated.stream_type || "").toLowerCase() === "classroom") {
+        const autoClassroom = String(updated.stream_type || "").toLowerCase() === "classroom";
+        const autoHasRecording = liveClassHasConvertibleRecording(updated);
+        if (autoClassroom || autoHasRecording) {
           await db
             .query(
               "DELETE FROM notifications WHERE title IN ('🔴 Live Class Started!', '🔴 Live Class Starting Now!', '⏰ Live Class in 30 minutes!') AND message ILIKE $1",

@@ -1,6 +1,9 @@
 import type { Express, Request, Response } from "express";
 import { AccessToken } from "livekit-server-sdk";
 import { userCanAccessLiveClassContent } from "./live-class-access";
+import { buildRecordingLectureSectionTitle } from "./recordingSection";
+import { saveRecordingForClassAndPeers } from "./live-class-recording-save";
+import { convertLiveClassTitlePeersToLectures } from "./live-class-lecture-convert";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -14,6 +17,7 @@ type RegisterClassroomRoutesDeps = {
   requireAuth: (req: Request, res: Response, next: () => void) => any;
   requireAdmin: (req: Request, res: Response, next: () => void) => any;
   getAuthUser: (req: Request) => Promise<AuthUser>;
+  recomputeAllEnrollmentsProgressForCourse: (courseId: number | string) => Promise<void>;
 };
 
 function getLiveKitConfig(): { url: string; apiKey: string; apiSecret: string } | null {
@@ -39,6 +43,7 @@ export function registerClassroomRoutes({
   requireAuth,
   requireAdmin,
   getAuthUser,
+  recomputeAllEnrollmentsProgressForCourse,
 }: RegisterClassroomRoutesDeps): void {
   app.get("/api/live-classes/:id/classroom/config", requireAuth, async (req: Request, res: Response) => {
     const cfg = getLiveKitConfig();
@@ -129,6 +134,61 @@ export function registerClassroomRoutes({
     } catch (err: any) {
       console.error("[Classroom] board-snapshot error:", err?.message || err);
       res.status(500).json({ message: "Failed to save board snapshot" });
+    }
+  });
+
+  app.post("/api/admin/live-classes/:id/classroom/finalize", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const liveClassId = String(req.params.id);
+      const lc = await loadLiveClass(db, liveClassId);
+      if (!lc) return res.status(404).json({ message: "Live class not found" });
+      if (String(lc.stream_type || "").toLowerCase() !== "classroom") {
+        return res.status(400).json({ message: "Not a classroom stream" });
+      }
+
+      const body = req.body || {};
+      const recordingUrl = String(body.recordingUrl || body.boardSnapshotUrl || "").trim();
+      const sectionTitle = buildRecordingLectureSectionTitle(
+        lc.lecture_section_title,
+        lc.lecture_subfolder_title,
+        body.sectionTitle
+      );
+
+      let lectureIds: number[] = [];
+      if (recordingUrl) {
+        const saved = await saveRecordingForClassAndPeers(db, liveClassId, recordingUrl, {
+          sectionTitle,
+          recomputeCourseProgress: recomputeAllEnrollmentsProgressForCourse,
+        });
+        lectureIds = saved.lectureIds;
+        await db.query(
+          "UPDATE live_classes SET board_snapshot_url = COALESCE(board_snapshot_url, $1) WHERE id = $2",
+          [recordingUrl, liveClassId]
+        );
+      } else {
+        const endedAt = Date.now();
+        await db.query(
+          `UPDATE live_classes 
+           SET is_live = FALSE, is_completed = TRUE, ended_at = COALESCE(ended_at, $1)
+           WHERE id = $2`,
+          [endedAt, liveClassId]
+        );
+        const refreshed = await db.query("SELECT * FROM live_classes WHERE id = $1", [liveClassId]);
+        lectureIds = await convertLiveClassTitlePeersToLectures(db, refreshed.rows[0] || lc, {
+          sectionTitleOverride: sectionTitle,
+          recomputeCourseProgress: recomputeAllEnrollmentsProgressForCourse,
+        });
+      }
+
+      res.json({
+        success: true,
+        recordingUrl: recordingUrl || null,
+        lectureIds,
+        sectionTitle,
+      });
+    } catch (err: any) {
+      console.error("[Classroom] finalize error:", err?.message || err);
+      res.status(500).json({ message: err?.message || "Failed to finalize classroom session" });
     }
   });
 
