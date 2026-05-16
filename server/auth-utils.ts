@@ -27,6 +27,14 @@ function rowsToAuthUser(u: Record<string, any>, sessionTokenOverride?: string | 
   };
 }
 
+/** WebSocket / internal callers may omit Express session — only sync when present. */
+function syncSessionUser(req: Request, user: AuthUser | null) {
+  const session = (req as { session?: { user?: AuthUser | null } }).session;
+  if (session && typeof session === "object") {
+    session.user = user;
+  }
+}
+
 /**
  * Loads the authenticated user. Students use a single rotated `users.session_token`.
  * Admins may have additional rows in `user_sessions` so multiple devices stay signed in.
@@ -43,16 +51,16 @@ export async function getAuthUserFromRequest(req: Request, db: DbClient): Promis
     try {
       const resolved = await resolveUserBySessionToken(db, token);
       if (!resolved) {
-        (req.session as any).user = null;
+        syncSessionUser(req, null);
         return null;
       }
       const u = resolved.row as Record<string, unknown>;
       if (u.is_blocked) {
-        (req.session as any).user = null;
+        syncSessionUser(req, null);
         return null;
       }
       const authUser = rowsToAuthUser(u, token);
-      (req.session as any).user = authUser;
+      syncSessionUser(req, authUser);
       return authUser;
     } catch (e) {
       console.error("[Auth] Bearer token lookup error:", e);
@@ -71,26 +79,26 @@ export async function getAuthUserFromRequest(req: Request, db: DbClient): Promis
       [sessionUser.id]
     );
     if (result.rows.length === 0) {
-      (req.session as any).user = null;
+      syncSessionUser(req, null);
       return null;
     }
     const row = result.rows[0];
     if (row.is_blocked) {
-      (req.session as any).user = null;
+      syncSessionUser(req, null);
       return null;
     }
     const cookieTok = sessionUser.sessionToken;
     if (cookieTok && !(await userHasSessionToken(db, sessionUser.id, cookieTok))) {
-      (req.session as any).user = null;
+      syncSessionUser(req, null);
       return null;
     }
     if (row.session_token && !sessionUser.sessionToken) {
-      (req.session as any).user = null;
+      syncSessionUser(req, null);
       return null;
     }
 
     const authUser = rowsToAuthUser(row, cookieTok || row.session_token);
-    (req.session as any).user = authUser;
+    syncSessionUser(req, authUser);
     return authUser;
   } catch (e) {
     console.error("[Auth] Session user lookup error:", e);

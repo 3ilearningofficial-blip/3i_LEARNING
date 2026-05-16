@@ -61,8 +61,8 @@ async function authenticateClassroomSocket(
       ...(token ? { authorization: `Bearer ${token}` } : {}),
       cookie: req.headers.cookie,
     },
-    session: (req as any).session,
-  } as any;
+    session: (req as { session?: unknown }).session ?? {},
+  } as import("express").Request;
 
   const user = await getAuthUserFromRequest(fakeReq, db);
   if (!user) return { ok: false, status: 401, message: "Unauthorized" };
