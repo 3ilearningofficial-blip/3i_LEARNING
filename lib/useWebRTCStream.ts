@@ -20,7 +20,7 @@ export interface UseWebRTCStreamReturn {
   cleanup: () => void;
 }
 
-export function useWebRTCStream(): UseWebRTCStreamReturn {
+export function useWebRTCStream(enabled = true): UseWebRTCStreamReturn {
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [isVideoEnabled, setIsVideoEnabled] = useState(true);
   const [isAudioEnabled, setIsAudioEnabled] = useState(true);
@@ -107,19 +107,17 @@ export function useWebRTCStream(): UseWebRTCStreamReturn {
     [isWeb, enumerateDevices]
   );
 
-  // Initialize stream and devices on mount (web only)
+  // Initialize stream and devices on mount (web only, when enabled)
   useEffect(() => {
-    if (isWeb) {
-      enumerateDevices();
-      startStream();
-    }
+    if (!enabled || !isWeb) return;
+    enumerateDevices();
+    startStream();
     return () => {
-      // cleanup on unmount
       streamRef.current?.getTracks().forEach((t) => t.stop());
       screenStreamRef.current?.getTracks().forEach((t) => t.stop());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isWeb]);
+  }, [enabled, isWeb]);
 
   const setSelectedCamera = useCallback(
     (deviceId: string) => {

@@ -39,7 +39,7 @@ export default function LiveSetupPage() {
   const [validationError, setValidationError] = useState<string | null>(null);
   const [isGoingLive, setIsGoingLive] = useState(false);
 
-  const webrtc = useWebRTCStream();
+  const webrtc = useWebRTCStream(streamType === "webrtc");
   const { data: classroomConfig } = useClassroomConfig(liveClassId);
 
   const { data: liveClass, isLoading } = useQuery({

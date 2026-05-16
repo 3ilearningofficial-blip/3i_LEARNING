@@ -18,7 +18,6 @@ import connectPgSimple from "connect-pg-simple";
 import rateLimit from "express-rate-limit";
 import { ipKeyGenerator } from "express-rate-limit";
 import compression from "compression";
-import * as fs from "fs";
 import pg from "pg";
 import { PgRateLimitStore } from "./pg-rate-limit-store";
 import { getAiTutorHealthSnapshot } from "./ai-tutor-service";

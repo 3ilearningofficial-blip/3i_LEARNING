@@ -11065,6 +11065,7 @@ var init_routes = __esm({
 init_pg_rate_limit_store();
 init_ai_tutor_service();
 import dotenv from "dotenv";
+import * as fs from "fs";
 import * as path from "path";
 import express from "express";
 import * as Sentry from "@sentry/node";
@@ -11073,7 +11074,6 @@ import connectPgSimple from "connect-pg-simple";
 import rateLimit from "express-rate-limit";
 import { ipKeyGenerator } from "express-rate-limit";
 import compression from "compression";
-import * as fs from "fs";
 import pg from "pg";
 import cors from "cors";
 var envPath = path.resolve(process.cwd(), ".env");
