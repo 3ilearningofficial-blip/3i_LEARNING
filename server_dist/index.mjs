@@ -11076,10 +11076,11 @@ import compression from "compression";
 import * as fs from "fs";
 import pg from "pg";
 import cors from "cors";
+var envPath = path.resolve(process.cwd(), ".env");
 if (process.env.NODE_ENV !== "production" || process.env.LOAD_DOTENV === "true") {
-  dotenv.config({
-    path: path.resolve(process.cwd(), ".env")
-  });
+  dotenv.config({ path: envPath });
+} else if (fs.existsSync(envPath)) {
+  dotenv.config({ path: envPath, override: false });
 }
 var app = express();
 var log = console.log;

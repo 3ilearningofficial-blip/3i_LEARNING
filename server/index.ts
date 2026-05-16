@@ -1,10 +1,13 @@
 import dotenv from "dotenv";
+import * as fs from "fs";
 import * as path from "path";
 
+const envPath = path.resolve(process.cwd(), ".env");
 if (process.env.NODE_ENV !== "production" || process.env.LOAD_DOTENV === "true") {
-  dotenv.config({
-    path: path.resolve(process.cwd(), ".env"),
-  });
+  dotenv.config({ path: envPath });
+} else if (fs.existsSync(envPath)) {
+  // EC2/PM2 often inject core secrets; merge .env for newer vars (e.g. LIVEKIT_*) without overriding.
+  dotenv.config({ path: envPath, override: false });
 }
 
 import express from "express";
