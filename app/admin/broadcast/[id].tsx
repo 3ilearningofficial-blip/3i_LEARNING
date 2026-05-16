@@ -205,9 +205,9 @@ export default function BroadcastPage() {
 
   const afterEndNavigate = useCallback(() => {
     if (courseId) {
-      router.replace(getAdminCourseRoute(courseId, "live") as any);
+      router.replace(getAdminCourseRoute(courseId) as any);
     } else {
-      router.replace("/admin" as any);
+      router.replace("/admin?tab=courses" as any);
     }
   }, [courseId]);
   const lcRecSubStorageKey = courseId != null ? `lcRecSub_${courseId}` : "lcRecSub";

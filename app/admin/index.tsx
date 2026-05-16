@@ -3,7 +3,7 @@ import {
   View, Text, StyleSheet, ScrollView, Pressable,
   Platform, ActivityIndicator, Alert, TextInput, Modal, Switch, Image, KeyboardAvoidingView, useWindowDimensions,
 } from "react-native";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
@@ -1023,10 +1023,21 @@ export default function AdminDashboard() {
     return () => observer.disconnect();
   }, []);
 
+  const { tab: adminTabParam } = useLocalSearchParams<{ tab?: string }>();
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
   const { user, isAdmin, logout } = useAuth();
-  const [activeTab, setActiveTab] = useState<AdminTab>("welcome");
+  const [activeTab, setActiveTab] = useState<AdminTab>(() => {
+    const t = String(adminTabParam || "").toLowerCase();
+    const valid: AdminTab[] = ["welcome", "courses", "tests", "materials", "missions", "notifications", "aiTutor", "books", "support", "analytics", "users"];
+    return valid.includes(t as AdminTab) ? (t as AdminTab) : "welcome";
+  });
+
+  useEffect(() => {
+    const t = String(adminTabParam || "").toLowerCase();
+    const valid: AdminTab[] = ["welcome", "courses", "tests", "materials", "missions", "notifications", "aiTutor", "books", "support", "analytics", "users"];
+    if (valid.includes(t as AdminTab)) setActiveTab(t as AdminTab);
+  }, [adminTabParam]);
   const [aiDoubtDays, setAiDoubtDays] = useState<"all" | "7" | "30">("all");
   const [aiDoubtTopic, setAiDoubtTopic] = useState<string>("all");
   const [aiDoubtStudent, setAiDoubtStudent] = useState("");

@@ -93,9 +93,9 @@ export default function AdminClassroomPage() {
       else Alert.alert("Class ended", msg);
 
       if (courseId) {
-        router.replace(getAdminCourseRoute(courseId, "live") as any);
+        router.replace(getAdminCourseRoute(courseId) as any);
       } else {
-        router.replace("/admin" as any);
+        router.replace("/admin?tab=courses" as any);
       }
     } catch (err: any) {
       if (Platform.OS === "web") window.alert(err?.message || "Failed to end class");

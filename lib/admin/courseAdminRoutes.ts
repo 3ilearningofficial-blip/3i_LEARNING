@@ -7,9 +7,15 @@ export function parseAdminCourseTab(raw: unknown): AdminCourseTab | null {
   return VALID_TABS.has(t as AdminCourseTab) ? (t as AdminCourseTab) : null;
 }
 
-/** Admin course page with optional tab (defaults to lectures when tab omitted). */
+/** Return to course admin after ending live (no Live/Lectures sub-tab forced). */
 export function getAdminCourseRoute(courseId: number | string, tab?: AdminCourseTab): string {
   const base = `/admin/course/${courseId}`;
-  if (tab && tab !== "lectures") return `${base}?tab=${tab}`;
-  return base;
+  const qs = new URLSearchParams({ fromLiveEnd: "1" });
+  if (tab && tab !== "lectures") qs.set("tab", tab);
+  return `${base}?${qs.toString()}`;
+}
+
+/** Main admin dashboard — Courses section (course list), not a course sub-tab. */
+export function getAdminCoursesSectionRoute(): string {
+  return "/admin?tab=courses";
 }

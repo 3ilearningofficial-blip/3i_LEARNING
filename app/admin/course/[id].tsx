@@ -205,7 +205,11 @@ export default function AdminCourseScreen() {
     return () => observer.disconnect();
   }, []);
 
-  const { id, tab: tabParam } = useLocalSearchParams<{ id: string; tab?: string }>();
+  const { id, tab: tabParam, fromLiveEnd } = useLocalSearchParams<{
+    id: string;
+    tab?: string;
+    fromLiveEnd?: string;
+  }>();
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
   const [activeTab, setActiveTab] = useState<AdminCourseTab>(() => {
@@ -222,6 +226,14 @@ export default function AdminCourseScreen() {
       setActiveTab(fromUrl as AdminCourseTab);
     }
   }, [tabParam]);
+
+  useEffect(() => {
+    if (String(fromLiveEnd || "") !== "1") return;
+    setOpenAdminFolder(null);
+    setShowAddLecture(false);
+    setShowAddLiveClass(false);
+    setShowFolderPicker(null);
+  }, [fromLiveEnd]);
   const [showAddLecture, setShowAddLecture] = useState(false);
   const [showAddTest, setShowAddTest] = useState(false);
   const [showAddQuestion, setShowAddQuestion] = useState<number | null>(null);
