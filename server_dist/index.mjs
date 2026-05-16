@@ -112,6 +112,284 @@ var init_pg_rate_limit_store = __esm({
   }
 });
 
+// server/ai-tutor-service.ts
+function getAiProviderMode() {
+  const raw = (process.env.AI_PROVIDER || "auto").trim().toLowerCase();
+  if (raw === "openai" || raw === "gemini" || raw === "auto") return raw;
+  return "auto";
+}
+function getAiTutorHealthSnapshot() {
+  const geminiConfigured = !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY)?.trim();
+  const openaiConfigured = !!process.env.OPENAI_API_KEY?.trim();
+  const openaiModel = (process.env.OPENAI_MODEL || "gpt-4o-mini").trim();
+  const aiProvider = getAiProviderMode();
+  let resolvedOrder = [];
+  if (aiProvider === "openai") {
+    resolvedOrder = openaiConfigured ? ["openai"] : [];
+  } else if (aiProvider === "gemini") {
+    resolvedOrder = geminiConfigured ? ["gemini"] : [];
+  } else {
+    if (geminiConfigured) resolvedOrder.push("gemini");
+    if (openaiConfigured) resolvedOrder.push("openai");
+  }
+  return { geminiConfigured, openaiConfigured, openaiModel, aiProvider, resolvedOrder };
+}
+function createGenerateAIAnswer(db2) {
+  return async function generateAIAnswer2(question, topic, userId) {
+    const q = String(question || "").trim();
+    const t = String(topic || "").trim();
+    if (!q) return "Please share your full question so I can help step by step.";
+    const tokenize = (text) => text.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w.length > 2);
+    const stop = /* @__PURE__ */ new Set([
+      "the",
+      "and",
+      "for",
+      "with",
+      "that",
+      "this",
+      "from",
+      "what",
+      "when",
+      "where",
+      "which",
+      "into",
+      "about",
+      "have",
+      "has",
+      "had",
+      "how",
+      "why",
+      "are",
+      "can",
+      "could",
+      "would",
+      "should",
+      "your",
+      "you",
+      "our",
+      "their",
+      "there",
+      "then",
+      "than",
+      "also",
+      "just",
+      "some",
+      "solve",
+      "find",
+      "show",
+      "math",
+      "question",
+      "doubt",
+      "topic"
+    ]);
+    const keywords = Array.from(new Set([...tokenize(q), ...tokenize(t)].filter((w) => !stop.has(w))));
+    const scoreSnippet = (text) => {
+      if (!keywords.length) return 0;
+      const lower = text.toLowerCase();
+      let score = 0;
+      for (const k of keywords) {
+        if (lower.includes(k)) score += 1;
+      }
+      return score;
+    };
+    const snippets = [];
+    try {
+      if (userId) {
+        const lectures = await db2.query(
+          `SELECT l.title, COALESCE(l.description, '') AS description, COALESCE(l.transcript, '') AS transcript,
+                  COALESCE(c.title, '') AS course_title
+           FROM lectures l
+           JOIN enrollments e ON e.course_id = l.course_id AND e.user_id = $1
+           LEFT JOIN courses c ON c.id = l.course_id
+           WHERE (e.status = 'active' OR e.status IS NULL)
+           ORDER BY l.created_at DESC
+           LIMIT 120`,
+          [userId]
+        );
+        for (const row of lectures.rows) {
+          const transcriptPart = String(row.transcript || "").trim();
+          const transcriptChunk = transcriptPart ? transcriptPart.slice(0, TRANSCRIPT_CONTEXT_CHARS) : "";
+          const text = [String(row.title || "").trim(), String(row.description || "").trim(), transcriptChunk].filter(Boolean).join(". ");
+          snippets.push({
+            source: "lecture",
+            title: `${row.course_title || "Course"} - ${row.title || "Lecture"}`,
+            text: text || String(row.title || ""),
+            score: scoreSnippet(text)
+          });
+        }
+        const materials = await db2.query(
+          `SELECT sm.title, COALESCE(sm.description, '') AS description, COALESCE(c.title, '') AS course_title
+           FROM study_materials sm
+           JOIN enrollments e ON e.course_id = sm.course_id AND e.user_id = $1
+           LEFT JOIN courses c ON c.id = sm.course_id
+           WHERE (e.status = 'active' OR e.status IS NULL)
+           ORDER BY sm.created_at DESC
+           LIMIT 120`,
+          [userId]
+        );
+        for (const row of materials.rows) {
+          const text = `${row.title}. ${row.description}`.trim();
+          snippets.push({
+            source: "material",
+            title: `${row.course_title || "Course"} - ${row.title || "Material"}`,
+            text,
+            score: scoreSnippet(text)
+          });
+        }
+        const questions = await db2.query(
+          `SELECT q.question_text, COALESCE(q.explanation, '') AS explanation, COALESCE(q.topic, '') AS topic,
+                  COALESCE(t.title, '') AS test_title, COALESCE(c.title, '') AS course_title
+           FROM questions q
+           JOIN tests t ON t.id = q.test_id
+           JOIN enrollments e ON e.course_id = t.course_id AND e.user_id = $1
+           LEFT JOIN courses c ON c.id = t.course_id
+           WHERE (e.status = 'active' OR e.status IS NULL)
+           ORDER BY q.id DESC
+           LIMIT 150`,
+          [userId]
+        );
+        for (const row of questions.rows) {
+          const text = `${row.topic}. ${row.question_text}. ${row.explanation}`.trim();
+          snippets.push({
+            source: "question",
+            title: `${row.course_title || "Course"} - ${row.test_title || "Test"} question`,
+            text,
+            score: scoreSnippet(text)
+          });
+        }
+      }
+    } catch (err) {
+      console.warn("[AI Tutor] context fetch failed:", err);
+    }
+    const selected = snippets.sort((a, b) => b.score - a.score).slice(0, 8).map((s, i) => `[${i + 1}] ${s.title} (${s.source})
+${s.text.slice(0, 450)}`);
+    const contextBlock = selected.length ? selected.join("\n\n") : "No specific class snippet found. Use general mathematics reasoning.";
+    const systemPrompt = "You are a rigorous math tutor for Indian competitive exam students. Give accurate, step-by-step solutions. If relevant context exists, use it. If context is insufficient, still solve using correct math methods. Do not fabricate references. Keep answer clear and practical.";
+    const userPrompt = `Student topic: ${t || "General"}
+Student question: ${q}
+
+Course context snippets:
+${contextBlock}
+
+Answer format:
+1) Short concept summary
+2) Step-by-step solution
+3) Final answer
+4) One similar practice question`;
+    const logLlmHttpFailure = (provider, status, bodyPreview) => {
+      console.warn(`[AI Tutor] ${provider} HTTP ${status}`, bodyPreview.slice(0, 500));
+    };
+    const callGemini = async () => {
+      const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+      if (!apiKey?.trim()) return null;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 18e3);
+      try {
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+          {
+            method: "POST",
+            signal: controller.signal,
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              systemInstruction: { parts: [{ text: systemPrompt }] },
+              contents: [{ role: "user", parts: [{ text: userPrompt }] }],
+              generationConfig: { temperature: 0.25, maxOutputTokens: 900 }
+            })
+          }
+        );
+        if (!res.ok) {
+          let preview = "";
+          try {
+            preview = JSON.stringify(await res.json());
+          } catch {
+            preview = await res.text().catch(() => "");
+          }
+          logLlmHttpFailure("Gemini", res.status, preview);
+          return null;
+        }
+        const data = await res.json();
+        const text = data?.candidates?.[0]?.content?.parts?.map((p) => p?.text || "").join("\n").trim();
+        return text || null;
+      } catch (e) {
+        console.warn("[AI Tutor] Gemini request failed:", e instanceof Error ? e.message : e);
+        return null;
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+    const callOpenAI = async () => {
+      const apiKey = process.env.OPENAI_API_KEY;
+      if (!apiKey?.trim()) return null;
+      const model = (process.env.OPENAI_MODEL || "gpt-4o-mini").trim();
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 18e3);
+      try {
+        const res = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          signal: controller.signal,
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${apiKey}`
+          },
+          body: JSON.stringify({
+            model,
+            temperature: 0.25,
+            max_tokens: 900,
+            messages: [
+              { role: "system", content: systemPrompt },
+              { role: "user", content: userPrompt }
+            ]
+          })
+        });
+        if (!res.ok) {
+          let preview = "";
+          try {
+            preview = JSON.stringify(await res.json());
+          } catch {
+            preview = await res.text().catch(() => "");
+          }
+          logLlmHttpFailure("OpenAI", res.status, preview);
+          return null;
+        }
+        const data = await res.json();
+        return data?.choices?.[0]?.message?.content?.trim() || null;
+      } catch (e) {
+        console.warn("[AI Tutor] OpenAI request failed:", e instanceof Error ? e.message : e);
+        return null;
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+    const mode = getAiProviderMode();
+    let llmAnswer = null;
+    if (mode === "openai") {
+      llmAnswer = await callOpenAI();
+    } else if (mode === "gemini") {
+      llmAnswer = await callGemini();
+    } else {
+      llmAnswer = await callGemini() || await callOpenAI();
+    }
+    if (llmAnswer) return llmAnswer;
+    const topicContext = t ? `Topic: ${t}. ` : "";
+    return `${topicContext}I could not reach the AI model right now, but here is a structured way to solve it:
+
+1. Identify the known values and what is asked.
+2. Write the core formula/concept used in this chapter.
+3. Substitute carefully and simplify step by step.
+4. Recheck units/signs and verify the final value.
+
+Question focus: "${q.slice(0, 80)}".`;
+  };
+}
+var TRANSCRIPT_CONTEXT_CHARS;
+var init_ai_tutor_service = __esm({
+  "server/ai-tutor-service.ts"() {
+    "use strict";
+    TRANSCRIPT_CONTEXT_CHARS = 8e3;
+  }
+});
+
 // server/firebase.ts
 import * as admin from "firebase-admin";
 function getFirebaseAdmin() {
@@ -822,22 +1100,25 @@ function normalizePhone(input) {
 function normalizeEmail(input) {
   return String(input || "").trim().toLowerCase();
 }
-function evaluateSendThrottle(snap, now) {
-  if (snap.send_locked_until && Number(snap.send_locked_until) > now) {
-    return { ok: false, lockedUntil: Number(snap.send_locked_until), persistLock: false };
+function evaluateOtpSendThrottle(snap, now) {
+  const lockedUntil = snap.send_locked_until != null ? Number(snap.send_locked_until) : null;
+  if (lockedUntil != null && lockedUntil > now) {
+    return { ok: false, lockedUntil, reason: "quota" };
   }
-  const winStart = snap.send_window_start ? Number(snap.send_window_start) : 0;
+  const lastSend = snap.last_send_at != null ? Number(snap.last_send_at) : null;
+  if (lastSend != null && now - lastSend < OTP_RESEND_COOLDOWN_MS) {
+    return { ok: false, lockedUntil: lastSend + OTP_RESEND_COOLDOWN_MS, reason: "cooldown" };
+  }
   let count = Number(snap.send_count) || 0;
-  let nextWindowStart = winStart;
-  if (!winStart || now - winStart > OTP_SEND_WINDOW_MS) {
-    nextWindowStart = now;
+  if (lockedUntil != null && lockedUntil <= now) {
     count = 0;
   }
-  const nextCount = count + 1;
-  if (nextCount > OTP_SEND_MAX_PER_WINDOW) {
-    return { ok: false, lockedUntil: now + OTP_SEND_LOCK_MS, persistLock: true };
+  if (count >= OTP_SENDS_PER_CYCLE) {
+    return { ok: false, lockedUntil: now + OTP_SEND_LOCK_MS, reason: "quota" };
   }
-  return { ok: true, nextCount, nextWindowStart, nextLockedUntil: null };
+  const nextCount = count + 1;
+  const newSendLockedUntil = nextCount >= OTP_SENDS_PER_CYCLE ? now + OTP_SEND_LOCK_MS : null;
+  return { ok: true, nextCount, lastSendAt: now, newSendLockedUntil };
 }
 function registerAuthRoutes({
   app: app2,
@@ -903,6 +1184,7 @@ function registerAuthRoutes({
       const otpHash = hashOtpValue2(otp);
       const otpExpires = now + 10 * 60 * 1e3;
       const isDev = process.env.NODE_ENV !== "production";
+      let lockedUntilForClient = null;
       const userRow = isPhone ? await db2.query(
         "SELECT id, otp_send_count, otp_send_window_start, otp_send_locked_until FROM users WHERE phone = $1",
         [normalizedIdentifier]
@@ -912,29 +1194,31 @@ function registerAuthRoutes({
       );
       if (userRow.rows.length > 0) {
         const u = userRow.rows[0];
-        const decision = evaluateSendThrottle(
+        let locked = u.otp_send_locked_until != null ? Number(u.otp_send_locked_until) : null;
+        let count = Number(u.otp_send_count || 0);
+        let lastSend = u.otp_send_window_start != null ? Number(u.otp_send_window_start) : null;
+        if (locked != null && locked <= now) {
+          await db2.query(
+            `UPDATE users SET otp_send_locked_until = NULL, otp_send_count = 0 WHERE id = $1`,
+            [u.id]
+          );
+          locked = null;
+          count = 0;
+        }
+        const decision = evaluateOtpSendThrottle(
           {
-            send_count: Number(u.otp_send_count || 0),
-            send_window_start: u.otp_send_window_start != null ? Number(u.otp_send_window_start) : null,
-            send_locked_until: u.otp_send_locked_until != null ? Number(u.otp_send_locked_until) : null
+            send_count: count,
+            last_send_at: lastSend,
+            send_locked_until: locked
           },
           now
         );
         if (!decision.ok) {
-          if (decision.persistLock) {
-            await db2.query(
-              `UPDATE users SET
-                 otp = NULL, otp_expires_at = NULL,
-                 otp_send_locked_until = $1,
-                 otp_send_count = 0,
-                 otp_send_window_start = $2
-               WHERE id = $3`,
-              [decision.lockedUntil, now, u.id]
-            );
-          }
+          const msg = decision.reason === "cooldown" ? OTP_COOLDOWN_MESSAGE : OTP_LOCKOUT_MESSAGE;
           return res.status(429).json({
-            message: OTP_LOCKOUT_MESSAGE,
-            lockedUntil: decision.lockedUntil
+            message: msg,
+            lockedUntil: decision.lockedUntil,
+            reason: decision.reason
           });
         }
         await db2.query(
@@ -945,48 +1229,54 @@ function registerAuthRoutes({
              otp_locked_until = NULL,
              otp_send_count = $3,
              otp_send_window_start = $4,
-             otp_send_locked_until = NULL
-           WHERE id = $5`,
-          [otpHash, otpExpires, decision.nextCount, decision.nextWindowStart, u.id]
+             otp_send_locked_until = $5
+           WHERE id = $6`,
+          [otpHash, otpExpires, decision.nextCount, decision.lastSendAt, decision.newSendLockedUntil, u.id]
         );
+        lockedUntilForClient = decision.newSendLockedUntil;
       } else {
         const challengeRow = await db2.query(
           "SELECT send_count, send_window_start, send_locked_until FROM otp_challenges WHERE identifier = $1",
           [normalizedIdentifier]
         );
-        const snap = challengeRow.rows.length > 0 ? {
-          send_count: Number(challengeRow.rows[0].send_count || 0),
-          send_window_start: challengeRow.rows[0].send_window_start != null ? Number(challengeRow.rows[0].send_window_start) : null,
-          send_locked_until: challengeRow.rows[0].send_locked_until != null ? Number(challengeRow.rows[0].send_locked_until) : null
-        } : { send_count: 0, send_window_start: null, send_locked_until: null };
-        const decision = evaluateSendThrottle(snap, now);
-        if (!decision.ok) {
-          if (decision.persistLock) {
+        let locked = null;
+        let count = 0;
+        let lastSend = null;
+        if (challengeRow.rows.length > 0) {
+          const r = challengeRow.rows[0];
+          locked = r.send_locked_until != null ? Number(r.send_locked_until) : null;
+          count = Number(r.send_count || 0);
+          lastSend = r.send_window_start != null ? Number(r.send_window_start) : null;
+          if (locked != null && locked <= now) {
             await db2.query(
-              `INSERT INTO otp_challenges
-                (identifier, type, otp_hash, otp_expires_at, send_count, send_window_start, send_locked_until, created_at, updated_at)
-               VALUES ($1, $2, NULL, NULL, 0, $3, $4, $3, $3)
-               ON CONFLICT (identifier) DO UPDATE SET
-                 type = EXCLUDED.type,
-                 otp_hash = NULL,
-                 otp_expires_at = NULL,
-                 send_count = 0,
-                 send_window_start = EXCLUDED.send_window_start,
-                 send_locked_until = EXCLUDED.send_locked_until,
-                 updated_at = EXCLUDED.updated_at`,
-              [normalizedIdentifier, type, now, decision.lockedUntil]
+              `UPDATE otp_challenges SET send_locked_until = NULL, send_count = 0, updated_at = $2 WHERE identifier = $1`,
+              [normalizedIdentifier, now]
             );
+            locked = null;
+            count = 0;
           }
+        }
+        const decision = evaluateOtpSendThrottle(
+          {
+            send_count: count,
+            last_send_at: lastSend,
+            send_locked_until: locked
+          },
+          now
+        );
+        if (!decision.ok) {
+          const msg = decision.reason === "cooldown" ? OTP_COOLDOWN_MESSAGE : OTP_LOCKOUT_MESSAGE;
           return res.status(429).json({
-            message: OTP_LOCKOUT_MESSAGE,
-            lockedUntil: decision.lockedUntil
+            message: msg,
+            lockedUntil: decision.lockedUntil,
+            reason: decision.reason
           });
         }
         await db2.query(
           `INSERT INTO otp_challenges
             (identifier, type, otp_hash, otp_expires_at, verify_failed_attempts, verify_locked_until,
              send_count, send_window_start, send_locked_until, created_at, updated_at)
-           VALUES ($1, $2, $3, $4, 0, NULL, $5, $6, NULL, $7, $7)
+           VALUES ($1, $2, $3, $4, 0, NULL, $5, $6, $7, $8, $8)
            ON CONFLICT (identifier) DO UPDATE SET
              type = EXCLUDED.type,
              otp_hash = EXCLUDED.otp_hash,
@@ -995,10 +1285,20 @@ function registerAuthRoutes({
              verify_locked_until = NULL,
              send_count = EXCLUDED.send_count,
              send_window_start = EXCLUDED.send_window_start,
-             send_locked_until = NULL,
+             send_locked_until = EXCLUDED.send_locked_until,
              updated_at = EXCLUDED.updated_at`,
-          [normalizedIdentifier, type, otpHash, otpExpires, decision.nextCount, decision.nextWindowStart, now]
+          [
+            normalizedIdentifier,
+            type,
+            otpHash,
+            otpExpires,
+            decision.nextCount,
+            decision.lastSendAt,
+            decision.newSendLockedUntil,
+            now
+          ]
         );
+        lockedUntilForClient = decision.newSendLockedUntil;
       }
       let smsSent = false;
       if (isPhone) {
@@ -1017,7 +1317,7 @@ function registerAuthRoutes({
         smsSent,
         devOtp: isDev ? otp : "",
         method: isPhone ? void 0 : "server",
-        lockedUntil: null
+        lockedUntil: lockedUntilForClient
       });
     } catch (err) {
       console.error(err);
@@ -1325,8 +1625,15 @@ function registerAuthRoutes({
   app2.post("/api/auth/email-login", async (req, res) => {
     try {
       const { email, password, deviceId } = req.body || {};
-      if (!email || !password) return res.status(400).json({ message: "Phone/email and password are required" });
+      if (typeof email !== "string" || typeof password !== "string") {
+        return res.status(400).json({ message: "Phone/email and password are required" });
+      }
       const identifier = email.trim().toLowerCase();
+      const normalizedPassword = password.trim();
+      if (!identifier || !normalizedPassword) {
+        return res.status(400).json({ message: "Phone/email and password are required" });
+      }
+      console.log("[Auth] email-login: lookup start", { identifierType: /^\d{10}$/.test(identifier) ? "phone" : "email" });
       const isPhone = /^\d{10}$/.test(identifier);
       let result;
       if (isPhone) {
@@ -1344,16 +1651,26 @@ function registerAuthRoutes({
       }
       if (!user.password_hash) return res.status(401).json({ message: GENERIC_LOGIN_ERROR });
       let matched = false;
-      if (isScryptHash(user.password_hash)) {
-        matched = await verifyPassword(password, user.password_hash);
-      } else {
-        matched = verifyLegacySha256(password, user.id, user.password_hash);
-        if (matched) {
-          const migratedHash = await hashPassword(password);
-          await db2.query("UPDATE users SET password_hash = $1 WHERE id = $2", [migratedHash, user.id]);
+      try {
+        console.log("[Auth] email-login: verify start", { userId: user.id, hashType: isScryptHash(user.password_hash) ? "scrypt" : "legacy" });
+        if (isScryptHash(user.password_hash)) {
+          matched = await verifyPassword(normalizedPassword, user.password_hash);
+        } else {
+          matched = verifyLegacySha256(normalizedPassword, user.id, user.password_hash);
+          if (matched) {
+            const migratedHash = await hashPassword(normalizedPassword);
+            await db2.query("UPDATE users SET password_hash = $1 WHERE id = $2", [migratedHash, user.id]);
+          }
         }
+      } catch (verifyErr) {
+        console.warn("[Auth] email-login: password verification failed with malformed hash/user data", {
+          userId: user.id,
+          error: verifyErr instanceof Error ? verifyErr.message : "unknown_error"
+        });
+        return res.status(401).json({ message: GENERIC_LOGIN_ERROR });
       }
       if (!matched) return res.status(401).json({ message: GENERIC_LOGIN_ERROR });
+      console.log("[Auth] email-login: device gate start", { userId: user.id });
       const gate = await assertLoginAllowedForInstallation(db2, req, {
         userId: user.id,
         role: user.role,
@@ -1365,6 +1682,7 @@ function registerAuthRoutes({
         return res.status(gate.httpStatus).json({ message: gate.message });
       }
       const dev = typeof deviceId === "string" ? deviceId : null;
+      console.log("[Auth] email-login: finalize session start", { userId: user.id });
       const finalized = await finalizeAuthenticatedSession(req, user, dev, false);
       res.json(finalized);
     } catch (err) {
@@ -1531,7 +1849,7 @@ function registerAuthRoutes({
     }
   });
 }
-var GENERIC_LOGIN_ERROR, GENERIC_OTP_ERROR, OTP_SEND_WINDOW_MS, OTP_SEND_MAX_PER_WINDOW, OTP_SEND_LOCK_MS, OTP_LOCKOUT_MESSAGE, REGISTRATION_TOKEN_TTL_MS;
+var GENERIC_LOGIN_ERROR, GENERIC_OTP_ERROR, OTP_RESEND_COOLDOWN_MS, OTP_SENDS_PER_CYCLE, OTP_SEND_LOCK_MS, OTP_LOCKOUT_MESSAGE, OTP_COOLDOWN_MESSAGE, REGISTRATION_TOKEN_TTL_MS;
 var init_auth_routes = __esm({
   "server/auth-routes.ts"() {
     "use strict";
@@ -1541,11 +1859,103 @@ var init_auth_routes = __esm({
     init_user_account_purge();
     GENERIC_LOGIN_ERROR = "Invalid credentials";
     GENERIC_OTP_ERROR = "Invalid or expired OTP";
-    OTP_SEND_WINDOW_MS = 2 * 60 * 1e3;
-    OTP_SEND_MAX_PER_WINDOW = 2;
+    OTP_RESEND_COOLDOWN_MS = 2 * 60 * 1e3;
+    OTP_SENDS_PER_CYCLE = 3;
     OTP_SEND_LOCK_MS = 24 * 60 * 60 * 1e3;
     OTP_LOCKOUT_MESSAGE = "Too many OTP attempts. Please try again after 24 hours.";
+    OTP_COOLDOWN_MESSAGE = "Please wait before requesting another OTP.";
     REGISTRATION_TOKEN_TTL_MS = 15 * 60 * 1e3;
+  }
+});
+
+// server/media-key-utils.ts
+function safeDecode(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+function stripHostIfUrl(raw) {
+  if (!/^https?:\/\//i.test(raw)) return raw;
+  try {
+    const parsed = new URL(raw);
+    const path2 = `${parsed.pathname || ""}${parsed.search || ""}${parsed.hash || ""}`;
+    return path2 || raw;
+  } catch {
+    return raw;
+  }
+}
+function normalizeSlashes(value) {
+  return value.replace(/\\/g, "/").replace(/\/{2,}/g, "/");
+}
+function removeSearchAndHash(value) {
+  const noHash = value.split("#")[0] || "";
+  return noHash.split("?")[0] || "";
+}
+function canonicalMediaKey(raw) {
+  let key = String(raw || "").trim();
+  if (!key) return "";
+  key = stripHostIfUrl(key);
+  key = removeSearchAndHash(key);
+  key = normalizeSlashes(key).replace(/^\/+/, "");
+  key = safeDecode(key);
+  key = normalizeSlashes(key).replace(/^\/+/, "");
+  const lower = key.toLowerCase();
+  if (lower.startsWith(MEDIA_PROXY_PREFIX)) {
+    key = key.slice(MEDIA_PROXY_PREFIX.length);
+  }
+  key = key.replace(/^\/+/, "").replace(/\/+$/g, "");
+  if (!key || key.includes("..")) return "";
+  return key;
+}
+function mediaKeyMatchVariants(raw) {
+  const canonical = canonicalMediaKey(raw);
+  if (!canonical) return [];
+  const decoded = safeDecode(canonical);
+  const encoded = encodeURI(canonical);
+  const values = /* @__PURE__ */ new Set([
+    canonical,
+    decoded,
+    encoded,
+    `api/media/${canonical}`,
+    `/api/media/${canonical}`,
+    `api/media/${decoded}`,
+    `/api/media/${decoded}`,
+    `api/media/${encoded}`,
+    `/api/media/${encoded}`
+  ]);
+  return [...values].filter(Boolean);
+}
+var MEDIA_PROXY_PREFIX;
+var init_media_key_utils = __esm({
+  "server/media-key-utils.ts"() {
+    "use strict";
+    MEDIA_PROXY_PREFIX = "api/media/";
+  }
+});
+
+// server/r2-presign-read.ts
+async function presignR2GetObject(getR2Client, objectKey, expiresInSeconds) {
+  const bucket = String(process.env.R2_BUCKET_NAME || "").trim();
+  if (!bucket || !objectKey) return null;
+  try {
+    const r2 = await getR2Client();
+    const { getSignedUrl } = await import("@aws-sdk/s3-request-presigner");
+    const { GetObjectCommand } = await import("@aws-sdk/client-s3");
+    return await getSignedUrl(
+      r2,
+      new GetObjectCommand({ Bucket: bucket, Key: objectKey }),
+      { expiresIn: Math.min(Math.max(60, expiresInSeconds), 7 * 24 * 60 * 60) }
+    );
+  } catch (err) {
+    console.warn("[r2-presign-read] failed:", err?.message || err);
+    return null;
+  }
+}
+var init_r2_presign_read = __esm({
+  "server/r2-presign-read.ts"() {
+    "use strict";
   }
 });
 
@@ -1576,21 +1986,40 @@ async function resolveToPublicAddress(hostname) {
     return false;
   }
 }
-function registerPdfRoutes({ app: app2, db: db2, getAuthUser: getAuthUser2 }) {
+function publicApiBaseUrl() {
+  const raw = String(process.env.PUBLIC_API_BASE_URL || process.env.API_PUBLIC_URL || "").trim().replace(/\/+$/, "");
+  if (raw) return raw;
+  return "https://api.3ilearning.in";
+}
+function mediaProxyUrl(publicBase, fileKey, token) {
+  const encPath = fileKey.split("/").filter(Boolean).map(encodeURIComponent).join("/");
+  return `${publicBase}/api/media/${encPath}?token=${encodeURIComponent(token)}`;
+}
+function registerPdfRoutes({ app: app2, db: db2, getAuthUser: getAuthUser2, getR2Client }) {
   app2.get("/api/pdf-viewer", async (req, res) => {
     const { token, key } = req.query;
     if (!token || !key || typeof token !== "string" || typeof key !== "string") {
       return res.status(400).send("Missing token or key");
     }
-    const tokenResult = await db2.query(
-      "SELECT user_id FROM media_tokens WHERE token = $1 AND expires_at > $2 AND file_key = $3",
-      [token, Date.now(), key]
-    ).catch(() => ({ rows: [] }));
+    const fileKey = canonicalMediaKey(key);
+    if (!fileKey) {
+      return res.status(400).send("Invalid key");
+    }
+    const tokenResult = await db2.query("SELECT user_id, expires_at FROM media_tokens WHERE token = $1 AND expires_at > $2 AND file_key = $3", [
+      token,
+      Date.now(),
+      fileKey
+    ]).catch(() => ({ rows: [] }));
     if (!tokenResult.rows.length) {
       return res.status(401).send("Token expired or invalid");
     }
-    const origin = `${req.headers["x-forwarded-proto"] || req.protocol}://${req.headers["x-forwarded-host"] || req.headers.host}`;
-    const pdfUrl = `${origin}/api/media/${key}?token=${token}`;
+    const expiresAt = Number(tokenResult.rows[0].expires_at);
+    const expMs = Number.isFinite(expiresAt) ? expiresAt : Date.now() + 10 * 60 * 1e3;
+    const ttlSec = Math.max(60, Math.floor((expMs - Date.now()) / 1e3));
+    const readUrl = await presignR2GetObject(getR2Client, fileKey, ttlSec);
+    const publicBase = publicApiBaseUrl();
+    const pdfUrl = readUrl || mediaProxyUrl(publicBase, fileKey, token);
+    const withCredentials = !readUrl;
     const html = `<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
@@ -1619,8 +2048,9 @@ html,body{width:100%;height:100%;background:#2a2a2a;overflow:auto;font-family:-a
 pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 (function(){
   var pdfUrl=${JSON.stringify(pdfUrl)};
+  var withCredentials=${JSON.stringify(withCredentials)};
   function renderPdf(url){
-    return pdfjsLib.getDocument({url:url,withCredentials:true}).promise.then(function(pdf){
+    return pdfjsLib.getDocument({url:url,withCredentials:withCredentials}).promise.then(function(pdf){
       document.getElementById('loading').style.display='none';
       var viewer=document.getElementById('viewer');
       viewer.innerHTML='';
@@ -1771,6 +2201,8 @@ var MAX_PDF_PROXY_BYTES, MAX_PDF_PROXY_REDIRECTS, PDF_PROXY_ALLOWED_HOSTS;
 var init_pdf_routes = __esm({
   "server/pdf-routes.ts"() {
     "use strict";
+    init_media_key_utils();
+    init_r2_presign_read();
     MAX_PDF_PROXY_BYTES = 30 * 1024 * 1024;
     MAX_PDF_PROXY_REDIRECTS = 2;
     PDF_PROXY_ALLOWED_HOSTS = /* @__PURE__ */ new Set([
@@ -2918,7 +3350,9 @@ var init_live_chat_routes = __esm({
 // server/listen-pool.ts
 import { Pool } from "pg";
 function createListenPool(connectionString) {
-  const max = Math.min(100, Math.max(5, parseInt(process.env.PG_LISTEN_POOL_MAX || "32", 10) || 32));
+  const defaultMax = process.env.NODE_ENV === "production" ? 12 : 20;
+  const parsedMax = parseInt(process.env.PG_LISTEN_POOL_MAX || String(defaultMax), 10) || defaultMax;
+  const max = Math.min(40, Math.max(2, parsedMax));
   return new Pool({
     connectionString,
     ssl: process.env.PGSSL_NO_VERIFY === "true" && process.env.NODE_ENV !== "production" ? { rejectUnauthorized: false } : { rejectUnauthorized: true },
@@ -4576,7 +5010,7 @@ function registerAdminLectureRoutes({
   };
   app2.post("/api/admin/lectures", requireAdmin, async (req, res) => {
     try {
-      const { courseId, title, description, videoUrl, fileUrl, videoType, pdfUrl, durationMinutes, orderIndex, isFreePreview, sectionTitle, lectureSubfolderTitle, downloadAllowed } = req.body;
+      const { courseId, title, description, transcript, videoUrl, fileUrl, videoType, pdfUrl, durationMinutes, orderIndex, isFreePreview, sectionTitle, lectureSubfolderTitle, downloadAllowed } = req.body;
       const parsedCourseId = Number(courseId);
       if (!Number.isFinite(parsedCourseId) || parsedCourseId <= 0) {
         return res.status(400).json({ message: "Invalid courseId" });
@@ -4598,13 +5032,15 @@ function registerAdminLectureRoutes({
         sectionTitle,
         lectureSubfolderTitle
       );
+      const transcriptText = transcript != null ? String(transcript) : "";
       const result = await db2.query(
-        `INSERT INTO lectures (course_id, title, description, video_url, video_type, pdf_url, duration_minutes, order_index, is_free_preview, section_title, download_allowed, created_at) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
+        `INSERT INTO lectures (course_id, title, description, transcript, video_url, video_type, pdf_url, duration_minutes, order_index, is_free_preview, section_title, download_allowed, created_at) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
         [
           parsedCourseId,
           String(title).trim(),
           description || "",
+          transcriptText,
           normalizedVideoUrl || null,
           effectiveVideoType,
           normalizedPdfUrl || null,
@@ -4636,16 +5072,19 @@ function registerAdminLectureRoutes({
   });
   app2.put("/api/admin/lectures/:id", requireAdmin, async (req, res) => {
     try {
-      const { title, description, videoUrl, videoType, durationMinutes, orderIndex, isFreePreview, sectionTitle, lectureSubfolderTitle, downloadAllowed } = req.body;
+      const { title, description, transcript, videoUrl, videoType, durationMinutes, orderIndex, isFreePreview, sectionTitle, lectureSubfolderTitle, downloadAllowed } = req.body;
       const normalizedSectionTitle = resolveLectureSectionTitle(
         sectionTitle,
         lectureSubfolderTitle
       );
+      const patchTranscript = Object.prototype.hasOwnProperty.call(req.body, "transcript");
+      const transcriptVal = patchTranscript ? String(transcript ?? "") : "";
       await db2.query(
-        `UPDATE lectures SET title=$1, description=$2, video_url=$3, video_type=$4, duration_minutes=$5, order_index=$6, is_free_preview=$7, section_title=$8, download_allowed=$9 WHERE id=$10`,
+        `UPDATE lectures SET title=$1, description=$2, transcript = CASE WHEN $11::boolean THEN $3::text ELSE transcript END, video_url=$4, video_type=$5, duration_minutes=$6, order_index=$7, is_free_preview=$8, section_title=$9, download_allowed=$10 WHERE id=$12`,
         [
           title,
           description || "",
+          transcriptVal,
           videoUrl,
           videoType || "youtube",
           parseInt(durationMinutes) || 0,
@@ -4653,6 +5092,7 @@ function registerAdminLectureRoutes({
           isFreePreview || false,
           normalizedSectionTitle,
           downloadAllowed || false,
+          patchTranscript,
           req.params.id
         ]
       );
@@ -6718,6 +7158,18 @@ var init_student_mission_material_routes = __esm({
   }
 });
 
+// server/lecture-payload-utils.ts
+function sanitizeLectureRowForClient(row) {
+  if (!row || typeof row !== "object") return row;
+  const { transcript: _omit, ...rest } = row;
+  return rest;
+}
+var init_lecture_payload_utils = __esm({
+  "server/lecture-payload-utils.ts"() {
+    "use strict";
+  }
+});
+
 // server/lecture-routes.ts
 function registerLectureRoutes({
   app: app2,
@@ -6753,7 +7205,7 @@ function registerLectureRoutes({
       if (!access.lecture) return res.status(404).json({ message: "Lecture not found" });
       if (!access.allowed) return res.status(403).json({ message: "Enrollment required to access this lecture" });
       const lecture = access.lecture;
-      res.json(lecture);
+      res.json(sanitizeLectureRowForClient(lecture));
     } catch {
       res.status(500).json({ message: "Failed to fetch lecture" });
     }
@@ -6840,6 +7292,7 @@ var init_lecture_routes = __esm({
   "server/lecture-routes.ts"() {
     "use strict";
     init_course_access_utils();
+    init_lecture_payload_utils();
   }
 });
 
@@ -8120,6 +8573,236 @@ var init_admin_live_class_manage_routes = __esm({
   }
 });
 
+// server/classroom-routes.ts
+import { AccessToken } from "livekit-server-sdk";
+function getLiveKitConfig() {
+  const url = String(process.env.LIVEKIT_URL || "").trim();
+  const apiKey = String(process.env.LIVEKIT_API_KEY || "").trim();
+  const apiSecret = String(process.env.LIVEKIT_API_SECRET || "").trim();
+  if (!url || !apiKey || !apiSecret) return null;
+  return { url, apiKey, apiSecret };
+}
+function classroomRoomName(liveClassId) {
+  return `lc-${liveClassId}`;
+}
+async function loadLiveClass(db2, id) {
+  const result = await db2.query("SELECT * FROM live_classes WHERE id = $1", [id]);
+  return result.rows[0] || null;
+}
+function registerClassroomRoutes({
+  app: app2,
+  db: db2,
+  requireAuth,
+  requireAdmin,
+  getAuthUser: getAuthUser2
+}) {
+  app2.get("/api/live-classes/:id/classroom/config", requireAuth, async (req, res) => {
+    const cfg = getLiveKitConfig();
+    res.json({
+      livekitConfigured: !!cfg,
+      syncPath: "/classroom-sync"
+    });
+  });
+  app2.post("/api/live-classes/:id/classroom/token", requireAuth, async (req, res) => {
+    try {
+      const liveClassId = String(req.params.id);
+      const user = await getAuthUser2(req);
+      if (!user) return res.status(401).json({ message: "Unauthorized" });
+      const lc = await loadLiveClass(db2, liveClassId);
+      if (!lc) return res.status(404).json({ message: "Live class not found" });
+      if (String(lc.stream_type || "").toLowerCase() !== "classroom") {
+        return res.status(400).json({ message: "This class is not a classroom stream" });
+      }
+      const canAccess = await userCanAccessLiveClassContent(db2, user, lc);
+      if (!canAccess) return res.status(403).json({ message: "Access denied" });
+      const isAdmin = user.role === "admin";
+      if (!isAdmin && (!lc.is_live || lc.is_completed)) {
+        return res.status(403).json({ message: "Class is not live" });
+      }
+      const cfg = getLiveKitConfig();
+      if (!cfg) {
+        return res.status(503).json({
+          message: "LiveKit is not configured. Set LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET."
+        });
+      }
+      const roomName = classroomRoomName(liveClassId);
+      if (!lc.classroom_room_name) {
+        await db2.query("UPDATE live_classes SET classroom_room_name = $1 WHERE id = $2", [
+          roomName,
+          liveClassId
+        ]);
+      }
+      const identity = `user-${user.id}`;
+      const at = new AccessToken(cfg.apiKey, cfg.apiSecret, {
+        identity,
+        name: user.name || identity,
+        ttl: "6h"
+      });
+      at.addGrant({
+        roomJoin: true,
+        room: roomName,
+        canPublish: isAdmin,
+        canSubscribe: true,
+        canPublishData: true
+      });
+      const token = await at.toJwt();
+      res.json({
+        token,
+        url: cfg.url,
+        roomName,
+        canPublish: isAdmin
+      });
+    } catch (err) {
+      console.error("[Classroom] token error:", err?.message || err);
+      res.status(500).json({ message: "Failed to create classroom token" });
+    }
+  });
+  app2.put("/api/admin/live-classes/:id/classroom/board-snapshot", requireAdmin, async (req, res) => {
+    try {
+      const liveClassId = String(req.params.id);
+      const { boardSnapshotUrl, recordingUrl } = req.body || {};
+      const url = String(boardSnapshotUrl || recordingUrl || "").trim();
+      if (!url) return res.status(400).json({ message: "boardSnapshotUrl required" });
+      const lc = await loadLiveClass(db2, liveClassId);
+      if (!lc) return res.status(404).json({ message: "Live class not found" });
+      await db2.query(
+        "UPDATE live_classes SET board_snapshot_url = $1, recording_url = COALESCE(recording_url, $1) WHERE id = $2",
+        [url, liveClassId]
+      );
+      res.json({ ok: true, boardSnapshotUrl: url });
+    } catch (err) {
+      console.error("[Classroom] board-snapshot error:", err?.message || err);
+      res.status(500).json({ message: "Failed to save board snapshot" });
+    }
+  });
+  app2.get("/api/live-classes/:id/classroom/board-snapshot", requireAuth, async (req, res) => {
+    try {
+      const user = await getAuthUser2(req);
+      if (!user) return res.status(401).json({ message: "Unauthorized" });
+      const lc = await loadLiveClass(db2, String(req.params.id));
+      if (!lc) return res.status(404).json({ message: "Live class not found" });
+      const canAccess = await userCanAccessLiveClassContent(db2, user, lc);
+      if (!canAccess) return res.status(403).json({ message: "Access denied" });
+      res.json({
+        boardSnapshotUrl: lc.board_snapshot_url || null,
+        classroomRoomName: lc.classroom_room_name || null
+      });
+    } catch (err) {
+      console.error("[Classroom] get board-snapshot error:", err?.message || err);
+      res.status(500).json({ message: "Failed to load board snapshot" });
+    }
+  });
+}
+var init_classroom_routes = __esm({
+  "server/classroom-routes.ts"() {
+    "use strict";
+    init_live_class_access();
+  }
+});
+
+// server/classroom-sync.ts
+import { URL as URL2 } from "node:url";
+import { WebSocketServer } from "ws";
+import { TLSocketRoom, InMemorySyncStorage } from "@tldraw/sync-core";
+function sanitizeRoomId(roomId) {
+  return roomId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 120);
+}
+function makeOrLoadRoom(roomId) {
+  const id = sanitizeRoomId(roomId);
+  const existing = rooms.get(id);
+  if (existing && !existing.isClosed()) return existing;
+  const storage = new InMemorySyncStorage();
+  const room = new TLSocketRoom({
+    storage,
+    onSessionRemoved(roomInstance, args) {
+      if (args.numSessionsRemaining === 0) {
+        roomInstance.close();
+        rooms.delete(id);
+      }
+    }
+  });
+  rooms.set(id, room);
+  return room;
+}
+function parseSessionId(url) {
+  const sid = url.searchParams.get("sessionId");
+  if (sid && sid.trim()) return sid.trim().slice(0, 128);
+  return `sess-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+async function authenticateClassroomSocket(db2, req, roomId) {
+  const url = new URL2(req.url || "", "http://localhost");
+  const token = url.searchParams.get("access_token") || url.searchParams.get("token") || "";
+  const fakeReq = {
+    headers: {
+      ...token ? { authorization: `Bearer ${token}` } : {},
+      cookie: req.headers.cookie
+    },
+    session: req.session
+  };
+  const user = await getAuthUserFromRequest(fakeReq, db2);
+  if (!user) return { ok: false, status: 401, message: "Unauthorized" };
+  const liveClassId = roomId.replace(/^lc-/, "").replace(/-preview$/, "");
+  const lcResult = await db2.query("SELECT * FROM live_classes WHERE id = $1", [liveClassId]);
+  const lc = lcResult.rows[0];
+  if (!lc) return { ok: false, status: 404, message: "Live class not found" };
+  if (String(lc.stream_type || "").toLowerCase() !== "classroom") {
+    return { ok: false, status: 400, message: "Not a classroom stream" };
+  }
+  const canAccess = await userCanAccessLiveClassContent(db2, user, lc);
+  if (!canAccess) return { ok: false, status: 403, message: "Access denied" };
+  const isPreview = roomId.endsWith("-preview");
+  const isAdmin = user.role === "admin";
+  if (!isPreview && !isAdmin && (!lc.is_live || lc.is_completed)) {
+    return { ok: false, status: 403, message: "Class is not live" };
+  }
+  return { ok: true, user: { id: user.id, role: user.role }, isReadonly: !isAdmin };
+}
+function attachClassroomSyncServer(httpServer, db2) {
+  const wss = new WebSocketServer({ noServer: true });
+  httpServer.on("upgrade", (req, socket, head) => {
+    const url = new URL2(req.url || "", "http://localhost");
+    const match = url.pathname.match(/^\/classroom-sync\/([^/]+)$/);
+    if (!match) return;
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      void handleConnection(ws, req, match[1], db2);
+    });
+  });
+}
+async function handleConnection(ws, req, rawRoomId, db2) {
+  const auth2 = await authenticateClassroomSocket(db2, req, rawRoomId);
+  if (!auth2.ok) {
+    ws.close(auth2.status === 401 ? 4401 : 4403, auth2.message);
+    return;
+  }
+  const roomId = sanitizeRoomId(rawRoomId);
+  const url = new URL2(req.url || "", "http://localhost");
+  const sessionId = parseSessionId(url);
+  const room = makeOrLoadRoom(roomId);
+  const caughtMessages = [];
+  const collect = (data) => {
+    caughtMessages.push(Buffer.isBuffer(data) ? data : Buffer.from(data));
+  };
+  ws.on("message", collect);
+  room.handleSocketConnect({
+    sessionId,
+    socket: ws,
+    isReadonly: auth2.isReadonly
+  });
+  ws.off("message", collect);
+  for (const msg of caughtMessages) {
+    ws.send(msg);
+  }
+}
+var rooms;
+var init_classroom_sync = __esm({
+  "server/classroom-sync.ts"() {
+    "use strict";
+    init_auth_utils();
+    init_live_class_access();
+    rooms = /* @__PURE__ */ new Map();
+  }
+});
+
 // server/course-access-routes.ts
 function registerCourseAccessRoutes({
   app: app2,
@@ -8173,106 +8856,93 @@ function registerCourseAccessRoutes({
     }
     return { ok: true };
   };
-  const normalizeStorageKey = (raw) => {
-    const trimmed = String(raw || "").trim();
-    if (!trimmed) return "";
-    if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-      try {
-        const parsed = new URL(trimmed);
-        return decodeURIComponent(parsed.pathname.replace(/^\/+/, ""));
-      } catch {
-        return trimmed;
-      }
-    }
-    return trimmed.replace(/^\/+/, "");
-  };
-  const canonicalMediaRelativeKey = (raw) => {
-    let s = normalizeStorageKey(raw);
-    if (!s) return "";
-    s = s.replace(/^\/+/, "");
-    const proxy = "api/media/";
-    if (s.toLowerCase().startsWith(proxy)) {
-      s = s.slice(proxy.length).replace(/^\/+/, "");
-    }
-    try {
-      s = decodeURIComponent(s);
-    } catch {
-    }
-    return s.replace(/^\/+/, "").replace(/\/+$/g, "");
-  };
-  const mediaKeyMatchVariants = (raw) => {
-    const k = canonicalMediaRelativeKey(raw);
-    if (!k || k.includes("..")) return [];
-    const set = /* @__PURE__ */ new Set([k, `api/media/${k}`, `/api/media/${k}`]);
-    return [...set];
-  };
-  const toR2ObjectKey = (raw) => {
-    let key = normalizeStorageKey(raw);
-    if (!key) return "";
-    const proxy = "api/media/";
-    if (key.toLowerCase().startsWith(proxy)) key = key.slice(proxy.length).replace(/^\/+/, "");
-    try {
-      key = decodeURIComponent(key);
-    } catch {
-    }
-    return key.replace(/^\/+/, "").replace(/\/+$/g, "");
-  };
+  const toR2ObjectKey = (raw) => canonicalMediaKey(raw);
   const userCanMintMediaToken = async (user, requestedKeyRaw) => {
     const variants = mediaKeyMatchVariants(requestedKeyRaw);
-    if (variants.length === 0) return false;
+    if (variants.length === 0) return { allowed: false, reason: "invalid_key" };
     const roleNorm = String(user.role ?? "").toLowerCase();
     if (roleNorm === "admin") {
-      return true;
+      return { allowed: true, reason: "allowed" };
     }
-    const now = Date.now();
     const lectureMatch = await db2.query(
-      `SELECT l.id
+      `SELECT l.course_id, l.is_free_preview
        FROM lectures l
-       LEFT JOIN enrollments e
-         ON e.user_id = $1
-        AND e.course_id = l.course_id
-        AND (e.status = 'active' OR e.status IS NULL)
-       WHERE l.video_url IS NOT NULL
+       WHERE (
+         (l.video_url IS NOT NULL AND (
+           regexp_replace(regexp_replace(COALESCE(l.video_url, ''), '^https?://[^/]+/', ''), '^/+', '') = ANY($1::text[])
+           OR regexp_replace(COALESCE(l.video_url, ''), '^https?://[^/]+/', '') = ANY($1::text[])
+         ))
+         OR
+         (l.pdf_url IS NOT NULL AND (
+           regexp_replace(regexp_replace(COALESCE(l.pdf_url, ''), '^https?://[^/]+/', ''), '^/+', '') = ANY($1::text[])
+           OR regexp_replace(COALESCE(l.pdf_url, ''), '^https?://[^/]+/', '') = ANY($1::text[])
+         ))
+       )
+       LIMIT 1`,
+      [variants]
+    );
+    if (lectureMatch.rows.length > 0) {
+      const row = lectureMatch.rows[0];
+      if (!row.course_id || row.is_free_preview) return { allowed: true, reason: "allowed" };
+      const enrollment = await db2.query(
+        "SELECT id, valid_until FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL) LIMIT 1",
+        [user.id, row.course_id]
+      );
+      if (enrollment.rows.length === 0) return { allowed: false, reason: "not_enrolled" };
+      if (isEnrollmentExpired(enrollment.rows[0])) {
+        return { allowed: false, reason: "expired" };
+      }
+      return { allowed: true, reason: "allowed" };
+    }
+    const liveClassMatch = await db2.query(
+      `SELECT lc.course_id, lc.is_free_preview
+       FROM live_classes lc
+       WHERE lc.recording_url IS NOT NULL
          AND (
-           regexp_replace(regexp_replace(COALESCE(l.video_url, ''), '^https?://[^/]+/', ''), '^/+', '') = ANY($2::text[])
-           OR regexp_replace(COALESCE(l.video_url, ''), '^https?://[^/]+/', '') = ANY($2::text[])
-         )
-         AND (
-           l.course_id IS NULL
-           OR l.is_free_preview = TRUE
-           OR (
-             e.id IS NOT NULL
-             AND (e.valid_until IS NULL OR e.valid_until > $3)
-           )
+           regexp_replace(regexp_replace(COALESCE(lc.recording_url, ''), '^https?://[^/]+/', ''), '^/+', '') = ANY($1::text[])
+           OR regexp_replace(COALESCE(lc.recording_url, ''), '^https?://[^/]+/', '') = ANY($1::text[])
          )
        LIMIT 1`,
-      [user.id, variants, now]
+      [variants]
     );
-    if (lectureMatch.rows.length > 0) return true;
+    if (liveClassMatch.rows.length > 0) {
+      const row = liveClassMatch.rows[0];
+      if (!row.course_id || row.is_free_preview) return { allowed: true, reason: "allowed" };
+      const enrollment = await db2.query(
+        "SELECT id, valid_until FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL) LIMIT 1",
+        [user.id, row.course_id]
+      );
+      if (enrollment.rows.length === 0) return { allowed: false, reason: "not_enrolled" };
+      if (isEnrollmentExpired(enrollment.rows[0])) {
+        return { allowed: false, reason: "expired" };
+      }
+      return { allowed: true, reason: "allowed" };
+    }
     const materialMatch = await db2.query(
-      `SELECT sm.id
+      `SELECT sm.course_id, sm.is_free
        FROM study_materials sm
-       LEFT JOIN enrollments e
-         ON e.user_id = $1
-        AND e.course_id = sm.course_id
-        AND (e.status = 'active' OR e.status IS NULL)
        WHERE sm.file_url IS NOT NULL
          AND (
-           regexp_replace(regexp_replace(COALESCE(sm.file_url, ''), '^https?://[^/]+/', ''), '^/+', '') = ANY($2::text[])
-           OR regexp_replace(COALESCE(sm.file_url, ''), '^https?://[^/]+/', '') = ANY($2::text[])
-         )
-         AND (
-           sm.course_id IS NULL
-           OR sm.is_free = TRUE
-           OR (
-             e.id IS NOT NULL
-             AND (e.valid_until IS NULL OR e.valid_until > $3)
-           )
+           regexp_replace(regexp_replace(COALESCE(sm.file_url, ''), '^https?://[^/]+/', ''), '^/+', '') = ANY($1::text[])
+           OR regexp_replace(COALESCE(sm.file_url, ''), '^https?://[^/]+/', '') = ANY($1::text[])
          )
        LIMIT 1`,
-      [user.id, variants, now]
+      [variants]
     );
-    return materialMatch.rows.length > 0;
+    if (materialMatch.rows.length > 0) {
+      const row = materialMatch.rows[0];
+      if (!row.course_id || row.is_free) return { allowed: true, reason: "allowed" };
+      const enrollment = await db2.query(
+        "SELECT id, valid_until FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL) LIMIT 1",
+        [user.id, row.course_id]
+      );
+      if (enrollment.rows.length === 0) return { allowed: false, reason: "not_enrolled" };
+      if (isEnrollmentExpired(enrollment.rows[0])) {
+        return { allowed: false, reason: "expired" };
+      }
+      return { allowed: true, reason: "allowed" };
+    }
+    return { allowed: false, reason: "no_match" };
   };
   const canAccessCourseContent = async (user, courseId) => {
     if (!user) return false;
@@ -8290,16 +8960,22 @@ function registerCourseAccessRoutes({
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const { fileKey } = req.body;
       if (!fileKey || typeof fileKey !== "string") return res.status(400).json({ message: "fileKey required" });
-      const allowed = await userCanMintMediaToken(user, fileKey);
-      if (!allowed) return res.status(403).json({ message: "You do not have access to this media file" });
+      const decision = await userCanMintMediaToken(user, fileKey);
+      if (!decision.allowed) {
+        console.warn("[media-token] denied", { userId: user.id, reason: decision.reason });
+        return res.status(403).json({ message: "You do not have access to this media file" });
+      }
       const token = generateSecureToken2();
       const expiresAt = Date.now() + 10 * 60 * 1e3;
-      const storedKey = canonicalMediaRelativeKey(fileKey) || normalizeStorageKey(fileKey);
+      const storedKey = canonicalMediaKey(fileKey);
+      if (!storedKey) return res.status(400).json({ message: "Invalid media file key" });
       await db2.query("INSERT INTO media_tokens (token, user_id, file_key, expires_at) VALUES ($1, $2, $3, $4)", [token, user.id, storedKey, expiresAt]);
       db2.query("DELETE FROM media_tokens WHERE expires_at < $1", [Date.now()]).catch(() => {
       });
+      const ttlSec = Math.max(60, Math.floor((expiresAt - Date.now()) / 1e3));
+      const readUrl = await presignR2GetObject(getR2Client, storedKey, ttlSec);
       res.set("Cache-Control", "private, no-store");
-      res.json({ token, expiresAt });
+      res.json(readUrl ? { token, expiresAt, readUrl } : { token, expiresAt });
     } catch {
       res.status(500).json({ message: "Failed to generate token" });
     }
@@ -8381,7 +9057,7 @@ function registerCourseAccessRoutes({
       const materialsResult = await db2.query("SELECT * FROM study_materials WHERE course_id = $1", [courseIdParam]);
       const fullLectures = lecturesResult.rows;
       const fullMaterials = materialsResult.rows;
-      const responseLectures = fullLectures;
+      const responseLectures = fullLectures.map((row) => sanitizeLectureRowForClient(row));
       const responseMaterials = fullMaterials;
       if (user) {
         const enroll = await db2.query("SELECT * FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)", [user.id, courseIdParam]);
@@ -8748,6 +9424,9 @@ var init_course_access_routes = __esm({
   "server/course-access-routes.ts"() {
     "use strict";
     init_course_access_utils();
+    init_media_key_utils();
+    init_r2_presign_read();
+    init_lecture_payload_utils();
   }
 });
 
@@ -8976,6 +9655,22 @@ var init_upload_routes = __esm({
 });
 
 // server/media-stream-routes.ts
+function r2HeadMetaGet(key) {
+  const row = r2HeadMetaLru.get(key);
+  if (!row) return null;
+  if (Date.now() - row.storedAt > R2_HEAD_META_TTL_MS) {
+    r2HeadMetaLru.delete(key);
+    return null;
+  }
+  return row;
+}
+function r2HeadMetaSet(key, contentLength, contentType) {
+  if (r2HeadMetaLru.size >= R2_HEAD_META_MAX) {
+    const oldest = r2HeadMetaLru.keys().next().value;
+    if (oldest) r2HeadMetaLru.delete(oldest);
+  }
+  r2HeadMetaLru.set(key, { contentLength, contentType, storedAt: Date.now() });
+}
 async function r2GetWithRetry(send, label) {
   try {
     return await withTimeout(send(), R2_GET_TIMEOUT_MS, label);
@@ -8986,7 +9681,8 @@ async function r2GetWithRetry(send, label) {
   }
 }
 async function streamMediaGet(req, res, db2, getAuthUser2, getR2Client, key) {
-  if (!key || key === "/") {
+  const canonicalKey = canonicalMediaKey(key);
+  if (!canonicalKey || canonicalKey === "/") {
     res.status(400).json({ message: "No file key" });
     return;
   }
@@ -8995,7 +9691,7 @@ async function streamMediaGet(req, res, db2, getAuthUser2, getR2Client, key) {
   let userRole = "student";
   let authenticatedViaMediaToken = false;
   if (mediaToken) {
-    const tokenResult = await db2.query("SELECT user_id FROM media_tokens WHERE token = $1 AND expires_at > $2 AND file_key = $3", [mediaToken, Date.now(), key]);
+    const tokenResult = await db2.query("SELECT user_id FROM media_tokens WHERE token = $1 AND expires_at > $2 AND file_key = $3", [mediaToken, Date.now(), canonicalKey]);
     if (tokenResult.rows.length === 0) {
       res.status(401).json({ message: "Token expired or invalid" });
       return;
@@ -9024,13 +9720,7 @@ async function streamMediaGet(req, res, db2, getAuthUser2, getR2Client, key) {
     userRole = user.role;
   }
   if (!authenticatedViaMediaToken && userRole !== "admin") {
-    const normalizedKey = key.replace(/^\/+/, "");
-    const keyVariants = Array.from(/* @__PURE__ */ new Set([
-      normalizedKey,
-      `/${normalizedKey}`,
-      decodeURIComponent(normalizedKey),
-      `/${decodeURIComponent(normalizedKey)}`
-    ])).filter(Boolean);
+    const keyVariants = mediaKeyMatchVariants(canonicalKey);
     const matResult = await db2.query(
       `SELECT course_id, is_free
        FROM study_materials
@@ -9078,8 +9768,31 @@ async function streamMediaGet(req, res, db2, getAuthUser2, getR2Client, key) {
           }
         }
       } else {
-        res.status(403).json({ message: "Forbidden" });
-        return;
+        const lcResult = await db2.query(
+          `SELECT course_id, is_free_preview
+           FROM live_classes
+           WHERE recording_url = ANY($1::text[])
+              OR regexp_replace(recording_url, '^https?://[^/]+/', '') = ANY($1::text[])
+              OR regexp_replace(recording_url, '^https?://[^/]+', '') = ANY($1::text[])
+           LIMIT 1`,
+          [keyVariants]
+        );
+        if (lcResult.rows.length > 0) {
+          const lc = lcResult.rows[0];
+          if (lc.course_id && !lc.is_free_preview) {
+            const enrolled = await db2.query(
+              "SELECT valid_until FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL) LIMIT 1",
+              [userId, lc.course_id]
+            );
+            if (enrolled.rows.length === 0 || isEnrollmentExpired(enrolled.rows[0])) {
+              res.status(403).json({ message: "Enrollment required" });
+              return;
+            }
+          }
+        } else {
+          res.status(403).json({ message: "Forbidden" });
+          return;
+        }
       }
     }
   }
@@ -9087,12 +9800,22 @@ async function streamMediaGet(req, res, db2, getAuthUser2, getR2Client, key) {
   const r2 = await getR2Client();
   const rangeHeader = req.headers.range;
   if (rangeHeader) {
-    const head = await withTimeout(
-      r2.send(new HeadObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: key })),
-      R2_HEAD_TIMEOUT_MS,
-      "R2 head request timed out"
-    );
-    const totalSize = head.ContentLength || 0;
+    const cachedHead = r2HeadMetaGet(canonicalKey);
+    let totalSize;
+    let headContentType;
+    if (cachedHead) {
+      totalSize = cachedHead.contentLength;
+      headContentType = cachedHead.contentType;
+    } else {
+      const head = await withTimeout(
+        r2.send(new HeadObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: canonicalKey })),
+        R2_HEAD_TIMEOUT_MS,
+        "R2 head request timed out"
+      );
+      totalSize = head.ContentLength || 0;
+      headContentType = head.ContentType;
+      if (totalSize > 0) r2HeadMetaSet(canonicalKey, totalSize, headContentType);
+    }
     const m = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim());
     if (!m || totalSize <= 0) {
       res.status(416);
@@ -9127,7 +9850,7 @@ async function streamMediaGet(req, res, db2, getAuthUser2, getR2Client, key) {
     const chunkSize = end - start + 1;
     const obj = await r2GetWithRetry(
       () => r2.send(
-        new GetObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: key, Range: `bytes=${start}-${end}` })
+        new GetObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: canonicalKey, Range: `bytes=${start}-${end}` })
       ),
       "R2 media range request timed out"
     );
@@ -9139,8 +9862,8 @@ async function streamMediaGet(req, res, db2, getAuthUser2, getR2Client, key) {
     res.setHeader("Content-Range", `bytes ${start}-${end}/${totalSize}`);
     res.setHeader("Accept-Ranges", "bytes");
     res.setHeader("Content-Length", String(chunkSize));
-    if (head.ContentType) res.setHeader("Content-Type", head.ContentType);
-    const isPdf = typeof head.ContentType === "string" && /pdf/i.test(head.ContentType);
+    if (headContentType) res.setHeader("Content-Type", headContentType);
+    const isPdf = typeof headContentType === "string" && /pdf/i.test(headContentType);
     res.setHeader("Cache-Control", isPdf ? "private, max-age=300" : "private, no-store");
     res.setHeader("Content-Disposition", "inline");
     const stream = obj.Body;
@@ -9151,13 +9874,15 @@ async function streamMediaGet(req, res, db2, getAuthUser2, getR2Client, key) {
     } else res.status(500).json({ message: "Cannot stream file" });
   } else {
     const obj = await r2GetWithRetry(
-      () => r2.send(new GetObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: key })),
+      () => r2.send(new GetObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: canonicalKey })),
       "R2 media request timed out"
     );
     if (!obj.Body) {
       res.status(404).json({ message: "File not found" });
       return;
     }
+    const fullLen = Number(obj.ContentLength);
+    if (Number.isFinite(fullLen) && fullLen > 0) r2HeadMetaSet(canonicalKey, fullLen, obj.ContentType);
     if (obj.ContentType) res.setHeader("Content-Type", obj.ContentType);
     if (obj.ContentLength) res.setHeader("Content-Length", String(obj.ContentLength));
     res.setHeader("Accept-Ranges", "bytes");
@@ -9218,234 +9943,18 @@ function registerMediaStreamRoutes({
     }
   });
 }
-var R2_HEAD_TIMEOUT_MS, R2_GET_TIMEOUT_MS;
+var R2_HEAD_TIMEOUT_MS, R2_GET_TIMEOUT_MS, R2_HEAD_META_TTL_MS, R2_HEAD_META_MAX, r2HeadMetaLru;
 var init_media_stream_routes = __esm({
   "server/media-stream-routes.ts"() {
     "use strict";
     init_course_access_utils();
+    init_media_key_utils();
     init_async_utils();
     R2_HEAD_TIMEOUT_MS = 15e3;
     R2_GET_TIMEOUT_MS = 3e4;
-  }
-});
-
-// server/ai-tutor-service.ts
-function createGenerateAIAnswer(db2) {
-  return async function generateAIAnswer2(question, topic, userId) {
-    const q = String(question || "").trim();
-    const t = String(topic || "").trim();
-    if (!q) return "Please share your full question so I can help step by step.";
-    const tokenize = (text) => text.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w.length > 2);
-    const stop = /* @__PURE__ */ new Set([
-      "the",
-      "and",
-      "for",
-      "with",
-      "that",
-      "this",
-      "from",
-      "what",
-      "when",
-      "where",
-      "which",
-      "into",
-      "about",
-      "have",
-      "has",
-      "had",
-      "how",
-      "why",
-      "are",
-      "can",
-      "could",
-      "would",
-      "should",
-      "your",
-      "you",
-      "our",
-      "their",
-      "there",
-      "then",
-      "than",
-      "also",
-      "just",
-      "some",
-      "solve",
-      "find",
-      "show",
-      "math",
-      "question",
-      "doubt",
-      "topic"
-    ]);
-    const keywords = Array.from(new Set([...tokenize(q), ...tokenize(t)].filter((w) => !stop.has(w))));
-    const scoreSnippet = (text) => {
-      if (!keywords.length) return 0;
-      const lower = text.toLowerCase();
-      let score = 0;
-      for (const k of keywords) {
-        if (lower.includes(k)) score += 1;
-      }
-      return score;
-    };
-    const snippets = [];
-    try {
-      if (userId) {
-        const lectures = await db2.query(
-          `SELECT l.title, COALESCE(l.description, '') AS description, COALESCE(c.title, '') AS course_title
-           FROM lectures l
-           JOIN enrollments e ON e.course_id = l.course_id AND e.user_id = $1
-           LEFT JOIN courses c ON c.id = l.course_id
-           WHERE (e.status = 'active' OR e.status IS NULL)
-           ORDER BY l.created_at DESC
-           LIMIT 120`,
-          [userId]
-        );
-        for (const row of lectures.rows) {
-          const text = `${row.title}. ${row.description}`.trim();
-          snippets.push({
-            source: "lecture",
-            title: `${row.course_title || "Course"} - ${row.title || "Lecture"}`,
-            text,
-            score: scoreSnippet(text)
-          });
-        }
-        const materials = await db2.query(
-          `SELECT sm.title, COALESCE(sm.description, '') AS description, COALESCE(c.title, '') AS course_title
-           FROM study_materials sm
-           JOIN enrollments e ON e.course_id = sm.course_id AND e.user_id = $1
-           LEFT JOIN courses c ON c.id = sm.course_id
-           WHERE (e.status = 'active' OR e.status IS NULL)
-           ORDER BY sm.created_at DESC
-           LIMIT 120`,
-          [userId]
-        );
-        for (const row of materials.rows) {
-          const text = `${row.title}. ${row.description}`.trim();
-          snippets.push({
-            source: "material",
-            title: `${row.course_title || "Course"} - ${row.title || "Material"}`,
-            text,
-            score: scoreSnippet(text)
-          });
-        }
-        const questions = await db2.query(
-          `SELECT q.question_text, COALESCE(q.explanation, '') AS explanation, COALESCE(q.topic, '') AS topic,
-                  COALESCE(t.title, '') AS test_title, COALESCE(c.title, '') AS course_title
-           FROM questions q
-           JOIN tests t ON t.id = q.test_id
-           JOIN enrollments e ON e.course_id = t.course_id AND e.user_id = $1
-           LEFT JOIN courses c ON c.id = t.course_id
-           WHERE (e.status = 'active' OR e.status IS NULL)
-           ORDER BY q.id DESC
-           LIMIT 150`,
-          [userId]
-        );
-        for (const row of questions.rows) {
-          const text = `${row.topic}. ${row.question_text}. ${row.explanation}`.trim();
-          snippets.push({
-            source: "question",
-            title: `${row.course_title || "Course"} - ${row.test_title || "Test"} question`,
-            text,
-            score: scoreSnippet(text)
-          });
-        }
-      }
-    } catch (err) {
-      console.warn("[AI Tutor] context fetch failed:", err);
-    }
-    const selected = snippets.sort((a, b) => b.score - a.score).slice(0, 8).map((s, i) => `[${i + 1}] ${s.title} (${s.source})
-${s.text.slice(0, 450)}`);
-    const contextBlock = selected.length ? selected.join("\n\n") : "No specific class snippet found. Use general mathematics reasoning.";
-    const systemPrompt = "You are a rigorous math tutor for Indian competitive exam students. Give accurate, step-by-step solutions. If relevant context exists, use it. If context is insufficient, still solve using correct math methods. Do not fabricate references. Keep answer clear and practical.";
-    const userPrompt = `Student topic: ${t || "General"}
-Student question: ${q}
-
-Course context snippets:
-${contextBlock}
-
-Answer format:
-1) Short concept summary
-2) Step-by-step solution
-3) Final answer
-4) One similar practice question`;
-    const callGemini = async () => {
-      const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-      if (!apiKey) return null;
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 18e3);
-      try {
-        const res = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
-          {
-            method: "POST",
-            signal: controller.signal,
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              systemInstruction: { parts: [{ text: systemPrompt }] },
-              contents: [{ role: "user", parts: [{ text: userPrompt }] }],
-              generationConfig: { temperature: 0.25, maxOutputTokens: 900 }
-            })
-          }
-        );
-        if (!res.ok) return null;
-        const data = await res.json();
-        const text = data?.candidates?.[0]?.content?.parts?.map((p) => p?.text || "").join("\n").trim();
-        return text || null;
-      } catch {
-        return null;
-      } finally {
-        clearTimeout(timer);
-      }
-    };
-    const callOpenAI = async () => {
-      const apiKey = process.env.OPENAI_API_KEY;
-      if (!apiKey) return null;
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 18e3);
-      try {
-        const res = await fetch("https://api.openai.com/v1/chat/completions", {
-          method: "POST",
-          signal: controller.signal,
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${apiKey}`
-          },
-          body: JSON.stringify({
-            model: process.env.OPENAI_MODEL || "gpt-4o-mini",
-            temperature: 0.25,
-            max_tokens: 900,
-            messages: [
-              { role: "system", content: systemPrompt },
-              { role: "user", content: userPrompt }
-            ]
-          })
-        });
-        if (!res.ok) return null;
-        const data = await res.json();
-        return data?.choices?.[0]?.message?.content?.trim() || null;
-      } catch {
-        return null;
-      } finally {
-        clearTimeout(timer);
-      }
-    };
-    const llmAnswer = await callGemini() || await callOpenAI();
-    if (llmAnswer) return llmAnswer;
-    const topicContext = t ? `Topic: ${t}. ` : "";
-    return `${topicContext}I could not reach the AI model right now, but here is a structured way to solve it:
-
-1. Identify the known values and what is asked.
-2. Write the core formula/concept used in this chapter.
-3. Substitute carefully and simplify step by step.
-4. Recheck units/signs and verify the final value.
-
-Question focus: "${q.slice(0, 80)}".`;
-  };
-}
-var init_ai_tutor_service = __esm({
-  "server/ai-tutor-service.ts"() {
-    "use strict";
+    R2_HEAD_META_TTL_MS = 5 * 60 * 1e3;
+    R2_HEAD_META_MAX = 400;
+    r2HeadMetaLru = /* @__PURE__ */ new Map();
   }
 });
 
@@ -9491,6 +10000,7 @@ var init_schema_readiness_contract = __esm({
     ];
     REQUIRED_COLUMNS = {
       users: [
+        "password_hash",
         "session_token",
         "app_bound_device_id",
         "web_device_id_phone",
@@ -9514,11 +10024,13 @@ var init_schema_readiness_contract = __esm({
         "cf_playback_hls",
         "lecture_section_title",
         "lecture_subfolder_title",
-        "recording_deleted_at"
+        "recording_deleted_at",
+        "classroom_room_name",
+        "board_snapshot_url"
       ],
       notifications: ["source", "expires_at", "is_hidden", "admin_notif_id", "image_url"],
       courses: ["subject", "cover_color", "pyq_count", "mock_count", "practice_count"],
-      lectures: ["download_allowed", "section_title", "live_class_id", "live_class_finalized"],
+      lectures: ["download_allowed", "section_title", "live_class_id", "live_class_finalized", "transcript"],
       study_materials: ["download_allowed", "section_title"],
       tests: ["difficulty", "scheduled_at", "price", "mini_course_id"],
       questions: ["image_url", "solution_image_url"],
@@ -9643,6 +10155,12 @@ import { Pool as Pool2 } from "pg";
 import multer from "multer";
 import { createRequire as createRequire2 } from "module";
 import { randomInt } from "node:crypto";
+function isTransientPgError(err) {
+  const message = String(err?.message || "").toLowerCase();
+  const code = String(err?.code || "").toUpperCase();
+  return message.includes("connection terminated") || message.includes("connection timeout") || message.includes("getaddrinfo eai_again") || message.includes("timeout exceeded when trying to connect") || code === "ECONNRESET" || code === "ECONNREFUSED" || code === "EAI_AGAIN" || code === "ETIMEDOUT" || code === "57P01" || // admin_shutdown
+  code === "57P03";
+}
 function normalizeDatabaseUrl(raw) {
   try {
     const parsed = new URL(raw);
@@ -9656,27 +10174,36 @@ function normalizeDatabaseUrl(raw) {
   }
 }
 async function runInTransaction(fn) {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const exec = {
-      query: async (text, params) => {
-        const r = await client.query(text, params);
-        return { rows: r.rows };
-      }
-    };
-    const out = await fn(exec);
-    await client.query("COMMIT");
-    return out;
-  } catch (e) {
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const client = await pool.connect();
     try {
-      await client.query("ROLLBACK");
-    } catch {
+      await client.query("BEGIN");
+      const exec = {
+        query: async (text, params) => {
+          const r = await client.query(text, params);
+          return { rows: r.rows };
+        }
+      };
+      const out = await fn(exec);
+      await client.query("COMMIT");
+      return out;
+    } catch (e) {
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+      }
+      if (isTransientPgError(e) && attempt < maxAttempts) {
+        console.warn("[DB] Transient transaction error, retrying", { attempt, code: e?.code, message: e?.message });
+        await new Promise((resolve2) => setTimeout(resolve2, 200 * attempt));
+        continue;
+      }
+      throw e;
+    } finally {
+      client.release();
     }
-    throw e;
-  } finally {
-    client.release();
   }
+  throw new Error("Transaction failed after retries");
 }
 async function dbQuery(text, params, options) {
   const slowQueryThresholdMs = Number(process.env.DB_SLOW_QUERY_MS || "300");
@@ -9693,10 +10220,7 @@ async function dbQuery(text, params, options) {
       return result;
     } catch (err) {
       const elapsedMs = Date.now() - startedAt;
-      const message = String(err?.message || "").toLowerCase();
-      const code = String(err?.code || "").toUpperCase();
-      const isTransient = message.includes("connection terminated") || message.includes("connection timeout") || message.includes("getaddrinfo eai_again") || message.includes("timeout exceeded when trying to connect") || code === "ECONNRESET" || code === "ECONNREFUSED" || code === "EAI_AGAIN" || code === "ETIMEDOUT" || code === "57P01" || // admin_shutdown
-      code === "57P03";
+      const isTransient = isTransientPgError(err);
       if (isTransient && attempt < 3) {
         console.warn("[DB] Transient error on attempt " + attempt + ", retrying...");
         await new Promise((r) => setTimeout(r, 200 * attempt));
@@ -9919,6 +10443,25 @@ async function registerRoutes(app2) {
     console.warn(
       "[DB] Legacy startup schema flags were requested, but runtime schema mutation is now disabled. Run SQL migrations before starting the server."
     );
+  }
+  try {
+    const readiness = await checkDatabaseReadiness(db);
+    if (!readiness.ok) {
+      const missingTables = new Set((readiness.missingTables || []).map((v) => String(v).toLowerCase()));
+      const missingColumns = new Set((readiness.missingColumns || []).map((v) => String(v).toLowerCase()));
+      const authCriticalIssues = [];
+      if (missingTables.has("user_sessions")) authCriticalIssues.push("missing table: user_sessions");
+      if (missingTables.has("session")) authCriticalIssues.push("missing table: session");
+      if (missingTables.has("express_rate_limit")) authCriticalIssues.push("missing table: express_rate_limit");
+      if (missingColumns.has("users.password_hash")) authCriticalIssues.push("missing column: users.password_hash");
+      if (authCriticalIssues.length > 0) {
+        console.warn("[DB] Auth-critical readiness issues detected", {
+          issues: authCriticalIssues
+        });
+      }
+    }
+  } catch (err) {
+    console.warn("[DB] Startup readiness preflight failed:", err);
   }
   const runBackgroundSchedulers = process.env.RUN_BACKGROUND_SCHEDULERS !== "false";
   if (runBackgroundSchedulers) {
@@ -10394,8 +10937,16 @@ async function registerRoutes(app2) {
     recomputeAllEnrollmentsProgressForCourse,
     getR2Client
   });
-  registerPdfRoutes({ app: app2, db, getAuthUser });
+  registerClassroomRoutes({
+    app: app2,
+    db,
+    requireAuth,
+    requireAdmin,
+    getAuthUser
+  });
+  registerPdfRoutes({ app: app2, db, getAuthUser, getR2Client });
   const httpServer = createServer(app2);
+  attachClassroomSyncServer(httpServer, db);
   return httpServer;
 }
 var require3, PDFParse, upload, uploadPdf, uploadLarge, databaseUrlRaw, databaseUrl, pgPoolMax, pool, listenPool, db, generateAIAnswer, authUserLazyKey;
@@ -10438,6 +10989,8 @@ var init_routes = __esm({
     init_test_attempt_routes();
     init_live_class_routes();
     init_admin_live_class_manage_routes();
+    init_classroom_routes();
+    init_classroom_sync();
     init_course_access_routes();
     init_upload_routes();
     init_media_stream_routes();
@@ -10473,10 +11026,28 @@ var init_routes = __esm({
       // release idle connections quickly (Neon closes them anyway)
       statement_timeout: 25e3
     });
+    console.log("[DB] Main pool configured", {
+      max: pgPoolMax,
+      nodeEnv: process.env.NODE_ENV || "development",
+      sslNoVerify: process.env.PGSSL_NO_VERIFY === "true"
+    });
     pool.on("error", (err) => {
       console.error("[Pool] Idle client error (connection dropped by Neon):", err.message);
     });
     listenPool = createListenPool(databaseUrl);
+    console.log("[DB] Listen pool configured", {
+      max: Math.min(
+        40,
+        Math.max(
+          2,
+          parseInt(
+            process.env.PG_LISTEN_POOL_MAX || (process.env.NODE_ENV === "production" ? "12" : "20"),
+            10
+          ) || (process.env.NODE_ENV === "production" ? 12 : 20)
+        )
+      ),
+      sseCap: Math.max(10, parseInt(process.env.PG_LISTEN_SSE_MAX_CONCURRENT || "100", 10) || 100)
+    });
     listenPool.on("error", (err) => {
       console.error("[ListenPool] Idle client error:", err.message);
     });
@@ -10490,6 +11061,7 @@ var init_routes = __esm({
 
 // server/index.ts
 init_pg_rate_limit_store();
+init_ai_tutor_service();
 import dotenv from "dotenv";
 import * as path from "path";
 import express from "express";
@@ -10719,7 +11291,7 @@ function logProductionReleaseHints() {
   if (process.env.NODE_ENV !== "production") return;
   const schedulerRole = process.env.RUN_BACKGROUND_SCHEDULERS === "false" ? "api-only" : "scheduler-enabled";
   log(
-    `[startup] production mode | scheduler_role=${schedulerRole} | health=/api/health/version,/api/health/ready`
+    `[startup] production mode | scheduler_role=${schedulerRole} | health=/api/health/version,/api/health/ready,/api/health/ai-providers`
   );
   if (process.env.ALLOW_RUNTIME_SCHEMA_SYNC === "true" || process.env.ALLOW_STARTUP_SCHEMA_ENSURE === "true") {
     console.warn(
@@ -10923,12 +11495,19 @@ function normalizeOtpIdentifier(input) {
       // Table is created by migrations/0011_distributed_rate_limits_and_session.sql
       createTableIfMissing: false
     });
+    const sessionStoreWithEvents = sessionConfig.store;
+    sessionStoreWithEvents.on?.("error", (err) => {
+      console.error("[SessionStore] error:", err);
+    });
   }
   app.use(session(sessionConfig));
   setupApiOriginProtection(app);
   setupApiHostSearchHints(app);
   app.get("/api/health/version", (_req, res) => {
     res.json(getBackendVersion());
+  });
+  app.get("/api/health/ai-providers", (_req, res) => {
+    res.json({ ok: true, ...getAiTutorHealthSnapshot() });
   });
   const rateLimitPgSsl = process.env.PGSSL_NO_VERIFY === "true" && process.env.NODE_ENV !== "production" ? { rejectUnauthorized: false } : { rejectUnauthorized: true };
   const rateLimitPool = typeof process.env.DATABASE_URL === "string" && process.env.DATABASE_URL.trim().length > 0 ? new pg.Pool({
@@ -10938,6 +11517,16 @@ function normalizeOtpIdentifier(input) {
     connectionTimeoutMillis: 8e3,
     ssl: rateLimitPgSsl
   }) : null;
+  if (rateLimitPool) {
+    console.log("[DB] Rate-limit pool configured", {
+      max: 5,
+      nodeEnv: process.env.NODE_ENV || "development",
+      sslNoVerify: process.env.PGSSL_NO_VERIFY === "true"
+    });
+    rateLimitPool.on("error", (err) => {
+      console.error("[RateLimitPool] idle client error:", err.message);
+    });
+  }
   const otpSendStore = rateLimitPool ? new PgRateLimitStore(rateLimitPool) : void 0;
   const otpVerifyStore = rateLimitPool ? new PgRateLimitStore(rateLimitPool) : void 0;
   const globalApiStore = rateLimitPool ? new PgRateLimitStore(rateLimitPool) : void 0;

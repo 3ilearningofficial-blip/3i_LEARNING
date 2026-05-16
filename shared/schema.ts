@@ -183,6 +183,8 @@ export const liveClasses = pgTable("live_classes", {
   // Tombstone set by the lecture-delete handler so background finalize/sweep loops
   // do not resurrect the recording row a few seconds later.
   recordingDeletedAt: bigint("recording_deleted_at", { mode: "number" }),
+  classroomRoomName: text("classroom_room_name"),
+  boardSnapshotUrl: text("board_snapshot_url"),
   createdAt: bigint("created_at", { mode: "number" }),
 });
 

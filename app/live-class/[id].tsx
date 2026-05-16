@@ -21,6 +21,7 @@ import LiveStudentsPanel from "@/components/LiveStudentsPanel";
 import { filterChatMessages } from "@/lib/chat-utils";
 import { buildYouTubePhoneWebSrcDoc } from "@/lib/buildYouTubePhoneWebSrcDoc";
 import { buildCfHlsPlayerHtml } from "@/lib/buildCfHlsPlayerHtml";
+import ClassroomStudentView from "@/components/classroom/ClassroomStudentView";
 
 const mediaTokenCache = new Map<string, { token: string; expiresAt: number; readUrl?: string }>();
 
@@ -901,6 +902,22 @@ export default function LiveClassScreen() {
       )}
     </View>
   ), [isAdmin]);
+
+  if (streamType === "classroom" && !isAdmin) {
+    return (
+      <View style={styles.container}>
+        <ClassroomStudentView
+          liveClassId={String(id)}
+          title={title}
+          showAsLiveUI={showAsLiveUI}
+          isCompleted={!!liveClassData?.is_completed}
+          chatMode={liveClassData?.chat_mode}
+          topPadding={topPadding}
+          bottomPadding={bottomPadding}
+        />
+      </View>
+    );
+  }
 
   const screenBody = (
     <>

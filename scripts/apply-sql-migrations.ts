@@ -27,6 +27,7 @@ const migrationFiles = [
   "migrations/0013_live_class_recording_dedupe.sql",
   "migrations/0014_otp_challenges_and_send_throttle.sql",
   "migrations/0015_lecture_transcript.sql",
+  "migrations/0016_classroom_live.sql",
 ];
 
 const connectionString = process.env.DATABASE_URL;

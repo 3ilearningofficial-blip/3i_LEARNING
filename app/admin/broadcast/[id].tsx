@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import { normalizeStreamType } from "@/lib/live-stream/types";
 import {
   View,
   Text,
@@ -163,7 +164,6 @@ iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border:
 
 export default function BroadcastPage() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const params = useLocalSearchParams<{ id: string; streamType: string }>();
   const liveClassId = id;
   useAuth();
   const queryClient = useQueryClient();
@@ -186,7 +186,13 @@ export default function BroadcastPage() {
     staleTime: 0,
   });
 
-  const streamType = liveClass?.stream_type || params.streamType || "webrtc";
+  const streamType = normalizeStreamType(liveClass?.stream_type) || "webrtc";
+
+  useEffect(() => {
+    if (liveClass && normalizeStreamType(liveClass.stream_type) === "classroom") {
+      router.replace(`/admin/classroom/${liveClassId}` as any);
+    }
+  }, [liveClass, liveClassId]);
   const chatMode = liveClass?.chat_mode || "public";
   const showViewerCount = liveClass?.show_viewer_count ?? true;
   const youtubeUrl = liveClass?.youtube_url || "";

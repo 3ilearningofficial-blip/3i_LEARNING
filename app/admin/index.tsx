@@ -2036,7 +2036,7 @@ export default function AdminDashboard() {
           setLiveLectureMain("");
           setLiveLectureSubfolder("");
           setLiveSubmitting(false);
-          router.push(`/admin/studio/${createdId}`);
+          router.push(`/admin/live/${createdId}/choose-stream` as any);
           return;
         }
       }
@@ -2770,7 +2770,7 @@ export default function AdminDashboard() {
                                     <Pressable
                                       style={{ flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, backgroundColor: "#DC2626", borderRadius: 8, paddingVertical: 8 }}
                                       onPress={() => {
-                                        router.push(`/admin/studio/${g.ids[0]}`);
+                                        router.push(`/admin/live/${g.ids[0]}/choose-stream` as any);
                                       }}>
                                       <Ionicons name="radio" size={14} color="#fff" />
                                       <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#fff" }}>Start Live</Text>
@@ -2780,7 +2780,11 @@ export default function AdminDashboard() {
                                       <Pressable
                                         style={{ flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, backgroundColor: "#DC2626", borderRadius: 8, paddingVertical: 8 }}
                                         onPress={() => {
-                                          router.push(`/admin/broadcast/${g.ids[0]}?streamType=${g.streamType || 'rtmp'}` as any);
+                                          router.push(
+                                            (String(g.streamType || "").toLowerCase() === "classroom"
+                                              ? `/admin/classroom/${g.ids[0]}`
+                                              : `/admin/broadcast/${g.ids[0]}`) as any
+                                          );
                                         }}>
                                         <Ionicons name="radio" size={14} color="#fff" />
                                         <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#fff" }}>Enter Studio</Text>

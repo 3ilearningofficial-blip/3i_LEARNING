@@ -4,4 +4,6 @@ const {
 
 const config = getSentryExpoConfig(__dirname);
 
+config.resolver.sourceExts = [...(config.resolver.sourceExts || []), "mjs"];
+
 module.exports = config;

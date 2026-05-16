@@ -61,6 +61,8 @@ export const REQUIRED_COLUMNS: Record<string, string[]> = {
     "lecture_section_title",
     "lecture_subfolder_title",
     "recording_deleted_at",
+    "classroom_room_name",
+    "board_snapshot_url",
   ],
   notifications: ["source", "expires_at", "is_hidden", "admin_notif_id", "image_url"],
   courses: ["subject", "cover_color", "pyq_count", "mock_count", "practice_count"],

@@ -1323,7 +1323,13 @@ export default function AdminCourseScreen() {
                     {lc.is_live && (
                       <Pressable
                         style={{ flexDirection: "row", alignItems: "center", gap: 5, backgroundColor: "#DC2626", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 }}
-                        onPress={() => router.push(`/admin/broadcast/${lc.id}?streamType=${(lc as any).stream_type || 'rtmp'}` as any)}
+                        onPress={() =>
+                          router.push(
+                            (String((lc as any).stream_type || "").toLowerCase() === "classroom"
+                              ? `/admin/classroom/${lc.id}`
+                              : `/admin/broadcast/${lc.id}`) as any
+                          )
+                        }
                       >
                         <Ionicons name="radio" size={14} color="#fff" />
                         <Text style={{ fontSize: 11, fontFamily: "Inter_600SemiBold", color: "#fff" }}>Enter Live Studio</Text>
