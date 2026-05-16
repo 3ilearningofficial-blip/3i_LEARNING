@@ -1,6 +1,10 @@
 import type { Express, Request, Response } from "express";
 import { buildRecordingLectureSectionTitle } from "./recordingSection";
 import { sendPushToUsers } from "./push-notifications";
+import {
+  convertLiveClassTitlePeersToLectures,
+  liveClassHasConvertibleRecording,
+} from "./live-class-lecture-convert";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -85,11 +89,15 @@ export function registerAdminLiveClassManageRoutes({
           if (only.rows.length === 0) return res.status(404).json({ message: "Live class not found" });
           const liveClassOnly = only.rows[0];
           const st = sectionTitle;
+          const isClassroom = String(liveClassOnly.stream_type || "").toLowerCase() === "classroom";
           const canConvert =
             liveClassOnly.is_completed === true &&
-            !!(liveClassOnly.youtube_url || liveClassOnly.recording_url || liveClassOnly.cf_playback_hls);
+            (liveClassHasConvertibleRecording(liveClassOnly) || isClassroom);
           if (!canConvert) {
-            return res.status(400).json({ message: "Class must be completed with a YouTube, Cloudflare, or R2 recording URL to save as a lecture." });
+            return res.status(400).json({
+              message:
+                "Class must be completed with a recording URL, or be an interactive classroom session, to save as a lecture.",
+            });
           }
           await db
             .query("DELETE FROM notifications WHERE title IN ('🔴 Live Class Started!', '🔴 Live Class Starting Now!', '⏰ Live Class in 30 minutes!') AND message ILIKE $1", ['%' + liveClassOnly.title + '%'])
@@ -359,6 +367,23 @@ export function registerAdminLiveClassManageRoutes({
             [req.params.id, liveClass.title]
           )
           .catch(() => {});
+      }
+
+      if (isCompleted === true && convertToLecture !== true) {
+        const refreshed = await db.query("SELECT * FROM live_classes WHERE id = $1", [req.params.id]);
+        const updated = refreshed.rows[0] || liveClass;
+        if (String(updated.stream_type || "").toLowerCase() === "classroom") {
+          await db
+            .query(
+              "DELETE FROM notifications WHERE title IN ('🔴 Live Class Started!', '🔴 Live Class Starting Now!', '⏰ Live Class in 30 minutes!') AND message ILIKE $1",
+              ["%" + updated.title + "%"]
+            )
+            .catch(() => {});
+          await convertLiveClassTitlePeersToLectures(db, updated, {
+            sectionTitleOverride: sectionTitle,
+            recomputeCourseProgress: recomputeAllEnrollmentsProgressForCourse,
+          });
+        }
       }
 
       res.json(liveClass);

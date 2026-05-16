@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useRef } from "react";
 import {
   View,
   Text,
@@ -15,6 +15,9 @@ import { Ionicons } from "@expo/vector-icons";
 import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
 import { liveClassQueryKey, liveClassesQueryKey } from "@/lib/query-keys";
 import TldrawClassroom from "@/components/classroom/TldrawClassroom";
+import type { TldrawClassroomHandle } from "@/components/classroom/TldrawClassroom.types";
+import { finalizeClassroomLiveSession } from "@/lib/classroom/finalizeClassroomLive";
+import { buildRecordingLectureSectionTitle } from "@/lib/recordingSection";
 import TeacherVideoPanel from "@/components/classroom/TeacherVideoPanel";
 import LiveChatPanel from "@/components/LiveChatPanel";
 import LiveStudentsPanel from "@/components/LiveStudentsPanel";
@@ -28,6 +31,7 @@ export default function AdminClassroomPage() {
   const qc = useQueryClient();
   const [activeTab, setActiveTab] = useState<SideTab>("chat");
   const [isEnding, setIsEnding] = useState(false);
+  const boardRef = useRef<TldrawClassroomHandle>(null);
 
   const { data: liveClass, isLoading } = useQuery({
     queryKey: liveClassQueryKey(liveClassId),
@@ -57,18 +61,28 @@ export default function AdminClassroomPage() {
 
     setIsEnding(true);
     try {
-      await apiRequest("PUT", `/api/admin/live-classes/${liveClassId}`, {
-        isLive: false,
-        isCompleted: true,
-      });
+      const result = await finalizeClassroomLiveSession(
+        liveClassId,
+        {
+          id: liveClassId,
+          lecture_section_title: liveClass?.lecture_section_title,
+          lecture_subfolder_title: liveClass?.lecture_subfolder_title,
+          recording_url: liveClass?.recording_url,
+          board_snapshot_url: liveClass?.board_snapshot_url,
+        },
+        boardRef.current?.getEditor() ?? null
+      );
       qc.invalidateQueries({ queryKey: liveClassesQueryKey() });
       qc.invalidateQueries({ queryKey: liveClassQueryKey(liveClassId) });
 
       const courseId = liveClass?.course_id;
-      const msg =
-        "Class ended. Interactive Classroom does not auto-record video yet. " +
-        "Open the course → Live tab → Upload to R2 (or paste a recording URL), then tap Save as Lecture " +
-        "to add it under Lectures → Live Class Recordings.";
+      const sectionLabel = buildRecordingLectureSectionTitle(
+        liveClass?.lecture_section_title,
+        liveClass?.lecture_subfolder_title
+      );
+      const msg = result.recordingUrl
+        ? `Class ended. Whiteboard saved to Lectures → ${sectionLabel}.`
+        : `Class ended. Session saved under Lectures → ${sectionLabel}. Upload a video later from the Live tab if needed.`;
       if (Platform.OS === "web") window.alert(msg);
       else Alert.alert("Class ended", msg);
 
@@ -82,7 +96,7 @@ export default function AdminClassroomPage() {
       else Alert.alert("Error", err?.message || "Failed to end class");
       setIsEnding(false);
     }
-  }, [liveClassId, qc, liveClass?.course_id]);
+  }, [liveClassId, qc, liveClass]);
 
   if (Platform.OS !== "web") {
     return (
@@ -129,7 +143,7 @@ export default function AdminClassroomPage() {
 
       <View style={styles.main}>
         <View style={styles.boardArea}>
-          <TldrawClassroom liveClassId={liveClassId} readonly={false} />
+          <TldrawClassroom ref={boardRef} liveClassId={liveClassId} readonly={false} />
         </View>
 
         <View style={styles.sidePanel}>

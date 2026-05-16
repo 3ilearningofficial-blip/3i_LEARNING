@@ -1,6 +1,7 @@
-import React from "react";
+import React, { forwardRef } from "react";
 import { Platform, View, Text, StyleSheet } from "react-native";
 import Colors from "@/constants/colors";
+import type { TldrawClassroomHandle } from "./TldrawClassroom.types";
 
 type Props = {
   liveClassId: string;
@@ -8,17 +9,20 @@ type Props = {
   preview?: boolean;
 };
 
-export default function TldrawClassroom(props: Props) {
+const TldrawClassroom = forwardRef<TldrawClassroomHandle, Props>(function TldrawClassroom(props, ref) {
   if (Platform.OS === "web") {
     const Web = require("./TldrawClassroom.web").default;
-    return <Web {...props} />;
+    return <Web ref={ref} {...props} />;
   }
   return (
     <View style={styles.placeholder}>
       <Text style={styles.text}>Whiteboard is available on web for this live class.</Text>
     </View>
   );
-}
+});
+
+export default TldrawClassroom;
+export type { TldrawClassroomHandle } from "./TldrawClassroom.types";
 
 const styles = StyleSheet.create({
   placeholder: {

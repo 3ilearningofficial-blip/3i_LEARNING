@@ -1,11 +1,13 @@
-import React, { useEffect, useState } from "react";
-import { View, ActivityIndicator, StyleSheet, Text, Platform } from "react-native";
-import { Tldraw } from "@tldraw/tldraw";
+import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { Tldraw, type Editor, type TLAsset, type TLAssetStore } from "tldraw";
 import { useSync } from "@tldraw/sync";
-import type { TLAssetStore } from "tldraw";
+import { View, ActivityIndicator, StyleSheet, Text, Platform } from "react-native";
 import "@tldraw/tldraw/tldraw.css";
 import { buildClassroomSyncUriWithAuth } from "@/lib/classroom/syncUri";
 import Colors from "@/constants/colors";
+import type { TldrawClassroomHandle } from "./TldrawClassroom.types";
+
+export type { TldrawClassroomHandle } from "./TldrawClassroom.types";
 
 const TLDRAW_LICENSE_KEY =
   process.env.EXPO_PUBLIC_TLDRAW_LICENSE_KEY ||
@@ -19,11 +21,11 @@ type Props = {
 };
 
 const assetStore: TLAssetStore = {
-  async upload(_asset, file) {
+  async upload(_asset: TLAsset, file: File) {
     const src = URL.createObjectURL(file);
     return { src };
   },
-  resolve(asset) {
+  resolve(asset: TLAsset) {
     return asset.props.src;
   },
 };
@@ -31,9 +33,11 @@ const assetStore: TLAssetStore = {
 function TldrawClassroomConnected({
   uri,
   readonly,
+  editorRef,
 }: {
   uri: string;
   readonly: boolean;
+  editorRef: React.MutableRefObject<Editor | null>;
 }) {
   const store = useSync({
     uri,
@@ -45,7 +49,8 @@ function TldrawClassroomConnected({
       <Tldraw
         licenseKey={TLDRAW_LICENSE_KEY}
         store={store}
-        onMount={(editor) => {
+        onMount={(editor: Editor) => {
+          editorRef.current = editor;
           if (readonly) {
             editor.updateInstanceState({ isReadonly: true });
           }
@@ -56,9 +61,17 @@ function TldrawClassroomConnected({
   );
 }
 
-export default function TldrawClassroomWeb({ liveClassId, readonly = false, preview = false }: Props) {
+const TldrawClassroomWeb = forwardRef<TldrawClassroomHandle, Props>(function TldrawClassroomWeb(
+  { liveClassId, readonly = false, preview = false },
+  ref
+) {
+  const editorRef = useRef<Editor | null>(null);
   const [uri, setUri] = useState<string | null>(null);
   const [uriError, setUriError] = useState<string | null>(null);
+
+  useImperativeHandle(ref, () => ({
+    getEditor: () => editorRef.current,
+  }));
 
   useEffect(() => {
     let cancelled = false;
@@ -110,10 +123,12 @@ export default function TldrawClassroomWeb({ liveClassId, readonly = false, prev
 
   return (
     <View style={styles.wrap}>
-      <TldrawClassroomConnected uri={uri} readonly={!!readonly} />
+      <TldrawClassroomConnected uri={uri} readonly={!!readonly} editorRef={editorRef} />
     </View>
   );
-}
+});
+
+export default TldrawClassroomWeb;
 
 const styles = StyleSheet.create({
   wrap: { flex: 1, minHeight: 200, backgroundColor: "#0a0a0a" },

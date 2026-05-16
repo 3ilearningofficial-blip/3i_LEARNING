@@ -27,6 +27,18 @@
       ],
       "@shared/*": [
         "./shared/*"
+      ],
+      "tldraw": [
+        "./node_modules/tldraw/dist-esm/index.d.mts"
+      ],
+      "@tldraw/tldraw": [
+        "./node_modules/@tldraw/tldraw/dist-esm/index.d.mts"
+      ],
+      "@tldraw/sync": [
+        "./node_modules/@tldraw/sync/dist-esm/index.d.mts"
+      ],
+      "react-native": [
+        "./node_modules/react-native/types/index.d.ts"
       ]
     }
   },
