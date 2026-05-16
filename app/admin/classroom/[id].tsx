@@ -18,6 +18,7 @@ import TldrawClassroom from "@/components/classroom/TldrawClassroom";
 import type { TldrawClassroomHandle } from "@/components/classroom/TldrawClassroom.types";
 import { finalizeClassroomLiveSession } from "@/lib/classroom/finalizeClassroomLive";
 import { buildRecordingLectureSectionTitle } from "@/lib/recordingSection";
+import { getAdminCourseRoute } from "@/lib/admin/courseAdminRoutes";
 import TeacherVideoPanel from "@/components/classroom/TeacherVideoPanel";
 import LiveClassRecordingTimer from "@/components/LiveClassRecordingTimer";
 import LiveChatPanel from "@/components/LiveChatPanel";
@@ -92,7 +93,7 @@ export default function AdminClassroomPage() {
       else Alert.alert("Class ended", msg);
 
       if (courseId) {
-        router.replace(`/admin/course/${courseId}` as any);
+        router.replace(getAdminCourseRoute(courseId, "live") as any);
       } else {
         router.replace("/admin" as any);
       }

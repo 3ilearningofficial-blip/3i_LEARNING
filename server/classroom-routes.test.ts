@@ -39,6 +39,7 @@ describe("classroom token", () => {
       requireAuth: (_req, _res, next) => next(),
       requireAdmin: (_req, _res, next) => next(),
       getAuthUser: async () => ({ id: 2, name: "Student", role: "student" }),
+      recomputeAllEnrollmentsProgressForCourse: async () => {},
     });
     const server = createServer(app);
     await new Promise<void>((resolve) => server.listen(0, resolve));

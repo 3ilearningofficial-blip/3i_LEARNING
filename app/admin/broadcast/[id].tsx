@@ -28,6 +28,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useDocumentVisibility } from "@/lib/useDocumentVisibility";
 import { useScreenWakeLock } from "@/lib/useScreenWakeLock";
 import { buildRecordingLectureSectionTitle } from "@/lib/recordingSection";
+import { getAdminCourseRoute } from "@/lib/admin/courseAdminRoutes";
 
 type StreamType = "webrtc" | "rtmp" | "cloudflare";
 
@@ -201,6 +202,14 @@ export default function BroadcastPage() {
   const youtubeUrl = liveClass?.youtube_url || "";
   const cfPlaybackHls = liveClass?.cf_playback_hls || "";
   const courseId = liveClass?.course_id;
+
+  const afterEndNavigate = useCallback(() => {
+    if (courseId) {
+      router.replace(getAdminCourseRoute(courseId, "live") as any);
+    } else {
+      router.replace("/admin" as any);
+    }
+  }, [courseId]);
   const lcRecSubStorageKey = courseId != null ? `lcRecSub_${courseId}` : "lcRecSub";
   const recordingSection = buildRecordingLectureSectionTitle(
     liveClass?.lecture_section_title,
@@ -361,7 +370,7 @@ export default function BroadcastPage() {
 
       retainedBlobRef.current = null;
       webrtc.cleanup();
-      router.replace("/admin" as any);
+      afterEndNavigate();
     } catch (err: any) {
       // Keep blob in memory for retry, do NOT mark completed
       retainedBlobRef.current = blob;
@@ -369,7 +378,7 @@ export default function BroadcastPage() {
       setUploadStatus(null);
       setIsEnding(false);
     }
-  }, [liveClassId, webrtc, recordingSubfolder, recordingSection]);
+  }, [liveClassId, webrtc, recordingSubfolder, recordingSection, afterEndNavigate]);
 
   const handleRetryUpload = useCallback(() => {
     const blob = retainedBlobRef.current;
@@ -402,7 +411,7 @@ export default function BroadcastPage() {
           await apiRequest("PUT", `/api/admin/live-classes/${liveClassId}`, { isLive: false, isCompleted: true });
           webrtc.cleanup();
           queryClient.invalidateQueries({ queryKey: ["/api/upcoming-classes"] });
-          router.replace("/admin" as any);
+          afterEndNavigate();
         }
       } else if (streamType === "cloudflare") {
         const endRes = await apiRequest("POST", `/api/admin/live-classes/${liveClassId}/stream/end`, {});
@@ -421,7 +430,7 @@ export default function BroadcastPage() {
         queryClient.invalidateQueries({ queryKey: liveClassesQueryKey() });
         queryClient.invalidateQueries({ queryKey: ["/api/courses"] });
         queryClient.invalidateQueries({ queryKey: ["/api/upcoming-classes"] });
-        router.replace("/admin" as any);
+        afterEndNavigate();
       } else {
         const effectiveYoutube = String(youtubeUrl || liveClass?.youtube_url || "").trim();
         if (!effectiveYoutube) {
@@ -438,14 +447,14 @@ export default function BroadcastPage() {
         queryClient.invalidateQueries({ queryKey: liveClassesQueryKey() });
         queryClient.invalidateQueries({ queryKey: ["/api/courses"] });
         queryClient.invalidateQueries({ queryKey: ["/api/upcoming-classes"] });
-        router.replace("/admin" as any);
+        afterEndNavigate();
       }
     } catch (err: any) {
       if (Platform.OS === "web") window.alert(err?.message || "Failed to end class. Please try again.");
       else Alert.alert("Error", err?.message || "Failed to end class. Please try again.");
       setIsEnding(false);
     }
-  }, [liveClassId, streamType, webrtc, recorder, youtubeUrl, liveClass?.youtube_url, cfPlaybackHls, uploadRecordingAndFinish, recordingSection, queryClient, liveClass?.id]);
+  }, [liveClassId, streamType, webrtc, recorder, youtubeUrl, liveClass?.youtube_url, cfPlaybackHls, uploadRecordingAndFinish, recordingSection, queryClient, liveClass?.id, afterEndNavigate]);
 
   if (isLoading) {
     return (

@@ -11,6 +11,7 @@ type Props = {
 
 const TldrawClassroom = forwardRef<TldrawClassroomHandle, Props>(function TldrawClassroom(props, ref) {
   if (Platform.OS === "web") {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- web-only lazy load for tldraw
     const Web = require("./TldrawClassroom.web").default;
     return <Web ref={ref} {...props} />;
   }

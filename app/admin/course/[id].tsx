@@ -205,10 +205,23 @@ export default function AdminCourseScreen() {
     return () => observer.disconnect();
   }, []);
 
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, tab: tabParam } = useLocalSearchParams<{ id: string; tab?: string }>();
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
-  const [activeTab, setActiveTab] = useState<AdminCourseTab>("lectures");
+  const [activeTab, setActiveTab] = useState<AdminCourseTab>(() => {
+    const fromUrl = String(tabParam || "").toLowerCase();
+    if (fromUrl === "live" || fromUrl === "tests" || fromUrl === "materials" || fromUrl === "enrolled") {
+      return fromUrl as AdminCourseTab;
+    }
+    return "lectures";
+  });
+
+  useEffect(() => {
+    const fromUrl = String(tabParam || "").toLowerCase();
+    if (fromUrl === "live" || fromUrl === "tests" || fromUrl === "materials" || fromUrl === "enrolled") {
+      setActiveTab(fromUrl as AdminCourseTab);
+    }
+  }, [tabParam]);
   const [showAddLecture, setShowAddLecture] = useState(false);
   const [showAddTest, setShowAddTest] = useState(false);
   const [showAddQuestion, setShowAddQuestion] = useState<number | null>(null);
