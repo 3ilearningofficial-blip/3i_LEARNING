@@ -38,16 +38,32 @@ function TldrawClassroomConnected({
   readonly: boolean;
   editorRef: React.MutableRefObject<Editor | null>;
 }) {
+  const [slowConnect, setSlowConnect] = useState(false);
   const store = useSync({
     uri,
     assets: assetStore,
   });
+
+  useEffect(() => {
+    if (store.status !== "loading") {
+      setSlowConnect(false);
+      return;
+    }
+    const t = setTimeout(() => setSlowConnect(true), 8000);
+    return () => clearTimeout(t);
+  }, [store.status]);
 
   if (store.status === "loading") {
     return (
       <View style={styles.centered}>
         <ActivityIndicator size="large" color={Colors.light.primary} />
         <Text style={styles.loadingText}>Connecting whiteboard…</Text>
+        {slowConnect ? (
+          <Text style={styles.hintSub}>
+            Still connecting? The board uses wss://api.3ilearning.in — redeploy the web app and
+            ensure EC2 is on the latest main (classroom-sync).
+          </Text>
+        ) : null}
       </View>
     );
   }

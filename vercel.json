@@ -3,6 +3,10 @@
     {
       "source": "/api/:path*",
       "destination": "https://api.3ilearning.in/api/:path*"
+    },
+    {
+      "source": "/classroom-sync/:path*",
+      "destination": "https://api.3ilearning.in/classroom-sync/:path*"
     }
   ]
 }
