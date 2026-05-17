@@ -4,15 +4,14 @@ import { useSync } from "@tldraw/sync";
 import { View, ActivityIndicator, StyleSheet, Text, Platform } from "react-native";
 import "@tldraw/tldraw/tldraw.css";
 import { buildClassroomSyncUriWithAuth } from "@/lib/classroom/syncUri";
+import { getTldrawLicenseKey, tldrawLicenseHint } from "@/lib/tldrawLicense";
 import Colors from "@/constants/colors";
 import type { TldrawClassroomHandle } from "./TldrawClassroom.types";
 
 export type { TldrawClassroomHandle } from "./TldrawClassroom.types";
 
-const TLDRAW_LICENSE_KEY =
-  process.env.EXPO_PUBLIC_TLDRAW_LICENSE_KEY ||
-  process.env.NEXT_PUBLIC_TLDRAW_LICENSE_KEY ||
-  "";
+const TLDRAW_LICENSE_KEY = getTldrawLicenseKey();
+const TLDRAW_LICENSE_HINT = tldrawLicenseHint(TLDRAW_LICENSE_KEY);
 
 type Props = {
   liveClassId: string;
@@ -69,7 +68,7 @@ function TldrawClassroomConnected({
   return (
     <div style={{ width: "100%", height: "100%", position: "relative", background: "#0a0a0a" }}>
       <Tldraw
-        licenseKey={TLDRAW_LICENSE_KEY}
+        {...(TLDRAW_LICENSE_KEY ? { licenseKey: TLDRAW_LICENSE_KEY } : {})}
         store={store.store}
         onMount={(editor: Editor) => {
           editorRef.current = editor;
@@ -115,13 +114,16 @@ const TldrawClassroomWeb = forwardRef<TldrawClassroomHandle, Props>(function Tld
     window.location.protocol === "https:" &&
     !TLDRAW_LICENSE_KEY;
 
-  if (needsLicense) {
+  if (needsLicense || TLDRAW_LICENSE_HINT) {
     return (
       <View style={styles.centered}>
         <Text style={styles.errorText}>
-          Whiteboard needs a tldraw license on HTTPS. Add EXPO_PUBLIC_TLDRAW_LICENSE_KEY to Vercel and
-          EC2 env (get a key at tldraw.dev).
+          {TLDRAW_LICENSE_HINT ||
+            "Whiteboard needs a tldraw license on HTTPS. Add EXPO_PUBLIC_TLDRAW_LICENSE_KEY on Vercel (Production + Preview), redeploy, and get a key at tldraw.dev/get-a-license/trial."}
         </Text>
+        {typeof window !== "undefined" ? (
+          <Text style={styles.hintSub}>Current host: {window.location.hostname}</Text>
+        ) : null}
       </View>
     );
   }
@@ -157,4 +159,5 @@ const styles = StyleSheet.create({
   centered: { flex: 1, justifyContent: "center", alignItems: "center", gap: 12 },
   loadingText: { fontSize: 14, color: Colors.light.textMuted },
   errorText: { fontSize: 14, color: Colors.light.error, textAlign: "center", padding: 16 },
+  hintSub: { fontSize: 12, color: Colors.light.textMuted, textAlign: "center", paddingHorizontal: 16 },
 });
