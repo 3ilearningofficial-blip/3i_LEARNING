@@ -71,7 +71,10 @@ export async function convertLiveClassTitlePeersToLectures(
        DO UPDATE SET
          title = EXCLUDED.title,
          description = EXCLUDED.description,
-         video_url = COALESCE(NULLIF(EXCLUDED.video_url, ''), lectures.video_url),
+         video_url = CASE
+           WHEN NULLIF(EXCLUDED.video_url, '') IS NOT NULL THEN EXCLUDED.video_url
+           ELSE lectures.video_url
+         END,
          video_type = EXCLUDED.video_type,
          duration_minutes = EXCLUDED.duration_minutes,
          section_title = EXCLUDED.section_title,

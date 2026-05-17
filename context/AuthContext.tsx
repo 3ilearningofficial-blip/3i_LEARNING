@@ -42,10 +42,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const stored = await getStoredAuthUser();
       const token = await getStoredToken();
 
-      // No persisted session — skip /api/auth/me (same idea as native).
+      // No persisted session — on web still try cookie-only /api/auth/me once.
       if (!token && !stored) {
-        setUser(null);
-        return;
+        if (Platform.OS !== "web") {
+          setUser(null);
+          return;
+        }
       }
 
       const baseUrl = getApiUrl();
@@ -132,9 +134,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           await removeStoredAuthUser();
           queryClient.clear();
         } else if (Platform.OS === "web") {
-          // Keep last known user when we still have a token (transient / misclassified failures).
+          // Keep last known user on transient failures (refresh during live class, admin classroom, etc.).
           const tok = await getStoredToken();
-          if (stored && tok) {
+          if (stored) {
             setUser(stored);
             return;
           }
@@ -249,7 +251,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const onPlaybackRoute =
       pathname.startsWith("/lecture/") ||
       pathname.startsWith("/live-class/") ||
-      pathname.startsWith("/material/");
+      pathname.startsWith("/material/") ||
+      pathname.startsWith("/admin/") ||
+      pathname.startsWith("/test") ||
+      pathname.startsWith("/course/");
     if (onPlaybackRoute) return;
     const TIMEOUT = 60 * 60 * 1000; // 1 hour
     let timer: ReturnType<typeof setTimeout>;

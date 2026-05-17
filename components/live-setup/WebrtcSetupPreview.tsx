@@ -1,13 +1,20 @@
 import React, { useEffect, useRef } from "react";
 import { View, Text, StyleSheet, Platform, ActivityIndicator } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { useWebRTCStream } from "@/lib/useWebRTCStream";
+import { useWebRTCStream, type UseWebRTCStreamReturn } from "@/lib/useWebRTCStream";
 import Colors from "@/constants/colors";
 
 const videoStyle = { width: "100%", height: "100%", objectFit: "cover" as const };
 
-export default function WebrtcSetupPreview() {
-  const webrtc = useWebRTCStream();
+type Props = {
+  webrtc?: UseWebRTCStreamReturn;
+  /** Smaller preview for setup sidebar */
+  compact?: boolean;
+};
+
+export default function WebrtcSetupPreview({ webrtc: webrtcProp, compact = false }: Props) {
+  const webrtcInternal = useWebRTCStream(!webrtcProp);
+  const webrtc = webrtcProp ?? webrtcInternal;
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
@@ -34,21 +41,43 @@ export default function WebrtcSetupPreview() {
   }
 
   return (
-    <View style={styles.wrap}>
+    <View style={[styles.wrap, compact && styles.wrapCompact]}>
       {webrtc.stream ? (
-        <video ref={videoRef as any} autoPlay muted playsInline style={videoStyle} />
+        <video
+          ref={videoRef as any}
+          autoPlay
+          muted
+          playsInline
+          style={compact ? videoStyleCompact : videoStyle}
+        />
       ) : (
-        <View style={styles.placeholder}>
-          <ActivityIndicator size="large" color={Colors.light.primary} />
-          <Text style={styles.placeholderText}>Allow camera access to preview</Text>
+        <View style={[styles.placeholder, compact && styles.placeholderCompact]}>
+          <ActivityIndicator size={compact ? "small" : "large"} color={Colors.light.primary} />
+          <Text style={styles.placeholderText}>
+            {compact ? "Allow camera access" : "Allow camera access to preview"}
+          </Text>
         </View>
       )}
     </View>
   );
 }
 
+const videoStyleCompact = {
+  width: "100%",
+  height: "100%",
+  objectFit: "cover" as const,
+  transform: "scaleX(-1)",
+};
+
 const styles = StyleSheet.create({
   wrap: { flex: 1, backgroundColor: "#000" },
+  wrapCompact: {
+    flex: undefined,
+    height: 108,
+    borderRadius: 8,
+    overflow: "hidden",
+    marginBottom: 8,
+  },
   placeholder: {
     flex: 1,
     justifyContent: "center",
@@ -56,6 +85,12 @@ const styles = StyleSheet.create({
     backgroundColor: "#0D1B2A",
     gap: 12,
     padding: 24,
+  },
+  placeholderCompact: {
+    flex: undefined,
+    height: 108,
+    gap: 6,
+    padding: 12,
   },
   placeholderText: { fontSize: 14, color: Colors.light.textMuted, textAlign: "center" },
   errorText: { fontSize: 14, color: Colors.light.error, textAlign: "center" },

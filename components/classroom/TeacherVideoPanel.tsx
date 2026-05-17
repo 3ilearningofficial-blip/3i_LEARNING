@@ -22,7 +22,7 @@ export default function TeacherVideoPanel({ liveClassId, enabled = true }: Props
     if (Platform.OS === "web" && videoRef.current) {
       setLocalVideoEl(videoRef.current);
     }
-  }, [setLocalVideoEl, connected]);
+  }, [setLocalVideoEl]);
 
   if (Platform.OS !== "web") {
     return (

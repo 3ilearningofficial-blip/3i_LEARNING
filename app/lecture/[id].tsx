@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
-  View, Text, StyleSheet, Pressable, Platform,
+  View, Text, StyleSheet, Pressable, Platform, Image,
   ActivityIndicator, Alert, ScrollView, useWindowDimensions,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
@@ -58,8 +58,14 @@ function getYouTubeVideoId(url: string): string {
   return "";
 }
 
+function isBoardSnapshotImage(url: string): boolean {
+  if (!url) return false;
+  return /\.(png|jpe?g|webp|gif)(\?|$)/i.test(url);
+}
+
 function isDirectVideoUrl(url: string): boolean {
   if (!url) return false;
+  if (isBoardSnapshotImage(url)) return false;
   const lower = url.toLowerCase();
   if (lower.match(/\.(mp4|mov|mkv|avi|webm)(\?|$)/)) return true;
   if (lower.includes("3ilearning.in")) return true;
@@ -430,7 +436,10 @@ export default function LectureScreen() {
     enabled: !!id,
     staleTime: 5 * 60 * 1000,
     gcTime: 15 * 60 * 1000,
-    refetchOnMount: false,
+    refetchOnMount: (query) => {
+      const cached = query.state.data as { video_url?: string } | undefined;
+      return !cached?.video_url;
+    },
   });
 
   const { data: progressData } = useQuery<{ is_completed: boolean }>({
@@ -564,7 +573,8 @@ export default function LectureScreen() {
   const videoId = getYouTubeVideoId(playbackUrl);
   const isStreamId = !videoId && isCloudflareStreamId(playbackUrl);
   const isCfHls = !videoId && !isStreamId && isHlsManifestUrl(playbackUrl);
-  const isDirect = !videoId && !isStreamId && isDirectVideoUrl(playbackUrl);
+  const isBoardImage = !videoId && !isStreamId && !isCfHls && isBoardSnapshotImage(playbackUrl);
+  const isDirect = !videoId && !isStreamId && !isBoardImage && isDirectVideoUrl(playbackUrl);
   
   const youtubeHtml = videoId ? buildYouTubeHtml(videoId) : "";
   const nativeYouTubeHtml = videoId ? buildNativeYouTubeHtml(videoId) : "";
@@ -878,10 +888,30 @@ export default function LectureScreen() {
             mixedContentMode="compatibility"
             originWhitelist={["*"]}
           />
-        ) : !hasError && canMountPlayer && !videoId && !isDirect && !isStreamId && !isCfHls ? (
+        ) : !hasError && isBoardImage && playbackUrl ? (
+          <View style={styles.boardSnapshotWrap}>
+            <Image
+              source={{ uri: playbackUrl }}
+              style={styles.boardSnapshotImage}
+              resizeMode="contain"
+              onLoad={() => setIsLoading(false)}
+              onError={handlePlaybackError}
+            />
+            <View style={styles.boardSnapshotBadge}>
+              <Ionicons name="easel-outline" size={14} color="#fff" />
+              <Text style={styles.boardSnapshotBadgeText}>Classroom board snapshot</Text>
+            </View>
+          </View>
+        ) : !hasError && canMountPlayer && !videoId && !isDirect && !isStreamId && !isCfHls && !isBoardImage ? (
           <View style={styles.errorOverlay}>
             <Ionicons name="videocam-off-outline" size={40} color={Colors.light.textMuted} />
             <Text style={styles.errorTitle}>No video available</Text>
+            {lectureData && !lectureData.video_url && !paramVideoUrl ? (
+              <Text style={styles.errorHint}>
+                This recording has no video yet. If you ended a classroom session before the board loaded, try
+                re-opening from Live Class Recordings after a new session is saved with a snapshot.
+              </Text>
+            ) : null}
           </View>
         ) : null}
       </View>
@@ -943,6 +973,29 @@ const styles = StyleSheet.create({
     backgroundColor: "#111", alignItems: "center", justifyContent: "center", gap: 10, padding: 24, zIndex: 10,
   },
   errorTitle: { fontSize: 16, fontFamily: "Inter_600SemiBold", color: "#fff", textAlign: "center" },
+  errorHint: {
+    fontSize: 12,
+    color: "rgba(255,255,255,0.55)",
+    fontFamily: "Inter_400Regular",
+    textAlign: "center",
+    lineHeight: 18,
+    marginTop: 4,
+  },
+  boardSnapshotWrap: { flex: 1, backgroundColor: "#111", position: "relative" },
+  boardSnapshotImage: { width: "100%", height: "100%" },
+  boardSnapshotBadge: {
+    position: "absolute",
+    top: 12,
+    left: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "rgba(0,0,0,0.65)",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  boardSnapshotBadgeText: { color: "#fff", fontSize: 12, fontFamily: "Inter_500Medium" },
   errorSub: { fontSize: 13, color: "rgba(255,255,255,0.5)", fontFamily: "Inter_400Regular", textAlign: "center" },
   retryBtn: { backgroundColor: Colors.light.primary, borderRadius: 10, paddingHorizontal: 20, paddingVertical: 10, marginTop: 4 },
   retryBtnText: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: "#fff" },

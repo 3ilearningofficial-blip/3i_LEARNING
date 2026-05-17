@@ -578,6 +578,12 @@ function rowsToAuthUser(u, sessionTokenOverride) {
     profileComplete: !!u.profile_complete || false
   };
 }
+function syncSessionUser(req, user) {
+  const session2 = req.session;
+  if (session2 && typeof session2 === "object") {
+    session2.user = user;
+  }
+}
 async function getAuthUserFromRequest(req, db2) {
   const authHeader = req.headers.authorization;
   const bearerRaw = authHeader?.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
@@ -587,16 +593,16 @@ async function getAuthUserFromRequest(req, db2) {
     try {
       const resolved = await resolveUserBySessionToken(db2, token);
       if (!resolved) {
-        req.session.user = null;
+        syncSessionUser(req, null);
         return null;
       }
       const u = resolved.row;
       if (u.is_blocked) {
-        req.session.user = null;
+        syncSessionUser(req, null);
         return null;
       }
       const authUser = rowsToAuthUser(u, token);
-      req.session.user = authUser;
+      syncSessionUser(req, authUser);
       return authUser;
     } catch (e) {
       console.error("[Auth] Bearer token lookup error:", e);
@@ -611,25 +617,25 @@ async function getAuthUserFromRequest(req, db2) {
       [sessionUser.id]
     );
     if (result.rows.length === 0) {
-      req.session.user = null;
+      syncSessionUser(req, null);
       return null;
     }
     const row = result.rows[0];
     if (row.is_blocked) {
-      req.session.user = null;
+      syncSessionUser(req, null);
       return null;
     }
     const cookieTok = sessionUser.sessionToken;
     if (cookieTok && !await userHasSessionToken(db2, sessionUser.id, cookieTok)) {
-      req.session.user = null;
+      syncSessionUser(req, null);
       return null;
     }
     if (row.session_token && !sessionUser.sessionToken) {
-      req.session.user = null;
+      syncSessionUser(req, null);
       return null;
     }
     const authUser = rowsToAuthUser(row, cookieTok || row.session_token);
-    req.session.user = authUser;
+    syncSessionUser(req, authUser);
     return authUser;
   } catch (e) {
     console.error("[Auth] Session user lookup error:", e);
@@ -3577,6 +3583,99 @@ var init_recordingSection = __esm({
   }
 });
 
+// server/live-class-recording-save.ts
+function inferVideoType(url) {
+  const lower = String(url || "").toLowerCase();
+  if (lower.includes("youtube.com") || lower.includes("youtu.be")) return "youtube";
+  if (lower.includes("videodelivery.net") || lower.endsWith(".m3u8")) return "cloudflare";
+  return "r2";
+}
+async function saveRecordingForClassAndPeers(db2, liveClassId, recordingUrl, opts = {}) {
+  const lcResult = await db2.query("SELECT * FROM live_classes WHERE id = $1", [liveClassId]);
+  if (lcResult.rows.length === 0) {
+    throw new Error("Live class not found");
+  }
+  const liveClass = lcResult.rows[0];
+  if (liveClass.recording_deleted_at) {
+    return { lectureId: null, lectureIds: [] };
+  }
+  const title = liveClass.title;
+  const peers = await db2.query("SELECT * FROM live_classes WHERE title = $1 ORDER BY id", [title]);
+  const lectureIds = [];
+  const endedAt = Date.now();
+  for (const row of peers.rows) {
+    if (row.recording_deleted_at) continue;
+    const durationMins = row.started_at ? Math.max(1, Math.round((endedAt - Number(row.started_at)) / 6e4)) : 0;
+    await db2.query(
+      `UPDATE live_classes 
+         SET recording_url = $1, is_completed = TRUE, is_live = FALSE, ended_at = $2,
+             duration_minutes = CASE 
+               WHEN started_at IS NOT NULL 
+               THEN GREATEST(1, ROUND(($2::bigint - started_at) / 60000.0)::INTEGER)
+               ELSE 0
+             END
+         WHERE id = $3`,
+      [recordingUrl, endedAt, row.id]
+    );
+    if (!row.course_id) continue;
+    const maxOrder = await db2.query(
+      "SELECT COALESCE(MAX(order_index), 0) + 1 as next_order FROM lectures WHERE course_id = $1",
+      [row.course_id]
+    );
+    const recordSection = buildRecordingLectureSectionTitle(
+      row.lecture_section_title,
+      row.lecture_subfolder_title,
+      opts.sectionTitle
+    );
+    const lectureResult = await db2.query(
+      `INSERT INTO lectures (
+         course_id, title, description, video_url, video_type, duration_minutes,
+         order_index, is_free_preview, section_title, live_class_id, live_class_finalized, created_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE, $11)
+       ON CONFLICT (live_class_id) WHERE live_class_id IS NOT NULL
+       DO UPDATE SET
+         course_id = EXCLUDED.course_id,
+         title = EXCLUDED.title,
+         description = EXCLUDED.description,
+         video_url = EXCLUDED.video_url,
+         video_type = EXCLUDED.video_type,
+         duration_minutes = EXCLUDED.duration_minutes,
+         section_title = EXCLUDED.section_title,
+         live_class_finalized = TRUE
+       RETURNING id`,
+      [
+        row.course_id,
+        row.title,
+        row.description || "",
+        recordingUrl,
+        inferVideoType(recordingUrl),
+        durationMins,
+        maxOrder.rows[0].next_order,
+        false,
+        recordSection,
+        row.id,
+        Date.now()
+      ]
+    );
+    lectureIds.push(Number(lectureResult.rows[0]?.id));
+    await db2.query(
+      "UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1",
+      [row.course_id]
+    );
+    if (opts.recomputeCourseProgress) {
+      await opts.recomputeCourseProgress(row.course_id);
+    }
+  }
+  return { lectureId: lectureIds[0] ?? null, lectureIds };
+}
+var init_live_class_recording_save = __esm({
+  "server/live-class-recording-save.ts"() {
+    "use strict";
+    init_recordingSection();
+  }
+});
+
 // server/live-stream-routes.ts
 function registerLiveStreamRoutes({
   app: app2,
@@ -3586,7 +3685,7 @@ function registerLiveStreamRoutes({
   getR2Client
 }) {
   const archiveRetryState = /* @__PURE__ */ new Map();
-  const inferVideoType = (url) => {
+  const inferVideoType3 = (url) => {
     const lower = String(url || "").toLowerCase();
     if (lower.includes("youtube.com") || lower.includes("youtu.be")) return "youtube";
     if (lower.includes("videodelivery.net") || lower.endsWith(".m3u8")) return "cloudflare";
@@ -3741,92 +3840,10 @@ function registerLiveStreamRoutes({
       return null;
     }
   };
-  const saveRecordingForClassAndPeers = async (liveClassId, recordingUrl, sectionTitle) => {
-    const lcResult = await db2.query("SELECT * FROM live_classes WHERE id = $1", [liveClassId]);
-    if (lcResult.rows.length === 0) {
-      throw new Error("Live class not found");
-    }
-    const liveClass = lcResult.rows[0];
-    if (liveClass.recording_deleted_at) {
-      return { lectureId: null, lectureIds: [] };
-    }
-    const title = liveClass.title;
-    const peers = await db2.query("SELECT * FROM live_classes WHERE title = $1 ORDER BY id", [title]);
-    const lectureIds = [];
-    for (const row of peers.rows) {
-      if (row.recording_deleted_at) continue;
-      const endedAt = Number(row.ended_at || Date.now());
-      const durationMins = row.started_at ? Math.max(1, Math.round((endedAt - Number(row.started_at)) / 6e4)) : 0;
-      await db2.query(
-        `UPDATE live_classes 
-         SET recording_url = $1, is_completed = TRUE, is_live = FALSE, ended_at = $2,
-             duration_minutes = CASE 
-               WHEN started_at IS NOT NULL 
-               THEN GREATEST(1, ROUND(($2::bigint - started_at) / 60000.0)::INTEGER)
-               ELSE 0
-             END
-         WHERE id = $3`,
-        [recordingUrl, endedAt, row.id]
-      );
-      if (!row.course_id) continue;
-      const maxOrder = await db2.query(
-        "SELECT COALESCE(MAX(order_index), 0) + 1 as next_order FROM lectures WHERE course_id = $1",
-        [row.course_id]
-      );
-      const recordSection = buildRecordingLectureSectionTitle(
-        row.lecture_section_title,
-        row.lecture_subfolder_title,
-        sectionTitle
-      );
-      const lectureResult = await db2.query(
-        `INSERT INTO lectures (
-           course_id,
-           title,
-           description,
-           video_url,
-           video_type,
-           duration_minutes,
-           order_index,
-           is_free_preview,
-           section_title,
-           live_class_id,
-           live_class_finalized,
-           created_at
-         )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE, $11)
-         ON CONFLICT (live_class_id) WHERE live_class_id IS NOT NULL
-         DO UPDATE SET
-           course_id = EXCLUDED.course_id,
-           title = EXCLUDED.title,
-           description = EXCLUDED.description,
-           video_url = EXCLUDED.video_url,
-           video_type = EXCLUDED.video_type,
-           duration_minutes = EXCLUDED.duration_minutes,
-           section_title = EXCLUDED.section_title,
-           live_class_finalized = TRUE
-         RETURNING id`,
-        [
-          row.course_id,
-          row.title,
-          row.description || "",
-          recordingUrl,
-          inferVideoType(recordingUrl),
-          durationMins,
-          maxOrder.rows[0].next_order,
-          false,
-          recordSection,
-          row.id,
-          Date.now()
-        ]
-      );
-      lectureIds.push(Number(lectureResult.rows[0]?.id));
-      await db2.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [
-        row.course_id
-      ]);
-      await recomputeAllEnrollmentsProgressForCourse2(row.course_id);
-    }
-    return { lectureId: lectureIds[0] ?? null, lectureIds };
-  };
+  const saveRecordingForClassAndPeers2 = (liveClassId, recordingUrl, sectionTitle) => saveRecordingForClassAndPeers(db2, liveClassId, recordingUrl, {
+    sectionTitle,
+    recomputeCourseProgress: recomputeAllEnrollmentsProgressForCourse2
+  });
   app2.post("/api/admin/live-classes/:id/stream/create", requireAdmin, async (req, res) => {
     try {
       const accountId = process.env.CF_STREAM_ACCOUNT_ID || process.env.R2_ACCOUNT_ID;
@@ -3955,7 +3972,7 @@ function registerLiveStreamRoutes({
           }
           if (recordingUrl) {
             try {
-              await saveRecordingForClassAndPeers(String(req.params.id), recordingUrl);
+              await saveRecordingForClassAndPeers2(String(req.params.id), recordingUrl);
             } catch (saveErr) {
               console.warn("[CF Stream] recording save after stream end failed:", saveErr);
             }
@@ -3987,7 +4004,7 @@ function registerLiveStreamRoutes({
       if (!recordingUrl) {
         return res.status(400).json({ message: "recordingUrl is required" });
       }
-      const { lectureId, lectureIds } = await saveRecordingForClassAndPeers(
+      const { lectureId, lectureIds } = await saveRecordingForClassAndPeers2(
         String(req.params.id),
         String(recordingUrl),
         sectionTitle
@@ -4123,6 +4140,7 @@ var init_live_stream_routes = __esm({
   "server/live-stream-routes.ts"() {
     "use strict";
     init_recordingSection();
+    init_live_class_recording_save();
   }
 });
 
@@ -5010,7 +5028,7 @@ function registerAdminLectureRoutes({
   };
   app2.post("/api/admin/lectures", requireAdmin, async (req, res) => {
     try {
-      const { courseId, title, description, transcript, videoUrl, fileUrl, videoType, pdfUrl, durationMinutes, orderIndex, isFreePreview, sectionTitle, lectureSubfolderTitle, downloadAllowed } = req.body;
+      const { courseId, title, description, transcript, videoUrl, fileUrl, videoType, pdfUrl, durationMinutes: durationMinutes2, orderIndex, isFreePreview, sectionTitle, lectureSubfolderTitle, downloadAllowed } = req.body;
       const parsedCourseId = Number(courseId);
       if (!Number.isFinite(parsedCourseId) || parsedCourseId <= 0) {
         return res.status(400).json({ message: "Invalid courseId" });
@@ -5044,7 +5062,7 @@ function registerAdminLectureRoutes({
           normalizedVideoUrl || null,
           effectiveVideoType,
           normalizedPdfUrl || null,
-          Number(durationMinutes) || 0,
+          Number(durationMinutes2) || 0,
           Number(orderIndex) || 0,
           isFreePreview || false,
           normalizedSectionTitle,
@@ -5072,7 +5090,7 @@ function registerAdminLectureRoutes({
   });
   app2.put("/api/admin/lectures/:id", requireAdmin, async (req, res) => {
     try {
-      const { title, description, transcript, videoUrl, videoType, durationMinutes, orderIndex, isFreePreview, sectionTitle, lectureSubfolderTitle, downloadAllowed } = req.body;
+      const { title, description, transcript, videoUrl, videoType, durationMinutes: durationMinutes2, orderIndex, isFreePreview, sectionTitle, lectureSubfolderTitle, downloadAllowed } = req.body;
       const normalizedSectionTitle = resolveLectureSectionTitle(
         sectionTitle,
         lectureSubfolderTitle
@@ -5087,7 +5105,7 @@ function registerAdminLectureRoutes({
           transcriptVal,
           videoUrl,
           videoType || "youtube",
-          parseInt(durationMinutes) || 0,
+          parseInt(durationMinutes2) || 0,
           parseInt(orderIndex) || 0,
           isFreePreview || false,
           normalizedSectionTitle,
@@ -5299,7 +5317,7 @@ function registerAdminTestRoutes({
   });
   app2.post("/api/admin/tests", requireAdmin, async (req, res) => {
     try {
-      const { title, description, courseId, durationMinutes, totalMarks, passingMarks, testType, folderName, difficulty, scheduledAt, miniCourseId, price } = req.body;
+      const { title, description, courseId, durationMinutes: durationMinutes2, totalMarks, passingMarks, testType, folderName, difficulty, scheduledAt, miniCourseId, price } = req.body;
       const result = await db2.query(
         `INSERT INTO tests (title, description, course_id, duration_minutes, total_marks, passing_marks, test_type, folder_name, difficulty, scheduled_at, mini_course_id, price, is_published, created_at) 
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, TRUE, $13) RETURNING *`,
@@ -5307,7 +5325,7 @@ function registerAdminTestRoutes({
           title,
           description,
           courseId || null,
-          durationMinutes || 60,
+          durationMinutes2 || 60,
           totalMarks || 100,
           passingMarks || 35,
           testType || "practice",
@@ -5984,18 +6002,18 @@ function registerAdminTestManagementRoutes({
   });
   app2.put("/api/admin/tests/:id", requireAdmin, async (req, res) => {
     try {
-      const { title, description, durationMinutes, totalMarks, testType, folderName, difficulty, scheduledAt, passingMarks, courseId, price } = req.body;
+      const { title, description, durationMinutes: durationMinutes2, totalMarks, testType, folderName, difficulty, scheduledAt, passingMarks, courseId, price } = req.body;
       const priceVal = price !== void 0 ? parseFloat(price) || 0 : null;
       if (courseId !== void 0) {
         await db2.query(
           `UPDATE tests SET title=$1, description=$2, duration_minutes=$3, total_marks=$4, test_type=$5, folder_name=$6, difficulty=$7, scheduled_at=$8, passing_marks=$9, course_id=$10${priceVal !== null ? ", price=$12" : ""} WHERE id=$11`,
-          priceVal !== null ? [title, description || "", parseInt(durationMinutes) || 60, parseInt(totalMarks) || 100, testType, folderName || null, difficulty || "moderate", scheduledAt || null, parseInt(passingMarks) || 35, courseId || null, req.params.id, priceVal] : [title, description || "", parseInt(durationMinutes) || 60, parseInt(totalMarks) || 100, testType, folderName || null, difficulty || "moderate", scheduledAt || null, parseInt(passingMarks) || 35, courseId || null, req.params.id]
+          priceVal !== null ? [title, description || "", parseInt(durationMinutes2) || 60, parseInt(totalMarks) || 100, testType, folderName || null, difficulty || "moderate", scheduledAt || null, parseInt(passingMarks) || 35, courseId || null, req.params.id, priceVal] : [title, description || "", parseInt(durationMinutes2) || 60, parseInt(totalMarks) || 100, testType, folderName || null, difficulty || "moderate", scheduledAt || null, parseInt(passingMarks) || 35, courseId || null, req.params.id]
         );
         if (courseId) await updateCourseTestCounts2(courseId);
       } else {
         await db2.query(
           `UPDATE tests SET title=$1, description=$2, duration_minutes=$3, total_marks=$4, test_type=$5, folder_name=$6, difficulty=$7, scheduled_at=$8, passing_marks=$9${priceVal !== null ? ", price=$11" : ""} WHERE id=$10`,
-          priceVal !== null ? [title, description || "", parseInt(durationMinutes) || 60, parseInt(totalMarks) || 100, testType, folderName || null, difficulty || "moderate", scheduledAt || null, parseInt(passingMarks) || 35, req.params.id, priceVal] : [title, description || "", parseInt(durationMinutes) || 60, parseInt(totalMarks) || 100, testType, folderName || null, difficulty || "moderate", scheduledAt || null, parseInt(passingMarks) || 35, req.params.id]
+          priceVal !== null ? [title, description || "", parseInt(durationMinutes2) || 60, parseInt(totalMarks) || 100, testType, folderName || null, difficulty || "moderate", scheduledAt || null, parseInt(passingMarks) || 35, req.params.id, priceVal] : [title, description || "", parseInt(durationMinutes2) || 60, parseInt(totalMarks) || 100, testType, folderName || null, difficulty || "moderate", scheduledAt || null, parseInt(passingMarks) || 35, req.params.id]
         );
         const existing = await db2.query("SELECT course_id FROM tests WHERE id = $1", [req.params.id]);
         if (existing.rows[0]?.course_id) await updateCourseTestCounts2(existing.rows[0].course_id);
@@ -8208,6 +8226,94 @@ var init_live_class_routes = __esm({
   }
 });
 
+// server/live-class-lecture-convert.ts
+function inferVideoType2(url) {
+  const lower = String(url || "").toLowerCase();
+  if (lower.includes("youtube.com") || lower.includes("youtu.be")) return "youtube";
+  if (lower.includes("videodelivery.net") || lower.endsWith(".m3u8")) return "cloudflare";
+  return "r2";
+}
+function pickRecordingUrl(row, fallback) {
+  const from = (r) => String(r.recording_url || r.cf_playback_hls || r.youtube_url || r.board_snapshot_url || "").trim();
+  return from(row) || (fallback ? from(fallback) : "");
+}
+function durationMinutes(peer, anchor) {
+  if (peer.started_at && peer.ended_at) {
+    return Math.max(1, Math.round((Number(peer.ended_at) - Number(peer.started_at)) / 6e4));
+  }
+  if (peer.duration_minutes != null) return Number(peer.duration_minutes);
+  if (anchor.duration_minutes != null) return Number(anchor.duration_minutes);
+  return 0;
+}
+async function convertLiveClassTitlePeersToLectures(db2, anchor, opts = {}) {
+  if (anchor.recording_deleted_at) return [];
+  const title = String(anchor.title || "").trim();
+  if (!title) return [];
+  const sameTitle = await db2.query("SELECT * FROM live_classes WHERE title = $1 ORDER BY id", [title]);
+  const lectureIds = [];
+  for (const peer of sameTitle.rows) {
+    if (!peer.course_id || peer.recording_deleted_at) continue;
+    const urlForPeer = pickRecordingUrl(peer, anchor);
+    const targetSection = buildRecordingLectureSectionTitle(
+      peer.lecture_section_title,
+      peer.lecture_subfolder_title,
+      opts.sectionTitleOverride
+    );
+    const maxOrder = await db2.query(
+      "SELECT COALESCE(MAX(order_index), 0) + 1 as next_order FROM lectures WHERE course_id = $1",
+      [peer.course_id]
+    );
+    const description = String(peer.description || anchor.description || "").trim() || (urlForPeer ? "" : "Interactive classroom session (whiteboard). Upload a video recording to replace this placeholder.");
+    const lectureResult = await db2.query(
+      `INSERT INTO lectures (
+         course_id, title, description, video_url, video_type, duration_minutes,
+         order_index, is_free_preview, section_title, live_class_id, live_class_finalized, created_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE, $11)
+       ON CONFLICT (live_class_id) WHERE live_class_id IS NOT NULL
+       DO UPDATE SET
+         title = EXCLUDED.title,
+         description = EXCLUDED.description,
+         video_url = COALESCE(NULLIF(EXCLUDED.video_url, ''), lectures.video_url),
+         video_type = EXCLUDED.video_type,
+         duration_minutes = EXCLUDED.duration_minutes,
+         section_title = EXCLUDED.section_title,
+         live_class_finalized = TRUE
+       RETURNING id`,
+      [
+        peer.course_id,
+        peer.title,
+        description,
+        urlForPeer,
+        urlForPeer ? inferVideoType2(urlForPeer) : "r2",
+        durationMinutes(peer, anchor),
+        maxOrder.rows[0].next_order,
+        false,
+        targetSection,
+        peer.id,
+        Date.now()
+      ]
+    );
+    lectureIds.push(Number(lectureResult.rows[0]?.id));
+    await db2.query(
+      "UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1",
+      [peer.course_id]
+    );
+    if (opts.recomputeCourseProgress) {
+      await opts.recomputeCourseProgress(peer.course_id);
+    }
+  }
+  return lectureIds;
+}
+function liveClassHasConvertibleRecording(row) {
+  return !!pickRecordingUrl(row);
+}
+var init_live_class_lecture_convert = __esm({
+  "server/live-class-lecture-convert.ts"() {
+    "use strict";
+    init_recordingSection();
+  }
+});
+
 // server/admin-live-class-manage-routes.ts
 function registerAdminLiveClassManageRoutes({
   app: app2,
@@ -8216,7 +8322,7 @@ function registerAdminLiveClassManageRoutes({
   getR2Client,
   recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse2
 }) {
-  const inferVideoType = (url) => {
+  const inferVideoType3 = (url) => {
     const lower = String(url || "").toLowerCase();
     if (lower.includes("youtube.com") || lower.includes("youtu.be")) return "youtube";
     if (lower.includes("videodelivery.net") || lower.endsWith(".m3u8")) return "cloudflare";
@@ -8277,9 +8383,12 @@ function registerAdminLiveClassManageRoutes({
           if (only.rows.length === 0) return res.status(404).json({ message: "Live class not found" });
           const liveClassOnly = only.rows[0];
           const st = sectionTitle;
-          const canConvert = liveClassOnly.is_completed === true && !!(liveClassOnly.youtube_url || liveClassOnly.recording_url || liveClassOnly.cf_playback_hls);
+          const isClassroom = String(liveClassOnly.stream_type || "").toLowerCase() === "classroom";
+          const canConvert = liveClassOnly.is_completed === true && (liveClassHasConvertibleRecording(liveClassOnly) || isClassroom);
           if (!canConvert) {
-            return res.status(400).json({ message: "Class must be completed with a YouTube, Cloudflare, or R2 recording URL to save as a lecture." });
+            return res.status(400).json({
+              message: "Class must be completed with a recording URL, or be an interactive classroom session, to save as a lecture."
+            });
           }
           await db2.query("DELETE FROM notifications WHERE title IN ('\u{1F534} Live Class Started!', '\u{1F534} Live Class Starting Now!', '\u23F0 Live Class in 30 minutes!') AND message ILIKE $1", ["%" + liveClassOnly.title + "%"]).catch(() => {
           });
@@ -8290,7 +8399,7 @@ function registerAdminLiveClassManageRoutes({
               peer.recording_url || peer.cf_playback_hls || peer.youtube_url || liveClassOnly.recording_url || liveClassOnly.cf_playback_hls || liveClassOnly.youtube_url || ""
             ).trim();
             if (!urlForPeer) continue;
-            const vType = inferVideoType(urlForPeer);
+            const vType = inferVideoType3(urlForPeer);
             const maxOrder = await db2.query("SELECT COALESCE(MAX(order_index), 0) + 1 as next_order FROM lectures WHERE course_id = $1", [peer.course_id]);
             const durationMins = peer.started_at && peer.ended_at ? Math.max(1, Math.round((Number(peer.ended_at) - Number(peer.started_at)) / 6e4)) : peer.duration_minutes != null ? Number(peer.duration_minutes) : liveClassOnly.duration_minutes != null ? Number(liveClassOnly.duration_minutes) : 0;
             const sectionForLecture = buildRecordingLectureSectionTitle(
@@ -8417,54 +8526,15 @@ function registerAdminLiveClassManageRoutes({
           });
         }
       }
-      const shouldConvertToLecture = convertToLecture === true && (isCompleted === true || liveClass.is_completed === true) && !liveClass.recording_deleted_at && (liveClass.youtube_url || liveClass.recording_url || liveClass.cf_playback_hls || liveClass.board_snapshot_url);
+      const isClassroomStream = String(liveClass.stream_type || "").toLowerCase() === "classroom";
+      const shouldConvertToLecture = convertToLecture === true && (isCompleted === true || liveClass.is_completed === true) && !liveClass.recording_deleted_at && (liveClass.youtube_url || liveClass.recording_url || liveClass.cf_playback_hls || liveClass.board_snapshot_url || isClassroomStream);
       if (shouldConvertToLecture) {
         await db2.query("DELETE FROM notifications WHERE title IN ('\u{1F534} Live Class Started!', '\u{1F534} Live Class Starting Now!', '\u23F0 Live Class in 30 minutes!') AND message ILIKE $1", ["%" + liveClass.title + "%"]).catch(() => {
         });
-        const sameTitle = await db2.query("SELECT * FROM live_classes WHERE title = $1", [liveClass.title]);
-        for (const peer of sameTitle.rows) {
-          if (!peer.course_id) continue;
-          const urlForPeer = String(
-            peer.recording_url || peer.cf_playback_hls || peer.youtube_url || peer.board_snapshot_url || liveClass.recording_url || liveClass.cf_playback_hls || liveClass.youtube_url || liveClass.board_snapshot_url || ""
-          ).trim();
-          if (!urlForPeer) continue;
-          const vType = inferVideoType(urlForPeer);
-          const maxOrder = await db2.query("SELECT COALESCE(MAX(order_index), 0) + 1 as next_order FROM lectures WHERE course_id = $1", [peer.course_id]);
-          const durationMins = peer.started_at && peer.ended_at ? Math.max(1, Math.round((Number(peer.ended_at) - Number(peer.started_at)) / 6e4)) : peer.duration_minutes != null ? Number(peer.duration_minutes) : liveClass.duration_minutes != null ? Number(liveClass.duration_minutes) : 0;
-          const targetSection = buildRecordingLectureSectionTitle(
-            peer.lecture_section_title,
-            peer.lecture_subfolder_title,
-            sectionTitle
-          );
-          await db2.query(
-            `INSERT INTO lectures (
-               course_id, title, description, video_url, video_type, duration_minutes,
-               order_index, is_free_preview, section_title, live_class_id, live_class_finalized, created_at
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE, $11)
-             ON CONFLICT (live_class_id) WHERE live_class_id IS NOT NULL
-             DO UPDATE SET
-               video_url = EXCLUDED.video_url,
-               video_type = EXCLUDED.video_type,
-               duration_minutes = EXCLUDED.duration_minutes,
-               section_title = EXCLUDED.section_title,
-               live_class_finalized = TRUE`,
-            [
-              peer.course_id,
-              peer.title,
-              peer.description || "",
-              urlForPeer,
-              vType,
-              durationMins,
-              maxOrder.rows[0].next_order,
-              false,
-              targetSection,
-              peer.id,
-              Date.now()
-            ]
-          );
-          await db2.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [peer.course_id]);
-          await recomputeAllEnrollmentsProgressForCourse2(peer.course_id);
-        }
+        await convertLiveClassTitlePeersToLectures(db2, liveClass, {
+          sectionTitleOverride: sectionTitle,
+          recomputeCourseProgress: recomputeAllEnrollmentsProgressForCourse2
+        });
       }
       if (isCompleted && !convertToLecture && liveClass.title) {
         await db2.query("DELETE FROM notifications WHERE title IN ('\u{1F534} Live Class Started!', '\u{1F534} Live Class Starting Now!', '\u23F0 Live Class in 30 minutes!') AND message ILIKE $1", ["%" + liveClass.title + "%"]).catch(() => {
@@ -8490,6 +8560,23 @@ function registerAdminLiveClassManageRoutes({
           [req.params.id, liveClass.title]
         ).catch(() => {
         });
+      }
+      if (isCompleted === true && convertToLecture !== true) {
+        const refreshed = await db2.query("SELECT * FROM live_classes WHERE id = $1", [req.params.id]);
+        const updated = refreshed.rows[0] || liveClass;
+        const autoClassroom = String(updated.stream_type || "").toLowerCase() === "classroom";
+        const autoHasRecording = liveClassHasConvertibleRecording(updated);
+        if (autoClassroom || autoHasRecording) {
+          await db2.query(
+            "DELETE FROM notifications WHERE title IN ('\u{1F534} Live Class Started!', '\u{1F534} Live Class Starting Now!', '\u23F0 Live Class in 30 minutes!') AND message ILIKE $1",
+            ["%" + updated.title + "%"]
+          ).catch(() => {
+          });
+          await convertLiveClassTitlePeersToLectures(db2, updated, {
+            sectionTitleOverride: sectionTitle,
+            recomputeCourseProgress: recomputeAllEnrollmentsProgressForCourse2
+          });
+        }
       }
       res.json(liveClass);
     } catch (err) {
@@ -8570,6 +8657,7 @@ var init_admin_live_class_manage_routes = __esm({
     "use strict";
     init_recordingSection();
     init_push_notifications();
+    init_live_class_lecture_convert();
   }
 });
 
@@ -8594,7 +8682,8 @@ function registerClassroomRoutes({
   db: db2,
   requireAuth,
   requireAdmin,
-  getAuthUser: getAuthUser2
+  getAuthUser: getAuthUser2,
+  recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse2
 }) {
   app2.get("/api/live-classes/:id/classroom/config", requireAuth, async (req, res) => {
     const cfg = getLiveKitConfig();
@@ -8675,6 +8764,57 @@ function registerClassroomRoutes({
       res.status(500).json({ message: "Failed to save board snapshot" });
     }
   });
+  app2.post("/api/admin/live-classes/:id/classroom/finalize", requireAdmin, async (req, res) => {
+    try {
+      const liveClassId = String(req.params.id);
+      const lc = await loadLiveClass(db2, liveClassId);
+      if (!lc) return res.status(404).json({ message: "Live class not found" });
+      if (String(lc.stream_type || "").toLowerCase() !== "classroom") {
+        return res.status(400).json({ message: "Not a classroom stream" });
+      }
+      const body = req.body || {};
+      const recordingUrl = String(body.recordingUrl || body.boardSnapshotUrl || "").trim();
+      const sectionTitle = buildRecordingLectureSectionTitle(
+        lc.lecture_section_title,
+        lc.lecture_subfolder_title,
+        body.sectionTitle
+      );
+      let lectureIds = [];
+      if (recordingUrl) {
+        const saved = await saveRecordingForClassAndPeers(db2, liveClassId, recordingUrl, {
+          sectionTitle,
+          recomputeCourseProgress: recomputeAllEnrollmentsProgressForCourse2
+        });
+        lectureIds = saved.lectureIds;
+        await db2.query(
+          "UPDATE live_classes SET board_snapshot_url = COALESCE(board_snapshot_url, $1) WHERE id = $2",
+          [recordingUrl, liveClassId]
+        );
+      } else {
+        const endedAt = Date.now();
+        await db2.query(
+          `UPDATE live_classes 
+           SET is_live = FALSE, is_completed = TRUE, ended_at = COALESCE(ended_at, $1)
+           WHERE id = $2`,
+          [endedAt, liveClassId]
+        );
+        const refreshed = await db2.query("SELECT * FROM live_classes WHERE id = $1", [liveClassId]);
+        lectureIds = await convertLiveClassTitlePeersToLectures(db2, refreshed.rows[0] || lc, {
+          sectionTitleOverride: sectionTitle,
+          recomputeCourseProgress: recomputeAllEnrollmentsProgressForCourse2
+        });
+      }
+      res.json({
+        success: true,
+        recordingUrl: recordingUrl || null,
+        lectureIds,
+        sectionTitle
+      });
+    } catch (err) {
+      console.error("[Classroom] finalize error:", err?.message || err);
+      res.status(500).json({ message: err?.message || "Failed to finalize classroom session" });
+    }
+  });
   app2.get("/api/live-classes/:id/classroom/board-snapshot", requireAuth, async (req, res) => {
     try {
       const user = await getAuthUser2(req);
@@ -8697,6 +8837,9 @@ var init_classroom_routes = __esm({
   "server/classroom-routes.ts"() {
     "use strict";
     init_live_class_access();
+    init_recordingSection();
+    init_live_class_recording_save();
+    init_live_class_lecture_convert();
   }
 });
 
@@ -8737,7 +8880,7 @@ async function authenticateClassroomSocket(db2, req, roomId) {
       ...token ? { authorization: `Bearer ${token}` } : {},
       cookie: req.headers.cookie
     },
-    session: req.session
+    session: req.session ?? {}
   };
   const user = await getAuthUserFromRequest(fakeReq, db2);
   if (!user) return { ok: false, status: 401, message: "Unauthorized" };
@@ -10944,7 +11087,8 @@ async function registerRoutes(app2) {
     db,
     requireAuth,
     requireAdmin,
-    getAuthUser
+    getAuthUser,
+    recomputeAllEnrollmentsProgressForCourse
   });
   registerPdfRoutes({ app: app2, db, getAuthUser, getR2Client });
   const httpServer = createServer(app2);

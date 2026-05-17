@@ -172,6 +172,10 @@ function RootLayoutNav() {
     // Unauthenticated users may reach /profile-setup directly via the
     // registrationToken handoff from /api/auth/verify-otp. The screen itself
     // validates the token; the layout just needs to not bounce them back.
+    // Admin routes gate auth themselves; avoid welcome bounce on refresh races.
+    if (currentSegment === "admin") {
+      return;
+    }
     if (!inAuthGroup && !inWelcome && !inProfileSetup) {
       router.replace("/welcome");
     }

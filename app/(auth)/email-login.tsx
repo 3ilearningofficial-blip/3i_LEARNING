@@ -148,8 +148,10 @@ export default function EmailLoginScreen() {
                   placeholderTextColor={Colors.light.textMuted}
                   value={email}
                   onChangeText={setEmail}
-                  keyboardType="email-address"
+                  keyboardType="default"
                   autoCapitalize="none"
+                  autoComplete="username"
+                  textContentType="username"
                   returnKeyType="next"
                 />
               </View>

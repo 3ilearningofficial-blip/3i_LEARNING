@@ -44,11 +44,33 @@ function TldrawClassroomConnected({
     assets: assetStore,
   });
 
+  if (store.status === "loading") {
+    return (
+      <View style={styles.centered}>
+        <ActivityIndicator size="large" color={Colors.light.primary} />
+        <Text style={styles.loadingText}>Connecting whiteboard…</Text>
+      </View>
+    );
+  }
+
+  if (store.status === "error") {
+    const msg = store.error?.message || "Whiteboard sync failed";
+    return (
+      <View style={styles.centered}>
+        <Text style={styles.errorText}>
+          {msg.includes("timeout")
+            ? "Whiteboard could not connect (timed out). Check EXPO_PUBLIC_API_BASE_URL points to your API server, deploy the latest backend (classroom-sync auth fix), and confirm the board WebSocket is reachable."
+            : msg}
+        </Text>
+      </View>
+    );
+  }
+
   return (
     <div style={{ width: "100%", height: "100%", position: "relative", background: "#0a0a0a" }}>
       <Tldraw
         licenseKey={TLDRAW_LICENSE_KEY}
-        store={store}
+        store={store.store}
         onMount={(editor: Editor) => {
           editorRef.current = editor;
           if (readonly) {

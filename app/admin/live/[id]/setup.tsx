@@ -20,7 +20,10 @@ import { validateSetupBeforeGoLive } from "@/lib/live-stream/setup-config";
 import { useWebRTCStream } from "@/lib/useWebRTCStream";
 import { useClassroomConfig } from "@/lib/classroom/useClassroomToken";
 import SharedLiveSettings from "@/components/live-setup/SharedLiveSettings";
+import MediaDeviceSelectors from "@/components/live-setup/MediaDeviceSelectors";
+import ClassroomMediaSetupPanel from "@/components/live-setup/ClassroomMediaSetupPanel";
 import ClassroomSetupPreview from "@/components/live-setup/ClassroomSetupPreview";
+import { saveClassroomMediaDevices } from "@/lib/classroom/mediaDevices";
 import CloudflareSetupPreview, { type CfStreamInfo } from "@/components/live-setup/CloudflareSetupPreview";
 import RtmpSetupPreview from "@/components/live-setup/RtmpSetupPreview";
 import WebrtcSetupPreview from "@/components/live-setup/WebrtcSetupPreview";
@@ -39,7 +42,8 @@ export default function LiveSetupPage() {
   const [validationError, setValidationError] = useState<string | null>(null);
   const [isGoingLive, setIsGoingLive] = useState(false);
 
-  const webrtc = useWebRTCStream(streamType === "webrtc");
+  const needsMediaPreview = streamType === "webrtc" || streamType === "classroom";
+  const webrtc = useWebRTCStream(needsMediaPreview);
   const { data: classroomConfig } = useClassroomConfig(liveClassId);
 
   const { data: liveClass, isLoading } = useQuery({
@@ -72,7 +76,7 @@ export default function LiveSetupPage() {
   const renderPreview = () => {
     switch (streamType) {
       case "classroom":
-        return <ClassroomSetupPreview livekitConfigured={!!classroomConfig?.livekitConfigured} />;
+        return <ClassroomSetupPreview liveClassId={liveClassId} />;
       case "cloudflare":
         return (
           <CloudflareSetupPreview
@@ -86,7 +90,7 @@ export default function LiveSetupPage() {
       case "rtmp":
         return <RtmpSetupPreview youtubeUrl={youtubeUrl} onYoutubeUrlChange={setYoutubeUrl} />;
       case "webrtc":
-        return <WebrtcSetupPreview />;
+        return <WebrtcSetupPreview webrtc={webrtc} />;
       default:
         return null;
     }
@@ -119,6 +123,13 @@ export default function LiveSetupPage() {
       }
 
       await apiRequest("PUT", `/api/admin/live-classes/${liveClassId}`, body);
+
+      if (streamType === "classroom" && Platform.OS === "web") {
+        saveClassroomMediaDevices({
+          cameraId: webrtc.selectedCamera || undefined,
+          microphoneId: webrtc.selectedMicrophone || undefined,
+        });
+      }
 
       if (streamType === "webrtc") {
         webrtc.cleanup();
@@ -174,6 +185,14 @@ export default function LiveSetupPage() {
 
         <View style={styles.sidePanel}>
           <ScrollView style={styles.sideScroll} showsVerticalScrollIndicator={false}>
+            {streamType === "classroom" ? (
+              <ClassroomMediaSetupPanel
+                webrtc={webrtc}
+                livekitConfigured={!!classroomConfig?.livekitConfigured}
+              />
+            ) : streamType === "webrtc" ? (
+              <MediaDeviceSelectors webrtc={webrtc} />
+            ) : null}
             <Text style={styles.streamLabel}>Stream: {streamType}</Text>
             <SharedLiveSettings
               chatMode={chatMode}
