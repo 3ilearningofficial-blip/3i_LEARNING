@@ -581,6 +581,12 @@ export default function LectureScreen() {
   const streamHtml = isStreamId ? buildCloudflareStreamHtml(playbackUrl) : "";
   const directVideoHtml = isDirect ? buildDirectVideoHtml(playbackUrl) : "";
 
+  useEffect(() => {
+    if (!isCfHls || Platform.OS !== "web" || !playbackUrl) return;
+    const t = setTimeout(() => setIsLoading(false), 1200);
+    return () => clearTimeout(t);
+  }, [isCfHls, playbackUrl, playerRetryTick]);
+
   const markComplete = async (opts?: { auto?: boolean }) => {
     const auto = !!opts?.auto;
     try {

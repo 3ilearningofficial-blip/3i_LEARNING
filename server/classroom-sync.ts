@@ -85,7 +85,9 @@ async function authenticateClassroomSocket(
     return { ok: false, status: 403, message: "Class is not live" };
   }
 
-  return { ok: true, user: { id: user.id, role: user.role }, isReadonly: !isAdmin };
+  // Admins must be able to draw on the board during setup preview and live class.
+  const isReadonly = user.role !== "admin";
+  return { ok: true, user: { id: user.id, role: user.role }, isReadonly };
 }
 
 export function attachClassroomSyncServer(httpServer: Server, db: DbClient): void {

@@ -19,10 +19,10 @@ export default function TeacherVideoPanel({ liveClassId, enabled = true }: Props
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
-    if (Platform.OS === "web" && videoRef.current) {
+    if (Platform.OS === "web" && videoRef.current && connected) {
       setLocalVideoEl(videoRef.current);
     }
-  }, [setLocalVideoEl]);
+  }, [setLocalVideoEl, connected]);
 
   if (Platform.OS !== "web") {
     return (

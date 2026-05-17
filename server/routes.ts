@@ -43,6 +43,7 @@ import { registerTestAttemptRoutes } from "./test-attempt-routes";
 import { registerLiveClassRoutes } from "./live-class-routes";
 import { registerAdminLiveClassManageRoutes } from "./admin-live-class-manage-routes";
 import { registerClassroomRoutes } from "./classroom-routes";
+import { registerLiveClassPollRoutes } from "./live-class-poll-routes";
 import { attachClassroomSyncServer } from "./classroom-sync";
 import { registerCourseAccessRoutes } from "./course-access-routes";
 import { registerUploadRoutes } from "./upload-routes";
@@ -1081,6 +1082,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     requireAdmin,
     getAuthUser,
     recomputeAllEnrollmentsProgressForCourse,
+  });
+
+  registerLiveClassPollRoutes({
+    app,
+    db,
+    requireAuth,
+    requireAdmin,
+    getAuthUser,
   });
 
   registerPdfRoutes({ app, db, getAuthUser, getR2Client });

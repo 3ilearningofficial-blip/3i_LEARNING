@@ -23,6 +23,9 @@ import TeacherVideoPanel from "@/components/classroom/TeacherVideoPanel";
 import LiveClassRecordingTimer from "@/components/LiveClassRecordingTimer";
 import LiveChatPanel from "@/components/LiveChatPanel";
 import LiveStudentsPanel from "@/components/LiveStudentsPanel";
+import ClassroomEngagementPanel from "@/components/classroom/ClassroomEngagementPanel";
+import ClassroomLiveOverlays from "@/components/classroom/ClassroomLiveOverlays";
+import { isTruthyDbFlag } from "@/lib/live-class/dbFlags";
 import Colors from "@/constants/colors";
 
 type SideTab = "chat" | "students";
@@ -47,7 +50,8 @@ export default function AdminClassroomPage() {
     refetchInterval: (q) => ((q.state.data as any)?.is_live ? 15000 : false),
   });
 
-  const isLive = !!liveClass?.is_live && !liveClass?.is_completed;
+  const sessionActive = liveClass && !isTruthyDbFlag(liveClass.is_completed);
+  const isLive = sessionActive && (isTruthyDbFlag(liveClass?.is_live) || sessionActive);
   const startedAt = Number(liveClass?.started_at || 0) || null;
 
   const chatMode = (liveClass?.chat_mode as "public" | "private") || "public";
@@ -134,14 +138,15 @@ export default function AdminClassroomPage() {
         <Text style={styles.headerTitle} numberOfLines={1}>
           {liveClass?.title || "Live class"}
         </Text>
-        {isLive ? (
-          <LiveClassRecordingTimer startedAt={startedAt} active compact />
-        ) : (
-          <View style={styles.livePill}>
-            <View style={styles.liveDot} />
-            <Text style={styles.liveText}>LIVE</Text>
-          </View>
-        )}
+        {sessionActive ? (
+          <>
+            <LiveClassRecordingTimer startedAt={startedAt} active compact />
+            <View style={styles.livePill}>
+              <View style={styles.liveDot} />
+              <Text style={styles.liveText}>LIVE</Text>
+            </View>
+          </>
+        ) : null}
         <Pressable style={styles.endBtn} onPress={handleEndClass} disabled={isEnding}>
           {isEnding ? (
             <ActivityIndicator size="small" color="#fff" />
@@ -153,7 +158,8 @@ export default function AdminClassroomPage() {
 
       <View style={styles.main}>
         <View style={styles.boardArea}>
-          {isLive && (
+          <ClassroomLiveOverlays liveClassId={liveClassId} isAdmin />
+          {sessionActive && (
             <View style={styles.boardTimerOverlay} pointerEvents="none">
               <LiveClassRecordingTimer startedAt={startedAt} active />
             </View>
@@ -162,7 +168,8 @@ export default function AdminClassroomPage() {
         </View>
 
         <View style={styles.sidePanel}>
-          <TeacherVideoPanel liveClassId={liveClassId} />
+          <ClassroomEngagementPanel liveClassId={liveClassId} />
+          <TeacherVideoPanel liveClassId={liveClassId} enabled={sessionActive} />
 
           <View style={styles.tabBar}>
             <Pressable

@@ -10,6 +10,7 @@ export function useLiveKitRoom(
   const roomRef = useRef<Room | null>(null);
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
+  const connectGenRef = useRef(0);
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
   const [micEnabled, setMicEnabled] = useState(true);
@@ -39,7 +40,7 @@ export function useLiveKitRoom(
   const setLocalVideoEl = useCallback(
     (el: HTMLVideoElement | null) => {
       localVideoRef.current = el;
-      if (el) attachLocal();
+      if (el && roomRef.current) attachLocal();
     },
     [attachLocal]
   );
@@ -47,7 +48,7 @@ export function useLiveKitRoom(
   const setRemoteVideoEl = useCallback(
     (el: HTMLVideoElement | null) => {
       remoteVideoRef.current = el;
-      if (el) attachRemoteTeacher();
+      if (el && roomRef.current) attachRemoteTeacher();
     },
     [attachRemoteTeacher]
   );
@@ -55,55 +56,55 @@ export function useLiveKitRoom(
   useEffect(() => {
     if (!enabled || !tokenPayload?.token || !tokenPayload.url) return;
 
+    const gen = ++connectGenRef.current;
     const room = new Room({ adaptiveStream: true, dynacast: true });
     roomRef.current = room;
-    let cancelled = false;
 
-    room.on(RoomEvent.TrackSubscribed, attachRemoteTeacher);
-    room.on(RoomEvent.LocalTrackPublished, attachLocal);
+    const onLocalPublished = () => attachLocal();
+    const onRemoteSubscribed = () => attachRemoteTeacher();
 
-    const mediaPrefs = loadClassroomMediaDevices();
+    room.on(RoomEvent.LocalTrackPublished, onLocalPublished);
+    room.on(RoomEvent.TrackSubscribed, onRemoteSubscribed);
 
-    void room
-      .connect(tokenPayload.url, tokenPayload.token)
-      .then(async () => {
-        if (cancelled) return;
+    const connect = async () => {
+      try {
+        await room.connect(tokenPayload.url, tokenPayload.token);
+        if (connectGenRef.current !== gen) return;
+
         setConnected(true);
+        setError(null);
+
+        const prefs = loadClassroomMediaDevices();
         if (tokenPayload.canPublish) {
           await room.localParticipant.setMicrophoneEnabled(true, {
-            deviceId: mediaPrefs.microphoneId,
+            deviceId: prefs.microphoneId,
           });
           await room.localParticipant.setCameraEnabled(true, {
-            deviceId: mediaPrefs.cameraId,
+            deviceId: prefs.cameraId,
           });
           setMicEnabled(room.localParticipant.isMicrophoneEnabled);
           setCamEnabled(room.localParticipant.isCameraEnabled);
           attachLocal();
-        } else {
-          attachRemoteTeacher();
         }
-      })
-      .catch((e: unknown) => {
-        if (!cancelled) {
-          const msg = e instanceof Error ? e.message : "Failed to connect video";
-          setError(msg);
-        }
-      });
+      } catch (e: unknown) {
+        if (connectGenRef.current !== gen) return;
+        setError(e instanceof Error ? e.message : "Failed to connect video");
+        setConnected(false);
+      }
+    };
+
+    void connect();
 
     return () => {
-      cancelled = true;
+      if (connectGenRef.current === gen) {
+        connectGenRef.current += 1;
+      }
       void room.disconnect();
       roomRef.current = null;
       setConnected(false);
     };
-  }, [
-    enabled,
-    tokenPayload?.token,
-    tokenPayload?.url,
-    tokenPayload?.canPublish,
-    attachLocal,
-    attachRemoteTeacher,
-  ]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, tokenPayload?.token, tokenPayload?.url, tokenPayload?.canPublish]);
 
   const toggleMic = async () => {
     const room = roomRef.current;

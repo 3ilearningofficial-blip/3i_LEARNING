@@ -19,6 +19,7 @@ import { useAuth } from "@/context/AuthContext";
 import { filterChatMessages } from "@/lib/chat-utils";
 import TldrawClassroom from "@/components/classroom/TldrawClassroom";
 import TeacherVideoPiP from "@/components/classroom/TeacherVideoPiP";
+import ClassroomLiveOverlays from "@/components/classroom/ClassroomLiveOverlays";
 import Colors from "@/constants/colors";
 
 type ChatMsg = {
@@ -152,6 +153,9 @@ export default function ClassroomStudentView({
           </View>
         ) : showAsLiveUI || isCompleted ? (
           <>
+            {showAsLiveUI && !isCompleted ? (
+              <ClassroomLiveOverlays liveClassId={liveClassId} />
+            ) : null}
             <TldrawClassroom liveClassId={liveClassId} readonly />
             {showAsLiveUI && !isCompleted ? <TeacherVideoPiP liveClassId={liveClassId} enabled /> : null}
           </>
