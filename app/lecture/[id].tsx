@@ -414,7 +414,15 @@ export default function LectureScreen() {
   const [mediaTokenError, setMediaTokenError] = useState<string | null>(null);
   const [mediaTokenRetryTick, setMediaTokenRetryTick] = useState(0);
 
-  const { data: lectureData, error: lectureError, refetch: refetchLecture } = useQuery<{ video_url: string; pdf_url?: string; title: string; is_completed?: boolean; download_allowed?: boolean; course_id?: number }>({
+  const { data: lectureData, error: lectureError, refetch: refetchLecture } = useQuery<{
+    video_url: string;
+    pdf_url?: string;
+    title: string;
+    is_completed?: boolean;
+    download_allowed?: boolean;
+    course_id?: number;
+    live_class_id?: number | null;
+  }>({
     queryKey: ["/api/lectures", id],
     queryFn: async () => {
       const baseUrl = getApiUrl();
@@ -483,7 +491,29 @@ export default function LectureScreen() {
 
   const isCompleted = progressData?.is_completed || lectureData?.is_completed || false;
 
-  const rawVideoUrl = lectureData?.video_url || paramVideoUrl || "";
+  const needsBoardFallback =
+    !!lectureData?.live_class_id &&
+    !String(lectureData?.video_url || "").trim() &&
+    !String(paramVideoUrl || "").trim();
+
+  const { data: classroomBoardSnapshot } = useQuery<{ boardSnapshotUrl: string | null }>({
+    queryKey: ["/api/live-classes", lectureData?.live_class_id, "classroom/board-snapshot"],
+    queryFn: async () => {
+      const lcId = lectureData!.live_class_id!;
+      const res = await authFetch(
+        `${getApiUrl()}/live-classes/${encodeURIComponent(String(lcId))}/classroom/board-snapshot`
+      );
+      if (!res.ok) throw new Error("Failed to load board snapshot");
+      return res.json();
+    },
+    enabled: needsBoardFallback,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const rawVideoUrl =
+    lectureData?.video_url ||
+    paramVideoUrl ||
+    (needsBoardFallback ? classroomBoardSnapshot?.boardSnapshotUrl || "" : "");
   const baseUrl = getBaseUrl();
   const [mediaToken, setMediaToken] = useState<string | null>(null);
   const [mediaReadUrl, setMediaReadUrl] = useState<string | null>(null);

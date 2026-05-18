@@ -1382,21 +1382,21 @@ function registerAuthRoutes({
         return res.status(404).json({ message: "Account not found. Please register first." });
       }
       const ch = chRow.rows[0];
-      const nowMs = Date.now();
+      const nowMs2 = Date.now();
       const verifyLockedUntil = ch.verify_locked_until != null ? Number(ch.verify_locked_until) : 0;
-      if (verifyLockedUntil > nowMs) {
+      if (verifyLockedUntil > nowMs2) {
         return res.status(429).json({ message: "Too many attempts. Please try again later." });
       }
-      if (!verifyOtpValue2(ch.otp_hash, otp) || nowMs > Number(ch.otp_expires_at || 0)) {
+      if (!verifyOtpValue2(ch.otp_hash, otp) || nowMs2 > Number(ch.otp_expires_at || 0)) {
         const failCount = Number(ch.verify_failed_attempts || 0) + 1;
-        const lockUntil = failCount >= 5 ? nowMs + 15 * 60 * 1e3 : null;
+        const lockUntil = failCount >= 5 ? nowMs2 + 15 * 60 * 1e3 : null;
         await db2.query(
           `UPDATE otp_challenges SET
              verify_failed_attempts = $1,
              verify_locked_until = COALESCE($2, verify_locked_until),
              updated_at = $3
            WHERE identifier = $4`,
-          [failCount, lockUntil, nowMs, normalizedIdentifier]
+          [failCount, lockUntil, nowMs2, normalizedIdentifier]
         );
         return res.status(401).json({ message: GENERIC_OTP_ERROR });
       }
@@ -1408,7 +1408,7 @@ function registerAuthRoutes({
            verify_locked_until = NULL,
            updated_at = $1
          WHERE identifier = $2`,
-        [nowMs, normalizedIdentifier]
+        [nowMs2, normalizedIdentifier]
       );
       return res.json(registrationTokenPayloadResponse(normalizedIdentifier, isPhone ? "phone" : "email"));
     } catch (err) {
@@ -8273,7 +8273,10 @@ async function convertLiveClassTitlePeersToLectures(db2, anchor, opts = {}) {
        DO UPDATE SET
          title = EXCLUDED.title,
          description = EXCLUDED.description,
-         video_url = COALESCE(NULLIF(EXCLUDED.video_url, ''), lectures.video_url),
+         video_url = CASE
+           WHEN NULLIF(EXCLUDED.video_url, '') IS NOT NULL THEN EXCLUDED.video_url
+           ELSE lectures.video_url
+         END,
          video_type = EXCLUDED.video_type,
          duration_minutes = EXCLUDED.duration_minutes,
          section_title = EXCLUDED.section_title,
@@ -8791,6 +8794,13 @@ function registerClassroomRoutes({
           [recordingUrl, liveClassId]
         );
       } else {
+        const boardOnly = String(body.boardSnapshotUrl || "").trim();
+        if (boardOnly) {
+          await db2.query(
+            "UPDATE live_classes SET board_snapshot_url = COALESCE(board_snapshot_url, $1) WHERE id = $2",
+            [boardOnly, liveClassId]
+          );
+        }
         const endedAt = Date.now();
         await db2.query(
           `UPDATE live_classes 
@@ -8843,10 +8853,272 @@ var init_classroom_routes = __esm({
   }
 });
 
+// server/live-class-poll-routes.ts
+function nowMs() {
+  return Date.now();
+}
+async function loadLiveClass2(db2, id) {
+  const r = await db2.query("SELECT * FROM live_classes WHERE id = $1", [id]);
+  return r.rows[0] || null;
+}
+async function finalizeExpiredPolls(db2, liveClassId) {
+  const t = nowMs();
+  await db2.query(
+    `UPDATE live_class_polls SET ended_at = $1 WHERE live_class_id = $2 AND ended_at IS NULL AND ends_at <= $3`,
+    [t, liveClassId, t]
+  );
+}
+async function finalizeExpiredTimers(db2, liveClassId) {
+  const t = nowMs();
+  await db2.query(
+    `UPDATE live_class_activity_timers SET ended_at = $1 WHERE live_class_id = $2 AND ended_at IS NULL AND ends_at <= $3`,
+    [t, liveClassId, t]
+  );
+}
+function registerLiveClassPollRoutes({
+  app: app2,
+  db: db2,
+  requireAuth,
+  requireAdmin,
+  getAuthUser: getAuthUser2
+}) {
+  app2.post("/api/admin/live-classes/:id/polls", requireAdmin, async (req, res) => {
+    try {
+      const liveClassId = String(req.params.id);
+      const user = await getAuthUser2(req);
+      const { kind, question, options, durationSeconds, correctOptionIndex } = req.body || {};
+      if (kind !== "poll" && kind !== "quiz") {
+        return res.status(400).json({ message: "kind must be poll or quiz" });
+      }
+      const q = String(question || "").trim();
+      if (!q) return res.status(400).json({ message: "question required" });
+      const opts = Array.isArray(options) ? options.map((o) => String(o || "").trim()).filter(Boolean) : [];
+      if (opts.length < 2) return res.status(400).json({ message: "At least 2 options required" });
+      const duration = Number(durationSeconds);
+      if (!Number.isFinite(duration) || duration < 5 || duration > 600) {
+        return res.status(400).json({ message: "durationSeconds must be 5\u2013600" });
+      }
+      const started = nowMs();
+      const ends = started + duration * 1e3;
+      await finalizeExpiredPolls(db2, liveClassId);
+      const pollRes = await db2.query(
+        `INSERT INTO live_class_polls (live_class_id, kind, question, duration_seconds, started_at, ends_at, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+        [liveClassId, kind, q, duration, started, ends, user?.id || null]
+      );
+      const poll = pollRes.rows[0];
+      const optionRows = [];
+      for (let i = 0; i < opts.length; i += 1) {
+        const o = await db2.query(
+          `INSERT INTO live_class_poll_options (poll_id, label, sort_order) VALUES ($1, $2, $3) RETURNING id, label, sort_order`,
+          [poll.id, opts[i], i]
+        );
+        optionRows.push(o.rows[0]);
+      }
+      let correctOptionId = null;
+      if (kind === "quiz") {
+        const idx = Number(correctOptionIndex);
+        if (!Number.isInteger(idx) || idx < 0 || idx >= optionRows.length) {
+          return res.status(400).json({ message: "correctOptionIndex required for quiz" });
+        }
+        correctOptionId = optionRows[idx].id;
+        await db2.query("UPDATE live_class_polls SET correct_option_id = $1 WHERE id = $2", [
+          correctOptionId,
+          poll.id
+        ]);
+        poll.correct_option_id = correctOptionId;
+      }
+      res.json({
+        poll: { ...poll, correct_option_id: correctOptionId, options: optionRows }
+      });
+    } catch (err) {
+      console.error("[Poll] create error:", err?.message || err);
+      res.status(500).json({ message: "Failed to create poll" });
+    }
+  });
+  app2.post("/api/admin/live-classes/:id/polls/:pollId/end", requireAdmin, async (req, res) => {
+    try {
+      const t = nowMs();
+      await db2.query(
+        "UPDATE live_class_polls SET ended_at = $1 WHERE id = $2 AND live_class_id = $3",
+        [t, req.params.pollId, req.params.id]
+      );
+      res.json({ ok: true });
+    } catch {
+      res.status(500).json({ message: "Failed to end poll" });
+    }
+  });
+  app2.get("/api/admin/live-classes/:id/polls/:pollId/results", requireAdmin, async (req, res) => {
+    try {
+      const pollId = Number(req.params.pollId);
+      const pollRes = await db2.query("SELECT * FROM live_class_polls WHERE id = $1 AND live_class_id = $2", [
+        pollId,
+        req.params.id
+      ]);
+      if (!pollRes.rows[0]) return res.status(404).json({ message: "Poll not found" });
+      const options = await db2.query(
+        "SELECT id, label, sort_order FROM live_class_poll_options WHERE poll_id = $1 ORDER BY sort_order",
+        [pollId]
+      );
+      const votes = await db2.query(
+        `SELECT option_id, COUNT(*)::int AS count FROM live_class_poll_votes WHERE poll_id = $1 GROUP BY option_id`,
+        [pollId]
+      );
+      const total = votes.rows.reduce((s, r) => s + Number(r.count), 0);
+      const results = options.rows.map((o) => {
+        const row = votes.rows.find((v) => Number(v.option_id) === Number(o.id));
+        const count = Number(row?.count || 0);
+        return {
+          ...o,
+          count,
+          percent: total > 0 ? Math.round(count / total * 100) : 0
+        };
+      });
+      res.json({ poll: pollRes.rows[0], results, totalVotes: total });
+    } catch {
+      res.status(500).json({ message: "Failed to load poll results" });
+    }
+  });
+  app2.get("/api/live-classes/:id/polls/active", requireAuth, async (req, res) => {
+    try {
+      const liveClassId = String(req.params.id);
+      const user = await getAuthUser2(req);
+      const lc = await loadLiveClass2(db2, liveClassId);
+      if (!lc) return res.status(404).json({ message: "Live class not found" });
+      if (!await userCanAccessLiveClassContent(db2, user, lc)) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      await finalizeExpiredPolls(db2, liveClassId);
+      const t = nowMs();
+      const pollRes = await db2.query(
+        `SELECT * FROM live_class_polls
+         WHERE live_class_id = $1 AND ended_at IS NULL AND ends_at > $2
+         ORDER BY started_at DESC LIMIT 1`,
+        [liveClassId, t]
+      );
+      const poll = pollRes.rows[0];
+      if (!poll) return res.json({ poll: null });
+      const options = await db2.query(
+        "SELECT id, label, sort_order FROM live_class_poll_options WHERE poll_id = $1 ORDER BY sort_order",
+        [poll.id]
+      );
+      let myVote = null;
+      if (user) {
+        const v = await db2.query(
+          "SELECT option_id FROM live_class_poll_votes WHERE poll_id = $1 AND user_id = $2",
+          [poll.id, user.id]
+        );
+        myVote = v.rows[0]?.option_id ?? null;
+      }
+      const ended = Number(poll.ends_at) <= t;
+      res.json({
+        poll: { ...poll, options: options.rows, ended, myVoteOptionId: myVote }
+      });
+    } catch {
+      res.status(500).json({ message: "Failed to load poll" });
+    }
+  });
+  app2.post("/api/live-classes/:id/polls/:pollId/vote", requireAuth, async (req, res) => {
+    try {
+      const user = await getAuthUser2(req);
+      if (!user) return res.status(401).json({ message: "Unauthorized" });
+      const pollId = Number(req.params.pollId);
+      const optionId = Number(req.body?.optionId);
+      if (!Number.isFinite(optionId)) return res.status(400).json({ message: "optionId required" });
+      const pollRes = await db2.query(
+        "SELECT * FROM live_class_polls WHERE id = $1 AND live_class_id = $2",
+        [pollId, req.params.id]
+      );
+      const poll = pollRes.rows[0];
+      if (!poll) return res.status(404).json({ message: "Poll not found" });
+      const t = nowMs();
+      if (poll.ended_at || Number(poll.ends_at) <= t) {
+        return res.status(400).json({ message: "Poll has ended" });
+      }
+      const opt = await db2.query(
+        "SELECT id FROM live_class_poll_options WHERE id = $1 AND poll_id = $2",
+        [optionId, pollId]
+      );
+      if (!opt.rows[0]) return res.status(400).json({ message: "Invalid option" });
+      await db2.query(
+        `INSERT INTO live_class_poll_votes (poll_id, user_id, option_id, voted_at)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (poll_id, user_id) DO UPDATE SET option_id = EXCLUDED.option_id, voted_at = EXCLUDED.voted_at`,
+        [pollId, user.id, optionId, t]
+      );
+      res.json({ ok: true });
+    } catch {
+      res.status(500).json({ message: "Failed to vote" });
+    }
+  });
+  app2.post("/api/admin/live-classes/:id/activity-timer", requireAdmin, async (req, res) => {
+    try {
+      const liveClassId = String(req.params.id);
+      const user = await getAuthUser2(req);
+      const label = String(req.body?.label || "Answer before time ends").trim();
+      const duration = Number(req.body?.durationSeconds);
+      if (!Number.isFinite(duration) || duration < 5 || duration > 3600) {
+        return res.status(400).json({ message: "durationSeconds must be 5\u20133600" });
+      }
+      const started = nowMs();
+      const ends = started + duration * 1e3;
+      await finalizeExpiredTimers(db2, liveClassId);
+      const r = await db2.query(
+        `INSERT INTO live_class_activity_timers (live_class_id, label, duration_seconds, started_at, ends_at, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+        [liveClassId, label, duration, started, ends, user?.id || null]
+      );
+      res.json({ timer: r.rows[0] });
+    } catch {
+      res.status(500).json({ message: "Failed to start timer" });
+    }
+  });
+  app2.get("/api/live-classes/:id/activity-timer/active", requireAuth, async (req, res) => {
+    try {
+      const liveClassId = String(req.params.id);
+      const user = await getAuthUser2(req);
+      const lc = await loadLiveClass2(db2, liveClassId);
+      if (!lc) return res.status(404).json({ message: "Live class not found" });
+      if (!await userCanAccessLiveClassContent(db2, user, lc)) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      await finalizeExpiredTimers(db2, liveClassId);
+      const t = nowMs();
+      const r = await db2.query(
+        `SELECT * FROM live_class_activity_timers
+         WHERE live_class_id = $1 AND ended_at IS NULL AND ends_at > $2
+         ORDER BY started_at DESC LIMIT 1`,
+        [liveClassId, t]
+      );
+      const timer = r.rows[0];
+      if (!timer) return res.json({ timer: null });
+      res.json({
+        timer: {
+          ...timer,
+          remainingSeconds: Math.max(0, Math.ceil((Number(timer.ends_at) - t) / 1e3))
+        }
+      });
+    } catch {
+      res.status(500).json({ message: "Failed to load timer" });
+    }
+  });
+}
+var init_live_class_poll_routes = __esm({
+  "server/live-class-poll-routes.ts"() {
+    "use strict";
+    init_live_class_access();
+  }
+});
+
 // server/classroom-sync.ts
 import { URL as URL2 } from "node:url";
 import { createRequire as createRequire2 } from "node:module";
-import { TLSocketRoom, InMemorySyncStorage } from "@tldraw/sync-core";
+import {
+  TLSocketRoom,
+  InMemorySyncStorage,
+  TLSyncErrorCloseEventCode,
+  TLSyncErrorCloseEventReason
+} from "@tldraw/sync-core";
 function sanitizeRoomId(roomId) {
   return roomId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 120);
 }
@@ -8898,7 +9170,8 @@ async function authenticateClassroomSocket(db2, req, roomId) {
   if (!isPreview && !isAdmin && (!lc.is_live || lc.is_completed)) {
     return { ok: false, status: 403, message: "Class is not live" };
   }
-  return { ok: true, user: { id: user.id, role: user.role }, isReadonly: !isAdmin };
+  const isReadonly = user.role !== "admin";
+  return { ok: true, user: { id: user.id, role: user.role }, isReadonly };
 }
 function attachClassroomSyncServer(httpServer, db2) {
   const wss = new WebSocketServer({ noServer: true });
@@ -8911,21 +9184,27 @@ function attachClassroomSyncServer(httpServer, db2) {
     });
   });
 }
+function syncCloseReason(status) {
+  if (status === 401) return TLSyncErrorCloseEventReason.NOT_AUTHENTICATED;
+  if (status === 404) return TLSyncErrorCloseEventReason.NOT_FOUND;
+  return TLSyncErrorCloseEventReason.FORBIDDEN;
+}
 async function handleConnection(ws, req, rawRoomId, db2) {
+  const caughtMessages = [];
+  const collect = (data) => {
+    caughtMessages.push(Buffer.isBuffer(data) ? data : Buffer.from(data));
+  };
+  ws.on("message", collect);
   const auth2 = await authenticateClassroomSocket(db2, req, rawRoomId);
   if (!auth2.ok) {
-    ws.close(auth2.status === 401 ? 4401 : 4403, auth2.message);
+    ws.off("message", collect);
+    ws.close(TLSyncErrorCloseEventCode, syncCloseReason(auth2.status));
     return;
   }
   const roomId = sanitizeRoomId(rawRoomId);
   const url = new URL2(req.url || "", "http://localhost");
   const sessionId = parseSessionId(url);
   const room = makeOrLoadRoom(roomId);
-  const caughtMessages = [];
-  const collect = (data) => {
-    caughtMessages.push(Buffer.isBuffer(data) ? data : Buffer.from(data));
-  };
-  ws.on("message", collect);
   room.handleSocketConnect({
     sessionId,
     socket: ws,
@@ -8933,7 +9212,7 @@ async function handleConnection(ws, req, rawRoomId, db2) {
   });
   ws.off("message", collect);
   for (const msg of caughtMessages) {
-    ws.send(msg);
+    ws.emit("message", msg);
   }
 }
 var require3, WebSocketServer, rooms;
@@ -11090,6 +11369,13 @@ async function registerRoutes(app2) {
     getAuthUser,
     recomputeAllEnrollmentsProgressForCourse
   });
+  registerLiveClassPollRoutes({
+    app: app2,
+    db,
+    requireAuth,
+    requireAdmin,
+    getAuthUser
+  });
   registerPdfRoutes({ app: app2, db, getAuthUser, getR2Client });
   const httpServer = createServer(app2);
   attachClassroomSyncServer(httpServer, db);
@@ -11136,6 +11422,7 @@ var init_routes = __esm({
     init_live_class_routes();
     init_admin_live_class_manage_routes();
     init_classroom_routes();
+    init_live_class_poll_routes();
     init_classroom_sync();
     init_course_access_routes();
     init_upload_routes();

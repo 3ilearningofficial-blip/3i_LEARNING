@@ -166,6 +166,13 @@ export function registerClassroomRoutes({
           [recordingUrl, liveClassId]
         );
       } else {
+        const boardOnly = String(body.boardSnapshotUrl || "").trim();
+        if (boardOnly) {
+          await db.query(
+            "UPDATE live_classes SET board_snapshot_url = COALESCE(board_snapshot_url, $1) WHERE id = $2",
+            [boardOnly, liveClassId]
+          );
+        }
         const endedAt = Date.now();
         await db.query(
           `UPDATE live_classes 

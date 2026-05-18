@@ -17,8 +17,7 @@ import { liveClassQueryKey, liveClassesQueryKey } from "@/lib/query-keys";
 import TldrawClassroom from "@/components/classroom/TldrawClassroom";
 import type { TldrawClassroomHandle } from "@/components/classroom/TldrawClassroom.types";
 import { finalizeClassroomLiveSession } from "@/lib/classroom/finalizeClassroomLive";
-import { buildRecordingLectureSectionTitle } from "@/lib/recordingSection";
-import { getAdminCourseRoute } from "@/lib/admin/courseAdminRoutes";
+import { getAdminCoursesSectionRoute } from "@/lib/admin/courseAdminRoutes";
 import TeacherVideoPanel from "@/components/classroom/TeacherVideoPanel";
 import LiveClassRecordingTimer from "@/components/LiveClassRecordingTimer";
 import LiveChatPanel from "@/components/LiveChatPanel";
@@ -85,22 +84,13 @@ export default function AdminClassroomPage() {
       qc.invalidateQueries({ queryKey: liveClassesQueryKey() });
       qc.invalidateQueries({ queryKey: liveClassQueryKey(liveClassId) });
 
-      const courseId = liveClass?.course_id;
-      const sectionLabel = buildRecordingLectureSectionTitle(
-        liveClass?.lecture_section_title,
-        liveClass?.lecture_subfolder_title
-      );
       const msg = result.recordingUrl
-        ? `Class ended. Whiteboard saved to Lectures → ${sectionLabel}.`
-        : `Class ended. Session saved under Lectures → ${sectionLabel}. Upload a video later from the Live tab if needed.`;
+        ? "Class ended. Whiteboard saved to Live Class Recordings."
+        : "Class ended. Session saved. Upload a video later from the course Live tab if needed.";
       if (Platform.OS === "web") window.alert(msg);
       else Alert.alert("Class ended", msg);
 
-      if (courseId) {
-        router.replace(getAdminCourseRoute(courseId) as any);
-      } else {
-        router.replace("/admin?tab=courses" as any);
-      }
+      router.replace(getAdminCoursesSectionRoute() as any);
     } catch (err: any) {
       if (Platform.OS === "web") window.alert(err?.message || "Failed to end class");
       else Alert.alert("Error", err?.message || "Failed to end class");

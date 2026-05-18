@@ -28,7 +28,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useDocumentVisibility } from "@/lib/useDocumentVisibility";
 import { useScreenWakeLock } from "@/lib/useScreenWakeLock";
 import { buildRecordingLectureSectionTitle } from "@/lib/recordingSection";
-import { getAdminCourseRoute } from "@/lib/admin/courseAdminRoutes";
+import { getAdminCoursesSectionRoute } from "@/lib/admin/courseAdminRoutes";
 
 type StreamType = "webrtc" | "rtmp" | "cloudflare";
 
@@ -204,12 +204,8 @@ export default function BroadcastPage() {
   const courseId = liveClass?.course_id;
 
   const afterEndNavigate = useCallback(() => {
-    if (courseId) {
-      router.replace(getAdminCourseRoute(courseId) as any);
-    } else {
-      router.replace("/admin?tab=courses" as any);
-    }
-  }, [courseId]);
+    router.replace(getAdminCoursesSectionRoute() as any);
+  }, []);
   const lcRecSubStorageKey = courseId != null ? `lcRecSub_${courseId}` : "lcRecSub";
   const recordingSection = buildRecordingLectureSectionTitle(
     liveClass?.lecture_section_title,

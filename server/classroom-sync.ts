@@ -9,7 +9,12 @@ const require = createRequire(import.meta.url);
 const WebSocketServer = require("ws").Server as new (
   options?: import("ws").ServerOptions
 ) => import("ws").WebSocketServer;
-import { TLSocketRoom, InMemorySyncStorage } from "@tldraw/sync-core";
+import {
+  TLSocketRoom,
+  InMemorySyncStorage,
+  TLSyncErrorCloseEventCode,
+  TLSyncErrorCloseEventReason,
+} from "@tldraw/sync-core";
 import { getAuthUserFromRequest } from "./auth-utils";
 import type { DbClient } from "./classroom-sync-types";
 import { userCanAccessLiveClassContent } from "./live-class-access";
@@ -104,10 +109,23 @@ export function attachClassroomSyncServer(httpServer: Server, db: DbClient): voi
   });
 }
 
+function syncCloseReason(status: number): string {
+  if (status === 401) return TLSyncErrorCloseEventReason.NOT_AUTHENTICATED;
+  if (status === 404) return TLSyncErrorCloseEventReason.NOT_FOUND;
+  return TLSyncErrorCloseEventReason.FORBIDDEN;
+}
+
 async function handleConnection(ws: WebSocket, req: IncomingMessage, rawRoomId: string, db: DbClient) {
+  const caughtMessages: Buffer[] = [];
+  const collect = (data: Buffer | ArrayBuffer) => {
+    caughtMessages.push(Buffer.isBuffer(data) ? data : Buffer.from(data));
+  };
+  ws.on("message", collect);
+
   const auth = await authenticateClassroomSocket(db, req, rawRoomId);
   if (!auth.ok) {
-    ws.close(auth.status === 401 ? 4401 : 4403, auth.message);
+    ws.off("message", collect);
+    ws.close(TLSyncErrorCloseEventCode, syncCloseReason(auth.status));
     return;
   }
 
@@ -115,12 +133,6 @@ async function handleConnection(ws: WebSocket, req: IncomingMessage, rawRoomId: 
   const url = new URL(req.url || "", "http://localhost");
   const sessionId = parseSessionId(url);
   const room = makeOrLoadRoom(roomId);
-
-  const caughtMessages: Buffer[] = [];
-  const collect = (data: Buffer | ArrayBuffer) => {
-    caughtMessages.push(Buffer.isBuffer(data) ? data : Buffer.from(data));
-  };
-  ws.on("message", collect);
 
   room.handleSocketConnect({
     sessionId,
@@ -130,6 +142,6 @@ async function handleConnection(ws: WebSocket, req: IncomingMessage, rawRoomId: 
 
   ws.off("message", collect);
   for (const msg of caughtMessages) {
-    ws.send(msg);
+    (ws as WebSocket & { emit(event: "message", data: Buffer): boolean }).emit("message", msg);
   }
 }

@@ -40,7 +40,11 @@ export async function finalizeClassroomLiveSession(
   ).trim();
 
   if (!recordingUrl && editor) {
+    const shapeIds = [...editor.getCurrentPageShapeIds()];
     const blob = await exportClassroomBoardPng(editor);
+    if (shapeIds.length > 0 && !blob) {
+      throw new Error("Could not save board snapshot. Try again before ending class.");
+    }
     if (blob) {
       const filename = `classroom-board-${liveClassId}-${Date.now()}.png`;
       const objectUrl = URL.createObjectURL(blob);

@@ -37,6 +37,9 @@
       "@tldraw/sync": [
         "./node_modules/@tldraw/sync/dist-esm/index.d.mts"
       ],
+      "livekit-server-sdk": [
+        "./types/livekit-server-sdk.d.ts"
+      ],
       "react-native": [
         "./node_modules/react-native/types/index.d.ts"
       ]
