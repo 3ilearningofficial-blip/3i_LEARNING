@@ -28,8 +28,6 @@ export default function ClassroomEngagementPanel({ liveClassId }: Props) {
   const [options, setOptions] = useState(["", ""]);
   const [correctIdx, setCorrectIdx] = useState(0);
   const [duration, setDuration] = useState("30");
-  const [timerLabel, setTimerLabel] = useState("Answer in chat before time ends");
-  const [timerDuration, setTimerDuration] = useState("60");
   const [viewPollId, setViewPollId] = useState<number | null>(null);
 
   const { data: activePoll } = useQuery({
@@ -92,23 +90,6 @@ export default function ClassroomEngagementPanel({ liveClassId }: Props) {
     onSuccess: (_, pollId) => {
       setViewPollId(pollId);
       qc.invalidateQueries({ queryKey: ["/api/live-classes", liveClassId, "polls", "active"] });
-    },
-  });
-
-  const startTimer = useMutation({
-    mutationFn: async () => {
-      const res = await apiRequest("POST", `/api/admin/live-classes/${liveClassId}/activity-timer`, {
-        label: timerLabel.trim() || "Time's up soon",
-        durationSeconds: Number(timerDuration) || 60,
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.message || "Failed to start timer");
-      }
-      return res.json();
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/live-classes", liveClassId, "activity-timer", "active"] });
     },
   });
 
@@ -231,29 +212,6 @@ export default function ClassroomEngagementPanel({ liveClassId }: Props) {
         disabled={createPoll.isPending || !!activePoll}
       >
         <Text style={styles.primaryBtnText}>{createPoll.isPending ? "Starting…" : "Start poll"}</Text>
-      </Pressable>
-
-      <Text style={[styles.subHeading, styles.spaced]}>Class timer (students see countdown)</Text>
-      <TextInput style={styles.input} value={timerLabel} onChangeText={setTimerLabel} />
-      <View style={styles.presetRow}>
-        {DURATION_PRESETS.map((s) => (
-          <Pressable
-            key={`t-${s}`}
-            style={[styles.presetBtn, timerDuration === String(s) && styles.presetBtnActive]}
-            onPress={() => setTimerDuration(String(s))}
-          >
-            <Text style={styles.presetText}>{s}s</Text>
-          </Pressable>
-        ))}
-        <TextInput
-          style={[styles.input, styles.durationInput]}
-          value={timerDuration}
-          onChangeText={setTimerDuration}
-          keyboardType="number-pad"
-        />
-      </View>
-      <Pressable style={styles.primaryBtn} onPress={() => void startTimer.mutate()} disabled={startTimer.isPending}>
-        <Text style={styles.primaryBtnText}>{startTimer.isPending ? "Starting…" : "Start timer"}</Text>
       </Pressable>
     </ScrollView>
   );

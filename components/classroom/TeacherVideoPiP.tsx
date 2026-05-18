@@ -7,11 +7,19 @@ import Colors from "@/constants/colors";
 type Props = {
   liveClassId: string;
   enabled?: boolean;
+  /** Lift PiP when portrait chat panel is open so video stays visible above chat */
+  chatOpen?: boolean;
+  isWideLayout?: boolean;
 };
 
 const videoStyle = { width: "100%", height: "100%", objectFit: "cover" as const };
 
-export default function TeacherVideoPiP({ liveClassId, enabled = true }: Props) {
+export default function TeacherVideoPiP({
+  liveClassId,
+  enabled = true,
+  chatOpen = false,
+  isWideLayout = false,
+}: Props) {
   const { data: tokenPayload, isLoading } = useClassroomToken(liveClassId, enabled);
   const { setRemoteVideoEl, connected } = useLiveKitRoom(tokenPayload, enabled && Platform.OS === "web");
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -24,8 +32,10 @@ export default function TeacherVideoPiP({ liveClassId, enabled = true }: Props) 
 
   if (Platform.OS !== "web") return null;
 
+  const pipBottom = chatOpen && !isWideLayout ? "46%" : 72;
+
   return (
-    <View style={styles.pip} pointerEvents="none">
+    <View style={[styles.pip, { bottom: pipBottom }]} pointerEvents="none">
       {isLoading || !connected ? (
         <ActivityIndicator color={Colors.light.primary} />
       ) : (

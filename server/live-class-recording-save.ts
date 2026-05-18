@@ -72,8 +72,18 @@ export async function saveRecordingForClassAndPeers(
          course_id = EXCLUDED.course_id,
          title = EXCLUDED.title,
          description = EXCLUDED.description,
-         video_url = EXCLUDED.video_url,
-         video_type = EXCLUDED.video_type,
+         video_url = CASE
+           WHEN $4::text ~* '\\.(png|jpe?g|webp|gif)(\\?|$)' AND lectures.video_url IS NOT NULL
+             AND lectures.video_url !~* '\\.(png|jpe?g|webp|gif)(\\?|$)'
+           THEN lectures.video_url
+           ELSE EXCLUDED.video_url
+         END,
+         video_type = CASE
+           WHEN $4::text ~* '\\.(png|jpe?g|webp|gif)(\\?|$)' AND lectures.video_url IS NOT NULL
+             AND lectures.video_url !~* '\\.(png|jpe?g|webp|gif)(\\?|$)'
+           THEN lectures.video_type
+           ELSE EXCLUDED.video_type
+         END,
          duration_minutes = EXCLUDED.duration_minutes,
          section_title = EXCLUDED.section_title,
          live_class_finalized = TRUE

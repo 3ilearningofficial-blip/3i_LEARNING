@@ -3,6 +3,7 @@ const STORAGE_KEY = "classroom_media_devices";
 export type ClassroomMediaDevices = {
   cameraId?: string;
   microphoneId?: string;
+  greenScreenEnabled?: boolean;
 };
 
 export function saveClassroomMediaDevices(devices: ClassroomMediaDevices): void {

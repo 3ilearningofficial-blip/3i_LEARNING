@@ -5,16 +5,19 @@ import { useClassroomToken } from "@/lib/classroom/useClassroomToken";
 import { useLiveKitRoom } from "@/lib/classroom/useLiveKitRoom";
 import Colors from "@/constants/colors";
 
+import type { Room } from "livekit-client";
+
 type Props = {
   liveClassId: string;
   enabled?: boolean;
+  onRoomReady?: (room: Room | null) => void;
 };
 
 const videoStyle = { width: "100%", height: "100%", objectFit: "cover" as const, transform: "scaleX(-1)" };
 
-export default function TeacherVideoPanel({ liveClassId, enabled = true }: Props) {
+export default function TeacherVideoPanel({ liveClassId, enabled = true, onRoomReady }: Props) {
   const { data: tokenPayload, isLoading, error: tokenError } = useClassroomToken(liveClassId, enabled);
-  const { error, connected, micEnabled, camEnabled, setLocalVideoEl, toggleMic, toggleCam } =
+  const { error, connected, micEnabled, camEnabled, setLocalVideoEl, toggleMic, toggleCam, room } =
     useLiveKitRoom(tokenPayload, enabled && Platform.OS === "web");
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
@@ -23,6 +26,11 @@ export default function TeacherVideoPanel({ liveClassId, enabled = true }: Props
       setLocalVideoEl(videoRef.current);
     }
   }, [setLocalVideoEl, connected]);
+
+  useEffect(() => {
+    onRoomReady?.(connected ? room.current : null);
+    return () => onRoomReady?.(null);
+  }, [connected, room, onRoomReady]);
 
   if (Platform.OS !== "web") {
     return (

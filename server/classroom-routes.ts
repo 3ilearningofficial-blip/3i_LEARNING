@@ -126,10 +126,7 @@ export function registerClassroomRoutes({
       const lc = await loadLiveClass(db, liveClassId);
       if (!lc) return res.status(404).json({ message: "Live class not found" });
 
-      await db.query(
-        "UPDATE live_classes SET board_snapshot_url = $1, recording_url = COALESCE(recording_url, $1) WHERE id = $2",
-        [url, liveClassId]
-      );
+      await db.query("UPDATE live_classes SET board_snapshot_url = $1 WHERE id = $2", [url, liveClassId]);
       res.json({ ok: true, boardSnapshotUrl: url });
     } catch (err: any) {
       console.error("[Classroom] board-snapshot error:", err?.message || err);
@@ -147,32 +144,33 @@ export function registerClassroomRoutes({
       }
 
       const body = req.body || {};
-      const recordingUrl = String(body.recordingUrl || body.boardSnapshotUrl || "").trim();
+      const recordingUrl = String(body.recordingUrl || "").trim();
+      const boardSnapshotUrl = String(body.boardSnapshotUrl || "").trim();
       const sectionTitle = buildRecordingLectureSectionTitle(
         lc.lecture_section_title,
         lc.lecture_subfolder_title,
         body.sectionTitle
       );
 
+      const isImageUrl = (u: string) => /\.(png|jpe?g|webp|gif)(\?|$)/i.test(u);
+
       let lectureIds: number[] = [];
-      if (recordingUrl) {
+      if (recordingUrl && !isImageUrl(recordingUrl)) {
         const saved = await saveRecordingForClassAndPeers(db, liveClassId, recordingUrl, {
           sectionTitle,
           recomputeCourseProgress: recomputeAllEnrollmentsProgressForCourse,
         });
         lectureIds = saved.lectureIds;
+      }
+
+      if (boardSnapshotUrl) {
         await db.query(
           "UPDATE live_classes SET board_snapshot_url = COALESCE(board_snapshot_url, $1) WHERE id = $2",
-          [recordingUrl, liveClassId]
+          [boardSnapshotUrl, liveClassId]
         );
-      } else {
-        const boardOnly = String(body.boardSnapshotUrl || "").trim();
-        if (boardOnly) {
-          await db.query(
-            "UPDATE live_classes SET board_snapshot_url = COALESCE(board_snapshot_url, $1) WHERE id = $2",
-            [boardOnly, liveClassId]
-          );
-        }
+      }
+
+      if (!recordingUrl || isImageUrl(recordingUrl)) {
         const endedAt = Date.now();
         await db.query(
           `UPDATE live_classes 
@@ -189,7 +187,8 @@ export function registerClassroomRoutes({
 
       res.json({
         success: true,
-        recordingUrl: recordingUrl || null,
+        recordingUrl: recordingUrl && !isImageUrl(recordingUrl) ? recordingUrl : null,
+        boardSnapshotUrl: boardSnapshotUrl || null,
         lectureIds,
         sectionTitle,
       });

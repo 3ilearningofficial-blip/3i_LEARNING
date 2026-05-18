@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from "react";
+import React, { useState, useCallback, useRef, useEffect } from "react";
 import {
   View,
   Text,
@@ -12,11 +12,15 @@ import { router, useLocalSearchParams } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
+import type { Room } from "livekit-client";
 import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
 import { liveClassQueryKey, liveClassesQueryKey } from "@/lib/query-keys";
 import TldrawClassroom from "@/components/classroom/TldrawClassroom";
 import type { TldrawClassroomHandle } from "@/components/classroom/TldrawClassroom.types";
 import { finalizeClassroomLiveSession } from "@/lib/classroom/finalizeClassroomLive";
+import { useClassroomSessionRecorder } from "@/lib/classroom/useClassroomSessionRecorder";
+import { uploadToR2 } from "@/lib/r2-upload";
+import { buildRecordingLectureSectionTitle } from "@/lib/recordingSection";
 import { getAdminCoursesSectionRoute } from "@/lib/admin/courseAdminRoutes";
 import TeacherVideoPanel from "@/components/classroom/TeacherVideoPanel";
 import LiveClassRecordingTimer from "@/components/LiveClassRecordingTimer";
@@ -24,6 +28,7 @@ import LiveChatPanel from "@/components/LiveChatPanel";
 import LiveStudentsPanel from "@/components/LiveStudentsPanel";
 import ClassroomEngagementPanel from "@/components/classroom/ClassroomEngagementPanel";
 import ClassroomLiveOverlays from "@/components/classroom/ClassroomLiveOverlays";
+import ClassroomHeaderActivityTimer from "@/components/classroom/ClassroomHeaderActivityTimer";
 import { isTruthyDbFlag } from "@/lib/live-class/dbFlags";
 import Colors from "@/constants/colors";
 
@@ -36,6 +41,9 @@ export default function AdminClassroomPage() {
   const [activeTab, setActiveTab] = useState<SideTab>("chat");
   const [isEnding, setIsEnding] = useState(false);
   const boardRef = useRef<TldrawClassroomHandle>(null);
+  const boardAreaRef = useRef<View>(null);
+  const liveKitRoomRef = useRef<Room | null>(null);
+  const sessionRecorder = useClassroomSessionRecorder(true);
 
   const { data: liveClass, isLoading } = useQuery({
     queryKey: liveClassQueryKey(liveClassId),
@@ -49,12 +57,36 @@ export default function AdminClassroomPage() {
     refetchInterval: (q) => ((q.state.data as any)?.is_live ? 15000 : false),
   });
 
+  const { data: viewerData } = useQuery<{ count: number; viewers: { user_id: number; user_name: string }[] }>({
+    queryKey: [`/api/live-classes/${liveClassId}/viewers`],
+    refetchInterval: 3000,
+    enabled: !!liveClassId && isTruthyDbFlag(liveClass?.is_live),
+  });
+
   const sessionActive = liveClass && !isTruthyDbFlag(liveClass.is_completed);
-  const isLive = sessionActive && (isTruthyDbFlag(liveClass?.is_live) || sessionActive);
+  const isLive = sessionActive && isTruthyDbFlag(liveClass?.is_live);
   const startedAt = Number(liveClass?.started_at || 0) || null;
 
   const chatMode = (liveClass?.chat_mode as "public" | "private") || "public";
   const showViewerCount = liveClass?.show_viewer_count ?? true;
+
+  const handleRoomReady = useCallback((room: Room | null) => {
+    liveKitRoomRef.current = room;
+  }, []);
+
+  const getBoardDomElement = useCallback((): HTMLElement | null => {
+    if (Platform.OS !== "web") return null;
+    const node = boardAreaRef.current as unknown as HTMLElement | null;
+    return node;
+  }, []);
+
+  useEffect(() => {
+    if (!isLive || !sessionActive) return;
+    const t = setTimeout(() => {
+      sessionRecorder.startSessionRecording(getBoardDomElement(), liveKitRoomRef.current);
+    }, 2000);
+    return () => clearTimeout(t);
+  }, [isLive, sessionActive, sessionRecorder, getBoardDomElement]);
 
   const handleEndClass = useCallback(async () => {
     const confirmed =
@@ -69,24 +101,69 @@ export default function AdminClassroomPage() {
     if (!confirmed) return;
 
     setIsEnding(true);
+    let videoRecordingUrl: string | undefined;
+
     try {
+      const blob = await sessionRecorder.stopAndGetBlob();
+      if (blob && blob.size > 0) {
+        const filename = `classroom-recording-${liveClassId}-${Date.now()}.webm`;
+        const fileUri = URL.createObjectURL(blob);
+        try {
+          const subfolder = String(liveClass?.lecture_subfolder_title || "").trim() || undefined;
+          const { publicUrl } = await uploadToR2(
+            fileUri,
+            filename,
+            "video/webm",
+            "live-class-recording",
+            undefined,
+            "/api/upload/presign",
+            subfolder
+          );
+          videoRecordingUrl = publicUrl;
+          const sectionTitle = buildRecordingLectureSectionTitle(
+            liveClass?.lecture_section_title,
+            liveClass?.lecture_subfolder_title
+          );
+          await apiRequest("POST", `/api/admin/live-classes/${liveClassId}/recording`, {
+            recordingUrl: publicUrl,
+            sectionTitle,
+          });
+        } finally {
+          URL.revokeObjectURL(fileUri);
+        }
+      }
+
       const result = await finalizeClassroomLiveSession(
         liveClassId,
         {
           id: liveClassId,
+          title: liveClass?.title,
+          course_id: liveClass?.course_id,
           lecture_section_title: liveClass?.lecture_section_title,
           lecture_subfolder_title: liveClass?.lecture_subfolder_title,
-          recording_url: liveClass?.recording_url,
+          recording_url: videoRecordingUrl || liveClass?.recording_url,
           board_snapshot_url: liveClass?.board_snapshot_url,
         },
-        boardRef.current?.getEditor() ?? null
+        boardRef.current?.getEditor() ?? null,
+        { videoRecordingUrl, boardEl: getBoardDomElement() }
       );
       qc.invalidateQueries({ queryKey: liveClassesQueryKey() });
       qc.invalidateQueries({ queryKey: liveClassQueryKey(liveClassId) });
 
-      const msg = result.recordingUrl
-        ? "Class ended. Whiteboard saved to Live Class Recordings."
-        : "Class ended. Session saved. Upload a video later from the course Live tab if needed.";
+      let msg: string;
+      if (result.recordingUrl && result.boardMaterialUrl) {
+        msg =
+          "Class ended. Video saved to Live Class Recordings. Board PDF added under Course → Materials (no folder).";
+      } else if (result.recordingUrl) {
+        msg = "Class ended. Video recording saved to Live Class Recordings.";
+      } else if (result.boardMaterialUrl) {
+        msg =
+          "Class ended. Board PDF added under Course → Materials. You can edit it to merge with other PDFs or move to a folder.";
+      } else if (result.boardSnapshotUrl) {
+        msg = "Class ended. Board snapshot saved. Upload a video from the course Live tab if you need full playback.";
+      } else {
+        msg = "Class ended. Session saved.";
+      }
       if (Platform.OS === "web") window.alert(msg);
       else Alert.alert("Class ended", msg);
 
@@ -96,7 +173,7 @@ export default function AdminClassroomPage() {
       else Alert.alert("Error", err?.message || "Failed to end class");
       setIsEnding(false);
     }
-  }, [liveClassId, qc, liveClass]);
+  }, [liveClassId, qc, liveClass, sessionRecorder]);
 
   if (Platform.OS !== "web") {
     return (
@@ -129,13 +206,18 @@ export default function AdminClassroomPage() {
           {liveClass?.title || "Live class"}
         </Text>
         {sessionActive ? (
-          <>
-            <LiveClassRecordingTimer startedAt={startedAt} active compact />
+          <View style={styles.headerStatus}>
+            <LiveClassRecordingTimer startedAt={startedAt} active={!!isLive} compact />
             <View style={styles.livePill}>
               <View style={styles.liveDot} />
               <Text style={styles.liveText}>LIVE</Text>
             </View>
-          </>
+            <ClassroomHeaderActivityTimer
+              liveClassId={liveClassId}
+              isAdmin
+              sessionActive={!!sessionActive}
+            />
+          </View>
         ) : null}
         <Pressable style={styles.endBtn} onPress={handleEndClass} disabled={isEnding}>
           {isEnding ? (
@@ -147,19 +229,17 @@ export default function AdminClassroomPage() {
       </LinearGradient>
 
       <View style={styles.main}>
-        <View style={styles.boardArea}>
+        <View ref={boardAreaRef} style={styles.boardArea}>
           <ClassroomLiveOverlays liveClassId={liveClassId} isAdmin />
-          {sessionActive && (
-            <View style={styles.boardTimerOverlay} pointerEvents="none">
-              <LiveClassRecordingTimer startedAt={startedAt} active />
-            </View>
-          )}
           <TldrawClassroom ref={boardRef} liveClassId={liveClassId} readonly={false} />
         </View>
 
         <View style={styles.sidePanel}>
-          <ClassroomEngagementPanel liveClassId={liveClassId} />
-          <TeacherVideoPanel liveClassId={liveClassId} enabled={sessionActive} />
+          <TeacherVideoPanel
+            liveClassId={liveClassId}
+            enabled={sessionActive}
+            onRoomReady={handleRoomReady}
+          />
 
           <View style={styles.tabBar}>
             <Pressable
@@ -180,9 +260,19 @@ export default function AdminClassroomPage() {
             {activeTab === "chat" ? (
               <LiveChatPanel liveClassId={liveClassId} chatMode={chatMode} isAdmin />
             ) : (
-              <LiveStudentsPanel liveClassId={liveClassId} showViewerCount={showViewerCount} />
+              <LiveStudentsPanel
+                liveClassId={liveClassId}
+                showViewerCount={showViewerCount}
+                parentViewers={
+                  viewerData
+                    ? { viewers: viewerData.viewers, count: viewerData.count }
+                    : undefined
+                }
+              />
             )}
           </View>
+
+          <ClassroomEngagementPanel liveClassId={liveClassId} />
         </View>
       </View>
     </View>
@@ -219,6 +309,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   headerTitle: { flex: 1, fontSize: 16, fontWeight: "700", color: "#fff" },
+  headerStatus: { flexDirection: "row", alignItems: "center", gap: 8 },
   livePill: {
     flexDirection: "row",
     alignItems: "center",
@@ -249,12 +340,6 @@ const styles = StyleSheet.create({
     backgroundColor: "#0a0a0a",
     position: "relative",
   },
-  boardTimerOverlay: {
-    position: "absolute",
-    top: 12,
-    left: 12,
-    zIndex: 20,
-  },
   sidePanel: {
     flex: 1,
     margin: 8,
@@ -269,5 +354,5 @@ const styles = StyleSheet.create({
   tabActive: { borderBottomWidth: 2, borderBottomColor: Colors.light.primary },
   tabText: { fontSize: 13, fontWeight: "600", color: Colors.light.textMuted },
   tabTextActive: { color: Colors.light.primary },
-  tabContent: { flex: 1, minHeight: 200 },
+  tabContent: { flex: 1, minHeight: 160 },
 });

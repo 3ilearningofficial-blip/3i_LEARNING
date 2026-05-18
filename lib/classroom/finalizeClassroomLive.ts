@@ -1,47 +1,88 @@
 import { apiRequest } from "@/lib/query-client";
 import { uploadToR2, getMimeType } from "@/lib/r2-upload";
 import { buildRecordingLectureSectionTitle } from "@/lib/recordingSection";
+import { isBoardSnapshotImageUrl, isVideoRecordingUrl } from "@/lib/classroom/recordingUrl";
+import {
+  exportClassroomBoardAllPagesPng,
+  exportClassroomBoardViewportPng,
+} from "@/lib/classroom/exportClassroomBoardViewport";
+import { saveClassroomBoardToCourseMaterials } from "@/lib/classroom/saveClassroomBoardMaterial";
 import type { Editor } from "tldraw";
 
 export type LiveClassRecordingMeta = {
   id: number | string;
+  title?: string | null;
+  course_id?: number | null;
   lecture_section_title?: string | null;
   lecture_subfolder_title?: string | null;
   recording_url?: string | null;
   board_snapshot_url?: string | null;
 };
 
-export async function exportClassroomBoardPng(editor: Editor | null): Promise<Blob | null> {
-  if (!editor) return null;
-  try {
-    const shapeIds = [...editor.getCurrentPageShapeIds()];
-    if (shapeIds.length === 0) return null;
-    const { blob } = await editor.toImage(shapeIds, { format: "png", background: true });
-    return blob || null;
-  } catch (e) {
-    console.warn("[Classroom] board export failed:", e);
-    return null;
-  }
+export async function exportClassroomBoardPng(
+  editor: Editor | null,
+  boardEl?: HTMLElement | null
+): Promise<Blob | null> {
+  const pages = await exportClassroomBoardAllPagesPng(editor, boardEl ?? null);
+  if (!pages?.length) return null;
+  return pages[pages.length - 1]?.blob ?? null;
 }
 
 export async function finalizeClassroomLiveSession(
   liveClassId: string,
   liveClass: LiveClassRecordingMeta,
-  editor: Editor | null
-): Promise<{ savedToLectures: boolean; recordingUrl?: string; lectureIds?: number[] }> {
+  editor: Editor | null,
+  opts?: {
+    videoRecordingUrl?: string | null;
+    boardEl?: HTMLElement | null;
+  }
+): Promise<{
+  savedToLectures: boolean;
+  recordingUrl?: string;
+  boardSnapshotUrl?: string;
+  boardMaterialUrl?: string;
+  lectureIds?: number[];
+}> {
   const subfolder = String(liveClass.lecture_subfolder_title || "").trim() || undefined;
   const sectionTitle = buildRecordingLectureSectionTitle(
     liveClass.lecture_section_title,
     liveClass.lecture_subfolder_title
   );
 
-  let recordingUrl = String(
-    liveClass.recording_url || liveClass.board_snapshot_url || ""
-  ).trim();
+  const existingRecording = String(liveClass.recording_url || "").trim();
+  const existingBoard = String(liveClass.board_snapshot_url || "").trim();
+  const courseId = Number(liveClass.course_id || 0);
+  const liveTitle = String(liveClass.title || "Live class").trim();
 
-  if (!recordingUrl && editor) {
+  let boardMaterialUrl: string | undefined;
+  if (courseId > 0 && editor) {
+    try {
+      const material = await saveClassroomBoardToCourseMaterials({
+        courseId,
+        liveClassTitle: liveTitle,
+        editor,
+        boardEl: opts?.boardEl ?? null,
+      });
+      boardMaterialUrl = material?.fileUrl;
+    } catch (e) {
+      console.warn("[Classroom] board PDF material save failed:", e);
+    }
+  }
+
+  let recordingUrl = String(opts?.videoRecordingUrl || "").trim();
+  if (!recordingUrl && isVideoRecordingUrl(existingRecording)) {
+    recordingUrl = existingRecording;
+  }
+
+  let boardSnapshotUrl = isBoardSnapshotImageUrl(existingBoard)
+    ? existingBoard
+    : isBoardSnapshotImageUrl(existingRecording)
+      ? existingRecording
+      : "";
+
+  if (!boardSnapshotUrl && editor) {
     const shapeIds = [...editor.getCurrentPageShapeIds()];
-    const blob = await exportClassroomBoardPng(editor);
+    const blob = await exportClassroomBoardPng(editor, opts?.boardEl ?? null);
     if (shapeIds.length > 0 && !blob) {
       throw new Error("Could not save board snapshot. Try again before ending class.");
     }
@@ -58,7 +99,7 @@ export async function finalizeClassroomLiveSession(
           "/api/upload/presign",
           subfolder
         );
-        recordingUrl = publicUrl;
+        boardSnapshotUrl = publicUrl;
       } finally {
         URL.revokeObjectURL(objectUrl);
       }
@@ -67,7 +108,7 @@ export async function finalizeClassroomLiveSession(
 
   const res = await apiRequest("POST", `/api/admin/live-classes/${liveClassId}/classroom/finalize`, {
     recordingUrl: recordingUrl || undefined,
-    boardSnapshotUrl: recordingUrl || undefined,
+    boardSnapshotUrl: boardSnapshotUrl || undefined,
     sectionTitle,
   });
   if (!res.ok) {
@@ -78,6 +119,8 @@ export async function finalizeClassroomLiveSession(
   return {
     savedToLectures: true,
     recordingUrl: data.recordingUrl || recordingUrl || undefined,
+    boardSnapshotUrl: data.boardSnapshotUrl || boardSnapshotUrl || undefined,
+    boardMaterialUrl,
     lectureIds: data.lectureIds,
   };
 }

@@ -410,7 +410,7 @@ export default function LiveClassScreen() {
     return () => sub.remove();
   }, []);
 
-  const { data: liveClassData } = useQuery<{ youtube_url: string; title: string; is_completed: boolean; is_live: boolean; show_viewer_count: boolean; cf_playback_hls?: string; stream_type?: string; recording_url?: string; duration_minutes?: number; scheduled_at?: number; has_access?: boolean; is_enrolled?: boolean; course_id?: number; is_public?: boolean; chat_mode?: string }>({
+  const { data: liveClassData } = useQuery<{ youtube_url: string; title: string; is_completed: boolean; is_live: boolean; started_at?: number; show_viewer_count: boolean; cf_playback_hls?: string; stream_type?: string; recording_url?: string; duration_minutes?: number; scheduled_at?: number; has_access?: boolean; is_enrolled?: boolean; course_id?: number; is_public?: boolean; chat_mode?: string }>({
     queryKey: liveClassQueryKey(String(id)),
     refetchInterval: (query) => {
       if (!isScreenActive) return false;
@@ -910,6 +910,8 @@ export default function LiveClassScreen() {
           liveClassId={String(id)}
           title={title}
           showAsLiveUI={showAsLiveUI}
+          isLive={!!liveClassData?.is_live}
+          startedAt={Number(liveClassData?.started_at || 0) || null}
           isCompleted={!!liveClassData?.is_completed}
           chatMode={liveClassData?.chat_mode}
           topPadding={topPadding}

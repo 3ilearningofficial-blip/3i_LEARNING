@@ -9,9 +9,9 @@ import {
   FlatList,
   KeyboardAvoidingView,
   ActivityIndicator,
+  useWindowDimensions,
 } from "react-native";
 import { router } from "expo-router";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
@@ -20,6 +20,8 @@ import { filterChatMessages } from "@/lib/chat-utils";
 import TldrawClassroom from "@/components/classroom/TldrawClassroom";
 import TeacherVideoPiP from "@/components/classroom/TeacherVideoPiP";
 import ClassroomLiveOverlays from "@/components/classroom/ClassroomLiveOverlays";
+import LiveClassRecordingTimer from "@/components/LiveClassRecordingTimer";
+import ClassroomHeaderActivityTimer from "@/components/classroom/ClassroomHeaderActivityTimer";
 import Colors from "@/constants/colors";
 
 type ChatMsg = {
@@ -35,6 +37,8 @@ type Props = {
   liveClassId: string;
   title: string;
   showAsLiveUI: boolean;
+  isLive: boolean;
+  startedAt?: number | null;
   isCompleted: boolean;
   chatMode?: string;
   topPadding: number;
@@ -45,20 +49,26 @@ export default function ClassroomStudentView({
   liveClassId,
   title,
   showAsLiveUI,
+  isLive,
+  startedAt,
   isCompleted,
   chatMode = "public",
   topPadding,
   bottomPadding,
 }: Props) {
-  const insets = useSafeAreaInsets();
+  const { width, height } = useWindowDimensions();
   const { user } = useAuth();
   const qc = useQueryClient();
   const [chatOpen, setChatOpen] = useState(false);
   const [chatMsg, setChatMsg] = useState("");
   const [handRaised, setHandRaised] = useState(false);
   const listRef = useRef<FlatList>(null);
+  const prevIsLiveRef = useRef(false);
 
-  const canInteract = showAsLiveUI && !isCompleted;
+  const isLandscape = width > height;
+  const isWide = width >= 768 || isLandscape;
+  const canChat = isLive && !isCompleted;
+  const showLiveHeader = (showAsLiveUI || isLive) && !isCompleted;
 
   const { data: messages = [] } = useQuery<ChatMsg[]>({
     queryKey: [`/api/live-classes/${liveClassId}/chat`],
@@ -67,7 +77,7 @@ export default function ClassroomStudentView({
       if (!res.ok) return [];
       return res.json();
     },
-    refetchInterval: canInteract ? 3000 : false,
+    refetchInterval: canChat ? 3000 : false,
     enabled: !!liveClassId,
   });
 
@@ -100,19 +110,79 @@ export default function ClassroomStudentView({
   });
 
   useEffect(() => {
-    if (!canInteract) return;
-    const t = setInterval(() => {
+    if (!isLive || isCompleted) {
+      prevIsLiveRef.current = false;
+      return;
+    }
+    const sendHeartbeat = () => {
       void apiRequest("POST", `/api/live-classes/${liveClassId}/viewers/heartbeat`, {});
-    }, 8000);
-    void apiRequest("POST", `/api/live-classes/${liveClassId}/viewers/heartbeat`, {});
+    };
+    if (!prevIsLiveRef.current) {
+      sendHeartbeat();
+      prevIsLiveRef.current = true;
+    }
+    const t = setInterval(sendHeartbeat, 8000);
     return () => clearInterval(t);
-  }, [liveClassId, canInteract]);
+  }, [liveClassId, isLive, isCompleted]);
 
   const handleSend = useCallback(() => {
     const t = chatMsg.trim();
-    if (!t || !canInteract) return;
+    if (!t || !canChat) return;
     sendMutation.mutate(t);
-  }, [chatMsg, canInteract, sendMutation]);
+  }, [chatMsg, canChat, sendMutation]);
+
+  const renderChatPanel = () => (
+    <View
+      style={[
+        styles.chatPanel,
+        isWide ? styles.chatPanelSide : styles.chatPanelPortrait,
+        { paddingBottom: isWide ? bottomPadding : bottomPadding },
+      ]}
+    >
+      <View style={styles.chatSheetHeader}>
+        <Text style={styles.chatSheetTitle}>Live chat</Text>
+        <Pressable
+          style={styles.closeBtn}
+          onPress={() => setChatOpen(false)}
+          accessibilityLabel="Close chat"
+        >
+          <Ionicons name="close" size={24} color={Colors.light.text} />
+        </Pressable>
+      </View>
+      <FlatList
+        ref={listRef}
+        data={displayMessages}
+        keyExtractor={(m) => String(m.id)}
+        style={styles.chatList}
+        renderItem={({ item }) => (
+          <View style={[styles.bubble, item.is_admin && styles.bubbleAdmin]}>
+            <Text style={styles.bubbleName}>{item.user_name}</Text>
+            <Text style={styles.bubbleText}>{item.message}</Text>
+          </View>
+        )}
+        ListEmptyComponent={
+          <Text style={styles.emptyChat}>No messages yet. Ask your doubt here.</Text>
+        }
+      />
+      <View style={styles.chatInputRow}>
+        <TextInput
+          style={styles.chatInput}
+          value={chatMsg}
+          onChangeText={setChatMsg}
+          placeholder={canChat ? "Ask a doubt…" : "Chat closed"}
+          editable={canChat}
+          onSubmitEditing={handleSend}
+        />
+        <Pressable
+          style={[styles.sendBtn, !chatMsg.trim() && styles.sendDisabled]}
+          onPress={handleSend}
+          disabled={!canChat || !chatMsg.trim()}
+        >
+          <Ionicons name="send" size={18} color="#fff" />
+        </Pressable>
+      </View>
+    </View>
+  );
 
   if (Platform.OS !== "web") {
     return (
@@ -137,86 +207,63 @@ export default function ClassroomStudentView({
         <Text style={styles.headerTitle} numberOfLines={1}>
           {title}
         </Text>
-        {showAsLiveUI && !isCompleted ? (
-          <View style={styles.livePill}>
-            <View style={styles.liveDot} />
-            <Text style={styles.liveText}>LIVE</Text>
+        {showLiveHeader ? (
+          <View style={styles.headerStatus}>
+            <LiveClassRecordingTimer startedAt={startedAt} active={isLive} compact />
+            <View style={styles.livePill}>
+              <View style={styles.liveDot} />
+              <Text style={styles.liveText}>LIVE</Text>
+            </View>
+            <ClassroomHeaderActivityTimer liveClassId={liveClassId} sessionActive={isLive} />
           </View>
         ) : null}
       </View>
 
-      <View style={styles.stage}>
-        {!showAsLiveUI && !isCompleted ? (
-          <View style={styles.waiting}>
-            <ActivityIndicator color={Colors.light.primary} />
-            <Text style={styles.waitingText}>Waiting for teacher to start…</Text>
-          </View>
-        ) : showAsLiveUI || isCompleted ? (
-          <>
-            {showAsLiveUI && !isCompleted ? (
-              <ClassroomLiveOverlays liveClassId={liveClassId} />
-            ) : null}
-            <TldrawClassroom liveClassId={liveClassId} readonly />
-            {showAsLiveUI && !isCompleted ? <TeacherVideoPiP liveClassId={liveClassId} enabled /> : null}
-          </>
-        ) : null}
+      <View style={[styles.body, isWide && chatOpen && styles.bodyRow]}>
+        <View style={[styles.stage, isWide && chatOpen && styles.stageWithChat]}>
+          {!showAsLiveUI && !isCompleted ? (
+            <View style={styles.waiting}>
+              <ActivityIndicator color={Colors.light.primary} />
+              <Text style={styles.waitingText}>Waiting for teacher to start…</Text>
+            </View>
+          ) : showAsLiveUI || isCompleted ? (
+            <>
+              {showAsLiveUI && !isCompleted ? (
+                <ClassroomLiveOverlays liveClassId={liveClassId} />
+              ) : null}
+              <TldrawClassroom liveClassId={liveClassId} readonly />
+              {showAsLiveUI && !isCompleted ? (
+                <View style={isWide && chatOpen && !isLandscape ? styles.pipAboveChat : undefined}>
+                  <TeacherVideoPiP
+                    liveClassId={liveClassId}
+                    enabled
+                    chatOpen={chatOpen}
+                    isWideLayout={isWide}
+                  />
+                </View>
+              ) : null}
+              {!isWide && chatOpen ? renderChatPanel() : null}
+            </>
+          ) : null}
+        </View>
+
+        {isWide && chatOpen ? renderChatPanel() : null}
       </View>
 
-      {chatOpen ? (
-        <View style={[styles.chatSheet, { paddingBottom: bottomPadding }]}>
-          <View style={styles.chatSheetHeader}>
-            <Text style={styles.chatSheetTitle}>Live chat</Text>
-            <Pressable onPress={() => setChatOpen(false)}>
-              <Ionicons name="close" size={22} color={Colors.light.text} />
-            </Pressable>
-          </View>
-          <FlatList
-            ref={listRef}
-            data={displayMessages}
-            keyExtractor={(m) => String(m.id)}
-            style={styles.chatList}
-            renderItem={({ item }) => (
-              <View style={[styles.bubble, item.is_admin && styles.bubbleAdmin]}>
-                <Text style={styles.bubbleName}>{item.user_name}</Text>
-                <Text style={styles.bubbleText}>{item.message}</Text>
-              </View>
-            )}
-            ListEmptyComponent={
-              <Text style={styles.emptyChat}>No messages yet. Ask your doubt here.</Text>
-            }
-          />
-          <View style={styles.chatInputRow}>
-            <TextInput
-              style={styles.chatInput}
-              value={chatMsg}
-              onChangeText={setChatMsg}
-              placeholder={canInteract ? "Ask a doubt…" : "Chat closed"}
-              editable={canInteract}
-              onSubmitEditing={handleSend}
-            />
-            <Pressable
-              style={[styles.sendBtn, !chatMsg.trim() && styles.sendDisabled]}
-              onPress={handleSend}
-              disabled={!canInteract || !chatMsg.trim()}
-            >
-              <Ionicons name="send" size={18} color="#fff" />
-            </Pressable>
-          </View>
+      {!chatOpen ? (
+        <View style={[styles.floatingBar, { bottom: bottomPadding + 12 }]}>
+          <Pressable
+            style={[styles.fab, handRaised && styles.fabActive]}
+            onPress={() => handMutation.mutate(!handRaised)}
+            disabled={!canChat}
+          >
+            <Text style={{ fontSize: 20 }}>✋</Text>
+          </Pressable>
+          <Pressable style={styles.fab} onPress={() => setChatOpen(true)}>
+            <Ionicons name="chatbubbles" size={22} color="#fff" />
+          </Pressable>
         </View>
       ) : null}
-
-      <View style={[styles.floatingBar, { bottom: bottomPadding + 12 }]}>
-        <Pressable
-          style={[styles.fab, handRaised && styles.fabActive]}
-          onPress={() => handMutation.mutate(!handRaised)}
-          disabled={!canInteract}
-        >
-          <Text style={{ fontSize: 20 }}>✋</Text>
-        </Pressable>
-        <Pressable style={styles.fab} onPress={() => setChatOpen((v) => !v)}>
-          <Ionicons name="chatbubbles" size={22} color="#fff" />
-        </Pressable>
-      </View>
     </KeyboardAvoidingView>
   );
 }
@@ -241,6 +288,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   headerTitle: { flex: 1, fontSize: 15, fontWeight: "700", color: "#fff" },
+  headerStatus: { flexDirection: "row", alignItems: "center", gap: 6, flexShrink: 0 },
   livePill: {
     flexDirection: "row",
     alignItems: "center",
@@ -252,7 +300,11 @@ const styles = StyleSheet.create({
   },
   liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: "#fff" },
   liveText: { fontSize: 10, fontWeight: "800", color: "#fff" },
-  stage: { flex: 1, position: "relative" },
+  body: { flex: 1 },
+  bodyRow: { flexDirection: "row" },
+  stage: { flex: 1, position: "relative", minHeight: 0 },
+  stageWithChat: { flex: 1 },
+  pipAboveChat: { marginBottom: 0 },
   waiting: { flex: 1, justifyContent: "center", alignItems: "center", gap: 12 },
   waitingText: { color: "#9CA3AF", fontSize: 14 },
   floatingBar: {
@@ -275,16 +327,25 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.12)",
   },
   fabActive: { backgroundColor: Colors.light.primary },
-  chatSheet: {
+  chatPanel: {
+    backgroundColor: "#fff",
+    zIndex: 40,
+    overflow: "hidden",
+  },
+  chatPanelSide: {
+    width: 320,
+    maxWidth: "38%",
+    borderLeftWidth: 1,
+    borderLeftColor: "#E5E7EB",
+  },
+  chatPanelPortrait: {
     position: "absolute",
     left: 0,
     right: 0,
     bottom: 0,
-    maxHeight: "45%",
-    backgroundColor: "#fff",
+    maxHeight: "42%",
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
-    zIndex: 40,
     paddingTop: 12,
   },
   chatSheetHeader: {
@@ -295,6 +356,14 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   chatSheetTitle: { fontSize: 16, fontWeight: "700", color: Colors.light.text },
+  closeBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#F3F4F6",
+  },
   chatList: { flex: 1, paddingHorizontal: 12 },
   bubble: {
     backgroundColor: "#F3F4F6",

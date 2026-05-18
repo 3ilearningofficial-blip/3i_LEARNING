@@ -30,18 +30,6 @@ export default function ClassroomLiveOverlays({ liveClassId, isAdmin = false }: 
     enabled: !!liveClassId && Platform.OS === "web",
   });
 
-  const { data: activeTimer } = useQuery({
-    queryKey: ["/api/live-classes", liveClassId, "activity-timer", "active"],
-    queryFn: async () => {
-      const res = await apiRequest("GET", `/api/live-classes/${liveClassId}/activity-timer/active`, undefined);
-      if (!res.ok) return null;
-      const json = await res.json();
-      return json.timer as any;
-    },
-    refetchInterval: 1000,
-    enabled: !!liveClassId && Platform.OS === "web",
-  });
-
   const vote = useMutation({
     mutationFn: async ({ pollId, optionId }: { pollId: number; optionId: number }) => {
       const res = await apiRequest("POST", `/api/live-classes/${liveClassId}/polls/${pollId}/vote`, {
@@ -64,19 +52,10 @@ export default function ClassroomLiveOverlays({ liveClassId, isAdmin = false }: 
       ? Math.max(0, Math.ceil((Number(activePoll.ends_at) - Date.now()) / 1000))
       : 0;
 
-  const timerRemaining = activeTimer?.remainingSeconds ?? 0;
-
   void tick;
 
   return (
     <View style={styles.stack} pointerEvents="box-none">
-      {activeTimer && timerRemaining > 0 ? (
-        <View style={styles.timerBanner}>
-          <Text style={styles.timerLabel}>{activeTimer.label || "Time remaining"}</Text>
-          <Text style={styles.timerCount}>{timerRemaining}s</Text>
-        </View>
-      ) : null}
-
       {activePoll && pollRemaining > 0 && !isAdmin ? (
         <View style={styles.pollCard}>
           <Text style={styles.pollKind}>{activePoll.kind === "quiz" ? "Quiz" : "Poll"} · {pollRemaining}s</Text>
@@ -110,16 +89,6 @@ const styles = StyleSheet.create({
     alignItems: "flex-end",
     gap: 8,
   },
-  timerBanner: {
-    backgroundColor: "#1E3A8A",
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 10,
-    alignItems: "center",
-    minWidth: 160,
-  },
-  timerLabel: { color: "#BFDBFE", fontSize: 11, fontWeight: "600" },
-  timerCount: { color: "#fff", fontSize: 22, fontWeight: "800", fontVariant: ["tabular-nums"] },
   pollCard: {
     backgroundColor: "rgba(15,23,42,0.92)",
     borderRadius: 12,

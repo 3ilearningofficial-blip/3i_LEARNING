@@ -86,6 +86,7 @@ function TldrawClassroomConnected({
       <Tldraw
         {...(TLDRAW_LICENSE_KEY ? { licenseKey: TLDRAW_LICENSE_KEY } : {})}
         store={store.store}
+        hideUi={readonly}
         onMount={(editor: Editor) => {
           editorRef.current = editor;
           if (readonly) {

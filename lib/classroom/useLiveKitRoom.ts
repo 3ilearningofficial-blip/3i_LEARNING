@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Room, RoomEvent, Track } from "livekit-client";
 import type { ClassroomTokenPayload } from "./useClassroomToken";
 import { loadClassroomMediaDevices } from "./mediaDevices";
+import { startChromaCameraPublish, type ChromaPublishCleanup } from "./useChromaPublish";
 
 export function useLiveKitRoom(
   tokenPayload: ClassroomTokenPayload | undefined,
@@ -11,6 +12,7 @@ export function useLiveKitRoom(
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const connectGenRef = useRef(0);
+  const chromaCleanupRef = useRef<ChromaPublishCleanup | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
   const [micEnabled, setMicEnabled] = useState(true);
@@ -37,12 +39,28 @@ export function useLiveKitRoom(
     }
   }, []);
 
+  const ensureChromaPublish = useCallback(async () => {
+    const room = roomRef.current;
+    const el = localVideoRef.current;
+    if (!room || !el) return;
+    const prefs = loadClassroomMediaDevices();
+    if (!prefs.greenScreenEnabled || chromaCleanupRef.current) return;
+    chromaCleanupRef.current = await startChromaCameraPublish(room, prefs.cameraId, el);
+    setCamEnabled(true);
+  }, []);
+
   const setLocalVideoEl = useCallback(
     (el: HTMLVideoElement | null) => {
       localVideoRef.current = el;
-      if (el && roomRef.current) attachLocal();
+      if (!el || !roomRef.current) return;
+      const prefs = loadClassroomMediaDevices();
+      if (prefs.greenScreenEnabled) {
+        void ensureChromaPublish();
+      } else {
+        attachLocal();
+      }
     },
-    [attachLocal]
+    [attachLocal, ensureChromaPublish]
   );
 
   const setRemoteVideoEl = useCallback(
@@ -79,12 +97,16 @@ export function useLiveKitRoom(
           await room.localParticipant.setMicrophoneEnabled(true, {
             deviceId: prefs.microphoneId,
           });
-          await room.localParticipant.setCameraEnabled(true, {
-            deviceId: prefs.cameraId,
-          });
+          if (!prefs.greenScreenEnabled) {
+            await room.localParticipant.setCameraEnabled(true, {
+              deviceId: prefs.cameraId,
+            });
+            setCamEnabled(room.localParticipant.isCameraEnabled);
+            attachLocal();
+          } else {
+            setCamEnabled(true);
+          }
           setMicEnabled(room.localParticipant.isMicrophoneEnabled);
-          setCamEnabled(room.localParticipant.isCameraEnabled);
-          attachLocal();
         }
       } catch (e: unknown) {
         if (connectGenRef.current !== gen) return;
@@ -99,6 +121,8 @@ export function useLiveKitRoom(
       if (connectGenRef.current === gen) {
         connectGenRef.current += 1;
       }
+      chromaCleanupRef.current?.();
+      chromaCleanupRef.current = null;
       void room.disconnect();
       roomRef.current = null;
       setConnected(false);
@@ -117,6 +141,23 @@ export function useLiveKitRoom(
   const toggleCam = async () => {
     const room = roomRef.current;
     if (!room) return;
+    const prefs = loadClassroomMediaDevices();
+    if (prefs.greenScreenEnabled) {
+      const next = !camEnabled;
+      if (next) {
+        chromaCleanupRef.current?.();
+        chromaCleanupRef.current = await startChromaCameraPublish(
+          room,
+          prefs.cameraId,
+          localVideoRef.current
+        );
+      } else {
+        chromaCleanupRef.current?.();
+        chromaCleanupRef.current = null;
+      }
+      setCamEnabled(next);
+      return;
+    }
     const next = !room.localParticipant.isCameraEnabled;
     await room.localParticipant.setCameraEnabled(next);
     setCamEnabled(next);

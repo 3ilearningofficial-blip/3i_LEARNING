@@ -24,7 +24,7 @@ interface ViewersResponse {
 export default function LiveStudentsPanel({ liveClassId, showViewerCount, parentViewers }: LiveStudentsPanelProps) {
   const { data } = useQuery<ViewersResponse>({
     queryKey: [`/api/live-classes/${liveClassId}/viewers`],
-    refetchInterval: parentViewers ? false : 10000,
+    refetchInterval: parentViewers ? false : 3000,
     enabled: parentViewers === undefined,
   });
 
