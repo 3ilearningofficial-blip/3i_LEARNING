@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useEffect } from "react";
+import React, { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import {
   View,
   Text,
@@ -32,14 +32,14 @@ import ClassroomHeaderActivityTimer from "@/components/classroom/ClassroomHeader
 import { isTruthyDbFlag } from "@/lib/live-class/dbFlags";
 import Colors from "@/constants/colors";
 
-type SideTab = "chat" | "students";
 
 export default function AdminClassroomPage() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const liveClassId = String(id || "");
   const qc = useQueryClient();
-  const [activeTab, setActiveTab] = useState<SideTab>("chat");
   const [isEnding, setIsEnding] = useState(false);
+  const [boardEl, setBoardEl] = useState<HTMLElement | null>(null);
+  const [compositeStream, setCompositeStream] = useState<MediaStream | null>(null);
   const boardRef = useRef<TldrawClassroomHandle>(null);
   const boardAreaRef = useRef<View>(null);
   const liveKitRoomRef = useRef<Room | null>(null);
@@ -67,7 +67,6 @@ export default function AdminClassroomPage() {
   const isLive = sessionActive && isTruthyDbFlag(liveClass?.is_live);
   const startedAt = Number(liveClass?.started_at || 0) || null;
 
-  const chatMode = (liveClass?.chat_mode as "public" | "private") || "public";
   const showViewerCount = liveClass?.show_viewer_count ?? true;
 
   const handleRoomReady = useCallback((room: Room | null) => {
@@ -76,17 +75,27 @@ export default function AdminClassroomPage() {
 
   const getBoardDomElement = useCallback((): HTMLElement | null => {
     if (Platform.OS !== "web") return null;
-    const node = boardAreaRef.current as unknown as HTMLElement | null;
-    return node;
+    return boardAreaRef.current as unknown as HTMLElement | null;
   }, []);
 
   useEffect(() => {
-    if (!isLive || !sessionActive) return;
+    if (Platform.OS !== "web") return;
+    const el = getBoardDomElement();
+    if (el) setBoardEl(el);
+  }, [sessionActive, getBoardDomElement]);
+
+  useEffect(() => {
+    if (!isLive || !sessionActive || !compositeStream) return;
     const t = setTimeout(() => {
-      sessionRecorder.startSessionRecording(getBoardDomElement(), liveKitRoomRef.current);
-    }, 2000);
+      sessionRecorder.startSessionRecording(compositeStream, liveKitRoomRef.current);
+    }, 1500);
     return () => clearTimeout(t);
-  }, [isLive, sessionActive, sessionRecorder, getBoardDomElement]);
+  }, [isLive, sessionActive, sessionRecorder, compositeStream]);
+
+  const chatModeResolved = useMemo(
+    () => (liveClass?.chat_mode as "public" | "private") || "public",
+    [liveClass?.chat_mode]
+  );
 
   const handleEndClass = useCallback(async () => {
     const confirmed =
@@ -237,42 +246,40 @@ export default function AdminClassroomPage() {
         <View style={styles.sidePanel}>
           <TeacherVideoPanel
             liveClassId={liveClassId}
-            enabled={sessionActive}
+            enabled={!!sessionActive}
+            boardEl={boardEl}
             onRoomReady={handleRoomReady}
+            onCompositeStream={setCompositeStream}
           />
 
-          <View style={styles.tabBar}>
-            <Pressable
-              style={[styles.tab, activeTab === "chat" && styles.tabActive]}
-              onPress={() => setActiveTab("chat")}
-            >
-              <Text style={[styles.tabText, activeTab === "chat" && styles.tabTextActive]}>Live chat</Text>
-            </Pressable>
-            <Pressable
-              style={[styles.tab, activeTab === "students" && styles.tabActive]}
-              onPress={() => setActiveTab("students")}
-            >
-              <Text style={[styles.tabText, activeTab === "students" && styles.tabTextActive]}>Students</Text>
-            </Pressable>
+          <View style={styles.engagementRow}>
+            <View style={styles.engagementCol}>
+              <Text style={styles.colLabel}>Chat</Text>
+              <View style={styles.colBody}>
+                <LiveChatPanel liveClassId={liveClassId} chatMode={chatModeResolved} isAdmin />
+              </View>
+            </View>
+            <View style={styles.engagementCol}>
+              <Text style={styles.colLabel}>Poll / Quiz</Text>
+              <View style={styles.colBody}>
+                <ClassroomEngagementPanel liveClassId={liveClassId} />
+              </View>
+            </View>
+            <View style={styles.engagementCol}>
+              <Text style={styles.colLabel}>Students</Text>
+              <View style={styles.colBody}>
+                <LiveStudentsPanel
+                  liveClassId={liveClassId}
+                  showViewerCount={showViewerCount}
+                  parentViewers={
+                    viewerData
+                      ? { viewers: viewerData.viewers, count: viewerData.count }
+                      : undefined
+                  }
+                />
+              </View>
+            </View>
           </View>
-
-          <View style={styles.tabContent}>
-            {activeTab === "chat" ? (
-              <LiveChatPanel liveClassId={liveClassId} chatMode={chatMode} isAdmin />
-            ) : (
-              <LiveStudentsPanel
-                liveClassId={liveClassId}
-                showViewerCount={showViewerCount}
-                parentViewers={
-                  viewerData
-                    ? { viewers: viewerData.viewers, count: viewerData.count }
-                    : undefined
-                }
-              />
-            )}
-          </View>
-
-          <ClassroomEngagementPanel liveClassId={liveClassId} />
         </View>
       </View>
     </View>
@@ -346,13 +353,32 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff",
     borderRadius: 10,
     padding: 10,
-    minWidth: 280,
-    maxWidth: 360,
+    minWidth: 420,
+    maxWidth: 720,
   },
-  tabBar: { flexDirection: "row", borderBottomWidth: 1, borderBottomColor: Colors.light.border },
-  tab: { flex: 1, paddingVertical: 10, alignItems: "center" },
-  tabActive: { borderBottomWidth: 2, borderBottomColor: Colors.light.primary },
-  tabText: { fontSize: 13, fontWeight: "600", color: Colors.light.textMuted },
-  tabTextActive: { color: Colors.light.primary },
-  tabContent: { flex: 1, minHeight: 160 },
+  engagementRow: {
+    flex: 1,
+    flexDirection: "row",
+    gap: 8,
+    minHeight: 200,
+  },
+  engagementCol: {
+    flex: 1,
+    minWidth: 0,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 8,
+    overflow: "hidden",
+  },
+  colLabel: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: Colors.light.textMuted,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    backgroundColor: "#F9FAFB",
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+  },
+  colBody: { flex: 1, minHeight: 140 },
 });

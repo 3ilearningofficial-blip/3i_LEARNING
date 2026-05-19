@@ -34,6 +34,7 @@ declare module "livekit-client" {
   }
 
   interface TrackPublication {
-    videoTrack?: { attach(element: HTMLVideoElement): void };
+    videoTrack?: { attach(element: HTMLVideoElement | HTMLAudioElement): void };
+    audioTrack?: { attach(element: HTMLVideoElement | HTMLAudioElement): void };
   }
 }

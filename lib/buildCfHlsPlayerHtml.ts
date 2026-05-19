@@ -73,9 +73,7 @@ ${menuCss}
 </style>
 </head>
 <body>
-<video id="v" autoplay controls playsinline controlsList="nodownload noremoteplayback nopictureinpicture" disablePictureInPicture disableRemotePlayback x-webkit-airplay="deny"></video>
-${menuHtml}
-<div id="overlay"><div class="spinner"></div><div class="msg" id="msg">Connecting to live stream...</div></div>
+<video id="v" autoplay playsinline controlsList="nodownload noremoteplayback nopictureinpicture" disablePictureInPicture disableRemotePlayback x-webkit-airplay="deny"></video>${menuHtml}<div id="overlay"><div class="spinner"></div><div class="msg" id="msg">Connecting to live stream...</div></div>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7/dist/hls.min.js"></script>
 <script>
 var video = document.getElementById('v');
@@ -85,18 +83,28 @@ var hlsUrl = ${safeUrl};
 var qsel = document.getElementById('qsel');
 var ssel = document.getElementById('ssel');
 var retryCount = 0;
+var fatalRebuildCount = 0;
+var maxFatalRebuilds = 12;
 var hlsRef = null;
-/** True once we've shown live frames at least once in this session.
- *  After that we never show the full "Connecting..." overlay again -- the
- *  player simply rebuffers / seeks to live edge silently. */
+var liveEdgeTimer = null;
+/** True once we've shown live frames at least once in this session. */
 var hasPlayedOnce = false;
 ${menuJs}
 function hideOverlay() { overlay.classList.add('hidden'); }
+function showReconnecting() {
+  overlay.classList.remove('hidden');
+  msg.textContent = 'Reconnecting to live stream…';
+}
 function showLive() {
   hideOverlay();
   if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({ event: 'play' }));
 }
 video.addEventListener('playing', function() { hasPlayedOnce = true; hideOverlay(); });
+video.addEventListener('error', function() {
+  if (hasPlayedOnce) showReconnecting();
+  else { overlay.classList.remove('hidden'); msg.textContent = 'Connecting to live stream...'; }
+  setTimeout(function() { try { softResume(); } catch (_) {} tryLoad(); }, 2000);
+});
 function fillQuality(hls) {
   hlsRef = hls;
   if (!qsel || !hls || !hls.levels || hls.levels.length <= 1) {
@@ -147,9 +155,8 @@ function jumpToLiveEdge() {
   } catch (_) {}
 }
 function softResume() {
-  // Resume after a screen sleep / tab background without showing the full
-  // "Connecting" overlay -- just seek to live edge and play.
   jumpToLiveEdge();
+  if (hlsRef) { try { hlsRef.startLoad(); } catch (_) {} }
   if (video.paused) {
     video.play().catch(function() {
       video.muted = true;
@@ -157,15 +164,34 @@ function softResume() {
     });
   }
 }
+window.softResume = softResume;
 document.addEventListener('visibilitychange', function() {
   if (!document.hidden) softResume();
 });
 window.addEventListener('focus', softResume);
 window.addEventListener('online', softResume);
+if (liveEdgeTimer) clearInterval(liveEdgeTimer);
+liveEdgeTimer = setInterval(function() {
+  if (!hasPlayedOnce) return;
+  jumpToLiveEdge();
+}, 25000);
 function tryLoad() {
+  if (fatalRebuildCount >= maxFatalRebuilds) {
+    showReconnecting();
+    fatalRebuildCount = 0;
+    setTimeout(tryLoad, 8000);
+    return;
+  }
   if (typeof Hls !== 'undefined' && Hls.isSupported()) {
     if (hlsRef) { try { hlsRef.destroy(); } catch (_) {} hlsRef = null; }
-    var hls = new Hls({ liveSyncDurationCount: 2, liveMaxLatencyDurationCount: 6, enableWorker: true, lowLatencyMode: true });
+    var hls = new Hls({
+      liveSyncDurationCount: 3,
+      liveMaxLatencyDurationCount: 10,
+      enableWorker: true,
+      lowLatencyMode: false,
+      manifestLoadingMaxRetry: 4,
+      levelLoadingMaxRetry: 4
+    });
     hls.loadSource(hlsUrl);
     hls.attachMedia(video);
     hls.on(Hls.Events.MANIFEST_PARSED, function() {
@@ -178,16 +204,14 @@ function tryLoad() {
     });
     hls.on(Hls.Events.ERROR, function(e, d) {
       if (!d || !d.fatal) return;
-      // Try in-place recovery first so we don't tear the player down on every
-      // tiny stall (which is what produced "Connecting..." after every wake).
       try {
-        if (d.type === Hls.ErrorTypes.NETWORK_ERROR) { hls.startLoad(); return; }
+        if (d.type === Hls.ErrorTypes.NETWORK_ERROR) { hls.startLoad(); jumpToLiveEdge(); return; }
         if (d.type === Hls.ErrorTypes.MEDIA_ERROR) { hls.recoverMediaError(); return; }
       } catch (_) {}
+      fatalRebuildCount++;
       retryCount++;
-      // Only show the loud overlay if we've never been live; after first play
-      // we just silently rebuild in the background.
-      if (!hasPlayedOnce) {
+      if (hasPlayedOnce) showReconnecting();
+      else {
         overlay.classList.remove('hidden');
         msg.textContent = 'Connecting... (' + retryCount + ')';
       }

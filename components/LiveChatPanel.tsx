@@ -88,7 +88,7 @@ export default function LiveChatPanel({ liveClassId, chatMode, isAdmin }: LiveCh
   const { data: raisedHands = [], refetch: refetchHands } = useQuery<HandRaise[]>({
     queryKey: [`/api/admin/live-classes/${liveClassId}/raised-hands`],
     enabled: isAdmin,
-    refetchInterval: 5000,
+    refetchInterval: 2000,
   });
 
   // Auto-scroll on new messages
@@ -116,18 +116,29 @@ export default function LiveChatPanel({ liveClassId, chatMode, isAdmin }: LiveCh
 
   const raiseHandMutation = useMutation({
     mutationFn: () => apiRequest("POST", `/api/live-classes/${liveClassId}/raise-hand`, {}),
-    onSuccess: () => { setHandRaised(true); refetchHands(); },
+    onSuccess: () => {
+      setHandRaised(true);
+      void refetchHands();
+      qc.invalidateQueries({ queryKey: [`/api/admin/live-classes/${liveClassId}/raised-hands`] });
+    },
   });
 
   const lowerHandMutation = useMutation({
     mutationFn: () => apiRequest("DELETE", `/api/live-classes/${liveClassId}/raise-hand`),
-    onSuccess: () => { setHandRaised(false); refetchHands(); },
+    onSuccess: () => {
+      setHandRaised(false);
+      void refetchHands();
+      qc.invalidateQueries({ queryKey: [`/api/admin/live-classes/${liveClassId}/raised-hands`] });
+    },
   });
 
   const resolveHandMutation = useMutation({
     mutationFn: (userId: number) =>
       apiRequest("POST", `/api/admin/live-classes/${liveClassId}/raised-hands/${userId}/resolve`, {}),
-    onSuccess: () => refetchHands(),
+    onSuccess: () => {
+      void refetchHands();
+      qc.invalidateQueries({ queryKey: [`/api/admin/live-classes/${liveClassId}/raised-hands`] });
+    },
   });
 
   const handleSend = useCallback(() => {

@@ -17,8 +17,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
 import { useAuth } from "@/context/AuthContext";
 import { filterChatMessages } from "@/lib/chat-utils";
-import TldrawClassroom from "@/components/classroom/TldrawClassroom";
-import TeacherVideoPiP from "@/components/classroom/TeacherVideoPiP";
+import ClassroomCompositePlayer from "@/components/classroom/ClassroomCompositePlayer";
 import ClassroomLiveOverlays from "@/components/classroom/ClassroomLiveOverlays";
 import LiveClassRecordingTimer from "@/components/LiveClassRecordingTimer";
 import ClassroomHeaderActivityTimer from "@/components/classroom/ClassroomHeaderActivityTimer";
@@ -69,6 +68,7 @@ export default function ClassroomStudentView({
   const isWide = width >= 768 || isLandscape;
   const canChat = isLive && !isCompleted;
   const showLiveHeader = (showAsLiveUI || isLive) && !isCompleted;
+  const watchComposite = showAsLiveUI && isLive && !isCompleted;
 
   const { data: messages = [] } = useQuery<ChatMsg[]>({
     queryKey: [`/api/live-classes/${liveClassId}/chat`],
@@ -107,6 +107,9 @@ export default function ClassroomStudentView({
       }
     },
     onSuccess: (_d, raise) => setHandRaised(raise),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: [`/api/admin/live-classes/${liveClassId}/raised-hands`] });
+    },
   });
 
   useEffect(() => {
@@ -117,10 +120,8 @@ export default function ClassroomStudentView({
     const sendHeartbeat = () => {
       void apiRequest("POST", `/api/live-classes/${liveClassId}/viewers/heartbeat`, {});
     };
-    if (!prevIsLiveRef.current) {
-      sendHeartbeat();
-      prevIsLiveRef.current = true;
-    }
+    sendHeartbeat();
+    prevIsLiveRef.current = true;
     const t = setInterval(sendHeartbeat, 8000);
     return () => clearInterval(t);
   }, [liveClassId, isLive, isCompleted]);
@@ -192,7 +193,7 @@ export default function ClassroomStudentView({
         </Pressable>
         <Text style={styles.nativeTitle}>{title}</Text>
         <Text style={styles.nativeText}>
-          Interactive classroom is available in the mobile browser. Open this class on 3i Learning web to see the live board and teacher video.
+          Interactive classroom is available in the mobile browser. Open this class on 3i Learning web to watch the live lesson.
         </Text>
       </View>
     );
@@ -226,24 +227,17 @@ export default function ClassroomStudentView({
               <ActivityIndicator color={Colors.light.primary} />
               <Text style={styles.waitingText}>Waiting for teacher to start…</Text>
             </View>
-          ) : showAsLiveUI || isCompleted ? (
+          ) : watchComposite ? (
             <>
-              {showAsLiveUI && !isCompleted ? (
-                <ClassroomLiveOverlays liveClassId={liveClassId} />
-              ) : null}
-              <TldrawClassroom liveClassId={liveClassId} readonly />
-              {showAsLiveUI && !isCompleted ? (
-                <View style={isWide && chatOpen && !isLandscape ? styles.pipAboveChat : undefined}>
-                  <TeacherVideoPiP
-                    liveClassId={liveClassId}
-                    enabled
-                    chatOpen={chatOpen}
-                    isWideLayout={isWide}
-                  />
-                </View>
-              ) : null}
+              <ClassroomLiveOverlays liveClassId={liveClassId} />
+              <ClassroomCompositePlayer liveClassId={liveClassId} enabled />
               {!isWide && chatOpen ? renderChatPanel() : null}
             </>
+          ) : showAsLiveUI || isCompleted ? (
+            <View style={styles.waiting}>
+              <ActivityIndicator color={Colors.light.primary} />
+              <Text style={styles.waitingText}>Connecting to class…</Text>
+            </View>
           ) : null}
         </View>
 
@@ -304,7 +298,6 @@ const styles = StyleSheet.create({
   bodyRow: { flexDirection: "row" },
   stage: { flex: 1, position: "relative", minHeight: 0 },
   stageWithChat: { flex: 1 },
-  pipAboveChat: { marginBottom: 0 },
   waiting: { flex: 1, justifyContent: "center", alignItems: "center", gap: 12 },
   waitingText: { color: "#9CA3AF", fontSize: 14 },
   floatingBar: {

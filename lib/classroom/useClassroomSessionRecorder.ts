@@ -5,14 +5,17 @@ import { Track } from "livekit-client";
 
 export type ClassroomSessionRecorder = {
   isRecording: boolean;
-  startSessionRecording: (boardEl: HTMLElement | null, room: Room | null) => void;
+  startSessionRecording: (
+    compositeStream: MediaStream | null,
+    room: Room | null
+  ) => void;
   stopAndGetBlob: () => Promise<Blob | null>;
   error: string | null;
 };
 
 function getPublicationMediaTrack(
   room: Room | null,
-  source: Track.Source.Camera | Track.Source.Microphone
+  source: Track.Source.Microphone
 ): MediaStreamTrack | null {
   if (!room) return null;
   const pub = room.localParticipant.getTrackPublication(source) as
@@ -21,35 +24,13 @@ function getPublicationMediaTrack(
   return pub?.track?.mediaStreamTrack ?? null;
 }
 
-function getLocalMicTrack(room: Room | null): MediaStreamTrack | null {
-  return getPublicationMediaTrack(room, Track.Source.Microphone);
-}
-
-function getLocalCameraTrack(room: Room | null): MediaStreamTrack | null {
-  return getPublicationMediaTrack(room, Track.Source.Camera);
-}
-
-function buildRecordingStream(boardEl: HTMLElement | null, room: Room | null): MediaStream | null {
+function buildRecordingStream(compositeStream: MediaStream | null, room: Room | null): MediaStream | null {
   const tracks: MediaStreamTrack[] = [];
 
-  const mic = getLocalMicTrack(room);
+  const mic = getPublicationMediaTrack(room, Track.Source.Microphone);
   if (mic) tracks.push(mic);
 
-  let videoTrack: MediaStreamTrack | null = null;
-  if (boardEl && typeof (boardEl as HTMLElement & { captureStream?: (fps?: number) => MediaStream }).captureStream === "function") {
-    try {
-      const boardStream = (boardEl as HTMLElement & { captureStream: (fps?: number) => MediaStream }).captureStream(5);
-      const vt = boardStream.getVideoTracks()[0];
-      if (vt) videoTrack = vt;
-    } catch {
-      /* captureStream unsupported */
-    }
-  }
-
-  if (!videoTrack) {
-    videoTrack = getLocalCameraTrack(room);
-  }
-
+  const videoTrack = compositeStream?.getVideoTracks()[0] ?? null;
   if (videoTrack) tracks.unshift(videoTrack);
 
   if (tracks.length === 0) return null;
@@ -58,16 +39,16 @@ function buildRecordingStream(boardEl: HTMLElement | null, room: Room | null): M
 
 export function useClassroomSessionRecorder(enabled: boolean): ClassroomSessionRecorder {
   const recorder = useMediaRecorder();
-  const boardElRef = useRef<HTMLElement | null>(null);
+  const compositeStreamRef = useRef<MediaStream | null>(null);
   const roomRef = useRef<Room | null>(null);
   const startedRef = useRef(false);
 
   const startSessionRecording = useCallback(
-    (boardEl: HTMLElement | null, room: Room | null) => {
+    (compositeStream: MediaStream | null, room: Room | null) => {
       if (!enabled || startedRef.current || recorder.isRecording) return;
-      boardElRef.current = boardEl;
+      compositeStreamRef.current = compositeStream;
       roomRef.current = room;
-      const stream = buildRecordingStream(boardEl, room);
+      const stream = buildRecordingStream(compositeStream, room);
       if (!stream) return;
       recorder.startRecording(stream);
       startedRef.current = true;
@@ -78,27 +59,20 @@ export function useClassroomSessionRecorder(enabled: boolean): ClassroomSessionR
   const stopAndGetBlob = useCallback(async (): Promise<Blob | null> => {
     if (!recorder.isRecording && !startedRef.current) return null;
     try {
-      if (recorder.isRecording) {
-        const blob = await recorder.stopRecording();
-        startedRef.current = false;
-        boardElRef.current = null;
-        roomRef.current = null;
-        return blob;
-      }
-    } catch {
-      /* no active recording */
+      return await recorder.stopRecording();
+    } finally {
+      startedRef.current = false;
+      compositeStreamRef.current = null;
+      roomRef.current = null;
     }
-    startedRef.current = false;
-    return null;
   }, [recorder]);
 
   useEffect(() => {
     if (!enabled) return;
     return () => {
       if (recorder.isRecording) {
-        recorder.stopRecording().catch(() => {});
+        void recorder.stopRecording();
       }
-      startedRef.current = false;
     };
   }, [enabled, recorder]);
 

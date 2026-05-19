@@ -10,27 +10,48 @@ import type { Room } from "livekit-client";
 type Props = {
   liveClassId: string;
   enabled?: boolean;
+  boardEl?: HTMLElement | null;
   onRoomReady?: (room: Room | null) => void;
+  onCompositeStream?: (stream: MediaStream | null) => void;
 };
 
 const videoStyle = { width: "100%", height: "100%", objectFit: "cover" as const, transform: "scaleX(-1)" };
 
-export default function TeacherVideoPanel({ liveClassId, enabled = true, onRoomReady }: Props) {
+export default function TeacherVideoPanel({
+  liveClassId,
+  enabled = true,
+  boardEl = null,
+  onRoomReady,
+  onCompositeStream,
+}: Props) {
   const { data: tokenPayload, isLoading, error: tokenError } = useClassroomToken(liveClassId, enabled);
-  const { error, connected, micEnabled, camEnabled, setLocalVideoEl, toggleMic, toggleCam, room } =
-    useLiveKitRoom(tokenPayload, enabled && Platform.OS === "web");
+  const {
+    error,
+    connected,
+    micEnabled,
+    camEnabled,
+    compositeStream,
+    setLocalVideoEl,
+    toggleMic,
+    toggleCam,
+    room,
+  } = useLiveKitRoom(tokenPayload, enabled && Platform.OS === "web", boardEl);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
     if (Platform.OS === "web" && videoRef.current && connected) {
       setLocalVideoEl(videoRef.current);
     }
-  }, [setLocalVideoEl, connected]);
+  }, [setLocalVideoEl, connected, compositeStream]);
 
   useEffect(() => {
     onRoomReady?.(connected ? room.current : null);
     return () => onRoomReady?.(null);
   }, [connected, room, onRoomReady]);
+
+  useEffect(() => {
+    onCompositeStream?.(compositeStream);
+  }, [compositeStream, onCompositeStream]);
 
   if (Platform.OS !== "web") {
     return (

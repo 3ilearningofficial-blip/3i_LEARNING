@@ -22,6 +22,9 @@ import { uploadToR2 } from "@/lib/r2-upload";
 import LiveChatPanel from "@/components/LiveChatPanel";
 import LiveStudentsPanel from "@/components/LiveStudentsPanel";
 import LiveClassRecordingTimer from "@/components/LiveClassRecordingTimer";
+import ClassroomEngagementPanel from "@/components/classroom/ClassroomEngagementPanel";
+import ClassroomHeaderActivityTimer from "@/components/classroom/ClassroomHeaderActivityTimer";
+import { LinearGradient } from "expo-linear-gradient";
 import Colors from "@/constants/colors";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "@/context/AuthContext";
@@ -32,7 +35,7 @@ import { getAdminCoursesSectionRoute } from "@/lib/admin/courseAdminRoutes";
 
 type StreamType = "webrtc" | "rtmp" | "cloudflare";
 
-type SideTab = "chat" | "students";
+type SideTab = "chat" | "poll" | "students";
 
 function buildYouTubeEmbedUrl(videoId: string): string {
   return `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&mute=0&playsinline=1&rel=0&modestbranding=1&showinfo=0&iv_load_policy=3&cc_load_policy=0&fs=1&disablekb=0&controls=1`;
@@ -469,15 +472,31 @@ export default function BroadcastPage() {
 
   return (
     <View style={styles.container}>
-      {/* Main: 3/4 stream + 1/4 side panel */}
-      <View style={styles.main}>
-        {/* LEFT: Stream Area (3/4) */}
-        <View style={styles.streamArea}>
-          {isLive && (
-            <View style={styles.liveTimerOverlay} pointerEvents="none">
-              <LiveClassRecordingTimer startedAt={liveStartedAt} active />
+      <LinearGradient colors={["#0A1628", "#1A2A4A"]} style={styles.broadcastHeader}>
+        <Pressable style={styles.headerBack} onPress={() => router.back()}>
+          <Ionicons name="arrow-back" size={22} color="#fff" />
+        </Pressable>
+        <Text style={styles.headerTitle} numberOfLines={1}>
+          {liveClass?.title || "Live broadcast"}
+        </Text>
+        {isLive ? (
+          <View style={styles.headerStatus}>
+            <LiveClassRecordingTimer startedAt={liveStartedAt} active compact />
+            <View style={styles.livePill}>
+              <View style={styles.liveDot} />
+              <Text style={styles.liveText}>LIVE</Text>
             </View>
-          )}
+            <ClassroomHeaderActivityTimer
+              liveClassId={String(liveClassId)}
+              isAdmin
+              sessionActive
+            />
+          </View>
+        ) : null}
+      </LinearGradient>
+
+      <View style={styles.main}>
+        <View style={styles.streamArea}>
           {streamType === "webrtc" ? (
             <>
               {/* WebRTC video feed */}
@@ -648,6 +667,19 @@ export default function BroadcastPage() {
               </Text>
             </Pressable>
             <Pressable
+              style={[styles.tab, activeTab === "poll" && styles.tabActive]}
+              onPress={() => setActiveTab("poll")}
+            >
+              <Ionicons
+                name="stats-chart-outline"
+                size={16}
+                color={activeTab === "poll" ? Colors.light.primary : Colors.light.textMuted}
+              />
+              <Text style={[styles.tabText, activeTab === "poll" && styles.tabTextActive]}>
+                Poll / Quiz
+              </Text>
+            </Pressable>
+            <Pressable
               style={[styles.tab, activeTab === "students" && styles.tabActive]}
               onPress={() => setActiveTab("students")}
             >
@@ -664,7 +696,6 @@ export default function BroadcastPage() {
             </Pressable>
           </View>
 
-          {/* Tab content */}
           <View style={styles.tabContent}>
             {activeTab === "chat" ? (
               <LiveChatPanel
@@ -672,6 +703,8 @@ export default function BroadcastPage() {
                 chatMode={chatMode}
                 isAdmin={true}
               />
+            ) : activeTab === "poll" ? (
+              <ClassroomEngagementPanel liveClassId={String(liveClassId)} />
             ) : (
               <LiveStudentsPanel
                 liveClassId={liveClassId!}
@@ -798,6 +831,34 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#000",
   },
+  broadcastHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 10,
+  },
+  headerBack: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "rgba(255,255,255,0.12)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  headerTitle: { flex: 1, fontSize: 16, fontWeight: "700", color: "#fff" },
+  headerStatus: { flexDirection: "row", alignItems: "center", gap: 8 },
+  livePill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "#DC2626",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: "#fff" },
+  liveText: { fontSize: 11, fontWeight: "800", color: "#fff" },
   loadingContainer: {
     flex: 1,
     justifyContent: "center",
@@ -819,12 +880,6 @@ const styles = StyleSheet.create({
     flex: 3,
     backgroundColor: "#000",
     position: "relative",
-  },
-  liveTimerOverlay: {
-    position: "absolute",
-    top: 12,
-    left: 12,
-    zIndex: 30,
   },
   noWebrtc: {
     flex: 1,

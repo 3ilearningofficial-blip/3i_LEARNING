@@ -128,9 +128,8 @@ export function registerLiveClassEngagementRoutes({
         const visible = lcAccess.rows[0]?.show_viewer_count ?? true;
         return res.json({ viewers: [], count: 0, visible });
       }
-      // 60s online window: forgiving enough to survive a brief screen lock or
-      // network hiccup so admin doesn't see students flicker out and back in.
-      const cutoff = Date.now() - 60000;
+      // 20s online window: faster leave detection; still survives brief stalls.
+      const cutoff = Date.now() - 20000;
       const result = await db.query(
         `SELECT user_name FROM live_class_viewers
          WHERE live_class_id = $1 AND last_heartbeat > $2

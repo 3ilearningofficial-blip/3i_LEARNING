@@ -390,6 +390,9 @@ export default function LiveClassScreen() {
   const lastMsgTimeRef = useRef<number>(0);
   const forceFullChatRefreshRef = useRef(false);
   const didAutoplayDirectRecording = useRef(false);
+  const cfHlsWebViewRef = useRef<WebView>(null);
+  const CF_HLS_RESUME_JS =
+    "try { if (typeof softResume === 'function') softResume(); } catch(e) {} true;";
   const markPlayed = useCallback(() => {
     setIsVideoLoading(false);
     setIsVideoPlaying(true);
@@ -663,6 +666,14 @@ export default function LiveClassScreen() {
     videoUrl.includes('.m3u8') ||
     (streamType === "cloudflare" && cfHlsUrl && videoUrl === cfHlsUrl)
   );
+  const isCfHlsLive = isCfHls && !!liveClassData?.is_live && !liveClassData?.is_completed;
+
+  useEffect(() => {
+    if (!isScreenActive || Platform.OS === "web") return;
+    if (!isCfHlsLive) return;
+    cfHlsWebViewRef.current?.injectJavaScript(CF_HLS_RESUME_JS);
+  }, [isScreenActive, isCfHlsLive, cfHlsUrl]);
+
   // Fallback sync for YouTube completed classes: clip playback length to app-recorded duration.
   const completedClipSeconds = liveClassData?.is_completed && (liveClassData?.duration_minutes || 0) > 0
     ? Number(liveClassData.duration_minutes) * 60
@@ -675,7 +686,7 @@ export default function LiveClassScreen() {
 
   const { data: viewerData } = useQuery<{ count: number; viewers: any[]; visible: boolean }>({
     queryKey: [`/api/live-classes/${id}/viewers`],
-    refetchInterval: (!isScreenActive || !liveClassData?.is_live || liveClassData?.is_completed) ? false : 6000,
+    refetchInterval: (!isScreenActive || !liveClassData?.is_live || liveClassData?.is_completed) ? false : 3000,
     staleTime: 3000,
   });
 
@@ -771,7 +782,7 @@ export default function LiveClassScreen() {
   const { data: raisedHands = [], refetch: refetchHands } = useQuery<HandRaise[]>({
     queryKey: [`/api/admin/live-classes/${id}/raised-hands`],
     enabled: isAdmin && !!liveClassData?.is_live && isScreenActive,
-    refetchInterval: isScreenActive ? 12000 : false,
+    refetchInterval: isScreenActive ? 2000 : false,
     staleTime: 3000,
   });
 
@@ -1051,7 +1062,8 @@ export default function LiveClassScreen() {
               />
             ) : isCfHls && Platform.OS !== "web" ? (
               <WebView
-                source={{ html: buildCfHlsPlayerHtml(cfHlsUrl, { liveStream: true }) }}
+                ref={cfHlsWebViewRef}
+                source={{ html: buildCfHlsPlayerHtml(cfHlsUrl, { liveStream: !!isCfHlsLive }) }}
                 style={{ flex: 1, backgroundColor: "#000" }}
                 onLoad={markPlayed}
                 onMessage={handleWebViewMessage}
@@ -1301,7 +1313,8 @@ export default function LiveClassScreen() {
               />
             ) : isCfHls && Platform.OS !== "web" ? (
               <WebView
-                source={{ html: buildCfHlsPlayerHtml(cfHlsUrl, { liveStream: true }) }}
+                ref={cfHlsWebViewRef}
+                source={{ html: buildCfHlsPlayerHtml(cfHlsUrl, { liveStream: !!isCfHlsLive }) }}
                 style={{ flex: 1, backgroundColor: "#000" }}
                 onLoad={markPlayed}
                 onMessage={handleWebViewMessage}

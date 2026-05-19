@@ -91,6 +91,7 @@ function TldrawClassroomConnected({
           editorRef.current = editor;
           if (readonly) {
             editor.updateInstanceState({ isReadonly: true });
+            editor.setCameraOptions({ isLocked: true });
           }
           editor.user.updateUserPreferences({ colorScheme: "dark" });
         }}
