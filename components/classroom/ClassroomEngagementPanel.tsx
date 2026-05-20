@@ -38,7 +38,7 @@ export default function ClassroomEngagementPanel({ liveClassId }: Props) {
       const json = await res.json();
       return json.poll as any;
     },
-    refetchInterval: 2000,
+    refetchInterval: 800,
     enabled: !!liveClassId,
   });
 
@@ -98,7 +98,12 @@ export default function ClassroomEngagementPanel({ liveClassId }: Props) {
   }
 
   return (
-    <ScrollView style={styles.wrap} nestedScrollEnabled showsVerticalScrollIndicator={false}>
+    <ScrollView
+      style={styles.wrap}
+      contentContainerStyle={styles.wrapContent}
+      nestedScrollEnabled
+      showsVerticalScrollIndicator={false}
+    >
       <Text style={styles.heading}>Live engagement</Text>
 
       {activePoll ? (
@@ -218,7 +223,8 @@ export default function ClassroomEngagementPanel({ liveClassId }: Props) {
 }
 
 const styles = StyleSheet.create({
-  wrap: { maxHeight: 320, marginBottom: 10 },
+  wrap: { flex: 1, minHeight: 0 },
+  wrapContent: { paddingBottom: 12, flexGrow: 1 },
   heading: { fontSize: 12, fontWeight: "700", color: Colors.light.textMuted, marginBottom: 8, textTransform: "uppercase" },
   subHeading: { fontSize: 13, fontWeight: "700", color: Colors.light.text, marginBottom: 6 },
   spaced: { marginTop: 14 },

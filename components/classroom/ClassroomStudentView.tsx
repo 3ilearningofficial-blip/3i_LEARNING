@@ -21,6 +21,7 @@ import ClassroomCompositePlayer from "@/components/classroom/ClassroomCompositeP
 import ClassroomLiveOverlays from "@/components/classroom/ClassroomLiveOverlays";
 import LiveClassRecordingTimer from "@/components/LiveClassRecordingTimer";
 import ClassroomHeaderActivityTimer from "@/components/classroom/ClassroomHeaderActivityTimer";
+import { useLiveEngagementSse } from "@/lib/useLiveEngagementSse";
 import Colors from "@/constants/colors";
 
 type ChatMsg = {
@@ -69,6 +70,12 @@ export default function ClassroomStudentView({
   const canChat = isLive && !isCompleted;
   const showLiveHeader = (showAsLiveUI || isLive) && !isCompleted;
   const watchComposite = showAsLiveUI && isLive && !isCompleted;
+
+  useLiveEngagementSse({
+    liveClassId,
+    enabled: canChat && Platform.OS === "web",
+    isAdmin: false,
+  });
 
   const { data: messages = [] } = useQuery<ChatMsg[]>({
     queryKey: [`/api/live-classes/${liveClassId}/chat`],

@@ -89,6 +89,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setUser(stored);
             return;
           }
+          if (Platform.OS === "web" && stored?.role === "admin" && token) {
+            await new Promise((r) => setTimeout(r, 400));
+            const retryRes = await fetchMe();
+            if (retryRes.ok) {
+              const retryData = await retryRes.json();
+              if (typeof retryData?.id === "number") {
+                if (retryData.sessionToken) {
+                  setUser(retryData);
+                  await storeAuthUser(retryData);
+                } else {
+                  retryData.sessionToken = token;
+                  setUser(retryData);
+                  await storeAuthUser(retryData);
+                }
+                return;
+              }
+            }
+            setUser(stored);
+            return;
+          }
           setUser(null);
           await removeStoredAuthUser();
           queryClient.clear();
@@ -114,6 +134,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           Alert.alert(
             "Access Restricted",
             "This account's paid subscription is tied to the device used at purchase. Sign in using that same installation, or contact support.",
+            [{ text: "OK" }]
+          );
+          setUser(null);
+          await removeStoredAuthUser();
+          queryClient.clear();
+        } else if (msg === "active_on_other_platform") {
+          const other = errorData?.activePlatform === "mobile" ? "the mobile app" : "the web browser";
+          Alert.alert(
+            "Signed in elsewhere",
+            `Your account is active on ${other}. Sign in here to switch to this device.`,
             [{ text: "OK" }]
           );
           setUser(null);
@@ -241,45 +271,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
     return () => setUnauthorizedHandler(null);
   }, [pathname]);
-
-  // Web: clear session and return to welcome after 1 hour inactivity (students only — admins may stay signed in on multiple devices).
-  useEffect(() => {
-    if (Platform.OS !== "web") return;
-    if (user?.role === "admin") return;
-    // Recorded/live class playback can happen inside iframes/video surfaces that do not
-    // reliably bubble activity events to the app shell. Avoid timing out while on player pages.
-    const onPlaybackRoute =
-      pathname.startsWith("/lecture/") ||
-      pathname.startsWith("/live-class/") ||
-      pathname.startsWith("/material/") ||
-      pathname.startsWith("/admin/") ||
-      pathname.startsWith("/test") ||
-      pathname.startsWith("/course/");
-    if (onPlaybackRoute) return;
-    const TIMEOUT = 60 * 60 * 1000; // 1 hour
-    let timer: ReturnType<typeof setTimeout>;
-
-    const resetTimer = () => {
-      clearTimeout(timer);
-      timer = setTimeout(async () => {
-        if (user) {
-          setUser(null);
-          await removeStoredAuthUser();
-          queryClient.clear();
-          router.replace("/welcome");
-        }
-      }, TIMEOUT);
-    };
-
-    const events = ["mousemove", "keydown", "click", "scroll", "touchstart"];
-    events.forEach((e) => window.addEventListener(e, resetTimer, { passive: true }));
-    resetTimer();
-
-    return () => {
-      clearTimeout(timer);
-      events.forEach((e) => window.removeEventListener(e, resetTimer));
-    };
-  }, [user, pathname]);
 
   const login = async (userData: AuthUser) => {
     queryClient.clear();

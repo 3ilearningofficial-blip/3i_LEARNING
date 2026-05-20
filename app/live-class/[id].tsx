@@ -22,6 +22,10 @@ import { filterChatMessages } from "@/lib/chat-utils";
 import { buildYouTubePhoneWebSrcDoc } from "@/lib/buildYouTubePhoneWebSrcDoc";
 import { buildCfHlsPlayerHtml } from "@/lib/buildCfHlsPlayerHtml";
 import ClassroomStudentView from "@/components/classroom/ClassroomStudentView";
+import ClassroomLiveOverlays from "@/components/classroom/ClassroomLiveOverlays";
+import ClassroomHeaderActivityTimer from "@/components/classroom/ClassroomHeaderActivityTimer";
+import { useLiveEngagementSse } from "@/lib/useLiveEngagementSse";
+import { useHandRaiseChime } from "@/lib/useHandRaiseChime";
 
 const mediaTokenCache = new Map<string, { token: string; expiresAt: number; readUrl?: string }>();
 
@@ -768,6 +772,23 @@ export default function LiveClassScreen() {
     liveClassData?.chat_mode === "private" ? "private" : "public";
   const canStudentChat = !!liveClassData?.is_live && !liveClassData?.is_completed;
   const canSendChat = !!isAdmin || canStudentChat;
+
+  const engagementSseActive = useLiveEngagementSse({
+    liveClassId: id ? String(id) : undefined,
+    enabled: isScreenActive && canStudentChat,
+    isAdmin: !!isAdmin,
+  });
+
+  const { data: raisedHands = [], refetch: refetchHands } = useQuery<HandRaise[]>({
+    queryKey: [`/api/admin/live-classes/${id}/raised-hands`],
+    enabled: isAdmin && !!liveClassData?.is_live && isScreenActive,
+    refetchInterval:
+      !isScreenActive ? false : engagementSseActive ? 30_000 : 500,
+    staleTime: 0,
+  });
+
+  useHandRaiseChime(raisedHands, !!isAdmin && canStudentChat && isScreenActive);
+
   const displayMessages = useMemo(
     () =>
       filterChatMessages(
@@ -778,13 +799,6 @@ export default function LiveClassScreen() {
       ) as ChatMsg[],
     [chatMessages, user?.id, isAdmin, chatMode]
   );
-
-  const { data: raisedHands = [], refetch: refetchHands } = useQuery<HandRaise[]>({
-    queryKey: [`/api/admin/live-classes/${id}/raised-hands`],
-    enabled: isAdmin && !!liveClassData?.is_live && isScreenActive,
-    refetchInterval: isScreenActive ? 2000 : false,
-    staleTime: 3000,
-  });
 
   useEffect(() => {
     let scrollTimer: ReturnType<typeof setTimeout> | null = null;
@@ -963,7 +977,17 @@ export default function LiveClassScreen() {
           )}
           <Text style={styles.headerTitle} numberOfLines={1}>{title || "Live Class"}</Text>
         </View>
-        <View style={{ width: 36 }} />
+        <View style={styles.headerRight}>
+          {canStudentChat || (isAdmin && liveClassData?.is_live) ? (
+            <ClassroomHeaderActivityTimer
+              liveClassId={String(id)}
+              isAdmin={!!isAdmin}
+              sessionActive={canStudentChat}
+            />
+          ) : (
+            <View style={{ width: 36 }} />
+          )}
+        </View>
       </View>
 
       {/* Enrollment gate — show if class requires enrollment and user is not enrolled */}
@@ -991,6 +1015,9 @@ export default function LiveClassScreen() {
         <View style={styles.webDesktopRow}>
           <View style={[styles.playerContainer, styles.webPlayerWide]}>
             <VideoWatermark isPlaying={isVideoPlaying} />
+            {canStudentChat && !isAdmin && id ? (
+              <ClassroomLiveOverlays liveClassId={String(id)} />
+            ) : null}
             {recordingTokenStatusOverlay}
             {!showAsLiveUI && !liveClassData?.is_completed && (
               <View style={styles.waitingOverlay}>
@@ -1244,6 +1271,9 @@ export default function LiveClassScreen() {
             ]}
           >
             <VideoWatermark isPlaying={isVideoPlaying} />
+            {canStudentChat && !isAdmin && id ? (
+              <ClassroomLiveOverlays liveClassId={String(id)} />
+            ) : null}
             {recordingTokenStatusOverlay}
             {!showAsLiveUI && !liveClassData?.is_completed && (
               <View style={styles.waitingOverlay}>
@@ -1580,6 +1610,7 @@ const styles = StyleSheet.create({
   header: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 14, paddingBottom: 8, backgroundColor: "#0A1628", flexShrink: 0, zIndex: 2 },
   backBtn: { width: 36, height: 36, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.12)", alignItems: "center", justifyContent: "center" },
   headerCenter: { flex: 1, flexDirection: "row", alignItems: "center", gap: 10 },
+  headerRight: { minWidth: 36, alignItems: "flex-end", justifyContent: "center" },
   liveIndicator: { flexDirection: "row", alignItems: "center", gap: 5, backgroundColor: "#DC2626", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
   scheduledPill: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "rgba(180, 83, 9, 0.35)", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, borderWidth: 1, borderColor: "rgba(252, 211, 77, 0.4)" },
   scheduledPillText: { fontSize: 9, fontFamily: "Inter_700Bold", color: "#FCD34D", letterSpacing: 0.5 },

@@ -10,7 +10,7 @@ import { getRazorpay, verifyPaymentSignature } from "./razorpay";
 import { randomInt } from "node:crypto";
 import { generateSecureToken, hashOtpValue, verifyOtpValue } from "./security-utils";
 import { getAuthUserFromRequest } from "./auth-utils";
-import { enforceInstallationBinding } from "./native-device-binding";
+import { assertActiveSessionPlatformMatches, enforceInstallationBinding } from "./native-device-binding";
 import { registerAuthRoutes } from "./auth-routes";
 import { registerPdfRoutes } from "./pdf-routes";
 import { registerPaymentRoutes } from "./payment-routes";
@@ -245,6 +245,11 @@ async function getAuthUser(req: Request): Promise<AuthUserResolved> {
       if (!user) return null;
       const boundOk = await enforceInstallationBinding(db, req, user.id, user.role);
       if (!boundOk) {
+        (req.session as any).user = null;
+        return null;
+      }
+      const platOk = await assertActiveSessionPlatformMatches(db, req, user.id, user.role);
+      if (!platOk.ok) {
         (req.session as any).user = null;
         return null;
       }
@@ -1087,6 +1092,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   registerLiveClassPollRoutes({
     app,
     db,
+    listenPool,
     requireAuth,
     requireAdmin,
     getAuthUser,

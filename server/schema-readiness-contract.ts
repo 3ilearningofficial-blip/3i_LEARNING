@@ -44,6 +44,7 @@ export const REQUIRED_COLUMNS: Record<string, string[]> = {
     "profile_complete",
     "is_blocked",
     "last_active_at",
+    "active_session_platform",
     "otp_send_count",
     "otp_send_window_start",
     "otp_send_locked_until",

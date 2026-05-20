@@ -180,7 +180,7 @@ export function registerAdminUsersAndContentRoutes({
       const uid = parseInt(String(req.params.id), 10);
       if (!Number.isFinite(uid)) return res.status(400).json({ message: "Invalid user id" });
       await db.query(
-        "UPDATE users SET app_bound_device_id = NULL, web_device_id_phone = NULL, web_device_id_desktop = NULL WHERE id = $1",
+        "UPDATE users SET app_bound_device_id = NULL, web_device_id_phone = NULL, web_device_id_desktop = NULL, active_session_platform = NULL WHERE id = $1",
         [uid]
       );
       // Clear historical denial events for this user so the auto-lock list reflects current state immediately.

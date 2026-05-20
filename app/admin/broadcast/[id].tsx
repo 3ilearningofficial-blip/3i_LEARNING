@@ -13,6 +13,8 @@ import {
 } from "react-native";
 import { useLocalSearchParams, router } from "expo-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useLiveEngagementSse } from "@/lib/useLiveEngagementSse";
+import { useHandRaiseChime } from "@/lib/useHandRaiseChime";
 import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
 import { liveClassQueryKey, liveClassesQueryKey } from "@/lib/query-keys";
 import { useWebRTCStream } from "@/lib/useWebRTCStream";
@@ -194,6 +196,38 @@ export default function BroadcastPage() {
   const streamType = normalizeStreamType(liveClass?.stream_type) || "webrtc";
   const isLive = !!liveClass?.is_live && !liveClass?.is_completed;
   const liveStartedAt = Number(liveClass?.started_at || 0) || null;
+
+  const engagementSseActive = useLiveEngagementSse({
+    liveClassId: liveClassId ? String(liveClassId) : undefined,
+    enabled: isLive && tabVisible,
+    isAdmin: true,
+  });
+
+  type HandRaiseRow = { id: number; user_id: number; user_name: string; raised_at: number };
+
+  const { data: raisedHandsRaw = [] } = useQuery<HandRaiseRow[]>({
+    queryKey: [`/api/admin/live-classes/${liveClassId}/raised-hands`],
+    enabled: !!liveClassId && isLive && tabVisible,
+    refetchInterval: engagementSseActive ? 30_000 : 500,
+    staleTime: 0,
+  });
+
+  const raisedHands = raisedHandsRaw.map((h) => ({
+    id: h.id,
+    userId: h.user_id,
+    userName: h.user_name,
+    raisedAt: h.raised_at,
+  }));
+
+  useHandRaiseChime(raisedHands, isLive && tabVisible);
+
+  const resolveHandMutation = useMutation({
+    mutationFn: (userId: number) =>
+      apiRequest("POST", `/api/admin/live-classes/${liveClassId}/raised-hands/${userId}/resolve`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/admin/live-classes/${liveClassId}/raised-hands`] });
+    },
+  });
 
   useEffect(() => {
     if (liveClass && normalizeStreamType(liveClass.stream_type) === "classroom") {
@@ -696,15 +730,37 @@ export default function BroadcastPage() {
             </Pressable>
           </View>
 
+          {raisedHands.length > 0 ? (
+            <View style={styles.raisedHandsStrip}>
+              <Text style={styles.raisedHandsStripTitle}>Raised hands ({raisedHands.length})</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                {raisedHands.map((h) => (
+                  <View key={h.id} style={styles.raisedHandChip}>
+                    <Text style={styles.raisedHandChipText} numberOfLines={1}>
+                      ✋ {h.userName}
+                    </Text>
+                    <Pressable onPress={() => resolveHandMutation.mutate(h.userId)}>
+                      <Text style={styles.raisedHandDismiss}>Dismiss</Text>
+                    </Pressable>
+                  </View>
+                ))}
+              </ScrollView>
+            </View>
+          ) : null}
+
           <View style={styles.tabContent}>
             {activeTab === "chat" ? (
               <LiveChatPanel
                 liveClassId={liveClassId!}
                 chatMode={chatMode}
                 isAdmin={true}
+                raisedHands={raisedHands}
+                onResolveHand={(userId) => resolveHandMutation.mutate(userId)}
               />
             ) : activeTab === "poll" ? (
-              <ClassroomEngagementPanel liveClassId={String(liveClassId)} />
+              <View style={styles.tabPanelFill}>
+                <ClassroomEngagementPanel liveClassId={String(liveClassId)} />
+              </View>
             ) : (
               <LiveStudentsPanel
                 liveClassId={liveClassId!}
@@ -837,6 +893,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     gap: 10,
+    position: "relative",
+    zIndex: 20,
   },
   headerBack: {
     width: 36,
@@ -947,6 +1005,7 @@ const styles = StyleSheet.create({
   sidePanel: {
     flex: 1,
     backgroundColor: "#fff",
+    minHeight: 0,
   },
 
   // Tab bar
@@ -980,7 +1039,39 @@ const styles = StyleSheet.create({
   // Tab content
   tabContent: {
     flex: 1,
+    minHeight: 0,
   },
+  tabPanelFill: {
+    flex: 1,
+    minHeight: 0,
+  },
+  raisedHandsStrip: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+    backgroundColor: "#FFFBEB",
+  },
+  raisedHandsStripTitle: {
+    fontSize: 11,
+    fontFamily: "Inter_700Bold",
+    color: "#92400E",
+    marginBottom: 6,
+  },
+  raisedHandChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#fff",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginRight: 8,
+    borderWidth: 1,
+    borderColor: "#FDE68A",
+  },
+  raisedHandChipText: { fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.text, maxWidth: 120 },
+  raisedHandDismiss: { fontSize: 11, fontFamily: "Inter_600SemiBold", color: Colors.light.primary },
 
   recordingFolderBlock: {
     padding: 10,

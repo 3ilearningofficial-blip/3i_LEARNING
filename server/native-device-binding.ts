@@ -16,7 +16,14 @@ export function getClientPlatform(req: Request): "ios" | "android" | "web" | nul
   return null;
 }
 
-/** Phone-class vs desktop-class web browser (two allowed installs per student). */
+/** Student session platform family for web XOR mobile enforcement. */
+export function getActiveSessionPlatformFamily(req: Request): "web" | "mobile" | null {
+  const plat = getClientPlatform(req);
+  if (plat === "web") return "web";
+  if (plat === "ios" || plat === "android") return "mobile";
+  return null;
+}
+
 export function getWebFormFactorFromRequest(req: Request): "phone" | "desktop" {
   const raw = (req.get("x-web-form-factor") || "").trim().toLowerCase();
   if (raw === "phone" || raw === "mobile") return "phone";
@@ -362,4 +369,61 @@ export async function assertLoginAllowedForInstallation(
     };
   }
   return { ok: true };
+}
+
+export function userRowHasDeviceBinding(row: {
+  app_bound_device_id?: unknown;
+  web_device_id_phone?: unknown;
+  web_device_id_desktop?: unknown;
+}): boolean {
+  const appb = String(row.app_bound_device_id ?? "").trim();
+  const wph = String(row.web_device_id_phone ?? "").trim();
+  const wdk = String(row.web_device_id_desktop ?? "").trim();
+  return !!(appb || wph || wdk);
+}
+
+/** True when the request installation matches a bound slot on the user row. */
+export function requestMatchesUserDeviceBinding(
+  req: Request,
+  row: {
+    app_bound_device_id?: unknown;
+    web_device_id_phone?: unknown;
+    web_device_id_desktop?: unknown;
+  }
+): boolean {
+  const cand = getInstallationIdFromRequest(req);
+  const plat = getClientPlatform(req);
+  if (!cand || cand === "web_anon") return false;
+  return studentInstallationMatchesActiveSession(
+    {
+      app_bound_device_id: row.app_bound_device_id,
+      web_device_id_phone: row.web_device_id_phone,
+      web_device_id_desktop: row.web_device_id_desktop,
+    },
+    req,
+    cand,
+    plat
+  );
+}
+
+/**
+ * Students may only use /api/auth/me on the platform family that last logged in (web XOR mobile).
+ * Admins are always allowed.
+ */
+export async function assertActiveSessionPlatformMatches(
+  db: DbLike,
+  req: Request,
+  userId: number,
+  role: string | undefined
+): Promise<{ ok: true } | { ok: false; activePlatform: string }> {
+  if (role === "admin") return { ok: true };
+  const r = await db.query(
+    "SELECT COALESCE(active_session_platform, '') AS asp FROM users WHERE id = $1",
+    [userId]
+  );
+  const active = String(r.rows[0]?.asp ?? "").trim();
+  if (!active || (active !== "web" && active !== "mobile")) return { ok: true };
+  const requestFamily = getActiveSessionPlatformFamily(req);
+  if (!requestFamily || requestFamily === active) return { ok: true };
+  return { ok: false, activePlatform: active };
 }

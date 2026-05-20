@@ -26,7 +26,7 @@ export default function ClassroomLiveOverlays({ liveClassId, isAdmin = false }: 
       const json = await res.json();
       return json.poll as any;
     },
-    refetchInterval: 2000,
+    refetchInterval: 800,
     enabled: !!liveClassId && Platform.OS === "web",
   });
 

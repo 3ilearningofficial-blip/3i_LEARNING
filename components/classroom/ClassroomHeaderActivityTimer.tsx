@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -7,6 +7,7 @@ import {
   TextInput,
   Platform,
   ActivityIndicator,
+  Modal,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -29,8 +30,10 @@ export default function ClassroomHeaderActivityTimer({
   const qc = useQueryClient();
   const [tick, setTick] = useState(0);
   const [popoverOpen, setPopoverOpen] = useState(false);
+  const [popoverPos, setPopoverPos] = useState({ top: 0, left: 0 });
   const [timerLabel, setTimerLabel] = useState("Answer in chat before time ends");
   const [timerDuration, setTimerDuration] = useState("60");
+  const clockBtnRef = useRef<View>(null);
 
   useEffect(() => {
     if (!sessionActive) return;
@@ -46,7 +49,7 @@ export default function ClassroomHeaderActivityTimer({
       const json = await res.json();
       return json.timer as { label?: string; remainingSeconds?: number } | null;
     },
-    refetchInterval: 1000,
+    refetchInterval: 800,
     enabled: !!liveClassId && sessionActive && Platform.OS === "web",
   });
 
@@ -68,11 +71,72 @@ export default function ClassroomHeaderActivityTimer({
     },
   });
 
+  useEffect(() => {
+    if (!popoverOpen || Platform.OS !== "web" || typeof document === "undefined") return;
+    const measure = () => {
+      const el = clockBtnRef.current as unknown as HTMLElement | null;
+      if (!el?.getBoundingClientRect) return;
+      const rect = el.getBoundingClientRect();
+      const width = 260;
+      setPopoverPos({
+        top: rect.bottom + 6,
+        left: Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8)),
+      });
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    window.addEventListener("scroll", measure, true);
+    return () => {
+      window.removeEventListener("resize", measure);
+      window.removeEventListener("scroll", measure, true);
+    };
+  }, [popoverOpen]);
+
   if (Platform.OS !== "web" || !sessionActive) return null;
 
   const timerRemaining = activeTimer?.remainingSeconds ?? 0;
   const showCountdown = timerRemaining > 0;
   void tick;
+
+  const popoverBody = (
+    <>
+      <Text style={styles.popoverTitle}>Student answer timer</Text>
+      <TextInput
+        style={styles.input}
+        value={timerLabel}
+        onChangeText={setTimerLabel}
+        placeholder="Label shown to students"
+      />
+      <View style={styles.presetRow}>
+        {DURATION_PRESETS.map((s) => (
+          <Pressable
+            key={s}
+            style={[styles.presetBtn, timerDuration === String(s) && styles.presetBtnActive]}
+            onPress={() => setTimerDuration(String(s))}
+          >
+            <Text style={styles.presetText}>{s}s</Text>
+          </Pressable>
+        ))}
+        <TextInput
+          style={styles.durationInput}
+          value={timerDuration}
+          onChangeText={setTimerDuration}
+          keyboardType="number-pad"
+        />
+      </View>
+      <Pressable
+        style={styles.startBtn}
+        onPress={() => void startTimer.mutate()}
+        disabled={startTimer.isPending}
+      >
+        {startTimer.isPending ? (
+          <ActivityIndicator size="small" color="#fff" />
+        ) : (
+          <Text style={styles.startBtnText}>Start timer</Text>
+        )}
+      </Pressable>
+    </>
+  );
 
   if (isAdmin) {
     return (
@@ -83,52 +147,28 @@ export default function ClassroomHeaderActivityTimer({
             <Text style={styles.countText}>{timerRemaining}s</Text>
           </View>
         ) : null}
-        <Pressable
-          style={[styles.clockBtn, popoverOpen && styles.clockBtnActive]}
-          onPress={() => setPopoverOpen((v) => !v)}
-          accessibilityLabel="Student answer timer"
-        >
-          <Ionicons name="timer-outline" size={18} color="#fff" />
-        </Pressable>
-        {popoverOpen ? (
-          <View style={styles.popover}>
-            <Text style={styles.popoverTitle}>Student answer timer</Text>
-            <TextInput
-              style={styles.input}
-              value={timerLabel}
-              onChangeText={setTimerLabel}
-              placeholder="Label shown to students"
-            />
-            <View style={styles.presetRow}>
-              {DURATION_PRESETS.map((s) => (
-                <Pressable
-                  key={s}
-                  style={[styles.presetBtn, timerDuration === String(s) && styles.presetBtnActive]}
-                  onPress={() => setTimerDuration(String(s))}
-                >
-                  <Text style={styles.presetText}>{s}s</Text>
-                </Pressable>
-              ))}
-              <TextInput
-                style={styles.durationInput}
-                value={timerDuration}
-                onChangeText={setTimerDuration}
-                keyboardType="number-pad"
-              />
-            </View>
+        <View ref={clockBtnRef} collapsable={false}>
+          <Pressable
+            style={[styles.clockBtn, popoverOpen && styles.clockBtnActive]}
+            onPress={() => setPopoverOpen((v) => !v)}
+            accessibilityLabel="Student answer timer"
+          >
+            <Ionicons name="timer-outline" size={18} color="#fff" />
+          </Pressable>
+        </View>
+        <Modal visible={popoverOpen} transparent animationType="fade" onRequestClose={() => setPopoverOpen(false)}>
+          <Pressable style={styles.modalBackdrop} onPress={() => setPopoverOpen(false)}>
             <Pressable
-              style={styles.startBtn}
-              onPress={() => void startTimer.mutate()}
-              disabled={startTimer.isPending}
+              style={[
+                styles.popoverFixed,
+                { top: popoverPos.top, left: popoverPos.left } as object,
+              ]}
+              onPress={(e) => e.stopPropagation?.()}
             >
-              {startTimer.isPending ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <Text style={styles.startBtnText}>Start timer</Text>
-              )}
+              {popoverBody}
             </Pressable>
-          </View>
-        ) : null}
+          </Pressable>
+        </Modal>
       </View>
     );
   }
@@ -144,7 +184,7 @@ export default function ClassroomHeaderActivityTimer({
 }
 
 const styles = StyleSheet.create({
-  adminWrap: { position: "relative", flexDirection: "row", alignItems: "center", gap: 6 },
+  adminWrap: { position: "relative", flexDirection: "row", alignItems: "center", gap: 6, zIndex: 50 },
   clockBtn: {
     width: 34,
     height: 34,
@@ -164,20 +204,22 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   countText: { fontSize: 12, fontWeight: "800", color: "#FDE68A", fontVariant: ["tabular-nums"] },
-  popover: {
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "transparent",
+  },
+  popoverFixed: {
     position: "absolute",
-    top: 40,
-    right: 0,
     width: 260,
     backgroundColor: "#fff",
     borderRadius: 10,
     padding: 12,
-    zIndex: 100,
+    zIndex: 10000,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.2,
     shadowRadius: 12,
-    elevation: 8,
+    elevation: 24,
     borderWidth: 1,
     borderColor: Colors.light.border,
   },

@@ -1026,7 +1026,28 @@ export default function AdminDashboard() {
   const { tab: adminTabParam } = useLocalSearchParams<{ tab?: string }>();
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
-  const { user, isAdmin, logout } = useAuth();
+  const { user, isAdmin, isLoading: authLoading, refreshUser, logout } = useAuth();
+  const [authRetryDone, setAuthRetryDone] = useState(false);
+
+  useEffect(() => {
+    if (authLoading || isAdmin || authRetryDone) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { getStoredAuthUser } = await import("@/lib/auth-storage");
+        const stored = await getStoredAuthUser();
+        if (stored?.role === "admin") {
+          await refreshUser();
+        }
+      } catch {
+        /* ignore */
+      }
+      if (!cancelled) setAuthRetryDone(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authLoading, isAdmin, authRetryDone, refreshUser]);
   const [activeTab, setActiveTab] = useState<AdminTab>(() => {
     const t = String(adminTabParam || "").toLowerCase();
     const valid: AdminTab[] = ["welcome", "courses", "tests", "materials", "missions", "notifications", "aiTutor", "books", "support", "analytics", "users"];
@@ -2159,6 +2180,14 @@ export default function AdminDashboard() {
       deletingUserIdsRef.current.delete(Number(userId));
     },
   });
+
+  if (authLoading || (!isAdmin && !authRetryDone)) {
+    return (
+      <View style={styles.centered}>
+        <ActivityIndicator size="large" color={Colors.light.primary} />
+      </View>
+    );
+  }
 
   if (!isAdmin) {
     return (

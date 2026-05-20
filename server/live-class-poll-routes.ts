@@ -1,5 +1,7 @@
 import type { Express, Request, Response } from "express";
+import type { Pool, PoolClient } from "pg";
 import { userCanAccessLiveClassContent } from "./live-class-access";
+import { releaseSseListen, tryAcquireSseListen } from "./sse-listen-budget";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -10,10 +12,35 @@ type AuthUser = { id: number; role: string } | null;
 type RegisterLiveClassPollRoutesDeps = {
   app: Express;
   db: DbClient;
+  listenPool: Pool;
   requireAuth: (req: Request, res: Response, next: () => void) => any;
   requireAdmin: (req: Request, res: Response, next: () => void) => any;
   getAuthUser: (req: Request) => Promise<AuthUser>;
 };
+
+async function checkEngagementStreamAccess(
+  req: Request,
+  res: Response,
+  db: DbClient,
+  getAuthUser: (req: Request) => Promise<AuthUser>,
+  liveClassId: string
+): Promise<boolean> {
+  const lc = await loadLiveClass(db, liveClassId);
+  if (!lc) {
+    res.status(404).json({ message: "Live class not found" });
+    return false;
+  }
+  const user = await getAuthUser(req);
+  if (!user) {
+    res.status(401).json({ message: "Login required" });
+    return false;
+  }
+  if (!(await userCanAccessLiveClassContent(db, user, lc))) {
+    res.status(403).json({ message: "Access denied" });
+    return false;
+  }
+  return true;
+}
 
 function nowMs() {
   return Date.now();
@@ -43,10 +70,12 @@ async function finalizeExpiredTimers(db: DbClient, liveClassId: string) {
 export function registerLiveClassPollRoutes({
   app,
   db,
+  listenPool,
   requireAuth,
   requireAdmin,
   getAuthUser,
 }: RegisterLiveClassPollRoutesDeps): void {
+  const listenPoolMax = listenPool.options.max ?? 32;
   app.post("/api/admin/live-classes/:id/polls", requireAdmin, async (req: Request, res: Response) => {
     try {
       const liveClassId = String(req.params.id);
@@ -290,6 +319,109 @@ export function registerLiveClassPollRoutes({
       });
     } catch {
       res.status(500).json({ message: "Failed to load timer" });
+    }
+  });
+
+  /** SSE: poll / timer / hand-raise changes via PostgreSQL NOTIFY (migration 0019). */
+  app.get("/api/live-classes/:id/engagement/stream", requireAuth, async (req: Request, res: Response) => {
+    const liveClassIdStr = String(req.params.id);
+    const hasAccess = await checkEngagementStreamAccess(req, res, db, getAuthUser, liveClassIdStr);
+    if (!hasAccess) return;
+
+    if (!tryAcquireSseListen(listenPoolMax)) {
+      return res.status(503).json({ message: "Too many realtime connections; try again shortly." });
+    }
+
+    let closed = false;
+    let listenClient: PoolClient | null = null;
+
+    const cleanup = async () => {
+      if (closed) return;
+      closed = true;
+      releaseSseListen();
+      const c = listenClient;
+      listenClient = null;
+      if (!c) return;
+      try {
+        c.removeAllListeners("notification");
+        await c.query("UNLISTEN live_engagement");
+      } catch {
+        /* ignore */
+      }
+      try {
+        c.release();
+      } catch {
+        /* ignore */
+      }
+    };
+
+    try {
+      listenClient = await listenPool.connect();
+    } catch (e) {
+      console.error("[Engagement SSE] listen pool connect failed", e);
+      releaseSseListen();
+      return res.status(503).json({ message: "Realtime unavailable" });
+    }
+
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    (res as any).flushHeaders?.();
+
+    const onNotify = (msg: { channel?: string; payload?: string }) => {
+      if (closed) return;
+      try {
+        const payload = JSON.parse(String(msg.payload || "{}")) as {
+          type?: string;
+          liveClassId?: unknown;
+        };
+        if (String(payload.liveClassId ?? "") !== liveClassIdStr) return;
+        if (!payload.type) return;
+        res.write(`data: ${JSON.stringify({ type: payload.type })}\n\n`);
+      } catch {
+        /* ignore */
+      }
+    };
+
+    const conn = listenClient;
+    if (!conn) {
+      releaseSseListen();
+      return res.status(503).json({ message: "Realtime unavailable" });
+    }
+    conn.on("notification", onNotify);
+    try {
+      await conn.query("LISTEN live_engagement");
+    } catch (e) {
+      console.error("[Engagement SSE] LISTEN failed", e);
+      await cleanup();
+      try {
+        res.write(`event: error\ndata: ${JSON.stringify({ message: "Realtime unavailable" })}\n\n`);
+      } catch {
+        /* ignore */
+      }
+      res.end();
+      return;
+    }
+
+    const ping = setInterval(() => {
+      if (closed) return;
+      try {
+        res.write(`: ping ${Date.now()}\n\n`);
+      } catch {
+        /* ignore */
+      }
+    }, 25000);
+
+    req.on("close", () => {
+      clearInterval(ping);
+      void cleanup();
+    });
+
+    try {
+      res.write(": stream ok\n\n");
+    } catch {
+      void cleanup();
     }
   });
 }

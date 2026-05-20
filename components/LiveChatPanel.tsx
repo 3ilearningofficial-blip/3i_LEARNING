@@ -10,17 +10,20 @@ import { useAuth } from "@/context/AuthContext";
 import { filterChatMessages, ChatMessage } from "@/lib/chat-utils";
 import Colors from "@/constants/colors";
 
-interface LiveChatPanelProps {
-  liveClassId: string;
-  chatMode: "public" | "private";
-  isAdmin: boolean;
-}
-
 interface HandRaise {
   id: number;
   userId: number;
   userName: string;
   raisedAt: number;
+}
+
+interface LiveChatPanelProps {
+  liveClassId: string;
+  chatMode: "public" | "private";
+  isAdmin: boolean;
+  /** When provided, parent owns raised-hands polling (all broadcast tabs). */
+  raisedHands?: HandRaise[];
+  onResolveHand?: (userId: number) => void;
 }
 
 function useVoiceInput(onResult: (text: string) => void) {
@@ -62,7 +65,13 @@ function useVoiceInput(onResult: (text: string) => void) {
   return { isListening, startListening, stopListening, supported };
 }
 
-export default function LiveChatPanel({ liveClassId, chatMode, isAdmin }: LiveChatPanelProps) {
+export default function LiveChatPanel({
+  liveClassId,
+  chatMode,
+  isAdmin,
+  raisedHands: raisedHandsProp,
+  onResolveHand,
+}: LiveChatPanelProps) {
   const { user } = useAuth();
   const qc = useQueryClient();
   const [chatMsg, setChatMsg] = useState("");
@@ -84,12 +93,23 @@ export default function LiveChatPanel({ liveClassId, chatMode, isAdmin }: LiveCh
     chatMode,
   );
 
-  // Admin: poll raised hands every 5 seconds
-  const { data: raisedHands = [], refetch: refetchHands } = useQuery<HandRaise[]>({
+  const { data: raisedHandsLocal = [], refetch: refetchHands } = useQuery<HandRaise[]>({
     queryKey: [`/api/admin/live-classes/${liveClassId}/raised-hands`],
-    enabled: isAdmin,
-    refetchInterval: 2000,
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/admin/live-classes/${liveClassId}/raised-hands`, undefined);
+      if (!res.ok) return [];
+      const rows = (await res.json()) as Array<Record<string, unknown>>;
+      return rows.map((h) => ({
+        id: Number(h.id),
+        userId: Number(h.userId ?? h.user_id),
+        userName: String(h.userName ?? h.user_name ?? "Student"),
+        raisedAt: Number(h.raisedAt ?? h.raised_at ?? 0),
+      }));
+    },
+    enabled: isAdmin && raisedHandsProp === undefined,
+    refetchInterval: 500,
   });
+  const raisedHands = raisedHandsProp ?? raisedHandsLocal;
 
   // Auto-scroll on new messages
   useEffect(() => {
@@ -140,6 +160,14 @@ export default function LiveChatPanel({ liveClassId, chatMode, isAdmin }: LiveCh
       qc.invalidateQueries({ queryKey: [`/api/admin/live-classes/${liveClassId}/raised-hands`] });
     },
   });
+
+  const dismissHand = useCallback(
+    (userId: number) => {
+      if (onResolveHand) onResolveHand(userId);
+      else resolveHandMutation.mutate(userId);
+    },
+    [onResolveHand, resolveHandMutation]
+  );
 
   const handleSend = useCallback(() => {
     const msg = chatMsg.trim();
@@ -211,7 +239,7 @@ export default function LiveChatPanel({ liveClassId, chatMode, isAdmin }: LiveCh
               <Text style={styles.raisedHandName}>✋ {h.userName}</Text>
               <Pressable
                 style={styles.resolveBtn}
-                onPress={() => resolveHandMutation.mutate(h.userId)}
+                onPress={() => dismissHand(h.userId)}
               >
                 <Text style={styles.resolveBtnText}>Dismiss</Text>
               </Pressable>

@@ -604,7 +604,7 @@ function normalizeOtpIdentifier(input: unknown): string {
       secure: isProduction,        // HTTPS only in production
       httpOnly: true,
       sameSite: "lax",
-      maxAge: 7 * 24 * 60 * 60 * 1000,
+      maxAge: 400 * 24 * 60 * 60 * 1000,
       ...(isProduction && sessionCookieDomain ? { domain: sessionCookieDomain } : {}),
     },
   };

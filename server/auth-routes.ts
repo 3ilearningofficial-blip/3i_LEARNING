@@ -2,6 +2,7 @@ import type { Express, Request, Response } from "express";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { hashPassword, isScryptHash, verifyLegacySha256, verifyPassword } from "./password-utils";
 import {
+  assertActiveSessionPlatformMatches,
   assertLoginAllowedForInstallation,
   bindDeviceForNativeFirstLogin,
   enforceInstallationBinding,
@@ -214,7 +215,10 @@ export function registerAuthRoutes({
   ): Promise<{ success: true; user: ReturnType<typeof buildSessionUserFromRow> }> => {
     const sessionToken = generateSecureToken();
     const normalizedDeviceId = deviceId || null;
-    await persistLoginSession(db, user as { id: number; role: string }, sessionToken, normalizedDeviceId, { clearOtp });
+    await persistLoginSession(db, user as { id: number; role: string }, sessionToken, normalizedDeviceId, {
+      clearOtp,
+      req,
+    });
     await finalizeStudentWebSlotsAfterAuth(db, Number(user.id), String(user.role), req);
     await bindDeviceForNativeFirstLogin(db, Number(user.id), String(user.role), req);
 
@@ -605,6 +609,14 @@ export function registerAuthRoutes({
               (req.session as any).user = null;
               return res.status(401).json({ message: "device_binding_mismatch" });
             }
+            const platBearer = await assertActiveSessionPlatformMatches(db, req, row.id as number, row.role as string);
+            if (!platBearer.ok) {
+              (req.session as any).user = null;
+              return res.status(401).json({
+                message: "active_on_other_platform",
+                activePlatform: platBearer.activePlatform,
+              });
+            }
             await finalizeStudentWebSlotsAfterAuth(db, row.id as number, row.role as string, req);
             (req.session as any).user = fresh;
             return res.json(fresh);
@@ -640,6 +652,14 @@ export function registerAuthRoutes({
       if (!bindSes) {
         (req.session as any).user = null;
         return res.status(401).json({ message: "device_binding_mismatch" });
+      }
+      const platSes = await assertActiveSessionPlatformMatches(db, req, sessionUser.id, row.role);
+      if (!platSes.ok) {
+        (req.session as any).user = null;
+        return res.status(401).json({
+          message: "active_on_other_platform",
+          activePlatform: platSes.activePlatform,
+        });
       }
       await finalizeStudentWebSlotsAfterAuth(db, sessionUser.id, row.role, req);
       const effectiveToken = tok || row.session_token;
