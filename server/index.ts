@@ -12,7 +12,6 @@ if (process.env.NODE_ENV !== "production" || process.env.LOAD_DOTENV === "true")
 
 import express from "express";
 import type { Request, Response, NextFunction } from "express";
-import * as Sentry from "@sentry/node";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import rateLimit from "express-rate-limit";
@@ -717,7 +716,6 @@ function normalizeOtpIdentifier(input: unknown): string {
   configureExpoAndLanding(app);
 
   // 5) Error handler (must be last)
-  Sentry.setupExpressErrorHandler(app);
   setupErrorHandler(app);
 
   const port = parseInt(process.env.PORT || "5000", 10);

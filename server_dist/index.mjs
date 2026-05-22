@@ -480,175 +480,6 @@ var init_security_utils = __esm({
   }
 });
 
-// server/user-sessions.ts
-async function resolveUserBySessionToken(db2, token) {
-  const minCreatedAt = Date.now() - SESSION_MAX_AGE_MS;
-  const primary = await db2.query(
-    "SELECT * FROM users WHERE session_token = $1 AND COALESCE(is_blocked, FALSE) = FALSE AND (last_active_at IS NULL OR last_active_at >= $2)",
-    [token, minCreatedAt]
-  );
-  if (primary.rows.length > 0) {
-    return { row: primary.rows[0], matchedVia: "primary" };
-  }
-  const extra = await db2.query(
-    `SELECT u.* FROM users u
-     INNER JOIN user_sessions s ON s.user_id = u.id AND s.session_token = $1
-     WHERE u.role = 'admin' AND COALESCE(u.is_blocked, FALSE) = FALSE AND s.created_at >= $2`,
-    [token, minCreatedAt]
-  );
-  if (extra.rows.length > 0) {
-    return { row: extra.rows[0], matchedVia: "extra" };
-  }
-  return null;
-}
-async function userHasSessionToken(db2, userId, token) {
-  if (!token) return false;
-  const minCreatedAt = Date.now() - SESSION_MAX_AGE_MS;
-  const u = await db2.query("SELECT session_token, role, last_active_at FROM users WHERE id = $1", [userId]);
-  if (u.rows.length === 0) return false;
-  if (u.rows[0].session_token === token) {
-    const la = Number(u.rows[0].last_active_at || 0);
-    if (!la || la >= minCreatedAt) return true;
-  }
-  if (u.rows[0].role !== "admin") return false;
-  const s = await db2.query(
-    "SELECT 1 FROM user_sessions WHERE user_id = $1 AND session_token = $2 AND created_at >= $3",
-    [userId, token, minCreatedAt]
-  );
-  return s.rows.length > 0;
-}
-async function persistLoginSession(db2, user, token, deviceId, opts) {
-  const isAdmin = user.role === "admin";
-  const now = Date.now();
-  if (isAdmin) {
-    await db2.query("INSERT INTO user_sessions (user_id, session_token, created_at) VALUES ($1, $2, $3)", [
-      user.id,
-      token,
-      now
-    ]);
-    const urow = await db2.query("SELECT session_token FROM users WHERE id = $1", [user.id]);
-    const hasPrimary = !!urow.rows[0]?.session_token;
-    if (!hasPrimary) {
-      await db2.query(
-        "UPDATE users SET session_token = $1, last_active_at = $2, device_id = COALESCE($3, device_id) WHERE id = $4",
-        [token, now, deviceId, user.id]
-      );
-    } else if (opts.clearOtp) {
-      await db2.query(
-        "UPDATE users SET otp = NULL, otp_expires_at = NULL, otp_failed_attempts = 0, otp_locked_until = NULL, last_active_at = $1, device_id = COALESCE($2, device_id) WHERE id = $3",
-        [now, deviceId, user.id]
-      );
-    } else {
-      await db2.query(
-        "UPDATE users SET last_active_at = $1, device_id = COALESCE($2, device_id) WHERE id = $3",
-        [now, deviceId, user.id]
-      );
-    }
-    return;
-  }
-  await db2.query("DELETE FROM user_sessions WHERE user_id = $1", [user.id]);
-  const otpClause = opts.clearOtp !== false ? "otp = NULL, otp_expires_at = NULL, otp_failed_attempts = 0, otp_locked_until = NULL, " : "";
-  await db2.query(
-    `UPDATE users SET ${otpClause}device_id = $1, session_token = $2, last_active_at = $3 WHERE id = $4`,
-    [deviceId || null, token, now, user.id]
-  );
-}
-async function revokeSessionTokenForUser(db2, userId, token) {
-  if (!token) return;
-  await db2.query("DELETE FROM user_sessions WHERE user_id = $1 AND session_token = $2", [userId, token]);
-  await db2.query("UPDATE users SET session_token = NULL WHERE id = $1 AND session_token = $2", [userId, token]);
-}
-var SESSION_MAX_AGE_MS;
-var init_user_sessions = __esm({
-  "server/user-sessions.ts"() {
-    "use strict";
-    SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
-  }
-});
-
-// server/auth-utils.ts
-function rowsToAuthUser(u, sessionTokenOverride) {
-  return {
-    id: u.id,
-    name: u.name,
-    email: u.email,
-    phone: u.phone,
-    role: u.role,
-    sessionToken: sessionTokenOverride ?? u.session_token,
-    profileComplete: !!u.profile_complete || false
-  };
-}
-function syncSessionUser(req, user) {
-  const session2 = req.session;
-  if (session2 && typeof session2 === "object") {
-    session2.user = user;
-  }
-}
-async function getAuthUserFromRequest(req, db2) {
-  const authHeader = req.headers.authorization;
-  const bearerRaw = authHeader?.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
-  const bearerToken = bearerRaw && bearerRaw !== "null" && bearerRaw !== "undefined" ? bearerRaw : "";
-  if (bearerToken) {
-    const token = bearerToken;
-    try {
-      const resolved = await resolveUserBySessionToken(db2, token);
-      if (!resolved) {
-        syncSessionUser(req, null);
-        return null;
-      }
-      const u = resolved.row;
-      if (u.is_blocked) {
-        syncSessionUser(req, null);
-        return null;
-      }
-      const authUser = rowsToAuthUser(u, token);
-      syncSessionUser(req, authUser);
-      return authUser;
-    } catch (e) {
-      console.error("[Auth] Bearer token lookup error:", e);
-      return null;
-    }
-  }
-  const sessionUser = req.session.user;
-  if (!sessionUser?.id) return null;
-  try {
-    const result = await db2.query(
-      "SELECT id, name, email, phone, role, session_token, profile_complete, is_blocked FROM users WHERE id = $1",
-      [sessionUser.id]
-    );
-    if (result.rows.length === 0) {
-      syncSessionUser(req, null);
-      return null;
-    }
-    const row = result.rows[0];
-    if (row.is_blocked) {
-      syncSessionUser(req, null);
-      return null;
-    }
-    const cookieTok = sessionUser.sessionToken;
-    if (cookieTok && !await userHasSessionToken(db2, sessionUser.id, cookieTok)) {
-      syncSessionUser(req, null);
-      return null;
-    }
-    if (row.session_token && !sessionUser.sessionToken) {
-      syncSessionUser(req, null);
-      return null;
-    }
-    const authUser = rowsToAuthUser(row, cookieTok || row.session_token);
-    syncSessionUser(req, authUser);
-    return authUser;
-  } catch (e) {
-    console.error("[Auth] Session user lookup error:", e);
-    return null;
-  }
-}
-var init_auth_utils = __esm({
-  "server/auth-utils.ts"() {
-    "use strict";
-    init_user_sessions();
-  }
-});
-
 // server/native-device-binding.ts
 function getInstallationIdFromRequest(req) {
   const raw = (req.get("x-app-device-id") || "").trim();
@@ -658,6 +489,12 @@ function getInstallationIdFromRequest(req) {
 function getClientPlatform(req) {
   const p = (req.get("x-client-platform") || "").trim().toLowerCase();
   if (p === "ios" || p === "android" || p === "web") return p;
+  return null;
+}
+function getActiveSessionPlatformFamily(req) {
+  const plat = getClientPlatform(req);
+  if (plat === "web") return "web";
+  if (plat === "ios" || plat === "android") return "mobile";
   return null;
 }
 function getWebFormFactorFromRequest(req) {
@@ -890,9 +727,231 @@ async function assertLoginAllowedForInstallation(db2, req, opts) {
   }
   return { ok: true };
 }
+function userRowHasDeviceBinding(row) {
+  const appb = String(row.app_bound_device_id ?? "").trim();
+  const wph = String(row.web_device_id_phone ?? "").trim();
+  const wdk = String(row.web_device_id_desktop ?? "").trim();
+  return !!(appb || wph || wdk);
+}
+async function assertActiveSessionPlatformMatches(db2, req, userId, role) {
+  if (role === "admin") return { ok: true };
+  const r = await db2.query(
+    "SELECT COALESCE(active_session_platform, '') AS asp FROM users WHERE id = $1",
+    [userId]
+  );
+  const active = String(r.rows[0]?.asp ?? "").trim();
+  if (!active || active !== "web" && active !== "mobile") return { ok: true };
+  const requestFamily = getActiveSessionPlatformFamily(req);
+  if (!requestFamily || requestFamily === active) return { ok: true };
+  return { ok: false, activePlatform: active };
+}
 var init_native_device_binding = __esm({
   "server/native-device-binding.ts"() {
     "use strict";
+  }
+});
+
+// server/user-sessions.ts
+function sessionMinActiveAt(row) {
+  const role = String(row.role ?? "");
+  if (role === "admin") return Date.now() - PERSISTENT_SESSION_MAX_AGE_MS;
+  if (userRowHasDeviceBinding(row)) return Date.now() - PERSISTENT_SESSION_MAX_AGE_MS;
+  return Date.now() - STUDENT_DEFAULT_SESSION_MAX_AGE_MS;
+}
+function isLastActiveValid(row) {
+  const la = Number(row.last_active_at || 0);
+  if (!la) return true;
+  return la >= sessionMinActiveAt(row);
+}
+async function resolveUserBySessionToken(db2, token) {
+  const primary = await db2.query(
+    "SELECT * FROM users WHERE session_token = $1 AND COALESCE(is_blocked, FALSE) = FALSE",
+    [token]
+  );
+  if (primary.rows.length > 0) {
+    const row = primary.rows[0];
+    if (isLastActiveValid(row)) {
+      return { row, matchedVia: "primary" };
+    }
+  }
+  const minCreatedAt = Date.now() - PERSISTENT_SESSION_MAX_AGE_MS;
+  const extra = await db2.query(
+    `SELECT u.* FROM users u
+     INNER JOIN user_sessions s ON s.user_id = u.id AND s.session_token = $1
+     WHERE u.role = 'admin' AND COALESCE(u.is_blocked, FALSE) = FALSE AND s.created_at >= $2`,
+    [token, minCreatedAt]
+  );
+  if (extra.rows.length > 0) {
+    return { row: extra.rows[0], matchedVia: "extra" };
+  }
+  return null;
+}
+async function userHasSessionToken(db2, userId, token) {
+  if (!token) return false;
+  const u = await db2.query(
+    `SELECT session_token, role, last_active_at,
+            app_bound_device_id, web_device_id_phone, web_device_id_desktop
+     FROM users WHERE id = $1`,
+    [userId]
+  );
+  if (u.rows.length === 0) return false;
+  const row = u.rows[0];
+  if (row.session_token === token) {
+    if (isLastActiveValid(row)) return true;
+  }
+  if (row.role !== "admin") return false;
+  const minCreatedAt = Date.now() - PERSISTENT_SESSION_MAX_AGE_MS;
+  const s = await db2.query(
+    "SELECT 1 FROM user_sessions WHERE user_id = $1 AND session_token = $2 AND created_at >= $3",
+    [userId, token, minCreatedAt]
+  );
+  return s.rows.length > 0;
+}
+async function persistLoginSession(db2, user, token, deviceId, opts) {
+  const isAdmin = user.role === "admin";
+  const now = Date.now();
+  const platformFamily = !isAdmin && opts.req ? getActiveSessionPlatformFamily(opts.req) : null;
+  if (isAdmin) {
+    await db2.query("INSERT INTO user_sessions (user_id, session_token, created_at) VALUES ($1, $2, $3)", [
+      user.id,
+      token,
+      now
+    ]);
+    const urow = await db2.query("SELECT session_token FROM users WHERE id = $1", [user.id]);
+    const hasPrimary = !!urow.rows[0]?.session_token;
+    if (!hasPrimary) {
+      await db2.query(
+        "UPDATE users SET session_token = $1, last_active_at = $2, device_id = COALESCE($3, device_id) WHERE id = $4",
+        [token, now, deviceId, user.id]
+      );
+    } else if (opts.clearOtp) {
+      await db2.query(
+        "UPDATE users SET otp = NULL, otp_expires_at = NULL, otp_failed_attempts = 0, otp_locked_until = NULL, last_active_at = $1, device_id = COALESCE($2, device_id) WHERE id = $3",
+        [now, deviceId, user.id]
+      );
+    } else {
+      await db2.query(
+        "UPDATE users SET last_active_at = $1, device_id = COALESCE($2, device_id) WHERE id = $3",
+        [now, deviceId, user.id]
+      );
+    }
+    return;
+  }
+  await db2.query("DELETE FROM user_sessions WHERE user_id = $1", [user.id]);
+  const otpClause = opts.clearOtp !== false ? "otp = NULL, otp_expires_at = NULL, otp_failed_attempts = 0, otp_locked_until = NULL, " : "";
+  if (platformFamily === "web" || platformFamily === "mobile") {
+    await db2.query(
+      `UPDATE users SET ${otpClause}device_id = $1, session_token = $2, last_active_at = $3, active_session_platform = $4 WHERE id = $5`,
+      [deviceId || null, token, now, platformFamily, user.id]
+    );
+  } else {
+    await db2.query(
+      `UPDATE users SET ${otpClause}device_id = $1, session_token = $2, last_active_at = $3 WHERE id = $4`,
+      [deviceId || null, token, now, user.id]
+    );
+  }
+}
+async function revokeSessionTokenForUser(db2, userId, token) {
+  if (!token) return;
+  await db2.query("DELETE FROM user_sessions WHERE user_id = $1 AND session_token = $2", [userId, token]);
+  const u = await db2.query("SELECT session_token FROM users WHERE id = $1", [userId]);
+  if (u.rows[0]?.session_token === token) {
+    await db2.query(
+      "UPDATE users SET session_token = NULL, active_session_platform = NULL WHERE id = $1",
+      [userId]
+    );
+  }
+}
+var STUDENT_DEFAULT_SESSION_MAX_AGE_MS, PERSISTENT_SESSION_MAX_AGE_MS;
+var init_user_sessions = __esm({
+  "server/user-sessions.ts"() {
+    "use strict";
+    init_native_device_binding();
+    STUDENT_DEFAULT_SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
+    PERSISTENT_SESSION_MAX_AGE_MS = 10 * 365 * 24 * 60 * 60 * 1e3;
+  }
+});
+
+// server/auth-utils.ts
+function rowsToAuthUser(u, sessionTokenOverride) {
+  return {
+    id: u.id,
+    name: u.name,
+    email: u.email,
+    phone: u.phone,
+    role: u.role,
+    sessionToken: sessionTokenOverride ?? u.session_token,
+    profileComplete: !!u.profile_complete || false
+  };
+}
+function syncSessionUser(req, user) {
+  const session2 = req.session;
+  if (session2 && typeof session2 === "object") {
+    session2.user = user;
+  }
+}
+async function getAuthUserFromRequest(req, db2) {
+  const authHeader = req.headers.authorization;
+  const bearerRaw = authHeader?.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+  const bearerToken = bearerRaw && bearerRaw !== "null" && bearerRaw !== "undefined" ? bearerRaw : "";
+  if (bearerToken) {
+    const token = bearerToken;
+    try {
+      const resolved = await resolveUserBySessionToken(db2, token);
+      if (!resolved) {
+        syncSessionUser(req, null);
+        return null;
+      }
+      const u = resolved.row;
+      if (u.is_blocked) {
+        syncSessionUser(req, null);
+        return null;
+      }
+      const authUser = rowsToAuthUser(u, token);
+      syncSessionUser(req, authUser);
+      return authUser;
+    } catch (e) {
+      console.error("[Auth] Bearer token lookup error:", e);
+      return null;
+    }
+  }
+  const sessionUser = req.session.user;
+  if (!sessionUser?.id) return null;
+  try {
+    const result = await db2.query(
+      "SELECT id, name, email, phone, role, session_token, profile_complete, is_blocked FROM users WHERE id = $1",
+      [sessionUser.id]
+    );
+    if (result.rows.length === 0) {
+      syncSessionUser(req, null);
+      return null;
+    }
+    const row = result.rows[0];
+    if (row.is_blocked) {
+      syncSessionUser(req, null);
+      return null;
+    }
+    const cookieTok = sessionUser.sessionToken;
+    if (cookieTok && !await userHasSessionToken(db2, sessionUser.id, cookieTok)) {
+      syncSessionUser(req, null);
+      return null;
+    }
+    if (row.session_token && !sessionUser.sessionToken) {
+      syncSessionUser(req, null);
+      return null;
+    }
+    const authUser = rowsToAuthUser(row, cookieTok || row.session_token);
+    syncSessionUser(req, authUser);
+    return authUser;
+  } catch (e) {
+    console.error("[Auth] Session user lookup error:", e);
+    return null;
+  }
+}
+var init_auth_utils = __esm({
+  "server/auth-utils.ts"() {
+    "use strict";
+    init_user_sessions();
   }
 });
 
@@ -1141,7 +1200,10 @@ function registerAuthRoutes({
   const finalizeAuthenticatedSession = async (req, user, deviceId, clearOtp) => {
     const sessionToken = generateSecureToken2();
     const normalizedDeviceId = deviceId || null;
-    await persistLoginSession(db2, user, sessionToken, normalizedDeviceId, { clearOtp });
+    await persistLoginSession(db2, user, sessionToken, normalizedDeviceId, {
+      clearOtp,
+      req
+    });
     await finalizeStudentWebSlotsAfterAuth(db2, Number(user.id), String(user.role), req);
     await bindDeviceForNativeFirstLogin(db2, Number(user.id), String(user.role), req);
     const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: normalizedDeviceId });
@@ -1477,6 +1539,14 @@ function registerAuthRoutes({
               req.session.user = null;
               return res.status(401).json({ message: "device_binding_mismatch" });
             }
+            const platBearer = await assertActiveSessionPlatformMatches(db2, req, row.id, row.role);
+            if (!platBearer.ok) {
+              req.session.user = null;
+              return res.status(401).json({
+                message: "active_on_other_platform",
+                activePlatform: platBearer.activePlatform
+              });
+            }
             await finalizeStudentWebSlotsAfterAuth(db2, row.id, row.role, req);
             req.session.user = fresh;
             return res.json(fresh);
@@ -1510,6 +1580,14 @@ function registerAuthRoutes({
       if (!bindSes) {
         req.session.user = null;
         return res.status(401).json({ message: "device_binding_mismatch" });
+      }
+      const platSes = await assertActiveSessionPlatformMatches(db2, req, sessionUser.id, row.role);
+      if (!platSes.ok) {
+        req.session.user = null;
+        return res.status(401).json({
+          message: "active_on_other_platform",
+          activePlatform: platSes.activePlatform
+        });
       }
       await finalizeStudentWebSlotsAfterAuth(db2, sessionUser.id, row.role, req);
       const effectiveToken = tok || row.session_token;
@@ -3482,7 +3560,7 @@ function registerLiveClassEngagementRoutes({
         const visible2 = lcAccess.rows[0]?.show_viewer_count ?? true;
         return res.json({ viewers: [], count: 0, visible: visible2 });
       }
-      const cutoff = Date.now() - 6e4;
+      const cutoff = Date.now() - 2e4;
       const result = await db2.query(
         `SELECT user_name FROM live_class_viewers
          WHERE live_class_id = $1 AND last_heartbeat > $2
@@ -3638,8 +3716,18 @@ async function saveRecordingForClassAndPeers(db2, liveClassId, recordingUrl, opt
          course_id = EXCLUDED.course_id,
          title = EXCLUDED.title,
          description = EXCLUDED.description,
-         video_url = EXCLUDED.video_url,
-         video_type = EXCLUDED.video_type,
+         video_url = CASE
+           WHEN $4::text ~* '\\.(png|jpe?g|webp|gif)(\\?|$)' AND lectures.video_url IS NOT NULL
+             AND lectures.video_url !~* '\\.(png|jpe?g|webp|gif)(\\?|$)'
+           THEN lectures.video_url
+           ELSE EXCLUDED.video_url
+         END,
+         video_type = CASE
+           WHEN $4::text ~* '\\.(png|jpe?g|webp|gif)(\\?|$)' AND lectures.video_url IS NOT NULL
+             AND lectures.video_url !~* '\\.(png|jpe?g|webp|gif)(\\?|$)'
+           THEN lectures.video_type
+           ELSE EXCLUDED.video_type
+         END,
          duration_minutes = EXCLUDED.duration_minutes,
          section_title = EXCLUDED.section_title,
          live_class_finalized = TRUE
@@ -5809,7 +5897,7 @@ function registerAdminUsersAndContentRoutes({
       const uid = parseInt(String(req.params.id), 10);
       if (!Number.isFinite(uid)) return res.status(400).json({ message: "Invalid user id" });
       await db2.query(
-        "UPDATE users SET app_bound_device_id = NULL, web_device_id_phone = NULL, web_device_id_desktop = NULL WHERE id = $1",
+        "UPDATE users SET app_bound_device_id = NULL, web_device_id_phone = NULL, web_device_id_desktop = NULL, active_session_platform = NULL WHERE id = $1",
         [uid]
       );
       await db2.query(
@@ -8749,6 +8837,45 @@ function registerClassroomRoutes({
       res.status(500).json({ message: "Failed to create classroom token" });
     }
   });
+  app2.get(
+    "/api/admin/live-classes/:id/classroom/board-checkpoint",
+    requireAdmin,
+    async (req, res) => {
+      try {
+        const lc = await loadLiveClass(db2, String(req.params.id));
+        if (!lc) return res.status(404).json({ message: "Live class not found" });
+        res.json({
+          checkpointUrl: lc.board_sync_checkpoint_url || null,
+          checkpointAt: lc.board_checkpoint_at || null
+        });
+      } catch (err) {
+        console.error("[Classroom] get checkpoint error:", err?.message || err);
+        res.status(500).json({ message: "Failed to load board checkpoint" });
+      }
+    }
+  );
+  app2.put(
+    "/api/admin/live-classes/:id/classroom/board-checkpoint",
+    requireAdmin,
+    async (req, res) => {
+      try {
+        const liveClassId = String(req.params.id);
+        const checkpointUrl = String(req.body?.checkpointUrl || "").trim();
+        if (!checkpointUrl) return res.status(400).json({ message: "checkpointUrl required" });
+        const lc = await loadLiveClass(db2, liveClassId);
+        if (!lc) return res.status(404).json({ message: "Live class not found" });
+        const t = Date.now();
+        await db2.query(
+          `UPDATE live_classes SET board_sync_checkpoint_url = $1, board_checkpoint_at = $2 WHERE id = $3`,
+          [checkpointUrl, t, liveClassId]
+        );
+        res.json({ ok: true, checkpointUrl, checkpointAt: t });
+      } catch (err) {
+        console.error("[Classroom] put checkpoint error:", err?.message || err);
+        res.status(500).json({ message: "Failed to save board checkpoint" });
+      }
+    }
+  );
   app2.put("/api/admin/live-classes/:id/classroom/board-snapshot", requireAdmin, async (req, res) => {
     try {
       const liveClassId = String(req.params.id);
@@ -8757,10 +8884,7 @@ function registerClassroomRoutes({
       if (!url) return res.status(400).json({ message: "boardSnapshotUrl required" });
       const lc = await loadLiveClass(db2, liveClassId);
       if (!lc) return res.status(404).json({ message: "Live class not found" });
-      await db2.query(
-        "UPDATE live_classes SET board_snapshot_url = $1, recording_url = COALESCE(recording_url, $1) WHERE id = $2",
-        [url, liveClassId]
-      );
+      await db2.query("UPDATE live_classes SET board_snapshot_url = $1 WHERE id = $2", [url, liveClassId]);
       res.json({ ok: true, boardSnapshotUrl: url });
     } catch (err) {
       console.error("[Classroom] board-snapshot error:", err?.message || err);
@@ -8776,31 +8900,56 @@ function registerClassroomRoutes({
         return res.status(400).json({ message: "Not a classroom stream" });
       }
       const body = req.body || {};
-      const recordingUrl = String(body.recordingUrl || body.boardSnapshotUrl || "").trim();
+      const recordingUrl = String(body.recordingUrl || "").trim();
+      const boardSnapshotUrl = String(body.boardSnapshotUrl || "").trim();
+      const boardPdfUrl = String(body.boardPdfUrl || "").trim();
+      const boardPagesRaw = body.boardPages;
+      const boardSyncCheckpointUrl = String(body.boardSyncCheckpointUrl || "").trim();
       const sectionTitle = buildRecordingLectureSectionTitle(
         lc.lecture_section_title,
         lc.lecture_subfolder_title,
         body.sectionTitle
       );
+      const isImageUrl = (u) => /\.(png|jpe?g|webp|gif)(\?|$)/i.test(u);
       let lectureIds = [];
-      if (recordingUrl) {
+      if (recordingUrl && !isImageUrl(recordingUrl)) {
         const saved = await saveRecordingForClassAndPeers(db2, liveClassId, recordingUrl, {
           sectionTitle,
           recomputeCourseProgress: recomputeAllEnrollmentsProgressForCourse2
         });
         lectureIds = saved.lectureIds;
+      }
+      if (boardSnapshotUrl) {
         await db2.query(
           "UPDATE live_classes SET board_snapshot_url = COALESCE(board_snapshot_url, $1) WHERE id = $2",
-          [recordingUrl, liveClassId]
+          [boardSnapshotUrl, liveClassId]
         );
-      } else {
-        const boardOnly = String(body.boardSnapshotUrl || "").trim();
-        if (boardOnly) {
-          await db2.query(
-            "UPDATE live_classes SET board_snapshot_url = COALESCE(board_snapshot_url, $1) WHERE id = $2",
-            [boardOnly, liveClassId]
-          );
-        }
+      }
+      const archiveFields = [];
+      const archiveParams = [];
+      let p = 1;
+      if (boardPdfUrl) {
+        archiveFields.push(`board_pdf_url = $${p++}`);
+        archiveParams.push(boardPdfUrl);
+      }
+      if (Array.isArray(boardPagesRaw) && boardPagesRaw.length > 0) {
+        archiveFields.push(`board_pages_json = $${p++}`);
+        archiveParams.push(JSON.stringify(boardPagesRaw));
+      }
+      if (boardSyncCheckpointUrl) {
+        archiveFields.push(`board_sync_checkpoint_url = $${p++}`);
+        archiveParams.push(boardSyncCheckpointUrl);
+        archiveFields.push(`board_checkpoint_at = $${p++}`);
+        archiveParams.push(Date.now());
+      }
+      if (archiveFields.length > 0) {
+        archiveParams.push(liveClassId);
+        await db2.query(
+          `UPDATE live_classes SET ${archiveFields.join(", ")} WHERE id = $${p}`,
+          archiveParams
+        );
+      }
+      if (!recordingUrl || isImageUrl(recordingUrl)) {
         const endedAt = Date.now();
         await db2.query(
           `UPDATE live_classes 
@@ -8808,15 +8957,19 @@ function registerClassroomRoutes({
            WHERE id = $2`,
           [endedAt, liveClassId]
         );
-        const refreshed = await db2.query("SELECT * FROM live_classes WHERE id = $1", [liveClassId]);
-        lectureIds = await convertLiveClassTitlePeersToLectures(db2, refreshed.rows[0] || lc, {
+        const refreshed2 = await db2.query("SELECT * FROM live_classes WHERE id = $1", [liveClassId]);
+        lectureIds = await convertLiveClassTitlePeersToLectures(db2, refreshed2.rows[0] || lc, {
           sectionTitleOverride: sectionTitle,
           recomputeCourseProgress: recomputeAllEnrollmentsProgressForCourse2
         });
       }
+      const refreshed = await db2.query("SELECT * FROM live_classes WHERE id = $1", [liveClassId]);
+      const row = refreshed.rows[0] || lc;
       res.json({
         success: true,
-        recordingUrl: recordingUrl || null,
+        recordingUrl: recordingUrl && !isImageUrl(recordingUrl) ? recordingUrl : null,
+        boardSnapshotUrl: boardSnapshotUrl || row.board_snapshot_url || null,
+        boardPdfUrl: row.board_pdf_url || boardPdfUrl || null,
         lectureIds,
         sectionTitle
       });
@@ -8854,6 +9007,23 @@ var init_classroom_routes = __esm({
 });
 
 // server/live-class-poll-routes.ts
+async function checkEngagementStreamAccess(req, res, db2, getAuthUser2, liveClassId) {
+  const lc = await loadLiveClass2(db2, liveClassId);
+  if (!lc) {
+    res.status(404).json({ message: "Live class not found" });
+    return false;
+  }
+  const user = await getAuthUser2(req);
+  if (!user) {
+    res.status(401).json({ message: "Login required" });
+    return false;
+  }
+  if (!await userCanAccessLiveClassContent(db2, user, lc)) {
+    res.status(403).json({ message: "Access denied" });
+    return false;
+  }
+  return true;
+}
 function nowMs() {
   return Date.now();
 }
@@ -8878,10 +9048,12 @@ async function finalizeExpiredTimers(db2, liveClassId) {
 function registerLiveClassPollRoutes({
   app: app2,
   db: db2,
+  listenPool: listenPool2,
   requireAuth,
   requireAdmin,
   getAuthUser: getAuthUser2
 }) {
+  const listenPoolMax = listenPool2.options.max ?? 32;
   app2.post("/api/admin/live-classes/:id/polls", requireAdmin, async (req, res) => {
     try {
       const liveClassId = String(req.params.id);
@@ -9095,11 +9267,132 @@ function registerLiveClassPollRoutes({
       res.json({
         timer: {
           ...timer,
-          remainingSeconds: Math.max(0, Math.ceil((Number(timer.ends_at) - t) / 1e3))
+          remainingSeconds: Math.max(0, Math.ceil((Number(timer.ends_at) - t) / 1e3)),
+          overlay_x_pct: Number(timer.overlay_x_pct ?? 85),
+          overlay_y_pct: Number(timer.overlay_y_pct ?? 8)
         }
       });
     } catch {
       res.status(500).json({ message: "Failed to load timer" });
+    }
+  });
+  app2.patch(
+    "/api/admin/live-classes/:id/activity-timer/overlay-position",
+    requireAdmin,
+    async (req, res) => {
+      try {
+        const liveClassId = String(req.params.id);
+        const xPct = Number(req.body?.xPct);
+        const yPct = Number(req.body?.yPct);
+        if (!Number.isFinite(xPct) || !Number.isFinite(yPct)) {
+          return res.status(400).json({ message: "xPct and yPct required" });
+        }
+        const x = Math.min(95, Math.max(2, xPct));
+        const y = Math.min(90, Math.max(2, yPct));
+        await finalizeExpiredTimers(db2, liveClassId);
+        const t = nowMs();
+        const r = await db2.query(
+          `UPDATE live_class_activity_timers
+           SET overlay_x_pct = $1, overlay_y_pct = $2
+           WHERE live_class_id = $3 AND ended_at IS NULL AND ends_at > $4
+           RETURNING id`,
+          [x, y, liveClassId, t]
+        );
+        if (!r.rows[0]) return res.status(404).json({ message: "No active timer" });
+        res.json({ ok: true, overlay_x_pct: x, overlay_y_pct: y });
+      } catch {
+        res.status(500).json({ message: "Failed to update timer position" });
+      }
+    }
+  );
+  app2.get("/api/live-classes/:id/engagement/stream", requireAuth, async (req, res) => {
+    const liveClassIdStr = String(req.params.id);
+    const hasAccess = await checkEngagementStreamAccess(req, res, db2, getAuthUser2, liveClassIdStr);
+    if (!hasAccess) return;
+    if (!tryAcquireSseListen(listenPoolMax)) {
+      return res.status(503).json({ message: "Too many realtime connections; try again shortly." });
+    }
+    let closed = false;
+    let listenClient = null;
+    const cleanup = async () => {
+      if (closed) return;
+      closed = true;
+      releaseSseListen();
+      const c = listenClient;
+      listenClient = null;
+      if (!c) return;
+      try {
+        c.removeAllListeners("notification");
+        await c.query("UNLISTEN live_engagement");
+      } catch {
+      }
+      try {
+        c.release();
+      } catch {
+      }
+    };
+    try {
+      listenClient = await listenPool2.connect();
+    } catch (e) {
+      console.error("[Engagement SSE] listen pool connect failed", e);
+      releaseSseListen();
+      return res.status(503).json({ message: "Realtime unavailable" });
+    }
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders?.();
+    const onNotify = (msg) => {
+      if (closed) return;
+      try {
+        const payload = JSON.parse(String(msg.payload || "{}"));
+        if (String(payload.liveClassId ?? "") !== liveClassIdStr) return;
+        if (!payload.type) return;
+        res.write(`data: ${JSON.stringify({ type: payload.type })}
+
+`);
+      } catch {
+      }
+    };
+    const conn = listenClient;
+    if (!conn) {
+      releaseSseListen();
+      return res.status(503).json({ message: "Realtime unavailable" });
+    }
+    conn.on("notification", onNotify);
+    try {
+      await conn.query("LISTEN live_engagement");
+    } catch (e) {
+      console.error("[Engagement SSE] LISTEN failed", e);
+      await cleanup();
+      try {
+        res.write(`event: error
+data: ${JSON.stringify({ message: "Realtime unavailable" })}
+
+`);
+      } catch {
+      }
+      res.end();
+      return;
+    }
+    const ping = setInterval(() => {
+      if (closed) return;
+      try {
+        res.write(`: ping ${Date.now()}
+
+`);
+      } catch {
+      }
+    }, 25e3);
+    req.on("close", () => {
+      clearInterval(ping);
+      void cleanup();
+    });
+    try {
+      res.write(": stream ok\n\n");
+    } catch {
+      void cleanup();
     }
   });
 }
@@ -9107,6 +9400,7 @@ var init_live_class_poll_routes = __esm({
   "server/live-class-poll-routes.ts"() {
     "use strict";
     init_live_class_access();
+    init_sse_listen_budget();
   }
 });
 
@@ -10432,6 +10726,7 @@ var init_schema_readiness_contract = __esm({
         "profile_complete",
         "is_blocked",
         "last_active_at",
+        "active_session_platform",
         "otp_send_count",
         "otp_send_window_start",
         "otp_send_locked_until"
@@ -10450,7 +10745,11 @@ var init_schema_readiness_contract = __esm({
         "lecture_subfolder_title",
         "recording_deleted_at",
         "classroom_room_name",
-        "board_snapshot_url"
+        "board_snapshot_url",
+        "board_pdf_url",
+        "board_pages_json",
+        "board_sync_checkpoint_url",
+        "board_checkpoint_at"
       ],
       notifications: ["source", "expires_at", "is_hidden", "admin_notif_id", "image_url"],
       courses: ["subject", "cover_color", "pyq_count", "mock_count", "practice_count"],
@@ -10672,6 +10971,11 @@ async function getAuthUser(req) {
       if (!user) return null;
       const boundOk = await enforceInstallationBinding(db, req, user.id, user.role);
       if (!boundOk) {
+        req.session.user = null;
+        return null;
+      }
+      const platOk = await assertActiveSessionPlatformMatches(db, req, user.id, user.role);
+      if (!platOk.ok) {
         req.session.user = null;
         return null;
       }
@@ -11372,6 +11676,7 @@ async function registerRoutes(app2) {
   registerLiveClassPollRoutes({
     app: app2,
     db,
+    listenPool,
     requireAuth,
     requireAdmin,
     getAuthUser
@@ -11499,7 +11804,6 @@ import dotenv from "dotenv";
 import * as fs from "fs";
 import * as path from "path";
 import express from "express";
-import * as Sentry from "@sentry/node";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import rateLimit from "express-rate-limit";
@@ -11917,7 +12221,7 @@ function normalizeOtpIdentifier(input) {
       // HTTPS only in production
       httpOnly: true,
       sameSite: "lax",
-      maxAge: 7 * 24 * 60 * 60 * 1e3,
+      maxAge: 400 * 24 * 60 * 60 * 1e3,
       ...isProduction && sessionCookieDomain ? { domain: sessionCookieDomain } : {}
     }
   };
@@ -12007,7 +12311,6 @@ function normalizeOtpIdentifier(input) {
     res.status(404).send("Not found");
   });
   configureExpoAndLanding(app);
-  Sentry.setupExpressErrorHandler(app);
   setupErrorHandler(app);
   const port = parseInt(process.env.PORT || "5000", 10);
   logProductionReleaseHints();
