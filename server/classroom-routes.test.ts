@@ -23,6 +23,33 @@ function mockDb(overrides: { liveClass?: any } = {}) {
   };
 }
 
+describe("classroom board checkpoint", () => {
+  it("PUT checkpoint requires checkpointUrl", async () => {
+    const app = express();
+    app.use(express.json());
+    const db = mockDb();
+    registerClassroomRoutes({
+      app,
+      db: db as any,
+      requireAuth: (_req, _res, next) => next(),
+      requireAdmin: (_req, _res, next) => next(),
+      getAuthUser: async () => ({ id: 1, name: "Admin", role: "admin" }),
+      recomputeAllEnrollmentsProgressForCourse: async () => {},
+    });
+    const server = createServer(app);
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const port = (server.address() as any).port;
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/admin/live-classes/1/classroom/board-checkpoint`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+    server.close();
+  });
+});
+
 describe("classroom token", () => {
   it("returns 503 when LiveKit is not configured", async () => {
     const prev = { ...process.env };

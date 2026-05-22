@@ -236,8 +236,8 @@ export default function ClassroomStudentView({
             </View>
           ) : watchComposite ? (
             <>
-              <ClassroomLiveOverlays liveClassId={liveClassId} />
               <ClassroomCompositePlayer liveClassId={liveClassId} enabled />
+              <ClassroomLiveOverlays liveClassId={liveClassId} sessionActive={isLive} />
               {!isWide && chatOpen ? renderChatPanel() : null}
             </>
           ) : showAsLiveUI || isCompleted ? (
@@ -303,7 +303,14 @@ const styles = StyleSheet.create({
   liveText: { fontSize: 10, fontWeight: "800", color: "#fff" },
   body: { flex: 1 },
   bodyRow: { flexDirection: "row" },
-  stage: { flex: 1, position: "relative", minHeight: 0 },
+  stage: {
+    flex: 1,
+    position: "relative",
+    minHeight: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#000",
+  },
   stageWithChat: { flex: 1 },
   waiting: { flex: 1, justifyContent: "center", alignItems: "center", gap: 12 },
   waitingText: { color: "#9CA3AF", fontSize: 14 },

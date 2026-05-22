@@ -1,0 +1,3 @@
+ALTER TABLE live_class_activity_timers
+  ADD COLUMN IF NOT EXISTS overlay_x_pct REAL NOT NULL DEFAULT 85,
+  ADD COLUMN IF NOT EXISTS overlay_y_pct REAL NOT NULL DEFAULT 8;

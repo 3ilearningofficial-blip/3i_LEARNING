@@ -26,6 +26,7 @@ import LiveStudentsPanel from "@/components/LiveStudentsPanel";
 import LiveClassRecordingTimer from "@/components/LiveClassRecordingTimer";
 import ClassroomEngagementPanel from "@/components/classroom/ClassroomEngagementPanel";
 import ClassroomHeaderActivityTimer from "@/components/classroom/ClassroomHeaderActivityTimer";
+import ClassroomLiveOverlays from "@/components/classroom/ClassroomLiveOverlays";
 import { LinearGradient } from "expo-linear-gradient";
 import Colors from "@/constants/colors";
 import { Ionicons } from "@expo/vector-icons";
@@ -679,6 +680,13 @@ export default function BroadcastPage() {
               </View>
             )
           )}
+          {isLive && liveClassId ? (
+            <ClassroomLiveOverlays
+              liveClassId={String(liveClassId)}
+              isAdmin
+              sessionActive
+            />
+          ) : null}
         </View>
 
         {/* RIGHT: Side Panel (1/4) */}
@@ -938,6 +946,7 @@ const styles = StyleSheet.create({
     flex: 3,
     backgroundColor: "#000",
     position: "relative",
+    overflow: "hidden",
   },
   noWebrtc: {
     flex: 1,
@@ -1044,6 +1053,8 @@ const styles = StyleSheet.create({
   tabPanelFill: {
     flex: 1,
     minHeight: 0,
+    paddingHorizontal: 12,
+    paddingTop: 8,
   },
   raisedHandsStrip: {
     paddingHorizontal: 10,

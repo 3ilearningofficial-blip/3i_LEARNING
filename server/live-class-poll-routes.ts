@@ -315,12 +315,44 @@ export function registerLiveClassPollRoutes({
         timer: {
           ...timer,
           remainingSeconds: Math.max(0, Math.ceil((Number(timer.ends_at) - t) / 1000)),
+          overlay_x_pct: Number(timer.overlay_x_pct ?? 85),
+          overlay_y_pct: Number(timer.overlay_y_pct ?? 8),
         },
       });
     } catch {
       res.status(500).json({ message: "Failed to load timer" });
     }
   });
+
+  app.patch(
+    "/api/admin/live-classes/:id/activity-timer/overlay-position",
+    requireAdmin,
+    async (req: Request, res: Response) => {
+      try {
+        const liveClassId = String(req.params.id);
+        const xPct = Number(req.body?.xPct);
+        const yPct = Number(req.body?.yPct);
+        if (!Number.isFinite(xPct) || !Number.isFinite(yPct)) {
+          return res.status(400).json({ message: "xPct and yPct required" });
+        }
+        const x = Math.min(95, Math.max(2, xPct));
+        const y = Math.min(90, Math.max(2, yPct));
+        await finalizeExpiredTimers(db, liveClassId);
+        const t = nowMs();
+        const r = await db.query(
+          `UPDATE live_class_activity_timers
+           SET overlay_x_pct = $1, overlay_y_pct = $2
+           WHERE live_class_id = $3 AND ended_at IS NULL AND ends_at > $4
+           RETURNING id`,
+          [x, y, liveClassId, t]
+        );
+        if (!r.rows[0]) return res.status(404).json({ message: "No active timer" });
+        res.json({ ok: true, overlay_x_pct: x, overlay_y_pct: y });
+      } catch {
+        res.status(500).json({ message: "Failed to update timer position" });
+      }
+    }
+  );
 
   /** SSE: poll / timer / hand-raise changes via PostgreSQL NOTIFY (migration 0019). */
   app.get("/api/live-classes/:id/engagement/stream", requireAuth, async (req: Request, res: Response) => {

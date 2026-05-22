@@ -116,6 +116,49 @@ export function registerClassroomRoutes({
     }
   });
 
+  app.get(
+    "/api/admin/live-classes/:id/classroom/board-checkpoint",
+    requireAdmin,
+    async (req: Request, res: Response) => {
+      try {
+        const lc = await loadLiveClass(db, String(req.params.id));
+        if (!lc) return res.status(404).json({ message: "Live class not found" });
+        res.json({
+          checkpointUrl: lc.board_sync_checkpoint_url || null,
+          checkpointAt: lc.board_checkpoint_at || null,
+        });
+      } catch (err: any) {
+        console.error("[Classroom] get checkpoint error:", err?.message || err);
+        res.status(500).json({ message: "Failed to load board checkpoint" });
+      }
+    }
+  );
+
+  app.put(
+    "/api/admin/live-classes/:id/classroom/board-checkpoint",
+    requireAdmin,
+    async (req: Request, res: Response) => {
+      try {
+        const liveClassId = String(req.params.id);
+        const checkpointUrl = String(req.body?.checkpointUrl || "").trim();
+        if (!checkpointUrl) return res.status(400).json({ message: "checkpointUrl required" });
+
+        const lc = await loadLiveClass(db, liveClassId);
+        if (!lc) return res.status(404).json({ message: "Live class not found" });
+
+        const t = Date.now();
+        await db.query(
+          `UPDATE live_classes SET board_sync_checkpoint_url = $1, board_checkpoint_at = $2 WHERE id = $3`,
+          [checkpointUrl, t, liveClassId]
+        );
+        res.json({ ok: true, checkpointUrl, checkpointAt: t });
+      } catch (err: any) {
+        console.error("[Classroom] put checkpoint error:", err?.message || err);
+        res.status(500).json({ message: "Failed to save board checkpoint" });
+      }
+    }
+  );
+
   app.put("/api/admin/live-classes/:id/classroom/board-snapshot", requireAdmin, async (req: Request, res: Response) => {
     try {
       const liveClassId = String(req.params.id);
@@ -146,6 +189,9 @@ export function registerClassroomRoutes({
       const body = req.body || {};
       const recordingUrl = String(body.recordingUrl || "").trim();
       const boardSnapshotUrl = String(body.boardSnapshotUrl || "").trim();
+      const boardPdfUrl = String(body.boardPdfUrl || "").trim();
+      const boardPagesRaw = body.boardPages;
+      const boardSyncCheckpointUrl = String(body.boardSyncCheckpointUrl || "").trim();
       const sectionTitle = buildRecordingLectureSectionTitle(
         lc.lecture_section_title,
         lc.lecture_subfolder_title,
@@ -170,6 +216,31 @@ export function registerClassroomRoutes({
         );
       }
 
+      const archiveFields: string[] = [];
+      const archiveParams: unknown[] = [];
+      let p = 1;
+      if (boardPdfUrl) {
+        archiveFields.push(`board_pdf_url = $${p++}`);
+        archiveParams.push(boardPdfUrl);
+      }
+      if (Array.isArray(boardPagesRaw) && boardPagesRaw.length > 0) {
+        archiveFields.push(`board_pages_json = $${p++}`);
+        archiveParams.push(JSON.stringify(boardPagesRaw));
+      }
+      if (boardSyncCheckpointUrl) {
+        archiveFields.push(`board_sync_checkpoint_url = $${p++}`);
+        archiveParams.push(boardSyncCheckpointUrl);
+        archiveFields.push(`board_checkpoint_at = $${p++}`);
+        archiveParams.push(Date.now());
+      }
+      if (archiveFields.length > 0) {
+        archiveParams.push(liveClassId);
+        await db.query(
+          `UPDATE live_classes SET ${archiveFields.join(", ")} WHERE id = $${p}`,
+          archiveParams
+        );
+      }
+
       if (!recordingUrl || isImageUrl(recordingUrl)) {
         const endedAt = Date.now();
         await db.query(
@@ -185,10 +256,14 @@ export function registerClassroomRoutes({
         });
       }
 
+      const refreshed = await db.query("SELECT * FROM live_classes WHERE id = $1", [liveClassId]);
+      const row = refreshed.rows[0] || lc;
+
       res.json({
         success: true,
         recordingUrl: recordingUrl && !isImageUrl(recordingUrl) ? recordingUrl : null,
-        boardSnapshotUrl: boardSnapshotUrl || null,
+        boardSnapshotUrl: boardSnapshotUrl || row.board_snapshot_url || null,
+        boardPdfUrl: row.board_pdf_url || boardPdfUrl || null,
         lectureIds,
         sectionTitle,
       });

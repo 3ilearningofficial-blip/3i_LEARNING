@@ -1,7 +1,11 @@
-import React from "react";
+import React, { useRef } from "react";
 import { View, Text, StyleSheet, Platform } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import TldrawClassroom from "@/components/classroom/TldrawClassroom";
+import ClassroomSlideShell from "@/components/classroom/ClassroomSlideShell";
+import ClassroomSlideToolbar from "@/components/classroom/ClassroomSlideToolbar";
+import ClassroomPageThumbnails from "@/components/classroom/ClassroomPageThumbnails";
+import type { TldrawClassroomHandle } from "@/components/classroom/TldrawClassroom.types";
 import Colors from "@/constants/colors";
 
 type Props = {
@@ -9,17 +13,24 @@ type Props = {
 };
 
 export default function ClassroomSetupPreview({ liveClassId }: Props) {
+  const boardRef = useRef<TldrawClassroomHandle>(null);
+
   return (
     <View style={styles.wrap}>
       <View style={styles.boardStrip}>
         <Ionicons name="easel-outline" size={20} color="#FBBF24" />
         <Text style={styles.boardText}>
-          Board preview — draw here to test sync before going live. Camera and mic are on the right.
+          Board preview — fixed 16:9 slides. Draw here to test sync before going live.
         </Text>
       </View>
       <View style={styles.boardArea}>
         {Platform.OS === "web" ? (
-          <TldrawClassroom liveClassId={liveClassId} preview readonly={false} />
+          <ClassroomSlideShell
+            toolbar={<ClassroomSlideToolbar boardRef={boardRef} />}
+            thumbnails={<ClassroomPageThumbnails boardRef={boardRef} />}
+          >
+            <TldrawClassroom liveClassId={liveClassId} preview readonly={false} />
+          </ClassroomSlideShell>
         ) : (
           <View style={styles.nativePlaceholder}>
             <Text style={styles.nativeText}>Whiteboard preview requires the admin web app.</Text>

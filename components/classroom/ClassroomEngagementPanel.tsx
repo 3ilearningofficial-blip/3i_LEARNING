@@ -224,7 +224,7 @@ export default function ClassroomEngagementPanel({ liveClassId }: Props) {
 
 const styles = StyleSheet.create({
   wrap: { flex: 1, minHeight: 0 },
-  wrapContent: { paddingBottom: 12, flexGrow: 1 },
+  wrapContent: { paddingHorizontal: 14, paddingTop: 4, paddingBottom: 12, flexGrow: 1 },
   heading: { fontSize: 12, fontWeight: "700", color: Colors.light.textMuted, marginBottom: 8, textTransform: "uppercase" },
   subHeading: { fontSize: 13, fontWeight: "700", color: Colors.light.text, marginBottom: 6 },
   spaced: { marginTop: 14 },

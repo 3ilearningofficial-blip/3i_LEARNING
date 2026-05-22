@@ -1015,9 +1015,6 @@ export default function LiveClassScreen() {
         <View style={styles.webDesktopRow}>
           <View style={[styles.playerContainer, styles.webPlayerWide]}>
             <VideoWatermark isPlaying={isVideoPlaying} />
-            {canStudentChat && !isAdmin && id ? (
-              <ClassroomLiveOverlays liveClassId={String(id)} />
-            ) : null}
             {recordingTokenStatusOverlay}
             {!showAsLiveUI && !liveClassData?.is_completed && (
               <View style={styles.waitingOverlay}>
@@ -1149,6 +1146,13 @@ export default function LiveClassScreen() {
                 <Text style={styles.noVideoText}>No video available</Text>
               </View>
             )}
+            {(canStudentChat || (isAdmin && liveClassData?.is_live)) && id ? (
+              <ClassroomLiveOverlays
+                liveClassId={String(id)}
+                isAdmin={!!isAdmin}
+                sessionActive={!!(canStudentChat || liveClassData?.is_live)}
+              />
+            ) : null}
           </View>
 
           <View style={styles.webSidebar}>
@@ -1271,9 +1275,6 @@ export default function LiveClassScreen() {
             ]}
           >
             <VideoWatermark isPlaying={isVideoPlaying} />
-            {canStudentChat && !isAdmin && id ? (
-              <ClassroomLiveOverlays liveClassId={String(id)} />
-            ) : null}
             {recordingTokenStatusOverlay}
             {!showAsLiveUI && !liveClassData?.is_completed && (
               <View style={styles.waitingOverlay}>
@@ -1401,6 +1402,13 @@ export default function LiveClassScreen() {
                 <Text style={styles.noVideoText}>No video available</Text>
               </View>
             )}
+            {(canStudentChat || (isAdmin && liveClassData?.is_live)) && id ? (
+              <ClassroomLiveOverlays
+                liveClassId={String(id)}
+                isAdmin={!!isAdmin}
+                sessionActive={!!(canStudentChat || liveClassData?.is_live)}
+              />
+            ) : null}
           </View>
 
           {isAdmin && isNarrowWeb && (

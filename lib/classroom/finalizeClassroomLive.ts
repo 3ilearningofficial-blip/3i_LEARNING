@@ -2,11 +2,9 @@ import { apiRequest } from "@/lib/query-client";
 import { uploadToR2, getMimeType } from "@/lib/r2-upload";
 import { buildRecordingLectureSectionTitle } from "@/lib/recordingSection";
 import { isBoardSnapshotImageUrl, isVideoRecordingUrl } from "@/lib/classroom/recordingUrl";
-import {
-  exportClassroomBoardAllPagesPng,
-  exportClassroomBoardViewportPng,
-} from "@/lib/classroom/exportClassroomBoardViewport";
+import { exportClassroomBoardAllPagesPng } from "@/lib/classroom/exportClassroomBoardViewport";
 import { saveClassroomBoardToCourseMaterials } from "@/lib/classroom/saveClassroomBoardMaterial";
+import type { EndSessionArchive } from "@/lib/classroom/uploadClassroomBoardArchive";
 import type { Editor } from "tldraw";
 
 export type LiveClassRecordingMeta = {
@@ -35,12 +33,15 @@ export async function finalizeClassroomLiveSession(
   opts?: {
     videoRecordingUrl?: string | null;
     boardEl?: HTMLElement | null;
+    boardArchive?: EndSessionArchive | null;
+    boardSyncCheckpointUrl?: string | null;
   }
 ): Promise<{
   savedToLectures: boolean;
   recordingUrl?: string;
   boardSnapshotUrl?: string;
   boardMaterialUrl?: string;
+  boardPdfUrl?: string;
   lectureIds?: number[];
 }> {
   const subfolder = String(liveClass.lecture_subfolder_title || "").trim() || undefined;
@@ -55,17 +56,40 @@ export async function finalizeClassroomLiveSession(
   const liveTitle = String(liveClass.title || "Live class").trim();
 
   let boardMaterialUrl: string | undefined;
-  if (courseId > 0 && editor) {
-    try {
-      const material = await saveClassroomBoardToCourseMaterials({
-        courseId,
-        liveClassTitle: liveTitle,
-        editor,
-        boardEl: opts?.boardEl ?? null,
-      });
-      boardMaterialUrl = material?.fileUrl;
-    } catch (e) {
-      console.warn("[Classroom] board PDF material save failed:", e);
+  if (courseId > 0) {
+    if (opts?.boardArchive?.boardPdfUrl) {
+      try {
+        const pageCount = opts.boardArchive.boardPageUrls?.length ?? 0;
+        const res = await apiRequest("POST", "/api/admin/study-materials", {
+          title: `${liveTitle} — Board notes`,
+          description: `Whiteboard export from interactive classroom — ${pageCount} page(s), ${new Date().toLocaleString()}.`,
+          fileUrl: opts.boardArchive.boardPdfUrl,
+          fileType: "pdf",
+          courseId,
+          isFree: false,
+          sectionTitle: null,
+          downloadAllowed: false,
+        });
+        if (res.ok) {
+          const row = await res.json();
+          boardMaterialUrl = opts.boardArchive.boardPdfUrl;
+          void row;
+        }
+      } catch (e) {
+        console.warn("[Classroom] board PDF material link failed:", e);
+      }
+    } else if (editor) {
+      try {
+        const material = await saveClassroomBoardToCourseMaterials({
+          courseId,
+          liveClassTitle: liveTitle,
+          editor,
+          boardEl: opts?.boardEl ?? null,
+        });
+        boardMaterialUrl = material?.fileUrl;
+      } catch (e) {
+        console.warn("[Classroom] board PDF material save failed:", e);
+      }
     }
   }
 
@@ -74,13 +98,15 @@ export async function finalizeClassroomLiveSession(
     recordingUrl = existingRecording;
   }
 
-  let boardSnapshotUrl = isBoardSnapshotImageUrl(existingBoard)
-    ? existingBoard
-    : isBoardSnapshotImageUrl(existingRecording)
-      ? existingRecording
-      : "";
+  let boardSnapshotUrl =
+    opts?.boardArchive?.boardSnapshotUrl ||
+    (isBoardSnapshotImageUrl(existingBoard)
+      ? existingBoard
+      : isBoardSnapshotImageUrl(existingRecording)
+        ? existingRecording
+        : "");
 
-  if (!boardSnapshotUrl && editor) {
+  if (!boardSnapshotUrl && editor && !opts?.boardArchive) {
     const shapeIds = [...editor.getCurrentPageShapeIds()];
     const blob = await exportClassroomBoardPng(editor, opts?.boardEl ?? null);
     if (shapeIds.length > 0 && !blob) {
@@ -109,6 +135,9 @@ export async function finalizeClassroomLiveSession(
   const res = await apiRequest("POST", `/api/admin/live-classes/${liveClassId}/classroom/finalize`, {
     recordingUrl: recordingUrl || undefined,
     boardSnapshotUrl: boardSnapshotUrl || undefined,
+    boardPdfUrl: opts?.boardArchive?.boardPdfUrl || undefined,
+    boardPages: opts?.boardArchive?.boardPageUrls || undefined,
+    boardSyncCheckpointUrl: opts?.boardSyncCheckpointUrl || undefined,
     sectionTitle,
   });
   if (!res.ok) {
@@ -121,6 +150,7 @@ export async function finalizeClassroomLiveSession(
     recordingUrl: data.recordingUrl || recordingUrl || undefined,
     boardSnapshotUrl: data.boardSnapshotUrl || boardSnapshotUrl || undefined,
     boardMaterialUrl,
+    boardPdfUrl: data.boardPdfUrl || opts?.boardArchive?.boardPdfUrl,
     lectureIds: data.lectureIds,
   };
 }

@@ -7,6 +7,7 @@ type Props = {
   liveClassId: string;
   readonly?: boolean;
   preview?: boolean;
+  onEditorReady?: (editor: import("tldraw").Editor | null) => void;
 };
 
 const TldrawClassroom = forwardRef<TldrawClassroomHandle, Props>(function TldrawClassroom(props, ref) {

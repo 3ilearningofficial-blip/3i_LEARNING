@@ -173,14 +173,8 @@ export default function ClassroomHeaderActivityTimer({
     );
   }
 
-  if (!showCountdown) return null;
-
-  return (
-    <View style={styles.countPill}>
-      <Ionicons name="time-outline" size={14} color="#FDE68A" />
-      <Text style={styles.countText}>{timerRemaining}s</Text>
-    </View>
-  );
+  /* Students see the timer on the video player overlay only. */
+  return null;
 }
 
 const styles = StyleSheet.create({

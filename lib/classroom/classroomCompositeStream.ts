@@ -1,9 +1,9 @@
 import { drawVideoWithChromaKey } from "./chromaKey";
+import { COMPOSITE_WIDTH, COMPOSITE_HEIGHT } from "./slideConstants";
 
-export const COMPOSITE_WIDTH = 1280;
-export const COMPOSITE_HEIGHT = 720;
-const PIP_WIDTH = 200;
-const PIP_HEIGHT = 266;
+export { COMPOSITE_WIDTH, COMPOSITE_HEIGHT };
+const PIP_WIDTH = Math.round(COMPOSITE_WIDTH * 0.16);
+const PIP_HEIGHT = Math.round(PIP_WIDTH * (4 / 3));
 const PIP_MARGIN = 16;
 const DEFAULT_FPS = 30;
 

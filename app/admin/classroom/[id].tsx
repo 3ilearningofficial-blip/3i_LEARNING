@@ -17,7 +17,17 @@ import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
 import { liveClassQueryKey, liveClassesQueryKey } from "@/lib/query-keys";
 import TldrawClassroom from "@/components/classroom/TldrawClassroom";
 import type { TldrawClassroomHandle } from "@/components/classroom/TldrawClassroom.types";
+import ClassroomSlideShell, {
+  type ClassroomSlideShellHandle,
+} from "@/components/classroom/ClassroomSlideShell";
+import ClassroomSlideToolbar from "@/components/classroom/ClassroomSlideToolbar";
+import ClassroomPageThumbnails from "@/components/classroom/ClassroomPageThumbnails";
+import ClassroomEndSessionModal from "@/components/classroom/ClassroomEndSessionModal";
+import type { EndSessionArchive } from "@/lib/classroom/uploadClassroomBoardArchive";
 import { finalizeClassroomLiveSession } from "@/lib/classroom/finalizeClassroomLive";
+import { importImageToCurrentSlide } from "@/lib/classroom/importSlideImage";
+import { useClassroomBoardCheckpoint } from "@/lib/classroom/useClassroomBoardCheckpoint";
+import type { Editor } from "tldraw";
 import { useClassroomSessionRecorder } from "@/lib/classroom/useClassroomSessionRecorder";
 import { uploadToR2 } from "@/lib/r2-upload";
 import { buildRecordingLectureSectionTitle } from "@/lib/recordingSection";
@@ -38,12 +48,15 @@ export default function AdminClassroomPage() {
   const liveClassId = String(id || "");
   const qc = useQueryClient();
   const [isEnding, setIsEnding] = useState(false);
+  const [endModalOpen, setEndModalOpen] = useState(false);
   const [boardEl, setBoardEl] = useState<HTMLElement | null>(null);
+  const [editor, setEditor] = useState<Editor | null>(null);
   const [compositeStream, setCompositeStream] = useState<MediaStream | null>(null);
   const boardRef = useRef<TldrawClassroomHandle>(null);
-  const boardAreaRef = useRef<View>(null);
+  const slideShellRef = useRef<ClassroomSlideShellHandle>(null);
   const liveKitRoomRef = useRef<Room | null>(null);
   const sessionRecorder = useClassroomSessionRecorder(true);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const { data: liveClass, isLoading } = useQuery({
     queryKey: liveClassQueryKey(liveClassId),
@@ -75,14 +88,33 @@ export default function AdminClassroomPage() {
 
   const getBoardDomElement = useCallback((): HTMLElement | null => {
     if (Platform.OS !== "web") return null;
-    return boardAreaRef.current as unknown as HTMLElement | null;
+    return slideShellRef.current?.getSlideFrameElement() ?? null;
   }, []);
 
   useEffect(() => {
     if (Platform.OS !== "web") return;
     const el = getBoardDomElement();
     if (el) setBoardEl(el);
-  }, [sessionActive, getBoardDomElement]);
+  }, [sessionActive, getBoardDomElement, endModalOpen]);
+
+  useClassroomBoardCheckpoint(liveClassId, editor, !!isLive && !!sessionActive);
+
+  const handleImportSlide = useCallback(() => {
+    if (Platform.OS !== "web") return;
+    if (!fileInputRef.current) {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = "image/png,image/jpeg,image/webp,image/gif";
+      input.onchange = async () => {
+        const file = input.files?.[0];
+        const ed = boardRef.current?.getEditor();
+        if (file && ed) await importImageToCurrentSlide(ed, file, liveClassId);
+      };
+      input.click();
+      return;
+    }
+    fileInputRef.current.click();
+  }, [liveClassId]);
 
   useEffect(() => {
     if (!isLive || !sessionActive || !compositeStream) return;
@@ -97,92 +129,109 @@ export default function AdminClassroomPage() {
     [liveClass?.chat_mode]
   );
 
-  const handleEndClass = useCallback(async () => {
-    const confirmed =
-      Platform.OS === "web"
-        ? window.confirm("End this live class?")
-        : await new Promise<boolean>((resolve) =>
-            Alert.alert("End class", "End this live class?", [
-              { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
-              { text: "End", style: "destructive", onPress: () => resolve(true) },
-            ])
-          );
-    if (!confirmed) return;
+  const completeEndClass = useCallback(
+    async (archive: EndSessionArchive | null) => {
+      setIsEnding(true);
+      let videoRecordingUrl: string | undefined;
+      let checkpointUrl: string | undefined;
 
-    setIsEnding(true);
-    let videoRecordingUrl: string | undefined;
-
-    try {
-      const blob = await sessionRecorder.stopAndGetBlob();
-      if (blob && blob.size > 0) {
-        const filename = `classroom-recording-${liveClassId}-${Date.now()}.webm`;
-        const fileUri = URL.createObjectURL(blob);
-        try {
-          const subfolder = String(liveClass?.lecture_subfolder_title || "").trim() || undefined;
-          const { publicUrl } = await uploadToR2(
-            fileUri,
-            filename,
-            "video/webm",
-            "live-class-recording",
-            undefined,
-            "/api/upload/presign",
-            subfolder
-          );
-          videoRecordingUrl = publicUrl;
-          const sectionTitle = buildRecordingLectureSectionTitle(
-            liveClass?.lecture_section_title,
-            liveClass?.lecture_subfolder_title
-          );
-          await apiRequest("POST", `/api/admin/live-classes/${liveClassId}/recording`, {
-            recordingUrl: publicUrl,
-            sectionTitle,
-          });
-        } finally {
-          URL.revokeObjectURL(fileUri);
+      try {
+        const blob = await sessionRecorder.stopAndGetBlob();
+        if (blob && blob.size > 0) {
+          const filename = `classroom-recording-${liveClassId}-${Date.now()}.webm`;
+          const fileUri = URL.createObjectURL(blob);
+          try {
+            const subfolder = String(liveClass?.lecture_subfolder_title || "").trim() || undefined;
+            const { publicUrl } = await uploadToR2(
+              fileUri,
+              filename,
+              "video/webm",
+              "live-class-recording",
+              undefined,
+              "/api/upload/presign",
+              subfolder
+            );
+            videoRecordingUrl = publicUrl;
+            const sectionTitle = buildRecordingLectureSectionTitle(
+              liveClass?.lecture_section_title,
+              liveClass?.lecture_subfolder_title
+            );
+            await apiRequest("POST", `/api/admin/live-classes/${liveClassId}/recording`, {
+              recordingUrl: publicUrl,
+              sectionTitle,
+            });
+          } finally {
+            URL.revokeObjectURL(fileUri);
+          }
         }
+
+        if (editor) {
+          try {
+            const snap = editor.getSnapshot();
+            const jsonBlob = new Blob([JSON.stringify(snap)], { type: "application/json" });
+            const snapUrl = URL.createObjectURL(jsonBlob);
+            const { publicUrl } = await uploadToR2(
+              snapUrl,
+              `classroom-sync-${liveClassId}-${Date.now()}.json`,
+              "application/json",
+              "live-class-recording",
+              undefined,
+              "/api/upload/presign",
+              String(liveClass?.lecture_subfolder_title || "").trim() || undefined
+            );
+            checkpointUrl = publicUrl;
+            URL.revokeObjectURL(snapUrl);
+          } catch {
+            /* checkpoint optional */
+          }
+        }
+
+        const result = await finalizeClassroomLiveSession(
+          liveClassId,
+          {
+            id: liveClassId,
+            title: liveClass?.title,
+            course_id: liveClass?.course_id,
+            lecture_section_title: liveClass?.lecture_section_title,
+            lecture_subfolder_title: liveClass?.lecture_subfolder_title,
+            recording_url: videoRecordingUrl || liveClass?.recording_url,
+            board_snapshot_url: archive?.boardSnapshotUrl || liveClass?.board_snapshot_url,
+          },
+          boardRef.current?.getEditor() ?? null,
+          {
+            videoRecordingUrl,
+            boardEl: getBoardDomElement(),
+            boardArchive: archive,
+            boardSyncCheckpointUrl: checkpointUrl,
+          }
+        );
+        qc.invalidateQueries({ queryKey: liveClassesQueryKey() });
+        qc.invalidateQueries({ queryKey: liveClassQueryKey(liveClassId) });
+
+        const lines: string[] = ["Class ended."];
+        if (result.recordingUrl) lines.push(`Video (R2): ${result.recordingUrl}`);
+        if (result.boardPdfUrl || archive?.boardPdfUrl) {
+          lines.push(`Board PDF (R2): ${result.boardPdfUrl || archive?.boardPdfUrl}`);
+        }
+        if (result.boardMaterialUrl) lines.push("Board PDF linked in Course → Materials.");
+        if (result.boardSnapshotUrl) lines.push(`Board snapshot: ${result.boardSnapshotUrl}`);
+        const msg = lines.join("\n");
+        if (Platform.OS === "web") window.alert(msg);
+        else Alert.alert("Class ended", msg);
+
+        router.replace(getAdminCoursesSectionRoute() as any);
+      } catch (err: any) {
+        if (Platform.OS === "web") window.alert(err?.message || "Failed to end class");
+        else Alert.alert("Error", err?.message || "Failed to end class");
+        setIsEnding(false);
       }
+    },
+    [liveClassId, qc, liveClass, sessionRecorder, editor, getBoardDomElement]
+  );
 
-      const result = await finalizeClassroomLiveSession(
-        liveClassId,
-        {
-          id: liveClassId,
-          title: liveClass?.title,
-          course_id: liveClass?.course_id,
-          lecture_section_title: liveClass?.lecture_section_title,
-          lecture_subfolder_title: liveClass?.lecture_subfolder_title,
-          recording_url: videoRecordingUrl || liveClass?.recording_url,
-          board_snapshot_url: liveClass?.board_snapshot_url,
-        },
-        boardRef.current?.getEditor() ?? null,
-        { videoRecordingUrl, boardEl: getBoardDomElement() }
-      );
-      qc.invalidateQueries({ queryKey: liveClassesQueryKey() });
-      qc.invalidateQueries({ queryKey: liveClassQueryKey(liveClassId) });
-
-      let msg: string;
-      if (result.recordingUrl && result.boardMaterialUrl) {
-        msg =
-          "Class ended. Video saved to Live Class Recordings. Board PDF added under Course → Materials (no folder).";
-      } else if (result.recordingUrl) {
-        msg = "Class ended. Video recording saved to Live Class Recordings.";
-      } else if (result.boardMaterialUrl) {
-        msg =
-          "Class ended. Board PDF added under Course → Materials. You can edit it to merge with other PDFs or move to a folder.";
-      } else if (result.boardSnapshotUrl) {
-        msg = "Class ended. Board snapshot saved. Upload a video from the course Live tab if you need full playback.";
-      } else {
-        msg = "Class ended. Session saved.";
-      }
-      if (Platform.OS === "web") window.alert(msg);
-      else Alert.alert("Class ended", msg);
-
-      router.replace(getAdminCoursesSectionRoute() as any);
-    } catch (err: any) {
-      if (Platform.OS === "web") window.alert(err?.message || "Failed to end class");
-      else Alert.alert("Error", err?.message || "Failed to end class");
-      setIsEnding(false);
-    }
-  }, [liveClassId, qc, liveClass, sessionRecorder]);
+  const handleEndClass = useCallback(() => {
+    if (Platform.OS === "web") setEndModalOpen(true);
+  }, []);
 
   if (Platform.OS !== "web") {
     return (
@@ -237,10 +286,34 @@ export default function AdminClassroomPage() {
         </Pressable>
       </LinearGradient>
 
+      <ClassroomEndSessionModal
+        visible={endModalOpen}
+        liveClassId={liveClassId}
+        title={String(liveClass?.title || "Live class")}
+        editor={editor}
+        boardEl={boardEl}
+        subfolder={String(liveClass?.lecture_subfolder_title || "").trim() || undefined}
+        onClose={() => setEndModalOpen(false)}
+        onConfirmEnd={completeEndClass}
+      />
+
       <View style={styles.main}>
-        <View ref={boardAreaRef} style={styles.boardArea}>
-          <ClassroomLiveOverlays liveClassId={liveClassId} isAdmin />
-          <TldrawClassroom ref={boardRef} liveClassId={liveClassId} readonly={false} />
+        <View style={styles.boardArea}>
+          <ClassroomLiveOverlays liveClassId={liveClassId} isAdmin sessionActive={!!sessionActive} />
+          <ClassroomSlideShell
+            ref={slideShellRef}
+            toolbar={
+              <ClassroomSlideToolbar boardRef={boardRef} onImportSlide={handleImportSlide} />
+            }
+            thumbnails={<ClassroomPageThumbnails boardRef={boardRef} />}
+          >
+            <TldrawClassroom
+              ref={boardRef}
+              liveClassId={liveClassId}
+              readonly={false}
+              onEditorReady={setEditor}
+            />
+          </ClassroomSlideShell>
         </View>
 
         <View style={styles.sidePanel}>
@@ -380,5 +453,5 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: Colors.light.border,
   },
-  colBody: { flex: 1, minHeight: 140 },
+  colBody: { flex: 1, minHeight: 140, paddingHorizontal: 4 },
 });

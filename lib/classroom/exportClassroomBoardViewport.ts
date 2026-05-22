@@ -1,18 +1,30 @@
 import type { Editor, TLPage, TLPageId } from "tldraw";
+import {
+  EXPORT_SCALE,
+  SLIDE_ASPECT,
+  SLIDE_LOGICAL_H,
+  SLIDE_LOGICAL_W,
+  getSlideBounds,
+} from "./slideConstants";
 
 type PageBoundsLike = { x: number; y: number; w: number; h: number };
 
-const EXPORT_SCALE = 2;
 const CONTENT_PADDING = 24;
 
 function getBoardAspect(boardEl: HTMLElement | null): number {
+  if (
+    boardEl?.getAttribute?.("data-classroom-slide-frame") === "true" ||
+    boardEl?.closest?.("[data-classroom-slide-frame]")
+  ) {
+    return SLIDE_ASPECT;
+  }
   if (boardEl && typeof boardEl.getBoundingClientRect === "function") {
     const rect = boardEl.getBoundingClientRect();
     if (rect.width > 8 && rect.height > 8) {
       return rect.width / rect.height;
     }
   }
-  return 16 / 9;
+  return SLIDE_ASPECT;
 }
 
 /** Expand content bounds to board preview aspect ratio (PPT-style slide frame). */
@@ -86,7 +98,7 @@ export async function exportClassroomBoardAllPagesPng(
 
   try {
     for (const page of pages) {
-      const slide = await exportSingleBoardPage(editor, page, aspect);
+      const slide = await exportSingleBoardPage(editor, page, aspect, boardEl);
       if (slide) exports.push(slide);
     }
   } finally {
@@ -105,7 +117,8 @@ export async function exportClassroomBoardAllPagesPng(
 async function exportSingleBoardPage(
   editor: Editor,
   page: TLPage,
-  aspect: number
+  aspect: number,
+  boardEl: HTMLElement | null
 ): Promise<BoardPageExport | null> {
   editor.setCurrentPage(page.id as TLPageId);
 
@@ -113,11 +126,20 @@ async function exportSingleBoardPage(
   const pageName = String((page as { name?: string }).name || "Page").trim() || "Page";
 
   let bounds: PageBoundsLike;
-  const contentBounds = editor.getCurrentPageBounds();
-  if (contentBounds && contentBounds.w > 0 && contentBounds.h > 0) {
-    bounds = fitBoundsToSlideAspect(boxToBounds(contentBounds), aspect);
+  const useFixedSlide =
+    aspect === SLIDE_ASPECT &&
+    (boardEl?.getAttribute?.("data-classroom-slide-frame") === "true" ||
+      !!boardEl?.closest?.("[data-classroom-slide-frame]"));
+
+  if (useFixedSlide) {
+    bounds = getSlideBounds();
   } else {
-    bounds = fitBoundsToSlideAspect({ x: 0, y: 0, w: 800, h: 800 / aspect }, aspect);
+    const contentBounds = editor.getCurrentPageBounds();
+    if (contentBounds && contentBounds.w > 0 && contentBounds.h > 0) {
+      bounds = fitBoundsToSlideAspect(boxToBounds(contentBounds), aspect);
+    } else {
+      bounds = fitBoundsToSlideAspect({ x: 0, y: 0, w: SLIDE_LOGICAL_W, h: SLIDE_LOGICAL_H }, aspect);
+    }
   }
 
   const width = Math.max(1, Math.round(bounds.w * EXPORT_SCALE));
