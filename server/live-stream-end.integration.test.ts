@@ -142,6 +142,8 @@ describe("Cloudflare stream end auto-save", () => {
     process.env.CF_STREAM_ACCOUNT_ID = "acct_123";
     process.env.CF_STREAM_API_TOKEN = "token_123";
     process.env.R2_BUCKET_NAME = "bucket_123";
+    process.env.CF_STREAM_DOWNLOAD_POLL_MS = "1";
+    process.env.CF_STREAM_DOWNLOAD_MAX_WAIT_MS = "100";
   });
 
   it("creates lecture entry when stream ends", async () => {
@@ -167,6 +169,13 @@ describe("Cloudflare stream end auto-save", () => {
           status: 200,
           headers: { "Content-Type": "application/json" },
         });
+      }
+      // Generate Download API — fail fast so archive falls back to HLS manifest URL.
+      if (s.includes("/stream/recording_uid_1/downloads")) {
+        return new Response(
+          JSON.stringify({ success: true, result: { default: { status: "error" } } }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
       }
       if (s.includes("/downloads/default.mp4")) {
         return new Response("", { status: 404 });
@@ -196,8 +205,8 @@ describe("Cloudflare stream end auto-save", () => {
     expect(result.body?.recordingPending).toBe(true);
     expect(result.body?.recordingUrl).toBeUndefined();
 
-    // stream/end now returns immediately and finalizes recording asynchronously.
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    // stream/end returns immediately; background job resolves recording + optional R2 archive.
+    await new Promise((resolve) => setTimeout(resolve, 50));
 
     const updatedLive = db.state.liveClasses.find((r: any) => r.id === 7);
     expect(updatedLive.is_completed).toBe(true);
