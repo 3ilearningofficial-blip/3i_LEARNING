@@ -1,6 +1,10 @@
 import type { Express, Request, Response } from "express";
 import { buildRecordingLectureSectionTitle } from "./recordingSection";
 import { saveRecordingForClassAndPeers as saveRecordingCore } from "./live-class-recording-save";
+import {
+  buildLegacyMp4CandidateUrls,
+  ensureCloudflareMp4DownloadUrl,
+} from "./cloudflare-stream-download";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -38,7 +42,10 @@ export function registerLiveStreamRoutes({
     return m?.[1] ? String(m[1]) : null;
   };
   const toMediaApiPath = (key: string): string => `/api/media/${key}`;
-  const archiveCloudflareRecordingToR2 = async (recordingUid: string): Promise<string | null> => {
+  const archiveCloudflareRecordingToR2 = async (
+    recordingUid: string,
+    cf?: { accountId: string; apiToken: string }
+  ): Promise<string | null> => {
     try {
       if (!process.env.R2_BUCKET_NAME) return null;
       const now = Date.now();
@@ -46,11 +53,16 @@ export function registerLiveStreamRoutes({
       if (retryState && retryState.nextAttemptAt > now) {
         return null;
       }
-      const configuredDownloadBase = String(process.env.CF_STREAM_DOWNLOAD_BASE_URL || "").trim().replace(/\/+$/, "");
-      const candidateUrls = [
-        `https://videodelivery.net/${recordingUid}/downloads/default.mp4`,
-        configuredDownloadBase ? `${configuredDownloadBase}/${recordingUid}/downloads/default.mp4` : "",
-      ].filter(Boolean);
+
+      const accountId = cf?.accountId || process.env.CF_STREAM_ACCOUNT_ID || process.env.R2_ACCOUNT_ID;
+      const apiToken = cf?.apiToken || process.env.CF_STREAM_API_TOKEN;
+
+      let mp4Url: string | null = null;
+      if (accountId && apiToken) {
+        mp4Url = await ensureCloudflareMp4DownloadUrl(String(accountId), String(apiToken), recordingUid);
+      }
+
+      const candidateUrls = mp4Url ? [mp4Url] : buildLegacyMp4CandidateUrls(recordingUid);
       let source: globalThis.Response | null = null;
       let matchedUrl = "";
       for (const candidateUrl of candidateUrls) {
@@ -71,7 +83,7 @@ export function registerLiveStreamRoutes({
         });
         if (attempts === 1 || attempts % 10 === 0) {
           console.warn(
-            `[CF Stream] MP4 not ready uid=${recordingUid} status=${resp.status} attempt=${attempts} nextRetryInMs=${backoffMs}`
+            `[CF Stream] MP4 fetch not ready uid=${recordingUid} status=${resp.status} attempt=${attempts} nextRetryInMs=${backoffMs}`
           );
         }
       }
@@ -336,7 +348,10 @@ export function registerLiveStreamRoutes({
           for (let i = 0; i < maxPolls; i += 1) {
             const latest = await getLatestRecording();
             if (latest) {
-              const archived = await archiveCloudflareRecordingToR2(latest.recordingUid);
+              const archived = await archiveCloudflareRecordingToR2(latest.recordingUid, {
+                accountId,
+                apiToken,
+              });
               recordingUrl = archived || latest.manifestUrl;
               break;
             }
@@ -346,7 +361,10 @@ export function registerLiveStreamRoutes({
           if (!recordingUrl && liveTitle) {
             const viaSearch = await findRecordingViaStreamSearch(accountId, apiToken, liveTitle, uid);
             if (viaSearch) {
-              const archived = await archiveCloudflareRecordingToR2(viaSearch.recordingUid);
+              const archived = await archiveCloudflareRecordingToR2(viaSearch.recordingUid, {
+                accountId,
+                apiToken,
+              });
               recordingUrl = archived || viaSearch.manifestUrl;
               console.log(`[CF Stream] Resolved recording via stream search title="${liveTitle.slice(0, 60)}"`);
             }
@@ -439,7 +457,10 @@ export function registerLiveStreamRoutes({
           }
         }
         if (!recordingUid) continue;
-        const archivedUrl = await archiveCloudflareRecordingToR2(recordingUid);
+        const archivedUrl = await archiveCloudflareRecordingToR2(
+          recordingUid,
+          accountId && apiToken ? { accountId, apiToken } : undefined
+        );
         if (!archivedUrl) continue;
         await db.query("UPDATE live_classes SET recording_url = $1 WHERE id = $2", [archivedUrl, row.id]);
         const patchedLecture = await db.query(
