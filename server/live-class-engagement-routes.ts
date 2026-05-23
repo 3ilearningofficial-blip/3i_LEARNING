@@ -110,7 +110,7 @@ export function registerLiveClassEngagementRoutes({
          RETURNING user_id`,
         [req.params.id, user.id, user.name || user.phone || "Anonymous", now]
       );
-      if (hb.rowCount && hb.rowCount > 0) {
+      if (hb.rows.length > 0) {
         try {
           await db.query(`SELECT pg_notify('live_engagement', $1)`, [
             JSON.stringify({ type: "viewer", liveClassId: String(req.params.id) }),
