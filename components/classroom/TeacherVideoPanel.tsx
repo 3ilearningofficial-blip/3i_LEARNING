@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, Pressable, Platform, ActivityIndicator } from "
 import { Ionicons } from "@expo/vector-icons";
 import { useClassroomToken } from "@/lib/classroom/useClassroomToken";
 import { useLiveKitRoom } from "@/lib/classroom/useLiveKitRoom";
+import { primeHandRaiseAudio } from "@/lib/playHandRaiseChime";
 import Colors from "@/constants/colors";
 
 import type { Room } from "livekit-client";
@@ -42,10 +43,18 @@ export default function TeacherVideoPanel({
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
-    if (Platform.OS === "web" && videoRef.current && connected) {
+    if (Platform.OS === "web" && videoRef.current && connected && camEnabled) {
       setLocalVideoEl(videoRef.current);
     }
-  }, [setLocalVideoEl, connected, compositeStream]);
+  }, [setLocalVideoEl, connected, compositeStream, camEnabled]);
+
+  useEffect(() => {
+    if (Platform.OS !== "web" || !camEnabled) return;
+    const el = videoRef.current;
+    if (!el || !compositeStream) return;
+    el.srcObject = compositeStream;
+    void el.play().catch(() => {});
+  }, [camEnabled, compositeStream]);
 
   useEffect(() => {
     onRoomReady?.(connected ? room.current : null);
@@ -78,13 +87,19 @@ export default function TeacherVideoPanel({
       <View style={styles.controls}>
         <Pressable
           style={[styles.ctrlBtn, !micEnabled && styles.ctrlBtnOff]}
-          onPress={() => void toggleMic()}
+          onPress={() => {
+            primeHandRaiseAudio();
+            void toggleMic();
+          }}
         >
           <Ionicons name={micEnabled ? "mic" : "mic-off"} size={18} color={micEnabled ? "#fff" : "#FCA5A5"} />
         </Pressable>
         <Pressable
           style={[styles.ctrlBtn, !camEnabled && styles.ctrlBtnOff]}
-          onPress={() => void toggleCam()}
+          onPress={() => {
+            primeHandRaiseAudio();
+            void toggleCam();
+          }}
         >
           <Ionicons
             name={camEnabled ? "videocam" : "videocam-off"}

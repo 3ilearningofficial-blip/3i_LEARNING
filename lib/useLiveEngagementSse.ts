@@ -46,6 +46,10 @@ export function useLiveEngagementSse({ liveClassId, enabled = true, isAdmin = fa
         void qcRef.current.invalidateQueries({
           queryKey: [`/api/admin/live-classes/${id}/raised-hands`],
         });
+      } else if (type === "viewer" && isAdmin) {
+        void qcRef.current.invalidateQueries({
+          queryKey: [`/api/live-classes/${id}/viewers`],
+        });
       }
     };
 

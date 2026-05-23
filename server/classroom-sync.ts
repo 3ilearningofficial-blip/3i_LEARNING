@@ -27,7 +27,40 @@ function sanitizeRoomId(roomId: string): string {
   return roomId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 120);
 }
 
-function makeOrLoadRoom(roomId: string): TLSocketRoom {
+function parseLiveClassIdFromRoomId(roomId: string): string {
+  return roomId.replace(/^lc-/, "").replace(/-preview$/, "");
+}
+
+async function teardownRoomIfAllowed(
+  roomId: string,
+  roomInstance: TLSocketRoom,
+  db: DbClient
+): Promise<void> {
+  if (roomId.endsWith("-preview")) {
+    roomInstance.close();
+    rooms.delete(roomId);
+    return;
+  }
+
+  const liveClassId = parseLiveClassIdFromRoomId(roomId);
+  try {
+    const r = await db.query(
+      `SELECT is_live, is_completed FROM live_classes WHERE id = $1`,
+      [liveClassId]
+    );
+    const lc = r.rows[0] as { is_live?: boolean | number; is_completed?: boolean | number } | undefined;
+    if (lc && Boolean(lc.is_live) && !Boolean(lc.is_completed)) {
+      return;
+    }
+  } catch (e) {
+    console.warn("[classroom-sync] could not check live status before teardown:", e);
+  }
+
+  roomInstance.close();
+  rooms.delete(roomId);
+}
+
+function makeOrLoadRoom(roomId: string, db: DbClient): TLSocketRoom {
   const id = sanitizeRoomId(roomId);
   const existing = rooms.get(id);
   if (existing && !existing.isClosed()) return existing;
@@ -37,8 +70,7 @@ function makeOrLoadRoom(roomId: string): TLSocketRoom {
     storage,
     onSessionRemoved(roomInstance, args) {
       if (args.numSessionsRemaining === 0) {
-        roomInstance.close();
-        rooms.delete(id);
+        void teardownRoomIfAllowed(id, roomInstance, db);
       }
     },
   });
@@ -132,7 +164,7 @@ async function handleConnection(ws: WebSocket, req: IncomingMessage, rawRoomId: 
   const roomId = sanitizeRoomId(rawRoomId);
   const url = new URL(req.url || "", "http://localhost");
   const sessionId = parseSessionId(url);
-  const room = makeOrLoadRoom(roomId);
+  const room = makeOrLoadRoom(roomId, db);
 
   room.handleSocketConnect({
     sessionId,

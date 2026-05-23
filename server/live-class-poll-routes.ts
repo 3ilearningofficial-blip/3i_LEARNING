@@ -307,7 +307,7 @@ export function registerLiveClassPollRoutes({
     try {
       const liveClassId = String(req.params.id);
       const user = await getAuthUser(req);
-      const label = String(req.body?.label || "Answer before time ends").trim();
+      const label = String(req.body?.label || "Timer").trim();
       const duration = Number(req.body?.durationSeconds);
       if (!Number.isFinite(duration) || duration < 5 || duration > 3600) {
         return res.status(400).json({ message: "durationSeconds must be 5–3600" });

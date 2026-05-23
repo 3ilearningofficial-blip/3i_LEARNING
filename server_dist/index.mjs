@@ -3532,16 +3532,25 @@ function registerLiveClassEngagementRoutes({
         return res.status(409).json({ message: "Class is not live" });
       }
       const now = Date.now();
-      await db2.query(
+      const hb = await db2.query(
         `INSERT INTO live_class_viewers (live_class_id, user_id, user_name, last_heartbeat)
          VALUES ($1, $2, $3, $4)
          ON CONFLICT (live_class_id, user_id) DO UPDATE SET
            last_heartbeat = EXCLUDED.last_heartbeat,
            user_name = COALESCE(EXCLUDED.user_name, live_class_viewers.user_name)
          WHERE live_class_viewers.last_heartbeat IS NULL
-            OR EXCLUDED.last_heartbeat - live_class_viewers.last_heartbeat >= 8000`,
+            OR EXCLUDED.last_heartbeat - live_class_viewers.last_heartbeat >= 8000
+         RETURNING user_id`,
         [req.params.id, user.id, user.name || user.phone || "Anonymous", now]
       );
+      if (hb.rowCount && hb.rowCount > 0) {
+        try {
+          await db2.query(`SELECT pg_notify('live_engagement', $1)`, [
+            JSON.stringify({ type: "viewer", liveClassId: String(req.params.id) })
+          ]);
+        } catch {
+        }
+      }
       res.json({ success: true });
     } catch (err) {
       console.error("Viewer heartbeat error:", err);
@@ -3562,7 +3571,7 @@ function registerLiveClassEngagementRoutes({
       }
       const cutoff = Date.now() - 2e4;
       const result = await db2.query(
-        `SELECT user_name FROM live_class_viewers
+        `SELECT user_id, user_name FROM live_class_viewers
          WHERE live_class_id = $1 AND last_heartbeat > $2
          ORDER BY user_name ASC`,
         [req.params.id, cutoff]
@@ -9226,6 +9235,39 @@ function registerLiveClassPollRoutes({
       res.status(500).json({ message: "Failed to end poll" });
     }
   });
+  app2.get("/api/admin/live-classes/:id/polls/session", requireAdmin, async (req, res) => {
+    try {
+      const liveClassId = String(req.params.id);
+      await finalizeExpiredPolls(db2, liveClassId);
+      const pollsRes = await db2.query(
+        `SELECT p.id, p.kind, p.question, p.started_at, p.ends_at, p.ended_at,
+                COALESCE(v.total_votes, 0)::int AS total_votes
+         FROM live_class_polls p
+         LEFT JOIN (
+           SELECT poll_id, COUNT(*)::int AS total_votes
+           FROM live_class_poll_votes
+           GROUP BY poll_id
+         ) v ON v.poll_id = p.id
+         WHERE p.live_class_id = $1
+         ORDER BY p.started_at DESC`,
+        [liveClassId]
+      );
+      const t = nowMs();
+      const polls = pollsRes.rows.map((p) => ({
+        id: p.id,
+        kind: p.kind,
+        question: p.question,
+        started_at: p.started_at,
+        ends_at: p.ends_at,
+        ended_at: p.ended_at,
+        total_votes: Number(p.total_votes || 0),
+        is_active: !p.ended_at && Number(p.ends_at) > t
+      }));
+      res.json({ polls });
+    } catch {
+      res.status(500).json({ message: "Failed to load session polls" });
+    }
+  });
   app2.get("/api/admin/live-classes/:id/polls/:pollId/results", requireAdmin, async (req, res) => {
     try {
       const pollId = Number(req.params.pollId);
@@ -9333,7 +9375,7 @@ function registerLiveClassPollRoutes({
     try {
       const liveClassId = String(req.params.id);
       const user = await getAuthUser2(req);
-      const label = String(req.body?.label || "Answer before time ends").trim();
+      const label = String(req.body?.label || "Timer").trim();
       const duration = Number(req.body?.durationSeconds);
       if (!Number.isFinite(duration) || duration < 5 || duration > 3600) {
         return res.status(400).json({ message: "durationSeconds must be 5\u20133600" });
@@ -9522,7 +9564,32 @@ import {
 function sanitizeRoomId(roomId) {
   return roomId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 120);
 }
-function makeOrLoadRoom(roomId) {
+function parseLiveClassIdFromRoomId(roomId) {
+  return roomId.replace(/^lc-/, "").replace(/-preview$/, "");
+}
+async function teardownRoomIfAllowed(roomId, roomInstance, db2) {
+  if (roomId.endsWith("-preview")) {
+    roomInstance.close();
+    rooms.delete(roomId);
+    return;
+  }
+  const liveClassId = parseLiveClassIdFromRoomId(roomId);
+  try {
+    const r = await db2.query(
+      `SELECT is_live, is_completed FROM live_classes WHERE id = $1`,
+      [liveClassId]
+    );
+    const lc = r.rows[0];
+    if (lc && Boolean(lc.is_live) && !Boolean(lc.is_completed)) {
+      return;
+    }
+  } catch (e) {
+    console.warn("[classroom-sync] could not check live status before teardown:", e);
+  }
+  roomInstance.close();
+  rooms.delete(roomId);
+}
+function makeOrLoadRoom(roomId, db2) {
   const id = sanitizeRoomId(roomId);
   const existing = rooms.get(id);
   if (existing && !existing.isClosed()) return existing;
@@ -9531,8 +9598,7 @@ function makeOrLoadRoom(roomId) {
     storage,
     onSessionRemoved(roomInstance, args) {
       if (args.numSessionsRemaining === 0) {
-        roomInstance.close();
-        rooms.delete(id);
+        void teardownRoomIfAllowed(id, roomInstance, db2);
       }
     }
   });
@@ -9604,7 +9670,7 @@ async function handleConnection(ws, req, rawRoomId, db2) {
   const roomId = sanitizeRoomId(rawRoomId);
   const url = new URL2(req.url || "", "http://localhost");
   const sessionId = parseSessionId(url);
-  const room = makeOrLoadRoom(roomId);
+  const room = makeOrLoadRoom(roomId, db2);
   room.handleSocketConnect({
     sessionId,
     socket: ws,

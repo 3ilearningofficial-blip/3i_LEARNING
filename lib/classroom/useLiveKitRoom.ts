@@ -5,11 +5,10 @@ import type { ClassroomTokenPayload } from "./useClassroomToken";
 import { loadClassroomMediaDevices } from "./mediaDevices";
 import {
   CLASSROOM_SPLIT_STREAM,
-  startClassroomBoardStream,
-  startClassroomCameraStream,
+  isClassroomBoardCaptureReady,
+  startClassroomPublishBundle,
   startClassroomRecordingComposite,
-  type BoardStreamHandle,
-  type CameraStreamHandle,
+  type ClassroomPublishBundle,
   type ClassroomCompositeHandle,
 } from "./classroomCompositeStream";
 
@@ -40,10 +39,10 @@ export function useLiveKitRoom(
   const remoteCameraRef = useRef<HTMLVideoElement | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const connectGenRef = useRef(0);
-  const boardHandleRef = useRef<BoardStreamHandle | null>(null);
-  const cameraHandleRef = useRef<CameraStreamHandle | null>(null);
+  const publishBundleRef = useRef<ClassroomPublishBundle | null>(null);
   const recordingCompositeRef = useRef<ClassroomCompositeHandle | null>(null);
   const publishedTracksRef = useRef<PublishedTracks>({});
+  const publishingRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
   const [micEnabled, setMicEnabled] = useState(true);
@@ -72,8 +71,6 @@ export function useLiveKitRoom(
       const camTrack = camPub?.videoTrack;
       if (camTrack && remoteCameraRef.current) {
         camTrack.attach(remoteCameraRef.current);
-      } else if (camTrack && remoteBoardRef.current && !screenTrack) {
-        camTrack.attach(remoteBoardRef.current);
       }
 
       const micPub = participant.getTrackPublication(Track.Source.Microphone);
@@ -86,12 +83,20 @@ export function useLiveKitRoom(
     }
   }, []);
 
+  const unpublishCompositeTracks = useCallback(async () => {
+    const room = roomRef.current;
+    if (!room) return;
+    const localParticipant = room.localParticipant as unknown as LocalPublisher;
+    const published = publishedTracksRef.current;
+    for (const track of [published.board, published.camera, published.legacy]) {
+      if (track) await localParticipant.unpublishTrack(track, true);
+    }
+    publishedTracksRef.current = {};
+  }, []);
+
   const stopComposite = useCallback(() => {
-    boardHandleRef.current?.stop();
-    boardHandleRef.current = null;
-    cameraHandleRef.current?.stop();
-    cameraHandleRef.current = null;
-    recordingCompositeRef.current?.stop();
+    publishBundleRef.current?.stop();
+    publishBundleRef.current = null;
     recordingCompositeRef.current = null;
     publishedTracksRef.current = {};
     setCompositeStream(null);
@@ -100,42 +105,33 @@ export function useLiveKitRoom(
   const startCompositePublish = useCallback(async () => {
     const room = roomRef.current;
     if (!room || !boardEl || !tokenPayload?.canPublish) return;
+    if (!isClassroomBoardCaptureReady(editor, boardEl)) return;
+    if (publishingRef.current) return;
 
+    publishingRef.current = true;
     const prefs = loadClassroomMediaDevices();
-    stopComposite();
 
     try {
+      await unpublishCompositeTracks();
+      stopComposite();
       await room.localParticipant.setCameraEnabled(false);
 
       const localParticipant = room.localParticipant as unknown as LocalPublisher;
 
       if (CLASSROOM_SPLIT_STREAM) {
-        const boardHandle = await startClassroomBoardStream({
-          editor,
-          boardEl,
-          fps: 30,
-        });
-        boardHandleRef.current = boardHandle;
-
-        const cameraHandle = await startClassroomCameraStream({
-          cameraId: prefs.cameraId,
-          greenScreen: prefs.greenScreenEnabled,
-          fps: 30,
-        });
-        cameraHandleRef.current = cameraHandle;
-
-        const recordingHandle = await startClassroomRecordingComposite({
+        const bundle = await startClassroomPublishBundle({
           editor,
           boardEl,
           cameraId: prefs.cameraId,
           greenScreen: prefs.greenScreenEnabled,
           fps: 30,
         });
-        recordingCompositeRef.current = recordingHandle;
-        setCompositeStream(recordingHandle.stream);
+        publishBundleRef.current = bundle;
+        recordingCompositeRef.current = bundle.recording;
+        setCompositeStream(bundle.recording.stream);
 
-        const boardTrack = boardHandle.stream.getVideoTracks()[0];
-        const cameraTrack = cameraHandle.stream.getVideoTracks()[0];
+        const boardTrack = bundle.board.stream.getVideoTracks()[0];
+        const cameraTrack = bundle.camera.stream.getVideoTracks()[0];
         if (!boardTrack || !cameraTrack) throw new Error("Missing publish tracks");
 
         await localParticipant.publishTrack(boardTrack, {
@@ -166,13 +162,23 @@ export function useLiveKitRoom(
       }
 
       setCamEnabled(true);
+      setError(null);
       attachLocalCompositePreview();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to start composite stream");
       setCamEnabled(false);
       stopComposite();
+    } finally {
+      publishingRef.current = false;
     }
-  }, [boardEl, editor, tokenPayload?.canPublish, stopComposite, attachLocalCompositePreview]);
+  }, [
+    boardEl,
+    editor,
+    tokenPayload?.canPublish,
+    stopComposite,
+    unpublishCompositeTracks,
+    attachLocalCompositePreview,
+  ]);
 
   const setLocalVideoEl = useCallback(
     (el: HTMLVideoElement | null) => {
@@ -259,6 +265,7 @@ export function useLiveKitRoom(
       if (connectGenRef.current === gen) {
         connectGenRef.current += 1;
       }
+      void unpublishCompositeTracks();
       stopComposite();
       void room.disconnect();
       roomRef.current = null;
@@ -269,7 +276,7 @@ export function useLiveKitRoom(
 
   useEffect(() => {
     if (!connected || !boardEl || !tokenPayload?.canPublish) return;
-    if (boardHandleRef.current || recordingCompositeRef.current) return;
+    if (!isClassroomBoardCaptureReady(editor, boardEl)) return;
     void startCompositePublish();
   }, [connected, boardEl, editor, tokenPayload?.canPublish, startCompositePublish]);
 
@@ -285,15 +292,12 @@ export function useLiveKitRoom(
     const room = roomRef.current;
     if (!room) return;
     const next = !camEnabled;
-    if (boardEl && (boardHandleRef.current || recordingCompositeRef.current)) {
+    // Classroom teachers always publish canvas composite tracks when boardEl is set.
+    if (boardEl && tokenPayload?.canPublish) {
       if (next) {
         await startCompositePublish();
       } else {
-        const localParticipant = room.localParticipant as unknown as LocalPublisher;
-        const published = publishedTracksRef.current;
-        for (const track of [published.board, published.camera, published.legacy]) {
-          if (track) await localParticipant.unpublishTrack(track, true);
-        }
+        await unpublishCompositeTracks();
         stopComposite();
         if (localVideoRef.current) localVideoRef.current.srcObject = null;
       }

@@ -124,18 +124,20 @@ export default function ClassroomEndSessionModal({
   };
 
   const handleEndClass = async () => {
-    if (!editor) {
-      setError("Whiteboard is still loading. Cannot end class yet.");
-      return;
-    }
     setEnding(true);
     setError(null);
     try {
-      const pages = await exportClassroomBoardAllPagesPng(editor, boardEl);
       let archive: EndSessionArchive | null = null;
-      if (pages?.length) {
-        const uploaded = await uploadClassroomBoardArchive(liveClassId, pages, subfolder);
-        if (uploaded) archive = uploaded;
+      if (editor) {
+        const pages = await exportClassroomBoardAllPagesPng(editor, boardEl);
+        if (pages?.length) {
+          const uploaded = await uploadClassroomBoardArchive(liveClassId, pages, subfolder);
+          if (uploaded) archive = uploaded;
+        } else if (editor.getPages().some((p) => editor.getPageShapeIds(p.id).size > 0)) {
+          setError(
+            "Board export failed; class will still end using cloud checkpoint if available."
+          );
+        }
       }
       await onConfirmEnd(archive);
       onClose();

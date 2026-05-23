@@ -110,7 +110,16 @@ export async function finalizeClassroomLiveSession(
     const shapeIds = [...editor.getCurrentPageShapeIds()];
     const blob = await exportClassroomBoardPng(editor, opts?.boardEl ?? null);
     if (shapeIds.length > 0 && !blob) {
-      throw new Error("Could not save board snapshot. Try again before ending class.");
+      const hasCheckpoint = Boolean(String(opts?.boardSyncCheckpointUrl || "").trim());
+      const hasArchive =
+        Boolean(opts?.boardArchive?.boardSnapshotUrl) ||
+        Boolean(opts?.boardArchive?.boardPdfUrl) ||
+        (opts?.boardArchive?.boardPageUrls?.length ?? 0) > 0;
+      if (!hasCheckpoint && !hasArchive) {
+        console.warn(
+          "[Classroom] PNG snapshot export failed; ending class with checkpoint/archive only if available"
+        );
+      }
     }
     if (blob) {
       const filename = `classroom-board-${liveClassId}-${Date.now()}.png`;

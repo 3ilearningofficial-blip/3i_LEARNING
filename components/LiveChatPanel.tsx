@@ -8,6 +8,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/query-client";
 import { useAuth } from "@/context/AuthContext";
 import { filterChatMessages, ChatMessage } from "@/lib/chat-utils";
+import { useHandRaiseChime } from "@/lib/useHandRaiseChime";
 import Colors from "@/constants/colors";
 
 interface HandRaise {
@@ -110,6 +111,8 @@ export default function LiveChatPanel({
     refetchInterval: 500,
   });
   const raisedHands = raisedHandsProp ?? raisedHandsLocal;
+
+  useHandRaiseChime(raisedHands, isAdmin);
 
   // Auto-scroll on new messages
   useEffect(() => {

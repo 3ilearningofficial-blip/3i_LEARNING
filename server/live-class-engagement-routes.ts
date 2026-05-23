@@ -99,16 +99,26 @@ export function registerLiveClassEngagementRoutes({
       // Throttle the UPDATE so back-to-back beats don't churn the row, but
       // keep the throttle below the client's 15s heartbeat interval so every
       // regular tick reliably refreshes last_heartbeat.
-      await db.query(
+      const hb = await db.query(
         `INSERT INTO live_class_viewers (live_class_id, user_id, user_name, last_heartbeat)
          VALUES ($1, $2, $3, $4)
          ON CONFLICT (live_class_id, user_id) DO UPDATE SET
            last_heartbeat = EXCLUDED.last_heartbeat,
            user_name = COALESCE(EXCLUDED.user_name, live_class_viewers.user_name)
          WHERE live_class_viewers.last_heartbeat IS NULL
-            OR EXCLUDED.last_heartbeat - live_class_viewers.last_heartbeat >= 8000`,
+            OR EXCLUDED.last_heartbeat - live_class_viewers.last_heartbeat >= 8000
+         RETURNING user_id`,
         [req.params.id, user.id, user.name || user.phone || "Anonymous", now]
       );
+      if (hb.rowCount && hb.rowCount > 0) {
+        try {
+          await db.query(`SELECT pg_notify('live_engagement', $1)`, [
+            JSON.stringify({ type: "viewer", liveClassId: String(req.params.id) }),
+          ]);
+        } catch {
+          /* optional realtime hint for admin */
+        }
+      }
       res.json({ success: true });
     } catch (err) {
       console.error("Viewer heartbeat error:", err);
@@ -131,7 +141,7 @@ export function registerLiveClassEngagementRoutes({
       // 20s online window: faster leave detection; still survives brief stalls.
       const cutoff = Date.now() - 20000;
       const result = await db.query(
-        `SELECT user_name FROM live_class_viewers
+        `SELECT user_id, user_name FROM live_class_viewers
          WHERE live_class_id = $1 AND last_heartbeat > $2
          ORDER BY user_name ASC`,
         [req.params.id, cutoff]

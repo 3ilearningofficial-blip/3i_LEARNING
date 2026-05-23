@@ -51,6 +51,7 @@ function TldrawClassroomConnected({
   onEditorReady?: (editor: Editor | null) => void;
 }) {
   const [slowConnect, setSlowConnect] = useState(false);
+  const [mountedEditor, setMountedEditor] = useState<Editor | null>(null);
   const assets: TLAssetStore = React.useMemo(
     () => createClassroomAssetStore(liveClassId),
     [liveClassId]
@@ -59,6 +60,13 @@ function TldrawClassroomConnected({
     uri,
     assets,
   });
+
+  const syncReady = store.status !== "loading" && store.status !== "error";
+
+  useEffect(() => {
+    if (!syncReady || readonly || preview || !mountedEditor) return;
+    void restoreClassroomBoardCheckpoint(liveClassId, mountedEditor);
+  }, [syncReady, readonly, preview, liveClassId, mountedEditor]);
 
   useEffect(() => {
     if (store.status !== "loading") {
@@ -107,11 +115,9 @@ function TldrawClassroomConnected({
         components={readonly ? undefined : classroomTeachingComponents}
         onMount={(editor: Editor) => {
           editorRef.current = editor;
+          setMountedEditor(editor);
           setupClassroomSlideEditor(editor, !!readonly);
           onEditorReady?.(editor);
-          if (!readonly && !preview) {
-            void restoreClassroomBoardCheckpoint(liveClassId, editor);
-          }
         }}
       />
     </div>

@@ -27,9 +27,24 @@ const pipBaseStyle: React.CSSProperties = {
   backgroundColor: "transparent",
 };
 
+function getInitialPipStyle(): React.CSSProperties {
+  if (Platform.OS !== "web" || typeof window === "undefined") {
+    return { ...pipBaseStyle, top: 12, right: 12 };
+  }
+  const landscape = window.matchMedia("(orientation: landscape)").matches;
+  const wide = window.innerWidth >= 768;
+  const topRight = wide || landscape;
+  return {
+    ...pipBaseStyle,
+    top: topRight ? 12 : undefined,
+    right: 12,
+    bottom: topRight ? undefined : 72,
+  };
+}
+
 /** Student live stage: board full-bleed + responsive teacher PiP overlay. */
 export default function ClassroomStudentStage({ boardVideoRef, cameraVideoRef }: Props) {
-  const [pipStyle, setPipStyle] = useState<React.CSSProperties>(pipBaseStyle);
+  const [pipStyle, setPipStyle] = useState<React.CSSProperties>(getInitialPipStyle);
 
   useEffect(() => {
     if (Platform.OS !== "web" || typeof window === "undefined") return;

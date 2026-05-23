@@ -10,6 +10,11 @@ echo "Step 2: Building native bundles..."
 node scripts/build.js || echo "Native build completed with warnings"
 
 echo "Step 3: Building Expo web app..."
-EXPO_PUBLIC_DOMAIN=$REPLIT_INTERNAL_APP_DOMAIN npx expo export --platform web --output-dir static-build/web
+DOMAIN="${EXPO_PUBLIC_DOMAIN:-$REPLIT_INTERNAL_APP_DOMAIN}"
+if [ -z "$DOMAIN" ]; then
+  echo "Set EXPO_PUBLIC_DOMAIN (e.g. 3ilearning.in) before building web."
+  exit 1
+fi
+EXPO_PUBLIC_DOMAIN="$DOMAIN" npx expo export --platform web --output-dir static-build/web
 
 echo "=== Build complete! ==="

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { View, Text, StyleSheet, Platform, Pressable } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import type { UseWebRTCStreamReturn } from "@/lib/useWebRTCStream";
-import WebrtcSetupPreview from "./WebrtcSetupPreview";
+import ChromaWebrtcPreview from "./ChromaWebrtcPreview";
 import MicLevelPreview from "./MicLevelPreview";
 import MediaDeviceDropdown from "./MediaDeviceDropdown";
 import {
@@ -49,7 +49,7 @@ export default function ClassroomMediaSetupPanel({ webrtc, livekitConfigured }: 
 
       {webrtc.error ? <Text style={styles.error}>{webrtc.error}</Text> : null}
 
-      <WebrtcSetupPreview webrtc={webrtc} compact />
+      <ChromaWebrtcPreview webrtc={webrtc} greenScreen={greenScreen} compact />
 
       <MediaDeviceDropdown
         label="Select Camera"
@@ -81,7 +81,7 @@ export default function ClassroomMediaSetupPanel({ webrtc, livekitConfigured }: 
         </View>
       </Pressable>
       <Text style={styles.hint}>
-        Use a physical green backdrop behind you. Preview in setup; students see the keyed video when live.
+        Use a physical green backdrop behind you. Preview shows keyed video when this toggle is on.
       </Text>
     </View>
   );

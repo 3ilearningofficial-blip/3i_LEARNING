@@ -23,7 +23,7 @@ import SharedLiveSettings from "@/components/live-setup/SharedLiveSettings";
 import MediaDeviceSelectors from "@/components/live-setup/MediaDeviceSelectors";
 import ClassroomMediaSetupPanel from "@/components/live-setup/ClassroomMediaSetupPanel";
 import ClassroomSetupPreview from "@/components/live-setup/ClassroomSetupPreview";
-import { saveClassroomMediaDevices } from "@/lib/classroom/mediaDevices";
+import { loadClassroomMediaDevices, saveClassroomMediaDevices } from "@/lib/classroom/mediaDevices";
 import CloudflareSetupPreview, { type CfStreamInfo } from "@/components/live-setup/CloudflareSetupPreview";
 import RtmpSetupPreview from "@/components/live-setup/RtmpSetupPreview";
 import WebrtcSetupPreview from "@/components/live-setup/WebrtcSetupPreview";
@@ -125,9 +125,11 @@ export default function LiveSetupPage() {
       await apiRequest("PUT", `/api/admin/live-classes/${liveClassId}`, body);
 
       if (streamType === "classroom" && Platform.OS === "web") {
+        const existing = loadClassroomMediaDevices();
         saveClassroomMediaDevices({
-          cameraId: webrtc.selectedCamera || undefined,
-          microphoneId: webrtc.selectedMicrophone || undefined,
+          ...existing,
+          cameraId: webrtc.selectedCamera || existing.cameraId,
+          microphoneId: webrtc.selectedMicrophone || existing.microphoneId,
         });
       }
 

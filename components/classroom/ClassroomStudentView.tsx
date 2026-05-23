@@ -22,6 +22,7 @@ import ClassroomLiveOverlays from "@/components/classroom/ClassroomLiveOverlays"
 import LiveClassRecordingTimer from "@/components/LiveClassRecordingTimer";
 import ClassroomHeaderActivityTimer from "@/components/classroom/ClassroomHeaderActivityTimer";
 import { useLiveEngagementSse } from "@/lib/useLiveEngagementSse";
+import { isTruthyDbFlag } from "@/lib/live-class/dbFlags";
 import Colors from "@/constants/colors";
 
 type ChatMsg = {
@@ -68,9 +69,10 @@ export default function ClassroomStudentView({
 
   const isLandscape = width > height;
   const isWide = width >= 768 || isLandscape;
-  const canChat = isLive && !isCompleted;
-  const showLiveHeader = (showAsLiveUI || isLive) && !isCompleted;
-  const watchComposite = showAsLiveUI && isLive && !isCompleted;
+  const classIsLive = isTruthyDbFlag(isLive) || isLive === true;
+  const canChat = classIsLive && !isCompleted;
+  const showLiveHeader = (showAsLiveUI || classIsLive) && !isCompleted;
+  const watchComposite = showAsLiveUI && classIsLive && !isCompleted;
 
   useLiveEngagementSse({
     liveClassId,
@@ -129,18 +131,33 @@ export default function ClassroomStudentView({
   });
 
   useEffect(() => {
-    if (!isLive || isCompleted) {
+    if (!classIsLive || isCompleted || !liveClassId) {
       prevIsLiveRef.current = false;
       return;
     }
     const sendHeartbeat = () => {
-      void apiRequest("POST", `/api/live-classes/${liveClassId}/viewers/heartbeat`, {});
+      void apiRequest("POST", `/api/live-classes/${liveClassId}/viewers/heartbeat`, {}).catch(
+        () => {}
+      );
     };
     sendHeartbeat();
     prevIsLiveRef.current = true;
-    const t = setInterval(sendHeartbeat, 8000);
-    return () => clearInterval(t);
-  }, [liveClassId, isLive, isCompleted]);
+    const t = setInterval(sendHeartbeat, 12000);
+    const onVisible = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        sendHeartbeat();
+      }
+    };
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onVisible);
+    }
+    return () => {
+      clearInterval(t);
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onVisible);
+      }
+    };
+  }, [liveClassId, classIsLive, isCompleted]);
 
   const handleSend = useCallback(() => {
     const t = chatMsg.trim();

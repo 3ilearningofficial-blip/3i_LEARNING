@@ -31,7 +31,7 @@ export default function ClassroomHeaderActivityTimer({
   const [tick, setTick] = useState(0);
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [popoverPos, setPopoverPos] = useState({ top: 0, left: 0 });
-  const [timerLabel, setTimerLabel] = useState("Answer in chat before time ends");
+  const [timerLabel, setTimerLabel] = useState("Timer");
   const [timerDuration, setTimerDuration] = useState("60");
   const clockBtnRef = useRef<View>(null);
 
@@ -56,7 +56,7 @@ export default function ClassroomHeaderActivityTimer({
   const startTimer = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", `/api/admin/live-classes/${liveClassId}/activity-timer`, {
-        label: timerLabel.trim() || "Time's up soon",
+        label: timerLabel.trim() || "Timer",
         durationSeconds: Number(timerDuration) || 60,
       });
       if (!res.ok) {

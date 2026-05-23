@@ -69,11 +69,30 @@ export default function AdminClassroomPage() {
     refetchInterval: (q) => ((q.state.data as any)?.is_live ? 15000 : false),
   });
 
-  const { data: viewerData } = useQuery<{ count: number; viewers: { user_id: number; user_name: string }[] }>({
+  const { data: viewerData, refetch: refetchViewers } = useQuery<{
+    count: number;
+    viewers: { user_id: number; user_name: string }[];
+  }>({
     queryKey: [`/api/live-classes/${liveClassId}/viewers`],
-    refetchInterval: 3000,
+    queryFn: async () => {
+      const res = await authFetch(
+        `${getApiUrl()}/api/live-classes/${encodeURIComponent(liveClassId)}/viewers`
+      );
+      if (!res.ok) throw new Error("Failed to fetch viewers");
+      return res.json();
+    },
+    refetchInterval: isTruthyDbFlag(liveClass?.is_live) ? 2000 : false,
     enabled: !!liveClassId && isTruthyDbFlag(liveClass?.is_live),
   });
+
+  useEffect(() => {
+    if (!isTruthyDbFlag(liveClass?.is_live) || Platform.OS !== "web") return;
+    const onFocus = () => {
+      void refetchViewers();
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [liveClass?.is_live, refetchViewers]);
 
   const sessionActive = liveClass && !isTruthyDbFlag(liveClass.is_completed);
   const isLive = sessionActive && isTruthyDbFlag(liveClass?.is_live);
@@ -102,7 +121,23 @@ export default function AdminClassroomPage() {
     if (el) setBoardEl(el);
   }, [sessionActive, getBoardDomElement, endModalOpen]);
 
-  useClassroomBoardCheckpoint(liveClassId, editor, !!isLive && !!sessionActive);
+  const { uploadCheckpoint } = useClassroomBoardCheckpoint(
+    liveClassId,
+    editor,
+    !!isLive && !!sessionActive
+  );
+
+  useEffect(() => {
+    if (Platform.OS !== "web") return;
+    const flush = () => {
+      void uploadCheckpoint();
+    };
+    window.addEventListener("beforeunload", flush);
+    return () => {
+      window.removeEventListener("beforeunload", flush);
+      flush();
+    };
+  }, [uploadCheckpoint]);
 
   const handleImportSlide = useCallback(() => {
     if (Platform.OS !== "web") return;
@@ -142,6 +177,9 @@ export default function AdminClassroomPage() {
 
       try {
         const blob = await sessionRecorder.stopAndGetBlob();
+        if (!blob || blob.size === 0) {
+          console.warn("[Classroom] session recording was empty — check composite stream / LiveKit publish");
+        }
         if (blob && blob.size > 0) {
           const filename = `classroom-recording-${liveClassId}-${Date.now()}.webm`;
           const fileUri = URL.createObjectURL(blob);
@@ -214,6 +252,11 @@ export default function AdminClassroomPage() {
         qc.invalidateQueries({ queryKey: liveClassQueryKey(liveClassId) });
 
         const lines: string[] = ["Class ended."];
+        if (!videoRecordingUrl && !result.recordingUrl) {
+          lines.push(
+            "No session video was recorded (stream may not have started). Board checkpoint and snapshots were saved when available."
+          );
+        }
         if (result.recordingUrl) lines.push(`Video (R2): ${result.recordingUrl}`);
         if (result.boardPdfUrl || archive?.boardPdfUrl) {
           lines.push(`Board PDF (R2): ${result.boardPdfUrl || archive?.boardPdfUrl}`);
@@ -271,10 +314,12 @@ export default function AdminClassroomPage() {
         {sessionActive ? (
           <View style={styles.headerStatus}>
             <LiveClassRecordingTimer startedAt={startedAt} active={!!isLive} compact />
-            <View style={styles.livePill}>
-              <View style={styles.liveDot} />
-              <Text style={styles.liveText}>LIVE</Text>
-            </View>
+            {isLive ? (
+              <View style={styles.livePill}>
+                <View style={styles.liveDot} />
+                <Text style={styles.liveText}>LIVE</Text>
+              </View>
+            ) : null}
             <ClassroomHeaderActivityTimer
               liveClassId={liveClassId}
               isAdmin
