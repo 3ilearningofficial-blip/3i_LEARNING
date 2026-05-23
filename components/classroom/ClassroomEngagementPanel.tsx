@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -17,6 +17,14 @@ const DURATION_PRESETS = [20, 30, 60, 120];
 
 type PollOption = { id: number; label: string; sort_order: number; count?: number; percent?: number };
 
+type SessionPoll = {
+  id: number;
+  kind: string;
+  question: string;
+  total_votes: number;
+  is_active: boolean;
+};
+
 type Props = {
   liveClassId: string;
 };
@@ -29,6 +37,23 @@ export default function ClassroomEngagementPanel({ liveClassId }: Props) {
   const [correctIdx, setCorrectIdx] = useState(0);
   const [duration, setDuration] = useState("30");
   const [viewPollId, setViewPollId] = useState<number | null>(null);
+  const prevActivePollIdRef = useRef<number | null>(null);
+
+  const { data: sessionPolls } = useQuery({
+    queryKey: ["/api/admin/live-classes", liveClassId, "polls", "session"],
+    queryFn: async () => {
+      const res = await apiRequest(
+        "GET",
+        `/api/admin/live-classes/${liveClassId}/polls/session`,
+        undefined
+      );
+      if (!res.ok) return [] as SessionPoll[];
+      const json = await res.json();
+      return (json.polls || []) as SessionPoll[];
+    },
+    refetchInterval: 2000,
+    enabled: !!liveClassId,
+  });
 
   const { data: activePoll } = useQuery({
     queryKey: ["/api/live-classes", liveClassId, "polls", "active"],
@@ -71,12 +96,26 @@ export default function ClassroomEngagementPanel({ liveClassId }: Props) {
       }
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (data: { poll?: { id: number } }) => {
       setQuestion("");
       setOptions(["", ""]);
       qc.invalidateQueries({ queryKey: ["/api/live-classes", liveClassId, "polls", "active"] });
+      qc.invalidateQueries({ queryKey: ["/api/admin/live-classes", liveClassId, "polls", "session"] });
+      if (data?.poll?.id) setViewPollId(data.poll.id);
     },
   });
+
+  useEffect(() => {
+    const currentId = activePoll?.id ?? null;
+    const prevId = prevActivePollIdRef.current;
+    if (prevId != null && currentId == null) {
+      setViewPollId((v) => v ?? prevId);
+      void qc.invalidateQueries({
+        queryKey: ["/api/admin/live-classes", liveClassId, "polls", "session"],
+      });
+    }
+    prevActivePollIdRef.current = currentId;
+  }, [activePoll?.id, liveClassId, qc]);
 
   const endPoll = useMutation({
     mutationFn: async (pollId: number) => {
@@ -90,8 +129,11 @@ export default function ClassroomEngagementPanel({ liveClassId }: Props) {
     onSuccess: (_, pollId) => {
       setViewPollId(pollId);
       qc.invalidateQueries({ queryKey: ["/api/live-classes", liveClassId, "polls", "active"] });
+      qc.invalidateQueries({ queryKey: ["/api/admin/live-classes", liveClassId, "polls", "session"] });
     },
   });
+
+  const endedPolls = (sessionPolls || []).filter((p) => !p.is_active);
 
   if (Platform.OS !== "web") {
     return <Text style={styles.note}>Polls and timers are available on web.</Text>;
@@ -139,9 +181,26 @@ export default function ClassroomEngagementPanel({ liveClassId }: Props) {
             ))
           )}
           <Text style={styles.totalVotes}>Total votes: {pollResults.totalVotes ?? 0}</Text>
-          <Pressable style={styles.linkBtn} onPress={() => setViewPollId(null)}>
-            <Text style={styles.linkBtnText}>Close results</Text>
-          </Pressable>
+        </View>
+      ) : null}
+
+      {endedPolls.length > 0 ? (
+        <View style={styles.pastPollsBox}>
+          <Text style={styles.pastPollsTitle}>Past polls (this class)</Text>
+          {endedPolls.map((p) => (
+            <Pressable
+              key={p.id}
+              style={[styles.pastPollRow, viewPollId === p.id && styles.pastPollRowActive]}
+              onPress={() => setViewPollId(p.id)}
+            >
+              <Text style={styles.pastPollQ} numberOfLines={2}>
+                {p.question}
+              </Text>
+              <Text style={styles.pastPollMeta}>
+                {p.kind === "quiz" ? "Quiz" : "Poll"} · {p.total_votes} votes
+              </Text>
+            </Pressable>
+          ))}
         </View>
       ) : null}
 
@@ -310,4 +369,25 @@ const styles = StyleSheet.create({
   resultLabel: { flex: 1, fontSize: 12, color: Colors.light.text },
   resultPct: { fontSize: 12, fontWeight: "700", color: Colors.light.primary },
   totalVotes: { fontSize: 11, color: Colors.light.textMuted, marginTop: 6 },
+  pastPollsBox: {
+    backgroundColor: "#F1F5F9",
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  pastPollsTitle: { fontSize: 11, fontWeight: "700", color: Colors.light.textMuted, marginBottom: 8 },
+  pastPollRow: {
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+    marginBottom: 4,
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  pastPollRowActive: { borderColor: Colors.light.primary, backgroundColor: "#EFF6FF" },
+  pastPollQ: { fontSize: 12, fontWeight: "600", color: Colors.light.text, marginBottom: 2 },
+  pastPollMeta: { fontSize: 10, color: Colors.light.textMuted },
 });

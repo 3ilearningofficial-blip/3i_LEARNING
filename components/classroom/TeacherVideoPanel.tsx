@@ -6,11 +6,13 @@ import { useLiveKitRoom } from "@/lib/classroom/useLiveKitRoom";
 import Colors from "@/constants/colors";
 
 import type { Room } from "livekit-client";
+import type { Editor } from "tldraw";
 
 type Props = {
   liveClassId: string;
   enabled?: boolean;
   boardEl?: HTMLElement | null;
+  editor?: Editor | null;
   onRoomReady?: (room: Room | null) => void;
   onCompositeStream?: (stream: MediaStream | null) => void;
 };
@@ -21,6 +23,7 @@ export default function TeacherVideoPanel({
   liveClassId,
   enabled = true,
   boardEl = null,
+  editor = null,
   onRoomReady,
   onCompositeStream,
 }: Props) {
@@ -35,7 +38,7 @@ export default function TeacherVideoPanel({
     toggleMic,
     toggleCam,
     room,
-  } = useLiveKitRoom(tokenPayload, enabled && Platform.OS === "web", boardEl);
+  } = useLiveKitRoom(tokenPayload, enabled && Platform.OS === "web", boardEl, editor);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {

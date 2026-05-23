@@ -47,7 +47,7 @@ export default function ClassroomHeaderActivityTimer({
       const res = await apiRequest("GET", `/api/live-classes/${liveClassId}/activity-timer/active`, undefined);
       if (!res.ok) return null;
       const json = await res.json();
-      return json.timer as { label?: string; remainingSeconds?: number } | null;
+      return json.timer as { label?: string; ends_at?: number; remainingSeconds?: number } | null;
     },
     refetchInterval: 800,
     enabled: !!liveClassId && sessionActive && Platform.OS === "web",
@@ -94,7 +94,10 @@ export default function ClassroomHeaderActivityTimer({
 
   if (Platform.OS !== "web" || !sessionActive) return null;
 
-  const timerRemaining = activeTimer?.remainingSeconds ?? 0;
+  const timerRemaining =
+    activeTimer?.ends_at && Number(activeTimer.ends_at) > Date.now()
+      ? Math.max(0, Math.ceil((Number(activeTimer.ends_at) - Date.now()) / 1000))
+      : 0;
   const showCountdown = timerRemaining > 0;
   void tick;
 

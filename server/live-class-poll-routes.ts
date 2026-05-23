@@ -153,6 +153,40 @@ export function registerLiveClassPollRoutes({
     }
   });
 
+  app.get("/api/admin/live-classes/:id/polls/session", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const liveClassId = String(req.params.id);
+      await finalizeExpiredPolls(db, liveClassId);
+      const pollsRes = await db.query(
+        `SELECT p.id, p.kind, p.question, p.started_at, p.ends_at, p.ended_at,
+                COALESCE(v.total_votes, 0)::int AS total_votes
+         FROM live_class_polls p
+         LEFT JOIN (
+           SELECT poll_id, COUNT(*)::int AS total_votes
+           FROM live_class_poll_votes
+           GROUP BY poll_id
+         ) v ON v.poll_id = p.id
+         WHERE p.live_class_id = $1
+         ORDER BY p.started_at DESC`,
+        [liveClassId]
+      );
+      const t = nowMs();
+      const polls = pollsRes.rows.map((p: any) => ({
+        id: p.id,
+        kind: p.kind,
+        question: p.question,
+        started_at: p.started_at,
+        ends_at: p.ends_at,
+        ended_at: p.ended_at,
+        total_votes: Number(p.total_votes || 0),
+        is_active: !p.ended_at && Number(p.ends_at) > t,
+      }));
+      res.json({ polls });
+    } catch {
+      res.status(500).json({ message: "Failed to load session polls" });
+    }
+  });
+
   app.get("/api/admin/live-classes/:id/polls/:pollId/results", requireAdmin, async (req: Request, res: Response) => {
     try {
       const pollId = Number(req.params.pollId);

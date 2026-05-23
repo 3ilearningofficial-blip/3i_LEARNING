@@ -11,8 +11,22 @@ type Props = {
   sessionActive?: boolean;
 };
 
+type ActiveTimer = {
+  label?: string;
+  ends_at?: number;
+  remainingSeconds?: number;
+  overlay_x_pct?: number;
+  overlay_y_pct?: number;
+};
+
 function clampPct(n: number, min: number, max: number) {
   return Math.min(max, Math.max(min, n));
+}
+
+function timerRemainingFromEndsAt(endsAt: number | undefined, tick: number): number {
+  void tick;
+  if (!endsAt || !Number.isFinite(endsAt)) return 0;
+  return Math.max(0, Math.ceil((Number(endsAt) - Date.now()) / 1000));
 }
 
 export default function ClassroomLiveOverlays({
@@ -58,12 +72,7 @@ export default function ClassroomLiveOverlays({
       const res = await apiRequest("GET", `/api/live-classes/${liveClassId}/activity-timer/active`, undefined);
       if (!res.ok) return null;
       const json = await res.json();
-      return json.timer as {
-        label?: string;
-        remainingSeconds?: number;
-        overlay_x_pct?: number;
-        overlay_y_pct?: number;
-      } | null;
+      return json.timer as ActiveTimer | null;
     },
     refetchInterval: 800,
     enabled: !!liveClassId && sessionActive && Platform.OS === "web",
@@ -92,8 +101,14 @@ export default function ClassroomLiveOverlays({
         { xPct, yPct }
       );
       if (!res.ok) throw new Error("Failed to save position");
+      return { xPct, yPct };
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
+      qc.setQueryData(
+        ["/api/live-classes", liveClassId, "activity-timer", "active"],
+        (prev: ActiveTimer | null | undefined) =>
+          prev ? { ...prev, overlay_x_pct: data.xPct, overlay_y_pct: data.yPct } : prev
+      );
       qc.invalidateQueries({ queryKey: ["/api/live-classes", liveClassId, "activity-timer", "active"] });
     },
   });
@@ -114,9 +129,12 @@ export default function ClassroomLiveOverlays({
     };
   }, []);
 
+  const timerEndsAt = activeTimer?.ends_at;
+  const timerRemaining = timerRemainingFromEndsAt(timerEndsAt, tick);
+
   useEffect(() => {
-    if (!activeTimer?.remainingSeconds) setDragPos(null);
-  }, [activeTimer?.remainingSeconds]);
+    if (timerRemaining <= 0) setDragPos(null);
+  }, [timerRemaining]);
 
   const onTimerDragStart = useCallback(
     (clientX: number, clientY: number) => {
@@ -174,12 +192,9 @@ export default function ClassroomLiveOverlays({
       ? Math.max(0, Math.ceil((Number(activePoll.ends_at) - Date.now()) / 1000))
       : 0;
 
-  const timerRemaining = activeTimer?.remainingSeconds ?? 0;
   const timerX = dragPos?.x ?? Number(activeTimer?.overlay_x_pct ?? 85);
   const timerY = dragPos?.y ?? Number(activeTimer?.overlay_y_pct ?? 8);
   const timerLabel = String(activeTimer?.label || "").trim() || "Time remaining";
-
-  void tick;
 
   return (
     <View ref={layerRef} style={styles.layer} pointerEvents="box-none" collapsable={false}>
@@ -216,7 +231,11 @@ export default function ClassroomLiveOverlays({
           pointerEvents={isAdmin ? "auto" : "none"}
         >
           <Pressable
-            style={[styles.timerCard, isAdmin && styles.timerCardDraggable]}
+            style={[
+              styles.timerCard,
+              isAdmin && styles.timerCardDraggable,
+              !isAdmin && styles.timerCardStudent,
+            ]}
             onPressIn={(e) => {
               if (!isAdmin) return;
               const ne = (e as unknown as { nativeEvent?: { clientX?: number; clientY?: number } })
@@ -233,12 +252,19 @@ export default function ClassroomLiveOverlays({
             }}
           >
             {isAdmin ? (
-              <Ionicons name="move" size={12} color="#94A3B8" style={styles.timerDragHint} />
-            ) : null}
-            <Text style={styles.timerLabel} numberOfLines={2}>
-              {timerLabel}
-            </Text>
-            <Text style={styles.timerCount}>{timerRemaining}s</Text>
+              <>
+                <Ionicons name="move" size={12} color="#94A3B8" style={styles.timerDragHint} />
+                <Text style={styles.timerLabel} numberOfLines={2}>
+                  {timerLabel}
+                </Text>
+                <Text style={styles.timerCount}>{timerRemaining}s</Text>
+              </>
+            ) : (
+              <View style={styles.timerStudentRow}>
+                <Ionicons name="time-outline" size={20} color="#FDE68A" />
+                <Text style={styles.timerCountStudent}>{timerRemaining}</Text>
+              </View>
+            )}
           </Pressable>
         </View>
       ) : null}
@@ -305,8 +331,19 @@ const styles = StyleSheet.create({
     borderColor: "#3B82F6",
     minWidth: 120,
   },
+  timerCardStudent: {
+    minWidth: 72,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+  },
   timerCardDraggable: { cursor: "grab" as unknown as undefined },
   timerDragHint: { position: "absolute", top: 6, right: 8 },
+  timerStudentRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
   timerLabel: {
     color: "#E2E8F0",
     fontSize: 12,
@@ -320,5 +357,13 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: "800",
     fontVariant: ["tabular-nums"],
+  },
+  timerCountStudent: {
+    color: "#FDE68A",
+    fontSize: 24,
+    fontWeight: "800",
+    fontVariant: ["tabular-nums"],
+    minWidth: 28,
+    textAlign: "center",
   },
 });

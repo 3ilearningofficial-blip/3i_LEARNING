@@ -45,25 +45,48 @@ export default function ClassroomEndSessionModal({
   onConfirmEnd,
 }: Props) {
   const [pageCount, setPageCount] = useState(0);
+  const [boardReady, setBoardReady] = useState(false);
   const [loadingExport, setLoadingExport] = useState(false);
   const [downloaded, setDownloaded] = useState(false);
   const [ending, setEnding] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!visible || !editor) return;
-    setPageCount(editor.getPages().length);
+    if (!visible) return;
     setDownloaded(false);
     setError(null);
+    if (!editor) {
+      setPageCount(0);
+      setBoardReady(false);
+      return;
+    }
+    const pages = editor.getPages();
+    setPageCount(pages.length);
+    setBoardReady(pages.length > 0);
   }, [visible, editor]);
 
   const exportPages = useCallback(async () => {
+    if (!editor) {
+      setError("Whiteboard is still loading. Wait a moment and try again.");
+      return null;
+    }
     setLoadingExport(true);
     setError(null);
     try {
-      return await exportClassroomBoardAllPagesPng(editor, boardEl);
-    } catch (e: any) {
-      setError(e?.message || "Export failed");
+      const pages = await exportClassroomBoardAllPagesPng(editor, boardEl);
+      if (!pages?.length) {
+        const n = editor.getPages().length;
+        setError(
+          n > 0
+            ? "Could not render board pages for export. Try switching to each page once, then export again."
+            : "No board pages to export"
+        );
+        return null;
+      }
+      return pages;
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Export failed";
+      setError(msg);
       return null;
     } finally {
       setLoadingExport(false);
@@ -72,10 +95,7 @@ export default function ClassroomEndSessionModal({
 
   const handleDownloadPdf = async () => {
     const pages = await exportPages();
-    if (!pages?.length) {
-      setError("No board pages to export");
-      return;
-    }
+    if (!pages?.length) return;
     const pdf = await pngSlidesToPdfBlob(pages.map((p) => ({ blob: p.blob, width: p.width, height: p.height })));
     downloadBoardPdfLocal(pdf, title);
     setDownloaded(true);
@@ -83,15 +103,16 @@ export default function ClassroomEndSessionModal({
 
   const handleDownloadPngs = async () => {
     const pages = await exportPages();
-    if (!pages?.length) {
-      setError("No board pages to export");
-      return;
-    }
+    if (!pages?.length) return;
     downloadBoardPngsLocal(pages, title);
     setDownloaded(true);
   };
 
   const handleSkipDownload = () => {
+    if (!editor) {
+      setError("Whiteboard is still loading.");
+      return;
+    }
     if (Platform.OS === "web") {
       const ok = window.confirm(
         "Skip local download? Your board will still be uploaded to cloud storage when you end class."
@@ -103,6 +124,10 @@ export default function ClassroomEndSessionModal({
   };
 
   const handleEndClass = async () => {
+    if (!editor) {
+      setError("Whiteboard is still loading. Cannot end class yet.");
+      return;
+    }
     setEnding(true);
     setError(null);
     try {
@@ -114,8 +139,8 @@ export default function ClassroomEndSessionModal({
       }
       await onConfirmEnd(archive);
       onClose();
-    } catch (e: any) {
-      setError(e?.message || "Failed to end class");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to end class");
     } finally {
       setEnding(false);
     }
@@ -123,20 +148,27 @@ export default function ClassroomEndSessionModal({
 
   if (Platform.OS !== "web") return null;
 
+  const canExport = boardReady && !!editor;
+
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.backdrop}>
         <View style={styles.card}>
           <Text style={styles.title}>End live class</Text>
           <Text style={styles.subtitle}>
-            Download your whiteboard ({pageCount} page{pageCount === 1 ? "" : "s"}) before ending. A cloud backup
-            (PDF + images) is saved to R2 when you end class.
+            {canExport
+              ? `Download your whiteboard (${pageCount} page${pageCount === 1 ? "" : "s"}) before ending. A cloud backup (PDF + images) is saved to R2 when you end class.`
+              : "Whiteboard is still loading. You can end class without a local download; cloud backup runs when the board is ready."}
           </Text>
 
           {error ? <Text style={styles.error}>{error}</Text> : null}
 
           <View style={styles.actions}>
-            <Pressable style={styles.btnPrimary} onPress={() => void handleDownloadPdf()} disabled={loadingExport || ending}>
+            <Pressable
+              style={[styles.btnPrimary, !canExport && styles.btnDisabled]}
+              onPress={() => void handleDownloadPdf()}
+              disabled={loadingExport || ending || !canExport}
+            >
               {loadingExport ? (
                 <ActivityIndicator color="#fff" size="small" />
               ) : (
@@ -146,7 +178,11 @@ export default function ClassroomEndSessionModal({
                 </>
               )}
             </Pressable>
-            <Pressable style={styles.btnSecondary} onPress={() => void handleDownloadPngs()} disabled={loadingExport || ending}>
+            <Pressable
+              style={[styles.btnSecondary, !canExport && styles.btnDisabled]}
+              onPress={() => void handleDownloadPngs()}
+              disabled={loadingExport || ending || !canExport}
+            >
               <Ionicons name="images-outline" size={18} color={Colors.light.primary} />
               <Text style={styles.btnSecondaryText}>Download all PNGs</Text>
             </Pressable>
@@ -158,7 +194,7 @@ export default function ClassroomEndSessionModal({
               <Text style={styles.okText}>Download recorded (or skipped)</Text>
             </View>
           ) : (
-            <Pressable style={styles.skipLink} onPress={handleSkipDownload}>
+            <Pressable style={styles.skipLink} onPress={handleSkipDownload} disabled={ending}>
               <Text style={styles.skipText}>Skip download — upload to cloud only</Text>
             </Pressable>
           )}
@@ -214,6 +250,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: 8,
   },
+  btnDisabled: { opacity: 0.45 },
   btnPrimaryText: { color: "#fff", fontWeight: "700", fontSize: 14 },
   btnSecondary: {
     flexDirection: "row",

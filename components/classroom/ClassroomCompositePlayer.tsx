@@ -1,7 +1,8 @@
-import React, { useEffect, useRef } from "react";
-import { View, StyleSheet, Platform, ActivityIndicator } from "react-native";
+import React, { useEffect, useRef, useState } from "react";
+import { View, StyleSheet, Platform, ActivityIndicator, Pressable, Text } from "react-native";
 import { useClassroomToken } from "@/lib/classroom/useClassroomToken";
 import { useLiveKitRoom } from "@/lib/classroom/useLiveKitRoom";
+import ClassroomStudentStage from "@/components/classroom/ClassroomStudentStage";
 import Colors from "@/constants/colors";
 
 type Props = {
@@ -9,23 +10,42 @@ type Props = {
   enabled?: boolean;
 };
 
-const videoStyle = { width: "100%", height: "100%", objectFit: "contain" as const, backgroundColor: "#000" };
-
-/** Full-area LiveKit player for students (composite board + teacher PiP + audio). */
+/** Full-area LiveKit player for students (board + responsive teacher PiP + audio). */
 export default function ClassroomCompositePlayer({ liveClassId, enabled = true }: Props) {
   const { data: tokenPayload, isLoading } = useClassroomToken(liveClassId, enabled);
-  const { setRemoteVideoEl, setRemoteAudioEl, connected, error } = useLiveKitRoom(
+  const { setRemoteBoardEl, setRemoteCameraEl, setRemoteAudioEl, connected, error } = useLiveKitRoom(
     tokenPayload,
     enabled && Platform.OS === "web"
   );
-  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const boardRef = useRef<HTMLVideoElement | null>(null);
+  const cameraRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [audioBlocked, setAudioBlocked] = useState(false);
 
   useEffect(() => {
     if (Platform.OS !== "web") return;
-    if (videoRef.current) setRemoteVideoEl(videoRef.current);
+    if (boardRef.current) setRemoteBoardEl(boardRef.current);
+    if (cameraRef.current) setRemoteCameraEl(cameraRef.current);
     if (audioRef.current) setRemoteAudioEl(audioRef.current);
-  }, [setRemoteVideoEl, setRemoteAudioEl, connected]);
+  }, [setRemoteBoardEl, setRemoteCameraEl, setRemoteAudioEl, connected]);
+
+  useEffect(() => {
+    if (Platform.OS !== "web" || !connected || !audioRef.current) return;
+    const audio = audioRef.current;
+    const tryPlay = () => {
+      void audio.play().then(() => setAudioBlocked(false)).catch(() => setAudioBlocked(true));
+    };
+    tryPlay();
+    audio.addEventListener("canplay", tryPlay);
+    return () => audio.removeEventListener("canplay", tryPlay);
+  }, [connected]);
+
+  const enableAudio = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.muted = false;
+    void audio.play().then(() => setAudioBlocked(false)).catch(() => setAudioBlocked(true));
+  };
 
   if (Platform.OS !== "web") return null;
 
@@ -39,8 +59,13 @@ export default function ClassroomCompositePlayer({ liveClassId, enabled = true }
         ) : null}
         {error ? null : (
           <>
-            <video ref={videoRef as any} autoPlay playsInline style={videoStyle} />
-            <audio ref={audioRef as any} autoPlay />
+            <ClassroomStudentStage boardVideoRef={boardRef} cameraVideoRef={cameraRef} />
+            <audio ref={audioRef as React.RefObject<HTMLAudioElement>} autoPlay playsInline />
+            {audioBlocked ? (
+              <Pressable style={styles.unmuteBtn} onPress={enableAudio}>
+                <Text style={styles.unmuteText}>Tap to enable sound</Text>
+              </Pressable>
+            ) : null}
           </>
         )}
       </View>
@@ -71,4 +96,17 @@ const styles = StyleSheet.create({
     zIndex: 2,
     backgroundColor: "rgba(0,0,0,0.5)",
   },
+  unmuteBtn: {
+    position: "absolute",
+    bottom: 16,
+    alignSelf: "center",
+    left: "50%",
+    transform: [{ translateX: -80 }],
+    zIndex: 10,
+    backgroundColor: "rgba(30,58,138,0.95)",
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 999,
+  },
+  unmuteText: { color: "#fff", fontSize: 13, fontWeight: "600" },
 });

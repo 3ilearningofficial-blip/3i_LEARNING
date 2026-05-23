@@ -34,11 +34,10 @@ import { buildRecordingLectureSectionTitle } from "@/lib/recordingSection";
 import { getAdminCoursesSectionRoute } from "@/lib/admin/courseAdminRoutes";
 import TeacherVideoPanel from "@/components/classroom/TeacherVideoPanel";
 import LiveClassRecordingTimer from "@/components/LiveClassRecordingTimer";
-import LiveChatPanel from "@/components/LiveChatPanel";
-import LiveStudentsPanel from "@/components/LiveStudentsPanel";
-import ClassroomEngagementPanel from "@/components/classroom/ClassroomEngagementPanel";
+import ClassroomEngagementSidebar from "@/components/classroom/ClassroomEngagementSidebar";
 import ClassroomLiveOverlays from "@/components/classroom/ClassroomLiveOverlays";
 import ClassroomHeaderActivityTimer from "@/components/classroom/ClassroomHeaderActivityTimer";
+import { useLiveEngagementSse } from "@/lib/useLiveEngagementSse";
 import { isTruthyDbFlag } from "@/lib/live-class/dbFlags";
 import Colors from "@/constants/colors";
 
@@ -81,6 +80,12 @@ export default function AdminClassroomPage() {
   const startedAt = Number(liveClass?.started_at || 0) || null;
 
   const showViewerCount = liveClass?.show_viewer_count ?? true;
+
+  useLiveEngagementSse({
+    liveClassId,
+    enabled: !!sessionActive && Platform.OS === "web",
+    isAdmin: true,
+  });
 
   const handleRoomReady = useCallback((room: Room | null) => {
     liveKitRoomRef.current = room;
@@ -321,38 +326,21 @@ export default function AdminClassroomPage() {
             liveClassId={liveClassId}
             enabled={!!sessionActive}
             boardEl={boardEl}
+            editor={editor}
             onRoomReady={handleRoomReady}
             onCompositeStream={setCompositeStream}
           />
 
-          <View style={styles.engagementRow}>
-            <View style={styles.engagementCol}>
-              <Text style={styles.colLabel}>Chat</Text>
-              <View style={styles.colBody}>
-                <LiveChatPanel liveClassId={liveClassId} chatMode={chatModeResolved} isAdmin />
-              </View>
-            </View>
-            <View style={styles.engagementCol}>
-              <Text style={styles.colLabel}>Poll / Quiz</Text>
-              <View style={styles.colBody}>
-                <ClassroomEngagementPanel liveClassId={liveClassId} />
-              </View>
-            </View>
-            <View style={styles.engagementCol}>
-              <Text style={styles.colLabel}>Students</Text>
-              <View style={styles.colBody}>
-                <LiveStudentsPanel
-                  liveClassId={liveClassId}
-                  showViewerCount={showViewerCount}
-                  parentViewers={
-                    viewerData
-                      ? { viewers: viewerData.viewers, count: viewerData.count }
-                      : undefined
-                  }
-                />
-              </View>
-            </View>
-          </View>
+          <ClassroomEngagementSidebar
+            liveClassId={liveClassId}
+            chatMode={chatModeResolved}
+            showViewerCount={showViewerCount}
+            parentViewers={
+              viewerData
+                ? { viewers: viewerData.viewers, count: viewerData.count }
+                : undefined
+            }
+          />
         </View>
       </View>
     </View>
@@ -428,20 +416,6 @@ const styles = StyleSheet.create({
     padding: 10,
     minWidth: 420,
     maxWidth: 720,
-  },
-  engagementRow: {
-    flex: 1,
-    flexDirection: "row",
-    gap: 8,
-    minHeight: 200,
-  },
-  engagementCol: {
-    flex: 1,
-    minWidth: 0,
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-    borderRadius: 8,
-    overflow: "hidden",
   },
   colLabel: {
     fontSize: 11,

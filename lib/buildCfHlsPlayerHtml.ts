@@ -69,11 +69,13 @@ video { width: 100%; height: 100%; object-fit: contain; background: #000; }
 .spinner { width: 36px; height: 36px; border: 3px solid #333; border-top-color: #F6821F; border-radius: 50%; animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .msg { font-size: 13px; color: #aaa; text-align: center; }
+#unmuteBtn { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 90; display: none; padding: 10px 18px; border-radius: 999px; border: none; background: rgba(30,58,138,0.95); color: #fff; font-size: 13px; font-weight: 600; font-family: system-ui, sans-serif; cursor: pointer; box-shadow: 0 4px 16px rgba(0,0,0,0.35); }
+#unmuteBtn.show { display: block; }
 ${menuCss}
 </style>
 </head>
 <body>
-<video id="v" autoplay playsinline controlsList="nodownload noremoteplayback nopictureinpicture" disablePictureInPicture disableRemotePlayback x-webkit-airplay="deny"></video>${menuHtml}<div id="overlay"><div class="spinner"></div><div class="msg" id="msg">Connecting to live stream...</div></div>
+<video id="v" autoplay playsinline controlsList="nodownload noremoteplayback nopictureinpicture" disablePictureInPicture disableRemotePlayback x-webkit-airplay="deny"></video>${menuHtml}<button type="button" id="unmuteBtn" aria-label="Enable sound">Tap to enable sound</button><div id="overlay"><div class="spinner"></div><div class="msg" id="msg">Connecting to live stream...</div></div>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7/dist/hls.min.js"></script>
 <script>
 var video = document.getElementById('v');
@@ -95,11 +97,49 @@ function showReconnecting() {
   overlay.classList.remove('hidden');
   msg.textContent = 'Reconnecting to live stream…';
 }
+var unmuteBtn = document.getElementById('unmuteBtn');
+var audioEnabled = false;
+function showUnmuteBtn() {
+  if (unmuteBtn && !audioEnabled) unmuteBtn.classList.add('show');
+}
+function hideUnmuteBtn() {
+  if (unmuteBtn) unmuteBtn.classList.remove('show');
+}
+function tryEnableAudio() {
+  if (audioEnabled) return Promise.resolve();
+  video.muted = false;
+  return video.play().then(function() {
+    audioEnabled = true;
+    hideUnmuteBtn();
+  }).catch(function() {
+    video.muted = true;
+    showUnmuteBtn();
+  });
+}
+if (unmuteBtn) {
+  unmuteBtn.addEventListener('click', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    video.muted = false;
+    video.play().then(function() {
+      audioEnabled = true;
+      hideUnmuteBtn();
+    }).catch(function() {
+      video.muted = true;
+      showUnmuteBtn();
+    });
+  });
+}
 function showLive() {
   hideOverlay();
+  tryEnableAudio();
   if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({ event: 'play' }));
 }
-video.addEventListener('playing', function() { hasPlayedOnce = true; hideOverlay(); });
+video.addEventListener('playing', function() {
+  hasPlayedOnce = true;
+  hideOverlay();
+  tryEnableAudio();
+});
 video.addEventListener('error', function() {
   if (hasPlayedOnce) showReconnecting();
   else { overlay.classList.remove('hidden'); msg.textContent = 'Connecting to live stream...'; }
@@ -197,7 +237,10 @@ function tryLoad() {
     hls.on(Hls.Events.MANIFEST_PARSED, function() {
       fillQuality(hls);
       video.muted = true;
-      video.play().then(showLive).catch(function() { video.play().then(showLive).catch(showLive); });
+      video.play().then(showLive).catch(function() {
+        video.muted = true;
+        video.play().then(showLive).catch(showLive);
+      });
     });
     hls.on(Hls.Events.LEVEL_SWITCHED, function() {
       if (qsel && hls.currentLevel >= 0) qsel.value = String(hls.currentLevel);
@@ -224,6 +267,7 @@ function tryLoad() {
     video.src = hlsUrl;
     video.addEventListener('loadedmetadata', function once() {
       video.removeEventListener('loadedmetadata', once);
+      video.muted = true;
       video.play().then(showLive).catch(function() { showLive(); });
     });
     video.addEventListener('error', function() {

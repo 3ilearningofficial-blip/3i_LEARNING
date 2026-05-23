@@ -3764,6 +3764,100 @@ var init_live_class_recording_save = __esm({
   }
 });
 
+// server/cloudflare-stream-download.ts
+function parseDefaultDownload(payload) {
+  const def = payload?.result?.default;
+  if (!def || typeof def !== "object") return null;
+  const status = String(def.status || "").toLowerCase();
+  if (status !== "ready" && status !== "inprogress" && status !== "error") return null;
+  return {
+    status,
+    url: def.url ? String(def.url) : void 0,
+    percentComplete: Number(def.percentComplete ?? def.percent_complete ?? 0)
+  };
+}
+async function createCloudflareStreamDownload(accountId, apiToken, videoUid) {
+  const res = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/${videoUid}/downloads`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiToken}` }
+    }
+  );
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data?.success) {
+    console.warn(
+      `[CF Stream] POST downloads failed uid=${videoUid} status=${res.status} body=${JSON.stringify(data?.errors || data).slice(0, 200)}`
+    );
+    return null;
+  }
+  return parseDefaultDownload(data);
+}
+async function getCloudflareStreamDownload(accountId, apiToken, videoUid) {
+  const res = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/${videoUid}/downloads`,
+    { headers: { Authorization: `Bearer ${apiToken}` } }
+  );
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data?.success) return null;
+  return parseDefaultDownload(data);
+}
+async function ensureCloudflareMp4DownloadUrl(accountId, apiToken, videoUid, options) {
+  const maxWaitMs = options?.maxWaitMs ?? Number(process.env.CF_STREAM_DOWNLOAD_MAX_WAIT_MS || 45 * 60 * 1e3);
+  const pollMs = options?.pollMs ?? Number(process.env.CF_STREAM_DOWNLOAD_POLL_MS || 1e4);
+  const created = await createCloudflareStreamDownload(accountId, apiToken, videoUid);
+  if (created?.status === "ready" && created.url) {
+    console.log(`[CF Stream] MP4 download already ready uid=${videoUid}`);
+    return created.url;
+  }
+  if (created?.status === "inprogress") {
+    console.log(
+      `[CF Stream] MP4 download generation started uid=${videoUid} pct=${created.percentComplete ?? 0}`
+    );
+  } else if (created) {
+    console.log(`[CF Stream] MP4 download create status=${created.status} uid=${videoUid}`);
+  } else {
+    console.log(`[CF Stream] MP4 download create pending (will poll) uid=${videoUid}`);
+  }
+  const deadline = Date.now() + maxWaitMs;
+  let lastLogAt = 0;
+  while (Date.now() < deadline) {
+    const state = await getCloudflareStreamDownload(accountId, apiToken, videoUid);
+    if (state?.status === "ready" && state.url) {
+      console.log(`[CF Stream] MP4 download ready uid=${videoUid}`);
+      return state.url;
+    }
+    if (state?.status === "error") {
+      console.warn(`[CF Stream] MP4 download generation error uid=${videoUid}`);
+      return null;
+    }
+    const now = Date.now();
+    if (now - lastLogAt > 6e4) {
+      lastLogAt = now;
+      console.log(
+        `[CF Stream] MP4 download in progress uid=${videoUid} pct=${state?.percentComplete ?? "?"}`
+      );
+    }
+    await sleep(pollMs);
+  }
+  console.warn(`[CF Stream] MP4 download timed out uid=${videoUid} maxWaitMs=${maxWaitMs}`);
+  return null;
+}
+function buildLegacyMp4CandidateUrls(recordingUid) {
+  const configuredDownloadBase = String(process.env.CF_STREAM_DOWNLOAD_BASE_URL || "").trim().replace(/\/+$/, "");
+  return [
+    `https://videodelivery.net/${recordingUid}/downloads/default.mp4`,
+    configuredDownloadBase ? `${configuredDownloadBase}/${recordingUid}/downloads/default.mp4` : ""
+  ].filter(Boolean);
+}
+var sleep;
+var init_cloudflare_stream_download = __esm({
+  "server/cloudflare-stream-download.ts"() {
+    "use strict";
+    sleep = (ms) => new Promise((resolve2) => setTimeout(resolve2, ms));
+  }
+});
+
 // server/live-stream-routes.ts
 function registerLiveStreamRoutes({
   app: app2,
@@ -3779,13 +3873,13 @@ function registerLiveStreamRoutes({
     if (lower.includes("videodelivery.net") || lower.endsWith(".m3u8")) return "cloudflare";
     return "r2";
   };
-  const sleep = (ms) => new Promise((resolve2) => setTimeout(resolve2, ms));
+  const sleep2 = (ms) => new Promise((resolve2) => setTimeout(resolve2, ms));
   const extractCloudflareRecordingUid = (url) => {
     const m = String(url || "").match(/videodelivery\.net\/([^/]+)\/manifest\/video\.m3u8/i);
     return m?.[1] ? String(m[1]) : null;
   };
   const toMediaApiPath = (key) => `/api/media/${key}`;
-  const archiveCloudflareRecordingToR2 = async (recordingUid) => {
+  const archiveCloudflareRecordingToR2 = async (recordingUid, cf) => {
     try {
       if (!process.env.R2_BUCKET_NAME) return null;
       const now = Date.now();
@@ -3793,11 +3887,13 @@ function registerLiveStreamRoutes({
       if (retryState && retryState.nextAttemptAt > now) {
         return null;
       }
-      const configuredDownloadBase = String(process.env.CF_STREAM_DOWNLOAD_BASE_URL || "").trim().replace(/\/+$/, "");
-      const candidateUrls = [
-        `https://videodelivery.net/${recordingUid}/downloads/default.mp4`,
-        configuredDownloadBase ? `${configuredDownloadBase}/${recordingUid}/downloads/default.mp4` : ""
-      ].filter(Boolean);
+      const accountId = cf?.accountId || process.env.CF_STREAM_ACCOUNT_ID || process.env.R2_ACCOUNT_ID;
+      const apiToken = cf?.apiToken || process.env.CF_STREAM_API_TOKEN;
+      let mp4Url = null;
+      if (accountId && apiToken) {
+        mp4Url = await ensureCloudflareMp4DownloadUrl(String(accountId), String(apiToken), recordingUid);
+      }
+      const candidateUrls = mp4Url ? [mp4Url] : buildLegacyMp4CandidateUrls(recordingUid);
       let source = null;
       let matchedUrl = "";
       for (const candidateUrl of candidateUrls) {
@@ -3818,7 +3914,7 @@ function registerLiveStreamRoutes({
         });
         if (attempts === 1 || attempts % 10 === 0) {
           console.warn(
-            `[CF Stream] MP4 not ready uid=${recordingUid} status=${resp.status} attempt=${attempts} nextRetryInMs=${backoffMs}`
+            `[CF Stream] MP4 fetch not ready uid=${recordingUid} status=${resp.status} attempt=${attempts} nextRetryInMs=${backoffMs}`
           );
         }
       }
@@ -4044,7 +4140,10 @@ function registerLiveStreamRoutes({
           for (let i = 0; i < maxPolls; i += 1) {
             const latest = await getLatestRecording();
             if (latest) {
-              const archived = await archiveCloudflareRecordingToR2(latest.recordingUid);
+              const archived = await archiveCloudflareRecordingToR2(latest.recordingUid, {
+                accountId,
+                apiToken
+              });
               recordingUrl = archived || latest.manifestUrl;
               break;
             }
@@ -4053,7 +4152,10 @@ function registerLiveStreamRoutes({
           if (!recordingUrl && liveTitle) {
             const viaSearch = await findRecordingViaStreamSearch(accountId, apiToken, liveTitle, uid);
             if (viaSearch) {
-              const archived = await archiveCloudflareRecordingToR2(viaSearch.recordingUid);
+              const archived = await archiveCloudflareRecordingToR2(viaSearch.recordingUid, {
+                accountId,
+                apiToken
+              });
               recordingUrl = archived || viaSearch.manifestUrl;
               console.log(`[CF Stream] Resolved recording via stream search title="${liveTitle.slice(0, 60)}"`);
             }
@@ -4139,7 +4241,10 @@ function registerLiveStreamRoutes({
           }
         }
         if (!recordingUid) continue;
-        const archivedUrl = await archiveCloudflareRecordingToR2(recordingUid);
+        const archivedUrl = await archiveCloudflareRecordingToR2(
+          recordingUid,
+          accountId && apiToken ? { accountId, apiToken } : void 0
+        );
         if (!archivedUrl) continue;
         await db2.query("UPDATE live_classes SET recording_url = $1 WHERE id = $2", [archivedUrl, row.id]);
         const patchedLecture = await db2.query(
@@ -4204,7 +4309,7 @@ function registerLiveStreamRoutes({
           }
         }
         console.log(`[CF Stream] Archived fallback recording to R2 for live class ${row.id}`);
-        await sleep(250);
+        await sleep2(250);
       }
     } catch (err) {
       console.warn("[CF Stream] Archive sweep error:", err);
@@ -4229,6 +4334,7 @@ var init_live_stream_routes = __esm({
     "use strict";
     init_recordingSection();
     init_live_class_recording_save();
+    init_cloudflare_stream_download();
   }
 });
 

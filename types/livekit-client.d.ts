@@ -18,6 +18,7 @@ declare module "livekit-client" {
     export enum Source {
       Camera = "camera",
       Microphone = "microphone",
+      ScreenShare = "screen_share",
     }
   }
 

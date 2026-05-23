@@ -63,6 +63,7 @@ export default function ClassroomStudentView({
   const [chatMsg, setChatMsg] = useState("");
   const [handRaised, setHandRaised] = useState(false);
   const listRef = useRef<FlatList>(null);
+  const chatInputRef = useRef<TextInput>(null);
   const prevIsLiveRef = useRef(false);
 
   const isLandscape = width > height;
@@ -76,6 +77,14 @@ export default function ClassroomStudentView({
     enabled: canChat && Platform.OS === "web",
     isAdmin: false,
   });
+
+  useEffect(() => {
+    if (!chatOpen || Platform.OS !== "web") return;
+    const t = requestAnimationFrame(() => {
+      chatInputRef.current?.focus();
+    });
+    return () => cancelAnimationFrame(t);
+  }, [chatOpen]);
 
   const { data: messages = [] } = useQuery<ChatMsg[]>({
     queryKey: [`/api/live-classes/${liveClassId}/chat`],
@@ -162,6 +171,8 @@ export default function ClassroomStudentView({
         data={displayMessages}
         keyExtractor={(m) => String(m.id)}
         style={styles.chatList}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive"
         renderItem={({ item }) => (
           <View style={[styles.bubble, item.is_admin && styles.bubbleAdmin]}>
             <Text style={styles.bubbleName}>{item.user_name}</Text>
@@ -174,12 +185,15 @@ export default function ClassroomStudentView({
       />
       <View style={styles.chatInputRow}>
         <TextInput
+          ref={chatInputRef}
           style={styles.chatInput}
           value={chatMsg}
           onChangeText={setChatMsg}
           placeholder={canChat ? "Ask a doubt…" : "Chat closed"}
           editable={canChat}
           onSubmitEditing={handleSend}
+          autoFocus={chatOpen}
+          enterKeyHint="send"
         />
         <Pressable
           style={[styles.sendBtn, !chatMsg.trim() && styles.sendDisabled]}
@@ -207,7 +221,11 @@ export default function ClassroomStudentView({
   }
 
   return (
-    <KeyboardAvoidingView style={styles.root}>
+    <KeyboardAvoidingView
+      style={styles.root}
+      behavior="padding"
+      keyboardVerticalOffset={topPadding}
+    >
       <View style={[styles.header, { paddingTop: topPadding + 4 }]}>
         <Pressable style={styles.backBtn} onPress={() => router.back()}>
           <Ionicons name="arrow-back" size={20} color="#fff" />
@@ -260,7 +278,15 @@ export default function ClassroomStudentView({
           >
             <Text style={{ fontSize: 20 }}>✋</Text>
           </Pressable>
-          <Pressable style={styles.fab} onPress={() => setChatOpen(true)}>
+          <Pressable
+            style={styles.fab}
+            onPress={() => {
+              setChatOpen(true);
+              if (Platform.OS === "web") {
+                requestAnimationFrame(() => chatInputRef.current?.focus());
+              }
+            }}
+          >
             <Ionicons name="chatbubbles" size={22} color="#fff" />
           </Pressable>
         </View>
