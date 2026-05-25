@@ -223,6 +223,7 @@ export default function LoginScreen() {
                 <Text style={styles.phonePrefixText}>+91</Text>
               </View>
               <TextInput
+                nativeID="login-phone"
                 style={[styles.input, styles.phoneInput]}
                 placeholder="Enter mobile number"
                 placeholderTextColor={Colors.light.textMuted}
@@ -244,6 +245,7 @@ export default function LoginScreen() {
             {otpSent && (
               <View style={{ gap: 8 }}>
                 <TextInput
+                  nativeID="login-otp"
                   style={[styles.input, { textAlign: "center", fontSize: 22, fontFamily: "Inter_700Bold", letterSpacing: 8, borderWidth: 1, borderColor: Colors.light.border, borderRadius: 12, paddingVertical: 14, backgroundColor: Colors.light.background }]}
                   placeholder="Enter OTP"
                   placeholderTextColor={Colors.light.textMuted}
