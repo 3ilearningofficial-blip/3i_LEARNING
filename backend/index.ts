@@ -348,7 +348,7 @@ function serveLandingPage({
 function configureExpoAndLanding(app: express.Application) {
   const templatePath = path.resolve(
     process.cwd(),
-    "server",
+    "backend",
     "templates",
     "landing-page.html",
   );
@@ -695,7 +695,7 @@ function normalizeOtpIdentifier(input: unknown): string {
 
   // Non-API pages/assets and landing routes
   app.get("/firebase-phone-auth", (_req: Request, res: Response) => {
-    const firebaseAuthPath = path.resolve(process.cwd(), "server", "templates", "firebase-phone-auth.html");
+    const firebaseAuthPath = path.resolve(process.cwd(), "backend", "templates", "firebase-phone-auth.html");
     if (fs.existsSync(firebaseAuthPath)) {
       return res.type("html").sendFile(firebaseAuthPath);
     }
