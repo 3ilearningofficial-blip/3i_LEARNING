@@ -34,6 +34,8 @@ const migrationFiles = [
   "migrations/0020_timer_overlay_position.sql",
   "migrations/0021_classroom_board_archive.sql",
   "migrations/0022_live_engagement_notify_updates.sql",
+  "migrations/0023_payment_failures.sql",
+  "migrations/0024_live_classes_scheduled_at_index.sql",
 ];
 
 const connectionString = process.env.DATABASE_URL;
