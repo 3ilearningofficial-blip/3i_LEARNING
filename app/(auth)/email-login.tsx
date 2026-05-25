@@ -143,6 +143,7 @@ export default function EmailLoginScreen() {
               <View style={styles.inputRow}>
                 <Ionicons name="person-outline" size={18} color={Colors.light.textMuted} />
                 <TextInput
+                  nativeID="email-login-username"
                   style={styles.input}
                   placeholder="Enter phone number or email"
                   placeholderTextColor={Colors.light.textMuted}
@@ -163,6 +164,7 @@ export default function EmailLoginScreen() {
               <View style={styles.inputRow}>
                 <Ionicons name="lock-closed-outline" size={18} color={Colors.light.textMuted} />
                 <TextInput
+                  nativeID="email-login-password"
                   style={styles.input}
                   placeholder="Enter your password"
                   placeholderTextColor={Colors.light.textMuted}
@@ -170,6 +172,8 @@ export default function EmailLoginScreen() {
                   onChangeText={setPassword}
                   secureTextEntry={!showPassword}
                   autoCapitalize="none"
+                  autoComplete="current-password"
+                  textContentType="password"
                   returnKeyType="done"
                   onSubmitEditing={handleLogin}
                 />
