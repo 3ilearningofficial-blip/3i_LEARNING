@@ -33,7 +33,7 @@ type SendPushToUsersFn = (
   db: DbClient,
   userIds: number[],
   payload: PushPayload
-) => Promise<void>;
+) => Promise<unknown>;
 
 /**
  * Start all background schedulers.
