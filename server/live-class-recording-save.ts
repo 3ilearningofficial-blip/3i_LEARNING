@@ -29,12 +29,13 @@ export async function saveRecordingForClassAndPeers(
   if (liveClass.recording_deleted_at) {
     return { lectureId: null, lectureIds: [] };
   }
-  const title = liveClass.title as string;
-  const peers = await db.query("SELECT * FROM live_classes WHERE title = $1 ORDER BY id", [title]);
   const lectureIds: number[] = [];
   const endedAt = Date.now();
 
-  for (const row of peers.rows) {
+  // Process only the class identified by liveClassId.
+  // Previously this fetched all classes sharing the same title, which caused
+  // recordings to be silently written to unrelated classes with duplicate names.
+  for (const row of [liveClass]) {
     if (row.recording_deleted_at) continue;
     const durationMins = row.started_at
       ? Math.max(1, Math.round((endedAt - Number(row.started_at)) / 60000))

@@ -54,23 +54,7 @@ export function registerPaymentRoutes({
   verifyPaymentSignature,
   runInTransaction,
 }: RegisterPaymentRoutesDeps): void {
-  // Best-effort bootstrap; analytics also handles missing table safely.
-  db.query(
-    `CREATE TABLE IF NOT EXISTS payment_failures (
-      id SERIAL PRIMARY KEY,
-      user_id INTEGER,
-      course_id INTEGER,
-      razorpay_order_id TEXT,
-      razorpay_payment_id TEXT,
-      source TEXT,
-      reason TEXT,
-      raw_error TEXT,
-      created_at BIGINT NOT NULL
-    )`
-  ).catch((err) => {
-    console.error("[Payments] failed to ensure payment_failures table:", err);
-  });
-
+  // payment_failures table is created by migrations/0023_payment_failures.sql
   const logPaymentFailure = async (payload: {
     userId?: number | null;
     courseId?: number | null;
