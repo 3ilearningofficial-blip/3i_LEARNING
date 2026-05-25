@@ -163,5 +163,3 @@ export async function finalizeClassroomLiveSession(
     lectureIds: data.lectureIds,
   };
 }
-
-}
