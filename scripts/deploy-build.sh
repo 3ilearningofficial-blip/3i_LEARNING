@@ -4,7 +4,7 @@ set -e
 echo "=== Building 3i Learning for deployment ==="
 
 echo "Step 1: Building server..."
-npx esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --outdir=server_dist
+npx esbuild backend/index.ts --platform=node --packages=external --bundle --format=esm --outdir=server_dist
 
 echo "Step 2: Building native bundles..."
 node scripts/build.js || echo "Native build completed with warnings"
