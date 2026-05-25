@@ -1,3 +1,25 @@
+/**
+ * classroom-sync.ts
+ * WebSocket sync server for tldraw collaborative whiteboard during live classroom sessions.
+ *
+ * Changes from original:
+ *  - attachClassroomSyncServer now accepts getR2Client so it can persist board snapshots.
+ *  - makeOrLoadRoom is now async; it attempts to restore the latest auto-checkpoint from R2
+ *    on first connection after a server restart. A roomLoadingPromises Map coalesces concurrent
+ *    connections so only one R2 fetch happens per room.
+ *  - storage.onChange() schedules a throttled auto-checkpoint (default: every 2 minutes).
+ *    The timer fires at most once per interval, even during continuous drawing.
+ *  - teardownRoomIfAllowed saves one final checkpoint before closing the room.
+ *  - A background interval prunes stale checkpoint state for rooms that no longer exist.
+ *  - All checkpoint I/O is wrapped in try/catch — any R2 failure is logged and ignored;
+ *    the sync protocol is never affected.
+ *  - Preview rooms ("-preview" suffix) are never checkpointed (ephemeral by design).
+ *  - If R2 is not configured, checkpoint code skips silently — old behavior exactly.
+ *
+ * Only auto-generated checkpoints (R2 key prefix "board-checkpoints/") are restored on restart.
+ * Frontend-uploaded manual checkpoint URLs are stored separately and are not touched here.
+ */
+
 import type { Server } from "node:http";
 import type { IncomingMessage } from "node:http";
 import { URL } from "node:url";
@@ -9,19 +31,79 @@ const require = createRequire(import.meta.url);
 const WebSocketServer = require("ws").Server as new (
   options?: import("ws").ServerOptions
 ) => import("ws").WebSocketServer;
+
 import {
   TLSocketRoom,
   InMemorySyncStorage,
   TLSyncErrorCloseEventCode,
   TLSyncErrorCloseEventReason,
 } from "@tldraw/sync-core";
+import type { RoomSnapshot } from "@tldraw/sync-core";
 import { getAuthUserFromRequest } from "./auth-utils";
 import type { DbClient } from "./classroom-sync-types";
 import { userCanAccessLiveClassContent } from "./live-class-access";
 
 export type { DbClient };
 
+// ── Shared R2 client type ─────────────────────────────────────────────────────
+
+type GetR2Client = () => Promise<any>;
+
+// ── Room lifecycle ────────────────────────────────────────────────────────────
+
+/** Live rooms, keyed by sanitized roomId. */
 const rooms = new Map<string, TLSocketRoom>();
+
+/**
+ * Coalesces concurrent async room-creation requests for the same roomId.
+ * Without this, two simultaneous first-connections after a server restart would
+ * each start an R2 fetch and create separate rooms — causing a split-brain.
+ */
+const roomLoadingPromises = new Map<string, Promise<TLSocketRoom>>();
+
+// ── Auto-checkpoint state ─────────────────────────────────────────────────────
+
+interface CheckpointState {
+  /** setTimeout handle; null means no checkpoint is currently scheduled. */
+  timer: ReturnType<typeof setTimeout> | null;
+  /** documentClock value at the last successful save. Skip save if unchanged. */
+  lastSavedClock: number;
+  /** Guard: true while an R2 upload is in progress; prevents concurrent overlapping saves. */
+  saving: boolean;
+}
+
+/** Per-room checkpoint state, keyed by sanitized roomId. */
+const checkpointStates = new Map<string, CheckpointState>();
+
+/**
+ * How long to wait between auto-checkpoints (milliseconds).
+ * Throttle semantics: the first change starts a timer; subsequent changes
+ * during the interval are ignored. This guarantees saves during continuous
+ * drawing (unlike a pure debounce which only saves after drawing stops).
+ * Override via BOARD_CHECKPOINT_INTERVAL_MS env var (minimum: 60 000 ms).
+ */
+const AUTO_CHECKPOINT_INTERVAL_MS = Math.max(
+  60_000,
+  Number(process.env.BOARD_CHECKPOINT_INTERVAL_MS || "120000")
+);
+
+/**
+ * R2 object-key prefix for server-generated auto-checkpoints.
+ * Only keys with this prefix are restored on server restart.
+ * Frontend-uploaded checkpoint URLs (http://…) are not touched.
+ */
+const AUTO_CHECKPOINT_KEY_PREFIX = "board-checkpoints/";
+
+/** Maximum time (ms) to wait for the R2 checkpoint GET before falling back to an empty board. */
+const AUTO_CHECKPOINT_LOAD_TIMEOUT_MS = 8_000;
+
+/** Maximum time (ms) to wait for the final checkpoint save during room teardown. */
+const AUTO_CHECKPOINT_TEARDOWN_TIMEOUT_MS = 5_000;
+
+/** How often to prune stale CheckpointState entries for rooms that no longer exist. */
+const CHECKPOINT_CLEANUP_INTERVAL_MS = 10 * 60 * 1_000; // 10 minutes
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
 
 function sanitizeRoomId(roomId: string): string {
   return roomId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 120);
@@ -31,52 +113,359 @@ function parseLiveClassIdFromRoomId(roomId: string): string {
   return roomId.replace(/^lc-/, "").replace(/-preview$/, "");
 }
 
+function isPreviewRoom(roomId: string): boolean {
+  return roomId.endsWith("-preview");
+}
+
+/** Returns true only when all four R2 env vars are present. */
+function isR2Configured(): boolean {
+  return !!(
+    process.env.R2_ACCOUNT_ID &&
+    process.env.R2_ACCESS_KEY_ID &&
+    process.env.R2_SECRET_ACCESS_KEY &&
+    process.env.R2_BUCKET_NAME
+  );
+}
+
+// ── R2 checkpoint I/O ─────────────────────────────────────────────────────────
+
+/**
+ * Download and parse a RoomSnapshot JSON from R2.
+ * Returns null on any error — caller falls back to empty board.
+ */
+async function fetchSnapshotFromR2(
+  getR2Client: GetR2Client,
+  objectKey: string
+): Promise<RoomSnapshot | null> {
+  try {
+    const { GetObjectCommand } = await import("@aws-sdk/client-s3");
+    const r2 = await getR2Client();
+    const bucket = String(process.env.R2_BUCKET_NAME || "");
+    const result = await r2.send(new GetObjectCommand({ Bucket: bucket, Key: objectKey }));
+    if (!result.Body) return null;
+    const chunks: Uint8Array[] = [];
+    for await (const chunk of result.Body) {
+      chunks.push(chunk instanceof Uint8Array ? chunk : Buffer.from(chunk));
+    }
+    const json = Buffer.concat(chunks).toString("utf-8");
+    return JSON.parse(json) as RoomSnapshot;
+  } catch (err: any) {
+    console.warn("[classroom-checkpoint] R2 GET failed:", err?.message || String(err));
+    return null;
+  }
+}
+
+/**
+ * Serialize a RoomSnapshot to JSON and upload to R2.
+ * Returns true on success, false on any error.
+ */
+async function uploadSnapshotToR2(
+  getR2Client: GetR2Client,
+  objectKey: string,
+  snapshot: RoomSnapshot
+): Promise<boolean> {
+  try {
+    const { PutObjectCommand } = await import("@aws-sdk/client-s3");
+    const r2 = await getR2Client();
+    const bucket = String(process.env.R2_BUCKET_NAME || "");
+    const body = Buffer.from(JSON.stringify(snapshot), "utf-8");
+    await r2.send(
+      new PutObjectCommand({
+        Bucket: bucket,
+        Key: objectKey,
+        Body: body,
+        ContentType: "application/json",
+      })
+    );
+    return true;
+  } catch (err: any) {
+    console.warn("[classroom-checkpoint] R2 PUT failed:", err?.message || String(err));
+    return false;
+  }
+}
+
+// ── Checkpoint load on room creation ──────────────────────────────────────────
+
+/**
+ * Read the latest auto-checkpoint key from the DB and fetch its snapshot from R2.
+ * Only restores keys that start with AUTO_CHECKPOINT_KEY_PREFIX — frontend-uploaded
+ * checkpoint URLs have a different format and are left alone.
+ * Returns null on any failure (missing row, wrong prefix, R2 error, parse error).
+ */
+async function loadAutoCheckpointSnapshot(
+  db: DbClient,
+  liveClassId: string,
+  getR2Client: GetR2Client
+): Promise<RoomSnapshot | null> {
+  if (!isR2Configured()) return null;
+  try {
+    const result = await db.query(
+      "SELECT board_sync_checkpoint_url FROM live_classes WHERE id = $1",
+      [liveClassId]
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    const storedUrl = String(row.board_sync_checkpoint_url || "");
+    if (!storedUrl.startsWith(AUTO_CHECKPOINT_KEY_PREFIX)) return null;
+    console.log(
+      `[classroom-checkpoint] Restoring class=${liveClassId} key=${storedUrl}`
+    );
+    const snapshot = await fetchSnapshotFromR2(getR2Client, storedUrl);
+    if (snapshot) {
+      console.log(
+        `[classroom-checkpoint] Restored class=${liveClassId} docs=${snapshot.documents?.length ?? 0}`
+      );
+    }
+    return snapshot;
+  } catch (err: any) {
+    console.warn("[classroom-checkpoint] Load error:", err?.message || String(err));
+    return null;
+  }
+}
+
+// ── Checkpoint save ───────────────────────────────────────────────────────────
+
+/**
+ * Serialize the current room snapshot to JSON, upload to R2, and update the DB row.
+ * Skips the save if the document clock has not advanced since the last save.
+ * Never throws — all errors are caught and logged.
+ */
+async function runCheckpoint(
+  roomId: string,
+  liveClassId: string,
+  room: TLSocketRoom,
+  db: DbClient,
+  getR2Client: GetR2Client
+): Promise<void> {
+  const state = checkpointStates.get(roomId);
+  if (!state || state.saving || room.isClosed() || !isR2Configured()) return;
+
+  const currentClock = room.getCurrentDocumentClock();
+  if (currentClock === state.lastSavedClock) return; // nothing changed since last save
+
+  state.saving = true;
+  try {
+    const snapshot = room.getCurrentSnapshot();
+    const timestamp = Date.now();
+    const key = `${AUTO_CHECKPOINT_KEY_PREFIX}lc-${liveClassId}-${timestamp}.json`;
+    const ok = await uploadSnapshotToR2(getR2Client, key, snapshot);
+    if (!ok) return;
+    await db.query(
+      "UPDATE live_classes SET board_sync_checkpoint_url = $1, board_checkpoint_at = $2 WHERE id = $3",
+      [key, timestamp, liveClassId]
+    );
+    state.lastSavedClock = currentClock;
+    console.log(
+      `[classroom-checkpoint] Saved class=${liveClassId} clock=${currentClock} key=${key}`
+    );
+  } catch (err: any) {
+    console.warn("[classroom-checkpoint] Save error:", err?.message || String(err));
+  } finally {
+    state.saving = false;
+  }
+}
+
+/**
+ * Schedule a checkpoint for roomId if one is not already pending.
+ * Throttle semantics: the first call after a save schedules the next checkpoint
+ * AUTO_CHECKPOINT_INTERVAL_MS in the future. Subsequent calls within that window
+ * are no-ops (timer already set). This ensures checkpoints happen even during
+ * sustained continuous drawing, which a pure debounce would never fire.
+ */
+function scheduleCheckpoint(
+  roomId: string,
+  liveClassId: string,
+  room: TLSocketRoom,
+  db: DbClient,
+  getR2Client: GetR2Client
+): void {
+  const state = checkpointStates.get(roomId);
+  if (!state || state.timer !== null) return; // already scheduled
+  if (isPreviewRoom(roomId)) return;          // preview rooms are never checkpointed
+
+  state.timer = setTimeout(() => {
+    state.timer = null;
+    void runCheckpoint(roomId, liveClassId, room, db, getR2Client);
+  }, AUTO_CHECKPOINT_INTERVAL_MS);
+}
+
+// ── Room creation ─────────────────────────────────────────────────────────────
+
+/**
+ * Return or create the TLSocketRoom for roomId.
+ *
+ * On first creation (no live room in memory, e.g. after server restart):
+ *   1. Check DB for an existing auto-checkpoint key.
+ *   2. If found, fetch the RoomSnapshot from R2 (with timeout).
+ *   3. Initialise InMemorySyncStorage from the snapshot, or start empty on any failure.
+ *   4. Wire storage.onChange to schedule periodic auto-checkpoints.
+ *   5. Store room in the rooms Map.
+ *
+ * The roomLoadingPromises Map ensures concurrent first-connections share a single
+ * loading promise rather than starting parallel R2 fetches or creating duplicate rooms.
+ */
+async function makeOrLoadRoom(
+  roomId: string,
+  liveClassId: string,
+  db: DbClient,
+  getR2Client: GetR2Client
+): Promise<TLSocketRoom> {
+  const id = sanitizeRoomId(roomId);
+
+  // Fast path: room already exists and is alive.
+  const existing = rooms.get(id);
+  if (existing && !existing.isClosed()) return existing;
+
+  // Slow path: coalesce concurrent loads so we never start two R2 fetches for the same room.
+  const pending = roomLoadingPromises.get(id);
+  if (pending) return pending;
+
+  const loadPromise = (async (): Promise<TLSocketRoom> => {
+    try {
+      // Attempt to restore from the last auto-checkpoint (non-preview only).
+      // Race against a timeout so a slow/unreachable R2 does not stall the first connection.
+      let snapshot: RoomSnapshot | null = null;
+      if (!isPreviewRoom(id)) {
+        snapshot = await Promise.race([
+          loadAutoCheckpointSnapshot(db, liveClassId, getR2Client),
+          new Promise<null>((resolve) =>
+            setTimeout(() => resolve(null), AUTO_CHECKPOINT_LOAD_TIMEOUT_MS)
+          ),
+        ]);
+      }
+
+      const storage = snapshot
+        ? new InMemorySyncStorage({ snapshot })
+        : new InMemorySyncStorage();
+
+      // Initialise checkpoint state; seed lastSavedClock so we skip a redundant
+      // save immediately after restore (clock hasn't advanced yet).
+      const cpState: CheckpointState = {
+        timer: null,
+        lastSavedClock: storage.getClock(),
+        saving: false,
+      };
+      checkpointStates.set(id, cpState);
+
+      const room = new TLSocketRoom({
+        storage,
+        onSessionRemoved(roomInstance, args) {
+          if (args.numSessionsRemaining === 0) {
+            void teardownRoomIfAllowed(id, liveClassId, roomInstance, db, getR2Client);
+          }
+        },
+      });
+
+      // Wire auto-checkpoint: any board change schedules a periodic save.
+      // Non-preview rooms only; silently skip if R2 is not configured.
+      if (!isPreviewRoom(id) && isR2Configured()) {
+        storage.onChange(() => {
+          scheduleCheckpoint(id, liveClassId, room, db, getR2Client);
+        });
+      }
+
+      rooms.set(id, room);
+      return room;
+    } finally {
+      // Always remove the loading promise so future calls don't block on a stale one.
+      roomLoadingPromises.delete(id);
+    }
+  })();
+
+  roomLoadingPromises.set(id, loadPromise);
+  return loadPromise;
+}
+
+// ── Checkpoint state cleanup ──────────────────────────────────────────────────
+
+function cleanupCheckpointState(roomId: string): void {
+  const state = checkpointStates.get(roomId);
+  if (state?.timer !== null && state?.timer !== undefined) {
+    clearTimeout(state.timer);
+  }
+  checkpointStates.delete(roomId);
+}
+
+/**
+ * Periodic cleanup: prune CheckpointState entries for rooms that no longer
+ * exist in the rooms Map, preventing unbounded memory growth in long-running
+ * deployments where many classes are created and closed over time.
+ */
+setInterval(() => {
+  for (const roomId of checkpointStates.keys()) {
+    const room = rooms.get(roomId);
+    if (!room || room.isClosed()) {
+      cleanupCheckpointState(roomId);
+    }
+  }
+}, CHECKPOINT_CLEANUP_INTERVAL_MS);
+
+// ── Teardown ──────────────────────────────────────────────────────────────────
+
+/**
+ * Close the room if the class is no longer live.
+ * Before closing, cancel any pending checkpoint timer and run one final save
+ * so the board state is preserved right up to the moment the class ended.
+ * The final save is bounded by AUTO_CHECKPOINT_TEARDOWN_TIMEOUT_MS so teardown
+ * is never blocked indefinitely by a slow/failing R2.
+ */
 async function teardownRoomIfAllowed(
   roomId: string,
+  liveClassId: string,
   roomInstance: TLSocketRoom,
-  db: DbClient
+  db: DbClient,
+  getR2Client: GetR2Client
 ): Promise<void> {
+  // Preview rooms are always torn down immediately — no checkpoint needed.
   if (roomId.endsWith("-preview")) {
     roomInstance.close();
     rooms.delete(roomId);
+    cleanupCheckpointState(roomId);
     return;
   }
 
-  const liveClassId = parseLiveClassIdFromRoomId(roomId);
+  // Check whether the class is still live before tearing down.
   try {
     const r = await db.query(
-      `SELECT is_live, is_completed FROM live_classes WHERE id = $1`,
+      "SELECT is_live, is_completed FROM live_classes WHERE id = $1",
       [liveClassId]
     );
-    const lc = r.rows[0] as { is_live?: boolean | number; is_completed?: boolean | number } | undefined;
+    const lc = r.rows[0] as
+      | { is_live?: boolean | number; is_completed?: boolean | number }
+      | undefined;
     if (lc && Boolean(lc.is_live) && !Boolean(lc.is_completed)) {
+      // Class is still live — keep room alive, do not tear down.
       return;
     }
   } catch (e) {
     console.warn("[classroom-sync] could not check live status before teardown:", e);
   }
 
+  // Class has ended — save a final checkpoint before discarding RAM state.
+  const state = checkpointStates.get(roomId);
+  if (state) {
+    if (state.timer !== null) {
+      clearTimeout(state.timer);
+      state.timer = null;
+    }
+    try {
+      await Promise.race([
+        runCheckpoint(roomId, liveClassId, roomInstance, db, getR2Client),
+        new Promise<void>((resolve) =>
+          setTimeout(resolve, AUTO_CHECKPOINT_TEARDOWN_TIMEOUT_MS)
+        ),
+      ]);
+    } catch {
+      /* ignore — teardown must proceed regardless */
+    }
+  }
+
   roomInstance.close();
   rooms.delete(roomId);
+  cleanupCheckpointState(roomId);
 }
 
-function makeOrLoadRoom(roomId: string, db: DbClient): TLSocketRoom {
-  const id = sanitizeRoomId(roomId);
-  const existing = rooms.get(id);
-  if (existing && !existing.isClosed()) return existing;
-
-  const storage = new InMemorySyncStorage();
-  const room = new TLSocketRoom({
-    storage,
-    onSessionRemoved(roomInstance, args) {
-      if (args.numSessionsRemaining === 0) {
-        void teardownRoomIfAllowed(id, roomInstance, db);
-      }
-    },
-  });
-  rooms.set(id, room);
-  return room;
-}
+// ── Authentication ────────────────────────────────────────────────────────────
 
 function parseSessionId(url: URL): string {
   const sid =
@@ -90,9 +479,15 @@ async function authenticateClassroomSocket(
   db: DbClient,
   req: IncomingMessage,
   roomId: string
-): Promise<{ ok: true; user: { id: number; role: string }; isReadonly: boolean } | { ok: false; status: number; message: string }> {
+): Promise<
+  | { ok: true; user: { id: number; role: string }; isReadonly: boolean }
+  | { ok: false; status: number; message: string }
+> {
   const url = new URL(req.url || "", "http://localhost");
-  const token = url.searchParams.get("access_token") || url.searchParams.get("token") || "";
+  const token =
+    url.searchParams.get("access_token") ||
+    url.searchParams.get("token") ||
+    "";
   const fakeReq = {
     headers: {
       ...(token ? { authorization: `Bearer ${token}` } : {}),
@@ -105,7 +500,10 @@ async function authenticateClassroomSocket(
   if (!user) return { ok: false, status: 401, message: "Unauthorized" };
 
   const liveClassId = roomId.replace(/^lc-/, "").replace(/-preview$/, "");
-  const lcResult = await db.query("SELECT * FROM live_classes WHERE id = $1", [liveClassId]);
+  const lcResult = await db.query(
+    "SELECT * FROM live_classes WHERE id = $1",
+    [liveClassId]
+  );
   const lc = lcResult.rows[0];
   if (!lc) return { ok: false, status: 404, message: "Live class not found" };
 
@@ -122,12 +520,31 @@ async function authenticateClassroomSocket(
     return { ok: false, status: 403, message: "Class is not live" };
   }
 
-  // Admins must be able to draw on the board during setup preview and live class.
+  // Admins can draw on the board; students are read-only.
   const isReadonly = user.role !== "admin";
   return { ok: true, user: { id: user.id, role: user.role }, isReadonly };
 }
 
-export function attachClassroomSyncServer(httpServer: Server, db: DbClient): void {
+// ── Server attachment ─────────────────────────────────────────────────────────
+
+function syncCloseReason(status: number): string {
+  if (status === 401) return TLSyncErrorCloseEventReason.NOT_AUTHENTICATED;
+  if (status === 404) return TLSyncErrorCloseEventReason.NOT_FOUND;
+  return TLSyncErrorCloseEventReason.FORBIDDEN;
+}
+
+/**
+ * Attach the classroom WebSocket sync server to an existing HTTP server.
+ *
+ * @param httpServer  Node.js HTTP server (from createServer(app))
+ * @param db          Shared DB client for auth + live-class queries + checkpoint metadata
+ * @param getR2Client Lazy R2 S3Client factory (same instance used by all other upload routes)
+ */
+export function attachClassroomSyncServer(
+  httpServer: Server,
+  db: DbClient,
+  getR2Client: GetR2Client
+): void {
   const wss = new WebSocketServer({ noServer: true });
 
   httpServer.on("upgrade", (req, socket, head) => {
@@ -136,18 +553,20 @@ export function attachClassroomSyncServer(httpServer: Server, db: DbClient): voi
     if (!match) return;
 
     wss.handleUpgrade(req, socket, head, (socketConn) => {
-      void handleConnection(socketConn, req, match[1], db);
+      void handleConnection(socketConn, req, match[1], db, getR2Client);
     });
   });
 }
 
-function syncCloseReason(status: number): string {
-  if (status === 401) return TLSyncErrorCloseEventReason.NOT_AUTHENTICATED;
-  if (status === 404) return TLSyncErrorCloseEventReason.NOT_FOUND;
-  return TLSyncErrorCloseEventReason.FORBIDDEN;
-}
-
-async function handleConnection(ws: WebSocket, req: IncomingMessage, rawRoomId: string, db: DbClient) {
+async function handleConnection(
+  ws: WebSocket,
+  req: IncomingMessage,
+  rawRoomId: string,
+  db: DbClient,
+  getR2Client: GetR2Client
+) {
+  // Buffer incoming messages during async auth + room-load so no tldraw packets
+  // are dropped while we await the DB and (potentially) R2.
   const caughtMessages: Buffer[] = [];
   const collect = (data: Buffer | ArrayBuffer) => {
     caughtMessages.push(Buffer.isBuffer(data) ? data : Buffer.from(data));
@@ -162,9 +581,14 @@ async function handleConnection(ws: WebSocket, req: IncomingMessage, rawRoomId: 
   }
 
   const roomId = sanitizeRoomId(rawRoomId);
+  const liveClassId = parseLiveClassIdFromRoomId(roomId);
   const url = new URL(req.url || "", "http://localhost");
   const sessionId = parseSessionId(url);
-  const room = makeOrLoadRoom(roomId, db);
+
+  // makeOrLoadRoom is now async: on first connection after a restart it restores
+  // the last auto-checkpoint from R2. The message buffer above ensures no packets
+  // are lost during this brief async window.
+  const room = await makeOrLoadRoom(roomId, liveClassId, db, getR2Client);
 
   room.handleSocketConnect({
     sessionId,
@@ -172,8 +596,12 @@ async function handleConnection(ws: WebSocket, req: IncomingMessage, rawRoomId: 
     isReadonly: auth.isReadonly,
   });
 
+  // Replay buffered messages now that the room is ready.
   ws.off("message", collect);
   for (const msg of caughtMessages) {
-    (ws as WebSocket & { emit(event: "message", data: Buffer): boolean }).emit("message", msg);
+    (ws as WebSocket & { emit(event: "message", data: Buffer): boolean }).emit(
+      "message",
+      msg
+    );
   }
 }

@@ -741,7 +741,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   registerPdfRoutes({ app, db, getAuthUser, getR2Client });
 
   const httpServer = createServer(app);
-  attachClassroomSyncServer(httpServer, db);
+  attachClassroomSyncServer(httpServer, db, getR2Client);
   return httpServer;
 }
 
