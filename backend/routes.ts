@@ -1,10 +1,8 @@
 ﻿import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "node:http";
 import { Pool } from "pg";
-import multer from "multer";
-import { createRequire } from "module";
-const require = createRequire(import.meta.url);
-const { PDFParse } = require("pdf-parse");
+import { PDFParse } from "pdf-parse";
+import { upload, uploadPdf, uploadLarge } from "./upload-config";
 import { verifyFirebaseToken } from "./firebase";
 import { getRazorpay, verifyPaymentSignature } from "./razorpay";
 import { randomInt } from "node:crypto";
@@ -69,18 +67,6 @@ import {
   unregisterAllPushTokens,
   unregisterPushToken,
 } from "./push-notifications";
-
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
-const uploadPdf = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 },
-  fileFilter: (_req, file, cb) => {
-    const mimetype = String(file?.mimetype || "").toLowerCase();
-    if (mimetype === "application/pdf") return cb(null, true);
-    return cb(new Error("Only PDF files are allowed"));
-  },
-});
-const uploadLarge = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } });
 
 function isTransientPgError(err: any): boolean {
   const message = String(err?.message || "").toLowerCase();
@@ -303,7 +289,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Extracted to server/schedulers.ts — see that file for full implementation.
   // In multi-instance deployments, set RUN_BACKGROUND_SCHEDULERS=false on all
   // instances except one to prevent duplicate push notifications.
-  startSchedulers(db, sendPushToUsers);
+  startSchedulers(db, pool, sendPushToUsers);
 
   // Readiness endpoint: used by orchestrators/load balancers to verify this instance can serve traffic.
   app.get("/api/health/ready", async (_req: Request, res: Response) => {

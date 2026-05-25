@@ -8,19 +8,41 @@
  * 1. Live Class 30-min Reminder (every 60 seconds)
  *    Finds classes starting in 29–31 minutes and sends push notifications
  *    to enrolled students (or all students for free/public classes).
- *    Uses a process-local Set for deduplication (see Phase 4 T-17 for
- *    the multi-instance distributed lock improvement).
+ *    Uses a PostgreSQL session-level advisory lock (T-14) so that only ONE
+ *    process fires notifications when multiple PM2 instances are running.
+ *    A process-local Set provides a second layer of deduplication within
+ *    a single process lifetime.
  *
  * 2. Download Token Cleanup (every 5 minutes)
  *    Deletes expired and already-used download tokens from the DB,
  *    keeping the download_tokens table from growing unboundedly.
  *
- * In multi-instance deployments, set RUN_BACKGROUND_SCHEDULERS=false on all
- * instances except one to prevent duplicate push notifications.
+ * In multi-instance deployments the advisory lock handles coordination
+ * automatically. The RUN_BACKGROUND_SCHEDULERS=false escape hatch is still
+ * supported for complete disablement on worker-only instances.
  */
+
+/**
+ * Stable numeric key used for pg_try_advisory_lock / pg_advisory_unlock.
+ * This value is arbitrary but must be unique across all advisory lock usages
+ * in this codebase and must never change once deployed.
+ */
+const LIVE_NOTIF_ADVISORY_LOCK_KEY = 31415926535;
 
 type DbClient = {
   query: (text: string, params?: unknown[], options?: any) => Promise<{ rows: any[]; rowCount?: number }>;
+};
+
+/**
+ * Minimal interface for acquiring a dedicated connection from the pg.Pool.
+ * We need a dedicated connection (not just pool.query) because advisory locks
+ * are session-scoped — they must be acquired and released on the same connection.
+ */
+type DbPool = DbClient & {
+  connect: () => Promise<{
+    query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
+    release: () => void;
+  }>;
 };
 
 type PushPayload = {
@@ -40,11 +62,13 @@ type SendPushToUsersFn = (
  * Call once during server startup, after the DB pool and push notification
  * service are ready.
  *
- * @param db           The main database client
- * @param sendPushToUsers  Push notification sender from push-notifications.ts
+ * @param db              The main database client (wrapped pool with slow-query logging)
+ * @param pool            The raw pg.Pool — needed to acquire dedicated connections for advisory locks
+ * @param sendPushToUsers Push notification sender from push-notifications.ts
  */
 export function startSchedulers(
   db: DbClient,
+  pool: DbPool,
   sendPushToUsers: SendPushToUsersFn
 ): void {
   const runBackgroundSchedulers = process.env.RUN_BACKGROUND_SCHEDULERS !== "false";
@@ -54,7 +78,7 @@ export function startSchedulers(
     return;
   }
 
-  startLiveClassNotificationScheduler(db, sendPushToUsers);
+  startLiveClassNotificationScheduler(db, pool, sendPushToUsers);
   startDownloadTokenCleanupScheduler(db);
 }
 
@@ -63,18 +87,43 @@ export function startSchedulers(
  * Runs every 60 seconds. Sends a push + in-app notification to students
  * enrolled in a class that starts in ~30 minutes.
  *
- * process-local sentNotifications Set prevents duplicate sends within
- * a single process lifetime. For multi-process safety see Phase 4 T-17.
+ * Multi-instance safety: acquires a PostgreSQL session-level advisory lock
+ * (LIVE_NOTIF_ADVISORY_LOCK_KEY) before doing any work. If another PM2 instance
+ * already holds the lock, this tick is skipped immediately — no double notifications.
+ * The lock is always released in a finally block, even if an error occurs.
+ *
+ * Process-local sentNotifications Set provides a second layer of deduplication
+ * within a single process lifetime (prevents resends across restart cycles).
  */
 function startLiveClassNotificationScheduler(
   db: DbClient,
+  pool: DbPool,
   sendPushToUsers: SendPushToUsersFn
 ): void {
   // process-local dedupe — prevents re-sending within same process restart cycle
   const sentNotifications = new Set<string>();
 
   setInterval(async () => {
+    // Acquire a dedicated connection for the advisory lock.
+    // Advisory locks are session-scoped: they must be acquired and released
+    // on the same connection, which pool.query() does NOT guarantee.
+    let lockClient: Awaited<ReturnType<DbPool["connect"]>> | null = null;
+    let lockAcquired = false;
+
     try {
+      lockClient = await pool.connect();
+
+      const lockResult = await lockClient.query(
+        "SELECT pg_try_advisory_lock($1) AS acquired",
+        [LIVE_NOTIF_ADVISORY_LOCK_KEY]
+      );
+      lockAcquired = lockResult.rows[0]?.acquired === true;
+
+      if (!lockAcquired) {
+        // Another instance is handling this tick — skip silently.
+        return;
+      }
+
       const now = Date.now();
       const minScheduleAt = now + 29 * 60 * 1000;
       const maxScheduleAt = now + 31 * 60 * 1000;
@@ -149,6 +198,22 @@ function startLiveClassNotificationScheduler(
       if (sentNotifications.size > 500) sentNotifications.clear();
     } catch (err) {
       console.error("[LiveNotif] Scheduler error:", err);
+    } finally {
+      // Always release the advisory lock and return the connection to the pool,
+      // even if an error was thrown during the notification work.
+      if (lockClient) {
+        if (lockAcquired) {
+          try {
+            await lockClient.query(
+              "SELECT pg_advisory_unlock($1)",
+              [LIVE_NOTIF_ADVISORY_LOCK_KEY]
+            );
+          } catch (unlockErr) {
+            console.error("[LiveNotif] Failed to release advisory lock:", unlockErr);
+          }
+        }
+        lockClient.release();
+      }
     }
   }, 60 * 1000);
 
