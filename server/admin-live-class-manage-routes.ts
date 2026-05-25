@@ -1,5 +1,5 @@
 import type { Express, Request, Response } from "express";
-import { buildRecordingLectureSectionTitle } from "./recordingSection";
+import { buildRecordingLectureSectionTitle } from "../shared/recordingSection";
 import { sendPushToUsers } from "./push-notifications";
 import {
   convertLiveClassTitlePeersToLectures,

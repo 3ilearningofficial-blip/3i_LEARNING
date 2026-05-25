@@ -1,5 +1,5 @@
 import type { Express, Request, Response } from "express";
-import { buildRecordingLectureSectionTitle } from "./recordingSection";
+import { buildRecordingLectureSectionTitle } from "../shared/recordingSection";
 import { saveRecordingForClassAndPeers as saveRecordingCore } from "./live-class-recording-save";
 import {
   buildLegacyMp4CandidateUrls,

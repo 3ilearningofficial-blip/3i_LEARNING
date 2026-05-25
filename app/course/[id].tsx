@@ -24,7 +24,7 @@ import { fetch } from "expo/fetch";
 import { useAuth } from "@/context/AuthContext";
 import { WebView } from "react-native-webview";
 import { DownloadButton } from "@/components/DownloadButton";
-import { DEFAULT_LIVE_RECORDING_SECTION } from "@/lib/recordingSection";
+import { DEFAULT_LIVE_RECORDING_SECTION } from "@shared/recordingSection";
 import { useDocumentVisibility } from "@/lib/useDocumentVisibility";
 
 interface Lecture {

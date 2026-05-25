@@ -30,7 +30,7 @@ import { useClassroomBoardCheckpoint } from "@/lib/classroom/useClassroomBoardCh
 import type { Editor } from "tldraw";
 import { useClassroomSessionRecorder } from "@/lib/classroom/useClassroomSessionRecorder";
 import { uploadToR2 } from "@/lib/r2-upload";
-import { buildRecordingLectureSectionTitle } from "@/lib/recordingSection";
+import { buildRecordingLectureSectionTitle } from "@shared/recordingSection";
 import { getAdminCoursesSectionRoute } from "@/lib/admin/courseAdminRoutes";
 import TeacherVideoPanel from "@/components/classroom/TeacherVideoPanel";
 import LiveClassRecordingTimer from "@/components/LiveClassRecordingTimer";

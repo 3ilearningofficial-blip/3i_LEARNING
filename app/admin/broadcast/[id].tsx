@@ -33,7 +33,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "@/context/AuthContext";
 import { useDocumentVisibility } from "@/lib/useDocumentVisibility";
 import { useScreenWakeLock } from "@/lib/useScreenWakeLock";
-import { buildRecordingLectureSectionTitle } from "@/lib/recordingSection";
+import { buildRecordingLectureSectionTitle } from "@shared/recordingSection";
 import { getAdminCoursesSectionRoute } from "@/lib/admin/courseAdminRoutes";
 
 type StreamType = "webrtc" | "rtmp" | "cloudflare";

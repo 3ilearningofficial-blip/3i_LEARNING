@@ -1,6 +1,6 @@
 import { apiRequest } from "@/lib/query-client";
 import { uploadToR2, getMimeType } from "@/lib/r2-upload";
-import { buildRecordingLectureSectionTitle } from "@/lib/recordingSection";
+import { buildRecordingLectureSectionTitle } from "@shared/recordingSection";
 import { isBoardSnapshotImageUrl, isVideoRecordingUrl } from "@/lib/classroom/recordingUrl";
 import { exportClassroomBoardAllPagesPng } from "@/lib/classroom/exportClassroomBoardViewport";
 import { saveClassroomBoardToCourseMaterials } from "@/lib/classroom/saveClassroomBoardMaterial";

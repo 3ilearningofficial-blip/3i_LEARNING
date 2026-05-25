@@ -1,7 +1,7 @@
 import type { Express, Request, Response } from "express";
 import { AccessToken } from "livekit-server-sdk";
 import { userCanAccessLiveClassContent } from "./live-class-access";
-import { buildRecordingLectureSectionTitle } from "./recordingSection";
+import { buildRecordingLectureSectionTitle } from "../shared/recordingSection";
 import { saveRecordingForClassAndPeers } from "./live-class-recording-save";
 import { convertLiveClassTitlePeersToLectures } from "./live-class-lecture-convert";
 

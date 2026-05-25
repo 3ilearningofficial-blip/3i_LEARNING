@@ -22,7 +22,7 @@ import Colors from "@/constants/colors";
 import { useAuth } from "@/context/AuthContext";
 import { fetch } from "expo/fetch";
 import BulkUploadModal from "@/components/BulkUploadModal";
-import { buildRecordingLectureSectionTitle, prefillLiveRecordingFormFields } from "@/lib/recordingSection";
+import { buildRecordingLectureSectionTitle, prefillLiveRecordingFormFields } from "@shared/recordingSection";
 import type { DeviceDeniedUserRow, UserRecord } from "./user-types";
 
 interface Course {

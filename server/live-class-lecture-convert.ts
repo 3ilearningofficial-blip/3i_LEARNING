@@ -1,4 +1,4 @@
-import { buildRecordingLectureSectionTitle } from "./recordingSection";
+import { buildRecordingLectureSectionTitle } from "../shared/recordingSection";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;

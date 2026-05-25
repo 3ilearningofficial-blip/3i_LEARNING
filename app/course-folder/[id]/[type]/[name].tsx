@@ -19,7 +19,7 @@ import { useScreenProtection } from "@/lib/useScreenProtection";
 import { useAuth } from "@/context/AuthContext";
 import { DownloadButton } from "@/components/DownloadButton";
 import { LectureListPreview } from "@/components/LectureListPreview";
-import { DEFAULT_LIVE_RECORDING_SECTION } from "@/lib/recordingSection";
+import { DEFAULT_LIVE_RECORDING_SECTION } from "@shared/recordingSection";
 import { useDocumentVisibility } from "@/lib/useDocumentVisibility";
 
 type FolderType = "lectures" | "materials" | "live" | "tests";

@@ -16,7 +16,7 @@ import { uploadToR2, getMimeType } from "@/lib/r2-upload";
 import Colors from "@/constants/colors";
 import { fetch } from "expo/fetch";
 import BulkUploadModal from "@/components/BulkUploadModal";
-import { DEFAULT_LIVE_RECORDING_SECTION } from "@/lib/recordingSection";
+import { DEFAULT_LIVE_RECORDING_SECTION } from "@shared/recordingSection";
 import { useDocumentVisibility } from "@/lib/useDocumentVisibility";
 
 interface Lecture {

@@ -1,6 +1,23 @@
-/** Same contract as `server/recordingSection.ts` — keep in sync. */
+/**
+ * shared/recordingSection.ts
+ * Canonical home for live class recording section title logic.
+ *
+ * Previously duplicated across:
+ *   - server/recordingSection.ts  (server-only subset)
+ *   - lib/recordingSection.ts     (frontend superset)
+ *
+ * Both files are now removed. Import from here in all server and frontend code.
+ *
+ * Convention: `main` (e.g. "Live Class Recordings") + optional `sub` (e.g. "Chapter 1") →
+ * "Live Class Recordings / Chapter 1" — also used as the matching `course_folders.name` for that bucket.
+ */
+
 export const DEFAULT_LIVE_RECORDING_SECTION = "Live Class Recordings";
 
+/**
+ * Resolve the lecture `section_title` used when saving a live class recording as a course lecture.
+ * Used by both the server (when persisting the recording) and the frontend (when displaying/editing).
+ */
 export function buildRecordingLectureSectionTitle(
   main: string | null | undefined,
   sub: string | null | undefined,
@@ -15,7 +32,10 @@ export function buildRecordingLectureSectionTitle(
   return s ? `${m} / ${s}` : m;
 }
 
-/** Split DB columns (and legacy combined `main` with " / ") into admin form main + subfolder fields. */
+/**
+ * Split DB columns (and legacy combined `main` with " / ") into admin form main + subfolder fields.
+ * Used by the frontend admin UI to pre-populate recording section inputs.
+ */
 export function prefillLiveRecordingFormFields(
   main: string | null | undefined,
   sub: string | null | undefined
