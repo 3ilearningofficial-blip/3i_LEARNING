@@ -3,11 +3,11 @@ import dotenv from "dotenv";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
-import { checkDatabaseReadiness } from "../backend/db-readiness";
+import { checkDatabaseReadiness } from "../../backend/db-readiness";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
+dotenv.config({ path: path.resolve(__dirname, "../..", ".env") });
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) {

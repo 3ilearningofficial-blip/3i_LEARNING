@@ -6,8 +6,8 @@
  * already reflects that migration (e.g. comment/whitespace change in the file).
  *
  * Usage:
- *   npx tsx scripts/repair-migration-checksum.ts migrations/0014_....sql
- *   npx tsx scripts/repair-migration-checksum.ts migrations/0014_....sql --apply
+ *   npx tsx scripts/db/repair-migration-checksum.ts migrations/0014_....sql
+ *   npx tsx scripts/db/repair-migration-checksum.ts migrations/0014_....sql --apply
  */
 import dotenv from "dotenv";
 import { createHash } from "node:crypto";
@@ -18,7 +18,7 @@ import pg from "pg";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const projectRoot = path.resolve(__dirname, "..");
+const projectRoot = path.resolve(__dirname, "../..");
 dotenv.config({ path: path.resolve(projectRoot, ".env") });
 
 const connectionString = process.env.DATABASE_URL;
