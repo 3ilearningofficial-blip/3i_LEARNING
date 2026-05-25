@@ -20,22 +20,10 @@ import compression from "compression";
 import pg from "pg";
 import { PgRateLimitStore } from "./pg-rate-limit-store";
 import { getAiTutorHealthSnapshot } from "./ai-tutor-service";
+import { normalizeDatabaseUrl } from "./db-utils";
 
 const app = express();
 const log = console.log;
-
-function normalizeDatabaseUrl(raw: string): string {
-  try {
-    const parsed = new URL(raw);
-    const sslMode = (parsed.searchParams.get("sslmode") || "").toLowerCase();
-    if (!sslMode || sslMode === "require" || sslMode === "prefer" || sslMode === "verify-ca") {
-      parsed.searchParams.set("sslmode", "verify-full");
-    }
-    return parsed.toString();
-  } catch {
-    return raw;
-  }
-}
 
 declare module "http" {
   interface IncomingMessage {
