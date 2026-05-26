@@ -9,7 +9,7 @@ import { router } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/context/AuthContext";
 import { getApiUrl, authFetch } from "@/lib/query-client";
 import Colors from "@/constants/colors";
@@ -276,6 +276,7 @@ export default function WelcomeScreen() {
   const isWide = width >= 640;
   const isWeb = Platform.OS === "web";
   const { user } = useAuth();
+  const qc = useQueryClient();
 
   const { data: cfg = {} } = useQuery<Record<string, string>>({
     queryKey: ["/api/site-settings"],
@@ -337,7 +338,15 @@ export default function WelcomeScreen() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ fileKey: pankajMediaKey }),
       });
-      if (!res.ok) return {};
+      if (!res.ok) {
+        // Session has expired or is invalid — invalidate the user cache so
+        // stale user.id no longer triggers auth-gated queries for logged-out
+        // visitors. This is non-blocking: welcome page keeps rendering.
+        if (res.status === 401 || res.status === 403) {
+          void qc.invalidateQueries({ queryKey: ["/api/auth/me"] });
+        }
+        return {};
+      }
       return res.json();
     },
     enabled: !!pankajMediaKey && !!user?.id,

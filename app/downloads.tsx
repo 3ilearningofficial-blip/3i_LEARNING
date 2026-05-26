@@ -13,7 +13,7 @@ import Colors from "@/constants/colors";
 import { useDownloadManager } from "@/lib/useDownloadManager";
 import { useAuth } from "@/context/AuthContext";
 import { useWebDownloadJobs } from "@/context/WebDownloadJobsContext";
-import { getWebOffline, removeWebOffline } from "@/lib/web-offline-store";
+import { getWebOffline, removeWebOffline, listWebOfflineKeys } from "@/lib/web-offline-store";
 
 type DownloadItem = {
   id: number;
@@ -22,6 +22,8 @@ type DownloadItem = {
   file_type: string;
   section_title?: string;
   course_title?: string;
+  course_id?: number;
+  order_index?: number;
   type: "material" | "lecture";
   local_filename?: string;
 };
@@ -79,6 +81,53 @@ export default function DownloadsScreen() {
     void refreshWebHeldKeys();
   }, [refreshWebHeldKeys]);
 
+  /**
+   * Web revocation cleanup — mirrors what runForegroundAccessCheck does on native.
+   *
+   * When the server returns a fresh /api/my-downloads list (e.g. after enrollment
+   * revocation), we compare the server-authoritative set against every key stored
+   * in IndexedDB for this user.  Any IndexedDB entry that is no longer in the
+   * server list means the user's access was revoked — we delete the blob so they
+   * cannot keep playing downloaded content offline indefinitely.
+   *
+   * This runs only on web, only when real server data is available, and only
+   * when a valid userId is present.  Errors are swallowed so a buggy IDB key
+   * never breaks the downloads screen.
+   */
+  useEffect(() => {
+    if (Platform.OS !== "web") return;
+    if (!data) return;
+    const userId = Number(user?.id || 0);
+    if (!Number.isFinite(userId) || userId <= 0) return;
+
+    void (async () => {
+      try {
+        // Build the set of item keys the server says this user still has access to.
+        const serverKeys = new Set<string>();
+        for (const item of data.lectures) serverKeys.add(`${userId}:lecture:${item.id}`);
+        for (const item of data.materials) serverKeys.add(`${userId}:material:${item.id}`);
+
+        // List every key stored in IndexedDB for any user (keys are userId:type:id).
+        const allStoredKeys = await listWebOfflineKeys();
+
+        for (const storedKey of allStoredKeys) {
+          // Only touch keys that belong to the current user.
+          if (!storedKey.startsWith(`${userId}:`)) continue;
+          // If this key is not in the server list, the user no longer has access.
+          if (!serverKeys.has(storedKey)) {
+            const [, itemType, itemIdStr] = storedKey.split(":");
+            const itemId = Number(itemIdStr);
+            if (itemType && Number.isFinite(itemId)) {
+              await removeWebOffline(userId, itemType, itemId).catch(() => {/* ignore */});
+            }
+          }
+        }
+      } catch {
+        // Never let cleanup errors surface to the user.
+      }
+    })();
+  }, [data, user?.id]);
+
   // Calculate total storage used
   useEffect(() => {
     if (Platform.OS !== 'web') {
@@ -101,6 +150,11 @@ export default function DownloadsScreen() {
               params: { id: String(item.id), videoUrl: blobUrl, title: item.title, isLocal: "true" },
             } as any);
           }
+          // Release the temporary URL handle after the destination screen has
+          // had time to read it. The blob itself stays in IndexedDB — only this
+          // in-memory URL reference is freed, preventing accumulation across
+          // multiple opens in one session.
+          setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
           return;
         }
       } catch (e) {
@@ -301,6 +355,56 @@ export default function DownloadsScreen() {
     ? (activeTab === "lectures" ? lectures : materials)
     : [];
 
+  /**
+   * Render items grouped by course → section_title, sorted by order_index.
+   * If all items belong to a single course the course header is omitted for
+   * a cleaner look. Section headers are always shown when present.
+   */
+  const renderGrouped = (items: DownloadItem[]) => {
+    // Group by course_title
+    const courseMap = new Map<string, DownloadItem[]>();
+    for (const item of items) {
+      const key = item.course_title || "Uncategorized";
+      if (!courseMap.has(key)) courseMap.set(key, []);
+      courseMap.get(key)!.push(item);
+    }
+    const showCourseHeaders = courseMap.size > 1;
+
+    return [...courseMap.entries()].map(([courseTitle, courseItems]) => {
+      // Group by section_title within this course
+      const sectionMap = new Map<string, DownloadItem[]>();
+      for (const item of courseItems) {
+        const key = item.section_title || "__none__";
+        if (!sectionMap.has(key)) sectionMap.set(key, []);
+        sectionMap.get(key)!.push(item);
+      }
+
+      return (
+        <View key={courseTitle}>
+          {showCourseHeaders && (
+            <View style={styles.courseGroupHeader}>
+              <Ionicons name="book-outline" size={14} color={Colors.light.primary} />
+              <Text style={styles.courseGroupHeaderText} numberOfLines={1}>{courseTitle}</Text>
+            </View>
+          )}
+          {[...sectionMap.entries()].map(([sectionKey, sectionItems]) => {
+            const sorted = [...sectionItems].sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0));
+            return (
+              <View key={sectionKey}>
+                {sectionKey !== "__none__" && (
+                  <View style={styles.sectionGroupHeader}>
+                    <Text style={styles.sectionGroupHeaderText}>{sectionKey}</Text>
+                  </View>
+                )}
+                {sorted.map(renderItem)}
+              </View>
+            );
+          })}
+        </View>
+      );
+    });
+  };
+
   return (
     <View style={[styles.container, { paddingTop: Platform.OS === "web" ? 16 : insets.top }]}>
       {/* Header */}
@@ -369,7 +473,7 @@ export default function DownloadsScreen() {
           contentContainerStyle={styles.list}
           showsVerticalScrollIndicator={false}
         >
-          {activeItems.map(renderItem)}
+          {renderGrouped(activeItems)}
         </ScrollView>
       )}
     </View>
@@ -444,6 +548,36 @@ const styles = StyleSheet.create({
   cardTitle: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text, marginBottom: 2 },
   cardSub: { fontSize: 12, fontFamily: "Inter_400Regular", color: Colors.light.primary },
   cardSection: { fontSize: 11, fontFamily: "Inter_400Regular", color: Colors.light.textMuted, marginTop: 1 },
+  courseGroupHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 2,
+    marginTop: 10,
+    marginBottom: 2,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+  },
+  courseGroupHeaderText: {
+    fontSize: 14,
+    fontFamily: "Inter_700Bold",
+    color: Colors.light.primary,
+    flex: 1,
+  },
+  sectionGroupHeader: {
+    paddingVertical: 6,
+    paddingHorizontal: 4,
+    marginTop: 8,
+    marginBottom: 2,
+  },
+  sectionGroupHeaderText: {
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.textMuted,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
   empty: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12, padding: 40 },
   emptyText: { fontSize: 15, fontFamily: "Inter_600SemiBold", color: Colors.light.text, textAlign: "center" },
   emptySubText: { fontSize: 13, fontFamily: "Inter_400Regular", color: Colors.light.textMuted, textAlign: "center" },

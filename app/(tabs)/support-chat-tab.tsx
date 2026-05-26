@@ -38,12 +38,31 @@ export default function SupportChatTab() {
   const [adminReplying, setAdminReplying] = useState(false);
   const adminScrollRef = useRef<ScrollView>(null);
 
+  /**
+   * Close the admin thread modal safely.
+   * On web, React Native Web's Modal sets aria-hidden on its backdrop — if a
+   * focused element (e.g. the reply TextInput) is still inside when that
+   * happens, Chrome logs an accessibility warning. Blurring the active element
+   * first prevents this.
+   */
+  const closeAdminThread = () => {
+    if (Platform.OS === "web" && typeof document !== "undefined") {
+      (document.activeElement as HTMLElement | null)?.blur();
+    }
+    setAdminSelectedUserId(null);
+    setAdminSelectedUserName("");
+    setAdminReply("");
+  };
+
   /** Web: push new rows via SSE; native keeps polling only. */
   useEffect(() => {
     if (Platform.OS !== "web" || typeof EventSource === "undefined" || !isAdmin || !adminSelectedUserId) return;
     const baseUrl = getApiUrl();
     const url = new URL(`/api/admin/support/messages/${adminSelectedUserId}/stream`, baseUrl).toString();
     const es = new EventSource(url, { withCredentials: true } as EventSourceInit);
+    // Stop reconnecting immediately on any error (including 401/403 on the
+    // HTTP handshake). Without this, browsers retry every ~3 s indefinitely.
+    es.onerror = () => es.close();
     es.onmessage = (ev) => {
       try {
         const row = JSON.parse(ev.data) as Message;
@@ -163,6 +182,8 @@ export default function SupportChatTab() {
     const baseUrl = getApiUrl();
     const url = new URL("/api/support/messages/stream", baseUrl).toString();
     const es = new EventSource(url, { withCredentials: true } as EventSourceInit);
+    // Stop reconnecting immediately on any error (including 401 when session expires).
+    es.onerror = () => es.close();
     es.onmessage = (ev) => {
       try {
         const row = JSON.parse(ev.data) as Message;
@@ -228,11 +249,11 @@ export default function SupportChatTab() {
         )}
 
         {/* Thread — full-screen modal, input pinned at bottom */}
-        <Modal visible={!!adminSelectedUserId} animationType="slide" onRequestClose={() => { setAdminSelectedUserId(null); setAdminSelectedUserName(""); setAdminReply(""); }}>
+        <Modal visible={!!adminSelectedUserId} animationType="slide" onRequestClose={closeAdminThread}>
           <KeyboardAvoidingView style={{ flex: 1, backgroundColor: "#F0F4FF" }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
             {/* Header */}
             <LinearGradient colors={["#0A1628", "#1A2E50"]} style={{ paddingTop: Platform.OS === "web" ? 16 : insets.top + 8, paddingHorizontal: 16, paddingBottom: 14, flexDirection: "row", alignItems: "center", gap: 12 }}>
-              <Pressable style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" }} onPress={() => { setAdminSelectedUserId(null); setAdminSelectedUserName(""); setAdminReply(""); }}>
+              <Pressable style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" }} onPress={closeAdminThread}>
                 <Ionicons name="arrow-back" size={20} color="#fff" />
               </Pressable>
               <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: Colors.light.primary, alignItems: "center", justifyContent: "center" }}>

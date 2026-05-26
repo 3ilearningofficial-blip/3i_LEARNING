@@ -1129,6 +1129,7 @@ export default function AdminDashboard() {
   const [showAddMission, setShowAddMission] = useState(false);
   const [missionTitle, setMissionTitle] = useState("");
   const [missionDesc, setMissionDesc] = useState("");
+  const [missionFolder, setMissionFolder] = useState("");
   const [missionType, setMissionType] = useState<"daily_drill" | "free_practice">("free_practice");
   const [missionXP, setMissionXP] = useState("50");
   const [missionQuestions, setMissionQuestions] = useState<{ question: string; options: string[]; correct: string; topic: string; subtopic: string; marks: string; solution: string; image_url: string; solution_image_url: string }[]>([]);
@@ -1641,7 +1642,7 @@ export default function AdminDashboard() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/admin/daily-missions"] });
       setShowAddMission(false);
-      setMissionTitle(""); setMissionDesc(""); setMissionQuestions([]);
+      setMissionTitle(""); setMissionDesc(""); setMissionFolder(""); setMissionQuestions([]);
       setMissionXP("50"); setMissionType("free_practice"); setMissionCourseId(null); setMissionBulkText("");
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       Alert.alert("Success", "Mission created!");
@@ -4071,72 +4072,108 @@ export default function AdminDashboard() {
                 <Text style={styles.infoText}>No missions yet. Create daily drill or free practice missions with questions for students.</Text>
               </View>
             ) : (
-              adminMissions.map((m: any) => {
-                const qCount = Array.isArray(m.questions) ? m.questions.length : 0;
-                const totalMarks = Array.isArray(m.questions) ? m.questions.reduce((s: number, q: any) => s + (q.marks || 0), 0) : 0;
-                return (
-                  <Pressable key={m.id} style={[styles.adminCard, { flexDirection: "row", alignItems: "center" }]} onPress={async () => {
-                    setSelectedMission(m);
-                    setMissionAttemptsLoading(true);
-                    try {
-                      const baseUrl = getApiUrl();
-                      const res = await authFetch(new URL(`/api/admin/daily-missions/${m.id}/attempts`, baseUrl).toString());
-                      if (!res.ok) {
-                        const errText = await res.text();
-                        console.error("Attempts fetch failed:", res.status, errText);
-                        setMissionAttempts([]);
-                      } else {
-                        const data = await res.json();
-                        setMissionAttempts(data);
-                      }
-                    } catch (e) {
-                      console.error("Attempts fetch error:", e);
-                      setMissionAttempts([]);
-                    } finally {
-                      setMissionAttemptsLoading(false);
-                    }
-                  }}>
-                    <View style={styles.adminCardContent}>
-                      <View style={styles.adminCardRow}>
-                        <Text style={styles.adminCardTitle} numberOfLines={2}>{m.title}</Text>
-                        <View style={[styles.typeBadge, { backgroundColor: m.mission_type === "free_practice" ? "#22C55E20" : "#F59E0B20" }]}>
-                          <Text style={{ fontSize: 10, fontFamily: "Inter_600SemiBold", color: m.mission_type === "free_practice" ? "#22C55E" : "#F59E0B" }}>
-                            {m.mission_type === "free_practice" ? "Free" : "Drill"}
-                          </Text>
-                        </View>
+              (() => {
+                // Group missions by folder_name. NULL/empty = "Ungrouped" shown first, then folders A-Z.
+                const folderMap = new Map<string, any[]>();
+                for (const m of adminMissions) {
+                  const key = m.folder_name?.trim() || "__none__";
+                  if (!folderMap.has(key)) folderMap.set(key, []);
+                  folderMap.get(key)!.push(m);
+                }
+                const groups: { folderName: string | null; items: any[] }[] = [];
+                if (folderMap.has("__none__")) groups.push({ folderName: null, items: folderMap.get("__none__")! });
+                [...folderMap.entries()]
+                  .filter(([k]) => k !== "__none__")
+                  .sort(([a], [b]) => a.localeCompare(b))
+                  .forEach(([k, v]) => groups.push({ folderName: k, items: v }));
+                const hasGroups = groups.length > 1 || (groups.length === 1 && groups[0].folderName !== null);
+                return groups.map((group) => (
+                  <View key={group.folderName || "__none__"}>
+                    {hasGroups && (
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 8, marginTop: 8, marginBottom: 4, borderBottomWidth: 1, borderBottomColor: Colors.light.border }}>
+                        <Ionicons name={group.folderName ? "folder-outline" : "list-outline"} size={15} color={group.folderName ? "#F59E0B" : Colors.light.textMuted} />
+                        <Text style={{ fontSize: 13, fontFamily: "Inter_700Bold", color: group.folderName ? "#D97706" : Colors.light.textMuted, flex: 1 }}>
+                          {group.folderName || "Ungrouped"}{" "}
+                          <Text style={{ fontFamily: "Inter_400Regular", fontSize: 12 }}>({group.items.length})</Text>
+                        </Text>
                       </View>
-                      <View style={styles.adminCardMeta}>
-                        <Text style={styles.adminCardMetaText}>{qCount} questions</Text>
-                        {totalMarks > 0 && <><Text style={styles.adminCardMetaText}>|</Text><Text style={styles.adminCardMetaText}>{totalMarks} marks</Text></>}
-                        <Text style={styles.adminCardMetaText}>|</Text>
-                        <Text style={styles.adminCardMetaText}>{m.mission_date}</Text>
-                      </View>
-                    </View>
-                    <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                      <Ionicons name="people-outline" size={16} color={Colors.light.primary} />
-                      <Pressable style={[styles.deleteBtn, { backgroundColor: "#EEF2FF" }]} onPress={(e) => {
-                        e.stopPropagation?.();
-                        setEditMission({ ...m, questions: Array.isArray(m.questions) ? m.questions.map((q: any) => ({ ...q, marks: String(q.marks || ""), solution: q.solution || "", image_url: q.image_url || "", solution_image_url: q.solution_image_url || "", subtopic: q.subtopic || "" })) : [] });
-                      }}>
-                        <Ionicons name="pencil-outline" size={18} color={Colors.light.primary} />
-                      </Pressable>
-                      <Pressable style={styles.deleteBtn} onPress={(e) => {
-                        e.stopPropagation?.();
-                        if (Platform.OS === "web") {
-                          if (window.confirm(`Delete "${m.title}"?`)) deleteMissionMutation.mutate(m.id);
-                        } else {
-                          Alert.alert("Delete Mission", `Delete "${m.title}"?`, [
-                            { text: "Cancel", style: "cancel" },
-                            { text: "Delete", style: "destructive", onPress: () => deleteMissionMutation.mutate(m.id) },
-                          ]);
-                        }
-                      }}>
-                        <Ionicons name="trash-outline" size={18} color="#EF4444" />
-                      </Pressable>
-                    </View>
-                  </Pressable>
-                );
-              })
+                    )}
+                    {group.items.map((m: any) => {
+                      const qCount = Array.isArray(m.questions) ? m.questions.length : 0;
+                      const totalMarks = Array.isArray(m.questions) ? m.questions.reduce((s: number, q: any) => s + (q.marks || 0), 0) : 0;
+                      return (
+                        <Pressable key={m.id} style={[styles.adminCard, { flexDirection: "row", alignItems: "center" }]} onPress={async () => {
+                          setSelectedMission(m);
+                          setMissionAttemptsLoading(true);
+                          try {
+                            const baseUrl = getApiUrl();
+                            const res = await authFetch(new URL(`/api/admin/daily-missions/${m.id}/attempts`, baseUrl).toString());
+                            if (!res.ok) {
+                              const errText = await res.text();
+                              console.error("Attempts fetch failed:", res.status, errText);
+                              setMissionAttempts([]);
+                            } else {
+                              const data = await res.json();
+                              setMissionAttempts(data);
+                            }
+                          } catch (e) {
+                            console.error("Attempts fetch error:", e);
+                            setMissionAttempts([]);
+                          } finally {
+                            setMissionAttemptsLoading(false);
+                          }
+                        }}>
+                          <View style={styles.adminCardContent}>
+                            <View style={styles.adminCardRow}>
+                              <Text style={styles.adminCardTitle} numberOfLines={2}>{m.title}</Text>
+                              <View style={{ flexDirection: "row", gap: 4, alignItems: "center" }}>
+                                {m.folder_name ? (
+                                  <View style={{ paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, backgroundColor: "#FEF3C7" }}>
+                                    <Text style={{ fontSize: 9, fontFamily: "Inter_600SemiBold", color: "#D97706" }}>📁 {m.folder_name}</Text>
+                                  </View>
+                                ) : null}
+                                <View style={[styles.typeBadge, { backgroundColor: m.mission_type === "free_practice" ? "#22C55E20" : "#F59E0B20" }]}>
+                                  <Text style={{ fontSize: 10, fontFamily: "Inter_600SemiBold", color: m.mission_type === "free_practice" ? "#22C55E" : "#F59E0B" }}>
+                                    {m.mission_type === "free_practice" ? "Free" : "Drill"}
+                                  </Text>
+                                </View>
+                              </View>
+                            </View>
+                            <View style={styles.adminCardMeta}>
+                              <Text style={styles.adminCardMetaText}>{qCount} questions</Text>
+                              {totalMarks > 0 && <><Text style={styles.adminCardMetaText}>|</Text><Text style={styles.adminCardMetaText}>{totalMarks} marks</Text></>}
+                              <Text style={styles.adminCardMetaText}>|</Text>
+                              <Text style={styles.adminCardMetaText}>{m.mission_date}</Text>
+                            </View>
+                          </View>
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                            <Ionicons name="people-outline" size={16} color={Colors.light.primary} />
+                            <Pressable style={[styles.deleteBtn, { backgroundColor: "#EEF2FF" }]} onPress={(e) => {
+                              e.stopPropagation?.();
+                              setEditMission({ ...m, questions: Array.isArray(m.questions) ? m.questions.map((q: any) => ({ ...q, marks: String(q.marks || ""), solution: q.solution || "", image_url: q.image_url || "", solution_image_url: q.solution_image_url || "", subtopic: q.subtopic || "" })) : [] });
+                            }}>
+                              <Ionicons name="pencil-outline" size={18} color={Colors.light.primary} />
+                            </Pressable>
+                            <Pressable style={styles.deleteBtn} onPress={(e) => {
+                              e.stopPropagation?.();
+                              if (Platform.OS === "web") {
+                                if (window.confirm(`Delete "${m.title}"?`)) deleteMissionMutation.mutate(m.id);
+                              } else {
+                                Alert.alert("Delete Mission", `Delete "${m.title}"?`, [
+                                  { text: "Cancel", style: "cancel" },
+                                  { text: "Delete", style: "destructive", onPress: () => deleteMissionMutation.mutate(m.id) },
+                                ]);
+                              }
+                            }}>
+                              <Ionicons name="trash-outline" size={18} color="#EF4444" />
+                            </Pressable>
+                          </View>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                ));
+              })()
             )}
           </View>
         )}
@@ -4651,6 +4688,10 @@ export default function AdminDashboard() {
                 <TextInput style={[styles.formInput, styles.formInputMulti]} placeholder="Mission description..." placeholderTextColor={Colors.light.textMuted} value={missionDesc} onChangeText={setMissionDesc} multiline numberOfLines={2} />
               </View>
               <View style={styles.formField}>
+                <Text style={styles.formLabel}>Folder (optional)</Text>
+                <TextInput style={styles.formInput} placeholder="e.g., Free Drills, CDS Paid, June 2026" placeholderTextColor={Colors.light.textMuted} value={missionFolder} onChangeText={setMissionFolder} />
+              </View>
+              <View style={styles.formField}>
                 <Text style={styles.formLabel}>Type</Text>
                 <View style={{ flexDirection: "row", gap: 8 }}>
                   {[{ key: "free_practice", label: "Free Practice" }, { key: "daily_drill", label: "Daily Drill" }].map((t) => (
@@ -4785,7 +4826,7 @@ export default function AdminDashboard() {
               disabled={!missionTitle || missionQuestions.length === 0 || addMissionMutation.isPending}
               onPress={() => {
                 const questions = missionQuestions.map((q, i) => ({ id: i + 1, ...q, marks: q.marks ? parseFloat(q.marks) : undefined }));
-                addMissionMutation.mutate({ title: missionTitle, description: missionDesc, questions, missionType, missionDate: new Date().toISOString().split("T")[0], courseId: missionCourseId });
+                addMissionMutation.mutate({ title: missionTitle, description: missionDesc, questions, missionType, missionDate: new Date().toISOString().split("T")[0], courseId: missionCourseId, folderName: missionFolder.trim() || null });
               }}>
               <LinearGradient colors={[Colors.light.primary, Colors.light.primaryDark]} style={styles.createBtnGrad}>
                 {addMissionMutation.isPending ? <ActivityIndicator color="#fff" /> : <Text style={styles.createBtnText}>Create Mission</Text>}
@@ -6241,6 +6282,10 @@ export default function AdminDashboard() {
                 <TextInput style={[styles.formInput, styles.formInputMulti]} value={editMission?.description || ""} onChangeText={(v) => setEditMission((p: any) => ({ ...p, description: v }))} placeholder="Description..." placeholderTextColor={Colors.light.textMuted} multiline />
               </View>
               <View style={styles.formField}>
+                <Text style={styles.formLabel}>Folder (optional)</Text>
+                <TextInput style={styles.formInput} placeholder="e.g., Free Drills, CDS Paid, June 2026" placeholderTextColor={Colors.light.textMuted} value={editMission?.folder_name || ""} onChangeText={(v) => setEditMission((p: any) => ({ ...p, folder_name: v }))} />
+              </View>
+              <View style={styles.formField}>
                 <Text style={styles.formLabel}>Date</Text>
                 <TextInput style={styles.formInput} value={editMission?.mission_date || ""} onChangeText={(v) => setEditMission((p: any) => ({ ...p, mission_date: v }))} placeholder="YYYY-MM-DD" placeholderTextColor={Colors.light.textMuted} />
               </View>
@@ -6356,7 +6401,7 @@ export default function AdminDashboard() {
               disabled={!editMission?.title || !editMission?.questions?.length || updateMissionMutation.isPending}
               onPress={() => {
                 const questions = (editMission.questions || []).map((q: any, i: number) => ({ id: i + 1, ...q, marks: q.marks ? parseFloat(q.marks) : undefined }));
-                updateMissionMutation.mutate({ id: editMission.id, title: editMission.title, description: editMission.description, questions, missionDate: editMission.mission_date, missionType: editMission.mission_type, courseId: editMission.course_id || null });
+                updateMissionMutation.mutate({ id: editMission.id, title: editMission.title, description: editMission.description, questions, missionDate: editMission.mission_date, missionType: editMission.mission_type, courseId: editMission.course_id || null, folderName: editMission.folder_name?.trim() || null });
               }}>
               <LinearGradient colors={[Colors.light.primary, Colors.light.primaryDark]} style={styles.createBtnGrad}>
                 {updateMissionMutation.isPending ? <ActivityIndicator color="#fff" /> : <Text style={styles.createBtnText}>Save Changes</Text>}

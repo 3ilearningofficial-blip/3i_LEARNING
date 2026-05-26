@@ -165,6 +165,62 @@ export function registerAdminCourseManagementRoutes({
     }
   });
 
+  /**
+   * PATCH /api/admin/courses/:id/reorder
+   * Body: { itemType: "test" | "material", items: [{ id: number, orderIndex: number }] }
+   *
+   * Bulk-updates order_index for tests or study_materials that belong to this
+   * course.  Each update is verified against course_id so admins cannot
+   * accidentally reorder items from other courses.
+   * Uses unnest to do a single SQL UPDATE instead of N round-trips.
+   */
+  app.patch("/api/admin/courses/:id/reorder", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const courseId = Number(req.params.id);
+      if (!Number.isFinite(courseId) || courseId <= 0) {
+        return res.status(400).json({ message: "Invalid course id" });
+      }
+      const { itemType, items } = req.body as { itemType: string; items: Array<{ id: number; orderIndex: number }> };
+      if (itemType !== "test" && itemType !== "material") {
+        return res.status(400).json({ message: "itemType must be 'test' or 'material'" });
+      }
+      if (!Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ message: "items must be a non-empty array" });
+      }
+      // Build parallel arrays for unnest
+      const ids: number[] = [];
+      const orders: number[] = [];
+      for (const item of items) {
+        const itemId = Number(item.id);
+        const orderIdx = Number(item.orderIndex);
+        if (!Number.isFinite(itemId) || !Number.isFinite(orderIdx)) continue;
+        ids.push(itemId);
+        orders.push(orderIdx);
+      }
+      if (ids.length === 0) return res.json({ success: true, updated: 0 });
+
+      if (itemType === "test") {
+        await db.query(
+          `UPDATE tests SET order_index = v.order_index
+           FROM (SELECT unnest($1::int[]) AS id, unnest($2::int[]) AS order_index) v
+           WHERE tests.id = v.id AND tests.course_id = $3`,
+          [ids, orders, courseId]
+        );
+      } else {
+        await db.query(
+          `UPDATE study_materials SET order_index = v.order_index
+           FROM (SELECT unnest($1::int[]) AS id, unnest($2::int[]) AS order_index) v
+           WHERE study_materials.id = v.id AND study_materials.course_id = $3`,
+          [ids, orders, courseId]
+        );
+      }
+      res.json({ success: true, updated: ids.length });
+    } catch (err) {
+      console.error("[reorder] error:", err);
+      res.status(500).json({ message: "Failed to reorder items" });
+    }
+  });
+
   app.delete("/api/admin/courses/:id/folders/:folderId", requireAdmin, async (req: Request, res: Response) => {
     try {
       await db.query(

@@ -37,6 +37,7 @@ interface TestItem {
   test_type: string;
   folder_name?: string;
   difficulty?: string;
+  order_index?: number;
 }
 
 interface Material {
@@ -47,6 +48,7 @@ interface Material {
   file_type: string;
   section_title?: string;
   download_allowed?: boolean;
+  order_index?: number;
 }
 
 interface LiveClassItem {
@@ -760,6 +762,41 @@ export default function AdminCourseScreen() {
     onError: () => Alert.alert("Error", "Failed to update material"),
   });
 
+  /**
+   * reorderMutation — sends new order_index values for a group of tests or
+   * materials to the server.  On success it invalidates the course detail query
+   * so the list refreshes with the persisted order.
+   */
+  const reorderMutation = useMutation({
+    mutationFn: async ({ itemType, items }: { itemType: "test" | "material"; items: Array<{ id: number; orderIndex: number }> }) => {
+      await apiRequest("PATCH", `/api/admin/courses/${id}/reorder`, { itemType, items });
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] }); },
+    onError: () => Alert.alert("Error", "Failed to reorder items"),
+  });
+
+  /**
+   * moveItem — swaps adjacent items in a filtered list and computes new
+   * orderIndex values (0, 1, 2, …), then fires reorderMutation.
+   * `allItems` is the full (already-sorted) list for this group so we can
+   * update ALL items in the group in one request — preventing gaps.
+   */
+  const moveItem = (
+    itemType: "test" | "material",
+    groupItems: Array<TestItem | Material>,
+    fromIdx: number,
+    direction: "up" | "down"
+  ) => {
+    const toIdx = direction === "up" ? fromIdx - 1 : fromIdx + 1;
+    if (toIdx < 0 || toIdx >= groupItems.length) return;
+    const reordered = [...groupItems];
+    const tmp = reordered[fromIdx];
+    reordered[fromIdx] = reordered[toIdx];
+    reordered[toIdx] = tmp;
+    const payload = reordered.map((item, idx) => ({ id: item.id, orderIndex: idx }));
+    reorderMutation.mutate({ itemType, items: payload });
+  };
+
   const loadQuestions = async (testId: number) => {
     setQuestionsLoading(true);
     try {
@@ -1120,45 +1157,63 @@ export default function AdminCourseScreen() {
                 </View>
               );
             })}
-            {courseTests.filter((test: any) => !test.folder_name).map((test) => (
-              <View key={test.id} style={styles.testCard}>
-                <View style={styles.testCardRow}>
-                  <Text style={styles.testCardTitle}>{test.title}</Text>
-                  <View style={{ flexDirection: "row", gap: 6, alignItems: "center" }}>
-                    <Pressable style={[styles.deleteItemBtn, { backgroundColor: "#EEF2FF" }]} onPress={() => setEditTest({ ...test, durationMinutes: String(test.duration_minutes), difficulty: test.difficulty || "moderate" })}>
-                      <Ionicons name="pencil-outline" size={14} color={Colors.light.primary} />
+            {(() => {
+              const ungroupedTests = courseTests.filter((t: any) => !t.folder_name);
+              return ungroupedTests.map((test: any, idx: number) => (
+                <View key={test.id} style={styles.testCard}>
+                  <View style={styles.testCardRow}>
+                    <Text style={styles.testCardTitle}>{test.title}</Text>
+                    <View style={{ flexDirection: "row", gap: 4, alignItems: "center" }}>
+                      {/* Up/Down reorder buttons */}
+                      <Pressable
+                        style={[styles.deleteItemBtn, { backgroundColor: "#F3F4F6", opacity: idx === 0 ? 0.3 : 1 }]}
+                        disabled={idx === 0 || reorderMutation.isPending}
+                        onPress={() => moveItem("test", ungroupedTests, idx, "up")}
+                      >
+                        <Ionicons name="chevron-up" size={14} color={Colors.light.text} />
+                      </Pressable>
+                      <Pressable
+                        style={[styles.deleteItemBtn, { backgroundColor: "#F3F4F6", opacity: idx === ungroupedTests.length - 1 ? 0.3 : 1 }]}
+                        disabled={idx === ungroupedTests.length - 1 || reorderMutation.isPending}
+                        onPress={() => moveItem("test", ungroupedTests, idx, "down")}
+                      >
+                        <Ionicons name="chevron-down" size={14} color={Colors.light.text} />
+                      </Pressable>
+                      <Pressable style={[styles.deleteItemBtn, { backgroundColor: "#EEF2FF" }]} onPress={() => setEditTest({ ...test, durationMinutes: String(test.duration_minutes), difficulty: test.difficulty || "moderate" })}>
+                        <Ionicons name="pencil-outline" size={14} color={Colors.light.primary} />
+                      </Pressable>
+                      <Pressable style={styles.deleteItemBtn} onPress={() => {
+                        if (Platform.OS === "web") {
+                          if (window.confirm(`Delete "${test.title}" and all its questions?`)) deleteTestMutation.mutate(test.id);
+                        } else {
+                          Alert.alert("Delete Test", `Delete "${test.title}" and all its questions?`, [
+                            { text: "Cancel", style: "cancel" },
+                            { text: "Delete", style: "destructive", onPress: () => deleteTestMutation.mutate(test.id) },
+                          ]);
+                        }
+                      }}>
+                        <Ionicons name="trash-outline" size={16} color="#EF4444" />
+                      </Pressable>
+                    </View>
+                  </View>
+                  <Text style={styles.testCardMeta}>{test.total_questions} questions · {test.duration_minutes}min · {test.test_type}</Text>
+                  <View style={styles.testUploadRow}>
+                    <Pressable style={styles.testUploadBtn} onPress={() => { resumeQuestionsModalAfterAddRef.current = null; setShowAddQuestion(test.id); }}>
+                      <Ionicons name="add-circle-outline" size={16} color={Colors.light.primary} />
+                      <Text style={styles.testUploadBtnText}>Add Questions</Text>
                     </Pressable>
-                    <Pressable style={styles.deleteItemBtn} onPress={() => {
-                      if (Platform.OS === "web") {
-                        if (window.confirm(`Delete "${test.title}" and all its questions?`)) deleteTestMutation.mutate(test.id);
-                      } else {
-                        Alert.alert("Delete Test", `Delete "${test.title}" and all its questions?`, [
-                          { text: "Cancel", style: "cancel" },
-                          { text: "Delete", style: "destructive", onPress: () => deleteTestMutation.mutate(test.id) },
-                        ]);
-                      }
-                    }}>
-                      <Ionicons name="trash-outline" size={16} color="#EF4444" />
+                    <Pressable style={[styles.testUploadBtn, { backgroundColor: "#FFF3E0" }]} onPress={() => setShowBulkUpload(test.id)}>
+                      <Ionicons name="cloud-upload" size={16} color="#FF6B35" />
+                      <Text style={[styles.testUploadBtnText, { color: "#FF6B35" }]}>Bulk Upload</Text>
+                    </Pressable>
+                    <Pressable style={[styles.testUploadBtn, { backgroundColor: "#DCFCE7" }]} onPress={() => { setShowViewQuestions(test.id); loadQuestions(test.id); }}>
+                      <Ionicons name="list" size={16} color="#16A34A" />
+                      <Text style={[styles.testUploadBtnText, { color: "#16A34A" }]}>Edit Questions</Text>
                     </Pressable>
                   </View>
                 </View>
-                <Text style={styles.testCardMeta}>{test.total_questions} questions · {test.duration_minutes}min · {test.test_type}</Text>
-                <View style={styles.testUploadRow}>
-                  <Pressable style={styles.testUploadBtn} onPress={() => { resumeQuestionsModalAfterAddRef.current = null; setShowAddQuestion(test.id); }}>
-                    <Ionicons name="add-circle-outline" size={16} color={Colors.light.primary} />
-                    <Text style={styles.testUploadBtnText}>Add Questions</Text>
-                  </Pressable>
-                  <Pressable style={[styles.testUploadBtn, { backgroundColor: "#FFF3E0" }]} onPress={() => setShowBulkUpload(test.id)}>
-                    <Ionicons name="cloud-upload" size={16} color="#FF6B35" />
-                    <Text style={[styles.testUploadBtnText, { color: "#FF6B35" }]}>Bulk Upload</Text>
-                  </Pressable>
-                  <Pressable style={[styles.testUploadBtn, { backgroundColor: "#DCFCE7" }]} onPress={() => { setShowViewQuestions(test.id); loadQuestions(test.id); }}>
-                    <Ionicons name="list" size={16} color="#16A34A" />
-                    <Text style={[styles.testUploadBtnText, { color: "#16A34A" }]}>Edit Questions</Text>
-                  </Pressable>
-                </View>
-              </View>
-            ))}
+              ));
+            })()}
           </View>
         )}
 
@@ -1211,43 +1266,57 @@ export default function AdminCourseScreen() {
                 </View>
               );
             })}
-            {courseMaterials.filter((m: any) => !m.section_title).map((mat) => (
-              <View key={mat.id} style={styles.itemCard}>
-                {mat.section_title && (
-                  <View style={styles.itemSectionBadge}>
-                    <Ionicons name="folder" size={12} color="#DC2626" />
-                    <Text style={[styles.itemSectionText, { color: "#DC2626" }]}>{mat.section_title}</Text>
+            {(() => {
+              const ungroupedMaterials = courseMaterials.filter((m: any) => !m.section_title);
+              return ungroupedMaterials.map((mat: any, idx: number) => (
+                <View key={mat.id} style={styles.itemCard}>
+                  <View style={styles.itemRow}>
+                    <View style={[styles.itemIcon, { backgroundColor: "#FEE2E2" }]}>
+                      <Ionicons name="document-text" size={16} color="#DC2626" />
+                    </View>
+                    <View style={styles.itemInfo}>
+                      <Text style={styles.itemTitle}>{mat.title}</Text>
+                      <Text style={styles.itemMeta}>{mat.file_type?.toUpperCase() || "PDF"}{mat.description ? ` · ${mat.description}` : ""}</Text>
+                    </View>
+                    <View style={{ flexDirection: "row", gap: 4, alignItems: "center" }}>
+                      {/* Up/Down reorder buttons */}
+                      <Pressable
+                        style={[styles.deleteItemBtn, { backgroundColor: "#F3F4F6", opacity: idx === 0 ? 0.3 : 1 }]}
+                        disabled={idx === 0 || reorderMutation.isPending}
+                        onPress={() => moveItem("material", ungroupedMaterials, idx, "up")}
+                      >
+                        <Ionicons name="chevron-up" size={14} color={Colors.light.text} />
+                      </Pressable>
+                      <Pressable
+                        style={[styles.deleteItemBtn, { backgroundColor: "#F3F4F6", opacity: idx === ungroupedMaterials.length - 1 ? 0.3 : 1 }]}
+                        disabled={idx === ungroupedMaterials.length - 1 || reorderMutation.isPending}
+                        onPress={() => moveItem("material", ungroupedMaterials, idx, "down")}
+                      >
+                        <Ionicons name="chevron-down" size={14} color={Colors.light.text} />
+                      </Pressable>
+                      <Pressable style={[styles.deleteItemBtn, { backgroundColor: "#EEF2FF" }]} onPress={() => setEditMaterial({ ...mat, sectionTitle: mat.section_title || "", downloadAllowed: mat.download_allowed || false })}>
+                        <Ionicons name="pencil-outline" size={16} color={Colors.light.primary} />
+                      </Pressable>
+                      <Pressable
+                        style={styles.deleteItemBtn}
+                        onPress={() => {
+                          if (Platform.OS === "web") {
+                            if (window.confirm(`Delete "${mat.title}"?`)) deleteMaterialMutation.mutate(mat.id);
+                          } else {
+                            Alert.alert("Delete Material", `Delete "${mat.title}"?`, [
+                              { text: "Cancel", style: "cancel" },
+                              { text: "Delete", style: "destructive", onPress: () => deleteMaterialMutation.mutate(mat.id) },
+                            ]);
+                          }
+                        }}
+                      >
+                        <Ionicons name="trash-outline" size={16} color="#EF4444" />
+                      </Pressable>
+                    </View>
                   </View>
-                )}
-                <View style={styles.itemRow}>
-                  <View style={[styles.itemIcon, { backgroundColor: "#FEE2E2" }]}>
-                    <Ionicons name="document-text" size={16} color="#DC2626" />
-                  </View>
-                  <View style={styles.itemInfo}>
-                    <Text style={styles.itemTitle}>{mat.title}</Text>
-                    <Text style={styles.itemMeta}>{mat.file_type?.toUpperCase() || "PDF"}{mat.description ? ` · ${mat.description}` : ""}</Text>
-                  </View>
-                  <Pressable style={[styles.deleteItemBtn, { backgroundColor: "#EEF2FF", marginRight: 6 }]} onPress={() => setEditMaterial({ ...mat, sectionTitle: mat.section_title || "", downloadAllowed: mat.download_allowed || false })}>
-                    <Ionicons name="pencil-outline" size={16} color={Colors.light.primary} />
-                  </Pressable>
-                  <Pressable
-                    style={styles.deleteItemBtn}
-                    onPress={() => {
-                      if (Platform.OS === "web") {
-                        if (window.confirm(`Delete "${mat.title}"?`)) deleteMaterialMutation.mutate(mat.id);
-                      } else {
-                        Alert.alert("Delete Material", `Delete "${mat.title}"?`, [
-                          { text: "Cancel", style: "cancel" },
-                          { text: "Delete", style: "destructive", onPress: () => deleteMaterialMutation.mutate(mat.id) },
-                        ]);
-                      }
-                    }}
-                  >
-                    <Ionicons name="trash-outline" size={16} color="#EF4444" />
-                  </Pressable>
                 </View>
-              </View>
-            ))}
+              ));
+            })()}
           </View>
         )}
 
@@ -2111,12 +2180,28 @@ export default function AdminCourseScreen() {
                       <Text style={styles.infoText}>This folder is empty. Tap "Add Test" to add tests.</Text>
                     </View>
                   )}
-                  {course?.tests?.filter((test: any) => test.folder_name === openAdminFolder.name).map((test: any) => (
-                    <View key={test.id} style={{ marginBottom: 8 }}>
+                  {(() => {
+                    const folderTests = course?.tests?.filter((t: any) => t.folder_name === openAdminFolder.name) || [];
+                    return folderTests.map((test: any, idx: number) => (
+                      <View key={test.id} style={{ marginBottom: 8 }}>
                         <View style={[styles.testCard]}>
                           <View style={styles.testCardRow}>
                             <Text style={styles.testCardTitle}>{test.title}</Text>
-                            <View style={{ flexDirection: "row", gap: 4 }}>
+                            <View style={{ flexDirection: "row", gap: 4, alignItems: "center" }}>
+                              <Pressable
+                                style={[styles.deleteItemBtn, { backgroundColor: "#F3F4F6", opacity: idx === 0 ? 0.3 : 1 }]}
+                                disabled={idx === 0 || reorderMutation.isPending}
+                                onPress={() => moveItem("test", folderTests, idx, "up")}
+                              >
+                                <Ionicons name="chevron-up" size={13} color={Colors.light.text} />
+                              </Pressable>
+                              <Pressable
+                                style={[styles.deleteItemBtn, { backgroundColor: "#F3F4F6", opacity: idx === folderTests.length - 1 ? 0.3 : 1 }]}
+                                disabled={idx === folderTests.length - 1 || reorderMutation.isPending}
+                                onPress={() => moveItem("test", folderTests, idx, "down")}
+                              >
+                                <Ionicons name="chevron-down" size={13} color={Colors.light.text} />
+                              </Pressable>
                               <Pressable style={[styles.deleteItemBtn, { backgroundColor: "#EEF2FF" }]} onPress={() => {
                                 setFolderEditTest({ ...test, durationMinutes: String(test.duration_minutes), totalMarks: String(test.total_marks), difficulty: test.difficulty || "moderate" });
                               }}>
@@ -2146,8 +2231,9 @@ export default function AdminCourseScreen() {
                             </Pressable>
                           </View>
                         </View>
-                    </View>
-                  ))}
+                      </View>
+                    ));
+                  })()}
                 </>
               )}
               {openAdminFolder?.type === "lecture" && (
@@ -2242,23 +2328,42 @@ export default function AdminCourseScreen() {
                       <Text style={styles.infoText}>This folder is empty. Tap "Add Material" to add materials.</Text>
                     </View>
                   )}
-                  {course?.materials?.filter((m: any) => m.section_title === openAdminFolder.name).map((mat: any) => (
-                    <View key={mat.id} style={[styles.itemCard, { marginBottom: 8 }]}>
-                      <View style={styles.itemRow}>
-                        <View style={[styles.itemIcon, { backgroundColor: "#FEE2E2" }]}><Ionicons name="document-text" size={16} color="#DC2626" /></View>
-                        <View style={styles.itemInfo}>
-                          <Text style={styles.itemTitle}>{mat.title}</Text>
-                          <Text style={styles.itemMeta}>{mat.file_type?.toUpperCase() || "PDF"}</Text>
+                  {(() => {
+                    const folderMaterials = course?.materials?.filter((m: any) => m.section_title === openAdminFolder.name) || [];
+                    return folderMaterials.map((mat: any, idx: number) => (
+                      <View key={mat.id} style={[styles.itemCard, { marginBottom: 8 }]}>
+                        <View style={styles.itemRow}>
+                          <View style={[styles.itemIcon, { backgroundColor: "#FEE2E2" }]}><Ionicons name="document-text" size={16} color="#DC2626" /></View>
+                          <View style={styles.itemInfo}>
+                            <Text style={styles.itemTitle}>{mat.title}</Text>
+                            <Text style={styles.itemMeta}>{mat.file_type?.toUpperCase() || "PDF"}</Text>
+                          </View>
+                          <View style={{ flexDirection: "row", gap: 4, alignItems: "center" }}>
+                            <Pressable
+                              style={[styles.deleteItemBtn, { backgroundColor: "#F3F4F6", opacity: idx === 0 ? 0.3 : 1 }]}
+                              disabled={idx === 0 || reorderMutation.isPending}
+                              onPress={() => moveItem("material", folderMaterials, idx, "up")}
+                            >
+                              <Ionicons name="chevron-up" size={13} color={Colors.light.text} />
+                            </Pressable>
+                            <Pressable
+                              style={[styles.deleteItemBtn, { backgroundColor: "#F3F4F6", opacity: idx === folderMaterials.length - 1 ? 0.3 : 1 }]}
+                              disabled={idx === folderMaterials.length - 1 || reorderMutation.isPending}
+                              onPress={() => moveItem("material", folderMaterials, idx, "down")}
+                            >
+                              <Ionicons name="chevron-down" size={13} color={Colors.light.text} />
+                            </Pressable>
+                            <Pressable style={[styles.deleteItemBtn, { backgroundColor: "#EEF2FF" }]} onPress={() => setFolderEditMaterial({ ...mat, fileUrl: mat.file_url || "", fileType: mat.file_type || "pdf", sectionTitle: mat.section_title || "", description: mat.description || "", downloadAllowed: mat.download_allowed || false })}>
+                              <Ionicons name="pencil" size={14} color={Colors.light.primary} />
+                            </Pressable>
+                            <Pressable style={styles.deleteItemBtn} onPress={() => deleteMaterialMutation.mutate(mat.id)}>
+                              <Ionicons name="trash-outline" size={16} color="#EF4444" />
+                            </Pressable>
+                          </View>
                         </View>
-                        <Pressable style={[styles.deleteItemBtn, { backgroundColor: "#EEF2FF", marginRight: 4 }]} onPress={() => setFolderEditMaterial({ ...mat, fileUrl: mat.file_url || "", fileType: mat.file_type || "pdf", sectionTitle: mat.section_title || "", description: mat.description || "", downloadAllowed: mat.download_allowed || false })}>
-                          <Ionicons name="pencil" size={14} color={Colors.light.primary} />
-                        </Pressable>
-                        <Pressable style={styles.deleteItemBtn} onPress={() => deleteMaterialMutation.mutate(mat.id)}>
-                          <Ionicons name="trash-outline" size={16} color="#EF4444" />
-                        </Pressable>
                       </View>
-                    </View>
-                  ))}
+                    ));
+                  })()}
                 </>
               )}
           </ScrollView>

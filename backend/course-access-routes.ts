@@ -27,6 +27,31 @@ type RegisterCourseAccessRoutesDeps = {
   updateCourseProgress: (userId: number, courseId: number | string) => Promise<void>;
 };
 
+/**
+ * Lightweight in-memory rate limiter for /api/download-url.
+ * Tracks per-user request counts within a sliding 60-second window.
+ * Uses a Map that self-prunes on each check so memory stays bounded.
+ * Max 10 token requests per user per minute — enough for legitimate bulk
+ * downloads but stops hammering.
+ */
+const DOWNLOAD_URL_RATE_WINDOW_MS = 60_000;
+const DOWNLOAD_URL_RATE_MAX = 10;
+const downloadUrlRateMap = new Map<number, { count: number; windowStart: number }>();
+
+function checkDownloadUrlRateLimit(userId: number): boolean {
+  const now = Date.now();
+  const entry = downloadUrlRateMap.get(userId);
+  if (!entry || now - entry.windowStart >= DOWNLOAD_URL_RATE_WINDOW_MS) {
+    downloadUrlRateMap.set(userId, { count: 1, windowStart: now });
+    return true; // allowed
+  }
+  if (entry.count >= DOWNLOAD_URL_RATE_MAX) {
+    return false; // blocked
+  }
+  entry.count += 1;
+  return true; // allowed
+}
+
 export function registerCourseAccessRoutes({
   app,
   db,
@@ -305,8 +330,8 @@ export function registerCourseAccessRoutes({
         (course as any).courseEnded = false;
       }
       const lecturesResult = await db.query("SELECT * FROM lectures WHERE course_id = $1 ORDER BY order_index", [courseIdParam]);
-      const testsResult = await db.query("SELECT * FROM tests WHERE course_id = $1 AND is_published = TRUE ORDER BY created_at DESC, id DESC", [courseIdParam]);
-      const materialsResult = await db.query("SELECT * FROM study_materials WHERE course_id = $1", [courseIdParam]);
+      const testsResult = await db.query("SELECT * FROM tests WHERE course_id = $1 AND is_published = TRUE ORDER BY COALESCE(order_index, 0) ASC, created_at ASC, id ASC", [courseIdParam]);
+      const materialsResult = await db.query("SELECT * FROM study_materials WHERE course_id = $1 ORDER BY COALESCE(order_index, 0) ASC, created_at ASC, id ASC", [courseIdParam]);
       const fullLectures = lecturesResult.rows;
       const fullMaterials = materialsResult.rows;
       const responseLectures = fullLectures.map((row) => sanitizeLectureRowForClient(row as Record<string, unknown>));
@@ -432,6 +457,7 @@ export function registerCourseAccessRoutes({
 
       const materialsResult = await db.query(
         `SELECT sm.id, sm.title, sm.file_url, sm.file_type, sm.section_title, sm.download_allowed,
+                COALESCE(sm.order_index, 0) AS order_index, sm.course_id,
                 c.title AS course_title, 'material' AS type, ud.downloaded_at, ud.local_filename
          FROM user_downloads ud
          JOIN study_materials sm ON ud.item_id = sm.id
@@ -445,14 +471,14 @@ export function registerCourseAccessRoutes({
              AND (e.valid_until IS NULL OR e.valid_until > $2)
            )
          )
-         ORDER BY ud.downloaded_at DESC`,
+         ORDER BY c.title NULLS LAST, sm.section_title NULLS LAST, COALESCE(sm.order_index, 0) ASC`,
         [user.id, Date.now()]
       );
 
       const lecturesResult = await db.query(
         `SELECT l.id, l.title, COALESCE(l.video_url, l.pdf_url) AS file_url,
                 CASE WHEN l.video_url IS NOT NULL AND l.video_url != '' THEN 'video' ELSE 'pdf' END AS file_type,
-                l.section_title,
+                l.section_title, COALESCE(l.order_index, 0) AS order_index, l.course_id,
                 c.title AS course_title, 'lecture' AS type, ud.downloaded_at, ud.local_filename
          FROM user_downloads ud
          JOIN lectures l ON ud.item_id = l.id
@@ -466,7 +492,7 @@ export function registerCourseAccessRoutes({
              AND (e.valid_until IS NULL OR e.valid_until > $2)
            )
          )
-         ORDER BY ud.downloaded_at DESC`,
+         ORDER BY c.title NULLS LAST, l.section_title NULLS LAST, COALESCE(l.order_index, 0) ASC`,
         [user.id, Date.now()]
       );
 
@@ -521,6 +547,13 @@ export function registerCourseAccessRoutes({
       if (!user || (roleNorm !== "student" && roleNorm !== "admin")) {
         return res.status(401).json({ message: "Not authenticated" });
       }
+
+      // Rate limit: max 10 token requests per user per 60 seconds.
+      // Admins bypass this limit since they may test multiple downloads.
+      if (roleNorm === "student" && !checkDownloadUrlRateLimit(user.id)) {
+        return res.status(429).json({ message: "Too many download requests. Please wait a moment before trying again." });
+      }
+
       const bypassEnrollment = roleNorm === "admin";
 
       const { itemType, itemId } = req.query;

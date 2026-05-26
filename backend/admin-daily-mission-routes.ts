@@ -18,14 +18,17 @@ export function registerAdminDailyMissionRoutes({
 }: RegisterAdminDailyMissionRoutesDeps): void {
   app.post("/api/admin/daily-missions", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { title, description, questions, missionDate, xpReward, missionType, courseId } = req.body;
+      const { title, description, questions, missionDate, xpReward, missionType, courseId, folderName } = req.body;
       if (!title || !questions || !Array.isArray(questions) || questions.length === 0) {
         return res.status(400).json({ message: "Title and questions are required" });
       }
+      // Normalise folder_name: trim and store NULL for empty/omitted values so
+      // "ungrouped" missions have a consistent NULL rather than empty string.
+      const folderNameNorm = typeof folderName === "string" && folderName.trim() ? folderName.trim() : null;
       const result = await db.query(
-        `INSERT INTO daily_missions (title, description, questions, mission_date, xp_reward, mission_type, course_id) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-        [title, description || "", JSON.stringify(questions), missionDate || new Date().toISOString().split("T")[0], xpReward || 50, missionType || "daily_drill", courseId || null]
+        `INSERT INTO daily_missions (title, description, questions, mission_date, xp_reward, mission_type, course_id, folder_name)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+        [title, description || "", JSON.stringify(questions), missionDate || new Date().toISOString().split("T")[0], xpReward || 50, missionType || "daily_drill", courseId || null, folderNameNorm]
       );
       const row = result.rows[0];
       const cid = courseId != null && courseId !== "" ? String(courseId) : "";
@@ -66,10 +69,11 @@ export function registerAdminDailyMissionRoutes({
 
   app.put("/api/admin/daily-missions/:id", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { title, description, questions, missionDate, xpReward, missionType, courseId } = req.body;
+      const { title, description, questions, missionDate, xpReward, missionType, courseId, folderName } = req.body;
+      const folderNameNorm = typeof folderName === "string" && folderName.trim() ? folderName.trim() : null;
       await db.query(
-        `UPDATE daily_missions SET title=$1, description=$2, questions=$3, mission_date=$4, xp_reward=$5, mission_type=$6, course_id=$7 WHERE id=$8`,
-        [title, description || "", JSON.stringify(questions), missionDate, xpReward || 50, missionType, courseId || null, req.params.id]
+        `UPDATE daily_missions SET title=$1, description=$2, questions=$3, mission_date=$4, xp_reward=$5, mission_type=$6, course_id=$7, folder_name=$8 WHERE id=$9`,
+        [title, description || "", JSON.stringify(questions), missionDate, xpReward || 50, missionType, courseId || null, folderNameNorm, req.params.id]
       );
       res.json({ success: true });
     } catch {

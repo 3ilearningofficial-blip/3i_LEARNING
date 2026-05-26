@@ -49,6 +49,8 @@ export const lectures = pgTable("lectures", {
   orderIndex: integer("order_index").default(0),
   isFreePreview: boolean("is_free_preview").default(false),
   sectionTitle: text("section_title"),
+  // Column exists in DB via migration 0003. Raw SQL queries already use it.
+  downloadAllowed: boolean("download_allowed").default(false),
   // Live-class linkage: a recording lecture is tied 1:1 to its live class so the
   // finalize/insert path is idempotent. See migrations/0013.
   liveClassId: integer("live_class_id"),
@@ -88,6 +90,8 @@ export const studyMaterials = pgTable("study_materials", {
   isFree: boolean("is_free").default(true),
   sectionTitle: text("section_title"),
   downloadAllowed: boolean("download_allowed").default(false),
+  // Added via migration 0025 — controls display order in the course content list.
+  orderIndex: integer("order_index").default(0),
   createdAt: bigint("created_at", { mode: "number" }),
 });
 
@@ -103,6 +107,8 @@ export const tests = pgTable("tests", {
   testType: text("test_type").default("practice"),
   folderName: text("folder_name"),
   isPublished: boolean("is_published").default(true),
+  // Added via migration 0025 — controls display order in the course content list.
+  orderIndex: integer("order_index").default(0),
   createdAt: bigint("created_at", { mode: "number" }),
 });
 
@@ -146,6 +152,8 @@ export const dailyMissions = pgTable("daily_missions", {
   xpReward: integer("xp_reward").default(50),
   missionType: text("mission_type").default("daily_drill"),
   courseId: integer("course_id"),
+  // Added via migration 0025 — groups missions into named buckets in admin and user UI.
+  folderName: text("folder_name"),
 });
 
 export const userMissions = pgTable("user_missions", {
