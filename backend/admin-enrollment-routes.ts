@@ -73,7 +73,7 @@ export function registerAdminEnrollmentRoutes({
       }
 
       // Non-blocking audit log — must not affect the response
-      void writeEnrollmentAuditLog(db, adminUserId, "updated", req.params.id, {
+      void writeEnrollmentAuditLog(db, adminUserId, "updated", String(req.params.id), {
         old_status: oldRow.status,
         new_status: status,
         old_valid_until: oldRow.valid_until,
@@ -99,7 +99,7 @@ export function registerAdminEnrollmentRoutes({
         await db.query("DELETE FROM enrollments WHERE id = $1", [req.params.id]);
         await deleteDownloadsForUser(user_id, course_id);
         // Non-blocking audit log
-        void writeEnrollmentAuditLog(db, adminUserId, "deleted", req.params.id, {
+        void writeEnrollmentAuditLog(db, adminUserId, "deleted", String(req.params.id), {
           user_id,
           course_id,
           status: enrollment.rows[0].status,
