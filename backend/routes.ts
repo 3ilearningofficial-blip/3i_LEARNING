@@ -214,8 +214,10 @@ const generateAIAnswer = createGenerateAIAnswer(db);
 
 // db-bound wrappers — bind the db client so route files receive the same
 // (userId, courseId) / (courseId) signatures they always have.
+// Pass runInTransaction so updateCourseProgress can serialize concurrent
+// updates for the same user+course via SELECT FOR UPDATE (BUG-09 fix).
 const updateCourseProgress = (userId: number, courseId: number | string) =>
-  _updateCourseProgress(db, userId, courseId);
+  _updateCourseProgress(db, userId, courseId, runInTransaction);
 const recomputeAllEnrollmentsProgressForCourse = (courseId: number | string) =>
   _recomputeAllEnrollmentsProgressForCourse(db, courseId);
 const updateCourseTestCounts = (courseId: number | string) =>
@@ -242,7 +244,7 @@ async function getAuthUser(req: Request): Promise<AuthUserResolved> {
       const user = await getAuthUserFromRequest(req, db);
       if (!user) return null;
       const boundOk = await enforceInstallationBinding(db, req, user.id, user.role);
-      if (!boundOk) {
+      if (!boundOk.ok) {
         (req.session as any).user = null;
         return null;
       }
@@ -432,6 +434,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   registerDoubtNotificationRoutes({
     app,
     db,
+    pool,
     getAuthUser,
     requireAdmin,
     generateAIAnswer,

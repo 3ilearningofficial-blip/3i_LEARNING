@@ -276,8 +276,34 @@ export function useLiveKitRoom(
 
   useEffect(() => {
     if (!connected || !boardEl || !tokenPayload?.canPublish) return;
-    if (!isClassroomBoardCaptureReady(editor, boardEl)) return;
-    void startCompositePublish();
+
+    // tldraw mounts its editor synchronously (onMount fires before React's next paint),
+    // but the underlying <canvas> element may not have rendered its first frame yet —
+    // isClassroomBoardCaptureReady checks for canvas.width > 0 which is 0 until paint.
+    // If we return early without a retry, the PIP / composite stream never starts and
+    // the teacher must toggle camera off/on to recover.
+    //
+    // Strategy: try immediately; if not ready, retry at 500 ms and again at 1500 ms.
+    // By 1.5 s the canvas is always painted; startCompositePublish guards itself too.
+    if (isClassroomBoardCaptureReady(editor, boardEl)) {
+      void startCompositePublish();
+      return;
+    }
+
+    const t1 = setTimeout(() => {
+      if (isClassroomBoardCaptureReady(editor, boardEl)) void startCompositePublish();
+    }, 500);
+
+    const t2 = setTimeout(() => {
+      // Unconditional at 1.5 s — startCompositePublish checks readiness internally
+      // and guards against concurrent calls via publishingRef.
+      void startCompositePublish();
+    }, 1500);
+
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
   }, [connected, boardEl, editor, tokenPayload?.canPublish, startCompositePublish]);
 
   const toggleMic = async () => {

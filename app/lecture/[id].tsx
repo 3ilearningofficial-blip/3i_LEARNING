@@ -544,7 +544,12 @@ export default function LectureScreen() {
     const cached = mediaTokenCache.get(userScopedMediaKey);
     if (cached && cached.expiresAt > Date.now()) {
       setMediaToken(cached.token);
-      setMediaReadUrl(cached.readUrl ?? null);
+      // Only use presigned readUrl if it has >90 s of life remaining.
+      // Within the last 90 s fall back to the /api/media/* proxy (token still valid).
+      const readUrlSafe = cached.readUrl && cached.expiresAt > Date.now() + 90_000
+        ? cached.readUrl
+        : null;
+      setMediaReadUrl(readUrlSafe);
       setMediaTokenError(null);
       return;
     }

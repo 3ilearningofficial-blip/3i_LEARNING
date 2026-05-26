@@ -119,7 +119,10 @@ export default function AdminClassroomPage() {
     if (Platform.OS !== "web") return;
     const el = getBoardDomElement();
     if (el) setBoardEl(el);
-  }, [sessionActive, getBoardDomElement, endModalOpen]);
+    // Also re-read when editor mounts: the slide frame is always in the DOM but we
+    // want boardEl to be set as soon as both the DOM element and the tldraw editor
+    // are available, so useLiveKitRoom can start the composite stream promptly.
+  }, [sessionActive, getBoardDomElement, endModalOpen, editor]);
 
   const { uploadCheckpoint } = useClassroomBoardCheckpoint(
     liveClassId,

@@ -421,10 +421,31 @@ export default function MaterialViewerScreen() {
       return;
     }
     if (isGDrive || isYouTube) return; // not needed for these
+
+    // Free materials are served by /api/media/* without authentication.
+    // The pdf-viewer endpoint also accepts free files without a token.
+    // Skipping the token fetch prevents spurious 401s when the session has
+    // expired or the user is not logged in (free content should always load).
+    if (material.is_free) {
+      setMediaToken(null);
+      setMediaReadUrl(null);
+      setMediaTokenError(null);
+      setLoading(false);
+      return;
+    }
+
     const cached = mediaTokenCache.get(fileKey);
     if (cached && cached.expiresAt > Date.now()) {
       setMediaToken(cached.token);
-      setMediaReadUrl(cached.readUrl ?? null);
+      // Only use the presigned readUrl if it has more than 90 seconds of life left.
+      // Presigned R2 URLs share the same ~10-min TTL as the media token, but clocks
+      // and round-trip time mean they can expire slightly before expiresAt.  Within
+      // the last 90 s we fall back to the /api/media/* proxy URL (token is still
+      // valid so it will be accepted) rather than serving an about-to-expire URL.
+      const readUrlSafe = cached.readUrl && cached.expiresAt > Date.now() + 90_000
+        ? cached.readUrl
+        : null;
+      setMediaReadUrl(readUrlSafe);
       setMediaTokenError(null);
       return;
     }
@@ -468,9 +489,16 @@ export default function MaterialViewerScreen() {
       : (fileUrl || "")
   ) || fileUrl;
 
-  // PDF viewer URL — server-rendered page with pdf.js (no browser PDF controls)
-  const pdfViewerUrl = mediaToken && fileKey
-    ? `${apiBaseUrl}/api/pdf-viewer?key=${encodeURIComponent(fileKey)}&token=${mediaToken}`
+  // PDF viewer URL — server-rendered page with pdf.js (no browser PDF controls).
+  // For paid materials we include the short-lived media token.
+  // For free materials the backend now accepts the request without a token, so
+  // we omit it — this prevents 401s when the session has expired.
+  const pdfViewerUrl = fileKey
+    ? (mediaToken
+        ? `${apiBaseUrl}/api/pdf-viewer?key=${encodeURIComponent(fileKey)}&token=${mediaToken}`
+        : material?.is_free
+          ? `${apiBaseUrl}/api/pdf-viewer?key=${encodeURIComponent(fileKey)}`
+          : null)
     : null;
 
   return (

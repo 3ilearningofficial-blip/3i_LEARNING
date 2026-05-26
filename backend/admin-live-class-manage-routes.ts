@@ -46,6 +46,16 @@ export function registerAdminLiveClassManageRoutes({
         WHERE is_live = true RETURNING id, title
       `);
       console.log(`[Cleanup] Marked ${updateResult.rows.length} live classes as completed`);
+      // Purge engagement rows for all classes just completed.
+      const completedIds = updateResult.rows.map((r: any) => r.id);
+      if (completedIds.length > 0) {
+        await db
+          .query("DELETE FROM live_class_viewers WHERE live_class_id = ANY($1::int[])", [completedIds])
+          .catch(() => {});
+        await db
+          .query("DELETE FROM live_class_hand_raises WHERE live_class_id = ANY($1::int[])", [completedIds])
+          .catch(() => {});
+      }
       res.json({ success: true, message: `Marked ${updateResult.rows.length} live classes as completed`, cleaned: updateResult.rows.length, classes: updateResult.rows });
     } catch (err) {
       console.error("[Cleanup] Error:", err);
@@ -333,6 +343,18 @@ export function registerAdminLiveClassManageRoutes({
             recomputeCourseProgress: recomputeAllEnrollmentsProgressForCourse,
           });
         }
+      }
+
+      // Clean up engagement rows when a class ends.
+      // live_class_viewers and live_class_hand_raises accumulate permanently
+      // if not purged — each class × each student adds a row forever.
+      if (isCompleted === true || isLive === false) {
+        await db
+          .query("DELETE FROM live_class_viewers WHERE live_class_id = $1", [req.params.id])
+          .catch(() => {});
+        await db
+          .query("DELETE FROM live_class_hand_raises WHERE live_class_id = $1", [req.params.id])
+          .catch(() => {});
       }
 
       res.json(liveClass);

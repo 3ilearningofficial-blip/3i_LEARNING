@@ -341,7 +341,10 @@ export default function WelcomeScreen() {
       return res.json();
     },
     enabled: !!pankajMediaKey && !!user?.id,
-    staleTime: 5 * 60 * 1000,
+    staleTime: 8 * 60 * 1000,
+    // gcTime must be shorter than the presigned URL TTL (10 min) so React Query
+    // discards the cached readUrl before it expires and causes a 404.
+    gcTime: 9 * 60 * 1000,
   });
   const pankajPhotoWithToken = React.useMemo(() => {
     if (!pankajPhotoResolved) return pankajPhotoResolved;

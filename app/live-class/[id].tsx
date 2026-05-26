@@ -579,7 +579,12 @@ export default function LiveClassScreen() {
     const cached = mediaTokenCache.get(userScopedRecordingKey);
     if (cached && cached.expiresAt > Date.now()) {
       setRecordingToken(cached.token);
-      setRecordingReadUrl(cached.readUrl ?? null);
+      // Only use presigned readUrl if it has >90 s of life remaining.
+      // Within the last 90 s fall back to the /api/media/* proxy (token still valid).
+      const readUrlSafe = cached.readUrl && cached.expiresAt > Date.now() + 90_000
+        ? cached.readUrl
+        : null;
+      setRecordingReadUrl(readUrlSafe);
       setRecordingTokenError(null);
       return;
     }

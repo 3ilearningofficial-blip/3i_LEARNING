@@ -348,7 +348,20 @@ export function registerSupportRoutes({
         "INSERT INTO support_messages (user_id, sender, message, created_at) VALUES ($1, 'admin', $2, $3) RETURNING *",
         [req.params.userId, message.trim().slice(0, 1000), Date.now()]
       );
-      res.json(result.rows[0]);
+      const row = result.rows[0];
+      // Explicitly notify student SSE stream so real-time delivery is guaranteed
+      // in code — not dependent on a database trigger from migration 0012.
+      // Payload format must match what the student /stream handler expects: { userId, id }.
+      try {
+        await db.query("SELECT pg_notify('support_chat', $1)", [
+          JSON.stringify({ userId: Number(req.params.userId), id: row.id }),
+        ]);
+      } catch (notifyErr) {
+        // pg_notify failure is non-fatal — the message is already persisted.
+        // Student will see it on next poll/refresh. Log for ops visibility.
+        console.error("[SupportAdmin] pg_notify failed for reply to userId=%s msgId=%s:", req.params.userId, row.id, notifyErr);
+      }
+      res.json(row);
     } catch {
       res.status(500).json({ message: "Failed to send reply" });
     }

@@ -463,6 +463,11 @@ export function registerAuthRoutes({
         if (lockedUntil > Date.now()) {
           return res.status(429).json({ message: "Too many attempts. Please try again later." });
         }
+        // Check expiry FIRST — an expired OTP must not increment the fail counter
+        // (incrementing on expiry causes premature lockouts for legitimate users).
+        if (Date.now() > Number(user.otp_expires_at)) {
+          return res.status(401).json({ message: GENERIC_OTP_ERROR });
+        }
         if (!verifyOtpValue(user.otp, otp)) {
           const lockMs = Date.now() + 15 * 60 * 1000;
           await db.query(
@@ -474,7 +479,6 @@ export function registerAuthRoutes({
           );
           return res.status(401).json({ message: GENERIC_OTP_ERROR });
         }
-        if (Date.now() > Number(user.otp_expires_at)) return res.status(401).json({ message: GENERIC_OTP_ERROR });
 
         const loginGate = await assertLoginAllowedForInstallation(db, req, {
           userId: user.id,
@@ -507,7 +511,11 @@ export function registerAuthRoutes({
       if (verifyLockedUntil > nowMs) {
         return res.status(429).json({ message: "Too many attempts. Please try again later." });
       }
-      if (!verifyOtpValue(ch.otp_hash, otp) || nowMs > Number(ch.otp_expires_at || 0)) {
+      // Check expiry FIRST — expired OTPs must not increment fail counter.
+      if (nowMs > Number(ch.otp_expires_at || 0)) {
+        return res.status(401).json({ message: GENERIC_OTP_ERROR });
+      }
+      if (!verifyOtpValue(ch.otp_hash, otp)) {
         const failCount = Number(ch.verify_failed_attempts || 0) + 1;
         const lockUntil = failCount >= 5 ? nowMs + 15 * 60 * 1000 : null;
         await db.query(
@@ -605,9 +613,9 @@ export function registerAuthRoutes({
               photo_url: row.photo_url,
             };
             const bindBearer = await enforceInstallationBinding(db, req, row.id as number, row.role as string);
-            if (!bindBearer) {
+            if (!bindBearer.ok) {
               (req.session as any).user = null;
-              return res.status(401).json({ message: "device_binding_mismatch" });
+              return res.status(401).json({ message: bindBearer.code });
             }
             const platBearer = await assertActiveSessionPlatformMatches(db, req, row.id as number, row.role as string);
             if (!platBearer.ok) {
@@ -630,8 +638,13 @@ export function registerAuthRoutes({
       return res.status(200).json({});
     }
     try {
+      // Include the extra columns needed for inline session-token validation so we
+      // can skip the second DB query that userHasSessionToken() would otherwise make.
       const dbUser = await db.query(
-        "SELECT id, name, email, phone, role, session_token, profile_complete, date_of_birth, photo_url, is_blocked FROM users WHERE id = $1",
+        `SELECT id, name, email, phone, role, session_token, profile_complete,
+                date_of_birth, photo_url, is_blocked,
+                last_active_at, app_bound_device_id, web_device_id_phone, web_device_id_desktop
+         FROM users WHERE id = $1`,
         [sessionUser.id]
       );
       if (dbUser.rows.length === 0) {
@@ -644,14 +657,40 @@ export function registerAuthRoutes({
         return res.status(403).json({ message: "account_blocked" });
       }
       const tok = sessionUser.sessionToken;
-      if (tok && !(await userHasSessionToken(db, sessionUser.id, tok))) {
-        (req.session as any).user = null;
-        return res.status(401).json({ message: "logged_in_elsewhere" });
+      // BUG-10 fix: validate session token inline using the row we already fetched.
+      // This avoids a second SELECT FROM users (what userHasSessionToken() used to do).
+      // Logic mirrors userHasSessionToken + isLastActiveValid + sessionMinActiveAt exactly.
+      if (tok) {
+        const la = Number(row.last_active_at || 0);
+        const hasBound = !!(row.app_bound_device_id || row.web_device_id_phone || row.web_device_id_desktop);
+        const maxAgeMs = (row.role === "admin" || hasBound)
+          ? 10 * 365 * 24 * 60 * 60 * 1000  // 10-year sessions for admins / bound devices
+          : 30 * 24 * 60 * 60 * 1000;         // 30-day sessions for unbound students
+        const isActive = !la || la >= Date.now() - maxAgeMs;
+        const primaryMatches = row.session_token === tok && isActive;
+        if (!primaryMatches) {
+          if (row.role === "admin") {
+            // Admins support multiple concurrent sessions stored in user_sessions table.
+            // Fall back to that table only when the primary token doesn't match (rare).
+            const minAge = Date.now() - 10 * 365 * 24 * 60 * 60 * 1000;
+            const sess = await db.query(
+              "SELECT 1 FROM user_sessions WHERE user_id = $1 AND session_token = $2 AND created_at >= $3",
+              [sessionUser.id, tok, minAge]
+            );
+            if (sess.rows.length === 0) {
+              (req.session as any).user = null;
+              return res.status(401).json({ message: "logged_in_elsewhere" });
+            }
+          } else {
+            (req.session as any).user = null;
+            return res.status(401).json({ message: "logged_in_elsewhere" });
+          }
+        }
       }
       const bindSes = await enforceInstallationBinding(db, req, sessionUser.id, row.role);
-      if (!bindSes) {
+      if (!bindSes.ok) {
         (req.session as any).user = null;
-        return res.status(401).json({ message: "device_binding_mismatch" });
+        return res.status(401).json({ message: bindSes.code });
       }
       const platSes = await assertActiveSessionPlatformMatches(db, req, sessionUser.id, row.role);
       if (!platSes.ok) {

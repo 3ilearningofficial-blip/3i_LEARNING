@@ -64,30 +64,70 @@ function mediaProxyUrl(publicBase: string, fileKey: string, token: string): stri
 export function registerPdfRoutes({ app, db, getAuthUser, getR2Client }: RegisterPdfRoutesDeps): void {
   app.get("/api/pdf-viewer", async (req: Request, res: Response) => {
     const { token, key } = req.query;
-    if (!token || !key || typeof token !== "string" || typeof key !== "string") {
-      return res.status(400).send("Missing token or key");
+    // Only `key` is strictly required — `token` is optional for free materials.
+    if (!key || typeof key !== "string") {
+      return res.status(400).send("Missing key");
     }
     const fileKey = canonicalMediaKey(key);
     if (!fileKey) {
       return res.status(400).send("Invalid key");
     }
-    const tokenResult = await db
-      .query("SELECT user_id, expires_at FROM media_tokens WHERE token = $1 AND expires_at > $2 AND file_key = $3", [
-        token,
-        Date.now(),
-        fileKey,
-      ])
-      .catch(() => ({ rows: [] as any[] }));
-    if (!tokenResult.rows.length) {
-      return res.status(401).send("Token expired or invalid");
+
+    let expMs: number | null = null;
+    let validToken: string | null = null;
+
+    // Try to validate the provided token (if any).
+    if (token && typeof token === "string") {
+      const tokenResult = await db
+        .query("SELECT user_id, expires_at FROM media_tokens WHERE token = $1 AND expires_at > $2 AND file_key = $3", [
+          token,
+          Date.now(),
+          fileKey,
+        ])
+        .catch(() => ({ rows: [] as any[] }));
+      if (tokenResult.rows.length > 0) {
+        expMs = Number(tokenResult.rows[0].expires_at);
+        validToken = token;
+      }
     }
-    const expiresAt = Number(tokenResult.rows[0].expires_at);
-    const expMs = Number.isFinite(expiresAt) ? expiresAt : Date.now() + 10 * 60 * 1000;
+
+    // If no valid token, check whether this is a free-access material.
+    // Free materials are already served without auth by /api/media/*; the PDF
+    // viewer just adds the DRM-like rendering layer on top — same permission level.
+    if (expMs === null) {
+      // Match the stored file_url against the canonical fileKey using the same
+      // regexp_replace normalization as the media-stream and course-access routes.
+      // We deliberately avoid LIKE/ILIKE here because fileKey is user-provided and
+      // LIKE special characters (% _) would make the match incorrectly broad.
+      const freeCheck = await db
+        .query(
+          `SELECT 1 FROM study_materials
+           WHERE is_free = TRUE
+             AND (
+               regexp_replace(regexp_replace(COALESCE(file_url,''),'^https?://[^/]+/',''),'^/+','') = $1
+               OR regexp_replace(COALESCE(file_url,''),'^https?://[^/]+/','') = $1
+             )
+           LIMIT 1`,
+          [fileKey]
+        )
+        .catch(() => ({ rows: [] as any[] }));
+
+      if (!freeCheck.rows.length) {
+        return res.status(401).send("Token expired or invalid");
+      }
+      // Free material — grant a 10-minute presigned window.
+      expMs = Date.now() + 10 * 60 * 1000;
+    }
+
     const ttlSec = Math.max(60, Math.floor((expMs - Date.now()) / 1000));
     const readUrl = await presignR2GetObject(getR2Client, fileKey, ttlSec);
     const publicBase = publicApiBaseUrl();
-    const pdfUrl = readUrl || mediaProxyUrl(publicBase, fileKey, token);
-    const withCredentials = !readUrl;
+    // Use token-based proxy only when the request carried a valid media token.
+    const pdfUrl = readUrl || (validToken ? mediaProxyUrl(publicBase, fileKey, validToken) : null);
+    if (!pdfUrl) {
+      return res.status(500).send("Unable to generate access URL for this file");
+    }
+    const withCredentials = false; // presigned URL or no-auth media route — no credentials needed
     const html = `<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">

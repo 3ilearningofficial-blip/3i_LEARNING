@@ -218,6 +218,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   }, [user?.id]);
 
+  // Periodic background session keep-alive.
+  // After 1-1.5 hours without a re-validation (e.g. during a live class where
+  // the page stays open), auth state can go stale: the server may have revoked
+  // the session, the user could have logged in on another device, or a cookie
+  // rotation could have happened.  Refreshing every 15 minutes prevents all of
+  // those from causing a surprise 401 mid-session.
+  //
+  // We use a ref so the setInterval callback always calls the CURRENT refreshUser
+  // closure without needing to restart the interval on every render.
+  const refreshUserRef = React.useRef(refreshUser);
+  useEffect(() => {
+    refreshUserRef.current = refreshUser;
+  });
+
+  useEffect(() => {
+    if (!user?.id) return;
+    const intervalMs = 15 * 60 * 1000; // 15 minutes
+    const id = setInterval(() => {
+      refreshUserRef.current().catch(() => {});
+    }, intervalMs);
+    return () => clearInterval(id);
+  }, [user?.id]);
+
   useEffect(() => {
     setUnauthorizedHandler(async () => {
       if (Platform.OS === "web") {

@@ -65,14 +65,32 @@ export function registerLiveClassRoutes({
 
       if (admin === "true" && user?.role === "admin") {
         if (cid) {
+          // BUG-15 fix: add LIMIT so a course with many historical classes doesn't send
+          // an unbounded payload. 500 is generous — no single course needs more at once.
           const result = await db.query(
-            "SELECT lc.*, c.title as course_title FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id WHERE lc.course_id = $1 ORDER BY lc.scheduled_at DESC",
+            `SELECT lc.*, c.title as course_title
+             FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
+             WHERE lc.course_id = $1
+             ORDER BY lc.scheduled_at DESC
+             LIMIT 500`,
             [cid]
           );
           res.set("Cache-Control", "private, no-store");
           return res.json(result.rows.map(sanitizeLiveClass));
         }
-        const result = await db.query("SELECT lc.*, c.title as course_title FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id ORDER BY lc.scheduled_at DESC");
+        // BUG-15 fix: paginate the all-classes admin listing.
+        // Accepts ?limit=N (1–500, default 200) and ?offset=N (default 0).
+        const rawLimit  = parseInt(String(req.query.limit  || "200"), 10);
+        const rawOffset = parseInt(String(req.query.offset || "0"),   10);
+        const safeLimit  = Number.isFinite(rawLimit)  && rawLimit  > 0 ? Math.min(rawLimit,  500) : 200;
+        const safeOffset = Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 0;
+        const result = await db.query(
+          `SELECT lc.*, c.title as course_title
+           FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
+           ORDER BY lc.scheduled_at DESC
+           LIMIT $1 OFFSET $2`,
+          [safeLimit, safeOffset]
+        );
         res.set("Cache-Control", "private, no-store");
         return res.json(result.rows.map(sanitizeLiveClass));
       }
@@ -178,12 +196,21 @@ export function registerLiveClassRoutes({
         res.set("Cache-Control", "private, no-store");
         return res.json(upcomingCache);
       }
+      // Only expose classes that are explicitly public, free, or free-preview.
+      // Private paid-course classes must NOT appear on this unauthenticated feed —
+      // their schedule, title, and course details would be visible to anyone otherwise.
       const result = await db.query(`
         SELECT lc.*, c.title as course_title, c.is_free as course_is_free, c.category as course_category
         FROM live_classes lc
         LEFT JOIN courses c ON c.id = lc.course_id
         WHERE lc.is_completed IS NOT TRUE
-        ORDER BY 
+          AND (
+            lc.course_id IS NULL
+            OR lc.is_public = TRUE
+            OR lc.is_free_preview = TRUE
+            OR c.is_free = TRUE
+          )
+        ORDER BY
           lc.is_live DESC,
           lc.scheduled_at ASC NULLS LAST
         LIMIT 50

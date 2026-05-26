@@ -171,14 +171,18 @@ function startLiveClassNotificationScheduler(
             );
             console.log(`[LiveNotif] 30min reminder sent for class=${lc.id} recipients=${inserted.rows.length}`);
           } else {
-            // Paid class — notify enrolled students only
+            // Paid class — notify only students with an active, non-expired enrollment.
+            // This prevents revoked or expired students from receiving reminders for
+            // classes they can no longer attend.
             const inserted = await db.query(
               `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
                SELECT e.user_id, $1, $2, 'info', $3, $4
                FROM enrollments e
                WHERE e.course_id = $5
+                 AND (e.status = 'active' OR e.status IS NULL)
+                 AND (e.valid_until IS NULL OR e.valid_until > $6)
                RETURNING user_id`,
-              [notifTitle, notifMessage, now, expiresAt, lc.course_id]
+              [notifTitle, notifMessage, now, expiresAt, lc.course_id, now]
             );
             await sendPushToUsers(
               db,
@@ -228,12 +232,15 @@ function startLiveClassNotificationScheduler(
 function startDownloadTokenCleanupScheduler(db: DbClient): void {
   setInterval(async () => {
     try {
+      // Delete ALL expired tokens — both used and unused (abandoned registrations).
+      // Previously only used=TRUE tokens were cleaned, leaving unused-but-expired
+      // tokens to accumulate indefinitely.
       const result = await db.query(
         `DELETE FROM download_tokens
          WHERE id IN (
            SELECT id
            FROM download_tokens
-           WHERE expires_at < $1 AND used = TRUE
+           WHERE expires_at < $1
            ORDER BY expires_at ASC
            LIMIT 2000
          )`,

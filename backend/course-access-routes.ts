@@ -621,22 +621,33 @@ export function registerCourseAccessRoutes({
 
   app.get("/api/download-proxy", async (req: Request, res: Response) => {
     try {
-      const user = await getAuthUser(req);
-      if (!user) return res.status(401).json({ message: "Not authenticated" });
       const { token } = req.query;
       if (!token || typeof token !== "string") {
         return res.status(400).json({ message: "Token required" });
       }
 
+      // Validate and consume the download token BEFORE checking the session.
+      // This order matters: if the session has expired in the few minutes between
+      // /api/download-url (minting) and /api/download-proxy (consuming), we still
+      // want to honour the download.  The token was minted only after full auth +
+      // enrollment verification, so tokenData.user_id is authoritative.
       const tokenResult = await db.query(
         "DELETE FROM download_tokens WHERE token = $1 AND expires_at > $2 RETURNING *",
         [token, Date.now()]
       );
       if (tokenResult.rows.length === 0) {
+        // Token is absent or expired — we need a session to tell the user to re-auth.
+        const user = await getAuthUser(req);
+        if (!user) return res.status(401).json({ message: "Not authenticated" });
         return res.status(403).json({ message: "Token invalid or expired" });
       }
       const tokenData = tokenResult.rows[0];
-      if (Number(tokenData.user_id) !== Number(user.id)) {
+
+      // If the session is still active, verify it belongs to the same user.
+      // If the session has expired (user === null) we trust tokenData.user_id —
+      // the token could only have been minted by that user.
+      const user = await getAuthUser(req);
+      if (user && Number(tokenData.user_id) !== Number(user.id)) {
         return res.status(403).json({ message: "Token does not belong to this user" });
       }
 

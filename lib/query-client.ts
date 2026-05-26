@@ -377,21 +377,44 @@ export async function fetchMediaToken(fileKey: string): Promise<MediaTokenResult
   await attachInstallationHeaders(headers);
   const ctrl = new AbortController();
   const timeout = setTimeout(() => ctrl.abort(), 12000);
+
+  const fetchOptions: RequestInit = {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ fileKey }),
+    credentials: "include",
+    signal: ctrl.signal,
+  };
+
   let res: Response;
   try {
-    res = await doFetchWithRetry(url.toString(), {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ fileKey }),
-      credentials: "include",
-      signal: ctrl.signal,
-    });
-  } catch (err) {
-    clearTimeout(timeout);
-    if (err instanceof Error && err.name === "AbortError") {
+    // doFetchWithRetry does not retry POST requests on network errors (by design,
+    // to avoid unintended side-effects on non-idempotent endpoints).  Here we add
+    // one explicit retry because token minting IS idempotent — a duplicate row
+    // just expires automatically.  This recovers from ERR_NETWORK_CHANGED during
+    // live classes or brief wifi↔4G switches without user intervention.
+    res = await doFetch(url.toString(), fetchOptions);
+  } catch (firstErr) {
+    // AbortError means our 12-second timeout fired — don't retry.
+    if (firstErr instanceof Error && firstErr.name === "AbortError") {
+      clearTimeout(timeout);
       return { ok: false, status: 504, message: "Media token request timed out. Please retry." };
     }
-    return { ok: false, status: 500, message: err instanceof Error ? err.message : "Failed to fetch media token" };
+    // Network error — wait 600 ms then try once more.
+    try {
+      await new Promise((r) => setTimeout(r, 600));
+      res = await doFetch(url.toString(), fetchOptions);
+    } catch (retryErr) {
+      clearTimeout(timeout);
+      if (retryErr instanceof Error && retryErr.name === "AbortError") {
+        return { ok: false, status: 504, message: "Media token request timed out. Please retry." };
+      }
+      return {
+        ok: false,
+        status: 500,
+        message: retryErr instanceof Error ? retryErr.message : "Failed to fetch media token",
+      };
+    }
   }
   clearTimeout(timeout);
   if (!res.ok) {
