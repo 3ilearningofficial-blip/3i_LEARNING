@@ -16,7 +16,10 @@ export function registerTestAttemptRoutes({
   db,
   getAuthUser,
 }: RegisterTestAttemptRoutesDeps): void {
-  app.get("/api/tests/:id/my-attempts", async (req: Request, res: Response) => {
+  // BUG-14 fix: both the hyphenated and underscored variants of this URL are used
+  // by different versions of the mobile app. Instead of copy-pasting the handler,
+  // define it once and register both paths against the same function.
+  const handleMyAttempts = async (req: Request, res: Response) => {
     try {
       const user = await getAuthUser(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
@@ -32,25 +35,9 @@ export function registerTestAttemptRoutes({
     } catch {
       res.status(500).json({ message: "Failed to fetch attempts" });
     }
-  });
-
-  app.get("/api/tests/:id/my_attempts", async (req: Request, res: Response) => {
-    try {
-      const user = await getAuthUser(req);
-      if (!user) return res.status(401).json({ message: "Not authenticated" });
-      const result = await db.query(
-        `SELECT ta.id, ta.score, ta.total_marks, ta.percentage, ta.correct, ta.incorrect,
-                ta.attempted, ta.time_taken_seconds, ta.completed_at, ta.status
-         FROM test_attempts ta
-         WHERE ta.user_id = $1 AND ta.test_id = $2 AND ta.status = 'completed'
-         ORDER BY ta.completed_at DESC`,
-        [user.id, req.params.id]
-      );
-      res.json(result.rows);
-    } catch {
-      res.status(500).json({ message: "Failed to fetch attempts" });
-    }
-  });
+  };
+  app.get("/api/tests/:id/my-attempts", handleMyAttempts); // canonical (hyphen)
+  app.get("/api/tests/:id/my_attempts", handleMyAttempts); // legacy alias (underscore)
 
   app.get("/api/tests/:id/analysis/:attemptId", async (req: Request, res: Response) => {
     try {

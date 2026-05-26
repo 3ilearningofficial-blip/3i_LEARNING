@@ -222,14 +222,24 @@ function studentInstallationMatchesActiveSession(
   return cand === appb;
 }
 
-/** Block session/API access if account is bound to another installation id. */
+export type EnforceBindingResult =
+  | { ok: true }
+  | { ok: false; code: "device_binding_mismatch" | "device_id_missing" };
+
+/**
+ * Block session/API access if account is bound to another installation id.
+ * Returns a typed result so callers can distinguish:
+ *   - device_binding_mismatch: device ID present but doesn't match bound slot
+ *   - device_id_missing: account has a binding but no device ID header was sent
+ *     (e.g. user cleared browser storage, or mobile app lost the ID)
+ */
 export async function enforceInstallationBinding(
   db: DbLike,
   req: Request,
   userId: number,
   role: string | undefined
-): Promise<boolean> {
-  if (role === "admin") return true;
+): Promise<EnforceBindingResult> {
+  if (role === "admin") return { ok: true };
 
   const r = await db.query(
     `SELECT COALESCE(app_bound_device_id, '') AS appb,
@@ -238,7 +248,7 @@ export async function enforceInstallationBinding(
      FROM users WHERE id = $1`,
     [userId]
   );
-  if (!r.rows.length) return true;
+  if (!r.rows.length) return { ok: true };
 
   const row = r.rows[0];
   const appb = String(row.appb ?? "").trim();
@@ -248,16 +258,23 @@ export async function enforceInstallationBinding(
   const cand = getInstallationIdFromRequest(req);
   const plat = getClientPlatform(req);
 
-  if (!wph && !wdk && !appb) return true;
+  // No bindings at all — allow everyone through.
+  if (!wph && !wdk && !appb) return { ok: true };
 
-  if (!cand || cand === "web_anon") return false;
+  // Account is bound but device ID header is absent (missing header, cleared
+  // storage, or stale client). Return a distinct code so the frontend can show
+  // a meaningful message instead of a generic "not authenticated" screen.
+  if (!cand || cand === "web_anon") {
+    return { ok: false, code: "device_id_missing" };
+  }
 
-  return studentInstallationMatchesActiveSession(
+  const matches = studentInstallationMatchesActiveSession(
     { app_bound_device_id: appb, web_device_id_phone: wph, web_device_id_desktop: wdk },
     req,
     cand,
     plat
   );
+  return matches ? { ok: true } : { ok: false, code: "device_binding_mismatch" };
 }
 
 type LoginDeviceResult =

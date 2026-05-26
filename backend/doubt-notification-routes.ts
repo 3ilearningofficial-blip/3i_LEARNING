@@ -1,4 +1,11 @@
 import type { Express, Request, Response } from "express";
+import type { Pool } from "pg";
+import { takeSupportPostSlotPg } from "./pg-rate-limit-store";
+
+// AI tutor rate limit: max 20 requests per hour per student.
+// Each call triggers 3 DB queries + an LLM API call — uncapped use is expensive.
+const AI_TUTOR_RATE_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+const AI_TUTOR_RATE_MAX = 20;
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -7,6 +14,7 @@ type DbClient = {
 type RegisterDoubtNotificationRoutesDeps = {
   app: Express;
   db: DbClient;
+  pool: Pool;
   getAuthUser: (req: Request) => Promise<any>;
   requireAdmin: (req: Request, res: Response, next: () => void) => any;
   generateAIAnswer: (question: string, topic?: string, userId?: number) => Promise<string>;
@@ -15,6 +23,7 @@ type RegisterDoubtNotificationRoutesDeps = {
 export function registerDoubtNotificationRoutes({
   app,
   db,
+  pool,
   getAuthUser,
   requireAdmin,
   generateAIAnswer,
@@ -66,6 +75,16 @@ export function registerDoubtNotificationRoutes({
     try {
       const user = await getAuthUser(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
+
+      // Rate-limit AI tutor calls per student — each call costs LLM API credits
+      // and triggers 3 DB queries. Without a limit, a single user can exhaust quota.
+      const slot = await takeSupportPostSlotPg(pool, user.id, AI_TUTOR_RATE_WINDOW_MS, AI_TUTOR_RATE_MAX);
+      if (!slot.ok) {
+        return res.status(429).json({
+          message: `Too many AI tutor requests. Try again in about ${slot.retryAfterSec} seconds.`,
+        });
+      }
+
       const { question, topic } = req.body;
       const aiAnswer = await generateAIAnswer(question, topic, user.id);
       const result = await db.query(

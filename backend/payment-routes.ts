@@ -398,7 +398,13 @@ export function registerPaymentRoutes({
       if (pay.rows.length === 0) {
         return res.json({ ok: true, fixed: false, message: "No paid order for this course" });
       }
-      await ensureCourseEnrollment(db, pay.rows[0]);
+      // Wrap in a transaction so the SELECT FOR UPDATE inside ensureCourseEnrollment
+      // actually holds its lock across the existence check and INSERT.
+      // Without a transaction, the lock is released immediately after the SELECT
+      // and concurrent calls can race to create duplicate enrollment rows.
+      await runInTransaction(async (tx) => {
+        await ensureCourseEnrollment(tx, pay.rows[0]);
+      });
       return res.json({ ok: true, fixed: true, message: "Enrollment synced" });
     } catch (err) {
       console.error("sync-enrollment error:", err);

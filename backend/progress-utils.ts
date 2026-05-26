@@ -42,31 +42,45 @@ export async function updateCourseTestCounts(
  *
  * Note: Live class recordings count as lectures (they become lecture rows
  * when the recording is saved), so they are already included in the lecture count.
+ *
+ * @param runTx  Optional transaction runner. When provided, all 4 queries run inside
+ *               a single transaction with SELECT FOR UPDATE on the enrollment row,
+ *               preventing concurrent updates for the same user+course from racing.
+ *               Call sites that don't supply runTx continue working as before.
  */
 export async function updateCourseProgress(
   db: DbClient,
   userId: number,
-  courseId: number | string
+  courseId: number | string,
+  runTx?: <T>(fn: (tx: DbClient) => Promise<T>) => Promise<T>
 ): Promise<void> {
   const cid = String(courseId);
-  try {
-    // Count total items
-    const totalLec = await db.query(
+
+  const doUpdate = async (client: DbClient) => {
+    // Acquire a row-level lock on the enrollment to prevent concurrent progress
+    // updates for the same user+course from racing and overwriting each other.
+    // If no enrollment exists yet, the lock is a no-op and we proceed safely.
+    if (runTx) {
+      await client.query(
+        "SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2 FOR UPDATE",
+        [userId, cid]
+      );
+    }
+
+    const totalLec = await client.query(
       "SELECT COUNT(*) FROM lectures WHERE course_id = $1",
       [cid]
     );
-    const totalTests = await db.query(
+    const totalTests = await client.query(
       "SELECT COUNT(*) FROM tests WHERE course_id = $1 AND is_published = TRUE",
       [cid]
     );
-
-    // Count completed items by user
-    const completedLec = await db.query(
+    const completedLec = await client.query(
       `SELECT COUNT(*) FROM lecture_progress lp JOIN lectures l ON lp.lecture_id = l.id
        WHERE lp.user_id = $1 AND l.course_id = $2 AND lp.is_completed = TRUE`,
       [userId, cid]
     );
-    const completedTests = await db.query(
+    const completedTests = await client.query(
       `SELECT COUNT(DISTINCT test_id) FROM test_attempts
        WHERE user_id = $1 AND test_id IN (SELECT id FROM tests WHERE course_id = $2) AND status = 'completed'`,
       [userId, cid]
@@ -76,10 +90,18 @@ export async function updateCourseProgress(
     const completed = parseInt(completedLec.rows[0].count) + parseInt(completedTests.rows[0].count);
     const progress = total > 0 ? Math.round((completed / total) * 100) : 0;
 
-    await db.query(
+    await client.query(
       "UPDATE enrollments SET progress_percent = $1 WHERE user_id = $2 AND course_id = $3",
       [progress, userId, cid]
     );
+  };
+
+  try {
+    if (runTx) {
+      await runTx((tx) => doUpdate(tx));
+    } else {
+      await doUpdate(db);
+    }
   } catch (err) {
     console.error("[Progress] Failed to update:", err);
   }
@@ -89,9 +111,11 @@ export async function updateCourseProgress(
  * Re-run progress for every enrolled (active) student in a course.
  * Called when content changes affect all students: new lecture added, test published, etc.
  *
- * Uses a single efficient CROSS JOIN LATERAL query instead of N individual updates.
- * WARNING: At 1000+ enrolled students this query takes several seconds.
- * Phase 4 (T-14) will add a DB index to speed this up.
+ * BUG-13 fix: replaced CROSS JOIN LATERAL with CTEs so that:
+ *   - total_lec and total_tests are computed once (not once per student)
+ *   - lec_done aggregates all students in a single table scan
+ *   - tests_done aggregates all students in a single table scan via JOIN (not IN subquery)
+ * This changes O(N) correlated subqueries into O(1) CTEs + O(N) single-pass joins.
  */
 export async function recomputeAllEnrollmentsProgressForCourse(
   db: DbClient,
@@ -100,39 +124,48 @@ export async function recomputeAllEnrollmentsProgressForCourse(
   const cid = String(courseId);
   try {
     await db.query(
-      `UPDATE enrollments AS e
+      `WITH
+         -- Course-level totals — computed once, not once per student
+         total_lec AS (
+           SELECT COUNT(*)::bigint AS n FROM lectures WHERE course_id = $1
+         ),
+         total_tests AS (
+           SELECT COUNT(*)::bigint AS n FROM tests WHERE course_id = $1 AND is_published = TRUE
+         ),
+         -- Per-student lecture completions — single table scan across all students
+         lec_done AS (
+           SELECT lp.user_id, COUNT(*)::bigint AS n
+           FROM lecture_progress lp
+           JOIN lectures l ON lp.lecture_id = l.id AND l.course_id = $1
+           WHERE lp.is_completed = TRUE
+           GROUP BY lp.user_id
+         ),
+         -- Per-student test completions — single table scan via JOIN instead of IN (SELECT)
+         tests_done AS (
+           SELECT ta.user_id, COUNT(DISTINCT ta.test_id)::bigint AS n
+           FROM test_attempts ta
+           JOIN tests t ON ta.test_id = t.id AND t.course_id = $1 AND t.is_published = TRUE
+           WHERE ta.status = 'completed'
+           GROUP BY ta.user_id
+         )
+       UPDATE enrollments AS e
        SET progress_percent = calc.pct
        FROM (
          SELECT
            en.user_id,
            en.course_id,
            CASE
-             WHEN (COALESCE(tl.total_lec, 0) + COALESCE(tt.total_tests, 0)) <= 0 THEN 0
+             WHEN (tl.n + tt.n) <= 0 THEN 0
              ELSE LEAST(100, GREATEST(0, ROUND(
-               (100.0 * (COALESCE(cl.done_lec, 0) + COALESCE(ct.done_tests, 0)))
-               / NULLIF(COALESCE(tl.total_lec, 0) + COALESCE(tt.total_tests, 0), 0)
+               100.0 * (COALESCE(ld.n, 0) + COALESCE(td.n, 0))
+               / NULLIF(tl.n + tt.n, 0)
              )))
            END::integer AS pct
          FROM enrollments en
-         CROSS JOIN LATERAL (
-           SELECT COUNT(*)::bigint AS total_lec FROM lectures WHERE course_id = $1
-         ) tl
-         CROSS JOIN LATERAL (
-           SELECT COUNT(*)::bigint AS total_tests FROM tests WHERE course_id = $1 AND is_published = TRUE
-         ) tt
-         LEFT JOIN LATERAL (
-           SELECT COUNT(*)::bigint AS done_lec
-           FROM lecture_progress lp
-           INNER JOIN lectures l ON lp.lecture_id = l.id AND l.course_id = $1
-           WHERE lp.user_id = en.user_id AND lp.is_completed = TRUE
-         ) cl ON TRUE
-         LEFT JOIN LATERAL (
-           SELECT COUNT(DISTINCT test_id)::bigint AS done_tests
-           FROM test_attempts ta
-           WHERE ta.user_id = en.user_id
-             AND ta.status = 'completed'
-             AND ta.test_id IN (SELECT id FROM tests WHERE course_id = $1)
-         ) ct ON TRUE
+         CROSS JOIN total_lec tl
+         CROSS JOIN total_tests tt
+         LEFT JOIN lec_done  ld ON ld.user_id = en.user_id
+         LEFT JOIN tests_done td ON td.user_id = en.user_id
          WHERE en.course_id::text = $1 AND (en.status = 'active' OR en.status IS NULL)
        ) AS calc
        WHERE e.user_id = calc.user_id AND e.course_id = calc.course_id`,
