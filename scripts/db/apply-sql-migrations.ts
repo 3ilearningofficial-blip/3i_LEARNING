@@ -37,6 +37,7 @@ const migrationFiles = [
   "migrations/0023_payment_failures.sql",
   "migrations/0024_live_classes_scheduled_at_index.sql",
   "migrations/0025_mission_folder_and_reorder.sql",
+  "migrations/0026_record_a_class.sql",
 ];
 
 const connectionString = process.env.DATABASE_URL;
