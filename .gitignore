@@ -54,3 +54,6 @@ server_dist/
 
 # Temp Word doc locks
 ~$*.docx
+
+# Replit IDE internal state
+.local/
