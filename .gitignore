@@ -48,3 +48,9 @@ yarn-error.*
 .env.local
 
 server_dist/
+
+# Replit IDE internal state (never commit)
+.local/
+
+# Temp Word doc locks
+~$*.docx
