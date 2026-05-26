@@ -1,7 +1,7 @@
 import React, { useState, useRef } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable,
-  TextInput, Platform, ActivityIndicator, FlatList, KeyboardAvoidingView,
+  TextInput, Platform, ActivityIndicator, FlatList, KeyboardAvoidingView, Alert,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
@@ -63,6 +63,16 @@ export default function AITutorScreen() {
       qc.invalidateQueries({ queryKey: ["/api/doubts"] });
       setQuestion("");
       setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 300);
+    },
+  });
+
+  const clearHistoryMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("DELETE", "/api/doubts");
+      return res.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/doubts"] });
     },
   });
 
@@ -142,6 +152,39 @@ export default function AITutorScreen() {
             </Pressable>
           ))}
         </ScrollView>
+        <View style={{ paddingHorizontal: 16, paddingBottom: 8 }}>
+          <Pressable
+            style={({ pressed }) => [
+              {
+                alignSelf: "flex-end",
+                paddingHorizontal: 12,
+                paddingVertical: 8,
+                borderRadius: 10,
+                borderWidth: 1,
+                borderColor: "#FCA5A5",
+                backgroundColor: "#FEF2F2",
+                opacity: clearHistoryMutation.isPending ? 0.6 : pressed ? 0.85 : 1,
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 6,
+              },
+            ]}
+            disabled={clearHistoryMutation.isPending || doubts.length === 0}
+            onPress={() => {
+              Alert.alert("Clear History?", "This will permanently delete all your previous AI Tutor questions and answers.", [
+                { text: "Cancel", style: "cancel" },
+                { text: "Clear", style: "destructive", onPress: () => clearHistoryMutation.mutate() },
+              ]);
+            }}
+          >
+            {clearHistoryMutation.isPending ? (
+              <ActivityIndicator size="small" color="#DC2626" />
+            ) : (
+              <Ionicons name="trash-outline" size={14} color="#DC2626" />
+            )}
+            <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#B91C1C" }}>Clear History</Text>
+          </Pressable>
+        </View>
       </View>
 
       <ScrollView

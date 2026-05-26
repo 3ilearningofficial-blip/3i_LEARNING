@@ -388,6 +388,71 @@ export async function assertLoginAllowedForInstallation(
   return { ok: true };
 }
 
+/** Block a new login while another device holds a recently active session. */
+export const SESSION_ACTIVITY_WINDOW_MS = 10 * 60 * 1000;
+
+type SessionActiveResult = { ok: true } | { ok: false; httpStatus: number; message: string };
+
+/**
+ * Before rotating `session_token`, ensure no other installation is actively using
+ * the account. Admins are exempt. Logged-out users (`session_token` NULL) pass.
+ * Same installation may always re-login (token refresh).
+ */
+export async function assertSessionNotActivelyInUse(
+  db: DbLike,
+  req: Request,
+  opts: {
+    userId: number;
+    role?: string;
+    bodyDeviceId?: string | null | undefined;
+  }
+): Promise<SessionActiveResult> {
+  if (opts.role === "admin") return { ok: true };
+
+  const ur = await db.query(
+    `SELECT session_token, last_active_at, role, device_id,
+            app_bound_device_id, web_device_id_phone, web_device_id_desktop
+     FROM users WHERE id = $1`,
+    [opts.userId]
+  );
+  if (ur.rows.length === 0) return { ok: true };
+  const row = ur.rows[0];
+  if (String(row.role ?? "") === "admin") return { ok: true };
+
+  const sessionToken = row.session_token ? String(row.session_token).trim() : "";
+  if (!sessionToken) return { ok: true };
+
+  const lastActive = Number(row.last_active_at || 0);
+  if (!lastActive || Date.now() - lastActive > SESSION_ACTIVITY_WINDOW_MS) {
+    return { ok: true };
+  }
+
+  const attemptHeader = getInstallationIdFromRequest(req);
+  const bodyId = (opts.bodyDeviceId && String(opts.bodyDeviceId).trim()) || "";
+  const attempted = attemptHeader || bodyId || null;
+
+  const bindingRow = {
+    app_bound_device_id: row.app_bound_device_id,
+    web_device_id_phone: row.web_device_id_phone,
+    web_device_id_desktop: row.web_device_id_desktop,
+  };
+  if (userRowHasDeviceBinding(bindingRow) && requestMatchesUserDeviceBinding(req, bindingRow)) {
+    return { ok: true };
+  }
+
+  const storedDeviceId = row.device_id ? String(row.device_id).trim() : "";
+  if (attempted && storedDeviceId && attempted === storedDeviceId) {
+    return { ok: true };
+  }
+
+  return {
+    ok: false,
+    httpStatus: 403,
+    message:
+      "This account is currently active on another device. Log out from that device first, or wait for it to become inactive.",
+  };
+}
+
 export function userRowHasDeviceBinding(row: {
   app_bound_device_id?: unknown;
   web_device_id_phone?: unknown;

@@ -1,20 +1,24 @@
 import type { Request } from "express";
 import type { DbLike } from "./native-device-binding";
-import { getActiveSessionPlatformFamily, userRowHasDeviceBinding } from "./native-device-binding";
+import { getActiveSessionPlatformFamily } from "./native-device-binding";
 
-/** Default expiry for unbound student sessions (30 days). */
-const STUDENT_DEFAULT_SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
-/** Long-lived sessions for bound students and all admins (10 years). */
-const PERSISTENT_SESSION_MAX_AGE_MS = 10 * 365 * 24 * 60 * 60 * 1000;
+/** Admin sessions: effectively never expire from inactivity. */
+export const ADMIN_SESSION_MAX_AGE_MS = 10 * 365 * 24 * 60 * 60 * 1000;
+/** Student sessions (bound or unbound): 7-day inactivity window. */
+export const STUDENT_SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
-function sessionMinActiveAt(row: Record<string, unknown>): number {
-  const role = String(row.role ?? "");
-  if (role === "admin") return Date.now() - PERSISTENT_SESSION_MAX_AGE_MS;
-  if (userRowHasDeviceBinding(row)) return Date.now() - PERSISTENT_SESSION_MAX_AGE_MS;
-  return Date.now() - STUDENT_DEFAULT_SESSION_MAX_AGE_MS;
+/** Max inactivity before a session token is rejected (role-aware). */
+export function sessionMaxAgeMsForRow(row: Record<string, unknown>): number {
+  if (String(row.role ?? "") === "admin") return ADMIN_SESSION_MAX_AGE_MS;
+  return STUDENT_SESSION_MAX_AGE_MS;
 }
 
-function isLastActiveValid(row: Record<string, unknown>): boolean {
+function sessionMinActiveAt(row: Record<string, unknown>): number {
+  return Date.now() - sessionMaxAgeMsForRow(row);
+}
+
+/** Whether `last_active_at` is within the allowed inactivity window for this user. */
+export function isSessionLastActiveValid(row: Record<string, unknown>): boolean {
   const la = Number(row.last_active_at || 0);
   if (!la) return true;
   return la >= sessionMinActiveAt(row);
@@ -30,11 +34,11 @@ export async function resolveUserBySessionToken(
   );
   if (primary.rows.length > 0) {
     const row = primary.rows[0] as Record<string, unknown>;
-    if (isLastActiveValid(row)) {
+    if (isSessionLastActiveValid(row)) {
       return { row, matchedVia: "primary" };
     }
   }
-  const minCreatedAt = Date.now() - PERSISTENT_SESSION_MAX_AGE_MS;
+  const minCreatedAt = Date.now() - ADMIN_SESSION_MAX_AGE_MS;
   const extra = await db.query(
     `SELECT u.* FROM users u
      INNER JOIN user_sessions s ON s.user_id = u.id AND s.session_token = $1
@@ -63,10 +67,10 @@ export async function userHasSessionToken(
   if (u.rows.length === 0) return false;
   const row = u.rows[0] as Record<string, unknown>;
   if (row.session_token === token) {
-    if (isLastActiveValid(row)) return true;
+    if (isSessionLastActiveValid(row)) return true;
   }
   if (row.role !== "admin") return false;
-  const minCreatedAt = Date.now() - PERSISTENT_SESSION_MAX_AGE_MS;
+  const minCreatedAt = Date.now() - ADMIN_SESSION_MAX_AGE_MS;
   const s = await db.query(
     "SELECT 1 FROM user_sessions WHERE user_id = $1 AND session_token = $2 AND created_at >= $3",
     [userId, token, minCreatedAt]

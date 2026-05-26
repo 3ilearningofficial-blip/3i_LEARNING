@@ -7,6 +7,21 @@ import { takeSupportPostSlotPg } from "./pg-rate-limit-store";
 const AI_TUTOR_RATE_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 const AI_TUTOR_RATE_MAX = 20;
 
+function normalizeQuestionPattern(input: string): string {
+  return String(input || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\b(please|plz|sir|mam|maam|kindly|can|could|would|help|me|with|solve|question)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function parseLimitOffset(rawLimit: unknown, rawOffset: unknown, fallbackLimit: number, maxLimit = 100): { limit: number; offset: number } {
+  const limit = Math.max(1, Math.min(maxLimit, Number(rawLimit) || fallbackLimit));
+  const offset = Math.max(0, Number(rawOffset) || 0);
+  return { limit, offset };
+}
+
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
 };
@@ -109,6 +124,17 @@ export function registerDoubtNotificationRoutes({
     }
   });
 
+  app.delete("/api/doubts", async (req: Request, res: Response) => {
+    try {
+      const user = await getAuthUser(req);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+      const deleted = await db.query("DELETE FROM doubts WHERE user_id = $1 RETURNING id", [user.id]);
+      res.json({ success: true, deletedCount: deleted.rows.length || 0 });
+    } catch {
+      res.status(500).json({ message: "Failed to clear doubt history" });
+    }
+  });
+
   app.get("/api/admin/doubts", requireAdmin, async (req: Request, res: Response) => {
     try {
       const daysRaw = String(req.query.days || "").trim();
@@ -166,17 +192,9 @@ export function registerDoubtNotificationRoutes({
         .sort((a, b) => b.count - a.count)
         .slice(0, 10);
 
-      const normalizeQuestion = (input: string): string =>
-        String(input || "")
-          .toLowerCase()
-          .replace(/[^a-z0-9\s]/g, " ")
-          .replace(/\b(please|plz|sir|mam|maam|kindly|can|could|would|help|me|with|solve|question)\b/g, " ")
-          .replace(/\s+/g, " ")
-          .trim();
-
       const patternCounts: Record<string, { questionPattern: string; count: number; latestAt: number; sampleQuestion: string }> = {};
       for (const r of rows) {
-        const normalized = normalizeQuestion(String(r.question || ""));
+        const normalized = normalizeQuestionPattern(String(r.question || ""));
         if (!normalized) continue;
         const existing = patternCounts[normalized];
         if (!existing) {
@@ -267,6 +285,270 @@ export function registerDoubtNotificationRoutes({
     } catch (err) {
       console.error("[Admin Doubts] delete failed:", err);
       res.status(500).json({ message: "Failed to clear doubts" });
+    }
+  });
+
+  app.get("/api/admin/doubts/students", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const daysRaw = String(req.query.days || "").trim();
+      const topicFilter = String(req.query.topic || "").trim();
+      const q = String(req.query.q || "").trim();
+      const { limit, offset } = parseLimitOffset(req.query.limit, req.query.offset, 30, 200);
+      const days = daysRaw === "7" || daysRaw === "30" ? Number(daysRaw) : 0;
+      const sinceTs = days > 0 ? Date.now() - days * 24 * 60 * 60 * 1000 : 0;
+
+      const where: string[] = [];
+      const params: unknown[] = [];
+      if (sinceTs > 0) {
+        params.push(sinceTs);
+        where.push(`d.created_at >= $${params.length}`);
+      }
+      if (topicFilter && topicFilter !== "all") {
+        params.push(topicFilter);
+        where.push(`COALESCE(d.topic, 'General') = $${params.length}`);
+      }
+      if (q) {
+        params.push(`%${q}%`);
+        const qIdx = params.length;
+        const digitOnly = q.replace(/\D/g, "");
+        let digitClause = "";
+        if (digitOnly.length >= 4) {
+          params.push(`%${digitOnly}%`);
+          digitClause = ` OR regexp_replace(COALESCE(u.phone, ''), '\\D', '', 'g') LIKE $${params.length}`;
+        }
+        where.push(`(
+          COALESCE(u.name, '') ILIKE $${qIdx}
+          OR COALESCE(u.phone, '') ILIKE $${qIdx}
+          OR COALESCE(u.email, '') ILIKE $${qIdx}
+          OR COALESCE(d.question, '') ILIKE $${qIdx}
+          ${digitClause}
+        )`);
+      }
+      const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+      const summary = await db.query(
+        `SELECT d.user_id,
+                COALESCE(u.name, '') AS user_name,
+                COALESCE(u.phone, '') AS user_phone,
+                COALESCE(u.email, '') AS user_email,
+                COUNT(*)::int AS doubt_count,
+                MAX(d.created_at)::bigint AS last_asked_at
+         FROM doubts d
+         LEFT JOIN users u ON u.id = d.user_id
+         ${whereSql}
+         GROUP BY d.user_id, u.name, u.phone, u.email
+         ORDER BY COUNT(*) DESC, MAX(d.created_at) DESC
+         LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+        [...params, limit, offset]
+      );
+
+      const totalRows = await db.query(
+        `SELECT COUNT(*)::int AS total
+         FROM (
+           SELECT d.user_id
+           FROM doubts d
+           LEFT JOIN users u ON u.id = d.user_id
+           ${whereSql}
+           GROUP BY d.user_id
+         ) s`,
+        params
+      );
+      res.json({
+        rows: summary.rows,
+        total: Number(totalRows.rows[0]?.total || 0),
+        limit,
+        offset,
+      });
+    } catch (err) {
+      console.error("[Admin Doubts] students list failed:", err);
+      res.status(500).json({ message: "Failed to fetch student doubt history" });
+    }
+  });
+
+  app.get("/api/admin/doubts/student/:userId", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const userId = Number(req.params.userId);
+      if (!Number.isFinite(userId) || userId <= 0) return res.status(400).json({ message: "Invalid user id" });
+      const daysRaw = String(req.query.days || "").trim();
+      const topicFilter = String(req.query.topic || "").trim();
+      const q = String(req.query.q || "").trim();
+      const { limit, offset } = parseLimitOffset(req.query.limit, req.query.offset, 50, 200);
+      const days = daysRaw === "7" || daysRaw === "30" ? Number(daysRaw) : 0;
+      const sinceTs = days > 0 ? Date.now() - days * 24 * 60 * 60 * 1000 : 0;
+
+      const where: string[] = ["d.user_id = $1"];
+      const params: unknown[] = [userId];
+      if (sinceTs > 0) {
+        params.push(sinceTs);
+        where.push(`d.created_at >= $${params.length}`);
+      }
+      if (topicFilter && topicFilter !== "all") {
+        params.push(topicFilter);
+        where.push(`COALESCE(d.topic, 'General') = $${params.length}`);
+      }
+      if (q) {
+        params.push(`%${q}%`);
+        where.push(`(COALESCE(d.question, '') ILIKE $${params.length} OR COALESCE(d.answer, '') ILIKE $${params.length})`);
+      }
+      const whereSql = `WHERE ${where.join(" AND ")}`;
+
+      const rows = await db.query(
+        `SELECT d.*, COALESCE(u.name, '') AS user_name, COALESCE(u.phone, '') AS user_phone, COALESCE(u.email, '') AS user_email
+         FROM doubts d
+         LEFT JOIN users u ON u.id = d.user_id
+         ${whereSql}
+         ORDER BY d.created_at DESC
+         LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+        [...params, limit, offset]
+      );
+      const totalRes = await db.query(
+        `SELECT COUNT(*)::int AS total
+         FROM doubts d
+         ${whereSql}`,
+        params
+      );
+      res.json({
+        rows: rows.rows,
+        total: Number(totalRes.rows[0]?.total || 0),
+        limit,
+        offset,
+      });
+    } catch (err) {
+      console.error("[Admin Doubts] student details failed:", err);
+      res.status(500).json({ message: "Failed to fetch student doubts" });
+    }
+  });
+
+  app.get("/api/admin/doubts/frequent", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const daysRaw = String(req.query.days || "").trim();
+      const q = String(req.query.q || "").trim();
+      const { limit, offset } = parseLimitOffset(req.query.limit, req.query.offset, 30, 200);
+      const days = daysRaw === "7" || daysRaw === "30" ? Number(daysRaw) : 0;
+      const sinceTs = days > 0 ? Date.now() - days * 24 * 60 * 60 * 1000 : 0;
+      const where: string[] = [];
+      const params: unknown[] = [];
+      if (sinceTs > 0) {
+        params.push(sinceTs);
+        where.push(`d.created_at >= $${params.length}`);
+      }
+      if (q) {
+        params.push(`%${q}%`);
+        where.push(`COALESCE(d.question, '') ILIKE $${params.length}`);
+      }
+      const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+      const baseRows = await db.query(
+        `SELECT d.question, d.created_at
+         FROM doubts d
+         ${whereSql}
+         ORDER BY d.created_at DESC
+         LIMIT 5000`,
+        params
+      );
+      const patternCounts: Record<string, { questionPattern: string; count: number; latestAt: number; sampleQuestion: string }> = {};
+      for (const r of baseRows.rows) {
+        const normalized = normalizeQuestionPattern(String(r.question || ""));
+        if (!normalized) continue;
+        const existing = patternCounts[normalized];
+        if (!existing) {
+          patternCounts[normalized] = {
+            questionPattern: normalized,
+            count: 1,
+            latestAt: Number(r.created_at || 0),
+            sampleQuestion: String(r.question || ""),
+          };
+        } else {
+          existing.count += 1;
+          if (Number(r.created_at || 0) > existing.latestAt) {
+            existing.latestAt = Number(r.created_at || 0);
+            existing.sampleQuestion = String(r.question || existing.sampleQuestion);
+          }
+        }
+      }
+      const all = Object.values(patternCounts)
+        .sort((a, b) => b.count - a.count || b.latestAt - a.latestAt);
+      res.json({
+        rows: all.slice(offset, offset + limit),
+        total: all.length,
+        limit,
+        offset,
+      });
+    } catch (err) {
+      console.error("[Admin Doubts] frequent list failed:", err);
+      res.status(500).json({ message: "Failed to fetch frequent questions" });
+    }
+  });
+
+  app.get("/api/admin/doubts/frequent/students", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const pattern = normalizeQuestionPattern(String(req.query.pattern || ""));
+      if (!pattern) return res.status(400).json({ message: "Pattern is required" });
+      const daysRaw = String(req.query.days || "").trim();
+      const q = String(req.query.q || "").trim();
+      const { limit, offset } = parseLimitOffset(req.query.limit, req.query.offset, 30, 200);
+      const days = daysRaw === "7" || daysRaw === "30" ? Number(daysRaw) : 0;
+      const sinceTs = days > 0 ? Date.now() - days * 24 * 60 * 60 * 1000 : 0;
+
+      const filterWhere: string[] = [];
+      const params: unknown[] = [];
+      if (sinceTs > 0) {
+        params.push(sinceTs);
+        filterWhere.push(`d.created_at >= $${params.length}`);
+      }
+      if (q) {
+        params.push(`%${q}%`);
+        filterWhere.push(`(
+          COALESCE(u.name, '') ILIKE $${params.length}
+          OR COALESCE(u.phone, '') ILIKE $${params.length}
+          OR COALESCE(u.email, '') ILIKE $${params.length}
+          OR COALESCE(d.question, '') ILIKE $${params.length}
+        )`);
+      }
+      const whereSql = filterWhere.length ? `AND ${filterWhere.join(" AND ")}` : "";
+
+      const raw = await db.query(
+        `SELECT d.user_id,
+                COALESCE(u.name, '') AS user_name,
+                COALESCE(u.phone, '') AS user_phone,
+                COALESCE(u.email, '') AS user_email,
+                d.question,
+                d.created_at
+         FROM doubts d
+         LEFT JOIN users u ON u.id = d.user_id
+         WHERE TRUE ${whereSql}
+         ORDER BY d.created_at DESC
+         LIMIT 6000`,
+        params
+      );
+
+      const matched = raw.rows.filter((r: any) => normalizeQuestionPattern(String(r.question || "")) === pattern);
+      const grouped = new Map<number, { user_id: number; user_name: string; user_phone: string; user_email: string; doubt_count: number; last_asked_at: number }>();
+      for (const r of matched) {
+        const id = Number(r.user_id || 0);
+        if (!grouped.has(id)) {
+          grouped.set(id, {
+            user_id: id,
+            user_name: String(r.user_name || ""),
+            user_phone: String(r.user_phone || ""),
+            user_email: String(r.user_email || ""),
+            doubt_count: 0,
+            last_asked_at: 0,
+          });
+        }
+        const g = grouped.get(id)!;
+        g.doubt_count += 1;
+        g.last_asked_at = Math.max(g.last_asked_at, Number(r.created_at || 0));
+      }
+      const rows = [...grouped.values()].sort((a, b) => b.doubt_count - a.doubt_count || b.last_asked_at - a.last_asked_at);
+      res.json({
+        rows: rows.slice(offset, offset + limit),
+        total: rows.length,
+        limit,
+        offset,
+      });
+    } catch (err) {
+      console.error("[Admin Doubts] frequent students failed:", err);
+      res.status(500).json({ message: "Failed to fetch students for frequent question" });
     }
   });
 

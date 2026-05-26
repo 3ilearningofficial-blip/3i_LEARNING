@@ -8,7 +8,7 @@ var __export = (target, all) => {
     __defProp(target, name, { get: all[name], enumerable: true });
 };
 
-// server/pg-rate-limit-store.ts
+// backend/pg-rate-limit-store.ts
 async function takeSupportPostSlotPg(pool2, userId, windowMs, max) {
   const key = `support_post:user:${userId}`;
   const store = new PgRateLimitStore(pool2);
@@ -23,7 +23,7 @@ async function takeSupportPostSlotPg(pool2, userId, windowMs, max) {
 }
 var PgRateLimitStore;
 var init_pg_rate_limit_store = __esm({
-  "server/pg-rate-limit-store.ts"() {
+  "backend/pg-rate-limit-store.ts"() {
     "use strict";
     PgRateLimitStore = class {
       constructor(pool2) {
@@ -112,7 +112,7 @@ var init_pg_rate_limit_store = __esm({
   }
 });
 
-// server/ai-tutor-service.ts
+// backend/ai-tutor-service.ts
 function getAiProviderMode() {
   const raw = (process.env.AI_PROVIDER || "auto").trim().toLowerCase();
   if (raw === "openai" || raw === "gemini" || raw === "auto") return raw;
@@ -384,13 +384,58 @@ Question focus: "${q.slice(0, 80)}".`;
 }
 var TRANSCRIPT_CONTEXT_CHARS;
 var init_ai_tutor_service = __esm({
-  "server/ai-tutor-service.ts"() {
+  "backend/ai-tutor-service.ts"() {
     "use strict";
     TRANSCRIPT_CONTEXT_CHARS = 8e3;
   }
 });
 
-// server/firebase.ts
+// backend/db-utils.ts
+function normalizeDatabaseUrl(raw) {
+  try {
+    const parsed = new URL(raw);
+    const sslMode = (parsed.searchParams.get("sslmode") || "").toLowerCase();
+    if (!sslMode || sslMode === "require" || sslMode === "prefer" || sslMode === "verify-ca") {
+      parsed.searchParams.set("sslmode", "verify-full");
+    }
+    return parsed.toString();
+  } catch {
+    return raw;
+  }
+}
+var init_db_utils = __esm({
+  "backend/db-utils.ts"() {
+    "use strict";
+  }
+});
+
+// backend/upload-config.ts
+import multer from "multer";
+var upload, uploadPdf, uploadLarge;
+var init_upload_config = __esm({
+  "backend/upload-config.ts"() {
+    "use strict";
+    upload = multer({
+      storage: multer.memoryStorage(),
+      limits: { fileSize: 10 * 1024 * 1024 }
+    });
+    uploadPdf = multer({
+      storage: multer.memoryStorage(),
+      limits: { fileSize: 10 * 1024 * 1024 },
+      fileFilter: (_req, file, cb) => {
+        const mimetype = String(file?.mimetype || "").toLowerCase();
+        if (mimetype === "application/pdf") return cb(null, true);
+        return cb(new Error("Only PDF files are allowed"));
+      }
+    });
+    uploadLarge = multer({
+      storage: multer.memoryStorage(),
+      limits: { fileSize: 500 * 1024 * 1024 }
+    });
+  }
+});
+
+// backend/firebase.ts
 import * as admin from "firebase-admin";
 function getFirebaseAdmin() {
   if (firebaseApp) return firebaseApp;
@@ -416,13 +461,13 @@ async function verifyFirebaseToken(idToken) {
 }
 var firebaseApp;
 var init_firebase = __esm({
-  "server/firebase.ts"() {
+  "backend/firebase.ts"() {
     "use strict";
     firebaseApp = null;
   }
 });
 
-// server/razorpay.ts
+// backend/razorpay.ts
 import crypto from "crypto";
 import { createRequire } from "module";
 function getRazorpay() {
@@ -445,14 +490,14 @@ function verifyPaymentSignature(orderId, paymentId, signature) {
 }
 var require2, Razorpay;
 var init_razorpay = __esm({
-  "server/razorpay.ts"() {
+  "backend/razorpay.ts"() {
     "use strict";
     require2 = createRequire(import.meta.url);
     Razorpay = require2("razorpay");
   }
 });
 
-// server/security-utils.ts
+// backend/security-utils.ts
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 function generateSecureToken(bytes = 32) {
   return randomBytes(bytes).toString("hex");
@@ -475,12 +520,12 @@ function verifyOtpValue(storedOtp, providedOtp) {
   return storedOtp === providedOtp;
 }
 var init_security_utils = __esm({
-  "server/security-utils.ts"() {
+  "backend/security-utils.ts"() {
     "use strict";
   }
 });
 
-// server/native-device-binding.ts
+// backend/native-device-binding.ts
 function getInstallationIdFromRequest(req) {
   const raw = (req.get("x-app-device-id") || "").trim();
   if (!raw || raw === "null" || raw === "undefined") return null;
@@ -624,7 +669,7 @@ function studentInstallationMatchesActiveSession(row, req, cand, plat) {
   return cand === appb;
 }
 async function enforceInstallationBinding(db2, req, userId, role) {
-  if (role === "admin") return true;
+  if (role === "admin") return { ok: true };
   const r = await db2.query(
     `SELECT COALESCE(app_bound_device_id, '') AS appb,
             COALESCE(web_device_id_phone, '') AS wph,
@@ -632,21 +677,24 @@ async function enforceInstallationBinding(db2, req, userId, role) {
      FROM users WHERE id = $1`,
     [userId]
   );
-  if (!r.rows.length) return true;
+  if (!r.rows.length) return { ok: true };
   const row = r.rows[0];
   const appb = String(row.appb ?? "").trim();
   const wph = String(row.wph ?? "").trim();
   const wdk = String(row.wdk ?? "").trim();
   const cand = getInstallationIdFromRequest(req);
   const plat = getClientPlatform(req);
-  if (!wph && !wdk && !appb) return true;
-  if (!cand || cand === "web_anon") return false;
-  return studentInstallationMatchesActiveSession(
+  if (!wph && !wdk && !appb) return { ok: true };
+  if (!cand || cand === "web_anon") {
+    return { ok: false, code: "device_id_missing" };
+  }
+  const matches = studentInstallationMatchesActiveSession(
     { app_bound_device_id: appb, web_device_id_phone: wph, web_device_id_desktop: wdk },
     req,
     cand,
     plat
   );
+  return matches ? { ok: true } : { ok: false, code: "device_binding_mismatch" };
 }
 async function assertLoginAllowedForInstallation(db2, req, opts) {
   if (opts.role === "admin") return { ok: true };
@@ -727,11 +775,64 @@ async function assertLoginAllowedForInstallation(db2, req, opts) {
   }
   return { ok: true };
 }
+async function assertSessionNotActivelyInUse(db2, req, opts) {
+  if (opts.role === "admin") return { ok: true };
+  const ur = await db2.query(
+    `SELECT session_token, last_active_at, role, device_id,
+            app_bound_device_id, web_device_id_phone, web_device_id_desktop
+     FROM users WHERE id = $1`,
+    [opts.userId]
+  );
+  if (ur.rows.length === 0) return { ok: true };
+  const row = ur.rows[0];
+  if (String(row.role ?? "") === "admin") return { ok: true };
+  const sessionToken = row.session_token ? String(row.session_token).trim() : "";
+  if (!sessionToken) return { ok: true };
+  const lastActive = Number(row.last_active_at || 0);
+  if (!lastActive || Date.now() - lastActive > SESSION_ACTIVITY_WINDOW_MS) {
+    return { ok: true };
+  }
+  const attemptHeader = getInstallationIdFromRequest(req);
+  const bodyId = opts.bodyDeviceId && String(opts.bodyDeviceId).trim() || "";
+  const attempted = attemptHeader || bodyId || null;
+  const bindingRow = {
+    app_bound_device_id: row.app_bound_device_id,
+    web_device_id_phone: row.web_device_id_phone,
+    web_device_id_desktop: row.web_device_id_desktop
+  };
+  if (userRowHasDeviceBinding(bindingRow) && requestMatchesUserDeviceBinding(req, bindingRow)) {
+    return { ok: true };
+  }
+  const storedDeviceId = row.device_id ? String(row.device_id).trim() : "";
+  if (attempted && storedDeviceId && attempted === storedDeviceId) {
+    return { ok: true };
+  }
+  return {
+    ok: false,
+    httpStatus: 403,
+    message: "This account is currently active on another device. Log out from that device first, or wait for it to become inactive."
+  };
+}
 function userRowHasDeviceBinding(row) {
   const appb = String(row.app_bound_device_id ?? "").trim();
   const wph = String(row.web_device_id_phone ?? "").trim();
   const wdk = String(row.web_device_id_desktop ?? "").trim();
   return !!(appb || wph || wdk);
+}
+function requestMatchesUserDeviceBinding(req, row) {
+  const cand = getInstallationIdFromRequest(req);
+  const plat = getClientPlatform(req);
+  if (!cand || cand === "web_anon") return false;
+  return studentInstallationMatchesActiveSession(
+    {
+      app_bound_device_id: row.app_bound_device_id,
+      web_device_id_phone: row.web_device_id_phone,
+      web_device_id_desktop: row.web_device_id_desktop
+    },
+    req,
+    cand,
+    plat
+  );
 }
 async function assertActiveSessionPlatformMatches(db2, req, userId, role) {
   if (role === "admin") return { ok: true };
@@ -745,20 +846,23 @@ async function assertActiveSessionPlatformMatches(db2, req, userId, role) {
   if (!requestFamily || requestFamily === active) return { ok: true };
   return { ok: false, activePlatform: active };
 }
+var SESSION_ACTIVITY_WINDOW_MS;
 var init_native_device_binding = __esm({
-  "server/native-device-binding.ts"() {
+  "backend/native-device-binding.ts"() {
     "use strict";
+    SESSION_ACTIVITY_WINDOW_MS = 10 * 60 * 1e3;
   }
 });
 
-// server/user-sessions.ts
-function sessionMinActiveAt(row) {
-  const role = String(row.role ?? "");
-  if (role === "admin") return Date.now() - PERSISTENT_SESSION_MAX_AGE_MS;
-  if (userRowHasDeviceBinding(row)) return Date.now() - PERSISTENT_SESSION_MAX_AGE_MS;
-  return Date.now() - STUDENT_DEFAULT_SESSION_MAX_AGE_MS;
+// backend/user-sessions.ts
+function sessionMaxAgeMsForRow(row) {
+  if (String(row.role ?? "") === "admin") return ADMIN_SESSION_MAX_AGE_MS;
+  return STUDENT_SESSION_MAX_AGE_MS;
 }
-function isLastActiveValid(row) {
+function sessionMinActiveAt(row) {
+  return Date.now() - sessionMaxAgeMsForRow(row);
+}
+function isSessionLastActiveValid(row) {
   const la = Number(row.last_active_at || 0);
   if (!la) return true;
   return la >= sessionMinActiveAt(row);
@@ -770,11 +874,11 @@ async function resolveUserBySessionToken(db2, token) {
   );
   if (primary.rows.length > 0) {
     const row = primary.rows[0];
-    if (isLastActiveValid(row)) {
+    if (isSessionLastActiveValid(row)) {
       return { row, matchedVia: "primary" };
     }
   }
-  const minCreatedAt = Date.now() - PERSISTENT_SESSION_MAX_AGE_MS;
+  const minCreatedAt = Date.now() - ADMIN_SESSION_MAX_AGE_MS;
   const extra = await db2.query(
     `SELECT u.* FROM users u
      INNER JOIN user_sessions s ON s.user_id = u.id AND s.session_token = $1
@@ -797,10 +901,10 @@ async function userHasSessionToken(db2, userId, token) {
   if (u.rows.length === 0) return false;
   const row = u.rows[0];
   if (row.session_token === token) {
-    if (isLastActiveValid(row)) return true;
+    if (isSessionLastActiveValid(row)) return true;
   }
   if (row.role !== "admin") return false;
-  const minCreatedAt = Date.now() - PERSISTENT_SESSION_MAX_AGE_MS;
+  const minCreatedAt = Date.now() - ADMIN_SESSION_MAX_AGE_MS;
   const s = await db2.query(
     "SELECT 1 FROM user_sessions WHERE user_id = $1 AND session_token = $2 AND created_at >= $3",
     [userId, token, minCreatedAt]
@@ -862,17 +966,17 @@ async function revokeSessionTokenForUser(db2, userId, token) {
     );
   }
 }
-var STUDENT_DEFAULT_SESSION_MAX_AGE_MS, PERSISTENT_SESSION_MAX_AGE_MS;
+var ADMIN_SESSION_MAX_AGE_MS, STUDENT_SESSION_MAX_AGE_MS;
 var init_user_sessions = __esm({
-  "server/user-sessions.ts"() {
+  "backend/user-sessions.ts"() {
     "use strict";
     init_native_device_binding();
-    STUDENT_DEFAULT_SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
-    PERSISTENT_SESSION_MAX_AGE_MS = 10 * 365 * 24 * 60 * 60 * 1e3;
+    ADMIN_SESSION_MAX_AGE_MS = 10 * 365 * 24 * 60 * 60 * 1e3;
+    STUDENT_SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
   }
 });
 
-// server/auth-utils.ts
+// backend/auth-utils.ts
 function rowsToAuthUser(u, sessionTokenOverride) {
   return {
     id: u.id,
@@ -949,13 +1053,13 @@ async function getAuthUserFromRequest(req, db2) {
   }
 }
 var init_auth_utils = __esm({
-  "server/auth-utils.ts"() {
+  "backend/auth-utils.ts"() {
     "use strict";
     init_user_sessions();
   }
 });
 
-// server/password-utils.ts
+// backend/password-utils.ts
 import { randomBytes as randomBytes2, pbkdf2 as pbkdf2Cb, timingSafeEqual as timingSafeEqual2, createHash } from "crypto";
 import { promisify } from "util";
 function toHex(input) {
@@ -992,7 +1096,7 @@ function verifyLegacySha256(password, userId, storedHash) {
 }
 var pbkdf2Async, PBKDF2_ITERATIONS, KEY_LEN;
 var init_password_utils = __esm({
-  "server/password-utils.ts"() {
+  "backend/password-utils.ts"() {
     "use strict";
     pbkdf2Async = promisify(pbkdf2Cb);
     PBKDF2_ITERATIONS = 21e4;
@@ -1000,7 +1104,7 @@ var init_password_utils = __esm({
   }
 });
 
-// server/user-account-purge.ts
+// backend/user-account-purge.ts
 async function purgeStudentAccountById(db2, userId) {
   const id = userId;
   let spSeq = 0;
@@ -1082,12 +1186,12 @@ async function purgeStudentAccountById(db2, userId) {
   });
 }
 var init_user_account_purge = __esm({
-  "server/user-account-purge.ts"() {
+  "backend/user-account-purge.ts"() {
     "use strict";
   }
 });
 
-// server/auth-routes.ts
+// backend/auth-routes.ts
 import { createHmac as createHmac2, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
 function getTokenSecret() {
   return process.env.OTP_HMAC_SECRET || process.env.SESSION_SECRET || "dev-otp-secret";
@@ -1198,6 +1302,14 @@ function registerAuthRoutes({
   runInTransaction: runInTransaction2
 }) {
   const finalizeAuthenticatedSession = async (req, user, deviceId, clearOtp) => {
+    const activeGuard = await assertSessionNotActivelyInUse(db2, req, {
+      userId: Number(user.id),
+      role: user.role,
+      bodyDeviceId: deviceId
+    });
+    if (!activeGuard.ok) {
+      return { success: false, httpStatus: activeGuard.httpStatus, message: activeGuard.message };
+    }
     const sessionToken = generateSecureToken2();
     const normalizedDeviceId = deviceId || null;
     await persistLoginSession(db2, user, sessionToken, normalizedDeviceId, {
@@ -1411,6 +1523,9 @@ function registerAuthRoutes({
         if (lockedUntil > Date.now()) {
           return res.status(429).json({ message: "Too many attempts. Please try again later." });
         }
+        if (Date.now() > Number(user.otp_expires_at)) {
+          return res.status(401).json({ message: GENERIC_OTP_ERROR });
+        }
         if (!verifyOtpValue2(user.otp, otp)) {
           const lockMs = Date.now() + 15 * 60 * 1e3;
           await db2.query(
@@ -1422,7 +1537,6 @@ function registerAuthRoutes({
           );
           return res.status(401).json({ message: GENERIC_OTP_ERROR });
         }
-        if (Date.now() > Number(user.otp_expires_at)) return res.status(401).json({ message: GENERIC_OTP_ERROR });
         const loginGate = await assertLoginAllowedForInstallation(db2, req, {
           userId: user.id,
           role: user.role,
@@ -1434,6 +1548,9 @@ function registerAuthRoutes({
           return res.status(loginGate.httpStatus).json({ message: loginGate.message });
         }
         const finalized = await finalizeAuthenticatedSession(req, user, deviceId || null, true);
+        if (!finalized.success) {
+          return res.status(finalized.httpStatus).json({ message: finalized.message });
+        }
         return res.json(finalized);
       }
       const chRow = await db2.query(
@@ -1449,7 +1566,10 @@ function registerAuthRoutes({
       if (verifyLockedUntil > nowMs2) {
         return res.status(429).json({ message: "Too many attempts. Please try again later." });
       }
-      if (!verifyOtpValue2(ch.otp_hash, otp) || nowMs2 > Number(ch.otp_expires_at || 0)) {
+      if (nowMs2 > Number(ch.otp_expires_at || 0)) {
+        return res.status(401).json({ message: GENERIC_OTP_ERROR });
+      }
+      if (!verifyOtpValue2(ch.otp_hash, otp)) {
         const failCount = Number(ch.verify_failed_attempts || 0) + 1;
         const lockUntil = failCount >= 5 ? nowMs2 + 15 * 60 * 1e3 : null;
         await db2.query(
@@ -1506,6 +1626,9 @@ function registerAuthRoutes({
         return res.status(loginGate.httpStatus).json({ message: loginGate.message });
       }
       const finalized = await finalizeAuthenticatedSession(req, user, deviceId || null, true);
+      if (!finalized.success) {
+        return res.status(finalized.httpStatus).json({ message: finalized.message });
+      }
       res.json(finalized);
     } catch (err) {
       console.error("Firebase verify error:", err);
@@ -1535,9 +1658,9 @@ function registerAuthRoutes({
               photo_url: row.photo_url
             };
             const bindBearer = await enforceInstallationBinding(db2, req, row.id, row.role);
-            if (!bindBearer) {
+            if (!bindBearer.ok) {
               req.session.user = null;
-              return res.status(401).json({ message: "device_binding_mismatch" });
+              return res.status(401).json({ message: bindBearer.code });
             }
             const platBearer = await assertActiveSessionPlatformMatches(db2, req, row.id, row.role);
             if (!platBearer.ok) {
@@ -1559,7 +1682,10 @@ function registerAuthRoutes({
     }
     try {
       const dbUser = await db2.query(
-        "SELECT id, name, email, phone, role, session_token, profile_complete, date_of_birth, photo_url, is_blocked FROM users WHERE id = $1",
+        `SELECT id, name, email, phone, role, session_token, profile_complete,
+                date_of_birth, photo_url, is_blocked,
+                last_active_at, app_bound_device_id, web_device_id_phone, web_device_id_desktop
+         FROM users WHERE id = $1`,
         [sessionUser.id]
       );
       if (dbUser.rows.length === 0) {
@@ -1572,14 +1698,30 @@ function registerAuthRoutes({
         return res.status(403).json({ message: "account_blocked" });
       }
       const tok = sessionUser.sessionToken;
-      if (tok && !await userHasSessionToken(db2, sessionUser.id, tok)) {
-        req.session.user = null;
-        return res.status(401).json({ message: "logged_in_elsewhere" });
+      if (tok) {
+        const isActive = isSessionLastActiveValid(row);
+        const primaryMatches = row.session_token === tok && isActive;
+        if (!primaryMatches) {
+          if (row.role === "admin") {
+            const minAge = Date.now() - ADMIN_SESSION_MAX_AGE_MS;
+            const sess = await db2.query(
+              "SELECT 1 FROM user_sessions WHERE user_id = $1 AND session_token = $2 AND created_at >= $3",
+              [sessionUser.id, tok, minAge]
+            );
+            if (sess.rows.length === 0) {
+              req.session.user = null;
+              return res.status(401).json({ message: "logged_in_elsewhere" });
+            }
+          } else {
+            req.session.user = null;
+            return res.status(401).json({ message: "logged_in_elsewhere" });
+          }
+        }
       }
       const bindSes = await enforceInstallationBinding(db2, req, sessionUser.id, row.role);
-      if (!bindSes) {
+      if (!bindSes.ok) {
         req.session.user = null;
-        return res.status(401).json({ message: "device_binding_mismatch" });
+        return res.status(401).json({ message: bindSes.code });
       }
       const platSes = await assertActiveSessionPlatformMatches(db2, req, sessionUser.id, row.role);
       if (!platSes.ok) {
@@ -1632,6 +1774,9 @@ function registerAuthRoutes({
         return res.status(loginGate.httpStatus).json({ message: loginGate.message });
       }
       const finalized = await finalizeAuthenticatedSession(req, user, deviceId || null, false);
+      if (!finalized.success) {
+        return res.status(finalized.httpStatus).json({ message: finalized.message });
+      }
       res.json(finalized);
     } catch (err) {
       console.error("Firebase login error:", err);
@@ -1768,6 +1913,9 @@ function registerAuthRoutes({
       const dev = typeof deviceId === "string" ? deviceId : null;
       console.log("[Auth] email-login: finalize session start", { userId: user.id });
       const finalized = await finalizeAuthenticatedSession(req, user, dev, false);
+      if (!finalized.success) {
+        return res.status(finalized.httpStatus).json({ message: finalized.message });
+      }
       res.json(finalized);
     } catch (err) {
       console.error("Email login error:", err);
@@ -1825,6 +1973,9 @@ function registerAuthRoutes({
       }
       const dev = typeof deviceId === "string" ? deviceId : null;
       const finalized = await finalizeAuthenticatedSession(req, user, dev, true);
+      if (!finalized.success) {
+        return res.status(finalized.httpStatus).json({ message: finalized.message });
+      }
       const refreshed = await db2.query(
         "SELECT id, name, email, phone, role, session_token, profile_complete, date_of_birth, photo_url FROM users WHERE id = $1",
         [user.id]
@@ -1935,7 +2086,7 @@ function registerAuthRoutes({
 }
 var GENERIC_LOGIN_ERROR, GENERIC_OTP_ERROR, OTP_RESEND_COOLDOWN_MS, OTP_SENDS_PER_CYCLE, OTP_SEND_LOCK_MS, OTP_LOCKOUT_MESSAGE, OTP_COOLDOWN_MESSAGE, REGISTRATION_TOKEN_TTL_MS;
 var init_auth_routes = __esm({
-  "server/auth-routes.ts"() {
+  "backend/auth-routes.ts"() {
     "use strict";
     init_password_utils();
     init_native_device_binding();
@@ -1952,7 +2103,7 @@ var init_auth_routes = __esm({
   }
 });
 
-// server/media-key-utils.ts
+// backend/media-key-utils.ts
 function safeDecode(value) {
   try {
     return decodeURIComponent(value);
@@ -2013,13 +2164,13 @@ function mediaKeyMatchVariants(raw) {
 }
 var MEDIA_PROXY_PREFIX;
 var init_media_key_utils = __esm({
-  "server/media-key-utils.ts"() {
+  "backend/media-key-utils.ts"() {
     "use strict";
     MEDIA_PROXY_PREFIX = "api/media/";
   }
 });
 
-// server/r2-presign-read.ts
+// backend/r2-presign-read.ts
 async function presignR2GetObject(getR2Client, objectKey, expiresInSeconds) {
   const bucket = String(process.env.R2_BUCKET_NAME || "").trim();
   if (!bucket || !objectKey) return null;
@@ -2038,12 +2189,12 @@ async function presignR2GetObject(getR2Client, objectKey, expiresInSeconds) {
   }
 }
 var init_r2_presign_read = __esm({
-  "server/r2-presign-read.ts"() {
+  "backend/r2-presign-read.ts"() {
     "use strict";
   }
 });
 
-// server/pdf-routes.ts
+// backend/pdf-routes.ts
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 function isPrivateOrLocalHost(hostname) {
@@ -2082,28 +2233,50 @@ function mediaProxyUrl(publicBase, fileKey, token) {
 function registerPdfRoutes({ app: app2, db: db2, getAuthUser: getAuthUser2, getR2Client }) {
   app2.get("/api/pdf-viewer", async (req, res) => {
     const { token, key } = req.query;
-    if (!token || !key || typeof token !== "string" || typeof key !== "string") {
-      return res.status(400).send("Missing token or key");
+    if (!key || typeof key !== "string") {
+      return res.status(400).send("Missing key");
     }
     const fileKey = canonicalMediaKey(key);
     if (!fileKey) {
       return res.status(400).send("Invalid key");
     }
-    const tokenResult = await db2.query("SELECT user_id, expires_at FROM media_tokens WHERE token = $1 AND expires_at > $2 AND file_key = $3", [
-      token,
-      Date.now(),
-      fileKey
-    ]).catch(() => ({ rows: [] }));
-    if (!tokenResult.rows.length) {
-      return res.status(401).send("Token expired or invalid");
+    let expMs = null;
+    let validToken = null;
+    if (token && typeof token === "string") {
+      const tokenResult = await db2.query("SELECT user_id, expires_at FROM media_tokens WHERE token = $1 AND expires_at > $2 AND file_key = $3", [
+        token,
+        Date.now(),
+        fileKey
+      ]).catch(() => ({ rows: [] }));
+      if (tokenResult.rows.length > 0) {
+        expMs = Number(tokenResult.rows[0].expires_at);
+        validToken = token;
+      }
     }
-    const expiresAt = Number(tokenResult.rows[0].expires_at);
-    const expMs = Number.isFinite(expiresAt) ? expiresAt : Date.now() + 10 * 60 * 1e3;
+    if (expMs === null) {
+      const freeCheck = await db2.query(
+        `SELECT 1 FROM study_materials
+           WHERE is_free = TRUE
+             AND (
+               regexp_replace(regexp_replace(COALESCE(file_url,''),'^https?://[^/]+/',''),'^/+','') = $1
+               OR regexp_replace(COALESCE(file_url,''),'^https?://[^/]+/','') = $1
+             )
+           LIMIT 1`,
+        [fileKey]
+      ).catch(() => ({ rows: [] }));
+      if (!freeCheck.rows.length) {
+        return res.status(401).send("Token expired or invalid");
+      }
+      expMs = Date.now() + 10 * 60 * 1e3;
+    }
     const ttlSec = Math.max(60, Math.floor((expMs - Date.now()) / 1e3));
     const readUrl = await presignR2GetObject(getR2Client, fileKey, ttlSec);
     const publicBase = publicApiBaseUrl();
-    const pdfUrl = readUrl || mediaProxyUrl(publicBase, fileKey, token);
-    const withCredentials = !readUrl;
+    const pdfUrl = readUrl || (validToken ? mediaProxyUrl(publicBase, fileKey, validToken) : null);
+    if (!pdfUrl) {
+      return res.status(500).send("Unable to generate access URL for this file");
+    }
+    const withCredentials = false;
     const html = `<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
@@ -2283,7 +2456,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/p
 }
 var MAX_PDF_PROXY_BYTES, MAX_PDF_PROXY_REDIRECTS, PDF_PROXY_ALLOWED_HOSTS;
 var init_pdf_routes = __esm({
-  "server/pdf-routes.ts"() {
+  "backend/pdf-routes.ts"() {
     "use strict";
     init_media_key_utils();
     init_r2_presign_read();
@@ -2297,7 +2470,7 @@ var init_pdf_routes = __esm({
   }
 });
 
-// server/course-access-utils.ts
+// backend/course-access-utils.ts
 function computeEnrollmentValidUntil(course, enrolledAtMs) {
   const cands = [];
   if (course.end_date != null && String(course.end_date).trim() !== "") {
@@ -2323,12 +2496,12 @@ function isEnrollmentExpired(row) {
   return Number(vu) < Date.now();
 }
 var init_course_access_utils = __esm({
-  "server/course-access-utils.ts"() {
+  "backend/course-access-utils.ts"() {
     "use strict";
   }
 });
 
-// server/payment-routes.ts
+// backend/payment-routes.ts
 function httpStatusForCourseVerifyError(message) {
   switch (message) {
     case "Invalid payment signature":
@@ -2359,21 +2532,6 @@ function registerPaymentRoutes({
   verifyPaymentSignature: verifyPaymentSignature2,
   runInTransaction: runInTransaction2
 }) {
-  db2.query(
-    `CREATE TABLE IF NOT EXISTS payment_failures (
-      id SERIAL PRIMARY KEY,
-      user_id INTEGER,
-      course_id INTEGER,
-      razorpay_order_id TEXT,
-      razorpay_payment_id TEXT,
-      source TEXT,
-      reason TEXT,
-      raw_error TEXT,
-      created_at BIGINT NOT NULL
-    )`
-  ).catch((err) => {
-    console.error("[Payments] failed to ensure payment_failures table:", err);
-  });
   const logPaymentFailure = async (payload) => {
     try {
       await db2.query(
@@ -2662,7 +2820,9 @@ function registerPaymentRoutes({
       if (pay.rows.length === 0) {
         return res.json({ ok: true, fixed: false, message: "No paid order for this course" });
       }
-      await ensureCourseEnrollment(db2, pay.rows[0]);
+      await runInTransaction2(async (tx) => {
+        await ensureCourseEnrollment(tx, pay.rows[0]);
+      });
       return res.json({ ok: true, fixed: true, message: "Enrollment synced" });
     } catch (err) {
       console.error("sync-enrollment error:", err);
@@ -2874,14 +3034,14 @@ function registerPaymentRoutes({
   });
 }
 var init_payment_routes = __esm({
-  "server/payment-routes.ts"() {
+  "backend/payment-routes.ts"() {
     "use strict";
     init_course_access_utils();
     init_native_device_binding();
   }
 });
 
-// server/sse-listen-budget.ts
+// backend/sse-listen-budget.ts
 function sseListenCapFromPoolMax(poolMax) {
   const poolClamp = Math.max(5, poolMax);
   const fromEnv = parseInt(process.env.PG_LISTEN_SSE_MAX_CONCURRENT || "", 10);
@@ -2901,13 +3061,13 @@ function releaseSseListen() {
 }
 var activeListenStreams;
 var init_sse_listen_budget = __esm({
-  "server/sse-listen-budget.ts"() {
+  "backend/sse-listen-budget.ts"() {
     "use strict";
     activeListenStreams = 0;
   }
 });
 
-// server/support-routes.ts
+// backend/support-routes.ts
 function registerSupportRoutes({
   app: app2,
   db: db2,
@@ -3205,7 +3365,15 @@ data: ${JSON.stringify({ message: "Realtime unavailable" })}
         "INSERT INTO support_messages (user_id, sender, message, created_at) VALUES ($1, 'admin', $2, $3) RETURNING *",
         [req.params.userId, message.trim().slice(0, 1e3), Date.now()]
       );
-      res.json(result.rows[0]);
+      const row = result.rows[0];
+      try {
+        await db2.query("SELECT pg_notify('support_chat', $1)", [
+          JSON.stringify({ userId: Number(req.params.userId), id: row.id })
+        ]);
+      } catch (notifyErr) {
+        console.error("[SupportAdmin] pg_notify failed for reply to userId=%s msgId=%s:", req.params.userId, row.id, notifyErr);
+      }
+      res.json(row);
     } catch {
       res.status(500).json({ message: "Failed to send reply" });
     }
@@ -3213,7 +3381,7 @@ data: ${JSON.stringify({ message: "Realtime unavailable" })}
 }
 var SUPPORT_POST_WINDOW_MS, SUPPORT_POST_MAX;
 var init_support_routes = __esm({
-  "server/support-routes.ts"() {
+  "backend/support-routes.ts"() {
     "use strict";
     init_pg_rate_limit_store();
     init_sse_listen_budget();
@@ -3222,7 +3390,7 @@ var init_support_routes = __esm({
   }
 });
 
-// server/live-class-access.ts
+// backend/live-class-access.ts
 function sqlEnrollmentExistsForLiveList(userIdParam, nowParam) {
   return `EXISTS (SELECT 1 FROM enrollments e WHERE e.course_id = lc.course_id AND e.user_id = $${userIdParam} AND (e.status = 'active' OR e.status IS NULL) AND (e.valid_until IS NULL OR e.valid_until >= $${nowParam}))`;
 }
@@ -3239,13 +3407,13 @@ async function userCanAccessLiveClassContent(db2, user, lc) {
   return true;
 }
 var init_live_class_access = __esm({
-  "server/live-class-access.ts"() {
+  "backend/live-class-access.ts"() {
     "use strict";
     init_course_access_utils();
   }
 });
 
-// server/live-chat-routes.ts
+// backend/live-chat-routes.ts
 async function checkLiveClassAccess(req, res, db2, getAuthUser2, liveClassId) {
   const lc = await db2.query("SELECT * FROM live_classes WHERE id = $1", [liveClassId]);
   if (lc.rows.length === 0) {
@@ -3424,14 +3592,14 @@ data: ${JSON.stringify({ message: "Realtime unavailable" })}
   });
 }
 var init_live_chat_routes = __esm({
-  "server/live-chat-routes.ts"() {
+  "backend/live-chat-routes.ts"() {
     "use strict";
     init_live_class_access();
     init_sse_listen_budget();
   }
 });
 
-// server/listen-pool.ts
+// backend/listen-pool.ts
 import { Pool } from "pg";
 function createListenPool(connectionString) {
   const defaultMax = process.env.NODE_ENV === "production" ? 12 : 20;
@@ -3447,12 +3615,12 @@ function createListenPool(connectionString) {
   });
 }
 var init_listen_pool = __esm({
-  "server/listen-pool.ts"() {
+  "backend/listen-pool.ts"() {
     "use strict";
   }
 });
 
-// server/live-class-engagement-routes.ts
+// backend/live-class-engagement-routes.ts
 function registerLiveClassEngagementRoutes({
   app: app2,
   db: db2,
@@ -3647,13 +3815,13 @@ function registerLiveClassEngagementRoutes({
   });
 }
 var init_live_class_engagement_routes = __esm({
-  "server/live-class-engagement-routes.ts"() {
+  "backend/live-class-engagement-routes.ts"() {
     "use strict";
     init_live_class_access();
   }
 });
 
-// server/recordingSection.ts
+// shared/recordingSection.ts
 function buildRecordingLectureSectionTitle(main, sub, bodyOverride) {
   if (bodyOverride != null && String(bodyOverride).trim() !== "") {
     return String(bodyOverride).trim();
@@ -3664,13 +3832,13 @@ function buildRecordingLectureSectionTitle(main, sub, bodyOverride) {
 }
 var DEFAULT_LIVE_RECORDING_SECTION;
 var init_recordingSection = __esm({
-  "server/recordingSection.ts"() {
+  "shared/recordingSection.ts"() {
     "use strict";
     DEFAULT_LIVE_RECORDING_SECTION = "Live Class Recordings";
   }
 });
 
-// server/live-class-recording-save.ts
+// backend/live-class-recording-save.ts
 function inferVideoType(url) {
   const lower = String(url || "").toLowerCase();
   if (lower.includes("youtube.com") || lower.includes("youtu.be")) return "youtube";
@@ -3686,11 +3854,9 @@ async function saveRecordingForClassAndPeers(db2, liveClassId, recordingUrl, opt
   if (liveClass.recording_deleted_at) {
     return { lectureId: null, lectureIds: [] };
   }
-  const title = liveClass.title;
-  const peers = await db2.query("SELECT * FROM live_classes WHERE title = $1 ORDER BY id", [title]);
   const lectureIds = [];
   const endedAt = Date.now();
-  for (const row of peers.rows) {
+  for (const row of [liveClass]) {
     if (row.recording_deleted_at) continue;
     const durationMins = row.started_at ? Math.max(1, Math.round((endedAt - Number(row.started_at)) / 6e4)) : 0;
     await db2.query(
@@ -3767,13 +3933,13 @@ async function saveRecordingForClassAndPeers(db2, liveClassId, recordingUrl, opt
   return { lectureId: lectureIds[0] ?? null, lectureIds };
 }
 var init_live_class_recording_save = __esm({
-  "server/live-class-recording-save.ts"() {
+  "backend/live-class-recording-save.ts"() {
     "use strict";
     init_recordingSection();
   }
 });
 
-// server/cloudflare-stream-download.ts
+// backend/cloudflare-stream-download.ts
 function parseDefaultDownload(payload) {
   const def = payload?.result?.default;
   if (!def || typeof def !== "object") return null;
@@ -3861,18 +4027,18 @@ function buildLegacyMp4CandidateUrls(recordingUid) {
 }
 var sleep;
 var init_cloudflare_stream_download = __esm({
-  "server/cloudflare-stream-download.ts"() {
+  "backend/cloudflare-stream-download.ts"() {
     "use strict";
     sleep = (ms) => new Promise((resolve2) => setTimeout(resolve2, ms));
   }
 });
 
-// server/live-stream-routes.ts
+// backend/live-stream-routes.ts
 function registerLiveStreamRoutes({
   app: app2,
   db: db2,
   requireAdmin,
-  recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse2,
+  recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse3,
   getR2Client
 }) {
   const archiveRetryState = /* @__PURE__ */ new Map();
@@ -4035,7 +4201,7 @@ function registerLiveStreamRoutes({
   };
   const saveRecordingForClassAndPeers2 = (liveClassId, recordingUrl, sectionTitle) => saveRecordingForClassAndPeers(db2, liveClassId, recordingUrl, {
     sectionTitle,
-    recomputeCourseProgress: recomputeAllEnrollmentsProgressForCourse2
+    recomputeCourseProgress: recomputeAllEnrollmentsProgressForCourse3
   });
   app2.post("/api/admin/live-classes/:id/stream/create", requireAdmin, async (req, res) => {
     try {
@@ -4313,7 +4479,7 @@ function registerLiveStreamRoutes({
               row.course_id
             ]).catch(() => {
             });
-            await recomputeAllEnrollmentsProgressForCourse2(row.course_id).catch(() => {
+            await recomputeAllEnrollmentsProgressForCourse3(row.course_id).catch(() => {
             });
           }
         }
@@ -4339,7 +4505,7 @@ function registerLiveStreamRoutes({
   }
 }
 var init_live_stream_routes = __esm({
-  "server/live-stream-routes.ts"() {
+  "backend/live-stream-routes.ts"() {
     "use strict";
     init_recordingSection();
     init_live_class_recording_save();
@@ -4347,7 +4513,7 @@ var init_live_stream_routes = __esm({
   }
 });
 
-// server/site-settings-routes.ts
+// backend/site-settings-routes.ts
 function registerSiteSettingsRoutes({
   app: app2,
   db: db2,
@@ -4397,42 +4563,421 @@ function registerSiteSettingsRoutes({
   });
 }
 var init_site_settings_routes = __esm({
-  "server/site-settings-routes.ts"() {
+  "backend/site-settings-routes.ts"() {
     "use strict";
   }
 });
 
-// server/admin-course-import-routes.ts
+// backend/course-content-transfer.ts
+function parseCourseId(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+async function fetchContentImportPreview(db2, sourceCourseId) {
+  const [lec, tst, mat, mis] = await Promise.all([
+    db2.query("SELECT COUNT(*)::int AS c FROM lectures WHERE course_id = $1", [sourceCourseId]),
+    db2.query("SELECT COUNT(*)::int AS c FROM tests WHERE course_id = $1", [sourceCourseId]),
+    db2.query("SELECT COUNT(*)::int AS c FROM study_materials WHERE course_id = $1", [sourceCourseId]),
+    db2.query("SELECT COUNT(*)::int AS c FROM daily_missions WHERE course_id = $1", [sourceCourseId])
+  ]);
+  return {
+    lectures: Number(lec.rows[0]?.c || 0),
+    tests: Number(tst.rows[0]?.c || 0),
+    materials: Number(mat.rows[0]?.c || 0),
+    missions: Number(mis.rows[0]?.c || 0)
+  };
+}
+async function syncCourseFoldersFromSource(db2, targetCourseId, sourceCourseId) {
+  const countRes = await db2.query(
+    `SELECT COUNT(*)::int AS c FROM course_folders
+     WHERE course_id = $1 AND type IN ('lecture', 'test', 'material')`,
+    [sourceCourseId]
+  );
+  const folderCount = Number(countRes.rows[0]?.c || 0);
+  if (folderCount === 0) return 0;
+  const now = Date.now();
+  await db2.query(
+    `INSERT INTO course_folders (course_id, name, type, is_hidden, created_at)
+     SELECT $1::int, cf.name, cf.type, cf.is_hidden, $2::bigint
+     FROM course_folders cf
+     WHERE cf.course_id = $3::int
+       AND cf.type IN ('lecture', 'test', 'material')
+     ON CONFLICT (course_id, name, type)
+     DO UPDATE SET is_hidden = EXCLUDED.is_hidden`,
+    [targetCourseId, now, sourceCourseId]
+  );
+  return folderCount;
+}
+async function nextLectureOrderBase(db2, targetCourseId) {
+  const maxRow = await db2.query(
+    `SELECT COALESCE(MAX(order_index), -1)::int AS m FROM lectures WHERE course_id = $1`,
+    [targetCourseId]
+  );
+  return Number(maxRow.rows[0]?.m ?? -1) + 1;
+}
+async function nextTestOrderBase(db2, targetCourseId) {
+  const maxRow = await db2.query(
+    `SELECT COALESCE(MAX(order_index), -1)::int AS m FROM tests WHERE course_id = $1`,
+    [targetCourseId]
+  );
+  return Number(maxRow.rows[0]?.m ?? -1) + 1;
+}
+async function nextMaterialOrderBase(db2, targetCourseId) {
+  const maxRow = await db2.query(
+    `SELECT COALESCE(MAX(order_index), -1)::int AS m FROM study_materials WHERE course_id = $1`,
+    [targetCourseId]
+  );
+  return Number(maxRow.rows[0]?.m ?? -1) + 1;
+}
+async function importLectureRow(db2, targetCourseId, l, orderIndex) {
+  const now = Date.now();
+  await db2.query(
+    `INSERT INTO lectures (
+       course_id, title, description, transcript, video_url, video_type, pdf_url,
+       duration_minutes, order_index, is_free_preview, section_title, download_allowed, created_at
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+    [
+      targetCourseId,
+      l.title,
+      l.description || "",
+      l.transcript || "",
+      l.video_url,
+      l.video_type || "youtube",
+      l.pdf_url || null,
+      l.duration_minutes || 0,
+      orderIndex,
+      !!l.is_free_preview,
+      l.section_title || null,
+      !!l.download_allowed,
+      l.created_at || now
+    ]
+  );
+}
+async function importLecturesByIds(db2, targetCourseId, lectureIds) {
+  if (lectureIds.length === 0) return 0;
+  const rows = await db2.query(
+    `SELECT * FROM lectures WHERE id = ANY($1::int[]) ORDER BY COALESCE(order_index, 0) ASC, id ASC`,
+    [lectureIds]
+  );
+  let orderBase = await nextLectureOrderBase(db2, targetCourseId);
+  const srcMin = rows.rows.length ? Math.min(...rows.rows.map((r) => Number(r.order_index ?? 0))) : 0;
+  let count = 0;
+  for (const l of rows.rows) {
+    const relOrder = Number(l.order_index ?? 0) - srcMin;
+    await importLectureRow(db2, targetCourseId, l, orderBase + relOrder);
+    count++;
+  }
+  return count;
+}
+async function importAllLecturesFromCourse(db2, targetCourseId, sourceCourseId) {
+  const rows = await db2.query(
+    `SELECT * FROM lectures WHERE course_id = $1 ORDER BY COALESCE(order_index, 0) ASC, id ASC`,
+    [sourceCourseId]
+  );
+  let orderBase = await nextLectureOrderBase(db2, targetCourseId);
+  const srcMin = rows.rows.length ? Math.min(...rows.rows.map((r) => Number(r.order_index ?? 0))) : 0;
+  let count = 0;
+  for (const l of rows.rows) {
+    const relOrder = Number(l.order_index ?? 0) - srcMin;
+    await importLectureRow(db2, targetCourseId, l, orderBase + relOrder);
+    count++;
+  }
+  return count;
+}
+async function importTestRow(db2, targetCourseId, t, orderIndex) {
+  const now = Date.now();
+  const newTest = await db2.query(
+    `INSERT INTO tests (
+       title, description, course_id, duration_minutes, total_marks, passing_marks,
+       test_type, folder_name, total_questions, difficulty, order_index, is_published, created_at
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+     RETURNING id`,
+    [
+      t.title,
+      t.description,
+      targetCourseId,
+      t.duration_minutes,
+      t.total_marks,
+      t.passing_marks ?? 35,
+      t.test_type,
+      t.folder_name || null,
+      t.total_questions || 0,
+      t.difficulty || "moderate",
+      orderIndex,
+      t.is_published !== false,
+      t.created_at || now
+    ]
+  );
+  const newTestId = newTest.rows[0].id;
+  const questions = await db2.query(
+    `SELECT * FROM questions WHERE test_id = $1 ORDER BY COALESCE(order_index, 0) ASC, id ASC`,
+    [t.id]
+  );
+  for (const q of questions.rows) {
+    await db2.query(
+      `INSERT INTO questions (
+         test_id, question_text, option_a, option_b, option_c, option_d, correct_option,
+         explanation, topic, difficulty, marks, negative_marks, order_index, image_url, solution_image_url
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+      [
+        newTestId,
+        q.question_text,
+        q.option_a,
+        q.option_b,
+        q.option_c,
+        q.option_d,
+        q.correct_option,
+        q.explanation,
+        q.topic,
+        q.difficulty,
+        q.marks,
+        q.negative_marks,
+        q.order_index,
+        q.image_url || null,
+        q.solution_image_url || null
+      ]
+    );
+  }
+  return 1;
+}
+async function importTestsByIds(db2, targetCourseId, testIds) {
+  if (testIds.length === 0) return 0;
+  const rows = await db2.query(
+    `SELECT * FROM tests WHERE id = ANY($1::int[]) ORDER BY COALESCE(order_index, 0) ASC, id ASC`,
+    [testIds]
+  );
+  let orderBase = await nextTestOrderBase(db2, targetCourseId);
+  const srcMin = rows.rows.length ? Math.min(...rows.rows.map((r) => Number(r.order_index ?? 0))) : 0;
+  let count = 0;
+  for (const t of rows.rows) {
+    const relOrder = Number(t.order_index ?? 0) - srcMin;
+    await importTestRow(db2, targetCourseId, t, orderBase + relOrder);
+    count++;
+  }
+  return count;
+}
+async function importAllTestsFromCourse(db2, targetCourseId, sourceCourseId) {
+  const rows = await db2.query(
+    `SELECT * FROM tests WHERE course_id = $1 ORDER BY COALESCE(order_index, 0) ASC, id ASC`,
+    [sourceCourseId]
+  );
+  let orderBase = await nextTestOrderBase(db2, targetCourseId);
+  const srcMin = rows.rows.length ? Math.min(...rows.rows.map((r) => Number(r.order_index ?? 0))) : 0;
+  let count = 0;
+  for (const t of rows.rows) {
+    const relOrder = Number(t.order_index ?? 0) - srcMin;
+    await importTestRow(db2, targetCourseId, t, orderBase + relOrder);
+    count++;
+  }
+  return count;
+}
+async function importMaterialRow(db2, targetCourseId, m, orderIndex) {
+  const now = Date.now();
+  await db2.query(
+    `INSERT INTO study_materials (
+       title, description, file_url, file_type, course_id, is_free, section_title, download_allowed, order_index, created_at
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+    [
+      m.title,
+      m.description || "",
+      m.file_url,
+      m.file_type || "pdf",
+      targetCourseId,
+      !!m.is_free,
+      m.section_title || null,
+      !!m.download_allowed,
+      orderIndex,
+      m.created_at || now
+    ]
+  );
+}
+async function importMaterialsByIds(db2, targetCourseId, materialIds) {
+  if (materialIds.length === 0) return 0;
+  const rows = await db2.query(
+    `SELECT * FROM study_materials WHERE id = ANY($1::int[]) ORDER BY COALESCE(order_index, 0) ASC, id ASC`,
+    [materialIds]
+  );
+  let orderBase = await nextMaterialOrderBase(db2, targetCourseId);
+  const srcMin = rows.rows.length ? Math.min(...rows.rows.map((r) => Number(r.order_index ?? 0))) : 0;
+  let count = 0;
+  for (const m of rows.rows) {
+    const relOrder = Number(m.order_index ?? 0) - srcMin;
+    await importMaterialRow(db2, targetCourseId, m, orderBase + relOrder);
+    count++;
+  }
+  return count;
+}
+async function importAllMaterialsFromCourse(db2, targetCourseId, sourceCourseId) {
+  const rows = await db2.query(
+    `SELECT * FROM study_materials WHERE course_id = $1 ORDER BY COALESCE(order_index, 0) ASC, id ASC`,
+    [sourceCourseId]
+  );
+  let orderBase = await nextMaterialOrderBase(db2, targetCourseId);
+  const srcMin = rows.rows.length ? Math.min(...rows.rows.map((r) => Number(r.order_index ?? 0))) : 0;
+  let count = 0;
+  for (const m of rows.rows) {
+    const relOrder = Number(m.order_index ?? 0) - srcMin;
+    await importMaterialRow(db2, targetCourseId, m, orderBase + relOrder);
+    count++;
+  }
+  return count;
+}
+async function importAllMissionsFromCourse(db2, targetCourseId, sourceCourseId) {
+  const rows = await db2.query(
+    `SELECT * FROM daily_missions WHERE course_id = $1 ORDER BY mission_date DESC, id ASC`,
+    [sourceCourseId]
+  );
+  let count = 0;
+  for (const m of rows.rows) {
+    const questionsPayload = typeof m.questions === "string" ? m.questions : JSON.stringify(m.questions ?? []);
+    await db2.query(
+      `INSERT INTO daily_missions (title, description, questions, mission_date, xp_reward, mission_type, course_id, folder_name)
+       VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8)`,
+      [
+        m.title,
+        m.description || "",
+        questionsPayload,
+        m.mission_date,
+        m.xp_reward ?? 50,
+        m.mission_type || "daily_drill",
+        targetCourseId,
+        m.folder_name || null
+      ]
+    );
+    count++;
+  }
+  return count;
+}
+async function importCourseContent(db2, targetCourseId, sourceCourseId, options) {
+  if (targetCourseId === sourceCourseId) {
+    throw new Error("Source and target course must be different");
+  }
+  const targetExists = await db2.query("SELECT id FROM courses WHERE id = $1 LIMIT 1", [targetCourseId]);
+  if (targetExists.rows.length === 0) throw new Error("Target course not found");
+  const sourceExists = await db2.query("SELECT id FROM courses WHERE id = $1 LIMIT 1", [sourceCourseId]);
+  if (sourceExists.rows.length === 0) throw new Error("Source course not found");
+  const needsFolders = options.lectures || options.tests || options.materials;
+  let foldersSynced = 0;
+  if (needsFolders) {
+    foldersSynced = await syncCourseFoldersFromSource(db2, targetCourseId, sourceCourseId);
+  }
+  const result = {
+    lectures: 0,
+    tests: 0,
+    materials: 0,
+    missions: 0,
+    foldersSynced
+  };
+  if (options.lectures) {
+    result.lectures = await importAllLecturesFromCourse(db2, targetCourseId, sourceCourseId);
+  }
+  if (options.tests) {
+    result.tests = await importAllTestsFromCourse(db2, targetCourseId, sourceCourseId);
+  }
+  if (options.materials) {
+    result.materials = await importAllMaterialsFromCourse(db2, targetCourseId, sourceCourseId);
+  }
+  if (options.missions) {
+    result.missions = await importAllMissionsFromCourse(db2, targetCourseId, sourceCourseId);
+  }
+  return result;
+}
+function parseImportContentOptions(body) {
+  const o = body?.options ?? body;
+  const lectures = o?.lectures === true;
+  const tests = o?.tests === true;
+  const materials = o?.materials === true;
+  const missions = o?.missions === true;
+  if (!lectures && !tests && !materials && !missions) return null;
+  return { lectures, tests, materials, missions };
+}
+var init_course_content_transfer = __esm({
+  "backend/course-content-transfer.ts"() {
+    "use strict";
+  }
+});
+
+// backend/admin-course-import-routes.ts
+async function finalizeTargetCourseStats(db2, targetCourseId, opts, updateCourseTestCounts3, recomputeAllEnrollmentsProgressForCourse3) {
+  if (opts.lectures) {
+    await db2.query(
+      "UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1",
+      [targetCourseId]
+    );
+    await recomputeAllEnrollmentsProgressForCourse3(targetCourseId);
+  }
+  if (opts.tests) {
+    await updateCourseTestCounts3(targetCourseId);
+  }
+}
 function registerAdminCourseImportRoutes({
   app: app2,
   db: db2,
   requireAdmin,
-  updateCourseTestCounts: updateCourseTestCounts2,
-  recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse2
+  updateCourseTestCounts: updateCourseTestCounts3,
+  recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse3,
+  runInTransaction: runInTransaction2
 }) {
+  app2.get("/api/admin/courses/:id/import-content-preview", requireAdmin, async (req, res) => {
+    try {
+      const sourceCourseId = parseCourseId(req.query.sourceCourseId);
+      if (!sourceCourseId) {
+        return res.status(400).json({ message: "sourceCourseId query param is required" });
+      }
+      const preview = await fetchContentImportPreview(db2, sourceCourseId);
+      res.json(preview);
+    } catch (err) {
+      console.error("[Import] preview error:", err);
+      res.status(500).json({ message: "Failed to load import preview" });
+    }
+  });
+  app2.post("/api/admin/courses/:id/import-content", requireAdmin, async (req, res) => {
+    try {
+      const targetCourseId = parseCourseId(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id);
+      const sourceCourseId = parseCourseId(req.body?.sourceCourseId);
+      const options = parseImportContentOptions(req.body);
+      if (!targetCourseId) return res.status(400).json({ message: "Invalid target course id" });
+      if (!sourceCourseId) return res.status(400).json({ message: "sourceCourseId is required" });
+      if (!options) {
+        return res.status(400).json({ message: "Select at least one content type to import" });
+      }
+      const result = await runInTransaction2(
+        (tx) => importCourseContent(tx, targetCourseId, sourceCourseId, options)
+      );
+      await finalizeTargetCourseStats(
+        db2,
+        String(targetCourseId),
+        { lectures: options.lectures, tests: options.tests },
+        updateCourseTestCounts3,
+        recomputeAllEnrollmentsProgressForCourse3
+      );
+      res.json({ success: true, ...result });
+    } catch (err) {
+      console.error("[Import] import-content error:", err);
+      const msg = err?.message || "Failed to import course content";
+      const status = msg.includes("not found") || msg.includes("different") ? 400 : 500;
+      res.status(status).json({ message: msg });
+    }
+  });
   app2.post("/api/admin/courses/:id/import-lectures", requireAdmin, async (req, res) => {
     try {
-      const targetCourseId = String(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id);
-      const { lectureIds, sectionTitle } = req.body;
+      const targetCourseId = parseCourseId(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id);
+      const { lectureIds } = req.body;
+      if (!targetCourseId) return res.status(400).json({ message: "Invalid course id" });
       if (!lectureIds || !Array.isArray(lectureIds) || lectureIds.length === 0) {
         return res.status(400).json({ message: "No lectures selected" });
       }
-      const maxOrder = await db2.query("SELECT COALESCE(MAX(order_index), 0) + 1 as next_order FROM lectures WHERE course_id = $1", [targetCourseId]);
-      let orderIndex = maxOrder.rows[0].next_order;
-      for (const lecId of lectureIds) {
-        const lec = await db2.query("SELECT * FROM lectures WHERE id = $1", [lecId]);
-        if (lec.rows.length > 0) {
-          const l = lec.rows[0];
-          await db2.query(
-            `INSERT INTO lectures (course_id, title, description, video_url, video_type, duration_minutes, order_index, is_free_preview, section_title, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-            [targetCourseId, l.title, l.description || "", l.video_url, l.video_type || "youtube", l.duration_minutes || 0, orderIndex++, false, l.section_title || null, Date.now()]
-          );
-        }
-      }
-      await db2.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [targetCourseId]);
-      await recomputeAllEnrollmentsProgressForCourse2(targetCourseId);
-      res.json({ success: true, imported: lectureIds.length });
+      const imported = await runInTransaction2(
+        (tx) => importLecturesByIds(tx, targetCourseId, lectureIds.map((id) => Number(id)).filter((id) => Number.isFinite(id)))
+      );
+      await finalizeTargetCourseStats(
+        db2,
+        String(targetCourseId),
+        { lectures: true, tests: false },
+        updateCourseTestCounts3,
+        recomputeAllEnrollmentsProgressForCourse3
+      );
+      res.json({ success: true, imported });
     } catch (err) {
       console.error("Import lectures error:", err);
       res.status(500).json({ message: "Failed to import lectures" });
@@ -4440,32 +4985,23 @@ function registerAdminCourseImportRoutes({
   });
   app2.post("/api/admin/courses/:id/import-tests", requireAdmin, async (req, res) => {
     try {
-      const targetCourseId = String(req.params.id);
+      const targetCourseId = parseCourseId(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id);
       const { testIds } = req.body;
+      if (!targetCourseId) return res.status(400).json({ message: "Invalid course id" });
       if (!testIds || !Array.isArray(testIds) || testIds.length === 0) {
         return res.status(400).json({ message: "No tests selected" });
       }
-      for (const testId of testIds) {
-        const test = await db2.query("SELECT * FROM tests WHERE id = $1", [testId]);
-        if (test.rows.length > 0) {
-          const t = test.rows[0];
-          const newTest = await db2.query(
-            `INSERT INTO tests (title, description, course_id, duration_minutes, total_marks, passing_marks, test_type, folder_name, total_questions, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
-            [t.title, t.description, targetCourseId, t.duration_minutes, t.total_marks, t.passing_marks, t.test_type, t.folder_name || null, t.total_questions || 0, Date.now()]
-          );
-          const questions = await db2.query("SELECT * FROM questions WHERE test_id = $1 ORDER BY order_index", [testId]);
-          for (const q of questions.rows) {
-            await db2.query(
-              `INSERT INTO questions (test_id, question_text, option_a, option_b, option_c, option_d, correct_option, explanation, topic, difficulty, marks, negative_marks, order_index)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
-              [newTest.rows[0].id, q.question_text, q.option_a, q.option_b, q.option_c, q.option_d, q.correct_option, q.explanation, q.topic, q.difficulty, q.marks, q.negative_marks, q.order_index]
-            );
-          }
-        }
-      }
-      await updateCourseTestCounts2(targetCourseId);
-      res.json({ success: true, imported: testIds.length });
+      const imported = await runInTransaction2(
+        (tx) => importTestsByIds(tx, targetCourseId, testIds.map((id) => Number(id)).filter((id) => Number.isFinite(id)))
+      );
+      await finalizeTargetCourseStats(
+        db2,
+        String(targetCourseId),
+        { lectures: false, tests: true },
+        updateCourseTestCounts3,
+        recomputeAllEnrollmentsProgressForCourse3
+      );
+      res.json({ success: true, imported });
     } catch (err) {
       console.error("Import tests error:", err);
       res.status(500).json({ message: "Failed to import tests" });
@@ -4473,23 +5009,20 @@ function registerAdminCourseImportRoutes({
   });
   app2.post("/api/admin/courses/:id/import-materials", requireAdmin, async (req, res) => {
     try {
-      const targetCourseId = req.params.id;
+      const targetCourseId = parseCourseId(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id);
       const { materialIds } = req.body;
+      if (!targetCourseId) return res.status(400).json({ message: "Invalid course id" });
       if (!materialIds || !Array.isArray(materialIds) || materialIds.length === 0) {
         return res.status(400).json({ message: "No materials selected" });
       }
-      for (const matId of materialIds) {
-        const mat = await db2.query("SELECT * FROM study_materials WHERE id = $1", [matId]);
-        if (mat.rows.length > 0) {
-          const m = mat.rows[0];
-          await db2.query(
-            `INSERT INTO study_materials (title, description, file_url, file_type, course_id, is_free, section_title, download_allowed, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-            [m.title, m.description || "", m.file_url, m.file_type || "pdf", targetCourseId, false, m.section_title || null, m.download_allowed || false, Date.now()]
-          );
-        }
-      }
-      res.json({ success: true, imported: materialIds.length });
+      const imported = await runInTransaction2(
+        (tx) => importMaterialsByIds(
+          tx,
+          targetCourseId,
+          materialIds.map((id) => Number(id)).filter((id) => Number.isFinite(id))
+        )
+      );
+      res.json({ success: true, imported });
     } catch (err) {
       console.error("Import materials error:", err);
       res.status(500).json({ message: "Failed to import materials" });
@@ -4497,12 +5030,13 @@ function registerAdminCourseImportRoutes({
   });
 }
 var init_admin_course_import_routes = __esm({
-  "server/admin-course-import-routes.ts"() {
+  "backend/admin-course-import-routes.ts"() {
     "use strict";
+    init_course_content_transfer();
   }
 });
 
-// server/admin-course-management-routes.ts
+// backend/admin-course-management-routes.ts
 function normalizeFolderName(value) {
   if (typeof value !== "string") return "";
   return value.trim().replace(/\s+/g, " ");
@@ -4511,7 +5045,7 @@ function registerAdminCourseManagementRoutes({
   app: app2,
   db: db2,
   requireAdmin,
-  updateCourseTestCounts: updateCourseTestCounts2
+  updateCourseTestCounts: updateCourseTestCounts3
 }) {
   app2.get("/api/admin/all-materials", requireAdmin, async (_req, res) => {
     try {
@@ -4643,6 +5177,50 @@ function registerAdminCourseManagementRoutes({
       res.status(500).json({ message: "Failed to update folder" });
     }
   });
+  app2.patch("/api/admin/courses/:id/reorder", requireAdmin, async (req, res) => {
+    try {
+      const courseId = Number(req.params.id);
+      if (!Number.isFinite(courseId) || courseId <= 0) {
+        return res.status(400).json({ message: "Invalid course id" });
+      }
+      const { itemType, items } = req.body;
+      if (itemType !== "test" && itemType !== "material") {
+        return res.status(400).json({ message: "itemType must be 'test' or 'material'" });
+      }
+      if (!Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ message: "items must be a non-empty array" });
+      }
+      const ids = [];
+      const orders = [];
+      for (const item of items) {
+        const itemId = Number(item.id);
+        const orderIdx = Number(item.orderIndex);
+        if (!Number.isFinite(itemId) || !Number.isFinite(orderIdx)) continue;
+        ids.push(itemId);
+        orders.push(orderIdx);
+      }
+      if (ids.length === 0) return res.json({ success: true, updated: 0 });
+      if (itemType === "test") {
+        await db2.query(
+          `UPDATE tests SET order_index = v.order_index
+           FROM (SELECT unnest($1::int[]) AS id, unnest($2::int[]) AS order_index) v
+           WHERE tests.id = v.id AND tests.course_id = $3`,
+          [ids, orders, courseId]
+        );
+      } else {
+        await db2.query(
+          `UPDATE study_materials SET order_index = v.order_index
+           FROM (SELECT unnest($1::int[]) AS id, unnest($2::int[]) AS order_index) v
+           WHERE study_materials.id = v.id AND study_materials.course_id = $3`,
+          [ids, orders, courseId]
+        );
+      }
+      res.json({ success: true, updated: ids.length });
+    } catch (err) {
+      console.error("[reorder] error:", err);
+      res.status(500).json({ message: "Failed to reorder items" });
+    }
+  });
   app2.delete("/api/admin/courses/:id/folders/:folderId", requireAdmin, async (req, res) => {
     try {
       await db2.query(
@@ -4674,7 +5252,7 @@ function registerAdminCourseManagementRoutes({
          WHERE cf.id = t.id`,
         [req.params.folderId, req.params.id]
       );
-      await updateCourseTestCounts2(String(req.params.id));
+      await updateCourseTestCounts3(String(req.params.id));
       res.json({ success: true });
     } catch {
       res.status(500).json({ message: "Failed to delete folder" });
@@ -4683,14 +5261,14 @@ function registerAdminCourseManagementRoutes({
 }
 var COURSE_FOLDER_TYPES, MAX_FOLDER_NAME_LENGTH;
 var init_admin_course_management_routes = __esm({
-  "server/admin-course-management-routes.ts"() {
+  "backend/admin-course-management-routes.ts"() {
     "use strict";
     COURSE_FOLDER_TYPES = /* @__PURE__ */ new Set(["lecture", "material", "test"]);
     MAX_FOLDER_NAME_LENGTH = 120;
   }
 });
 
-// server/admin-analytics-routes.ts
+// backend/admin-analytics-routes.ts
 function registerAdminAnalyticsRoutes({
   app: app2,
   db: db2,
@@ -5097,25 +5675,41 @@ function registerAdminAnalyticsRoutes({
   });
 }
 var init_admin_analytics_routes = __esm({
-  "server/admin-analytics-routes.ts"() {
+  "backend/admin-analytics-routes.ts"() {
     "use strict";
   }
 });
 
-// server/admin-enrollment-routes.ts
+// backend/admin-enrollment-routes.ts
+async function writeEnrollmentAuditLog(db2, adminUserId, action, enrollmentId, meta) {
+  try {
+    await db2.query(
+      `INSERT INTO admin_audit_log (admin_user_id, action, target_type, target_id, meta, created_at)
+       VALUES ($1, $2, 'enrollment', $3, $4, $5)`,
+      [adminUserId, action, enrollmentId, JSON.stringify(meta), Date.now()]
+    );
+  } catch {
+  }
+}
 function registerAdminEnrollmentRoutes({
   app: app2,
   db: db2,
   requireAdmin,
-  deleteDownloadsForUser: deleteDownloadsForUser2,
-  deleteDownloadsForCourse: deleteDownloadsForCourse2,
+  deleteDownloadsForUser: deleteDownloadsForUser3,
+  deleteDownloadsForCourse: deleteDownloadsForCourse3,
   runInTransaction: runInTransaction2
 }) {
   app2.put("/api/admin/enrollments/:id", requireAdmin, async (req, res) => {
     try {
+      const adminUserId = Number(req.user?.id) || null;
       const { status, valid_until } = req.body;
       const updates = [];
       const params = [];
+      const before = await db2.query(
+        "SELECT status, valid_until FROM enrollments WHERE id = $1",
+        [req.params.id]
+      ).catch(() => ({ rows: [] }));
+      const oldRow = before.rows[0] || {};
       if (status !== void 0) {
         params.push(status);
         updates.push(`status = $${params.length}`);
@@ -5128,6 +5722,12 @@ function registerAdminEnrollmentRoutes({
         params.push(req.params.id);
         await db2.query(`UPDATE enrollments SET ${updates.join(", ")} WHERE id = $${params.length}`, params);
       }
+      void writeEnrollmentAuditLog(db2, adminUserId, "updated", String(req.params.id), {
+        old_status: oldRow.status,
+        new_status: status,
+        old_valid_until: oldRow.valid_until,
+        new_valid_until: valid_until
+      });
       res.json({ success: true });
     } catch {
       res.status(500).json({ message: "Failed to update enrollment" });
@@ -5135,11 +5735,21 @@ function registerAdminEnrollmentRoutes({
   });
   app2.delete("/api/admin/enrollments/:id", requireAdmin, async (req, res) => {
     try {
-      const enrollment = await db2.query("SELECT user_id, course_id FROM enrollments WHERE id = $1", [req.params.id]);
+      const adminUserId = Number(req.user?.id) || null;
+      const enrollment = await db2.query(
+        "SELECT user_id, course_id, status, valid_until FROM enrollments WHERE id = $1",
+        [req.params.id]
+      );
       if (enrollment.rows.length > 0) {
         const { user_id, course_id } = enrollment.rows[0];
         await db2.query("DELETE FROM enrollments WHERE id = $1", [req.params.id]);
-        await deleteDownloadsForUser2(user_id, course_id);
+        await deleteDownloadsForUser3(user_id, course_id);
+        void writeEnrollmentAuditLog(db2, adminUserId, "deleted", String(req.params.id), {
+          user_id,
+          course_id,
+          status: enrollment.rows[0].status,
+          valid_until: enrollment.rows[0].valid_until
+        });
       } else {
         await db2.query("DELETE FROM enrollments WHERE id = $1", [req.params.id]);
       }
@@ -5151,8 +5761,17 @@ function registerAdminEnrollmentRoutes({
   app2.delete("/api/admin/courses/:id", requireAdmin, async (req, res) => {
     try {
       const courseId = req.params.id;
-      await deleteDownloadsForCourse2(parseInt(Array.isArray(courseId) ? courseId[0] : courseId));
+      await deleteDownloadsForCourse3(parseInt(Array.isArray(courseId) ? courseId[0] : courseId));
       await runInTransaction2(async (tx) => {
+        await tx.query(
+          `DELETE FROM media_tokens
+           WHERE file_url IN (
+             SELECT file_url FROM study_materials WHERE course_id = $1 AND file_url IS NOT NULL
+             UNION ALL
+             SELECT video_url FROM lectures WHERE course_id = $1 AND video_url IS NOT NULL
+           )`,
+          [courseId]
+        );
         await tx.query("DELETE FROM test_attempts WHERE test_id IN (SELECT id FROM tests WHERE course_id = $1)", [courseId]);
         await tx.query("DELETE FROM questions WHERE test_id IN (SELECT id FROM tests WHERE course_id = $1)", [courseId]);
         await tx.query("DELETE FROM tests WHERE course_id = $1", [courseId]);
@@ -5171,12 +5790,12 @@ function registerAdminEnrollmentRoutes({
   });
 }
 var init_admin_enrollment_routes = __esm({
-  "server/admin-enrollment-routes.ts"() {
+  "backend/admin-enrollment-routes.ts"() {
     "use strict";
   }
 });
 
-// server/async-utils.ts
+// backend/async-utils.ts
 async function withTimeout(promise, timeoutMs, message) {
   let timer = null;
   try {
@@ -5194,18 +5813,18 @@ function isTimeoutError(err) {
   return /timed out/i.test(String(err?.message ?? ""));
 }
 var init_async_utils = __esm({
-  "server/async-utils.ts"() {
+  "backend/async-utils.ts"() {
     "use strict";
   }
 });
 
-// server/admin-lecture-routes.ts
+// backend/admin-lecture-routes.ts
 function registerAdminLectureRoutes({
   app: app2,
   db: db2,
   requireAdmin,
   getR2Client,
-  recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse2
+  recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse3
 }) {
   const normalizeSectionSegments = (value) => String(value || "").split("/").map((s) => s.trim()).filter(Boolean);
   const resolveLectureSectionTitle = (sectionTitle, subfolderTitle) => {
@@ -5274,7 +5893,7 @@ function registerAdminLectureRoutes({
         ]
       );
       await db2.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [parsedCourseId]);
-      await recomputeAllEnrollmentsProgressForCourse2(parsedCourseId);
+      await recomputeAllEnrollmentsProgressForCourse3(parsedCourseId);
       res.json(result.rows[0]);
     } catch (err) {
       console.error("[AdminLectures] create failed", {
@@ -5319,7 +5938,7 @@ function registerAdminLectureRoutes({
       );
       const row = await db2.query("SELECT course_id FROM lectures WHERE id = $1 LIMIT 1", [req.params.id]);
       if (row.rows[0]?.course_id) {
-        await recomputeAllEnrollmentsProgressForCourse2(row.rows[0].course_id);
+        await recomputeAllEnrollmentsProgressForCourse3(row.rows[0].course_id);
       }
       res.json({ success: true });
     } catch {
@@ -5349,7 +5968,7 @@ function registerAdminLectureRoutes({
         "UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1",
         [lecture.course_id]
       );
-      await recomputeAllEnrollmentsProgressForCourse2(lecture.course_id);
+      await recomputeAllEnrollmentsProgressForCourse3(lecture.course_id);
       if (lecture.live_class_id) {
         try {
           await db2.query(
@@ -5400,13 +6019,13 @@ function registerAdminLectureRoutes({
   });
 }
 var init_admin_lecture_routes = __esm({
-  "server/admin-lecture-routes.ts"() {
+  "backend/admin-lecture-routes.ts"() {
     "use strict";
     init_async_utils();
   }
 });
 
-// server/push-notifications.ts
+// backend/push-notifications.ts
 function chunkArray(arr, size) {
   const out = [];
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
@@ -5491,17 +6110,17 @@ async function sendPushToUsers(db2, userIds, payload) {
   return { sent, tokens: tokens.length };
 }
 var init_push_notifications = __esm({
-  "server/push-notifications.ts"() {
+  "backend/push-notifications.ts"() {
     "use strict";
   }
 });
 
-// server/admin-test-routes.ts
+// backend/admin-test-routes.ts
 function registerAdminTestRoutes({
   app: app2,
   db: db2,
   requireAdmin,
-  updateCourseTestCounts: updateCourseTestCounts2
+  updateCourseTestCounts: updateCourseTestCounts3
 }) {
   app2.get("/api/admin/tests", requireAdmin, async (_req, res) => {
     try {
@@ -5541,7 +6160,7 @@ function registerAdminTestRoutes({
         ]
       );
       if (courseId) {
-        await updateCourseTestCounts2(courseId);
+        await updateCourseTestCounts3(courseId);
         const courseInfo = await db2.query("SELECT title FROM courses WHERE id = $1", [courseId]).catch(() => ({ rows: [] }));
         const courseTitle = String(courseInfo.rows[0]?.title || "your course");
         const recipients = await db2.query("SELECT user_id FROM enrollments WHERE course_id = $1", [courseId]).catch(() => ({ rows: [] }));
@@ -5631,13 +6250,13 @@ function registerAdminTestRoutes({
   });
 }
 var init_admin_test_routes = __esm({
-  "server/admin-test-routes.ts"() {
+  "backend/admin-test-routes.ts"() {
     "use strict";
     init_push_notifications();
   }
 });
 
-// server/admin-question-bulk-routes.ts
+// backend/admin-question-bulk-routes.ts
 function parseQuestionsFromText(text) {
   const questions = [];
   const normalized = text.replace(/\f/g, "\n").replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/[\u2022\u2023\u25E6\u2043\u2219]/g, "").replace(/^[\s\-\*\>\•]+/gm, (m) => m.replace(/[\-\*\>\•]/g, "").trimStart());
@@ -5752,7 +6371,7 @@ function registerAdminQuestionBulkRoutes({
   app: app2,
   db: db2,
   requireAdmin,
-  upload: upload2,
+  upload: upload3,
   PDFParse: PDFParse2
 }) {
   app2.post("/api/admin/questions/bulk-text", requireAdmin, async (req, res) => {
@@ -5784,7 +6403,7 @@ function registerAdminQuestionBulkRoutes({
       res.status(500).json({ message: "Failed to parse and add questions" });
     }
   });
-  app2.post("/api/admin/questions/bulk-pdf", requireAdmin, upload2.single("pdf"), async (req, res) => {
+  app2.post("/api/admin/questions/bulk-pdf", requireAdmin, upload3.single("pdf"), async (req, res) => {
     try {
       const testId = req.body.testId;
       const defaultMarks = parseInt(req.body.defaultMarks) || 4;
@@ -5849,19 +6468,19 @@ function registerAdminQuestionBulkRoutes({
   });
 }
 var init_admin_question_bulk_routes = __esm({
-  "server/admin-question-bulk-routes.ts"() {
+  "backend/admin-question-bulk-routes.ts"() {
     "use strict";
   }
 });
 
-// server/admin-users-and-content-routes.ts
+// backend/admin-users-and-content-routes.ts
 function registerAdminUsersAndContentRoutes({
   app: app2,
   db: db2,
   requireAdmin,
-  deleteDownloadsForUser: deleteDownloadsForUser2,
+  deleteDownloadsForUser: deleteDownloadsForUser3,
   runInTransaction: runInTransaction2,
-  recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse2
+  recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse3
 }) {
   app2.post("/api/admin/study-materials", requireAdmin, async (req, res) => {
     try {
@@ -5895,7 +6514,7 @@ function registerAdminUsersAndContentRoutes({
       );
       if (parsedCourseId) {
         await db2.query("UPDATE courses SET total_materials = (SELECT COUNT(*) FROM study_materials WHERE course_id = $1) WHERE id = $1", [parsedCourseId]);
-        await recomputeAllEnrollmentsProgressForCourse2(parsedCourseId);
+        await recomputeAllEnrollmentsProgressForCourse3(parsedCourseId);
         const courseInfo = await db2.query("SELECT title FROM courses WHERE id = $1", [parsedCourseId]).catch(() => ({ rows: [] }));
         const courseTitle = String(courseInfo.rows[0]?.title || "your course");
         const recipients = await db2.query("SELECT user_id FROM enrollments WHERE course_id = $1", [parsedCourseId]).catch(() => ({ rows: [] }));
@@ -6122,7 +6741,7 @@ function registerAdminUsersAndContentRoutes({
         await db2.query("DELETE FROM user_sessions WHERE user_id = $1", [req.params.id]);
         await db2.query("UPDATE users SET is_blocked = TRUE, session_token = NULL WHERE id = $1", [req.params.id]);
         const userId = req.params.id;
-        await deleteDownloadsForUser2(parseInt(Array.isArray(userId) ? userId[0] : userId));
+        await deleteDownloadsForUser3(parseInt(Array.isArray(userId) ? userId[0] : userId));
       } else {
         await db2.query("UPDATE users SET is_blocked = FALSE WHERE id = $1", [req.params.id]);
       }
@@ -6146,7 +6765,7 @@ function registerAdminUsersAndContentRoutes({
       if (String(userRow.rows[0].role || "").toLowerCase() === "admin") {
         return res.status(400).json({ message: "Admin accounts cannot be removed from this action" });
       }
-      await deleteDownloadsForUser2(userId);
+      await deleteDownloadsForUser3(userId);
       await runInTransaction2((tx) => purgeStudentAccountById(tx, userId));
       res.json({ success: true });
     } catch (err) {
@@ -6157,19 +6776,19 @@ function registerAdminUsersAndContentRoutes({
   });
 }
 var init_admin_users_and_content_routes = __esm({
-  "server/admin-users-and-content-routes.ts"() {
+  "backend/admin-users-and-content-routes.ts"() {
     "use strict";
     init_push_notifications();
     init_user_account_purge();
   }
 });
 
-// server/admin-test-management-routes.ts
+// backend/admin-test-management-routes.ts
 function registerAdminTestManagementRoutes({
   app: app2,
   db: db2,
   requireAdmin,
-  updateCourseTestCounts: updateCourseTestCounts2
+  updateCourseTestCounts: updateCourseTestCounts3
 }) {
   app2.get("/api/admin/tests/:id/questions", requireAdmin, async (req, res) => {
     try {
@@ -6212,14 +6831,14 @@ function registerAdminTestManagementRoutes({
           `UPDATE tests SET title=$1, description=$2, duration_minutes=$3, total_marks=$4, test_type=$5, folder_name=$6, difficulty=$7, scheduled_at=$8, passing_marks=$9, course_id=$10${priceVal !== null ? ", price=$12" : ""} WHERE id=$11`,
           priceVal !== null ? [title, description || "", parseInt(durationMinutes2) || 60, parseInt(totalMarks) || 100, testType, folderName || null, difficulty || "moderate", scheduledAt || null, parseInt(passingMarks) || 35, courseId || null, req.params.id, priceVal] : [title, description || "", parseInt(durationMinutes2) || 60, parseInt(totalMarks) || 100, testType, folderName || null, difficulty || "moderate", scheduledAt || null, parseInt(passingMarks) || 35, courseId || null, req.params.id]
         );
-        if (courseId) await updateCourseTestCounts2(courseId);
+        if (courseId) await updateCourseTestCounts3(courseId);
       } else {
         await db2.query(
           `UPDATE tests SET title=$1, description=$2, duration_minutes=$3, total_marks=$4, test_type=$5, folder_name=$6, difficulty=$7, scheduled_at=$8, passing_marks=$9${priceVal !== null ? ", price=$11" : ""} WHERE id=$10`,
           priceVal !== null ? [title, description || "", parseInt(durationMinutes2) || 60, parseInt(totalMarks) || 100, testType, folderName || null, difficulty || "moderate", scheduledAt || null, parseInt(passingMarks) || 35, req.params.id, priceVal] : [title, description || "", parseInt(durationMinutes2) || 60, parseInt(totalMarks) || 100, testType, folderName || null, difficulty || "moderate", scheduledAt || null, parseInt(passingMarks) || 35, req.params.id]
         );
         const existing = await db2.query("SELECT course_id FROM tests WHERE id = $1", [req.params.id]);
-        if (existing.rows[0]?.course_id) await updateCourseTestCounts2(existing.rows[0].course_id);
+        if (existing.rows[0]?.course_id) await updateCourseTestCounts3(existing.rows[0].course_id);
       }
       res.json({ success: true });
     } catch {
@@ -6233,7 +6852,7 @@ function registerAdminTestManagementRoutes({
       await db2.query("DELETE FROM test_attempts WHERE test_id = $1", [req.params.id]);
       await db2.query("DELETE FROM questions WHERE test_id = $1", [req.params.id]);
       await db2.query("DELETE FROM tests WHERE id = $1", [req.params.id]);
-      if (courseId) await updateCourseTestCounts2(courseId);
+      if (courseId) await updateCourseTestCounts3(courseId);
       res.json({ success: true });
     } catch (err) {
       console.error("Delete test error:", err);
@@ -6242,12 +6861,12 @@ function registerAdminTestManagementRoutes({
   });
 }
 var init_admin_test_management_routes = __esm({
-  "server/admin-test-management-routes.ts"() {
+  "backend/admin-test-management-routes.ts"() {
     "use strict";
   }
 });
 
-// server/admin-daily-mission-routes.ts
+// backend/admin-daily-mission-routes.ts
 function registerAdminDailyMissionRoutes({
   app: app2,
   db: db2,
@@ -6255,14 +6874,15 @@ function registerAdminDailyMissionRoutes({
 }) {
   app2.post("/api/admin/daily-missions", requireAdmin, async (req, res) => {
     try {
-      const { title, description, questions, missionDate, xpReward, missionType, courseId } = req.body;
+      const { title, description, questions, missionDate, xpReward, missionType, courseId, folderName } = req.body;
       if (!title || !questions || !Array.isArray(questions) || questions.length === 0) {
         return res.status(400).json({ message: "Title and questions are required" });
       }
+      const folderNameNorm = typeof folderName === "string" && folderName.trim() ? folderName.trim() : null;
       const result = await db2.query(
-        `INSERT INTO daily_missions (title, description, questions, mission_date, xp_reward, mission_type, course_id) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-        [title, description || "", JSON.stringify(questions), missionDate || (/* @__PURE__ */ new Date()).toISOString().split("T")[0], xpReward || 50, missionType || "daily_drill", courseId || null]
+        `INSERT INTO daily_missions (title, description, questions, mission_date, xp_reward, mission_type, course_id, folder_name)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+        [title, description || "", JSON.stringify(questions), missionDate || (/* @__PURE__ */ new Date()).toISOString().split("T")[0], xpReward || 50, missionType || "daily_drill", courseId || null, folderNameNorm]
       );
       const row = result.rows[0];
       const cid = courseId != null && courseId !== "" ? String(courseId) : "";
@@ -6301,10 +6921,11 @@ function registerAdminDailyMissionRoutes({
   });
   app2.put("/api/admin/daily-missions/:id", requireAdmin, async (req, res) => {
     try {
-      const { title, description, questions, missionDate, xpReward, missionType, courseId } = req.body;
+      const { title, description, questions, missionDate, xpReward, missionType, courseId, folderName } = req.body;
+      const folderNameNorm = typeof folderName === "string" && folderName.trim() ? folderName.trim() : null;
       await db2.query(
-        `UPDATE daily_missions SET title=$1, description=$2, questions=$3, mission_date=$4, xp_reward=$5, mission_type=$6, course_id=$7 WHERE id=$8`,
-        [title, description || "", JSON.stringify(questions), missionDate, xpReward || 50, missionType, courseId || null, req.params.id]
+        `UPDATE daily_missions SET title=$1, description=$2, questions=$3, mission_date=$4, xp_reward=$5, mission_type=$6, course_id=$7, folder_name=$8 WHERE id=$9`,
+        [title, description || "", JSON.stringify(questions), missionDate, xpReward || 50, missionType, courseId || null, folderNameNorm, req.params.id]
       );
       res.json({ success: true });
     } catch {
@@ -6352,13 +6973,13 @@ function registerAdminDailyMissionRoutes({
   });
 }
 var init_admin_daily_mission_routes = __esm({
-  "server/admin-daily-mission-routes.ts"() {
+  "backend/admin-daily-mission-routes.ts"() {
     "use strict";
     init_push_notifications();
   }
 });
 
-// server/admin-notification-routes.ts
+// backend/admin-notification-routes.ts
 function registerAdminNotificationRoutes({
   app: app2,
   db: db2,
@@ -6457,13 +7078,13 @@ function registerAdminNotificationRoutes({
   });
 }
 var init_admin_notification_routes = __esm({
-  "server/admin-notification-routes.ts"() {
+  "backend/admin-notification-routes.ts"() {
     "use strict";
     init_push_notifications();
   }
 });
 
-// server/admin-course-crud-routes.ts
+// backend/admin-course-crud-routes.ts
 function registerAdminCourseCrudRoutes({
   app: app2,
   db: db2,
@@ -6501,12 +7122,12 @@ function registerAdminCourseCrudRoutes({
   });
 }
 var init_admin_course_crud_routes = __esm({
-  "server/admin-course-crud-routes.ts"() {
+  "backend/admin-course-crud-routes.ts"() {
     "use strict";
   }
 });
 
-// server/book-routes.ts
+// backend/book-routes.ts
 function registerBookRoutes({
   app: app2,
   db: db2,
@@ -6736,13 +7357,13 @@ function registerBookRoutes({
   });
 }
 var init_book_routes = __esm({
-  "server/book-routes.ts"() {
+  "backend/book-routes.ts"() {
     "use strict";
     init_native_device_binding();
   }
 });
 
-// server/standalone-folder-routes.ts
+// backend/standalone-folder-routes.ts
 function normalizeStandaloneFolderName(value) {
   if (typeof value !== "string") return "";
   return value.trim().replace(/\s+/g, " ");
@@ -6841,6 +7462,13 @@ function registerStandaloneFolderRoutes({
              FROM renamed r
              WHERE r.folder_type = 'test' AND tt.folder_name = r.old_name AND tt.course_id IS NULL
              RETURNING tt.id
+           ),
+           upd_missions AS (
+             UPDATE daily_missions dm
+             SET folder_name = $2
+             FROM renamed r
+             WHERE r.folder_type = 'mission' AND dm.folder_name = r.old_name
+             RETURNING dm.id
            )
            UPDATE study_materials sm
            SET section_title = $2
@@ -6884,6 +7512,12 @@ function registerStandaloneFolderRoutes({
            USING target t
            WHERE t.type = 'material' AND sm.section_title = t.name AND sm.course_id IS NULL
            RETURNING sm.id
+         ),
+         del_missions AS (
+           DELETE FROM daily_missions dm
+           USING target t
+           WHERE t.type = 'mission' AND dm.folder_name = t.name
+           RETURNING dm.id
          )
          DELETE FROM standalone_folders sf
          USING target t
@@ -6898,17 +7532,26 @@ function registerStandaloneFolderRoutes({
 }
 var STANDALONE_FOLDER_TYPES, MAX_STANDALONE_FOLDER_NAME_LENGTH;
 var init_standalone_folder_routes = __esm({
-  "server/standalone-folder-routes.ts"() {
+  "backend/standalone-folder-routes.ts"() {
     "use strict";
-    STANDALONE_FOLDER_TYPES = /* @__PURE__ */ new Set(["test", "material", "mini_course"]);
+    STANDALONE_FOLDER_TYPES = /* @__PURE__ */ new Set(["test", "material", "mini_course", "mission"]);
     MAX_STANDALONE_FOLDER_NAME_LENGTH = 120;
   }
 });
 
-// server/doubt-notification-routes.ts
+// backend/doubt-notification-routes.ts
+function normalizeQuestionPattern(input) {
+  return String(input || "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\b(please|plz|sir|mam|maam|kindly|can|could|would|help|me|with|solve|question)\b/g, " ").replace(/\s+/g, " ").trim();
+}
+function parseLimitOffset(rawLimit, rawOffset, fallbackLimit, maxLimit = 100) {
+  const limit = Math.max(1, Math.min(maxLimit, Number(rawLimit) || fallbackLimit));
+  const offset = Math.max(0, Number(rawOffset) || 0);
+  return { limit, offset };
+}
 function registerDoubtNotificationRoutes({
   app: app2,
   db: db2,
+  pool: pool2,
   getAuthUser: getAuthUser2,
   requireAdmin,
   generateAIAnswer: generateAIAnswer2
@@ -6955,6 +7598,12 @@ function registerDoubtNotificationRoutes({
     try {
       const user = await getAuthUser2(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
+      const slot = await takeSupportPostSlotPg(pool2, user.id, AI_TUTOR_RATE_WINDOW_MS, AI_TUTOR_RATE_MAX);
+      if (!slot.ok) {
+        return res.status(429).json({
+          message: `Too many AI tutor requests. Try again in about ${slot.retryAfterSec} seconds.`
+        });
+      }
       const { question, topic } = req.body;
       const aiAnswer = await generateAIAnswer2(question, topic, user.id);
       const result = await db2.query(
@@ -6975,6 +7624,16 @@ function registerDoubtNotificationRoutes({
       res.json(result.rows);
     } catch {
       res.status(500).json({ message: "Failed to fetch doubts" });
+    }
+  });
+  app2.delete("/api/doubts", async (req, res) => {
+    try {
+      const user = await getAuthUser2(req);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+      const deleted = await db2.query("DELETE FROM doubts WHERE user_id = $1 RETURNING id", [user.id]);
+      res.json({ success: true, deletedCount: deleted.rows.length || 0 });
+    } catch {
+      res.status(500).json({ message: "Failed to clear doubt history" });
     }
   });
   app2.get("/api/admin/doubts", requireAdmin, async (req, res) => {
@@ -7027,10 +7686,9 @@ function registerDoubtNotificationRoutes({
         topicCounts[k] = (topicCounts[k] || 0) + 1;
       }
       const topTopics = Object.entries(topicCounts).map(([topic, count]) => ({ topic, count })).sort((a, b) => b.count - a.count).slice(0, 10);
-      const normalizeQuestion = (input) => String(input || "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\b(please|plz|sir|mam|maam|kindly|can|could|would|help|me|with|solve|question)\b/g, " ").replace(/\s+/g, " ").trim();
       const patternCounts = {};
       for (const r of rows) {
-        const normalized = normalizeQuestion(String(r.question || ""));
+        const normalized = normalizeQuestionPattern(String(r.question || ""));
         if (!normalized) continue;
         const existing = patternCounts[normalized];
         if (!existing) {
@@ -7112,6 +7770,257 @@ function registerDoubtNotificationRoutes({
       res.status(500).json({ message: "Failed to clear doubts" });
     }
   });
+  app2.get("/api/admin/doubts/students", requireAdmin, async (req, res) => {
+    try {
+      const daysRaw = String(req.query.days || "").trim();
+      const topicFilter = String(req.query.topic || "").trim();
+      const q = String(req.query.q || "").trim();
+      const { limit, offset } = parseLimitOffset(req.query.limit, req.query.offset, 30, 200);
+      const days = daysRaw === "7" || daysRaw === "30" ? Number(daysRaw) : 0;
+      const sinceTs = days > 0 ? Date.now() - days * 24 * 60 * 60 * 1e3 : 0;
+      const where = [];
+      const params = [];
+      if (sinceTs > 0) {
+        params.push(sinceTs);
+        where.push(`d.created_at >= $${params.length}`);
+      }
+      if (topicFilter && topicFilter !== "all") {
+        params.push(topicFilter);
+        where.push(`COALESCE(d.topic, 'General') = $${params.length}`);
+      }
+      if (q) {
+        params.push(`%${q}%`);
+        const qIdx = params.length;
+        const digitOnly = q.replace(/\D/g, "");
+        let digitClause = "";
+        if (digitOnly.length >= 4) {
+          params.push(`%${digitOnly}%`);
+          digitClause = ` OR regexp_replace(COALESCE(u.phone, ''), '\\D', '', 'g') LIKE $${params.length}`;
+        }
+        where.push(`(
+          COALESCE(u.name, '') ILIKE $${qIdx}
+          OR COALESCE(u.phone, '') ILIKE $${qIdx}
+          OR COALESCE(u.email, '') ILIKE $${qIdx}
+          OR COALESCE(d.question, '') ILIKE $${qIdx}
+          ${digitClause}
+        )`);
+      }
+      const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+      const summary = await db2.query(
+        `SELECT d.user_id,
+                COALESCE(u.name, '') AS user_name,
+                COALESCE(u.phone, '') AS user_phone,
+                COALESCE(u.email, '') AS user_email,
+                COUNT(*)::int AS doubt_count,
+                MAX(d.created_at)::bigint AS last_asked_at
+         FROM doubts d
+         LEFT JOIN users u ON u.id = d.user_id
+         ${whereSql}
+         GROUP BY d.user_id, u.name, u.phone, u.email
+         ORDER BY COUNT(*) DESC, MAX(d.created_at) DESC
+         LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+        [...params, limit, offset]
+      );
+      const totalRows = await db2.query(
+        `SELECT COUNT(*)::int AS total
+         FROM (
+           SELECT d.user_id
+           FROM doubts d
+           LEFT JOIN users u ON u.id = d.user_id
+           ${whereSql}
+           GROUP BY d.user_id
+         ) s`,
+        params
+      );
+      res.json({
+        rows: summary.rows,
+        total: Number(totalRows.rows[0]?.total || 0),
+        limit,
+        offset
+      });
+    } catch (err) {
+      console.error("[Admin Doubts] students list failed:", err);
+      res.status(500).json({ message: "Failed to fetch student doubt history" });
+    }
+  });
+  app2.get("/api/admin/doubts/student/:userId", requireAdmin, async (req, res) => {
+    try {
+      const userId = Number(req.params.userId);
+      if (!Number.isFinite(userId) || userId <= 0) return res.status(400).json({ message: "Invalid user id" });
+      const daysRaw = String(req.query.days || "").trim();
+      const topicFilter = String(req.query.topic || "").trim();
+      const q = String(req.query.q || "").trim();
+      const { limit, offset } = parseLimitOffset(req.query.limit, req.query.offset, 50, 200);
+      const days = daysRaw === "7" || daysRaw === "30" ? Number(daysRaw) : 0;
+      const sinceTs = days > 0 ? Date.now() - days * 24 * 60 * 60 * 1e3 : 0;
+      const where = ["d.user_id = $1"];
+      const params = [userId];
+      if (sinceTs > 0) {
+        params.push(sinceTs);
+        where.push(`d.created_at >= $${params.length}`);
+      }
+      if (topicFilter && topicFilter !== "all") {
+        params.push(topicFilter);
+        where.push(`COALESCE(d.topic, 'General') = $${params.length}`);
+      }
+      if (q) {
+        params.push(`%${q}%`);
+        where.push(`(COALESCE(d.question, '') ILIKE $${params.length} OR COALESCE(d.answer, '') ILIKE $${params.length})`);
+      }
+      const whereSql = `WHERE ${where.join(" AND ")}`;
+      const rows = await db2.query(
+        `SELECT d.*, COALESCE(u.name, '') AS user_name, COALESCE(u.phone, '') AS user_phone, COALESCE(u.email, '') AS user_email
+         FROM doubts d
+         LEFT JOIN users u ON u.id = d.user_id
+         ${whereSql}
+         ORDER BY d.created_at DESC
+         LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+        [...params, limit, offset]
+      );
+      const totalRes = await db2.query(
+        `SELECT COUNT(*)::int AS total
+         FROM doubts d
+         ${whereSql}`,
+        params
+      );
+      res.json({
+        rows: rows.rows,
+        total: Number(totalRes.rows[0]?.total || 0),
+        limit,
+        offset
+      });
+    } catch (err) {
+      console.error("[Admin Doubts] student details failed:", err);
+      res.status(500).json({ message: "Failed to fetch student doubts" });
+    }
+  });
+  app2.get("/api/admin/doubts/frequent", requireAdmin, async (req, res) => {
+    try {
+      const daysRaw = String(req.query.days || "").trim();
+      const q = String(req.query.q || "").trim();
+      const { limit, offset } = parseLimitOffset(req.query.limit, req.query.offset, 30, 200);
+      const days = daysRaw === "7" || daysRaw === "30" ? Number(daysRaw) : 0;
+      const sinceTs = days > 0 ? Date.now() - days * 24 * 60 * 60 * 1e3 : 0;
+      const where = [];
+      const params = [];
+      if (sinceTs > 0) {
+        params.push(sinceTs);
+        where.push(`d.created_at >= $${params.length}`);
+      }
+      if (q) {
+        params.push(`%${q}%`);
+        where.push(`COALESCE(d.question, '') ILIKE $${params.length}`);
+      }
+      const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+      const baseRows = await db2.query(
+        `SELECT d.question, d.created_at
+         FROM doubts d
+         ${whereSql}
+         ORDER BY d.created_at DESC
+         LIMIT 5000`,
+        params
+      );
+      const patternCounts = {};
+      for (const r of baseRows.rows) {
+        const normalized = normalizeQuestionPattern(String(r.question || ""));
+        if (!normalized) continue;
+        const existing = patternCounts[normalized];
+        if (!existing) {
+          patternCounts[normalized] = {
+            questionPattern: normalized,
+            count: 1,
+            latestAt: Number(r.created_at || 0),
+            sampleQuestion: String(r.question || "")
+          };
+        } else {
+          existing.count += 1;
+          if (Number(r.created_at || 0) > existing.latestAt) {
+            existing.latestAt = Number(r.created_at || 0);
+            existing.sampleQuestion = String(r.question || existing.sampleQuestion);
+          }
+        }
+      }
+      const all = Object.values(patternCounts).sort((a, b) => b.count - a.count || b.latestAt - a.latestAt);
+      res.json({
+        rows: all.slice(offset, offset + limit),
+        total: all.length,
+        limit,
+        offset
+      });
+    } catch (err) {
+      console.error("[Admin Doubts] frequent list failed:", err);
+      res.status(500).json({ message: "Failed to fetch frequent questions" });
+    }
+  });
+  app2.get("/api/admin/doubts/frequent/students", requireAdmin, async (req, res) => {
+    try {
+      const pattern = normalizeQuestionPattern(String(req.query.pattern || ""));
+      if (!pattern) return res.status(400).json({ message: "Pattern is required" });
+      const daysRaw = String(req.query.days || "").trim();
+      const q = String(req.query.q || "").trim();
+      const { limit, offset } = parseLimitOffset(req.query.limit, req.query.offset, 30, 200);
+      const days = daysRaw === "7" || daysRaw === "30" ? Number(daysRaw) : 0;
+      const sinceTs = days > 0 ? Date.now() - days * 24 * 60 * 60 * 1e3 : 0;
+      const filterWhere = [];
+      const params = [];
+      if (sinceTs > 0) {
+        params.push(sinceTs);
+        filterWhere.push(`d.created_at >= $${params.length}`);
+      }
+      if (q) {
+        params.push(`%${q}%`);
+        filterWhere.push(`(
+          COALESCE(u.name, '') ILIKE $${params.length}
+          OR COALESCE(u.phone, '') ILIKE $${params.length}
+          OR COALESCE(u.email, '') ILIKE $${params.length}
+          OR COALESCE(d.question, '') ILIKE $${params.length}
+        )`);
+      }
+      const whereSql = filterWhere.length ? `AND ${filterWhere.join(" AND ")}` : "";
+      const raw = await db2.query(
+        `SELECT d.user_id,
+                COALESCE(u.name, '') AS user_name,
+                COALESCE(u.phone, '') AS user_phone,
+                COALESCE(u.email, '') AS user_email,
+                d.question,
+                d.created_at
+         FROM doubts d
+         LEFT JOIN users u ON u.id = d.user_id
+         WHERE TRUE ${whereSql}
+         ORDER BY d.created_at DESC
+         LIMIT 6000`,
+        params
+      );
+      const matched = raw.rows.filter((r) => normalizeQuestionPattern(String(r.question || "")) === pattern);
+      const grouped = /* @__PURE__ */ new Map();
+      for (const r of matched) {
+        const id = Number(r.user_id || 0);
+        if (!grouped.has(id)) {
+          grouped.set(id, {
+            user_id: id,
+            user_name: String(r.user_name || ""),
+            user_phone: String(r.user_phone || ""),
+            user_email: String(r.user_email || ""),
+            doubt_count: 0,
+            last_asked_at: 0
+          });
+        }
+        const g = grouped.get(id);
+        g.doubt_count += 1;
+        g.last_asked_at = Math.max(g.last_asked_at, Number(r.created_at || 0));
+      }
+      const rows = [...grouped.values()].sort((a, b) => b.doubt_count - a.doubt_count || b.last_asked_at - a.last_asked_at);
+      res.json({
+        rows: rows.slice(offset, offset + limit),
+        total: rows.length,
+        limit,
+        offset
+      });
+    } catch (err) {
+      console.error("[Admin Doubts] frequent students failed:", err);
+      res.status(500).json({ message: "Failed to fetch students for frequent question" });
+    }
+  });
   app2.get("/api/notifications", async (req, res) => {
     try {
       const user = await getAuthUser2(req);
@@ -7144,13 +8053,17 @@ function registerDoubtNotificationRoutes({
     }
   });
 }
+var AI_TUTOR_RATE_WINDOW_MS, AI_TUTOR_RATE_MAX;
 var init_doubt_notification_routes = __esm({
-  "server/doubt-notification-routes.ts"() {
+  "backend/doubt-notification-routes.ts"() {
     "use strict";
+    init_pg_rate_limit_store();
+    AI_TUTOR_RATE_WINDOW_MS = 60 * 60 * 1e3;
+    AI_TUTOR_RATE_MAX = 20;
   }
 });
 
-// server/student-mission-material-routes.ts
+// backend/student-mission-material-routes.ts
 function registerStudentMissionMaterialRoutes({
   app: app2,
   db: db2,
@@ -7373,30 +8286,30 @@ function registerStudentMissionMaterialRoutes({
   });
 }
 var init_student_mission_material_routes = __esm({
-  "server/student-mission-material-routes.ts"() {
+  "backend/student-mission-material-routes.ts"() {
     "use strict";
     init_course_access_utils();
   }
 });
 
-// server/lecture-payload-utils.ts
+// backend/lecture-payload-utils.ts
 function sanitizeLectureRowForClient(row) {
   if (!row || typeof row !== "object") return row;
   const { transcript: _omit, ...rest } = row;
   return rest;
 }
 var init_lecture_payload_utils = __esm({
-  "server/lecture-payload-utils.ts"() {
+  "backend/lecture-payload-utils.ts"() {
     "use strict";
   }
 });
 
-// server/lecture-routes.ts
+// backend/lecture-routes.ts
 function registerLectureRoutes({
   app: app2,
   db: db2,
   getAuthUser: getAuthUser2,
-  updateCourseProgress: updateCourseProgress2
+  updateCourseProgress: updateCourseProgress3
 }) {
   const canAccessLecture = async (user, lectureId) => {
     const result = await db2.query(
@@ -7500,7 +8413,7 @@ function registerLectureRoutes({
         [user.id, lectureId, normalizedWatchPercent, Boolean(isCompleted), isCompleted ? Date.now() : null]
       );
       if (courseId && isCompleted) {
-        await updateCourseProgress2(user.id, Number(courseId));
+        await updateCourseProgress3(user.id, Number(courseId));
         await db2.query("UPDATE enrollments SET last_lecture_id = $1 WHERE user_id = $2 AND course_id = $3", [lectureId, user.id, courseId]);
       }
       res.json({ success: true });
@@ -7510,14 +8423,14 @@ function registerLectureRoutes({
   });
 }
 var init_lecture_routes = __esm({
-  "server/lecture-routes.ts"() {
+  "backend/lecture-routes.ts"() {
     "use strict";
     init_course_access_utils();
     init_lecture_payload_utils();
   }
 });
 
-// server/test-folder-routes.ts
+// backend/test-folder-routes.ts
 function registerTestFolderRoutes({
   app: app2,
   db: db2,
@@ -7713,13 +8626,13 @@ function registerTestFolderRoutes({
   });
 }
 var init_test_folder_routes = __esm({
-  "server/test-folder-routes.ts"() {
+  "backend/test-folder-routes.ts"() {
     "use strict";
     init_native_device_binding();
   }
 });
 
-// server/test-access-guards.ts
+// backend/test-access-guards.ts
 async function assertTestAccess(db2, user, test, testId) {
   if (user.role === "admin") return { ok: true };
   if (test.course_id) {
@@ -7745,13 +8658,13 @@ async function assertTestAccess(db2, user, test, testId) {
   return { ok: true };
 }
 var init_test_access_guards = __esm({
-  "server/test-access-guards.ts"() {
+  "backend/test-access-guards.ts"() {
     "use strict";
     init_course_access_utils();
   }
 });
 
-// server/test-core-routes.ts
+// backend/test-core-routes.ts
 function sanitizeQuestionsForClient(rows, isAdmin) {
   if (isAdmin) return rows;
   return rows.map((q) => {
@@ -7763,7 +8676,7 @@ function registerTestCoreRoutes({
   app: app2,
   db: db2,
   getAuthUser: getAuthUser2,
-  updateCourseProgress: updateCourseProgress2
+  updateCourseProgress: updateCourseProgress3
 }) {
   app2.get("/api/tests", async (req, res) => {
     try {
@@ -7901,7 +8814,7 @@ function registerTestCoreRoutes({
       const weakTopics = Object.entries(topicErrors).sort(([, a], [, b]) => b - a).slice(0, 3).map(([topic]) => topic);
       if (test.course_id) {
         try {
-          await updateCourseProgress2(user.id, test.course_id);
+          await updateCourseProgress3(user.id, test.course_id);
         } catch (_pe) {
         }
       }
@@ -7929,20 +8842,20 @@ function registerTestCoreRoutes({
   });
 }
 var init_test_core_routes = __esm({
-  "server/test-core-routes.ts"() {
+  "backend/test-core-routes.ts"() {
     "use strict";
     init_test_access_guards();
     init_course_access_utils();
   }
 });
 
-// server/test-attempt-routes.ts
+// backend/test-attempt-routes.ts
 function registerTestAttemptRoutes({
   app: app2,
   db: db2,
   getAuthUser: getAuthUser2
 }) {
-  app2.get("/api/tests/:id/my-attempts", async (req, res) => {
+  const handleMyAttempts = async (req, res) => {
     try {
       const user = await getAuthUser2(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
@@ -7958,24 +8871,9 @@ function registerTestAttemptRoutes({
     } catch {
       res.status(500).json({ message: "Failed to fetch attempts" });
     }
-  });
-  app2.get("/api/tests/:id/my_attempts", async (req, res) => {
-    try {
-      const user = await getAuthUser2(req);
-      if (!user) return res.status(401).json({ message: "Not authenticated" });
-      const result = await db2.query(
-        `SELECT ta.id, ta.score, ta.total_marks, ta.percentage, ta.correct, ta.incorrect,
-                ta.attempted, ta.time_taken_seconds, ta.completed_at, ta.status
-         FROM test_attempts ta
-         WHERE ta.user_id = $1 AND ta.test_id = $2 AND ta.status = 'completed'
-         ORDER BY ta.completed_at DESC`,
-        [user.id, req.params.id]
-      );
-      res.json(result.rows);
-    } catch {
-      res.status(500).json({ message: "Failed to fetch attempts" });
-    }
-  });
+  };
+  app2.get("/api/tests/:id/my-attempts", handleMyAttempts);
+  app2.get("/api/tests/:id/my_attempts", handleMyAttempts);
   app2.get("/api/tests/:id/analysis/:attemptId", async (req, res) => {
     try {
       const user = await getAuthUser2(req);
@@ -8211,13 +9109,13 @@ function registerTestAttemptRoutes({
   });
 }
 var init_test_attempt_routes = __esm({
-  "server/test-attempt-routes.ts"() {
+  "backend/test-attempt-routes.ts"() {
     "use strict";
     init_test_access_guards();
   }
 });
 
-// server/live-class-routes.ts
+// backend/live-class-routes.ts
 function registerLiveClassRoutes({
   app: app2,
   db: db2,
@@ -8267,13 +9165,27 @@ function registerLiveClassRoutes({
       if (admin2 === "true" && user?.role === "admin") {
         if (cid) {
           const result3 = await db2.query(
-            "SELECT lc.*, c.title as course_title FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id WHERE lc.course_id = $1 ORDER BY lc.scheduled_at DESC",
+            `SELECT lc.*, c.title as course_title
+             FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
+             WHERE lc.course_id = $1
+             ORDER BY lc.scheduled_at DESC
+             LIMIT 500`,
             [cid]
           );
           res.set("Cache-Control", "private, no-store");
           return res.json(result3.rows.map(sanitizeLiveClass));
         }
-        const result2 = await db2.query("SELECT lc.*, c.title as course_title FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id ORDER BY lc.scheduled_at DESC");
+        const rawLimit = parseInt(String(req.query.limit || "200"), 10);
+        const rawOffset = parseInt(String(req.query.offset || "0"), 10);
+        const safeLimit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 500) : 200;
+        const safeOffset = Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 0;
+        const result2 = await db2.query(
+          `SELECT lc.*, c.title as course_title
+           FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
+           ORDER BY lc.scheduled_at DESC
+           LIMIT $1 OFFSET $2`,
+          [safeLimit, safeOffset]
+        );
         res.set("Cache-Control", "private, no-store");
         return res.json(result2.rows.map(sanitizeLiveClass));
       }
@@ -8381,7 +9293,13 @@ function registerLiveClassRoutes({
         FROM live_classes lc
         LEFT JOIN courses c ON c.id = lc.course_id
         WHERE lc.is_completed IS NOT TRUE
-        ORDER BY 
+          AND (
+            lc.course_id IS NULL
+            OR lc.is_public = TRUE
+            OR lc.is_free_preview = TRUE
+            OR c.is_free = TRUE
+          )
+        ORDER BY
           lc.is_live DESC,
           lc.scheduled_at ASC NULLS LAST
         LIMIT 50
@@ -8422,14 +9340,14 @@ function registerLiveClassRoutes({
   });
 }
 var init_live_class_routes = __esm({
-  "server/live-class-routes.ts"() {
+  "backend/live-class-routes.ts"() {
     "use strict";
     init_course_access_utils();
     init_live_class_access();
   }
 });
 
-// server/live-class-lecture-convert.ts
+// backend/live-class-lecture-convert.ts
 function inferVideoType2(url) {
   const lower = String(url || "").toLowerCase();
   if (lower.includes("youtube.com") || lower.includes("youtu.be")) return "youtube";
@@ -8514,19 +9432,19 @@ function liveClassHasConvertibleRecording(row) {
   return !!pickRecordingUrl(row);
 }
 var init_live_class_lecture_convert = __esm({
-  "server/live-class-lecture-convert.ts"() {
+  "backend/live-class-lecture-convert.ts"() {
     "use strict";
     init_recordingSection();
   }
 });
 
-// server/admin-live-class-manage-routes.ts
+// backend/admin-live-class-manage-routes.ts
 function registerAdminLiveClassManageRoutes({
   app: app2,
   db: db2,
   requireAdmin,
   getR2Client,
-  recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse2
+  recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse3
 }) {
   const inferVideoType3 = (url) => {
     const lower = String(url || "").toLowerCase();
@@ -8548,6 +9466,13 @@ function registerAdminLiveClassManageRoutes({
         WHERE is_live = true RETURNING id, title
       `);
       console.log(`[Cleanup] Marked ${updateResult.rows.length} live classes as completed`);
+      const completedIds = updateResult.rows.map((r) => r.id);
+      if (completedIds.length > 0) {
+        await db2.query("DELETE FROM live_class_viewers WHERE live_class_id = ANY($1::int[])", [completedIds]).catch(() => {
+        });
+        await db2.query("DELETE FROM live_class_hand_raises WHERE live_class_id = ANY($1::int[])", [completedIds]).catch(() => {
+        });
+      }
       res.json({ success: true, message: `Marked ${updateResult.rows.length} live classes as completed`, cleaned: updateResult.rows.length, classes: updateResult.rows });
     } catch (err) {
       console.error("[Cleanup] Error:", err);
@@ -8640,7 +9565,7 @@ function registerAdminLiveClassManageRoutes({
               ]
             );
             await db2.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [peer.course_id]);
-            await recomputeAllEnrollmentsProgressForCourse2(peer.course_id);
+            await recomputeAllEnrollmentsProgressForCourse3(peer.course_id);
           }
           return res.json(liveClassOnly);
         }
@@ -8739,7 +9664,7 @@ function registerAdminLiveClassManageRoutes({
         });
         await convertLiveClassTitlePeersToLectures(db2, liveClass, {
           sectionTitleOverride: sectionTitle,
-          recomputeCourseProgress: recomputeAllEnrollmentsProgressForCourse2
+          recomputeCourseProgress: recomputeAllEnrollmentsProgressForCourse3
         });
       }
       if (isCompleted && !convertToLecture && liveClass.title) {
@@ -8780,9 +9705,15 @@ function registerAdminLiveClassManageRoutes({
           });
           await convertLiveClassTitlePeersToLectures(db2, updated, {
             sectionTitleOverride: sectionTitle,
-            recomputeCourseProgress: recomputeAllEnrollmentsProgressForCourse2
+            recomputeCourseProgress: recomputeAllEnrollmentsProgressForCourse3
           });
         }
+      }
+      if (isCompleted === true || isLive === false) {
+        await db2.query("DELETE FROM live_class_viewers WHERE live_class_id = $1", [req.params.id]).catch(() => {
+        });
+        await db2.query("DELETE FROM live_class_hand_raises WHERE live_class_id = $1", [req.params.id]).catch(() => {
+        });
       }
       res.json(liveClass);
     } catch (err) {
@@ -8813,7 +9744,7 @@ function registerAdminLiveClassManageRoutes({
         req.params.id
       ]);
       if (existing.rows[0]?.course_id) {
-        await recomputeAllEnrollmentsProgressForCourse2(existing.rows[0].course_id);
+        await recomputeAllEnrollmentsProgressForCourse3(existing.rows[0].course_id);
       }
       res.json({ success: true });
     } catch {
@@ -8849,7 +9780,7 @@ function registerAdminLiveClassManageRoutes({
       await db2.query("DELETE FROM study_materials WHERE id = $1", [req.params.id]);
       if (courseId) {
         await db2.query("UPDATE courses SET total_materials = (SELECT COUNT(*) FROM study_materials WHERE course_id = $1) WHERE id = $1", [courseId]);
-        await recomputeAllEnrollmentsProgressForCourse2(courseId);
+        await recomputeAllEnrollmentsProgressForCourse3(courseId);
       }
       res.json({ success: true });
     } catch (err) {
@@ -8859,7 +9790,7 @@ function registerAdminLiveClassManageRoutes({
   });
 }
 var init_admin_live_class_manage_routes = __esm({
-  "server/admin-live-class-manage-routes.ts"() {
+  "backend/admin-live-class-manage-routes.ts"() {
     "use strict";
     init_recordingSection();
     init_push_notifications();
@@ -8867,7 +9798,7 @@ var init_admin_live_class_manage_routes = __esm({
   }
 });
 
-// server/classroom-routes.ts
+// backend/classroom-routes.ts
 import { AccessToken } from "livekit-server-sdk";
 function getLiveKitConfig() {
   const url = String(process.env.LIVEKIT_URL || "").trim();
@@ -8889,7 +9820,7 @@ function registerClassroomRoutes({
   requireAuth,
   requireAdmin,
   getAuthUser: getAuthUser2,
-  recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse2
+  recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse3
 }) {
   app2.get("/api/live-classes/:id/classroom/config", requireAuth, async (req, res) => {
     const cfg = getLiveKitConfig();
@@ -9030,7 +9961,7 @@ function registerClassroomRoutes({
       if (recordingUrl && !isImageUrl(recordingUrl)) {
         const saved = await saveRecordingForClassAndPeers(db2, liveClassId, recordingUrl, {
           sectionTitle,
-          recomputeCourseProgress: recomputeAllEnrollmentsProgressForCourse2
+          recomputeCourseProgress: recomputeAllEnrollmentsProgressForCourse3
         });
         lectureIds = saved.lectureIds;
       }
@@ -9075,7 +10006,7 @@ function registerClassroomRoutes({
         const refreshed2 = await db2.query("SELECT * FROM live_classes WHERE id = $1", [liveClassId]);
         lectureIds = await convertLiveClassTitlePeersToLectures(db2, refreshed2.rows[0] || lc, {
           sectionTitleOverride: sectionTitle,
-          recomputeCourseProgress: recomputeAllEnrollmentsProgressForCourse2
+          recomputeCourseProgress: recomputeAllEnrollmentsProgressForCourse3
         });
       }
       const refreshed = await db2.query("SELECT * FROM live_classes WHERE id = $1", [liveClassId]);
@@ -9112,7 +10043,7 @@ function registerClassroomRoutes({
   });
 }
 var init_classroom_routes = __esm({
-  "server/classroom-routes.ts"() {
+  "backend/classroom-routes.ts"() {
     "use strict";
     init_live_class_access();
     init_recordingSection();
@@ -9121,7 +10052,7 @@ var init_classroom_routes = __esm({
   }
 });
 
-// server/live-class-poll-routes.ts
+// backend/live-class-poll-routes.ts
 async function checkEngagementStreamAccess(req, res, db2, getAuthUser2, liveClassId) {
   const lc = await loadLiveClass2(db2, liveClassId);
   if (!lc) {
@@ -9545,14 +10476,14 @@ data: ${JSON.stringify({ message: "Realtime unavailable" })}
   });
 }
 var init_live_class_poll_routes = __esm({
-  "server/live-class-poll-routes.ts"() {
+  "backend/live-class-poll-routes.ts"() {
     "use strict";
     init_live_class_access();
     init_sse_listen_budget();
   }
 });
 
-// server/classroom-sync.ts
+// backend/classroom-sync.ts
 import { URL as URL2 } from "node:url";
 import { createRequire as createRequire2 } from "node:module";
 import {
@@ -9567,16 +10498,174 @@ function sanitizeRoomId(roomId) {
 function parseLiveClassIdFromRoomId(roomId) {
   return roomId.replace(/^lc-/, "").replace(/-preview$/, "");
 }
-async function teardownRoomIfAllowed(roomId, roomInstance, db2) {
+function isPreviewRoom(roomId) {
+  return roomId.endsWith("-preview");
+}
+function isR2Configured() {
+  return !!(process.env.R2_ACCOUNT_ID && process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY && process.env.R2_BUCKET_NAME);
+}
+async function fetchSnapshotFromR2(getR2Client, objectKey) {
+  try {
+    const { GetObjectCommand } = await import("@aws-sdk/client-s3");
+    const r2 = await getR2Client();
+    const bucket = String(process.env.R2_BUCKET_NAME || "");
+    const result = await r2.send(new GetObjectCommand({ Bucket: bucket, Key: objectKey }));
+    if (!result.Body) return null;
+    const chunks = [];
+    for await (const chunk of result.Body) {
+      chunks.push(chunk instanceof Uint8Array ? chunk : Buffer.from(chunk));
+    }
+    const json = Buffer.concat(chunks).toString("utf-8");
+    return JSON.parse(json);
+  } catch (err) {
+    console.warn("[classroom-checkpoint] R2 GET failed:", err?.message || String(err));
+    return null;
+  }
+}
+async function uploadSnapshotToR2(getR2Client, objectKey, snapshot) {
+  try {
+    const { PutObjectCommand } = await import("@aws-sdk/client-s3");
+    const r2 = await getR2Client();
+    const bucket = String(process.env.R2_BUCKET_NAME || "");
+    const body = Buffer.from(JSON.stringify(snapshot), "utf-8");
+    await r2.send(
+      new PutObjectCommand({
+        Bucket: bucket,
+        Key: objectKey,
+        Body: body,
+        ContentType: "application/json"
+      })
+    );
+    return true;
+  } catch (err) {
+    console.warn("[classroom-checkpoint] R2 PUT failed:", err?.message || String(err));
+    return false;
+  }
+}
+async function loadAutoCheckpointSnapshot(db2, liveClassId, getR2Client) {
+  if (!isR2Configured()) return null;
+  try {
+    const result = await db2.query(
+      "SELECT board_sync_checkpoint_url FROM live_classes WHERE id = $1",
+      [liveClassId]
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    const storedUrl = String(row.board_sync_checkpoint_url || "");
+    if (!storedUrl.startsWith(AUTO_CHECKPOINT_KEY_PREFIX)) return null;
+    console.log(
+      `[classroom-checkpoint] Restoring class=${liveClassId} key=${storedUrl}`
+    );
+    const snapshot = await fetchSnapshotFromR2(getR2Client, storedUrl);
+    if (snapshot) {
+      console.log(
+        `[classroom-checkpoint] Restored class=${liveClassId} docs=${snapshot.documents?.length ?? 0}`
+      );
+    }
+    return snapshot;
+  } catch (err) {
+    console.warn("[classroom-checkpoint] Load error:", err?.message || String(err));
+    return null;
+  }
+}
+async function runCheckpoint(roomId, liveClassId, room, db2, getR2Client) {
+  const state = checkpointStates.get(roomId);
+  if (!state || state.saving || room.isClosed() || !isR2Configured()) return;
+  const currentClock = room.getCurrentDocumentClock();
+  if (currentClock === state.lastSavedClock) return;
+  state.saving = true;
+  try {
+    const snapshot = room.getCurrentSnapshot();
+    const timestamp = Date.now();
+    const key = `${AUTO_CHECKPOINT_KEY_PREFIX}lc-${liveClassId}-${timestamp}.json`;
+    const ok = await uploadSnapshotToR2(getR2Client, key, snapshot);
+    if (!ok) return;
+    await db2.query(
+      "UPDATE live_classes SET board_sync_checkpoint_url = $1, board_checkpoint_at = $2 WHERE id = $3",
+      [key, timestamp, liveClassId]
+    );
+    state.lastSavedClock = currentClock;
+    console.log(
+      `[classroom-checkpoint] Saved class=${liveClassId} clock=${currentClock} key=${key}`
+    );
+  } catch (err) {
+    console.warn("[classroom-checkpoint] Save error:", err?.message || String(err));
+  } finally {
+    state.saving = false;
+  }
+}
+function scheduleCheckpoint(roomId, liveClassId, room, db2, getR2Client) {
+  const state = checkpointStates.get(roomId);
+  if (!state || state.timer !== null) return;
+  if (isPreviewRoom(roomId)) return;
+  state.timer = setTimeout(() => {
+    state.timer = null;
+    void runCheckpoint(roomId, liveClassId, room, db2, getR2Client);
+  }, AUTO_CHECKPOINT_INTERVAL_MS);
+}
+async function makeOrLoadRoom(roomId, liveClassId, db2, getR2Client) {
+  const id = sanitizeRoomId(roomId);
+  const existing = rooms.get(id);
+  if (existing && !existing.isClosed()) return existing;
+  const pending = roomLoadingPromises.get(id);
+  if (pending) return pending;
+  const loadPromise = (async () => {
+    try {
+      let snapshot = null;
+      if (!isPreviewRoom(id)) {
+        snapshot = await Promise.race([
+          loadAutoCheckpointSnapshot(db2, liveClassId, getR2Client),
+          new Promise(
+            (resolve2) => setTimeout(() => resolve2(null), AUTO_CHECKPOINT_LOAD_TIMEOUT_MS)
+          )
+        ]);
+      }
+      const storage = snapshot ? new InMemorySyncStorage({ snapshot }) : new InMemorySyncStorage();
+      const cpState = {
+        timer: null,
+        lastSavedClock: storage.getClock(),
+        saving: false
+      };
+      checkpointStates.set(id, cpState);
+      const room = new TLSocketRoom({
+        storage,
+        onSessionRemoved(roomInstance, args) {
+          if (args.numSessionsRemaining === 0) {
+            void teardownRoomIfAllowed(id, liveClassId, roomInstance, db2, getR2Client);
+          }
+        }
+      });
+      if (!isPreviewRoom(id) && isR2Configured()) {
+        storage.onChange(() => {
+          scheduleCheckpoint(id, liveClassId, room, db2, getR2Client);
+        });
+      }
+      rooms.set(id, room);
+      return room;
+    } finally {
+      roomLoadingPromises.delete(id);
+    }
+  })();
+  roomLoadingPromises.set(id, loadPromise);
+  return loadPromise;
+}
+function cleanupCheckpointState(roomId) {
+  const state = checkpointStates.get(roomId);
+  if (state?.timer !== null && state?.timer !== void 0) {
+    clearTimeout(state.timer);
+  }
+  checkpointStates.delete(roomId);
+}
+async function teardownRoomIfAllowed(roomId, liveClassId, roomInstance, db2, getR2Client) {
   if (roomId.endsWith("-preview")) {
     roomInstance.close();
     rooms.delete(roomId);
+    cleanupCheckpointState(roomId);
     return;
   }
-  const liveClassId = parseLiveClassIdFromRoomId(roomId);
   try {
     const r = await db2.query(
-      `SELECT is_live, is_completed FROM live_classes WHERE id = $1`,
+      "SELECT is_live, is_completed FROM live_classes WHERE id = $1",
       [liveClassId]
     );
     const lc = r.rows[0];
@@ -9586,24 +10675,25 @@ async function teardownRoomIfAllowed(roomId, roomInstance, db2) {
   } catch (e) {
     console.warn("[classroom-sync] could not check live status before teardown:", e);
   }
+  const state = checkpointStates.get(roomId);
+  if (state) {
+    if (state.timer !== null) {
+      clearTimeout(state.timer);
+      state.timer = null;
+    }
+    try {
+      await Promise.race([
+        runCheckpoint(roomId, liveClassId, roomInstance, db2, getR2Client),
+        new Promise(
+          (resolve2) => setTimeout(resolve2, AUTO_CHECKPOINT_TEARDOWN_TIMEOUT_MS)
+        )
+      ]);
+    } catch {
+    }
+  }
   roomInstance.close();
   rooms.delete(roomId);
-}
-function makeOrLoadRoom(roomId, db2) {
-  const id = sanitizeRoomId(roomId);
-  const existing = rooms.get(id);
-  if (existing && !existing.isClosed()) return existing;
-  const storage = new InMemorySyncStorage();
-  const room = new TLSocketRoom({
-    storage,
-    onSessionRemoved(roomInstance, args) {
-      if (args.numSessionsRemaining === 0) {
-        void teardownRoomIfAllowed(id, roomInstance, db2);
-      }
-    }
-  });
-  rooms.set(id, room);
-  return room;
+  cleanupCheckpointState(roomId);
 }
 function parseSessionId(url) {
   const sid = url.searchParams.get("syncClientId") || url.searchParams.get("sessionId");
@@ -9623,7 +10713,10 @@ async function authenticateClassroomSocket(db2, req, roomId) {
   const user = await getAuthUserFromRequest(fakeReq, db2);
   if (!user) return { ok: false, status: 401, message: "Unauthorized" };
   const liveClassId = roomId.replace(/^lc-/, "").replace(/-preview$/, "");
-  const lcResult = await db2.query("SELECT * FROM live_classes WHERE id = $1", [liveClassId]);
+  const lcResult = await db2.query(
+    "SELECT * FROM live_classes WHERE id = $1",
+    [liveClassId]
+  );
   const lc = lcResult.rows[0];
   if (!lc) return { ok: false, status: 404, message: "Live class not found" };
   if (String(lc.stream_type || "").toLowerCase() !== "classroom") {
@@ -9639,23 +10732,23 @@ async function authenticateClassroomSocket(db2, req, roomId) {
   const isReadonly = user.role !== "admin";
   return { ok: true, user: { id: user.id, role: user.role }, isReadonly };
 }
-function attachClassroomSyncServer(httpServer, db2) {
+function syncCloseReason(status) {
+  if (status === 401) return TLSyncErrorCloseEventReason.NOT_AUTHENTICATED;
+  if (status === 404) return TLSyncErrorCloseEventReason.NOT_FOUND;
+  return TLSyncErrorCloseEventReason.FORBIDDEN;
+}
+function attachClassroomSyncServer(httpServer, db2, getR2Client) {
   const wss = new WebSocketServer({ noServer: true });
   httpServer.on("upgrade", (req, socket, head) => {
     const url = new URL2(req.url || "", "http://localhost");
     const match = url.pathname.match(/^\/classroom-sync\/([^/]+)$/);
     if (!match) return;
     wss.handleUpgrade(req, socket, head, (socketConn) => {
-      void handleConnection(socketConn, req, match[1], db2);
+      void handleConnection(socketConn, req, match[1], db2, getR2Client);
     });
   });
 }
-function syncCloseReason(status) {
-  if (status === 401) return TLSyncErrorCloseEventReason.NOT_AUTHENTICATED;
-  if (status === 404) return TLSyncErrorCloseEventReason.NOT_FOUND;
-  return TLSyncErrorCloseEventReason.FORBIDDEN;
-}
-async function handleConnection(ws, req, rawRoomId, db2) {
+async function handleConnection(ws, req, rawRoomId, db2, getR2Client) {
   const caughtMessages = [];
   const collect = (data) => {
     caughtMessages.push(Buffer.isBuffer(data) ? data : Buffer.from(data));
@@ -9668,9 +10761,10 @@ async function handleConnection(ws, req, rawRoomId, db2) {
     return;
   }
   const roomId = sanitizeRoomId(rawRoomId);
+  const liveClassId = parseLiveClassIdFromRoomId(roomId);
   const url = new URL2(req.url || "", "http://localhost");
   const sessionId = parseSessionId(url);
-  const room = makeOrLoadRoom(roomId, db2);
+  const room = await makeOrLoadRoom(roomId, liveClassId, db2, getR2Client);
   room.handleSocketConnect({
     sessionId,
     socket: ws,
@@ -9678,29 +10772,63 @@ async function handleConnection(ws, req, rawRoomId, db2) {
   });
   ws.off("message", collect);
   for (const msg of caughtMessages) {
-    ws.emit("message", msg);
+    ws.emit(
+      "message",
+      msg
+    );
   }
 }
-var require3, WebSocketServer, rooms;
+var require3, WebSocketServer, rooms, roomLoadingPromises, checkpointStates, AUTO_CHECKPOINT_INTERVAL_MS, AUTO_CHECKPOINT_KEY_PREFIX, AUTO_CHECKPOINT_LOAD_TIMEOUT_MS, AUTO_CHECKPOINT_TEARDOWN_TIMEOUT_MS, CHECKPOINT_CLEANUP_INTERVAL_MS;
 var init_classroom_sync = __esm({
-  "server/classroom-sync.ts"() {
+  "backend/classroom-sync.ts"() {
     "use strict";
     init_auth_utils();
     init_live_class_access();
     require3 = createRequire2(import.meta.url);
     WebSocketServer = require3("ws").Server;
     rooms = /* @__PURE__ */ new Map();
+    roomLoadingPromises = /* @__PURE__ */ new Map();
+    checkpointStates = /* @__PURE__ */ new Map();
+    AUTO_CHECKPOINT_INTERVAL_MS = Math.max(
+      6e4,
+      Number(process.env.BOARD_CHECKPOINT_INTERVAL_MS || "120000")
+    );
+    AUTO_CHECKPOINT_KEY_PREFIX = "board-checkpoints/";
+    AUTO_CHECKPOINT_LOAD_TIMEOUT_MS = 8e3;
+    AUTO_CHECKPOINT_TEARDOWN_TIMEOUT_MS = 5e3;
+    CHECKPOINT_CLEANUP_INTERVAL_MS = 10 * 60 * 1e3;
+    setInterval(() => {
+      for (const roomId of checkpointStates.keys()) {
+        const room = rooms.get(roomId);
+        if (!room || room.isClosed()) {
+          cleanupCheckpointState(roomId);
+        }
+      }
+    }, CHECKPOINT_CLEANUP_INTERVAL_MS);
   }
 });
 
-// server/course-access-routes.ts
+// backend/course-access-routes.ts
+function checkDownloadUrlRateLimit(userId) {
+  const now = Date.now();
+  const entry = downloadUrlRateMap.get(userId);
+  if (!entry || now - entry.windowStart >= DOWNLOAD_URL_RATE_WINDOW_MS) {
+    downloadUrlRateMap.set(userId, { count: 1, windowStart: now });
+    return true;
+  }
+  if (entry.count >= DOWNLOAD_URL_RATE_MAX) {
+    return false;
+  }
+  entry.count += 1;
+  return true;
+}
 function registerCourseAccessRoutes({
   app: app2,
   db: db2,
   getAuthUser: getAuthUser2,
   generateSecureToken: generateSecureToken2,
   getR2Client,
-  updateCourseProgress: updateCourseProgress2
+  updateCourseProgress: updateCourseProgress3
 }) {
   const assertTrackDownloadAllowed = async (user, itemType, itemId) => {
     const roleNorm = String(user.role ?? "student").toLowerCase();
@@ -9943,8 +11071,8 @@ function registerCourseAccessRoutes({
         course.courseEnded = false;
       }
       const lecturesResult = await db2.query("SELECT * FROM lectures WHERE course_id = $1 ORDER BY order_index", [courseIdParam]);
-      const testsResult = await db2.query("SELECT * FROM tests WHERE course_id = $1 AND is_published = TRUE ORDER BY created_at DESC, id DESC", [courseIdParam]);
-      const materialsResult = await db2.query("SELECT * FROM study_materials WHERE course_id = $1", [courseIdParam]);
+      const testsResult = await db2.query("SELECT * FROM tests WHERE course_id = $1 AND is_published = TRUE ORDER BY COALESCE(order_index, 0) ASC, created_at ASC, id ASC", [courseIdParam]);
+      const materialsResult = await db2.query("SELECT * FROM study_materials WHERE course_id = $1 ORDER BY COALESCE(order_index, 0) ASC, created_at ASC, id ASC", [courseIdParam]);
       const fullLectures = lecturesResult.rows;
       const fullMaterials = materialsResult.rows;
       const responseLectures = fullLectures.map((row) => sanitizeLectureRowForClient(row));
@@ -10055,6 +11183,7 @@ function registerCourseAccessRoutes({
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const materialsResult = await db2.query(
         `SELECT sm.id, sm.title, sm.file_url, sm.file_type, sm.section_title, sm.download_allowed,
+                COALESCE(sm.order_index, 0) AS order_index, sm.course_id,
                 c.title AS course_title, 'material' AS type, ud.downloaded_at, ud.local_filename
          FROM user_downloads ud
          JOIN study_materials sm ON ud.item_id = sm.id
@@ -10068,13 +11197,13 @@ function registerCourseAccessRoutes({
              AND (e.valid_until IS NULL OR e.valid_until > $2)
            )
          )
-         ORDER BY ud.downloaded_at DESC`,
+         ORDER BY c.title NULLS LAST, sm.section_title NULLS LAST, COALESCE(sm.order_index, 0) ASC`,
         [user.id, Date.now()]
       );
       const lecturesResult = await db2.query(
         `SELECT l.id, l.title, COALESCE(l.video_url, l.pdf_url) AS file_url,
                 CASE WHEN l.video_url IS NOT NULL AND l.video_url != '' THEN 'video' ELSE 'pdf' END AS file_type,
-                l.section_title,
+                l.section_title, COALESCE(l.order_index, 0) AS order_index, l.course_id,
                 c.title AS course_title, 'lecture' AS type, ud.downloaded_at, ud.local_filename
          FROM user_downloads ud
          JOIN lectures l ON ud.item_id = l.id
@@ -10088,7 +11217,7 @@ function registerCourseAccessRoutes({
              AND (e.valid_until IS NULL OR e.valid_until > $2)
            )
          )
-         ORDER BY ud.downloaded_at DESC`,
+         ORDER BY c.title NULLS LAST, l.section_title NULLS LAST, COALESCE(l.order_index, 0) ASC`,
         [user.id, Date.now()]
       );
       res.json({
@@ -10137,6 +11266,9 @@ function registerCourseAccessRoutes({
       const roleNorm = String(user?.role ?? "student").toLowerCase();
       if (!user || roleNorm !== "student" && roleNorm !== "admin") {
         return res.status(401).json({ message: "Not authenticated" });
+      }
+      if (roleNorm === "student" && !checkDownloadUrlRateLimit(user.id)) {
+        return res.status(429).json({ message: "Too many download requests. Please wait a moment before trying again." });
       }
       const bypassEnrollment = roleNorm === "admin";
       const { itemType, itemId } = req.query;
@@ -10223,8 +11355,6 @@ function registerCourseAccessRoutes({
   });
   app2.get("/api/download-proxy", async (req, res) => {
     try {
-      const user = await getAuthUser2(req);
-      if (!user) return res.status(401).json({ message: "Not authenticated" });
       const { token } = req.query;
       if (!token || typeof token !== "string") {
         return res.status(400).json({ message: "Token required" });
@@ -10234,10 +11364,13 @@ function registerCourseAccessRoutes({
         [token, Date.now()]
       );
       if (tokenResult.rows.length === 0) {
+        const user2 = await getAuthUser2(req);
+        if (!user2) return res.status(401).json({ message: "Not authenticated" });
         return res.status(403).json({ message: "Token invalid or expired" });
       }
       const tokenData = tokenResult.rows[0];
-      if (Number(tokenData.user_id) !== Number(user.id)) {
+      const user = await getAuthUser2(req);
+      if (user && Number(tokenData.user_id) !== Number(user.id)) {
         return res.status(403).json({ message: "Token does not belong to this user" });
       }
       const { GetObjectCommand } = await import("@aws-sdk/client-s3");
@@ -10310,17 +11443,21 @@ function registerCourseAccessRoutes({
     }
   });
 }
+var DOWNLOAD_URL_RATE_WINDOW_MS, DOWNLOAD_URL_RATE_MAX, downloadUrlRateMap;
 var init_course_access_routes = __esm({
-  "server/course-access-routes.ts"() {
+  "backend/course-access-routes.ts"() {
     "use strict";
     init_course_access_utils();
     init_media_key_utils();
     init_r2_presign_read();
     init_lecture_payload_utils();
+    DOWNLOAD_URL_RATE_WINDOW_MS = 6e4;
+    DOWNLOAD_URL_RATE_MAX = 10;
+    downloadUrlRateMap = /* @__PURE__ */ new Map();
   }
 });
 
-// server/r2-path-utils.ts
+// backend/r2-path-utils.ts
 function sanitizeLiveRecordingSubfolder(input) {
   if (input === void 0 || input === null) return null;
   const s = String(input).trim();
@@ -10335,14 +11472,14 @@ function sanitizeLiveRecordingSubfolder(input) {
 }
 var LIVE_CLASS_RECORDING_ROOT, SUBFOLDER_MAX;
 var init_r2_path_utils = __esm({
-  "server/r2-path-utils.ts"() {
+  "backend/r2-path-utils.ts"() {
     "use strict";
     LIVE_CLASS_RECORDING_ROOT = "live-class-recording";
     SUBFOLDER_MAX = 80;
   }
 });
 
-// server/upload-routes.ts
+// backend/upload-routes.ts
 function getPublicApiBaseUrl(req) {
   const configured = String(process.env.PUBLIC_API_BASE_URL || "").trim();
   if (configured) return configured.replace(/\/+$/, "");
@@ -10537,14 +11674,14 @@ function registerUploadRoutes({
   });
 }
 var init_upload_routes = __esm({
-  "server/upload-routes.ts"() {
+  "backend/upload-routes.ts"() {
     "use strict";
     init_r2_path_utils();
     init_async_utils();
   }
 });
 
-// server/media-stream-routes.ts
+// backend/media-stream-routes.ts
 function r2HeadMetaGet(key) {
   const row = r2HeadMetaLru.get(key);
   if (!row) return null;
@@ -10835,7 +11972,7 @@ function registerMediaStreamRoutes({
 }
 var R2_HEAD_TIMEOUT_MS, R2_GET_TIMEOUT_MS, R2_HEAD_META_TTL_MS, R2_HEAD_META_MAX, r2HeadMetaLru;
 var init_media_stream_routes = __esm({
-  "server/media-stream-routes.ts"() {
+  "backend/media-stream-routes.ts"() {
     "use strict";
     init_course_access_utils();
     init_media_key_utils();
@@ -10848,10 +11985,10 @@ var init_media_stream_routes = __esm({
   }
 });
 
-// server/schema-readiness-contract.ts
+// backend/schema-readiness-contract.ts
 var REQUIRED_TABLES, REQUIRED_COLUMNS, REQUIRED_UNIQUE_INDEX_SPECS;
 var init_schema_readiness_contract = __esm({
-  "server/schema-readiness-contract.ts"() {
+  "backend/schema-readiness-contract.ts"() {
     "use strict";
     REQUIRED_TABLES = [
       "users",
@@ -10953,7 +12090,7 @@ var init_schema_readiness_contract = __esm({
   }
 });
 
-// server/db-readiness.ts
+// backend/db-readiness.ts
 function parseIndexColumns(value) {
   if (Array.isArray(value)) {
     return value.map((c) => String(c));
@@ -11034,39 +12171,399 @@ async function checkDatabaseReadiness(db2) {
   };
 }
 var init_db_readiness = __esm({
-  "server/db-readiness.ts"() {
+  "backend/db-readiness.ts"() {
     "use strict";
     init_schema_readiness_contract();
   }
 });
 
-// server/routes.ts
+// backend/sms-utils.ts
+async function sendOTPviaSMS(phone, otp) {
+  const apiKey = process.env.FAST2SMS_API_KEY;
+  if (!apiKey) {
+    console.log("[SMS] No FAST2SMS_API_KEY set");
+    return false;
+  }
+  try {
+    console.log("[SMS] Sending OTP via Quick SMS route");
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15e3);
+    const res = await fetch("https://www.fast2sms.com/dev/bulkV2", {
+      method: "POST",
+      headers: {
+        "authorization": apiKey,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        route: "q",
+        message: `Your 3i Learning verification code is ${otp}. Valid for 10 minutes. Do not share this code.`,
+        numbers: phone,
+        flash: "0"
+      }),
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+    const data = await res.json();
+    console.log("[SMS] Quick SMS response received");
+    if (data.return === true) {
+      console.log("[SMS] OTP sent successfully");
+      return true;
+    }
+    console.error("[SMS] Quick SMS failed:", data.message || "provider_error");
+  } catch (err) {
+    if (err.name === "AbortError") {
+      console.error("[SMS] Quick SMS timeout");
+    } else {
+      console.error(`[SMS] Quick SMS error:`, err);
+    }
+  }
+  try {
+    console.log("[SMS] Trying OTP route as fallback");
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15e3);
+    const url = `https://www.fast2sms.com/dev/bulkV2?authorization=${encodeURIComponent(apiKey)}&route=otp&variables_values=${encodeURIComponent(otp)}&flash=0&numbers=${encodeURIComponent(phone)}`;
+    const res = await fetch(url, { method: "GET", signal: controller.signal });
+    clearTimeout(timeout);
+    const data = await res.json();
+    console.log("[SMS] OTP route response received");
+    if (data.return === true) {
+      console.log("[SMS] OTP route sent successfully");
+      return true;
+    }
+    console.error("[SMS] OTP route failed:", data.message || "provider_error");
+  } catch (err) {
+    if (err.name === "AbortError") {
+      console.error("[SMS] OTP route timeout");
+    } else {
+      console.error(`[SMS] OTP route error:`, err);
+    }
+  }
+  return false;
+}
+var init_sms_utils = __esm({
+  "backend/sms-utils.ts"() {
+    "use strict";
+  }
+});
+
+// backend/progress-utils.ts
+async function updateCourseTestCounts(db2, courseId) {
+  const id = String(courseId);
+  await db2.query(
+    `UPDATE courses SET
+      total_tests    = (SELECT COUNT(*) FROM tests WHERE course_id = $1),
+      pyq_count      = (SELECT COUNT(*) FROM tests WHERE course_id = $1 AND test_type = 'pyq'),
+      mock_count     = (SELECT COUNT(*) FROM tests WHERE course_id = $1 AND test_type = 'mock'),
+      practice_count = (SELECT COUNT(*) FROM tests WHERE course_id = $1 AND test_type = 'practice')
+    WHERE id = $1`,
+    [id]
+  );
+  await recomputeAllEnrollmentsProgressForCourse(db2, id);
+}
+async function updateCourseProgress(db2, userId, courseId, runTx) {
+  const cid = String(courseId);
+  const doUpdate = async (client) => {
+    if (runTx) {
+      await client.query(
+        "SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2 FOR UPDATE",
+        [userId, cid]
+      );
+    }
+    const totalLec = await client.query(
+      "SELECT COUNT(*) FROM lectures WHERE course_id = $1",
+      [cid]
+    );
+    const totalTests = await client.query(
+      "SELECT COUNT(*) FROM tests WHERE course_id = $1 AND is_published = TRUE",
+      [cid]
+    );
+    const completedLec = await client.query(
+      `SELECT COUNT(*) FROM lecture_progress lp JOIN lectures l ON lp.lecture_id = l.id
+       WHERE lp.user_id = $1 AND l.course_id = $2 AND lp.is_completed = TRUE`,
+      [userId, cid]
+    );
+    const completedTests = await client.query(
+      `SELECT COUNT(DISTINCT test_id) FROM test_attempts
+       WHERE user_id = $1 AND test_id IN (SELECT id FROM tests WHERE course_id = $2) AND status = 'completed'`,
+      [userId, cid]
+    );
+    const total = parseInt(totalLec.rows[0].count) + parseInt(totalTests.rows[0].count);
+    const completed = parseInt(completedLec.rows[0].count) + parseInt(completedTests.rows[0].count);
+    const progress = total > 0 ? Math.round(completed / total * 100) : 0;
+    await client.query(
+      "UPDATE enrollments SET progress_percent = $1 WHERE user_id = $2 AND course_id = $3",
+      [progress, userId, cid]
+    );
+  };
+  try {
+    if (runTx) {
+      await runTx((tx) => doUpdate(tx));
+    } else {
+      await doUpdate(db2);
+    }
+  } catch (err) {
+    console.error("[Progress] Failed to update:", err);
+  }
+}
+async function recomputeAllEnrollmentsProgressForCourse(db2, courseId) {
+  const cid = String(courseId);
+  try {
+    await db2.query(
+      `WITH
+         -- Course-level totals \u2014 computed once, not once per student
+         total_lec AS (
+           SELECT COUNT(*)::bigint AS n FROM lectures WHERE course_id = $1
+         ),
+         total_tests AS (
+           SELECT COUNT(*)::bigint AS n FROM tests WHERE course_id = $1 AND is_published = TRUE
+         ),
+         -- Per-student lecture completions \u2014 single table scan across all students
+         lec_done AS (
+           SELECT lp.user_id, COUNT(*)::bigint AS n
+           FROM lecture_progress lp
+           JOIN lectures l ON lp.lecture_id = l.id AND l.course_id = $1
+           WHERE lp.is_completed = TRUE
+           GROUP BY lp.user_id
+         ),
+         -- Per-student test completions \u2014 single table scan via JOIN instead of IN (SELECT)
+         tests_done AS (
+           SELECT ta.user_id, COUNT(DISTINCT ta.test_id)::bigint AS n
+           FROM test_attempts ta
+           JOIN tests t ON ta.test_id = t.id AND t.course_id = $1 AND t.is_published = TRUE
+           WHERE ta.status = 'completed'
+           GROUP BY ta.user_id
+         )
+       UPDATE enrollments AS e
+       SET progress_percent = calc.pct
+       FROM (
+         SELECT
+           en.user_id,
+           en.course_id,
+           CASE
+             WHEN (tl.n + tt.n) <= 0 THEN 0
+             ELSE LEAST(100, GREATEST(0, ROUND(
+               100.0 * (COALESCE(ld.n, 0) + COALESCE(td.n, 0))
+               / NULLIF(tl.n + tt.n, 0)
+             )))
+           END::integer AS pct
+         FROM enrollments en
+         CROSS JOIN total_lec tl
+         CROSS JOIN total_tests tt
+         LEFT JOIN lec_done  ld ON ld.user_id = en.user_id
+         LEFT JOIN tests_done td ON td.user_id = en.user_id
+         WHERE en.course_id::text = $1 AND (en.status = 'active' OR en.status IS NULL)
+       ) AS calc
+       WHERE e.user_id = calc.user_id AND e.course_id = calc.course_id`,
+      [cid]
+    );
+  } catch (err) {
+    console.error("[Progress] recomputeAllEnrollmentsProgressForCourse failed:", err);
+  }
+}
+var init_progress_utils = __esm({
+  "backend/progress-utils.ts"() {
+    "use strict";
+  }
+});
+
+// backend/schedulers.ts
+function startSchedulers(db2, pool2, sendPushToUsers2) {
+  const runBackgroundSchedulers = process.env.RUN_BACKGROUND_SCHEDULERS !== "false";
+  if (!runBackgroundSchedulers) {
+    console.log("[Schedulers] Background schedulers disabled (RUN_BACKGROUND_SCHEDULERS=false)");
+    return;
+  }
+  startLiveClassNotificationScheduler(db2, pool2, sendPushToUsers2);
+  startDownloadTokenCleanupScheduler(db2);
+}
+function startLiveClassNotificationScheduler(db2, pool2, sendPushToUsers2) {
+  const sentNotifications = /* @__PURE__ */ new Set();
+  setInterval(async () => {
+    let lockClient = null;
+    let lockAcquired = false;
+    try {
+      lockClient = await pool2.connect();
+      const lockResult = await lockClient.query(
+        "SELECT pg_try_advisory_lock($1) AS acquired",
+        [LIVE_NOTIF_ADVISORY_LOCK_KEY]
+      );
+      lockAcquired = lockResult.rows[0]?.acquired === true;
+      if (!lockAcquired) {
+        return;
+      }
+      const now = Date.now();
+      const minScheduleAt = now + 29 * 60 * 1e3;
+      const maxScheduleAt = now + 31 * 60 * 1e3;
+      const classes = await db2.query(
+        `SELECT lc.id, lc.title, lc.course_id, lc.is_free_preview, lc.is_public
+         FROM live_classes lc
+         WHERE lc.is_completed IS NOT TRUE
+           AND lc.is_live IS NOT TRUE
+           AND lc.notify_bell = TRUE
+           AND lc.scheduled_at IS NOT NULL
+           AND lc.scheduled_at BETWEEN $1 AND $2
+         ORDER BY lc.scheduled_at ASC
+         LIMIT 50`,
+        [minScheduleAt, maxScheduleAt]
+      );
+      for (const lc of classes.rows) {
+        const expiresAt = now + 6 * 36e5;
+        const key30 = `30min_${lc.id}`;
+        if (!sentNotifications.has(key30)) {
+          sentNotifications.add(key30);
+          const notifTitle = "\u23F0 Live Class in 30 minutes!";
+          const notifMessage = `"${lc.title}" starts in 30 minutes. Get ready!`;
+          if (!lc.course_id || lc.is_free_preview === true || lc.is_public === true) {
+            const inserted = await db2.query(
+              `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
+               SELECT u.id, $1, $2, 'info', $3, $4
+               FROM users u
+               WHERE u.role = 'student'
+               RETURNING user_id`,
+              [notifTitle, notifMessage, now, expiresAt]
+            );
+            await sendPushToUsers2(
+              db2,
+              inserted.rows.map((r) => Number(r.user_id)),
+              {
+                title: notifTitle,
+                body: notifMessage,
+                data: { type: "live_class_reminder", liveClassId: lc.id }
+              }
+            );
+            console.log(`[LiveNotif] 30min reminder sent for class=${lc.id} recipients=${inserted.rows.length}`);
+          } else {
+            const inserted = await db2.query(
+              `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
+               SELECT e.user_id, $1, $2, 'info', $3, $4
+               FROM enrollments e
+               WHERE e.course_id = $5
+                 AND (e.status = 'active' OR e.status IS NULL)
+                 AND (e.valid_until IS NULL OR e.valid_until > $6)
+               RETURNING user_id`,
+              [notifTitle, notifMessage, now, expiresAt, lc.course_id, now]
+            );
+            await sendPushToUsers2(
+              db2,
+              inserted.rows.map((r) => Number(r.user_id)),
+              {
+                title: notifTitle,
+                body: notifMessage,
+                data: { type: "live_class_reminder", liveClassId: lc.id, courseId: lc.course_id }
+              }
+            );
+            console.log(`[LiveNotif] 30min reminder sent for class=${lc.id} recipients=${inserted.rows.length}`);
+          }
+        }
+      }
+      if (sentNotifications.size > 500) sentNotifications.clear();
+    } catch (err) {
+      console.error("[LiveNotif] Scheduler error:", err);
+    } finally {
+      if (lockClient) {
+        if (lockAcquired) {
+          try {
+            await lockClient.query(
+              "SELECT pg_advisory_unlock($1)",
+              [LIVE_NOTIF_ADVISORY_LOCK_KEY]
+            );
+          } catch (unlockErr) {
+            console.error("[LiveNotif] Failed to release advisory lock:", unlockErr);
+          }
+        }
+        lockClient.release();
+      }
+    }
+  }, 60 * 1e3);
+  console.log("[LiveNotif] Scheduler started \u2014 checks every 60s");
+}
+function startDownloadTokenCleanupScheduler(db2) {
+  setInterval(async () => {
+    try {
+      const result = await db2.query(
+        `DELETE FROM download_tokens
+         WHERE id IN (
+           SELECT id
+           FROM download_tokens
+           WHERE expires_at < $1
+           ORDER BY expires_at ASC
+           LIMIT 2000
+         )`,
+        [Date.now()]
+      );
+      if (result.rowCount && result.rowCount > 0) {
+        console.log(`[TokenCleanup] Deleted ${result.rowCount} expired tokens`);
+      }
+    } catch (err) {
+      console.error("[TokenCleanup] Error:", err);
+    }
+  }, 5 * 60 * 1e3);
+  console.log("[TokenCleanup] Scheduler started \u2014 runs every 5 minutes");
+}
+var LIVE_NOTIF_ADVISORY_LOCK_KEY;
+var init_schedulers = __esm({
+  "backend/schedulers.ts"() {
+    "use strict";
+    LIVE_NOTIF_ADVISORY_LOCK_KEY = 31415926535;
+  }
+});
+
+// backend/download-utils.ts
+async function deleteDownloadsForUser(db2, userId, courseId) {
+  try {
+    if (courseId) {
+      await db2.query(
+        `DELETE FROM user_downloads
+         WHERE user_id = $1
+         AND (
+           (item_type = 'lecture' AND item_id IN (SELECT id FROM lectures WHERE course_id = $2))
+           OR
+           (item_type = 'material' AND item_id IN (SELECT id FROM study_materials WHERE course_id = $2))
+         )`,
+        [userId, courseId]
+      );
+      console.log(`[Cleanup] Deleted downloads for user ${userId} in course ${courseId}`);
+    } else {
+      await db2.query("DELETE FROM user_downloads WHERE user_id = $1", [userId]);
+      console.log(`[Cleanup] Deleted all downloads for user ${userId}`);
+    }
+  } catch (err) {
+    console.error("[Cleanup] Failed to delete downloads:", err);
+  }
+}
+async function deleteDownloadsForCourse(db2, courseId) {
+  try {
+    await db2.query(
+      `DELETE FROM user_downloads
+       WHERE (item_type = 'lecture' AND item_id IN (SELECT id FROM lectures WHERE course_id = $1))
+       OR (item_type = 'material' AND item_id IN (SELECT id FROM study_materials WHERE course_id = $1))`,
+      [courseId]
+    );
+    console.log(`[Cleanup] Deleted all downloads for course ${courseId}`);
+  } catch (err) {
+    console.error("[Cleanup] Failed to delete course downloads:", err);
+  }
+}
+var init_download_utils = __esm({
+  "backend/download-utils.ts"() {
+    "use strict";
+  }
+});
+
+// backend/routes.ts
 var routes_exports = {};
 __export(routes_exports, {
   registerRoutes: () => registerRoutes
 });
 import { createServer } from "node:http";
 import { Pool as Pool2 } from "pg";
-import multer from "multer";
-import { createRequire as createRequire3 } from "module";
+import { PDFParse } from "pdf-parse";
 import { randomInt } from "node:crypto";
 function isTransientPgError(err) {
   const message = String(err?.message || "").toLowerCase();
   const code = String(err?.code || "").toUpperCase();
   return message.includes("connection terminated") || message.includes("connection timeout") || message.includes("getaddrinfo eai_again") || message.includes("timeout exceeded when trying to connect") || code === "ECONNRESET" || code === "ECONNREFUSED" || code === "EAI_AGAIN" || code === "ETIMEDOUT" || code === "57P01" || // admin_shutdown
   code === "57P03";
-}
-function normalizeDatabaseUrl(raw) {
-  try {
-    const parsed = new URL(raw);
-    const sslMode = (parsed.searchParams.get("sslmode") || "").toLowerCase();
-    if (!sslMode || sslMode === "require" || sslMode === "prefer" || sslMode === "verify-ca") {
-      parsed.searchParams.set("sslmode", "verify-full");
-    }
-    return parsed.toString();
-  } catch {
-    return raw;
-  }
 }
 async function runInTransaction(fn) {
   const maxAttempts = 3;
@@ -11142,7 +12639,7 @@ async function getAuthUser(req) {
       const user = await getAuthUserFromRequest(req, db);
       if (!user) return null;
       const boundOk = await enforceInstallationBinding(db, req, user.id, user.role);
-      if (!boundOk) {
+      if (!boundOk.ok) {
         req.session.user = null;
         return null;
       }
@@ -11156,187 +12653,6 @@ async function getAuthUser(req) {
     r[authUserLazyKey] = p;
   }
   return p;
-}
-async function sendOTPviaSMS(phone, otp) {
-  const apiKey = process.env.FAST2SMS_API_KEY;
-  if (!apiKey) {
-    console.log("[SMS] No FAST2SMS_API_KEY set");
-    return false;
-  }
-  try {
-    console.log("[SMS] Sending OTP via Quick SMS route");
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15e3);
-    const res = await fetch("https://www.fast2sms.com/dev/bulkV2", {
-      method: "POST",
-      headers: {
-        "authorization": apiKey,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        route: "q",
-        message: `Your 3i Learning verification code is ${otp}. Valid for 10 minutes. Do not share this code.`,
-        numbers: phone,
-        flash: "0"
-      }),
-      signal: controller.signal
-    });
-    clearTimeout(timeout);
-    const data = await res.json();
-    console.log("[SMS] Quick SMS response received");
-    if (data.return === true) {
-      console.log("[SMS] OTP sent successfully");
-      return true;
-    }
-    console.error("[SMS] Quick SMS failed:", data.message || "provider_error");
-  } catch (err) {
-    if (err.name === "AbortError") {
-      console.error("[SMS] Quick SMS timeout");
-    } else {
-      console.error(`[SMS] Quick SMS error:`, err);
-    }
-  }
-  try {
-    console.log("[SMS] Trying OTP route as fallback");
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15e3);
-    const url = `https://www.fast2sms.com/dev/bulkV2?authorization=${encodeURIComponent(apiKey)}&route=otp&variables_values=${encodeURIComponent(otp)}&flash=0&numbers=${encodeURIComponent(phone)}`;
-    const res = await fetch(url, { method: "GET", signal: controller.signal });
-    clearTimeout(timeout);
-    const data = await res.json();
-    console.log("[SMS] OTP route response received");
-    if (data.return === true) {
-      console.log("[SMS] OTP route sent successfully");
-      return true;
-    }
-    console.error("[SMS] OTP route failed:", data.message || "provider_error");
-  } catch (err) {
-    if (err.name === "AbortError") {
-      console.error("[SMS] OTP route timeout");
-    } else {
-      console.error(`[SMS] OTP route error:`, err);
-    }
-  }
-  return false;
-}
-async function updateCourseTestCounts(courseId) {
-  const id = String(courseId);
-  await db.query(`
-    UPDATE courses SET
-      total_tests    = (SELECT COUNT(*) FROM tests WHERE course_id = $1),
-      pyq_count      = (SELECT COUNT(*) FROM tests WHERE course_id = $1 AND test_type = 'pyq'),
-      mock_count     = (SELECT COUNT(*) FROM tests WHERE course_id = $1 AND test_type = 'mock'),
-      practice_count = (SELECT COUNT(*) FROM tests WHERE course_id = $1 AND test_type = 'practice')
-    WHERE id = $1
-  `, [id]);
-  await recomputeAllEnrollmentsProgressForCourse(id);
-}
-async function updateCourseProgress(userId, courseId) {
-  const cid = String(courseId);
-  try {
-    const totalLec = await db.query("SELECT COUNT(*) FROM lectures WHERE course_id = $1", [cid]);
-    const totalTests = await db.query("SELECT COUNT(*) FROM tests WHERE course_id = $1 AND is_published = TRUE", [cid]);
-    const completedLec = await db.query(
-      `SELECT COUNT(*) FROM lecture_progress lp JOIN lectures l ON lp.lecture_id = l.id 
-       WHERE lp.user_id = $1 AND l.course_id = $2 AND lp.is_completed = TRUE`,
-      [userId, cid]
-    );
-    const completedTests = await db.query(
-      `SELECT COUNT(DISTINCT test_id) FROM test_attempts 
-       WHERE user_id = $1 AND test_id IN (SELECT id FROM tests WHERE course_id = $2) AND status = 'completed'`,
-      [userId, cid]
-    );
-    const total = parseInt(totalLec.rows[0].count) + parseInt(totalTests.rows[0].count);
-    const completed = parseInt(completedLec.rows[0].count) + parseInt(completedTests.rows[0].count);
-    const progress = total > 0 ? Math.round(completed / total * 100) : 0;
-    await db.query(
-      "UPDATE enrollments SET progress_percent = $1 WHERE user_id = $2 AND course_id = $3",
-      [progress, userId, cid]
-    );
-  } catch (err) {
-    console.error("[Progress] Failed to update:", err);
-  }
-}
-async function recomputeAllEnrollmentsProgressForCourse(courseId) {
-  const cid = String(courseId);
-  try {
-    await db.query(
-      `UPDATE enrollments AS e
-       SET progress_percent = calc.pct
-       FROM (
-         SELECT
-           en.user_id,
-           en.course_id,
-           CASE
-             WHEN (COALESCE(tl.total_lec, 0) + COALESCE(tt.total_tests, 0)) <= 0 THEN 0
-             ELSE LEAST(100, GREATEST(0, ROUND(
-               (100.0 * (COALESCE(cl.done_lec, 0) + COALESCE(ct.done_tests, 0)))
-               / NULLIF(COALESCE(tl.total_lec, 0) + COALESCE(tt.total_tests, 0), 0)
-             )))
-           END::integer AS pct
-         FROM enrollments en
-         CROSS JOIN LATERAL (
-           SELECT COUNT(*)::bigint AS total_lec FROM lectures WHERE course_id = $1
-         ) tl
-         CROSS JOIN LATERAL (
-           SELECT COUNT(*)::bigint AS total_tests FROM tests WHERE course_id = $1 AND is_published = TRUE
-         ) tt
-         LEFT JOIN LATERAL (
-           SELECT COUNT(*)::bigint AS done_lec
-           FROM lecture_progress lp
-           INNER JOIN lectures l ON lp.lecture_id = l.id AND l.course_id = $1
-           WHERE lp.user_id = en.user_id AND lp.is_completed = TRUE
-         ) cl ON TRUE
-         LEFT JOIN LATERAL (
-           SELECT COUNT(DISTINCT test_id)::bigint AS done_tests
-           FROM test_attempts ta
-           WHERE ta.user_id = en.user_id
-             AND ta.status = 'completed'
-             AND ta.test_id IN (SELECT id FROM tests WHERE course_id = $1)
-         ) ct ON TRUE
-         WHERE en.course_id::text = $1 AND (en.status = 'active' OR en.status IS NULL)
-       ) AS calc
-       WHERE e.user_id = calc.user_id AND e.course_id = calc.course_id`,
-      [cid]
-    );
-  } catch (err) {
-    console.error("[Progress] recomputeAllEnrollmentsProgressForCourse failed:", err);
-  }
-}
-async function deleteDownloadsForUser(userId, courseId) {
-  try {
-    if (courseId) {
-      await db.query(
-        `DELETE FROM user_downloads 
-         WHERE user_id = $1 
-         AND (
-           (item_type = 'lecture' AND item_id IN (SELECT id FROM lectures WHERE course_id = $2))
-           OR
-           (item_type = 'material' AND item_id IN (SELECT id FROM study_materials WHERE course_id = $2))
-         )`,
-        [userId, courseId]
-      );
-      console.log(`[Cleanup] Deleted downloads for user ${userId} in course ${courseId}`);
-    } else {
-      await db.query("DELETE FROM user_downloads WHERE user_id = $1", [userId]);
-      console.log(`[Cleanup] Deleted all downloads for user ${userId}`);
-    }
-  } catch (err) {
-    console.error("[Cleanup] Failed to delete downloads:", err);
-  }
-}
-async function deleteDownloadsForCourse(courseId) {
-  try {
-    await db.query(
-      `DELETE FROM user_downloads 
-       WHERE (item_type = 'lecture' AND item_id IN (SELECT id FROM lectures WHERE course_id = $1))
-       OR (item_type = 'material' AND item_id IN (SELECT id FROM study_materials WHERE course_id = $1))`,
-      [courseId]
-    );
-    console.log(`[Cleanup] Deleted all downloads for course ${courseId}`);
-  } catch (err) {
-    console.error("[Cleanup] Failed to delete course downloads:", err);
-  }
 }
 async function registerRoutes(app2) {
   if (process.env.ALLOW_RUNTIME_SCHEMA_SYNC === "true" || process.env.ALLOW_STARTUP_SCHEMA_ENSURE === "true") {
@@ -11363,104 +12679,7 @@ async function registerRoutes(app2) {
   } catch (err) {
     console.warn("[DB] Startup readiness preflight failed:", err);
   }
-  const runBackgroundSchedulers = process.env.RUN_BACKGROUND_SCHEDULERS !== "false";
-  if (runBackgroundSchedulers) {
-    const sentNotifications = /* @__PURE__ */ new Set();
-    setInterval(async () => {
-      try {
-        const now = Date.now();
-        const minScheduleAt = now + 29 * 60 * 1e3;
-        const maxScheduleAt = now + 31 * 60 * 1e3;
-        const classes = await db.query(
-          `SELECT lc.id, lc.title, lc.course_id, lc.is_free_preview, lc.is_public
-           FROM live_classes lc
-           WHERE lc.is_completed IS NOT TRUE
-             AND lc.is_live IS NOT TRUE
-             AND lc.notify_bell = TRUE
-             AND lc.scheduled_at IS NOT NULL
-             AND lc.scheduled_at BETWEEN $1 AND $2
-           ORDER BY lc.scheduled_at ASC
-           LIMIT 50`,
-          [minScheduleAt, maxScheduleAt]
-        );
-        for (const lc of classes.rows) {
-          const expiresAt = now + 6 * 36e5;
-          const key30 = `30min_${lc.id}`;
-          if (!sentNotifications.has(key30)) {
-            sentNotifications.add(key30);
-            const notifTitle = "\u23F0 Live Class in 30 minutes!";
-            const notifMessage = `"${lc.title}" starts in 30 minutes. Get ready!`;
-            if (!lc.course_id || lc.is_free_preview === true || lc.is_public === true) {
-              const inserted = await db.query(
-                `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
-                 SELECT u.id, $1, $2, 'info', $3, $4
-                 FROM users u
-                 WHERE u.role = 'student'
-                 RETURNING user_id`,
-                [notifTitle, notifMessage, now, expiresAt]
-              );
-              await sendPushToUsers(
-                db,
-                inserted.rows.map((r) => Number(r.user_id)),
-                {
-                  title: notifTitle,
-                  body: notifMessage,
-                  data: { type: "live_class_reminder", liveClassId: lc.id }
-                }
-              );
-              console.log(`[LiveNotif] 30min reminder sent for class=${lc.id} recipients=${inserted.rows.length}`);
-            } else {
-              const inserted = await db.query(
-                `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
-                 SELECT e.user_id, $1, $2, 'info', $3, $4
-                 FROM enrollments e
-                 WHERE e.course_id = $5
-                 RETURNING user_id`,
-                [notifTitle, notifMessage, now, expiresAt, lc.course_id]
-              );
-              await sendPushToUsers(
-                db,
-                inserted.rows.map((r) => Number(r.user_id)),
-                {
-                  title: notifTitle,
-                  body: notifMessage,
-                  data: { type: "live_class_reminder", liveClassId: lc.id, courseId: lc.course_id }
-                }
-              );
-              console.log(`[LiveNotif] 30min reminder sent for class=${lc.id} recipients=${inserted.rows.length}`);
-            }
-          }
-        }
-        if (sentNotifications.size > 500) sentNotifications.clear();
-      } catch (err) {
-        console.error("[LiveNotif] Scheduler error:", err);
-      }
-    }, 60 * 1e3);
-    console.log("[LiveNotif] Scheduler started \u2014 checks every 60s");
-    setInterval(async () => {
-      try {
-        const result = await db.query(
-          `DELETE FROM download_tokens
-           WHERE id IN (
-             SELECT id
-             FROM download_tokens
-             WHERE expires_at < $1 AND used = TRUE
-             ORDER BY expires_at ASC
-             LIMIT 2000
-           )`,
-          [Date.now()]
-        );
-        if (result.rowCount && result.rowCount > 0) {
-          console.log(`[TokenCleanup] Deleted ${result.rowCount} expired tokens`);
-        }
-      } catch (err) {
-        console.error("[TokenCleanup] Error:", err);
-      }
-    }, 5 * 60 * 1e3);
-    console.log("[TokenCleanup] Scheduler started \u2014 runs every 5 minutes");
-  } else {
-    console.log("[Schedulers] Background schedulers disabled (RUN_BACKGROUND_SCHEDULERS=false)");
-  }
+  startSchedulers(db, pool, sendPushToUsers);
   app2.get("/api/health/ready", async (_req, res) => {
     try {
       const readiness = await checkDatabaseReadiness(db);
@@ -11549,7 +12768,7 @@ async function registerRoutes(app2) {
     app: app2,
     db,
     getAuthUser,
-    updateCourseProgress
+    updateCourseProgress: updateCourseProgress2
   });
   registerTestFolderRoutes({
     app: app2,
@@ -11562,7 +12781,7 @@ async function registerRoutes(app2) {
     app: app2,
     db,
     getAuthUser,
-    updateCourseProgress
+    updateCourseProgress: updateCourseProgress2
   });
   registerTestAttemptRoutes({
     app: app2,
@@ -11582,6 +12801,7 @@ async function registerRoutes(app2) {
   registerDoubtNotificationRoutes({
     app: app2,
     db,
+    pool,
     getAuthUser,
     requireAdmin,
     generateAIAnswer
@@ -11713,7 +12933,7 @@ async function registerRoutes(app2) {
     db,
     requireAdmin,
     getR2Client,
-    recomputeAllEnrollmentsProgressForCourse
+    recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse2
   });
   registerCourseAccessRoutes({
     app: app2,
@@ -11721,7 +12941,7 @@ async function registerRoutes(app2) {
     getAuthUser,
     generateSecureToken,
     getR2Client,
-    updateCourseProgress
+    updateCourseProgress: updateCourseProgress2
   });
   registerUploadRoutes({
     app: app2,
@@ -11750,14 +12970,15 @@ async function registerRoutes(app2) {
     app: app2,
     db,
     requireAdmin,
-    updateCourseTestCounts,
-    recomputeAllEnrollmentsProgressForCourse
+    updateCourseTestCounts: updateCourseTestCounts2,
+    recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse2,
+    runInTransaction
   });
   registerAdminCourseManagementRoutes({
     app: app2,
     db,
     requireAdmin,
-    updateCourseTestCounts
+    updateCourseTestCounts: updateCourseTestCounts2
   });
   registerAdminAnalyticsRoutes({
     app: app2,
@@ -11768,8 +12989,8 @@ async function registerRoutes(app2) {
     app: app2,
     db,
     requireAdmin,
-    deleteDownloadsForUser,
-    deleteDownloadsForCourse,
+    deleteDownloadsForUser: deleteDownloadsForUser2,
+    deleteDownloadsForCourse: deleteDownloadsForCourse2,
     runInTransaction
   });
   registerAdminLectureRoutes({
@@ -11777,13 +12998,13 @@ async function registerRoutes(app2) {
     db,
     requireAdmin,
     getR2Client,
-    recomputeAllEnrollmentsProgressForCourse
+    recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse2
   });
   registerAdminTestRoutes({
     app: app2,
     db,
     requireAdmin,
-    updateCourseTestCounts
+    updateCourseTestCounts: updateCourseTestCounts2
   });
   registerAdminQuestionBulkRoutes({
     app: app2,
@@ -11796,9 +13017,9 @@ async function registerRoutes(app2) {
     app: app2,
     db,
     requireAdmin,
-    deleteDownloadsForUser,
+    deleteDownloadsForUser: deleteDownloadsForUser2,
     runInTransaction,
-    recomputeAllEnrollmentsProgressForCourse
+    recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse2
   });
   registerAdminNotificationRoutes({
     app: app2,
@@ -11809,7 +13030,7 @@ async function registerRoutes(app2) {
     app: app2,
     db,
     requireAdmin,
-    updateCourseTestCounts
+    updateCourseTestCounts: updateCourseTestCounts2
   });
   registerAdminDailyMissionRoutes({
     app: app2,
@@ -11834,7 +13055,7 @@ async function registerRoutes(app2) {
     app: app2,
     db,
     requireAdmin,
-    recomputeAllEnrollmentsProgressForCourse,
+    recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse2,
     getR2Client
   });
   registerClassroomRoutes({
@@ -11843,7 +13064,7 @@ async function registerRoutes(app2) {
     requireAuth,
     requireAdmin,
     getAuthUser,
-    recomputeAllEnrollmentsProgressForCourse
+    recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse2
   });
   registerLiveClassPollRoutes({
     app: app2,
@@ -11855,13 +13076,14 @@ async function registerRoutes(app2) {
   });
   registerPdfRoutes({ app: app2, db, getAuthUser, getR2Client });
   const httpServer = createServer(app2);
-  attachClassroomSyncServer(httpServer, db);
+  attachClassroomSyncServer(httpServer, db, getR2Client);
   return httpServer;
 }
-var require4, PDFParse, upload, uploadPdf, uploadLarge, databaseUrlRaw, databaseUrl, pgPoolMax, pool, listenPool, db, generateAIAnswer, authUserLazyKey;
+var databaseUrlRaw, databaseUrl, pgPoolMax, pool, listenPool, db, generateAIAnswer, updateCourseProgress2, recomputeAllEnrollmentsProgressForCourse2, updateCourseTestCounts2, deleteDownloadsForUser2, deleteDownloadsForCourse2, authUserLazyKey;
 var init_routes = __esm({
-  "server/routes.ts"() {
+  "backend/routes.ts"() {
     "use strict";
+    init_upload_config();
     init_firebase();
     init_razorpay();
     init_security_utils();
@@ -11906,20 +13128,12 @@ var init_routes = __esm({
     init_media_stream_routes();
     init_ai_tutor_service();
     init_db_readiness();
+    init_db_utils();
+    init_sms_utils();
+    init_progress_utils();
+    init_schedulers();
+    init_download_utils();
     init_push_notifications();
-    require4 = createRequire3(import.meta.url);
-    ({ PDFParse } = require4("pdf-parse"));
-    upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
-    uploadPdf = multer({
-      storage: multer.memoryStorage(),
-      limits: { fileSize: 10 * 1024 * 1024 },
-      fileFilter: (_req, file, cb) => {
-        const mimetype = String(file?.mimetype || "").toLowerCase();
-        if (mimetype === "application/pdf") return cb(null, true);
-        return cb(new Error("Only PDF files are allowed"));
-      }
-    });
-    uploadLarge = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } });
     databaseUrlRaw = process.env.DATABASE_URL;
     databaseUrl = databaseUrlRaw ? normalizeDatabaseUrl(databaseUrlRaw) : void 0;
     if (!databaseUrl) {
@@ -11965,13 +13179,19 @@ var init_routes = __esm({
       query: (text, params, options) => dbQuery(text, params, options)
     };
     generateAIAnswer = createGenerateAIAnswer(db);
+    updateCourseProgress2 = (userId, courseId) => updateCourseProgress(db, userId, courseId, runInTransaction);
+    recomputeAllEnrollmentsProgressForCourse2 = (courseId) => recomputeAllEnrollmentsProgressForCourse(db, courseId);
+    updateCourseTestCounts2 = (courseId) => updateCourseTestCounts(db, courseId);
+    deleteDownloadsForUser2 = (userId, courseId) => deleteDownloadsForUser(db, userId, courseId);
+    deleteDownloadsForCourse2 = (courseId) => deleteDownloadsForCourse(db, courseId);
     authUserLazyKey = /* @__PURE__ */ Symbol("authUserLazy");
   }
 });
 
-// server/index.ts
+// backend/index.ts
 init_pg_rate_limit_store();
 init_ai_tutor_service();
+init_db_utils();
 import dotenv from "dotenv";
 import * as fs from "fs";
 import * as path from "path";
@@ -11991,18 +13211,6 @@ if (process.env.NODE_ENV !== "production" || process.env.LOAD_DOTENV === "true")
 }
 var app = express();
 var log = console.log;
-function normalizeDatabaseUrl2(raw) {
-  try {
-    const parsed = new URL(raw);
-    const sslMode = (parsed.searchParams.get("sslmode") || "").toLowerCase();
-    if (!sslMode || sslMode === "require" || sslMode === "prefer" || sslMode === "verify-ca") {
-      parsed.searchParams.set("sslmode", "verify-full");
-    }
-    return parsed.toString();
-  } catch {
-    return raw;
-  }
-}
 function normalizeOrigin(value) {
   const trimmed = value.trim();
   if (!trimmed) return "";
@@ -12228,7 +13436,7 @@ function serveExpoManifest(platform, res) {
 function configureExpoAndLanding(app2) {
   const templatePath = path.resolve(
     process.cwd(),
-    "server",
+    "backend",
     "templates",
     "landing-page.html"
   );
@@ -12400,7 +13608,7 @@ function normalizeOtpIdentifier(input) {
   if (isProduction && process.env.DATABASE_URL) {
     const PgSession = connectPgSimple(session);
     sessionConfig.store = new PgSession({
-      conString: normalizeDatabaseUrl2(process.env.DATABASE_URL),
+      conString: normalizeDatabaseUrl(process.env.DATABASE_URL),
       tableName: "session",
       // Table is created by migrations/0011_distributed_rate_limits_and_session.sql
       createTableIfMissing: false
@@ -12421,7 +13629,7 @@ function normalizeOtpIdentifier(input) {
   });
   const rateLimitPgSsl = process.env.PGSSL_NO_VERIFY === "true" && process.env.NODE_ENV !== "production" ? { rejectUnauthorized: false } : { rejectUnauthorized: true };
   const rateLimitPool = typeof process.env.DATABASE_URL === "string" && process.env.DATABASE_URL.trim().length > 0 ? new pg.Pool({
-    connectionString: normalizeDatabaseUrl2(process.env.DATABASE_URL),
+    connectionString: normalizeDatabaseUrl(process.env.DATABASE_URL),
     max: 5,
     min: 0,
     connectionTimeoutMillis: 8e3,
@@ -12476,7 +13684,7 @@ function normalizeOtpIdentifier(input) {
   app.use("/api", globalApiLimiter);
   const server = await registerRoutes2(app);
   app.get("/firebase-phone-auth", (_req, res) => {
-    const firebaseAuthPath = path.resolve(process.cwd(), "server", "templates", "firebase-phone-auth.html");
+    const firebaseAuthPath = path.resolve(process.cwd(), "backend", "templates", "firebase-phone-auth.html");
     if (fs.existsSync(firebaseAuthPath)) {
       return res.type("html").sendFile(firebaseAuthPath);
     }

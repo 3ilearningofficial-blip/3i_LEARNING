@@ -1062,6 +1062,19 @@ export default function AdminDashboard() {
   const [aiDoubtDays, setAiDoubtDays] = useState<"all" | "7" | "30">("all");
   const [aiDoubtTopic, setAiDoubtTopic] = useState<string>("all");
   const [aiDoubtStudent, setAiDoubtStudent] = useState("");
+  const [aiStudentsOffset, setAiStudentsOffset] = useState(0);
+  const [aiFrequentOffset, setAiFrequentOffset] = useState(0);
+  const [aiSelectedStudent, setAiSelectedStudent] = useState<any | null>(null);
+  const [aiSelectedPattern, setAiSelectedPattern] = useState<any | null>(null);
+  const [aiStudentHistoryOffset, setAiStudentHistoryOffset] = useState(0);
+  const [aiPatternStudentsOffset, setAiPatternStudentsOffset] = useState(0);
+
+  useEffect(() => {
+    setAiStudentsOffset(0);
+    setAiFrequentOffset(0);
+    setAiStudentHistoryOffset(0);
+    setAiPatternStudentsOffset(0);
+  }, [aiDoubtDays, aiDoubtTopic, aiDoubtStudent]);
   const [showAddCourse, setShowAddCourse] = useState(false);
   const [showNotification, setShowNotification] = useState(false);
   const [notifTitle, setNotifTitle] = useState("");
@@ -1152,10 +1165,10 @@ export default function AdminDashboard() {
   const [testQuestionsList, setTestQuestionsList] = useState<any[]>([]);
   const [testQuestionsLoading, setTestQuestionsLoading] = useState(false);
   const [showViewQuestions, setShowViewQuestions] = useState(false);
-  // Folder management for tests/materials tabs
+  // Folder management for tests/materials/missions tabs
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
-  const [openFolderView, setOpenFolderView] = useState<{ folder: any; type: "test" | "material" } | null>(null);
-  const [showCreateFolderModal, setShowCreateFolderModal] = useState<"test" | "material" | null>(null);
+  const [openFolderView, setOpenFolderView] = useState<{ folder: any; type: "test" | "material" | "mission" } | null>(null);
+  const [showCreateFolderModal, setShowCreateFolderModal] = useState<"test" | "material" | "mission" | null>(null);
   const [newFolderNameInput, setNewFolderNameInput] = useState("");
   const [newFolderValidityMonths, setNewFolderValidityMonths] = useState("");
   // Folder action sheet (same as course admin)
@@ -1223,7 +1236,10 @@ export default function AdminDashboard() {
   const [selectedTestIds, setSelectedTestIds] = useState<number[]>([]);
   const [selectedMaterialIds, setSelectedMaterialIds] = useState<number[]>([]);
   const [importLoading, setImportLoading] = useState(false);
-  const [importSectionTitle, setImportSectionTitle] = useState("");
+  const [importOptions, setImportOptions] = useState({ lectures: true, tests: true, materials: true, missions: true });
+  const [importPreview, setImportPreview] = useState<{ lectures: number; tests: number; materials: number; missions: number } | null>(null);
+  const [importPreviewLoading, setImportPreviewLoading] = useState(false);
+  const [showAdvancedImport, setShowAdvancedImport] = useState(false);
   const [showCreateTest, setShowCreateTest] = useState(false);
   const [testTitle, setTestTitle] = useState("");
   const [testDesc, setTestDesc] = useState("");
@@ -1470,20 +1486,98 @@ export default function AdminDashboard() {
     staleTime: 3 * 60 * 1000,
     refetchOnMount: false,
   });
-  const clearAdminDoubtsMutation = useMutation({
-    mutationFn: async () => {
+
+  const aiStudentsLimit = 20;
+  const { data: adminDoubtStudentsData = { rows: [] as any[], total: 0 } } = useQuery<{ rows: any[]; total: number }>({
+    queryKey: ["/api/admin/doubts/students", aiDoubtDays, aiDoubtTopic, aiDoubtStudent, aiStudentsOffset],
+    queryFn: async () => {
+      const baseUrl = getApiUrl();
       const qs = new URLSearchParams();
       if (aiDoubtDays !== "all") qs.set("days", aiDoubtDays);
       if (aiDoubtTopic !== "all") qs.set("topic", aiDoubtTopic);
-      if (aiDoubtStudent.trim()) qs.set("student", aiDoubtStudent.trim());
-      const path = `/api/admin/doubts${qs.toString() ? `?${qs.toString()}` : ""}`;
-      const res = await apiRequest("DELETE", path);
+      if (aiDoubtStudent.trim()) qs.set("q", aiDoubtStudent.trim());
+      qs.set("limit", String(aiStudentsLimit));
+      qs.set("offset", String(aiStudentsOffset));
+      const res = await authFetch(new URL(`/api/admin/doubts/students?${qs.toString()}`, baseUrl).toString());
+      if (!res.ok) return { rows: [], total: 0 };
+      return res.json();
+    },
+    enabled: activeTab === "aiTutor",
+    staleTime: 60_000,
+    refetchOnMount: false,
+  });
+
+  const aiFrequentLimit = 20;
+  const { data: adminFrequentPatternsData = { rows: [] as any[], total: 0 } } = useQuery<{ rows: any[]; total: number }>({
+    queryKey: ["/api/admin/doubts/frequent", aiDoubtDays, aiDoubtStudent, aiFrequentOffset],
+    queryFn: async () => {
+      const baseUrl = getApiUrl();
+      const qs = new URLSearchParams();
+      if (aiDoubtDays !== "all") qs.set("days", aiDoubtDays);
+      if (aiDoubtStudent.trim()) qs.set("q", aiDoubtStudent.trim());
+      qs.set("limit", String(aiFrequentLimit));
+      qs.set("offset", String(aiFrequentOffset));
+      const res = await authFetch(new URL(`/api/admin/doubts/frequent?${qs.toString()}`, baseUrl).toString());
+      if (!res.ok) return { rows: [], total: 0 };
+      return res.json();
+    },
+    enabled: activeTab === "aiTutor",
+    staleTime: 60_000,
+    refetchOnMount: false,
+  });
+
+  const aiStudentHistoryLimit = 25;
+  const { data: aiSelectedStudentHistory = { rows: [] as any[], total: 0 } } = useQuery<{ rows: any[]; total: number }>({
+    queryKey: ["/api/admin/doubts/student", aiSelectedStudent?.user_id, aiDoubtDays, aiDoubtTopic, aiDoubtStudent, aiStudentHistoryOffset],
+    queryFn: async () => {
+      if (!aiSelectedStudent?.user_id) return { rows: [], total: 0 };
+      const baseUrl = getApiUrl();
+      const qs = new URLSearchParams();
+      if (aiDoubtDays !== "all") qs.set("days", aiDoubtDays);
+      if (aiDoubtTopic !== "all") qs.set("topic", aiDoubtTopic);
+      if (aiDoubtStudent.trim()) qs.set("q", aiDoubtStudent.trim());
+      qs.set("limit", String(aiStudentHistoryLimit));
+      qs.set("offset", String(aiStudentHistoryOffset));
+      const res = await authFetch(new URL(`/api/admin/doubts/student/${aiSelectedStudent.user_id}?${qs.toString()}`, baseUrl).toString());
+      if (!res.ok) return { rows: [], total: 0 };
+      return res.json();
+    },
+    enabled: activeTab === "aiTutor" && !!aiSelectedStudent?.user_id,
+    staleTime: 30_000,
+    refetchOnMount: false,
+  });
+
+  const aiPatternStudentsLimit = 20;
+  const { data: aiSelectedPatternStudents = { rows: [] as any[], total: 0 } } = useQuery<{ rows: any[]; total: number }>({
+    queryKey: ["/api/admin/doubts/frequent/students", aiSelectedPattern?.questionPattern, aiDoubtDays, aiDoubtStudent, aiPatternStudentsOffset],
+    queryFn: async () => {
+      if (!aiSelectedPattern?.questionPattern) return { rows: [], total: 0 };
+      const baseUrl = getApiUrl();
+      const qs = new URLSearchParams();
+      qs.set("pattern", aiSelectedPattern.questionPattern);
+      if (aiDoubtDays !== "all") qs.set("days", aiDoubtDays);
+      if (aiDoubtStudent.trim()) qs.set("q", aiDoubtStudent.trim());
+      qs.set("limit", String(aiPatternStudentsLimit));
+      qs.set("offset", String(aiPatternStudentsOffset));
+      const res = await authFetch(new URL(`/api/admin/doubts/frequent/students?${qs.toString()}`, baseUrl).toString());
+      if (!res.ok) return { rows: [], total: 0 };
+      return res.json();
+    },
+    enabled: activeTab === "aiTutor" && !!aiSelectedPattern?.questionPattern,
+    staleTime: 30_000,
+    refetchOnMount: false,
+  });
+  const clearAdminDoubtsMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("DELETE", "/api/admin/doubts");
       const payload = await res.json().catch(() => ({} as any));
       if (!res.ok) throw new Error(payload?.message || "Failed to clear doubts");
       return payload;
     },
     onSuccess: (payload: any) => {
       qc.invalidateQueries({ queryKey: ["/api/admin/doubts"] });
+      qc.invalidateQueries({ queryKey: ["/api/admin/doubts/students"] });
+      qc.invalidateQueries({ queryKey: ["/api/admin/doubts/frequent"] });
       Alert.alert("AI Tutor", `Deleted ${Number(payload?.deletedCount || 0)} doubts.`);
     },
     onError: (err: any) => Alert.alert("Error", err?.message || "Failed to clear doubts"),
@@ -1723,13 +1817,27 @@ export default function AdminDashboard() {
     refetchOnMount: false,
   });
 
+  const { data: missionFolders = [], refetch: refetchMissionFolders } = useQuery<any[]>({
+    queryKey: ["/api/admin/standalone-folders", "mission"],
+    queryFn: async () => {
+      const baseUrl = getApiUrl();
+      const res = await authFetch(new URL("/api/admin/standalone-folders?type=mission", baseUrl).toString());
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: activeTab === "missions",
+    staleTime: 10 * 60 * 1000,
+    refetchOnMount: false,
+  });
+
   const createStandaloneFolderMutation = useMutation({
     mutationFn: async (data: { name: string; type: string; category?: string; price?: string; originalPrice?: string; isFree?: boolean; description?: string; validityMonths?: string }) => {
       const res = await apiRequest("POST", "/api/admin/standalone-folders", data);
       return res.json();
     },
     onSuccess: (_, vars) => {
-      if (vars.type === "test") { refetchTestFolders(); }
+      if (vars.type === "test") refetchTestFolders();
+      else if (vars.type === "mission") refetchMissionFolders();
       else refetchMaterialFolders();
     },
   });
@@ -1738,7 +1846,7 @@ export default function AdminDashboard() {
     mutationFn: async (data: any) => {
       await apiRequest("PUT", `/api/admin/standalone-folders/${data.id}`, data);
     },
-    onSuccess: () => { refetchTestFolders(); refetchMaterialFolders(); },
+    onSuccess: () => { refetchTestFolders(); refetchMaterialFolders(); refetchMissionFolders(); },
   });
 
   const renameStandaloneFolderMutation = useMutation({
@@ -1746,9 +1854,10 @@ export default function AdminDashboard() {
       await apiRequest("PUT", `/api/admin/standalone-folders/${id}`, { name, validityMonths });
     },
     onSuccess: () => {
-      refetchTestFolders(); refetchMaterialFolders();
+      refetchTestFolders(); refetchMaterialFolders(); refetchMissionFolders();
       qc.invalidateQueries({ queryKey: ["/api/admin/tests"] });
       qc.invalidateQueries({ queryKey: ["/api/study-materials"] });
+      qc.invalidateQueries({ queryKey: ["/api/admin/daily-missions"] });
       setEditStandaloneFolderModal(false);
     },
   });
@@ -1758,9 +1867,10 @@ export default function AdminDashboard() {
       await apiRequest("DELETE", `/api/admin/standalone-folders/${id}`);
     },
     onSuccess: () => {
-      refetchTestFolders(); refetchMaterialFolders();
+      refetchTestFolders(); refetchMaterialFolders(); refetchMissionFolders();
       qc.invalidateQueries({ queryKey: ["/api/admin/tests"] });
       qc.invalidateQueries({ queryKey: ["/api/study-materials"] });
+      qc.invalidateQueries({ queryKey: ["/api/admin/daily-missions"] });
     },
   });
 
@@ -2406,21 +2516,13 @@ export default function AdminDashboard() {
                     <Pressable style={[styles.editBtn, { backgroundColor: "#8B5CF615" }]} onPress={() => {
                         setImportTargetCourseId(course.id);
                         setImportSourceCourseId(null);
+                        setImportOptions({ lectures: true, tests: true, materials: true, missions: true });
+                        setImportPreview(null);
+                        setShowAdvancedImport(false);
                         setSelectedLectureIds([]);
                         setSelectedTestIds([]);
                         setSelectedMaterialIds([]);
-                        setImportSectionTitle("");
-                        const baseUrl = getApiUrl();
-                        Promise.all([
-                          globalThis.fetch(new URL("/api/admin/all-lectures", baseUrl).toString(), { credentials: "include" }).then(r => r.json()).catch(() => []),
-                          globalThis.fetch(new URL("/api/admin/all-tests", baseUrl).toString(), { credentials: "include" }).then(r => r.json()).catch(() => []),
-                          globalThis.fetch(new URL("/api/admin/all-materials", baseUrl).toString(), { credentials: "include" }).then(r => r.ok ? r.json() : []).catch(() => []),
-                        ]).then(([lecs, tests, mats]) => {
-                          setAllLectures(Array.isArray(lecs) ? lecs : []);
-                          setAllTests(Array.isArray(tests) ? tests : []);
-                          setAllMaterials(Array.isArray(mats) ? mats : []);
-                          setShowImportModal(true);
-                        });
+                        setShowImportModal(true);
                       }}>
                         <Ionicons name="download-outline" size={18} color="#8B5CF6" />
                       </Pressable>
@@ -3225,9 +3327,12 @@ export default function AdminDashboard() {
 
             <View style={{ flexDirection: Platform.OS === "web" ? "row" : "column", gap: 20, alignItems: Platform.OS === "web" ? "stretch" as any : "flex-start" }}>
               {/* Send Notification */}
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <Text style={styles.sectionTitle}>Send Notification</Text>
-                <View style={styles.notifCard}>
+              <View style={{ flex: Platform.OS === "web" ? 3 : 1, minWidth: 0 }}>
+                <View style={{ backgroundColor: "#fff", borderRadius: 16, borderWidth: 1, borderColor: Colors.light.border, overflow: "hidden" }}>
+                  <View style={{ paddingHorizontal: 16, paddingTop: 16, paddingBottom: 10, borderBottomWidth: 1, borderBottomColor: Colors.light.border }}>
+                    <Text style={styles.sectionTitle}>Send Notification</Text>
+                  </View>
+                  <View style={[styles.notifCard, { borderWidth: 0, borderRadius: 0, margin: 0 }]}>
                   <Text style={styles.notifLabel}>Notification Title</Text>
                   <TextInput
                     style={styles.notifInput}
@@ -3387,11 +3492,12 @@ export default function AdminDashboard() {
                       </Pressable>
                     ))}
                   </View>
+                  </View>
                 </View>
               </View>
 
               {/* Past Notifications */}
-              <View style={{ flex: 1, minWidth: 0 }}>
+              <View style={{ flex: Platform.OS === "web" ? 1 : 1, minWidth: 0 }}>
                 <View style={{ backgroundColor: "#fff", borderRadius: 16, borderWidth: 1, borderColor: Colors.light.border, flex: 1, overflow: "hidden" }}>
                   {/* Header */}
                   <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", padding: 16, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: Colors.light.border }}>
@@ -3779,19 +3885,15 @@ export default function AdminDashboard() {
                   opacity: clearAdminDoubtsMutation.isPending ? 0.7 : 1,
                 }}
                 onPress={() => {
-                  const scope = [
-                    aiDoubtDays !== "all" ? `Days: ${aiDoubtDays}` : "Days: All",
-                    aiDoubtTopic !== "all" ? `Topic: ${aiDoubtTopic}` : "Topic: All",
-                    aiDoubtStudent.trim() ? `Search: ${aiDoubtStudent.trim()}` : "Search: All",
-                  ].join("\n");
-                  Alert.alert(
-                    "Clear Old AI Tutor Questions?",
-                    `This will permanently delete doubts for current filter scope.\n\n${scope}`,
-                    [
-                      { text: "Cancel", style: "cancel" },
-                      { text: "Delete", style: "destructive", onPress: () => clearAdminDoubtsMutation.mutate() },
-                    ]
-                  );
+                  const run = () => clearAdminDoubtsMutation.mutate();
+                  if (Platform.OS === "web") {
+                    if (window.confirm("Are you sure you want to delete all AI Tutor questions for all students? This action cannot be undone.")) run();
+                    return;
+                  }
+                  Alert.alert("Clear All AI Tutor Questions?", "Are you sure you want to delete all AI Tutor questions for all students? This action cannot be undone.", [
+                    { text: "Cancel", style: "cancel" },
+                    { text: "Delete All", style: "destructive", onPress: run },
+                  ]);
                 }}
               >
                 {clearAdminDoubtsMutation.isPending ? (
@@ -3800,7 +3902,7 @@ export default function AdminDashboard() {
                   <>
                     <Ionicons name="trash-outline" size={14} color="#fff" />
                     <Text style={{ color: "#fff", fontFamily: "Inter_600SemiBold", fontSize: 13 }}>
-                      Clear Old Questions (Filtered)
+                      Clear All Questions
                     </Text>
                   </>
                 )}
@@ -3829,129 +3931,157 @@ export default function AdminDashboard() {
                 </View>
 
                 <View style={[styles.adminCard, { marginBottom: 14 }]}>
-                  <Text style={[styles.adminCardTitle, { marginBottom: 8 }]}>Repeated Question Patterns</Text>
-                  {(adminDoubtData.repeatedPatterns || []).length === 0 ? (
-                    <Text style={styles.adminCardMetaText}>No repeated patterns yet.</Text>
+                  <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                    <Text style={styles.adminCardTitle}>Student History</Text>
+                    <Text style={styles.adminCardMetaText}>{adminDoubtStudentsData.total} students</Text>
+                  </View>
+                  {adminDoubtStudentsData.rows.length === 0 ? (
+                    <Text style={styles.adminCardMetaText}>No student doubt history found.</Text>
                   ) : (
                     <View style={{ gap: 8 }}>
-                      {adminDoubtData.repeatedPatterns.map((p, idx) => (
-                        <View key={`${p.questionPattern}-${idx}`} style={{ backgroundColor: "#F8FAFC", borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 10, padding: 10 }}>
-                          <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>
-                            {p.sampleQuestion}
-                          </Text>
-                          <Text style={[styles.adminCardMetaText, { marginTop: 4 }]}>
-                            repeated {p.count} times
-                          </Text>
-                        </View>
+                      {adminDoubtStudentsData.rows.map((s) => (
+                        <Pressable key={`student-h-${s.user_id}`} onPress={() => { setAiSelectedStudent(s); setAiStudentHistoryOffset(0); }}
+                          style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10, backgroundColor: "#F8FAFC", borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 10, padding: 10 }}>
+                          <View style={{ flex: 1 }}>
+                            <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.text }} numberOfLines={1}>
+                              {s.user_name || s.user_phone || s.user_email || "Student"}
+                            </Text>
+                            <Text style={styles.adminCardMetaText}>
+                              Last asked: {s.last_asked_at ? new Date(Number(s.last_asked_at)).toLocaleString("en-IN") : "—"}
+                            </Text>
+                          </View>
+                          <View style={{ alignItems: "flex-end" }}>
+                            <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>{s.doubt_count}</Text>
+                            <Text style={styles.adminCardMetaText}>questions</Text>
+                          </View>
+                        </Pressable>
                       ))}
+                      {(aiStudentsOffset + aiStudentsLimit) < Number(adminDoubtStudentsData.total || 0) && (
+                        <Pressable style={styles.typeSelectBtn} onPress={() => setAiStudentsOffset((p) => p + aiStudentsLimit)}>
+                          <Text style={styles.typeSelectText}>View More Students</Text>
+                        </Pressable>
+                      )}
                     </View>
                   )}
                 </View>
 
                 <View style={[styles.adminCard, { marginBottom: 14 }]}>
-                  <Text style={[styles.adminCardTitle, { marginBottom: 8 }]}>Per Student Insights</Text>
-                  {(adminDoubtData.studentInsights || []).length === 0 ? (
-                    <Text style={styles.adminCardMetaText}>No student insights yet.</Text>
+                  <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                    <Text style={styles.adminCardTitle}>Frequently Asked Questions</Text>
+                    <Text style={styles.adminCardMetaText}>{adminFrequentPatternsData.total} patterns</Text>
+                  </View>
+                  {adminFrequentPatternsData.rows.length === 0 ? (
+                    <Text style={styles.adminCardMetaText}>No repeated patterns yet.</Text>
                   ) : (
                     <View style={{ gap: 8 }}>
-                      {adminDoubtData.studentInsights.map((s) => (
-                        <View key={String(s.user_id)} style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10, backgroundColor: "#F8FAFC", borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 10, padding: 10 }}>
-                          <View style={{ flex: 1 }}>
-                            <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.text }} numberOfLines={1}>
-                              {s.name || s.phone || s.email || "Student"}
-                            </Text>
-                            <Text style={styles.adminCardMetaText}>
-                              Top topic: {s.topTopic}
-                            </Text>
-                          </View>
-                          <View style={{ alignItems: "flex-end" }}>
-                            <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>{s.doubtCount}</Text>
-                            <Text style={styles.adminCardMetaText}>doubts</Text>
-                          </View>
-                        </View>
+                      {adminFrequentPatternsData.rows.map((p, idx) => (
+                        <Pressable key={`freq-${idx}-${p.questionPattern}`} onPress={() => { setAiSelectedPattern(p); setAiPatternStudentsOffset(0); }}
+                          style={{ backgroundColor: "#F8FAFC", borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 10, padding: 10 }}>
+                          <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>
+                            {p.sampleQuestion}
+                          </Text>
+                          <Text style={[styles.adminCardMetaText, { marginTop: 4 }]}>
+                            repeated {p.count} times · tap to view students
+                          </Text>
+                        </Pressable>
                       ))}
+                      {(aiFrequentOffset + aiFrequentLimit) < Number(adminFrequentPatternsData.total || 0) && (
+                        <Pressable style={styles.typeSelectBtn} onPress={() => setAiFrequentOffset((p) => p + aiFrequentLimit)}>
+                          <Text style={styles.typeSelectText}>View More Questions</Text>
+                        </Pressable>
+                      )}
                     </View>
                   )}
                 </View>
-
-                {aiDoubtStudent.trim().length > 0 && (
-                  <View style={[styles.adminCard, { marginBottom: 14 }]}>
-                    <Text style={[styles.adminCardTitle, { marginBottom: 8 }]}>Student Ask Timeline</Text>
-                    {(() => {
-                      const rows = (adminDoubtData.doubts || []) as AdminDoubtRow[];
-                      if (!rows.length) return <Text style={styles.adminCardMetaText}>No matching student doubts found.</Text>;
-
-                      const byStudent: Record<string, { key: string; label: string; doubts: AdminDoubtRow[] }> = {};
-                      for (const d of rows) {
-                        const key = String(d.user_name || d.user_phone || d.user_email || "student");
-                        if (!byStudent[key]) {
-                          byStudent[key] = { key, label: key, doubts: [] };
-                        }
-                        byStudent[key].doubts.push(d);
-                      }
-                      const target = Object.values(byStudent).sort((a, b) => b.doubts.length - a.doubts.length)[0];
-                      const doubts = (target?.doubts || []).slice(0, 20);
-                      return (
-                        <View style={{ gap: 8 }}>
-                          <Text style={styles.adminCardMetaText}>
-                            Showing latest {doubts.length} doubts for: {target?.label || "Student"}
-                          </Text>
-                          {doubts.map((d) => (
-                            <View key={`student-doubt-${d.id}`} style={{ backgroundColor: "#F8FAFC", borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 10, padding: 10, gap: 5 }}>
-                              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                                <View style={styles.typeBadge}>
-                                  <Text style={{ fontSize: 10, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>{d.topic || "General"}</Text>
-                                </View>
-                                <Text style={styles.adminCardMetaText}>
-                                  {d.created_at ? new Date(Number(d.created_at)).toLocaleString("en-IN") : ""}
-                                </Text>
-                              </View>
-                              <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>
-                                Q: {d.question}
-                              </Text>
-                              <Text style={{ fontSize: 13, fontFamily: "Inter_400Regular", color: Colors.light.textSecondary, lineHeight: 20 }}>
-                                A: {d.answer}
-                              </Text>
-                            </View>
-                          ))}
-                        </View>
-                      );
-                    })()}
-                  </View>
-                )}
-
-                {(adminDoubtData.doubts || []).length === 0 ? (
-                  <View style={styles.infoCard}>
-                    <Ionicons name="chatbox-ellipses-outline" size={20} color={Colors.light.primary} />
-                    <Text style={styles.infoText}>No AI tutor doubts yet.</Text>
-                  </View>
-                ) : (
-                  adminDoubtData.doubts.map((d) => (
-                    <View key={d.id} style={[styles.adminCard, { gap: 10 }]}>
-                      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                        <Text style={styles.adminCardTitle} numberOfLines={1}>
-                          {d.user_name || d.user_phone || d.user_email || "Student"}
-                        </Text>
-                        <View style={styles.typeBadge}>
-                          <Text style={{ fontSize: 10, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>{d.topic || "General"}</Text>
-                        </View>
-                      </View>
-                      <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>
-                        Q: {d.question}
-                      </Text>
-                      <Text style={{ fontSize: 13, fontFamily: "Inter_400Regular", color: Colors.light.textSecondary, lineHeight: 20 }}>
-                        A: {d.answer}
-                      </Text>
-                      <Text style={styles.adminCardMetaText}>
-                        {d.created_at ? new Date(Number(d.created_at)).toLocaleString("en-IN") : ""}
-                      </Text>
-                    </View>
-                  ))
-                )}
               </>
             )}
           </View>
         )}
+
+        <Modal visible={activeTab === "aiTutor" && !!aiSelectedStudent} animationType="slide" transparent onRequestClose={() => setAiSelectedStudent(null)}>
+          <View style={styles.modalOverlay}>
+            <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16, maxHeight: "86%" }]}>
+              <View style={styles.modalHeader}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.modalTitle}>Student Question History</Text>
+                  <Text style={styles.adminCardMetaText}>
+                    {aiSelectedStudent?.user_name || aiSelectedStudent?.user_phone || aiSelectedStudent?.user_email || "Student"}
+                  </Text>
+                </View>
+                <Pressable onPress={() => setAiSelectedStudent(null)}>
+                  <Ionicons name="close" size={24} color={Colors.light.text} />
+                </Pressable>
+              </View>
+              <ScrollView style={styles.modalScroll} showsVerticalScrollIndicator={false}>
+                {(aiSelectedStudentHistory.rows || []).length === 0 ? (
+                  <Text style={styles.adminCardMetaText}>No doubts found for this student.</Text>
+                ) : (
+                  (aiSelectedStudentHistory.rows || []).map((d: any) => (
+                    <View key={`history-${d.id}`} style={{ backgroundColor: "#F8FAFC", borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 10, padding: 10, gap: 5, marginBottom: 8 }}>
+                      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                        <View style={styles.typeBadge}>
+                          <Text style={{ fontSize: 10, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>{d.topic || "General"}</Text>
+                        </View>
+                        <Text style={styles.adminCardMetaText}>{d.created_at ? new Date(Number(d.created_at)).toLocaleString("en-IN") : ""}</Text>
+                      </View>
+                      <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Q: {d.question}</Text>
+                      <Text style={{ fontSize: 13, fontFamily: "Inter_400Regular", color: Colors.light.textSecondary, lineHeight: 20 }}>A: {d.answer}</Text>
+                    </View>
+                  ))
+                )}
+                {(aiStudentHistoryOffset + aiStudentHistoryLimit) < Number(aiSelectedStudentHistory.total || 0) && (
+                  <Pressable style={styles.typeSelectBtn} onPress={() => setAiStudentHistoryOffset((p) => p + aiStudentHistoryLimit)}>
+                    <Text style={styles.typeSelectText}>View More</Text>
+                  </Pressable>
+                )}
+              </ScrollView>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal visible={activeTab === "aiTutor" && !!aiSelectedPattern} animationType="slide" transparent onRequestClose={() => setAiSelectedPattern(null)}>
+          <View style={styles.modalOverlay}>
+            <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16, maxHeight: "86%" }]}>
+              <View style={styles.modalHeader}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.modalTitle}>Students Who Asked This</Text>
+                  <Text style={styles.adminCardMetaText} numberOfLines={2}>{aiSelectedPattern?.sampleQuestion || ""}</Text>
+                </View>
+                <Pressable onPress={() => setAiSelectedPattern(null)}>
+                  <Ionicons name="close" size={24} color={Colors.light.text} />
+                </Pressable>
+              </View>
+              <ScrollView style={styles.modalScroll} showsVerticalScrollIndicator={false}>
+                {(aiSelectedPatternStudents.rows || []).length === 0 ? (
+                  <Text style={styles.adminCardMetaText}>No students found for this question pattern.</Text>
+                ) : (
+                  (aiSelectedPatternStudents.rows || []).map((s: any) => (
+                    <Pressable key={`pattern-student-${s.user_id}`} onPress={() => { setAiSelectedPattern(null); setAiSelectedStudent(s); setAiStudentHistoryOffset(0); }}
+                      style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10, backgroundColor: "#F8FAFC", borderWidth: 1, borderColor: "#E2E8F0", borderRadius: 10, padding: 10, marginBottom: 8 }}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.text }} numberOfLines={1}>
+                          {s.user_name || s.user_phone || s.user_email || "Student"}
+                        </Text>
+                        <Text style={styles.adminCardMetaText}>
+                          Last asked: {s.last_asked_at ? new Date(Number(s.last_asked_at)).toLocaleString("en-IN") : "—"}
+                        </Text>
+                      </View>
+                      <View style={{ alignItems: "flex-end" }}>
+                        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>{s.doubt_count}</Text>
+                        <Text style={styles.adminCardMetaText}>questions</Text>
+                      </View>
+                    </Pressable>
+                  ))
+                )}
+                {(aiPatternStudentsOffset + aiPatternStudentsLimit) < Number(aiSelectedPatternStudents.total || 0) && (
+                  <Pressable style={styles.typeSelectBtn} onPress={() => setAiPatternStudentsOffset((p) => p + aiPatternStudentsLimit)}>
+                    <Text style={styles.typeSelectText}>View More</Text>
+                  </Pressable>
+                )}
+              </ScrollView>
+            </View>
+          </View>
+        </Modal>
 
         {activeTab === "support" && (
           <View style={styles.section}>
@@ -4059,10 +4189,16 @@ export default function AdminDashboard() {
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>Daily Missions ({adminMissions.length})</Text>
-              <Pressable style={styles.addBtn} onPress={() => setShowAddMission(true)}>
-                <Ionicons name="add" size={18} color="#fff" />
-                <Text style={styles.addBtnText}>Add Mission</Text>
-              </Pressable>
+              <View style={{ flexDirection: "row", gap: 8 }}>
+                <Pressable style={[styles.addBtn, { backgroundColor: "#0F766E" }]} onPress={() => setShowCreateFolderModal("mission")}>
+                  <Ionicons name="folder-open-outline" size={16} color="#fff" />
+                  <Text style={styles.addBtnText}>Folder</Text>
+                </Pressable>
+                <Pressable style={styles.addBtn} onPress={() => setShowAddMission(true)}>
+                  <Ionicons name="add" size={18} color="#fff" />
+                  <Text style={styles.addBtnText}>Add Mission</Text>
+                </Pressable>
+              </View>
             </View>
             {missionsLoading ? (
               <ActivityIndicator size="large" color={Colors.light.primary} style={{ marginTop: 20 }} />
@@ -4073,106 +4209,130 @@ export default function AdminDashboard() {
               </View>
             ) : (
               (() => {
-                // Group missions by folder_name. NULL/empty = "Ungrouped" shown first, then folders A-Z.
-                const folderMap = new Map<string, any[]>();
-                for (const m of adminMissions) {
-                  const key = m.folder_name?.trim() || "__none__";
-                  if (!folderMap.has(key)) folderMap.set(key, []);
-                  folderMap.get(key)!.push(m);
-                }
-                const groups: { folderName: string | null; items: any[] }[] = [];
-                if (folderMap.has("__none__")) groups.push({ folderName: null, items: folderMap.get("__none__")! });
-                [...folderMap.entries()]
-                  .filter(([k]) => k !== "__none__")
-                  .sort(([a], [b]) => a.localeCompare(b))
-                  .forEach(([k, v]) => groups.push({ folderName: k, items: v }));
-                const hasGroups = groups.length > 1 || (groups.length === 1 && groups[0].folderName !== null);
-                return groups.map((group) => (
-                  <View key={group.folderName || "__none__"}>
-                    {hasGroups && (
-                      <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 8, marginTop: 8, marginBottom: 4, borderBottomWidth: 1, borderBottomColor: Colors.light.border }}>
-                        <Ionicons name={group.folderName ? "folder-outline" : "list-outline"} size={15} color={group.folderName ? "#F59E0B" : Colors.light.textMuted} />
-                        <Text style={{ fontSize: 13, fontFamily: "Inter_700Bold", color: group.folderName ? "#D97706" : Colors.light.textMuted, flex: 1 }}>
-                          {group.folderName || "Ungrouped"}{" "}
-                          <Text style={{ fontFamily: "Inter_400Regular", fontSize: 12 }}>({group.items.length})</Text>
-                        </Text>
+                const renderMissionCard = (m: any) => {
+                  const qCount = Array.isArray(m.questions) ? m.questions.length : 0;
+                  const totalMarks = Array.isArray(m.questions) ? m.questions.reduce((s: number, q: any) => s + (q.marks || 0), 0) : 0;
+                  return (
+                    <Pressable key={m.id} style={[styles.adminCard, { flexDirection: "row", alignItems: "center" }]} onPress={async () => {
+                      setSelectedMission(m);
+                      setMissionAttemptsLoading(true);
+                      try {
+                        const baseUrl = getApiUrl();
+                        const res = await authFetch(new URL(`/api/admin/daily-missions/${m.id}/attempts`, baseUrl).toString());
+                        if (!res.ok) {
+                          const errText = await res.text();
+                          console.error("Attempts fetch failed:", res.status, errText);
+                          setMissionAttempts([]);
+                        } else {
+                          const data = await res.json();
+                          setMissionAttempts(data);
+                        }
+                      } catch (e) {
+                        console.error("Attempts fetch error:", e);
+                        setMissionAttempts([]);
+                      } finally {
+                        setMissionAttemptsLoading(false);
+                      }
+                    }}>
+                      <View style={styles.adminCardContent}>
+                        <View style={styles.adminCardRow}>
+                          <Text style={styles.adminCardTitle} numberOfLines={2}>{m.title}</Text>
+                          <View style={{ flexDirection: "row", gap: 4, alignItems: "center" }}>
+                            {m.folder_name ? (
+                              <View style={{ paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, backgroundColor: "#D1FAE5" }}>
+                                <Text style={{ fontSize: 9, fontFamily: "Inter_600SemiBold", color: "#0F766E" }}>📁 {m.folder_name}</Text>
+                              </View>
+                            ) : null}
+                            <View style={[styles.typeBadge, { backgroundColor: m.mission_type === "free_practice" ? "#22C55E20" : "#F59E0B20" }]}>
+                              <Text style={{ fontSize: 10, fontFamily: "Inter_600SemiBold", color: m.mission_type === "free_practice" ? "#22C55E" : "#F59E0B" }}>
+                                {m.mission_type === "free_practice" ? "Free" : "Drill"}
+                              </Text>
+                            </View>
+                          </View>
+                        </View>
+                        <View style={styles.adminCardMeta}>
+                          <Text style={styles.adminCardMetaText}>{qCount} questions</Text>
+                          {totalMarks > 0 && <><Text style={styles.adminCardMetaText}>|</Text><Text style={styles.adminCardMetaText}>{totalMarks} marks</Text></>}
+                          <Text style={styles.adminCardMetaText}>|</Text>
+                          <Text style={styles.adminCardMetaText}>{m.mission_date}</Text>
+                        </View>
                       </View>
-                    )}
-                    {group.items.map((m: any) => {
-                      const qCount = Array.isArray(m.questions) ? m.questions.length : 0;
-                      const totalMarks = Array.isArray(m.questions) ? m.questions.reduce((s: number, q: any) => s + (q.marks || 0), 0) : 0;
-                      return (
-                        <Pressable key={m.id} style={[styles.adminCard, { flexDirection: "row", alignItems: "center" }]} onPress={async () => {
-                          setSelectedMission(m);
-                          setMissionAttemptsLoading(true);
-                          try {
-                            const baseUrl = getApiUrl();
-                            const res = await authFetch(new URL(`/api/admin/daily-missions/${m.id}/attempts`, baseUrl).toString());
-                            if (!res.ok) {
-                              const errText = await res.text();
-                              console.error("Attempts fetch failed:", res.status, errText);
-                              setMissionAttempts([]);
-                            } else {
-                              const data = await res.json();
-                              setMissionAttempts(data);
-                            }
-                          } catch (e) {
-                            console.error("Attempts fetch error:", e);
-                            setMissionAttempts([]);
-                          } finally {
-                            setMissionAttemptsLoading(false);
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                        <Ionicons name="people-outline" size={16} color={Colors.light.primary} />
+                        <Pressable style={[styles.deleteBtn, { backgroundColor: "#EEF2FF" }]} onPress={(e) => {
+                          e.stopPropagation?.();
+                          setEditMission({ ...m, questions: Array.isArray(m.questions) ? m.questions.map((q: any) => ({ ...q, marks: String(q.marks || ""), solution: q.solution || "", image_url: q.image_url || "", solution_image_url: q.solution_image_url || "", subtopic: q.subtopic || "" })) : [] });
+                        }}>
+                          <Ionicons name="pencil-outline" size={18} color={Colors.light.primary} />
+                        </Pressable>
+                        <Pressable style={styles.deleteBtn} onPress={(e) => {
+                          e.stopPropagation?.();
+                          if (Platform.OS === "web") {
+                            if (window.confirm(`Delete "${m.title}"?`)) deleteMissionMutation.mutate(m.id);
+                          } else {
+                            Alert.alert("Delete Mission", `Delete "${m.title}"?`, [
+                              { text: "Cancel", style: "cancel" },
+                              { text: "Delete", style: "destructive", onPress: () => deleteMissionMutation.mutate(m.id) },
+                            ]);
                           }
                         }}>
-                          <View style={styles.adminCardContent}>
-                            <View style={styles.adminCardRow}>
-                              <Text style={styles.adminCardTitle} numberOfLines={2}>{m.title}</Text>
-                              <View style={{ flexDirection: "row", gap: 4, alignItems: "center" }}>
-                                {m.folder_name ? (
-                                  <View style={{ paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, backgroundColor: "#FEF3C7" }}>
-                                    <Text style={{ fontSize: 9, fontFamily: "Inter_600SemiBold", color: "#D97706" }}>📁 {m.folder_name}</Text>
-                                  </View>
-                                ) : null}
-                                <View style={[styles.typeBadge, { backgroundColor: m.mission_type === "free_practice" ? "#22C55E20" : "#F59E0B20" }]}>
-                                  <Text style={{ fontSize: 10, fontFamily: "Inter_600SemiBold", color: m.mission_type === "free_practice" ? "#22C55E" : "#F59E0B" }}>
-                                    {m.mission_type === "free_practice" ? "Free" : "Drill"}
-                                  </Text>
-                                </View>
-                              </View>
-                            </View>
-                            <View style={styles.adminCardMeta}>
-                              <Text style={styles.adminCardMetaText}>{qCount} questions</Text>
-                              {totalMarks > 0 && <><Text style={styles.adminCardMetaText}>|</Text><Text style={styles.adminCardMetaText}>{totalMarks} marks</Text></>}
-                              <Text style={styles.adminCardMetaText}>|</Text>
-                              <Text style={styles.adminCardMetaText}>{m.mission_date}</Text>
-                            </View>
-                          </View>
-                          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                            <Ionicons name="people-outline" size={16} color={Colors.light.primary} />
-                            <Pressable style={[styles.deleteBtn, { backgroundColor: "#EEF2FF" }]} onPress={(e) => {
-                              e.stopPropagation?.();
-                              setEditMission({ ...m, questions: Array.isArray(m.questions) ? m.questions.map((q: any) => ({ ...q, marks: String(q.marks || ""), solution: q.solution || "", image_url: q.image_url || "", solution_image_url: q.solution_image_url || "", subtopic: q.subtopic || "" })) : [] });
-                            }}>
-                              <Ionicons name="pencil-outline" size={18} color={Colors.light.primary} />
-                            </Pressable>
-                            <Pressable style={styles.deleteBtn} onPress={(e) => {
-                              e.stopPropagation?.();
-                              if (Platform.OS === "web") {
-                                if (window.confirm(`Delete "${m.title}"?`)) deleteMissionMutation.mutate(m.id);
-                              } else {
-                                Alert.alert("Delete Mission", `Delete "${m.title}"?`, [
-                                  { text: "Cancel", style: "cancel" },
-                                  { text: "Delete", style: "destructive", onPress: () => deleteMissionMutation.mutate(m.id) },
-                                ]);
-                              }
-                            }}>
-                              <Ionicons name="trash-outline" size={18} color="#EF4444" />
-                            </Pressable>
-                          </View>
+                          <Ionicons name="trash-outline" size={18} color="#EF4444" />
                         </Pressable>
+                      </View>
+                    </Pressable>
+                  );
+                };
+
+                const folderNames = new Set(missionFolders.map((f: any) => f.name));
+                const noFolder = adminMissions.filter((m: any) => !m.folder_name || !folderNames.has(m.folder_name));
+                return (
+                  <>
+                    {missionFolders.map((folder: any) => {
+                      const folderKey = `mission:${folder.id}`;
+                      const isOpen = expandedFolders.has(folderKey);
+                      const folderMissions = adminMissions.filter((m: any) => m.folder_name === folder.name);
+                      return (
+                        <View key={folder.id} style={{ marginBottom: 8 }}>
+                          <Pressable
+                            style={[styles.adminCard, { flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: folder.is_hidden ? "#F3F4F6" : "#ECFDF5", borderLeftWidth: 4, borderLeftColor: "#0F766E", padding: 14 }]}
+                            onPress={() => {
+                              setExpandedFolders((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(folderKey)) next.delete(folderKey);
+                                else next.add(folderKey);
+                                return next;
+                              });
+                            }}
+                          >
+                            <Ionicons name={folder.is_hidden ? "folder-outline" : "folder"} size={22} color={folder.is_hidden ? Colors.light.textMuted : "#0F766E"} />
+                            <View style={{ flex: 1 }}>
+                              <Text style={{ fontSize: 14, fontFamily: "Inter_700Bold", color: folder.is_hidden ? Colors.light.textMuted : Colors.light.text }}>{folder.name}{folder.is_hidden ? " (Hidden)" : ""}</Text>
+                              <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>{folderMissions.length} mission{folderMissions.length !== 1 ? "s" : ""}</Text>
+                            </View>
+                            <Ionicons name={isOpen ? "chevron-down" : "chevron-forward"} size={18} color={Colors.light.textMuted} />
+                            <Pressable style={{ padding: 6 }} onPress={(e) => { e.stopPropagation?.(); setStandaloneFolderActionSheet(folder); }}>
+                              <Ionicons name="ellipsis-vertical" size={18} color={Colors.light.textMuted} />
+                            </Pressable>
+                          </Pressable>
+                          {isOpen && (
+                            <View style={{ marginTop: 8 }}>
+                              {folderMissions.length === 0 ? (
+                                <View style={styles.infoCard}>
+                                  <Ionicons name="information-circle-outline" size={18} color={Colors.light.textMuted} />
+                                  <Text style={styles.infoText}>This folder is empty.</Text>
+                                </View>
+                              ) : (
+                                folderMissions.map(renderMissionCard)
+                              )}
+                            </View>
+                          )}
+                        </View>
                       );
                     })}
-                  </View>
-                ));
+                    {adminMissions.length === 0 && missionFolders.length === 0 && <View style={styles.infoCard}><Ionicons name="flame-outline" size={20} color={Colors.light.primary} /><Text style={styles.infoText}>No missions yet.</Text></View>}
+                    {noFolder.map(renderMissionCard)}
+                  </>
+                );
               })()
             )}
           </View>
@@ -5052,29 +5212,101 @@ export default function AdminDashboard() {
               </Pressable>
             </View>
             <ScrollView style={styles.modalScroll}>
-              <View style={styles.formField}>
-                <Text style={styles.formLabel}>Section Title (optional)</Text>
-                <TextInput style={styles.formInput} placeholder="e.g., Week 1 - Algebra" placeholderTextColor={Colors.light.textMuted} value={importSectionTitle} onChangeText={setImportSectionTitle} />
+              <View style={[styles.infoCard, { marginBottom: 12 }]}>
+                <Ionicons name="information-circle-outline" size={18} color={Colors.light.primary} />
+                <Text style={styles.infoText}>
+                  Copies content into this course only. Title, price, and description stay unchanged. Folder names and order are preserved.
+                </Text>
               </View>
 
               <View style={styles.formField}>
-                <Text style={styles.formLabel}>Filter by Source Course</Text>
+                <Text style={styles.formLabel}>Source Course *</Text>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 8 }}>
-                  <Pressable onPress={() => setImportSourceCourseId(null)} style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, backgroundColor: importSourceCourseId === null ? Colors.light.primary : Colors.light.secondary, marginRight: 8 }}>
-                    <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: importSourceCourseId === null ? "#fff" : Colors.light.text }}>All</Text>
-                  </Pressable>
                   {courses.filter(c => c.id !== importTargetCourseId).map(c => (
-                    <Pressable key={c.id} onPress={() => setImportSourceCourseId(c.id)} style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, backgroundColor: importSourceCourseId === c.id ? Colors.light.primary : Colors.light.secondary, marginRight: 8 }}>
+                    <Pressable
+                      key={c.id}
+                      onPress={async () => {
+                        setImportSourceCourseId(c.id);
+                        setImportPreview(null);
+                        setImportPreviewLoading(true);
+                        try {
+                          const baseUrl = getApiUrl();
+                          const res = await authFetch(
+                            new URL(`/api/admin/courses/${importTargetCourseId}/import-content-preview?sourceCourseId=${c.id}`, baseUrl).toString()
+                          );
+                          if (res.ok) setImportPreview(await res.json());
+                          else setImportPreview({ lectures: 0, tests: 0, materials: 0, missions: 0 });
+                        } catch {
+                          setImportPreview(null);
+                        } finally {
+                          setImportPreviewLoading(false);
+                        }
+                      }}
+                      style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, backgroundColor: importSourceCourseId === c.id ? Colors.light.primary : Colors.light.secondary, marginRight: 8 }}
+                    >
                       <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: importSourceCourseId === c.id ? "#fff" : Colors.light.text }} numberOfLines={1}>{c.title}</Text>
                     </Pressable>
                   ))}
                 </ScrollView>
+                {!importSourceCourseId && (
+                  <Text style={styles.adminCardMetaText}>Select the course to copy content from.</Text>
+                )}
+                {importPreviewLoading && <ActivityIndicator size="small" color={Colors.light.primary} style={{ marginTop: 8 }} />}
+                {importPreview && importSourceCourseId && !importPreviewLoading && (
+                  <Text style={[styles.adminCardMetaText, { marginTop: 6 }]}>
+                    Available: {importPreview.lectures} lectures · {importPreview.tests} tests · {importPreview.materials} materials · {importPreview.missions} missions
+                  </Text>
+                )}
               </View>
 
-              {(() => {
-                const filteredLectures = allLectures.filter(l => l.course_id !== importTargetCourseId && (importSourceCourseId === null || l.course_id === importSourceCourseId));
-                const filteredTests = allTests.filter(t => t.course_id !== importTargetCourseId && (importSourceCourseId === null || t.course_id === importSourceCourseId));
-                const filteredMaterials = allMaterials.filter(m => m.course_id !== importTargetCourseId && (importSourceCourseId === null || m.course_id === importSourceCourseId));
+              <View style={styles.formField}>
+                <Text style={styles.formLabel}>What to import</Text>
+                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                  {([
+                    { key: "lectures" as const, label: "Lectures" },
+                    { key: "tests" as const, label: "Tests" },
+                    { key: "materials" as const, label: "Materials" },
+                    { key: "missions" as const, label: "Missions" },
+                  ]).map((item) => (
+                    <Pressable
+                      key={item.key}
+                      style={[styles.typeSelectBtn, importOptions[item.key] && styles.typeSelectActive]}
+                      onPress={() => setImportOptions((p) => ({ ...p, [item.key]: !p[item.key] }))}
+                    >
+                      <Text style={[styles.typeSelectText, importOptions[item.key] && styles.typeSelectTextActive]}>{item.label}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </View>
+
+              <Pressable
+                style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 12 }}
+                onPress={async () => {
+                  const next = !showAdvancedImport;
+                  setShowAdvancedImport(next);
+                  if (next && allLectures.length === 0) {
+                    const baseUrl = getApiUrl();
+                    const [lecs, tests, mats] = await Promise.all([
+                      globalThis.fetch(new URL("/api/admin/all-lectures", baseUrl).toString(), { credentials: "include" }).then(r => r.json()).catch(() => []),
+                      globalThis.fetch(new URL("/api/admin/all-tests", baseUrl).toString(), { credentials: "include" }).then(r => r.json()).catch(() => []),
+                      globalThis.fetch(new URL("/api/admin/all-materials", baseUrl).toString(), { credentials: "include" }).then(r => r.ok ? r.json() : []).catch(() => []),
+                    ]);
+                    setAllLectures(Array.isArray(lecs) ? lecs : []);
+                    setAllTests(Array.isArray(tests) ? tests : []);
+                    setAllMaterials(Array.isArray(mats) ? mats : []);
+                  }
+                }}
+              >
+                <Ionicons name={showAdvancedImport ? "chevron-down" : "chevron-forward"} size={16} color={Colors.light.primary} />
+                <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>
+                  Advanced: pick individual items
+                </Text>
+              </Pressable>
+
+              {showAdvancedImport && (() => {
+                const filteredLectures = allLectures.filter(l => l.course_id !== importTargetCourseId && l.course_id === importSourceCourseId);
+                const filteredTests = allTests.filter(t => t.course_id !== importTargetCourseId && t.course_id === importSourceCourseId);
+                const filteredMaterials = allMaterials.filter(m => m.course_id !== importTargetCourseId && m.course_id === importSourceCourseId);
                 const groupedLectures: Record<string, any[]> = {};
                 filteredLectures.forEach(l => {
                   const key = l.course_title || "Unknown";
@@ -5137,8 +5369,11 @@ export default function AdminDashboard() {
                       </View>
                     ))}
 
-                    {filteredLectures.length === 0 && filteredTests.length === 0 && filteredMaterials.length === 0 && (
-                      <Text style={{ fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.textMuted, textAlign: "center", marginTop: 20 }}>No content found in other courses</Text>
+                    {!importSourceCourseId && (
+                      <Text style={{ fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.textMuted, textAlign: "center", marginTop: 12 }}>Select a source course above.</Text>
+                    )}
+                    {importSourceCourseId && filteredLectures.length === 0 && filteredTests.length === 0 && filteredMaterials.length === 0 && (
+                      <Text style={{ fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.textMuted, textAlign: "center", marginTop: 20 }}>No lectures, tests, or materials in the source course</Text>
                     )}
 
                     {filteredMaterials.length > 0 && (() => {
@@ -5182,32 +5417,79 @@ export default function AdminDashboard() {
               })()}
             </ScrollView>
             <Pressable
-              style={[styles.createBtn, (selectedLectureIds.length === 0 && selectedTestIds.length === 0 && selectedMaterialIds.length === 0) && styles.createBtnDisabled]}
-              disabled={importLoading || (selectedLectureIds.length === 0 && selectedTestIds.length === 0 && selectedMaterialIds.length === 0)}
+              style={[
+                styles.createBtn,
+                (!importSourceCourseId || (!importOptions.lectures && !importOptions.tests && !importOptions.materials && !importOptions.missions)) && styles.createBtnDisabled,
+              ]}
+              disabled={
+                importLoading ||
+                !importSourceCourseId ||
+                (!importOptions.lectures && !importOptions.tests && !importOptions.materials && !importOptions.missions)
+              }
               onPress={async () => {
+                if (!importTargetCourseId || !importSourceCourseId) return;
                 setImportLoading(true);
                 try {
-                  if (selectedLectureIds.length > 0) {
-                    await apiRequest("POST", `/api/admin/courses/${importTargetCourseId}/import-lectures`, { lectureIds: selectedLectureIds });
+                  if (showAdvancedImport && (selectedLectureIds.length > 0 || selectedTestIds.length > 0 || selectedMaterialIds.length > 0)) {
+                    if (selectedLectureIds.length > 0) {
+                      await apiRequest("POST", `/api/admin/courses/${importTargetCourseId}/import-lectures`, { lectureIds: selectedLectureIds });
+                    }
+                    if (selectedTestIds.length > 0) {
+                      await apiRequest("POST", `/api/admin/courses/${importTargetCourseId}/import-tests`, { testIds: selectedTestIds });
+                    }
+                    if (selectedMaterialIds.length > 0) {
+                      await apiRequest("POST", `/api/admin/courses/${importTargetCourseId}/import-materials`, { materialIds: selectedMaterialIds });
+                    }
+                    qc.invalidateQueries({ queryKey: ["/api/courses"] });
+                    qc.invalidateQueries({ queryKey: ["/api/admin/daily-missions"] });
+                    setShowImportModal(false);
+                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                    Alert.alert(
+                      "Success",
+                      `Imported ${selectedLectureIds.length} lectures, ${selectedTestIds.length} tests, ${selectedMaterialIds.length} materials (selected items).`
+                    );
+                    return;
                   }
-                  if (selectedTestIds.length > 0) {
-                    await apiRequest("POST", `/api/admin/courses/${importTargetCourseId}/import-tests`, { testIds: selectedTestIds });
-                  }
-                  if (selectedMaterialIds.length > 0) {
-                    await apiRequest("POST", `/api/admin/courses/${importTargetCourseId}/import-materials`, { materialIds: selectedMaterialIds });
-                  }
+
+                  const res = await apiRequest("POST", `/api/admin/courses/${importTargetCourseId}/import-content`, {
+                    sourceCourseId: importSourceCourseId,
+                    options: importOptions,
+                  });
+                  const payload = await res.json();
+                  if (!res.ok) throw new Error(payload?.message || "Import failed");
+
                   qc.invalidateQueries({ queryKey: ["/api/courses"] });
+                  qc.invalidateQueries({ queryKey: ["/api/admin/daily-missions"] });
                   setShowImportModal(false);
                   Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-                  Alert.alert("Success", `Imported ${selectedLectureIds.length} lectures, ${selectedTestIds.length} tests, ${selectedMaterialIds.length} materials!`);
-                } catch (e) {
-                  Alert.alert("Error", "Failed to import");
+                  Alert.alert(
+                    "Import complete",
+                    [
+                      importOptions.lectures ? `${payload.lectures ?? 0} lectures` : null,
+                      importOptions.tests ? `${payload.tests ?? 0} tests` : null,
+                      importOptions.materials ? `${payload.materials ?? 0} materials` : null,
+                      importOptions.missions ? `${payload.missions ?? 0} missions` : null,
+                    ]
+                      .filter(Boolean)
+                      .join(", ") + " added to this course."
+                  );
+                } catch (e: any) {
+                  Alert.alert("Import failed", e?.message || "Could not import content. Nothing was changed if the request failed midway.");
                 } finally {
                   setImportLoading(false);
                 }
-              }}>
+              }}
+            >
               <LinearGradient colors={["#8B5CF6", "#7C3AED"]} style={styles.createBtnGrad}>
-                {importLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.createBtnText}>Import {selectedLectureIds.length + selectedTestIds.length + selectedMaterialIds.length} Items</Text>}
+                {importLoading ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.createBtnText}>
+                    {showAdvancedImport && (selectedLectureIds.length + selectedTestIds.length + selectedMaterialIds.length) > 0
+                      ? `Import ${selectedLectureIds.length + selectedTestIds.length + selectedMaterialIds.length} selected items`
+                      : "Import from source course"}
+                  </Text>
+                )}
               </LinearGradient>
             </Pressable>
           </View>
@@ -5939,7 +6221,7 @@ export default function AdminDashboard() {
         </View>
       </Modal>
 
-      {/* Create Folder Modal (Tests & Materials) — DB-backed */}
+      {/* Create Folder Modal (Tests, Materials, Missions) — DB-backed */}
       <Modal visible={!!showCreateFolderModal} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16, maxHeight: 320 }]}>
@@ -5981,7 +6263,16 @@ export default function AdminDashboard() {
                 setNewFolderValidityMonths("");
               }}
             >
-              <LinearGradient colors={showCreateFolderModal === "test" ? [Colors.light.primary, Colors.light.primaryDark] : ["#DC2626", "#B91C1C"]} style={styles.createBtnGrad}>
+              <LinearGradient
+                colors={
+                  showCreateFolderModal === "test"
+                    ? [Colors.light.primary, Colors.light.primaryDark]
+                    : showCreateFolderModal === "mission"
+                      ? ["#0F766E", "#115E59"]
+                      : ["#DC2626", "#B91C1C"]
+                }
+                style={styles.createBtnGrad}
+              >
                 {createStandaloneFolderMutation.isPending ? <ActivityIndicator color="#fff" /> : <Text style={styles.createBtnText}>Create Folder</Text>}
               </LinearGradient>
             </Pressable>
@@ -6293,12 +6584,45 @@ export default function AdminDashboard() {
                 <Text style={styles.formLabel}>Type</Text>
                 <View style={{ flexDirection: "row", gap: 8 }}>
                   {[{ key: "free_practice", label: "Free Practice" }, { key: "daily_drill", label: "Daily Drill" }].map((t) => (
-                    <Pressable key={t.key} style={[styles.typeSelectBtn, editMission?.mission_type === t.key && styles.typeSelectActive]} onPress={() => setEditMission((p: any) => ({ ...p, mission_type: t.key }))}>
+                    <Pressable
+                      key={t.key}
+                      style={[styles.typeSelectBtn, editMission?.mission_type === t.key && styles.typeSelectActive]}
+                      onPress={() => setEditMission((p: any) => ({ ...p, mission_type: t.key, course_id: t.key === "daily_drill" ? p?.course_id ?? null : null }))}
+                    >
                       <Text style={[styles.typeSelectText, editMission?.mission_type === t.key && styles.typeSelectTextActive]}>{t.label}</Text>
                     </Pressable>
                   ))}
                 </View>
               </View>
+              {editMission?.mission_type === "daily_drill" && (
+                <View style={styles.formField}>
+                  <Text style={styles.formLabel}>Linked Course (optional)</Text>
+                  <View style={{ marginTop: 6, gap: 6 }}>
+                    <Pressable
+                      style={[{ flexDirection: "row", alignItems: "center", gap: 10, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: !editMission?.course_id ? Colors.light.primary : Colors.light.border, backgroundColor: !editMission?.course_id ? Colors.light.secondary : "#fff" }]}
+                      onPress={() => setEditMission((p: any) => ({ ...p, course_id: null }))}
+                    >
+                      <Ionicons name="globe-outline" size={18} color={!editMission?.course_id ? Colors.light.primary : Colors.light.textMuted} />
+                      <Text style={{ fontSize: 14, fontFamily: !editMission?.course_id ? "Inter_600SemiBold" : "Inter_400Regular", color: !editMission?.course_id ? Colors.light.primary : Colors.light.text }}>Any Course</Text>
+                      {!editMission?.course_id && <Ionicons name="checkmark-circle" size={18} color={Colors.light.primary} style={{ marginLeft: "auto" }} />}
+                    </Pressable>
+                    {courses.map((c) => (
+                      <Pressable
+                        key={c.id}
+                        style={[{ flexDirection: "row", alignItems: "center", gap: 10, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: editMission?.course_id === c.id ? Colors.light.primary : Colors.light.border, backgroundColor: editMission?.course_id === c.id ? Colors.light.secondary : "#fff" }]}
+                        onPress={() => setEditMission((p: any) => ({ ...p, course_id: c.id }))}
+                      >
+                        <Ionicons name="book-outline" size={18} color={editMission?.course_id === c.id ? Colors.light.primary : Colors.light.textMuted} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ fontSize: 14, fontFamily: editMission?.course_id === c.id ? "Inter_600SemiBold" : "Inter_400Regular", color: editMission?.course_id === c.id ? Colors.light.primary : Colors.light.text }}>{c.title}</Text>
+                          <Text style={{ fontSize: 11, fontFamily: "Inter_400Regular", color: Colors.light.textMuted }}>{c.category} · {c.is_free ? "Free" : `₹${parseFloat(c.price).toFixed(0)}`}</Text>
+                        </View>
+                        {editMission?.course_id === c.id && <Ionicons name="checkmark-circle" size={18} color={Colors.light.primary} />}
+                      </Pressable>
+                    ))}
+                  </View>
+                </View>
+              )}
               <View style={styles.formField}>
                 <Text style={styles.formLabel}>Questions ({editMission?.questions?.length || 0})</Text>
                 {(editMission?.questions || []).map((q: any, idx: number) => (

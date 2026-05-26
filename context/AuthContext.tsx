@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode, useMemo } from "react";
+import React, { createContext, useContext, useState, useEffect, ReactNode, useMemo, useCallback } from "react";
 import { Alert, Platform } from "react-native";
 import { router, usePathname } from "expo-router";
 import {
@@ -32,12 +32,29 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+/** Routes where a stale session must not hard-logout mid-playback (web + native). */
+function isProtectedPlaybackRoute(path: string): boolean {
+  return (
+    path.startsWith("/lecture/") ||
+    path.startsWith("/live-class/") ||
+    path.startsWith("/material/") ||
+    path.startsWith("/admin")
+  );
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const pathname = usePathname();
+  const pathnameRef = React.useRef(pathname);
 
-  const refreshUser = async () => {
+  useEffect(() => {
+    pathnameRef.current = pathname;
+  }, [pathname]);
+
+  const refreshUser = useCallback(async () => {
+    const onProtectedRoute = isProtectedPlaybackRoute(pathnameRef.current || "");
+
     try {
       const stored = await getStoredAuthUser();
       const token = await getStoredToken();
@@ -130,6 +147,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } else {
         const errorData = await res.json().catch(() => null);
         const msg = errorData?.message as string | undefined;
+
+        if (msg === "device_id_missing") {
+          Alert.alert(
+            "Sign in required",
+            "Your browser data was cleared. Please log in again to re-link this browser.",
+            [{ text: "OK" }]
+          );
+          setUser(null);
+          await removeStoredAuthUser();
+          queryClient.clear();
+          router.replace("/welcome");
+          return;
+        }
+
         if (msg === "device_binding_mismatch") {
           Alert.alert(
             "Access Restricted",
@@ -139,18 +170,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setUser(null);
           await removeStoredAuthUser();
           queryClient.clear();
-        } else if (msg === "active_on_other_platform") {
-          const other = errorData?.activePlatform === "mobile" ? "the mobile app" : "the web browser";
-          Alert.alert(
-            "Signed in elsewhere",
-            `Your account is active on ${other}. Sign in here to switch to this device.`,
-            [{ text: "OK" }]
-          );
-          setUser(null);
-          await removeStoredAuthUser();
-          queryClient.clear();
-        } else if (msg === "logged_in_elsewhere") {
-          Alert.alert("Session Expired", "Your account has been logged in on another device.", [{ text: "OK" }]);
+        } else if (msg === "active_on_other_platform" || msg === "logged_in_elsewhere") {
+          if (onProtectedRoute && stored) {
+            // Keep local session during lecture/live-class/material/admin work.
+            setUser(stored);
+            return;
+          }
+          if (msg === "active_on_other_platform") {
+            const other = errorData?.activePlatform === "mobile" ? "the mobile app" : "the web browser";
+            Alert.alert(
+              "Signed in elsewhere",
+              `Your account is active on ${other}. Sign in here to switch to this device.`,
+              [{ text: "OK" }]
+            );
+          } else {
+            Alert.alert("Session Expired", "Your account has been logged in on another device.", [{ text: "OK" }]);
+          }
           setUser(null);
           await removeStoredAuthUser();
           queryClient.clear();
@@ -201,7 +236,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         queryClient.clear();
       }
     }
-  };
+  }, []);
 
   useEffect(() => {
     const init = async () => {
@@ -209,7 +244,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setIsLoading(false);
     };
     init();
-  }, []);
+  }, [refreshUser]);
 
   useEffect(() => {
     if (!user || Platform.OS === "web") return;
@@ -230,7 +265,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const refreshUserRef = React.useRef(refreshUser);
   useEffect(() => {
     refreshUserRef.current = refreshUser;
-  });
+  }, [refreshUser]);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -243,14 +278,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     setUnauthorizedHandler(async () => {
+      // Playback + admin: background calls may 401 during flaky API; don't hard-logout immediately.
+      if (isProtectedPlaybackRoute(pathnameRef.current || "")) return;
+
       if (Platform.OS === "web") {
-        // Playback + admin: background calls may 401 during flaky API; don't hard-logout immediately.
-        const suppressHardLogoutRoute =
-          pathname.startsWith("/lecture/") ||
-          pathname.startsWith("/live-class/") ||
-          pathname.startsWith("/material/") ||
-          pathname.startsWith("/admin");
-        if (suppressHardLogoutRoute) return;
         // Confirm whether session is actually invalid before clearing user on web.
         // This avoids false logout from endpoint-specific/transient 401s.
         const storedForMe = await getStoredAuthUser();
@@ -332,7 +363,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       refreshUser,
       updateUser,
     }),
-    [user, isLoading]
+    [user, isLoading, refreshUser]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -10,7 +10,7 @@ type RegisterStandaloneFolderRoutesDeps = {
   requireAdmin: (req: Request, res: Response, next: () => void) => any;
 };
 
-const STANDALONE_FOLDER_TYPES = new Set(["test", "material", "mini_course"]);
+const STANDALONE_FOLDER_TYPES = new Set(["test", "material", "mini_course", "mission"]);
 const MAX_STANDALONE_FOLDER_NAME_LENGTH = 120;
 
 function normalizeStandaloneFolderName(value: unknown): string {
@@ -121,6 +121,13 @@ export function registerStandaloneFolderRoutes({
              FROM renamed r
              WHERE r.folder_type = 'test' AND tt.folder_name = r.old_name AND tt.course_id IS NULL
              RETURNING tt.id
+           ),
+           upd_missions AS (
+             UPDATE daily_missions dm
+             SET folder_name = $2
+             FROM renamed r
+             WHERE r.folder_type = 'mission' AND dm.folder_name = r.old_name
+             RETURNING dm.id
            )
            UPDATE study_materials sm
            SET section_title = $2
@@ -168,6 +175,12 @@ export function registerStandaloneFolderRoutes({
            USING target t
            WHERE t.type = 'material' AND sm.section_title = t.name AND sm.course_id IS NULL
            RETURNING sm.id
+         ),
+         del_missions AS (
+           DELETE FROM daily_missions dm
+           USING target t
+           WHERE t.type = 'mission' AND dm.folder_name = t.name
+           RETURNING dm.id
          )
          DELETE FROM standalone_folders sf
          USING target t

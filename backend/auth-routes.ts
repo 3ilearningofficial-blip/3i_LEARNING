@@ -4,11 +4,18 @@ import { hashPassword, isScryptHash, verifyLegacySha256, verifyPassword } from "
 import {
   assertActiveSessionPlatformMatches,
   assertLoginAllowedForInstallation,
+  assertSessionNotActivelyInUse,
   bindDeviceForNativeFirstLogin,
   enforceInstallationBinding,
   finalizeStudentWebSlotsAfterAuth,
 } from "./native-device-binding";
-import { persistLoginSession, resolveUserBySessionToken, revokeSessionTokenForUser, userHasSessionToken } from "./user-sessions";
+import {
+  ADMIN_SESSION_MAX_AGE_MS,
+  isSessionLastActiveValid,
+  persistLoginSession,
+  resolveUserBySessionToken,
+  revokeSessionTokenForUser,
+} from "./user-sessions";
 import { purgeStudentAccountById } from "./user-account-purge";
 
 type DbClient = {
@@ -212,7 +219,19 @@ export function registerAuthRoutes({
     user: Record<string, any>,
     deviceId: string | null | undefined,
     clearOtp: boolean
-  ): Promise<{ success: true; user: ReturnType<typeof buildSessionUserFromRow> }> => {
+  ): Promise<
+    | { success: true; user: ReturnType<typeof buildSessionUserFromRow> }
+    | { success: false; httpStatus: number; message: string }
+  > => {
+    const activeGuard = await assertSessionNotActivelyInUse(db, req, {
+      userId: Number(user.id),
+      role: user.role,
+      bodyDeviceId: deviceId,
+    });
+    if (!activeGuard.ok) {
+      return { success: false, httpStatus: activeGuard.httpStatus, message: activeGuard.message };
+    }
+
     const sessionToken = generateSecureToken();
     const normalizedDeviceId = deviceId || null;
     await persistLoginSession(db, user as { id: number; role: string }, sessionToken, normalizedDeviceId, {
@@ -492,6 +511,9 @@ export function registerAuthRoutes({
         }
 
         const finalized = await finalizeAuthenticatedSession(req, user, deviceId || null, true);
+        if (!finalized.success) {
+          return res.status(finalized.httpStatus).json({ message: finalized.message });
+        }
         return res.json(finalized);
       }
 
@@ -583,6 +605,9 @@ export function registerAuthRoutes({
       }
 
       const finalized = await finalizeAuthenticatedSession(req, user, deviceId || null, true);
+      if (!finalized.success) {
+        return res.status(finalized.httpStatus).json({ message: finalized.message });
+      }
       res.json(finalized);
     } catch (err) {
       console.error("Firebase verify error:", err);
@@ -658,21 +683,15 @@ export function registerAuthRoutes({
       }
       const tok = sessionUser.sessionToken;
       // BUG-10 fix: validate session token inline using the row we already fetched.
-      // This avoids a second SELECT FROM users (what userHasSessionToken() used to do).
-      // Logic mirrors userHasSessionToken + isLastActiveValid + sessionMinActiveAt exactly.
+      // Logic mirrors userHasSessionToken + isSessionLastActiveValid in user-sessions.ts.
       if (tok) {
-        const la = Number(row.last_active_at || 0);
-        const hasBound = !!(row.app_bound_device_id || row.web_device_id_phone || row.web_device_id_desktop);
-        const maxAgeMs = (row.role === "admin" || hasBound)
-          ? 10 * 365 * 24 * 60 * 60 * 1000  // 10-year sessions for admins / bound devices
-          : 30 * 24 * 60 * 60 * 1000;         // 30-day sessions for unbound students
-        const isActive = !la || la >= Date.now() - maxAgeMs;
+        const isActive = isSessionLastActiveValid(row);
         const primaryMatches = row.session_token === tok && isActive;
         if (!primaryMatches) {
           if (row.role === "admin") {
             // Admins support multiple concurrent sessions stored in user_sessions table.
             // Fall back to that table only when the primary token doesn't match (rare).
-            const minAge = Date.now() - 10 * 365 * 24 * 60 * 60 * 1000;
+            const minAge = Date.now() - ADMIN_SESSION_MAX_AGE_MS;
             const sess = await db.query(
               "SELECT 1 FROM user_sessions WHERE user_id = $1 AND session_token = $2 AND created_at >= $3",
               [sessionUser.id, tok, minAge]
@@ -748,6 +767,9 @@ export function registerAuthRoutes({
       }
 
       const finalized = await finalizeAuthenticatedSession(req, user, deviceId || null, false);
+      if (!finalized.success) {
+        return res.status(finalized.httpStatus).json({ message: finalized.message });
+      }
       res.json(finalized);
     } catch (err: any) {
       console.error("Firebase login error:", err);
@@ -895,6 +917,9 @@ export function registerAuthRoutes({
       const dev = typeof deviceId === "string" ? deviceId : null;
       console.log("[Auth] email-login: finalize session start", { userId: user.id });
       const finalized = await finalizeAuthenticatedSession(req, user, dev, false);
+      if (!finalized.success) {
+        return res.status(finalized.httpStatus).json({ message: finalized.message });
+      }
       res.json(finalized);
     } catch (err) {
       console.error("Email login error:", err);
@@ -976,6 +1001,9 @@ export function registerAuthRoutes({
 
       const dev = typeof deviceId === "string" ? deviceId : null;
       const finalized = await finalizeAuthenticatedSession(req, user, dev, true);
+      if (!finalized.success) {
+        return res.status(finalized.httpStatus).json({ message: finalized.message });
+      }
       const refreshed = await db.query(
         "SELECT id, name, email, phone, role, session_token, profile_complete, date_of_birth, photo_url FROM users WHERE id = $1",
         [user.id]

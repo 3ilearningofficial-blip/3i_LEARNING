@@ -624,6 +624,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     requireAdmin,
     updateCourseTestCounts,
     recomputeAllEnrollmentsProgressForCourse,
+    runInTransaction: runInTransaction,
   });
 
   registerAdminCourseManagementRoutes({
