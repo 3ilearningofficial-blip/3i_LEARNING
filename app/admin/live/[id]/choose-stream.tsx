@@ -79,7 +79,11 @@ export default function ChooseStreamPage() {
           <Text style={styles.headerTitle} numberOfLines={1}>
             {liveClass?.title || "Live class"}
           </Text>
-          <Text style={styles.headerSub}>Choose how you want to teach</Text>
+          <Text style={styles.headerSub}>
+            {liveClass?.is_recording_mode
+              ? "Select recording method"
+              : "Choose how you want to teach"}
+          </Text>
         </View>
       </LinearGradient>
 

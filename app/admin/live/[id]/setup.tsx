@@ -175,7 +175,11 @@ export default function LiveSetupPage() {
           <Text style={styles.headerTitle} numberOfLines={1}>
             {liveClass?.title || "Preview"}
           </Text>
-          <Text style={styles.headerSub}>Check everything before going live</Text>
+          <Text style={styles.headerSub}>
+            {liveClass?.is_recording_mode
+              ? "Check everything before recording"
+              : "Check everything before going live"}
+          </Text>
         </View>
         <View style={styles.setupBadge}>
           <Text style={styles.setupBadgeText}>SETUP</Text>
@@ -214,8 +218,14 @@ export default function LiveSetupPage() {
               <ActivityIndicator size="small" color="#fff" />
             ) : (
               <>
-                <Ionicons name="radio" size={20} color="#fff" />
-                <Text style={styles.goLiveText}>Go Live</Text>
+                <Ionicons
+                  name={liveClass?.is_recording_mode ? "recording" : "radio"}
+                  size={20}
+                  color="#fff"
+                />
+                <Text style={styles.goLiveText}>
+                  {liveClass?.is_recording_mode ? "Start Recording" : "Go Live"}
+                </Text>
               </>
             )}
           </Pressable>

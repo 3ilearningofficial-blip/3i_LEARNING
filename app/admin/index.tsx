@@ -1198,6 +1198,16 @@ export default function AdminDashboard() {
   /** Main section + optional subfolder — combined when saving the recording (see `buildRecordingLectureSectionTitle`). */
   const [liveLectureMain, setLiveLectureMain] = useState("");
   const [liveLectureSubfolder, setLiveLectureSubfolder] = useState("");
+  // Record a Class modal state
+  const [showRecordClassModal, setShowRecordClassModal] = useState(false);
+  const [recTitle, setRecTitle] = useState("");
+  const [recSelectedCourses, setRecSelectedCourses] = useState<number[]>([]);
+  const [recLectureMain, setRecLectureMain] = useState("");
+  const [recLectureSubfolder, setRecLectureSubfolder] = useState("");
+  const [recVisibility, setRecVisibility] = useState<"immediate" | "scheduled">("immediate");
+  const [recVisibleDate, setRecVisibleDate] = useState("");
+  const [recVisibleTime, setRecVisibleTime] = useState("");
+  const [recSubmitting, setRecSubmitting] = useState(false);
   const [lessonTitle, setLessonTitle] = useState("");
   const [lessonVideoUrl, setLessonVideoUrl] = useState("");
   const [lessonSelectedCourses, setLessonSelectedCourses] = useState<number[]>([]);
@@ -2203,6 +2213,53 @@ export default function AdminDashboard() {
     }
   };
 
+  // Handle Record a Class modal submission
+  const handleRecordClass = async () => {
+    if (!recTitle.trim() || recSelectedCourses.length === 0) return;
+    setRecSubmitting(true);
+    try {
+      let visibleAfterAt: number | null = null;
+      if (recVisibility === "scheduled" && recVisibleDate.trim()) {
+        const ts = new Date(`${recVisibleDate}T${recVisibleTime || "00:00"}`).getTime();
+        if (Number.isFinite(ts)) visibleAfterAt = ts;
+      }
+      let createdId: number | null = null;
+      for (const courseId of recSelectedCourses) {
+        const res = await apiRequest("POST", "/api/admin/live-classes", {
+          title: recTitle.trim(),
+          courseId,
+          isLive: false,
+          isPublic: false,
+          streamType: "webrtc",
+          isRecordingMode: true,
+          visibleAfterAt,
+          lectureSectionTitle: recLectureMain.trim() || null,
+          lectureSubfolderTitle: recLectureSubfolder.trim() || null,
+        });
+        if (!createdId) {
+          const body = await res.json();
+          createdId = body.id;
+        }
+      }
+      if (createdId) {
+        // Close modal and reset form before navigating
+        setShowRecordClassModal(false);
+        setRecTitle("");
+        setRecSelectedCourses([]);
+        setRecLectureMain("");
+        setRecLectureSubfolder("");
+        setRecVisibility("immediate");
+        setRecVisibleDate("");
+        setRecVisibleTime("");
+        setRecSubmitting(false);
+        router.push(`/admin/live/${createdId}/choose-stream` as any);
+      }
+    } catch (err: any) {
+      Alert.alert("Error", err?.message || "Failed to create recording session.");
+      setRecSubmitting(false);
+    }
+  };
+
   // Edit upcoming class
   const [editingLiveClass, setEditingLiveClass] = useState<any>(null);
   const [liveActionSheet, setLiveActionSheet] = useState<any>(null);
@@ -2567,13 +2624,22 @@ export default function AdminDashboard() {
               ) : (
                 <>
                   <Text style={styles.sectionTitle}>Upcoming Class</Text>
-                  <Pressable
-                    style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: Colors.light.primary, borderRadius: 12, paddingVertical: 13, marginTop: 12, marginBottom: 12 }}
-                    onPress={() => setShowCreateClassChoice(true)}
-                  >
-                    <Ionicons name="add-circle-outline" size={20} color="#fff" />
-                    <Text style={{ fontSize: 14, fontFamily: "Inter_600SemiBold", color: "#fff" }}>Create Class</Text>
-                  </Pressable>
+                  <View style={{ flexDirection: "row", gap: 8, marginTop: 12, marginBottom: 12 }}>
+                    <Pressable
+                      style={{ flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, backgroundColor: Colors.light.primary, borderRadius: 12, paddingVertical: 13 }}
+                      onPress={() => setShowCreateClassChoice(true)}
+                    >
+                      <Ionicons name="add-circle-outline" size={18} color="#fff" />
+                      <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: "#fff" }}>Create Class</Text>
+                    </Pressable>
+                    <Pressable
+                      style={{ flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, backgroundColor: "#DC2626", borderRadius: 12, paddingVertical: 13 }}
+                      onPress={() => setShowRecordClassModal(true)}
+                    >
+                      <Ionicons name="recording-outline" size={18} color="#fff" />
+                      <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: "#fff" }}>Record a Class</Text>
+                    </Pressable>
+                  </View>
                 </>
               )}
 
@@ -6083,6 +6149,159 @@ export default function AdminDashboard() {
         bottomPadding={bottomPadding}
         modalStyle={Platform.OS === "web" ? { zIndex: 93000 } : undefined}
       />
+
+      {/* ─── Record a Class Modal ─── */}
+      <Modal
+        visible={showRecordClassModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => !recSubmitting && setShowRecordClassModal(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.55)", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ width: "100%", maxWidth: 480 }}>
+            <View style={{ backgroundColor: "#fff", borderRadius: 20, overflow: "hidden", maxHeight: "90%" }}>
+              {/* Modal Header */}
+              <LinearGradient colors={["#0A1628", "#1A2A4A"]} style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingTop: Platform.OS === "web" ? 16 : 20, paddingBottom: 14, gap: 10 }}>
+                <Pressable
+                  onPress={() => !recSubmitting && setShowRecordClassModal(false)}
+                  style={{ width: 32, height: 32, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" }}
+                >
+                  <Ionicons name="arrow-back" size={18} color="#fff" />
+                </Pressable>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: "#fff" }}>Record a Class</Text>
+                  <Text style={{ fontSize: 11, color: "rgba(255,255,255,0.65)", fontFamily: "Inter_400Regular" }}>Private recording — not visible to students during recording</Text>
+                </View>
+                <Pressable
+                  onPress={() => !recSubmitting && setShowRecordClassModal(false)}
+                  style={{ width: 32, height: 32, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" }}
+                >
+                  <Ionicons name="close" size={18} color="#fff" />
+                </Pressable>
+              </LinearGradient>
+
+              {/* Modal Body */}
+              <ScrollView style={{ padding: 16 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+                {/* Title */}
+                <View style={{ gap: 4, marginBottom: 12 }}>
+                  <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Recording Title *</Text>
+                  <TextInput
+                    style={styles.formInput}
+                    placeholder="e.g. Trigonometry — Chapter 1"
+                    placeholderTextColor={Colors.light.textMuted}
+                    value={recTitle}
+                    onChangeText={setRecTitle}
+                    editable={!recSubmitting}
+                  />
+                </View>
+
+                {/* Course selector */}
+                <View style={{ gap: 4, marginBottom: 12 }}>
+                  <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Add to Course *</Text>
+                  <ScrollView style={{ maxHeight: 130, borderWidth: 1, borderColor: Colors.light.border, borderRadius: 10 }} nestedScrollEnabled>
+                    {courses.filter(c => c.course_type !== "test_series").map((c) => (
+                      <Pressable
+                        key={c.id}
+                        onPress={() => setRecSelectedCourses(prev => prev.includes(c.id) ? prev.filter(id => id !== c.id) : [...prev, c.id])}
+                        style={{ flexDirection: "row", alignItems: "center", gap: 8, padding: 10, borderBottomWidth: 1, borderBottomColor: Colors.light.border, backgroundColor: recSelectedCourses.includes(c.id) ? "#FEE2E2" : "#fff" }}
+                        disabled={recSubmitting}
+                      >
+                        <Ionicons name={recSelectedCourses.includes(c.id) ? "checkbox" : "square-outline"} size={20} color={recSelectedCourses.includes(c.id) ? "#DC2626" : Colors.light.textMuted} />
+                        <Text style={{ fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.text, flex: 1 }} numberOfLines={1}>{c.title}</Text>
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+                </View>
+
+                {/* Recording section */}
+                <View style={{ gap: 4, marginBottom: 8 }}>
+                  <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Lecture Section (optional)</Text>
+                  <Text style={{ fontSize: 10, fontFamily: "Inter_400Regular", color: Colors.light.textMuted }}>Folder inside the course where the recording will appear. Leave empty to use "Live Class Recordings".</Text>
+                  <TextInput
+                    style={styles.formInput}
+                    placeholder="e.g. Live Class Recordings"
+                    placeholderTextColor={Colors.light.textMuted}
+                    value={recLectureMain}
+                    onChangeText={setRecLectureMain}
+                    editable={!recSubmitting}
+                  />
+                </View>
+                <View style={{ gap: 4, marginBottom: 12 }}>
+                  <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Subfolder (optional)</Text>
+                  <TextInput
+                    style={styles.formInput}
+                    placeholder="e.g. Chapter 1 — Algebra"
+                    placeholderTextColor={Colors.light.textMuted}
+                    value={recLectureSubfolder}
+                    onChangeText={setRecLectureSubfolder}
+                    editable={!recSubmitting}
+                  />
+                  {(recLectureMain || recLectureSubfolder) ? (
+                    <Text style={{ fontSize: 10, fontFamily: "Inter_500Medium", color: Colors.light.textMuted }}>
+                      Saves as: {buildRecordingLectureSectionTitle(recLectureMain, recLectureSubfolder, null)}
+                    </Text>
+                  ) : null}
+                </View>
+
+                {/* Visibility */}
+                <View style={{ gap: 6, marginBottom: 16 }}>
+                  <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Visible to Students</Text>
+                  <View style={{ flexDirection: "row", gap: 8 }}>
+                    <Pressable
+                      onPress={() => setRecVisibility("immediate")}
+                      style={{ flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: "center", backgroundColor: recVisibility === "immediate" ? "#DC2626" : "#F3F4F6" }}
+                      disabled={recSubmitting}
+                    >
+                      <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: recVisibility === "immediate" ? "#fff" : Colors.light.text }}>After Recording</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => setRecVisibility("scheduled")}
+                      style={{ flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: "center", backgroundColor: recVisibility === "scheduled" ? Colors.light.primary : "#F3F4F6" }}
+                      disabled={recSubmitting}
+                    >
+                      <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: recVisibility === "scheduled" ? "#fff" : Colors.light.text }}>Schedule Date</Text>
+                    </Pressable>
+                  </View>
+                  {recVisibility === "scheduled" ? (
+                    <View style={{ flexDirection: "row", gap: 10, marginTop: 4 }}>
+                      <View style={{ flex: 1, gap: 4 }}>
+                        <Text style={{ fontSize: 11, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Date *</Text>
+                        <TextInput style={styles.formInput} placeholder="YYYY-MM-DD" placeholderTextColor={Colors.light.textMuted} value={recVisibleDate} onChangeText={setRecVisibleDate} editable={!recSubmitting} />
+                      </View>
+                      <View style={{ flex: 1, gap: 4 }}>
+                        <Text style={{ fontSize: 11, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Time</Text>
+                        <TextInput style={styles.formInput} placeholder="18:00" placeholderTextColor={Colors.light.textMuted} value={recVisibleTime} onChangeText={setRecVisibleTime} editable={!recSubmitting} />
+                      </View>
+                    </View>
+                  ) : null}
+                </View>
+              </ScrollView>
+
+              {/* Modal Footer — Next button */}
+              <View style={{ padding: 16, borderTopWidth: 1, borderTopColor: Colors.light.border }}>
+                <Pressable
+                  style={{
+                    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+                    backgroundColor: (!recTitle.trim() || recSelectedCourses.length === 0 || (recVisibility === "scheduled" && !recVisibleDate.trim()) || recSubmitting) ? "#9CA3AF" : "#DC2626",
+                    borderRadius: 12, paddingVertical: 14,
+                  }}
+                  disabled={!recTitle.trim() || recSelectedCourses.length === 0 || (recVisibility === "scheduled" && !recVisibleDate.trim()) || recSubmitting}
+                  onPress={handleRecordClass}
+                >
+                  {recSubmitting ? (
+                    <ActivityIndicator color="#fff" size="small" />
+                  ) : (
+                    <>
+                      <Text style={{ fontSize: 15, fontFamily: "Inter_700Bold", color: "#fff" }}>Next</Text>
+                      <Ionicons name="arrow-forward" size={18} color="#fff" />
+                    </>
+                  )}
+                </Pressable>
+              </View>
+            </View>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
 
       {/* Mission Leaderboard Modal */}
       <Modal visible={!!selectedMission && !selectedAttempt} animationType="slide" onRequestClose={() => { setSelectedMission(null); setMissionAttempts([]); }}>

@@ -62,12 +62,18 @@ export async function saveRecordingForClassAndPeers(
       row.lecture_subfolder_title,
       opts.sectionTitle
     );
+    // visible_after_at: pass through from live_class for recording-mode sessions.
+    // NULL means immediately visible (default for all live classes and manual lectures).
+    const visibleAfterAt = (row.is_recording_mode && row.visible_after_at)
+      ? Number(row.visible_after_at)
+      : null;
     const lectureResult = await db.query(
       `INSERT INTO lectures (
          course_id, title, description, video_url, video_type, duration_minutes,
-         order_index, is_free_preview, section_title, live_class_id, live_class_finalized, created_at
+         order_index, is_free_preview, section_title, live_class_id, live_class_finalized,
+         visible_after_at, created_at
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE, $11)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE, $11, $12)
        ON CONFLICT (live_class_id) WHERE live_class_id IS NOT NULL
        DO UPDATE SET
          course_id = EXCLUDED.course_id,
@@ -87,6 +93,7 @@ export async function saveRecordingForClassAndPeers(
          END,
          duration_minutes = EXCLUDED.duration_minutes,
          section_title = EXCLUDED.section_title,
+         visible_after_at = EXCLUDED.visible_after_at,
          live_class_finalized = TRUE
        RETURNING id`,
       [
@@ -100,6 +107,7 @@ export async function saveRecordingForClassAndPeers(
         false,
         recordSection,
         row.id,
+        visibleAfterAt,
         Date.now(),
       ]
     );

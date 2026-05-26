@@ -96,14 +96,16 @@ export function registerAdminUsersAndContentRoutes({
 
   app.post("/api/admin/live-classes", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { title, description, courseId, youtubeUrl, scheduledAt, isLive, isPublic, notifyEmail, notifyBell, isFreePreview, streamType, chatMode, showViewerCount, lectureSectionTitle, lectureSubfolderTitle } = req.body;
+      const { title, description, courseId, youtubeUrl, scheduledAt, isLive, isPublic, notifyEmail, notifyBell, isFreePreview, streamType, chatMode, showViewerCount, lectureSectionTitle, lectureSubfolderTitle, isRecordingMode, visibleAfterAt } = req.body;
       const mainSec =
         typeof lectureSectionTitle === "string" && lectureSectionTitle.trim() !== "" ? lectureSectionTitle.trim() : null;
       const subSec =
         typeof lectureSubfolderTitle === "string" && lectureSubfolderTitle.trim() !== "" ? lectureSubfolderTitle.trim() : null;
+      const recMode = isRecordingMode === true;
+      const visAfter = (recMode && visibleAfterAt && Number.isFinite(Number(visibleAfterAt))) ? Number(visibleAfterAt) : null;
       const result = await db.query(
-        `INSERT INTO live_classes (title, description, course_id, youtube_url, scheduled_at, is_live, is_public, notify_email, notify_bell, is_free_preview, stream_type, chat_mode, show_viewer_count, lecture_section_title, lecture_subfolder_title, created_at) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING *`,
+        `INSERT INTO live_classes (title, description, course_id, youtube_url, scheduled_at, is_live, is_public, notify_email, notify_bell, is_free_preview, stream_type, chat_mode, show_viewer_count, lecture_section_title, lecture_subfolder_title, is_recording_mode, visible_after_at, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) RETURNING *`,
         [
           title,
           description,
@@ -111,7 +113,7 @@ export function registerAdminUsersAndContentRoutes({
           youtubeUrl || null,
           scheduledAt,
           isLive || false,
-          isPublic || false,
+          recMode ? false : (isPublic || false),  // recording sessions are never public
           notifyEmail || false,
           notifyBell || false,
           isFreePreview || false,
@@ -120,10 +122,12 @@ export function registerAdminUsersAndContentRoutes({
           showViewerCount !== false,
           mainSec,
           subSec,
+          recMode,
+          visAfter,
           Date.now(),
         ]
       );
-      console.log(`[LiveClass] created id=${result.rows[0]?.id} title="${title}" courseId=${courseId} scheduledAt=${scheduledAt} isLive=${isLive}`);
+      console.log(`[LiveClass] created id=${result.rows[0]?.id} title="${title}" courseId=${courseId} scheduledAt=${scheduledAt} isLive=${isLive} isRecordingMode=${recMode}`);
       res.json(result.rows[0]);
     } catch (err) {
       console.error("[LiveClass] create failed", err);

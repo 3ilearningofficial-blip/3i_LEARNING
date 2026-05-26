@@ -197,6 +197,9 @@ export default function BroadcastPage() {
   const streamType = normalizeStreamType(liveClass?.stream_type) || "webrtc";
   const isLive = !!liveClass?.is_live && !liveClass?.is_completed;
   const liveStartedAt = Number(liveClass?.started_at || 0) || null;
+  // Recording mode: admin is making a private recording, not a live broadcast.
+  // Students never see this session. Chat/poll/students panels are hidden.
+  const isRecordingMode = !!liveClass?.is_recording_mode;
 
   const engagementSseActive = useLiveEngagementSse({
     liveClassId: liveClassId ? String(liveClassId) : undefined,
@@ -517,15 +520,24 @@ export default function BroadcastPage() {
         {isLive ? (
           <View style={styles.headerStatus}>
             <LiveClassRecordingTimer startedAt={liveStartedAt} active compact />
-            <View style={styles.livePill}>
-              <View style={styles.liveDot} />
-              <Text style={styles.liveText}>LIVE</Text>
-            </View>
-            <ClassroomHeaderActivityTimer
-              liveClassId={String(liveClassId)}
-              isAdmin
-              sessionActive
-            />
+            {isRecordingMode ? (
+              <View style={[styles.livePill, { backgroundColor: "#7C3AED" }]}>
+                <View style={[styles.liveDot, { backgroundColor: "#fff" }]} />
+                <Text style={styles.liveText}>REC</Text>
+              </View>
+            ) : (
+              <View style={styles.livePill}>
+                <View style={styles.liveDot} />
+                <Text style={styles.liveText}>LIVE</Text>
+              </View>
+            )}
+            {!isRecordingMode ? (
+              <ClassroomHeaderActivityTimer
+                liveClassId={String(liveClassId)}
+                isAdmin
+                sessionActive
+              />
+            ) : null}
           </View>
         ) : null}
       </LinearGradient>
@@ -691,91 +703,119 @@ export default function BroadcastPage() {
 
         {/* RIGHT: Side Panel (1/4) */}
         <View style={styles.sidePanel}>
-          {/* Tab switcher */}
-          <View style={styles.tabBar}>
-            <Pressable
-              style={[styles.tab, activeTab === "chat" && styles.tabActive]}
-              onPress={() => setActiveTab("chat")}
-            >
-              <Ionicons
-                name="chatbubbles-outline"
-                size={16}
-                color={activeTab === "chat" ? Colors.light.primary : Colors.light.textMuted}
-              />
-              <Text
-                style={[styles.tabText, activeTab === "chat" && styles.tabTextActive]}
-              >
-                Chat
-              </Text>
-            </Pressable>
-            <Pressable
-              style={[styles.tab, activeTab === "poll" && styles.tabActive]}
-              onPress={() => setActiveTab("poll")}
-            >
-              <Ionicons
-                name="stats-chart-outline"
-                size={16}
-                color={activeTab === "poll" ? Colors.light.primary : Colors.light.textMuted}
-              />
-              <Text style={[styles.tabText, activeTab === "poll" && styles.tabTextActive]}>
-                Poll / Quiz
-              </Text>
-            </Pressable>
-            <Pressable
-              style={[styles.tab, activeTab === "students" && styles.tabActive]}
-              onPress={() => setActiveTab("students")}
-            >
-              <Ionicons
-                name="people-outline"
-                size={16}
-                color={activeTab === "students" ? Colors.light.primary : Colors.light.textMuted}
-              />
-              <Text
-                style={[styles.tabText, activeTab === "students" && styles.tabTextActive]}
-              >
-                Students
-              </Text>
-            </Pressable>
-          </View>
-
-          {raisedHands.length > 0 ? (
-            <View style={styles.raisedHandsStrip}>
-              <Text style={styles.raisedHandsStripTitle}>Raised hands ({raisedHands.length})</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                {raisedHands.map((h) => (
-                  <View key={h.id} style={styles.raisedHandChip}>
-                    <Text style={styles.raisedHandChipText} numberOfLines={1}>
-                      ✋ {h.userName}
-                    </Text>
-                    <Pressable onPress={() => resolveHandMutation.mutate(h.userId)}>
-                      <Text style={styles.raisedHandDismiss}>Dismiss</Text>
-                    </Pressable>
-                  </View>
-                ))}
-              </ScrollView>
-            </View>
-          ) : null}
-
-          <View style={styles.tabContent}>
-            {activeTab === "chat" ? (
-              <LiveChatPanel
-                liveClassId={liveClassId!}
-                chatMode={chatMode}
-                isAdmin={true}
-                raisedHands={raisedHands}
-                onResolveHand={(userId) => resolveHandMutation.mutate(userId)}
-              />
-            ) : activeTab === "poll" ? (
-              <View style={styles.tabPanelFill}>
-                <ClassroomEngagementPanel liveClassId={String(liveClassId)} />
+          {/* In recording mode: hide chat/poll/students — show a simple info panel */}
+          {!isRecordingMode ? (
+            <>
+              {/* Tab switcher */}
+              <View style={styles.tabBar}>
+                <Pressable
+                  style={[styles.tab, activeTab === "chat" && styles.tabActive]}
+                  onPress={() => setActiveTab("chat")}
+                >
+                  <Ionicons
+                    name="chatbubbles-outline"
+                    size={16}
+                    color={activeTab === "chat" ? Colors.light.primary : Colors.light.textMuted}
+                  />
+                  <Text
+                    style={[styles.tabText, activeTab === "chat" && styles.tabTextActive]}
+                  >
+                    Chat
+                  </Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.tab, activeTab === "poll" && styles.tabActive]}
+                  onPress={() => setActiveTab("poll")}
+                >
+                  <Ionicons
+                    name="stats-chart-outline"
+                    size={16}
+                    color={activeTab === "poll" ? Colors.light.primary : Colors.light.textMuted}
+                  />
+                  <Text style={[styles.tabText, activeTab === "poll" && styles.tabTextActive]}>
+                    Poll / Quiz
+                  </Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.tab, activeTab === "students" && styles.tabActive]}
+                  onPress={() => setActiveTab("students")}
+                >
+                  <Ionicons
+                    name="people-outline"
+                    size={16}
+                    color={activeTab === "students" ? Colors.light.primary : Colors.light.textMuted}
+                  />
+                  <Text
+                    style={[styles.tabText, activeTab === "students" && styles.tabTextActive]}
+                  >
+                    Students
+                  </Text>
+                </Pressable>
               </View>
-            ) : (
-              <LiveStudentsPanel
-                liveClassId={liveClassId!}
-                showViewerCount={showViewerCount}
-              />
-            )}
-          </View>
+
+              {raisedHands.length > 0 ? (
+                <View style={styles.raisedHandsStrip}>
+                  <Text style={styles.raisedHandsStripTitle}>Raised hands ({raisedHands.length})</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                    {raisedHands.map((h) => (
+                      <View key={h.id} style={styles.raisedHandChip}>
+                        <Text style={styles.raisedHandChipText} numberOfLines={1}>
+                          ✋ {h.userName}
+                        </Text>
+                        <Pressable onPress={() => resolveHandMutation.mutate(h.userId)}>
+                          <Text style={styles.raisedHandDismiss}>Dismiss</Text>
+                        </Pressable>
+                      </View>
+                    ))}
+                  </ScrollView>
+                </View>
+              ) : null}
+
+              <View style={styles.tabContent}>
+                {activeTab === "chat" ? (
+                  <LiveChatPanel
+                    liveClassId={liveClassId!}
+                    chatMode={chatMode}
+                    isAdmin={true}
+                    raisedHands={raisedHands}
+                    onResolveHand={(userId) => resolveHandMutation.mutate(userId)}
+                  />
+                ) : activeTab === "poll" ? (
+                  <View style={styles.tabPanelFill}>
+                    <ClassroomEngagementPanel liveClassId={String(liveClassId)} />
+                  </View>
+                ) : (
+                  <LiveStudentsPanel
+                    liveClassId={liveClassId!}
+                    showViewerCount={showViewerCount}
+                  />
+                )}
+              </View>
+            </>
+          ) : (
+            /* Recording mode: show status info instead of chat/poll/students */
+            <View style={styles.recModeInfo}>
+              <View style={styles.recModeBadge}>
+                <View style={styles.recModeDot} />
+                <Text style={styles.recModeBadgeText}>RECORDING</Text>
+              </View>
+              <Text style={styles.recModeHint}>
+                This is a private recording session.{"\n"}Students cannot see or join this session.
+              </Text>
+              {recorder.isRecording ? (
+                <View style={styles.recModeTimerRow}>
+                  <Ionicons name="time-outline" size={14} color="#7C3AED" />
+                  <LiveClassRecordingTimer startedAt={liveStartedAt} active />
+                </View>
+              ) : (
+                <Text style={styles.recModeHint2}>
+                  {streamType === "webrtc"
+                    ? "Start screen share to begin recording."
+                    : "Recording starts when you start the stream."}
+                </Text>
+              )}
+            </View>
+          )}
 
           {streamType === "webrtc" && (
             <View style={styles.recordingFolderBlock}>
@@ -872,7 +912,9 @@ export default function BroadcastPage() {
               ) : (
                 <>
                   <Ionicons name="stop-circle" size={18} color="#fff" />
-                  <Text style={styles.endClassText}>End Class</Text>
+                  <Text style={styles.endClassText}>
+                    {isRecordingMode ? "Stop Recording" : "End Class"}
+                  </Text>
                 </>
               )}
             </Pressable>
@@ -1227,6 +1269,56 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: Colors.light.textMuted,
     textAlign: "right",
+  },
+
+  // Recording mode info panel
+  recModeInfo: {
+    flex: 1,
+    padding: 16,
+    gap: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  recModeBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#F5F3FF",
+    borderWidth: 1.5,
+    borderColor: "#7C3AED",
+    borderRadius: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  recModeDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: "#7C3AED",
+  },
+  recModeBadgeText: {
+    fontSize: 13,
+    fontWeight: "800",
+    color: "#7C3AED",
+    letterSpacing: 1.5,
+  },
+  recModeHint: {
+    fontSize: 12,
+    color: Colors.light.textMuted,
+    textAlign: "center",
+    lineHeight: 18,
+  },
+  recModeHint2: {
+    fontSize: 11,
+    color: Colors.light.textMuted,
+    textAlign: "center",
+    lineHeight: 16,
+    fontStyle: "italic",
+  },
+  recModeTimerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
   },
 
   // Upload error / retry

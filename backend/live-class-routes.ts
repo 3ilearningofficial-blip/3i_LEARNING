@@ -103,6 +103,7 @@ export function registerLiveClassRoutes({
             ${ex23} as is_enrolled
            FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
            WHERE lc.course_id = $1
+             AND COALESCE(lc.is_recording_mode, FALSE) = FALSE
              AND (
                lc.is_completed IS NOT TRUE
                OR (
@@ -123,6 +124,7 @@ export function registerLiveClassRoutes({
           `SELECT lc.*, c.title as course_title, c.is_free as course_is_free, FALSE as is_enrolled
            FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
            WHERE lc.course_id = $1
+             AND COALESCE(lc.is_recording_mode, FALSE) = FALSE
              AND (
                lc.is_completed IS NOT TRUE
                OR (
@@ -144,14 +146,15 @@ export function registerLiveClassRoutes({
           `SELECT lc.*, c.title as course_title, c.is_free as course_is_free,
             ${ex12} as is_enrolled
            FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
-           WHERE (
-             lc.is_completed IS NOT TRUE
-             OR (
-               lc.recording_url IS NOT NULL
-               OR lc.cf_playback_hls IS NOT NULL
-               OR (lc.youtube_url IS NOT NULL AND TRIM(lc.youtube_url) != '')
+           WHERE COALESCE(lc.is_recording_mode, FALSE) = FALSE
+             AND (
+               lc.is_completed IS NOT TRUE
+               OR (
+                 lc.recording_url IS NOT NULL
+                 OR lc.cf_playback_hls IS NOT NULL
+                 OR (lc.youtube_url IS NOT NULL AND TRIM(lc.youtube_url) != '')
+               )
              )
-           )
              AND (
                (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
                OR (lc.course_id IS NOT NULL AND (lc.is_free_preview = TRUE OR ${ex12}))
@@ -165,14 +168,15 @@ export function registerLiveClassRoutes({
       const result = await db.query(
         `SELECT lc.*, c.title as course_title, c.is_free as course_is_free, FALSE as is_enrolled
          FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
-         WHERE (
-           lc.is_completed IS NOT TRUE
-           OR (
-             lc.recording_url IS NOT NULL
-             OR lc.cf_playback_hls IS NOT NULL
-             OR (lc.youtube_url IS NOT NULL AND TRIM(lc.youtube_url) != '')
+         WHERE COALESCE(lc.is_recording_mode, FALSE) = FALSE
+           AND (
+             lc.is_completed IS NOT TRUE
+             OR (
+               lc.recording_url IS NOT NULL
+               OR lc.cf_playback_hls IS NOT NULL
+               OR (lc.youtube_url IS NOT NULL AND TRIM(lc.youtube_url) != '')
+             )
            )
-         )
            AND (
              (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
              OR (lc.course_id IS NOT NULL AND lc.is_free_preview = TRUE)
@@ -204,6 +208,7 @@ export function registerLiveClassRoutes({
         FROM live_classes lc
         LEFT JOIN courses c ON c.id = lc.course_id
         WHERE lc.is_completed IS NOT TRUE
+          AND COALESCE(lc.is_recording_mode, FALSE) = FALSE
           AND (
             lc.course_id IS NULL
             OR lc.is_public = TRUE

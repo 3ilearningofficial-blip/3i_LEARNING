@@ -97,6 +97,8 @@ export default function AdminClassroomPage() {
   const sessionActive = liveClass && !isTruthyDbFlag(liveClass.is_completed);
   const isLive = sessionActive && isTruthyDbFlag(liveClass?.is_live);
   const startedAt = Number(liveClass?.started_at || 0) || null;
+  // Recording mode: private recording, not a live broadcast to students.
+  const isRecordingMode = !!liveClass?.is_recording_mode;
 
   const showViewerCount = liveClass?.show_viewer_count ?? true;
 
@@ -318,23 +320,34 @@ export default function AdminClassroomPage() {
           <View style={styles.headerStatus}>
             <LiveClassRecordingTimer startedAt={startedAt} active={!!isLive} compact />
             {isLive ? (
-              <View style={styles.livePill}>
-                <View style={styles.liveDot} />
-                <Text style={styles.liveText}>LIVE</Text>
-              </View>
+              isRecordingMode ? (
+                <View style={[styles.livePill, { backgroundColor: "#7C3AED" }]}>
+                  <View style={styles.liveDot} />
+                  <Text style={styles.liveText}>REC</Text>
+                </View>
+              ) : (
+                <View style={styles.livePill}>
+                  <View style={styles.liveDot} />
+                  <Text style={styles.liveText}>LIVE</Text>
+                </View>
+              )
             ) : null}
-            <ClassroomHeaderActivityTimer
-              liveClassId={liveClassId}
-              isAdmin
-              sessionActive={!!sessionActive}
-            />
+            {!isRecordingMode ? (
+              <ClassroomHeaderActivityTimer
+                liveClassId={liveClassId}
+                isAdmin
+                sessionActive={!!sessionActive}
+              />
+            ) : null}
           </View>
         ) : null}
         <Pressable style={styles.endBtn} onPress={handleEndClass} disabled={isEnding}>
           {isEnding ? (
             <ActivityIndicator size="small" color="#fff" />
           ) : (
-            <Text style={styles.endBtnText}>End Class</Text>
+            <Text style={styles.endBtnText}>
+              {isRecordingMode ? "Stop Recording" : "End Class"}
+            </Text>
           )}
         </Pressable>
       </LinearGradient>
@@ -379,16 +392,29 @@ export default function AdminClassroomPage() {
             onCompositeStream={setCompositeStream}
           />
 
-          <ClassroomEngagementSidebar
-            liveClassId={liveClassId}
-            chatMode={chatModeResolved}
-            showViewerCount={showViewerCount}
-            parentViewers={
-              viewerData
-                ? { viewers: viewerData.viewers, count: viewerData.count }
-                : undefined
-            }
-          />
+          {/* In recording mode, hide chat/poll/students/handraise — show recording status only */}
+          {!isRecordingMode ? (
+            <ClassroomEngagementSidebar
+              liveClassId={liveClassId}
+              chatMode={chatModeResolved}
+              showViewerCount={showViewerCount}
+              parentViewers={
+                viewerData
+                  ? { viewers: viewerData.viewers, count: viewerData.count }
+                  : undefined
+              }
+            />
+          ) : (
+            <View style={{ padding: 16, gap: 10, alignItems: "center", justifyContent: "center" }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "#F5F3FF", borderWidth: 1.5, borderColor: "#7C3AED", borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10 }}>
+                <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: "#7C3AED" }} />
+                <Text style={{ fontSize: 13, fontWeight: "800", color: "#7C3AED", letterSpacing: 1.5 }}>RECORDING</Text>
+              </View>
+              <Text style={{ fontSize: 11, color: Colors.light.textMuted, textAlign: "center", lineHeight: 17 }}>
+                Private session — students cannot see or join this recording.
+              </Text>
+            </View>
+          )}
         </View>
       </View>
     </View>

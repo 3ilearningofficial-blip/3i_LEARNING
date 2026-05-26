@@ -55,6 +55,9 @@ export const lectures = pgTable("lectures", {
   // finalize/insert path is idempotent. See migrations/0013.
   liveClassId: integer("live_class_id"),
   liveClassFinalized: boolean("live_class_finalized").default(false),
+  // Added via migration 0026. When set, students cannot see this lecture until
+  // the timestamp has passed. NULL = always visible.
+  visibleAfterAt: bigint("visible_after_at", { mode: "number" }),
   createdAt: bigint("created_at", { mode: "number" }),
 });
 
@@ -193,6 +196,12 @@ export const liveClasses = pgTable("live_classes", {
   recordingDeletedAt: bigint("recording_deleted_at", { mode: "number" }),
   classroomRoomName: text("classroom_room_name"),
   boardSnapshotUrl: text("board_snapshot_url"),
+  // Added via migration 0026. Marks a session as a private recording-only session
+  // (not a live class). Students never see recording-mode sessions as upcoming/live.
+  isRecordingMode: boolean("is_recording_mode").default(false),
+  // Added via migration 0026. When set, the resulting lecture is hidden from
+  // students until this timestamp. NULL = visible immediately after recording.
+  visibleAfterAt: bigint("visible_after_at", { mode: "number" }),
   createdAt: bigint("created_at", { mode: "number" }),
 });
 

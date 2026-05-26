@@ -329,7 +329,18 @@ export function registerCourseAccessRoutes({
       } else {
         (course as any).courseEnded = false;
       }
-      const lecturesResult = await db.query("SELECT * FROM lectures WHERE course_id = $1 ORDER BY order_index", [courseIdParam]);
+      // For non-admin users, hide lectures whose visible_after_at is in the future.
+      // Admins always see all lectures regardless of scheduled visibility.
+      const nowMs = Date.now();
+      const lecturesResult = user?.role === "admin"
+        ? await db.query(
+            "SELECT * FROM lectures WHERE course_id = $1 ORDER BY order_index",
+            [courseIdParam]
+          )
+        : await db.query(
+            "SELECT * FROM lectures WHERE course_id = $1 AND (visible_after_at IS NULL OR visible_after_at <= $2) ORDER BY order_index",
+            [courseIdParam, nowMs]
+          );
       const testsResult = await db.query("SELECT * FROM tests WHERE course_id = $1 AND is_published = TRUE ORDER BY COALESCE(order_index, 0) ASC, created_at ASC, id ASC", [courseIdParam]);
       const materialsResult = await db.query("SELECT * FROM study_materials WHERE course_id = $1 ORDER BY COALESCE(order_index, 0) ASC, created_at ASC, id ASC", [courseIdParam]);
       const fullLectures = lecturesResult.rows;
