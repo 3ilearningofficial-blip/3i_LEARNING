@@ -43,6 +43,24 @@ export function createGenerateAIAnswer(db: DbClient) {
     const t = String(topic || "").trim();
     if (!q) return "Please share your full question so I can help step by step.";
 
+    // ── Content guard ────────────────────────────────────────────────────────────────
+    // This is an educational platform serving students.  Before sending anything to an
+    // LLM, reject requests that are clearly off-topic or potentially harmful.
+    // Keep the list narrow — the goal is a safety floor, not over-filtering.
+    // The LLM system prompt (below) is already tightly scoped to academic math topics.
+    const BLOCKED_PATTERNS: RegExp[] = [
+      /\b(suicide|self.harm|self harm|kill (your|my)self)\b/i,
+      /\b(make|build|create|synthesize).{0,30}(bomb|explosive|weapon|poison|drug)\b/i,
+      /\b(porn|pornograph|nude|naked|sex video)\b/i,
+      /\b(hack|crack|exploit|phish).{0,20}(password|account|system|server)\b/i,
+    ];
+    const rawInput = `${q} ${t}`;
+    if (BLOCKED_PATTERNS.some((re) => re.test(rawInput))) {
+      console.warn(`[AI Tutor] Blocked input from userId=${userId ?? "anon"} (content guard)`);
+      return "I can only help with academic study questions. Please ask something related to your course material.";
+    }
+    // ────────────────────────────────────────────────────────────────────────────────
+
     const tokenize = (text: string): string[] =>
       text
         .toLowerCase()

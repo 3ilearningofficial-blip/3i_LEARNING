@@ -47,6 +47,8 @@ const migrationFiles = [
   "migrations/0032_live_classes_cf_recording_uid.sql",
   "migrations/0033_media_tokens_access_count.sql",
   "migrations/0034_download_tokens_table.sql",
+  "migrations/0035_user_missions_table.sql",
+  "migrations/0036_lecture_progress_unique_payments_razorpay.sql",
 ];
 
 const connectionString = process.env.DATABASE_URL;

@@ -33,6 +33,13 @@ export const REQUIRED_TABLES = [
   "express_rate_limit",
   "otp_challenges",
   "notifications_sent",
+  // Tables that exist on production but were previously missing from this contract.
+  // Added alongside migrations 0035 and 0036 to ensure CI and staging environments
+  // are fully validated after applying those migrations.
+  "daily_missions",      // 0000 baseline — holds daily drill questions
+  "lecture_progress",    // 0000 baseline — per-student lecture watch state
+  "payments",            // 0000 baseline — Razorpay payment records
+  "user_missions",       // 0035 — per-student daily mission completion records
 ] as const;
 
 export const REQUIRED_COLUMNS: Record<string, string[]> = {

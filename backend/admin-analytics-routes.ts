@@ -59,11 +59,18 @@ export function registerAdminAnalyticsRoutes({
       // Course revenue must not JOIN payments next to enrollments (cartesian = doubled sums).
       // Payouts are stored in paise (Razorpay); response amounts use rupees for this API.
 
+      // safeRows: returns fallback data if a query fails so the entire analytics
+      // dashboard doesn't crash on a single bad query.  Errors are now logged so
+      // they surface in production monitoring rather than disappearing silently.
       const safeRows = async (query: Promise<{ rows: any[] }>, fallbackRows: any[] = []) => {
         try {
           const result = await query;
           return result.rows;
-        } catch {
+        } catch (err) {
+          console.error(
+            "[Analytics] Query failed, using fallback data:",
+            err instanceof Error ? err.message : String(err)
+          );
           return fallbackRows;
         }
       };

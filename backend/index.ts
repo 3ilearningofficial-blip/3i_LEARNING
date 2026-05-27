@@ -15,6 +15,13 @@ if (!process.env.OTP_HMAC_SECRET) {
   throw new Error("OTP_HMAC_SECRET must be set");
 }
 
+if (process.env.NODE_ENV === "production" && !process.env.SESSION_SECRET) {
+  // Hard fail: a missing session secret means every session cookie is signed with an
+  // empty string, making sessions trivially forgeable by any user who reads the source.
+  // Never allow this in production — set SESSION_SECRET in your environment / secrets manager.
+  throw new Error("SESSION_SECRET must be set in production");
+}
+
 import express from "express";
 import type { Request, Response, NextFunction } from "express";
 import session from "express-session";

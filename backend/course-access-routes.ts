@@ -318,6 +318,10 @@ export function registerCourseAccessRoutes({
     try {
       const user = await getAuthUser(req);
       const { category, search } = req.query;
+      // Both admin and student branches now use LEFT JOIN aggregations instead of
+      // correlated subqueries. Correlated subqueries run one COUNT per course per row,
+      // making the query O(N×2) as the catalogue grows. LEFT JOINs on pre-aggregated
+      // sub-selects run a single pass over tests/study_materials regardless of catalogue size.
       let query =
         user?.role === "admin"
           ? `SELECT c.*,
@@ -328,9 +332,12 @@ export function registerCourseAccessRoutes({
              LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM study_materials GROUP BY 1) m_agg ON m_agg.course_id = c.id
              WHERE 1=1`
           : `SELECT c.*,
-               (SELECT COUNT(*) FROM tests t WHERE t.course_id = c.id AND t.is_published = TRUE) AS total_tests,
-               (SELECT COUNT(*) FROM study_materials sm WHERE sm.course_id = c.id) AS total_materials
-             FROM courses c WHERE c.is_published = TRUE`;
+               COALESCE(t_agg.cnt, 0) AS total_tests,
+               COALESCE(m_agg.cnt, 0) AS total_materials
+             FROM courses c
+             LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM tests WHERE is_published = TRUE GROUP BY 1) t_agg ON t_agg.course_id = c.id
+             LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM study_materials GROUP BY 1) m_agg ON m_agg.course_id = c.id
+             WHERE c.is_published = TRUE`;
       const params: unknown[] = [];
 
       if (search) {

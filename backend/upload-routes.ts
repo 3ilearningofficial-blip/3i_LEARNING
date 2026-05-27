@@ -51,7 +51,12 @@ export function registerUploadRoutes({
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const { filename, contentType } = req.body;
       if (!filename || !contentType) return res.status(400).json({ message: "filename and contentType required" });
-      if (!contentType.startsWith("image/")) return res.status(400).json({ message: "Only image uploads allowed" });
+      // Explicit allowlist — SVG is excluded because SVGs can contain <script> tags (XSS).
+      // startsWith("image/") alone is not sufficient.
+      const ALLOWED_PROFILE_MIME_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+      if (!ALLOWED_PROFILE_MIME_TYPES.includes(String(contentType))) {
+        return res.status(400).json({ message: "Only JPEG, PNG, WebP, or GIF images are allowed for profile photos" });
+      }
       if (!process.env.R2_ACCOUNT_ID || !process.env.R2_ACCESS_KEY_ID || !process.env.R2_SECRET_ACCESS_KEY) {
         return res.status(500).json({ message: "R2 credentials not configured." });
       }
@@ -143,10 +148,33 @@ export function registerUploadRoutes({
     }
   });
 
+  // Allowlist of MIME types accepted by the admin presign endpoint.
+  // SVG is explicitly excluded (SVGs can embed <script> tags → XSS if served from the same origin).
+  // Add new types here only after confirming the client and CDN handle them safely.
+  const ALLOWED_ADMIN_MIME_TYPES = new Set([
+    // Images
+    "image/jpeg", "image/png", "image/webp", "image/gif",
+    // Documents
+    "application/pdf",
+    // Video (Cloudflare Stream handles these; direct R2 for recordings)
+    "video/mp4", "video/webm", "video/quicktime",
+    // Audio
+    "audio/mpeg", "audio/mp4", "audio/ogg", "audio/wav",
+  ]);
+
   app.post("/api/upload/presign", requireAdmin, async (req: Request, res: Response) => {
     try {
       const { filename, contentType, folder, subfolder } = req.body;
       if (!filename || !contentType) return res.status(400).json({ message: "filename and contentType required" });
+      // Validate MIME type against the server-side allowlist.
+      // Never pass the client-supplied contentType directly to S3 without validation —
+      // an admin could presign a text/html or application/javascript object, which would
+      // be an XSS vector if the R2 bucket has public read access.
+      if (!ALLOWED_ADMIN_MIME_TYPES.has(String(contentType))) {
+        return res.status(400).json({
+          message: `Content type '${contentType}' is not allowed. Permitted types: images (JPEG/PNG/WebP/GIF), PDF, MP4/WebM/MOV video, and common audio formats.`,
+        });
+      }
       if (!process.env.R2_ACCOUNT_ID || !process.env.R2_ACCESS_KEY_ID || !process.env.R2_SECRET_ACCESS_KEY) {
         return res.status(500).json({ message: "R2 credentials not configured. Check .env file." });
       }
