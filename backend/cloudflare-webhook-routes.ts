@@ -56,8 +56,13 @@ export function registerCloudflareWebhookRoutes({
       const eventType = String(req.body?.type || req.body?.event || "").toLowerCase();
       const eventId = String(req.body?.id || req.body?.event_id || req.get("cf-event-id") || "").trim();
       const uid = String(req.body?.uid || req.body?.data?.uid || req.body?.video?.uid || "").trim();
-      if (!uid) return res.status(400).json({ message: "Missing uid" });
-      if (!eventId) return res.status(400).json({ message: "Missing event id" });
+
+      // Cloudflare sends a test ping with no uid/eventId when you click "Save and Test".
+      // Acknowledge it with 200 so the webhook destination is saved successfully.
+      if (!uid || !eventId) {
+        console.log(`[CloudflareWebhook] test ping received — eventType=${eventType || "none"}, body=${JSON.stringify(req.body || {}).slice(0, 200)}`);
+        return res.json({ ok: true });
+      }
 
       try {
         await db.query(
