@@ -12,6 +12,7 @@ const projectRoot = path.resolve(__dirname, "../..");
 dotenv.config({ path: path.resolve(projectRoot, ".env") });
 
 const migrationFiles = [
+  "migrations/0000_core_schema_baseline.sql",
   "migrations/0001_production_hardening_baseline.sql",
   "migrations/0002_runtime_tables_followup.sql",
   "migrations/0003_runtime_schema_baseline.sql",
