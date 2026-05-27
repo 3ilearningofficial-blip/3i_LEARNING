@@ -1,7 +1,9 @@
-import { createClient, type RedisClientType } from "redis";
+import { createClient } from "redis";
 
-let client: RedisClientType | null = null;
-let connectPromise: Promise<RedisClientType | null> | null = null;
+export type AppRedisClient = ReturnType<typeof createClient>;
+
+let client: AppRedisClient | null = null;
+let connectPromise: Promise<AppRedisClient | null> | null = null;
 
 function redisUrl(): string | null {
   const raw = process.env.REDIS_URL?.trim();
@@ -17,14 +19,14 @@ export function isRedisConfigured(): boolean {
  * Shared Redis client for dedup, rate limits, etc.
  * Returns null when REDIS_URL is unset or connection fails (callers fall back to PostgreSQL).
  */
-export async function getRedisClient(): Promise<RedisClientType | null> {
+export async function getRedisClient(): Promise<AppRedisClient | null> {
   const url = redisUrl();
   if (!url) return null;
 
   if (client?.isOpen) return client;
 
   if (!connectPromise) {
-    connectPromise = (async () => {
+    connectPromise = (async (): Promise<AppRedisClient | null> => {
       try {
         const next = createClient({ url });
         next.on("error", (err) => {

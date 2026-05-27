@@ -8,7 +8,10 @@ export function hashOtpValue(otp: string): string {
   // No fallback: a missing OTP_HMAC_SECRET must be a hard startup error, not a silent
   // downgrade to a known/guessable secret. If the env var is absent, secret is undefined
   // and createHmac will throw, surfacing the misconfiguration immediately at call time.
-  const secret = process.env.OTP_HMAC_SECRET;
+  const secret = process.env.OTP_HMAC_SECRET?.trim();
+  if (!secret) {
+    throw new Error("OTP_HMAC_SECRET must be set");
+  }
   return createHmac("sha256", secret).update(otp).digest("hex");
 }
 

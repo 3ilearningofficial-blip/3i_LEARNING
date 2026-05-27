@@ -1,4 +1,4 @@
-import type { RedisClientType } from "redis";
+import type { AppRedisClient } from "./redis-client";
 
 const NOTIF_DEDUP_TTL_SEC = 24 * 60 * 60;
 
@@ -11,7 +11,7 @@ function dedupKey(classId: number, userId: number, type: string): string {
  * Processes in batches to avoid huge pipelines.
  */
 export async function filterNewNotificationRecipientsRedis(
-  redis: RedisClientType,
+  redis: AppRedisClient,
   classId: number,
   userIds: number[],
   type: string,
@@ -28,7 +28,8 @@ export async function filterNewNotificationRecipientsRedis(
     const replies = await multi.exec();
     batch.forEach((userId, idx) => {
       const reply = replies?.[idx];
-      if (reply === "OK") accepted.push(userId);
+      // SET NX returns null when the key already exists; any non-null reply means we claimed the slot.
+      if (reply != null) accepted.push(userId);
     });
   }
 

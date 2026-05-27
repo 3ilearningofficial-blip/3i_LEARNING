@@ -62,6 +62,7 @@ export async function checkDatabaseReadiness(db: Queryable): Promise<{
 
   const missingColumns: string[] = [];
   for (const [table, columns] of Object.entries(REQUIRED_COLUMNS)) {
+    if (!presentTables.has(table)) continue;
     const set = presentColumns.get(table) ?? new Set<string>();
     for (const column of columns) {
       if (!set.has(column)) {
@@ -91,6 +92,7 @@ export async function checkDatabaseReadiness(db: Queryable): Promise<{
     presentUniqueKeys.add(`${table}|${cols.join(",")}`);
   }
   const missingIndexes = REQUIRED_UNIQUE_INDEX_SPECS
+    .filter((s) => presentTables.has(s.table))
     .map((s) => `${s.table}|${s.columns.join(",")}`)
     .filter((sig) => !presentUniqueKeys.has(sig));
 

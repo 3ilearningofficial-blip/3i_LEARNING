@@ -52,10 +52,18 @@ if (!connectionString) {
   console.error("[db:apply-sql] DATABASE_URL not found");
   process.exit(1);
 }
+const dbHost = (() => {
+  try {
+    return new URL(connectionString).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+})();
+const useInsecureSsl = dbHost && dbHost !== "localhost" && dbHost !== "127.0.0.1";
 
 const pool = new pg.Pool({
   connectionString,
-  ssl: { rejectUnauthorized: false },
+  ...(useInsecureSsl ? { ssl: { rejectUnauthorized: false } } : {}),
   max: 1,
 });
 

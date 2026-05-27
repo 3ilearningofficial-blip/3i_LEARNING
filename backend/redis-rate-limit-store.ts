@@ -1,4 +1,4 @@
-import type { RedisClientType } from "redis";
+import type { AppRedisClient } from "./redis-client";
 
 /**
  * express-rate-limit v8 store backed by Redis (shared across PM2 instances).
@@ -8,7 +8,7 @@ export class RedisRateLimitStore {
   private windowMs = 60_000;
   readonly localKeys = false;
 
-  constructor(private readonly redis: RedisClientType) {}
+  constructor(private readonly redis: AppRedisClient) {}
 
   init(options: { windowMs: number }): void {
     this.windowMs = options.windowMs;
@@ -101,7 +101,7 @@ export class RedisRateLimitStore {
 
 /** Fixed-window rate limit for /api/download-url (student-only). */
 export async function checkDownloadUrlRateLimitRedis(
-  redis: RedisClientType,
+  redis: AppRedisClient,
   userId: number,
   windowMs: number,
   max: number
