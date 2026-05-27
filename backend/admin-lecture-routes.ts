@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { purgeUserDownloadsForItem } from "./download-access-utils";
 import { withTimeout } from "./async-utils";
 
 type DbClient = {
@@ -102,7 +103,7 @@ export function registerAdminLectureRoutes({
           Date.now(),
         ]
       );
-      await db.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [parsedCourseId]);
+      // `courses.total_lectures` is maintained by a trigger on `lectures`.
       await recomputeAllEnrollmentsProgressForCourse(parsedCourseId);
       res.json(result.rows[0]);
     } catch (err) {
@@ -147,6 +148,9 @@ export function registerAdminLectureRoutes({
           req.params.id,
         ]
       );
+      if (downloadAllowed === false) {
+        await purgeUserDownloadsForItem(db, "lecture", Number(req.params.id));
+      }
       const row = await db.query("SELECT course_id FROM lectures WHERE id = $1 LIMIT 1", [req.params.id]);
       if (row.rows[0]?.course_id) {
         await recomputeAllEnrollmentsProgressForCourse(row.rows[0].course_id);
@@ -186,10 +190,7 @@ export function registerAdminLectureRoutes({
       //    object-store call never holds the request long enough for the upstream
       //    proxy to return its own 504 (which would strip CORS headers).
       await db.query("DELETE FROM lectures WHERE id = $1", [req.params.id]);
-      await db.query(
-        "UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1",
-        [lecture.course_id],
-      );
+      // `courses.total_lectures` is maintained by a trigger on `lectures`.
       await recomputeAllEnrollmentsProgressForCourse(lecture.course_id);
 
       // 2) If this lecture was created from a live class, tombstone the live class so

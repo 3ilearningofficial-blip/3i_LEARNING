@@ -80,6 +80,23 @@ export async function hasWebOffline(userId: number, itemType: string, itemId: nu
   return r != null;
 }
 
+/** Remove all offline blobs for a user (logout / account switch). */
+export async function clearWebOfflineForUser(userId: number): Promise<void> {
+  const prefix = `${userId}:`;
+  const keys = await listWebOfflineKeys();
+  const mine = keys.filter((k) => k.startsWith(prefix));
+  if (!mine.length) return;
+  const db = await openDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE, "readwrite");
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error ?? new Error("IndexedDB bulk delete failed"));
+    const store = tx.objectStore(STORE);
+    for (const k of mine) store.delete(k);
+  });
+  db.close();
+}
+
 export async function listWebOfflineKeys(): Promise<string[]> {
   const db = await openDb();
   const keys = await new Promise<string[]>((resolve, reject) => {

@@ -112,10 +112,7 @@ export async function saveRecordingForClassAndPeers(
       ]
     );
     lectureIds.push(Number(lectureResult.rows[0]?.id));
-    await db.query(
-      "UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1",
-      [row.course_id]
-    );
+    // `courses.total_lectures` is maintained by a trigger on `lectures`.
     if (opts.recomputeCourseProgress) {
       await opts.recomputeCourseProgress(row.course_id);
     }

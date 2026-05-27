@@ -32,6 +32,7 @@ export const REQUIRED_TABLES = [
   "session",
   "express_rate_limit",
   "otp_challenges",
+  "notifications_sent",
 ] as const;
 
 export const REQUIRED_COLUMNS: Record<string, string[]> = {
@@ -49,7 +50,7 @@ export const REQUIRED_COLUMNS: Record<string, string[]> = {
     "otp_send_window_start",
     "otp_send_locked_until",
   ],
-  enrollments: ["status", "valid_until"],
+  enrollments: ["status", "valid_until", "download_cleanup_pending"],
   live_classes: [
     "recording_url",
     "stream_type",
@@ -68,11 +69,21 @@ export const REQUIRED_COLUMNS: Record<string, string[]> = {
     "board_pages_json",
     "board_sync_checkpoint_url",
     "board_checkpoint_at",
+    "cf_recording_uid",
+    "recording_url_normalized",
   ],
   notifications: ["source", "expires_at", "is_hidden", "admin_notif_id", "image_url"],
   courses: ["subject", "cover_color", "pyq_count", "mock_count", "practice_count"],
-  lectures: ["download_allowed", "section_title", "live_class_id", "live_class_finalized", "transcript"],
-  study_materials: ["download_allowed", "section_title"],
+  lectures: [
+    "download_allowed",
+    "section_title",
+    "live_class_id",
+    "live_class_finalized",
+    "transcript",
+    "video_url_normalized",
+    "pdf_url_normalized",
+  ],
+  study_materials: ["download_allowed", "section_title", "file_url_normalized"],
   tests: ["difficulty", "scheduled_at", "price", "mini_course_id"],
   questions: ["image_url", "solution_image_url"],
   lecture_progress: ["playback_sessions", "last_session_ping_at"],
@@ -96,4 +107,5 @@ export const REQUIRED_UNIQUE_INDEX_SPECS = [
   { table: "user_push_tokens", columns: ["expo_push_token"] },
   { table: "users", columns: ["phone"] },
   { table: "users", columns: ["email"] },
+  { table: "notifications_sent", columns: ["class_id", "user_id", "type"] },
 ] as const;

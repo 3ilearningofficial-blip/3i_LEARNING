@@ -695,7 +695,7 @@ export default function LiveClassScreen() {
 
   const { data: viewerData } = useQuery<{ count: number; viewers: any[]; visible: boolean }>({
     queryKey: [`/api/live-classes/${id}/viewers`],
-    refetchInterval: (!isScreenActive || !liveClassData?.is_live || liveClassData?.is_completed) ? false : 3000,
+    refetchInterval: (!isScreenActive || !liveClassData?.is_live || liveClassData?.is_completed) ? false : 8000,
     staleTime: 3000,
   });
 
@@ -788,7 +788,7 @@ export default function LiveClassScreen() {
     queryKey: [`/api/admin/live-classes/${id}/raised-hands`],
     enabled: isAdmin && !!liveClassData?.is_live && isScreenActive,
     refetchInterval:
-      !isScreenActive ? false : engagementSseActive ? 30_000 : 500,
+      !isScreenActive ? false : engagementSseActive ? 30_000 : 1500,
     staleTime: 0,
   });
 

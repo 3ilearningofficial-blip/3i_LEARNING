@@ -7,7 +7,6 @@ type RegisterUploadRoutesDeps = {
   requireAdmin: (req: Request, res: Response, next: () => void) => any;
   getAuthUser: (req: Request) => Promise<{ id: number } | null>;
   getR2Client: () => Promise<any>;
-  uploadLarge: any;
 };
 
 function getPublicApiBaseUrl(req: Request): string {
@@ -45,7 +44,6 @@ export function registerUploadRoutes({
   requireAdmin,
   getAuthUser,
   getR2Client,
-  uploadLarge,
 }: RegisterUploadRoutesDeps): void {
   app.post("/api/upload/presign-profile", async (req: Request, res: Response) => {
     try {
@@ -60,7 +58,11 @@ export function registerUploadRoutes({
       const { PutObjectCommand } = await import("@aws-sdk/client-s3");
       const { getSignedUrl } = await import("@aws-sdk/s3-request-presigner");
       const r2 = await getR2Client();
-      const ext = filename.split(".").pop() || "jpg";
+      const ext = (filename.split(".").pop() || "").toLowerCase();
+      const ALLOWED_IMAGE_EXTENSIONS = ["jpg", "jpeg", "png", "webp", "gif"];
+      if (!ALLOWED_IMAGE_EXTENSIONS.includes(ext)) {
+        return res.status(400).json({ message: "Invalid file type. Allowed: jpg, jpeg, png, webp, gif" });
+      }
       const key = `images/profile-${user.id}-${Date.now()}.${ext}`;
       const command = new PutObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: key, ContentType: contentType });
       const uploadUrl = await getSignedUrl(r2, command, { expiresIn: 600 });
@@ -171,49 +173,33 @@ export function registerUploadRoutes({
     }
   });
 
-  app.post("/api/upload/to-r2", requireAdmin, uploadLarge.single("file"), async (req: Request, res: Response) => {
-    try {
-      if (process.env.ALLOW_SERVER_BUFFER_UPLOAD !== "true") {
-        return res.status(403).json({
-          message:
-            "Direct buffered upload is disabled. Use /api/upload/presign and upload from client instead.",
-        });
-      }
-      if (!(req as any).file) return res.status(400).json({ message: "No file uploaded" });
-      const file = (req as any).file;
-      const folder = req.body.folder || "uploads";
-      const subfolder = req.body.subfolder;
-      if (!process.env.R2_ACCOUNT_ID || !process.env.R2_ACCESS_KEY_ID || !process.env.R2_SECRET_ACCESS_KEY) {
-        return res.status(500).json({ message: "R2 credentials not configured." });
-      }
-      const { PutObjectCommand } = await import("@aws-sdk/client-s3");
-      const r2 = await getR2Client();
-      const keyResult = buildPresignedObjectKey({ filename: file.originalname, folder, subfolder });
-      if ("error" in keyResult) {
-        return res.status(400).json({ message: keyResult.error });
-      }
-      const { key } = keyResult;
-      await r2.send(
-        new PutObjectCommand({
-          Bucket: process.env.R2_BUCKET_NAME,
-          Key: key,
-          Body: file.buffer,
-          ContentType: file.mimetype,
-        })
-      );
-      const publicUrl = `${getPublicApiBaseUrl(req)}/api/media/${key}`;
-      console.log(`[R2] Server upload complete: ${key} (${file.size} bytes)`);
-      res.json({ publicUrl, key });
-    } catch (err: any) {
-      console.error("[R2] Server upload error:", err?.message || err);
-      res.status(500).json({ message: "Failed to upload file" });
-    }
+  // Buffered uploads used multer in-memory which can OOM on concurrent large files.
+  // Large assets must be uploaded via presigned PUT URL (`/api/upload/presign` + client PUT).
+  app.post("/api/upload/to-r2", requireAdmin, async (_req: Request, res: Response) => {
+    res.status(410).json({
+      message: "Server-side buffered uploads are disabled. Use /api/upload/presign and upload from the client directly to R2.",
+    });
   });
 
   app.delete("/api/upload/file", requireAdmin, async (req: Request, res: Response) => {
     try {
       const { key } = req.body;
       if (!key) return res.status(400).json({ message: "key required" });
+      const ALLOWED_KEY_PREFIXES = [
+        "uploads/",
+        "course-materials/",
+        "profile-images/",
+        "thumbnails/",
+        "course-thumbnails/",
+        "materials/",
+        "lectures/",
+        "books/",
+        "videos/",
+        "images/",
+        "live-class-recording/",
+      ];
+      const keyAllowed = ALLOWED_KEY_PREFIXES.some((prefix) => String(key).startsWith(prefix));
+      if (!keyAllowed) return res.status(403).json({ message: "Invalid file key — operation not permitted" });
       const { DeleteObjectCommand } = await import("@aws-sdk/client-s3");
       const r2 = await getR2Client();
       await r2.send(new DeleteObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: key }));

@@ -9,6 +9,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { invalidateAccessCaches } from "@/lib/invalidate-access-caches";
 import * as Haptics from "expo-haptics";
 import { apiRequest, getApiUrl, getBaseUrl, authFetch } from "@/lib/query-client";
 import {
@@ -150,8 +151,7 @@ export default function CourseDetailScreen() {
     if (!p) return;
     if (p === "success") {
       Alert.alert("Success!", "Payment successful! You are now enrolled.");
-      qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] });
-      qc.invalidateQueries({ queryKey: ["/api/courses"] });
+      invalidateAccessCaches(qc, { userId: user?.id, courseId: id });
     } else if (p === "failed") {
       Alert.alert("Payment", "We could not complete the payment. Please try again.");
     }
@@ -159,7 +159,7 @@ export default function CourseDetailScreen() {
     url.searchParams.delete("payment");
     const next = url.pathname + (url.search || "") + url.hash;
     window.history.replaceState({}, document.title, next);
-  }, [id, qc]);
+  }, [id, qc, user?.id]);
   const [enrollError, setEnrollError] = useState("");
   const [enrollSuccess, setEnrollSuccess] = useState(false);
   const [studentActionStudent, setStudentActionStudent] = useState<any>(null);
@@ -436,8 +436,7 @@ export default function CourseDetailScreen() {
       }
       // Background refetch to sync with server — wait longer to ensure DB commit
       setTimeout(() => {
-        qc.invalidateQueries({ queryKey: ["/api/courses"] });
-        qc.refetchQueries({ queryKey: ["/api/courses"], type: "all" });
+        invalidateAccessCaches(qc, { userId: user?.id, courseId: id });
         qc.invalidateQueries({ queryKey: ["/api/admin/courses", id] });
       }, 2000);
     },
@@ -487,8 +486,7 @@ export default function CourseDetailScreen() {
                 razorpay_signature: response.razorpay_signature,
                 courseId: courseIdNum,
               });
-              qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] });
-              qc.invalidateQueries({ queryKey: ["/api/courses"] });
+              invalidateAccessCaches(qc, { userId: user?.id, courseId: id });
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
               Alert.alert("Success!", "Payment successful! You are now enrolled.");
             } catch {
@@ -1634,8 +1632,7 @@ setTimeout(function() {
                         razorpay_signature: data.razorpay_signature,
                         courseId: parseInt(id as string),
                       });
-                      qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] });
-                      qc.invalidateQueries({ queryKey: ["/api/courses"] });
+                      invalidateAccessCaches(qc, { userId: user?.id, courseId: id });
                       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
                       Alert.alert("Success!", "Payment successful! You are now enrolled.");
                     } catch {

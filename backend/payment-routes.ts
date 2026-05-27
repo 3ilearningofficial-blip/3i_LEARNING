@@ -81,7 +81,8 @@ export function registerPaymentRoutes({
         ]
       );
     } catch (err) {
-      console.error("[Payments] failed to log payment failure:", err);
+      console.error("[Payment] Failed to log payment failure:", err);
+      throw err; // re-throw so caller knows the log failed
     }
   };
 
@@ -234,35 +235,37 @@ export function registerPaymentRoutes({
       const pricePaisa = Math.round(parseFloat(String(price)) * 100);
       const now = Date.now();
 
-      const updated = await db.query(
-        `UPDATE payments AS p
-         SET click_count = COALESCE(p.click_count, 1) + 1,
-             status = 'created'
-         FROM (
-           SELECT id FROM payments
+      await runInTransaction(async (tx) => {
+        // Lock existing click-tracking or paid row to prevent concurrent double-insert.
+        const existing = await tx.query(
+          `SELECT id, status FROM payments
            WHERE user_id = $1 AND course_id = $2
-             AND (status = 'created' OR status IS NULL)
-             AND (razorpay_order_id IS NULL OR btrim(razorpay_order_id) = '')
            ORDER BY created_at DESC
            LIMIT 1
-         ) AS sub
-         WHERE p.id = sub.id
-         RETURNING p.id`,
-        [user.id, courseId]
-      );
-      if (updated.rows.length === 0) {
-        const paid = await db.query(
-          "SELECT id FROM payments WHERE user_id = $1 AND course_id = $2 AND status = 'paid' LIMIT 1",
+           FOR UPDATE`,
           [user.id, courseId]
         );
-        if (paid.rows.length === 0) {
-          await db.query(
+        if (existing.rows.length > 0) {
+          const row = existing.rows[0];
+          // Only bump click_count on the non-paid tracking row; leave paid rows alone.
+          if (row.status !== "paid") {
+            await tx.query(
+              `UPDATE payments
+               SET click_count = COALESCE(click_count, 1) + 1,
+                   status = 'created'
+               WHERE id = $1`,
+              [row.id]
+            );
+          }
+        } else {
+          // No row at all — safe to insert now that we hold no conflicting lock.
+          await tx.query(
             `INSERT INTO payments (user_id, course_id, amount, status, click_count, created_at)
              VALUES ($1, $2, $3, 'created', 1, $4)`,
             [user.id, courseId, pricePaisa, now]
           );
         }
-      }
+      });
       res.json({ ok: true });
     } catch {
       res.json({ ok: true });

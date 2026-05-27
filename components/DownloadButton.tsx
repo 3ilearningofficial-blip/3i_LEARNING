@@ -29,8 +29,12 @@ function WebDownloadButton({
   fileType: string;
 }) {
   const { user } = useAuth();
-  const { getJob, startWebDownload, isItemSavedLocally } = useWebDownloadJobs();
+  const { getJob, startWebDownload, isItemSavedLocally, isWebOfflineHydrated } = useWebDownloadJobs();
   const [tapError, setTapError] = useState<string | null>(null);
+
+  if (!isWebOfflineHydrated) {
+    return null;
+  }
 
   const job = getJob(itemType, itemId);
   const status = job?.status;
@@ -99,11 +103,15 @@ export function DownloadButton({
   title = 'Download',
   fileType = 'file',
 }: DownloadButtonProps) {
-  const { getDownloadState, startDownload } = useDownloadManager();
+  const { getDownloadState, startDownload, isStateLoaded } = useDownloadManager();
   const state = getDownloadState(itemType, itemId);
 
   // Guard: only show if download is allowed and user is enrolled
   if (!downloadAllowed || !isEnrolled) {
+    return null;
+  }
+
+  if (!isStateLoaded) {
     return null;
   }
 

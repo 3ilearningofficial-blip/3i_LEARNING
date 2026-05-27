@@ -38,6 +38,13 @@ const migrationFiles = [
   "migrations/0024_live_classes_scheduled_at_index.sql",
   "migrations/0025_mission_folder_and_reorder.sql",
   "migrations/0026_record_a_class.sql",
+  "migrations/0027_notifications_dedup_table.sql",
+  "migrations/0028_media_token_url_normalized_columns.sql",
+  "migrations/0029_download_cleanup_pending_enrollments.sql",
+  "migrations/0030_live_classes_is_live_scheduled_at_index.sql",
+  "migrations/0031_courses_total_lectures_trigger.sql",
+  "migrations/0032_live_classes_cf_recording_uid.sql",
+  "migrations/0033_media_tokens_access_count.sql",
 ];
 
 const connectionString = process.env.DATABASE_URL;

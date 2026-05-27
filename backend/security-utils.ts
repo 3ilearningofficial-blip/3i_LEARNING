@@ -5,7 +5,10 @@ export function generateSecureToken(bytes = 32): string {
 }
 
 export function hashOtpValue(otp: string): string {
-  const secret = process.env.OTP_HMAC_SECRET || process.env.SESSION_SECRET || "dev-otp-secret";
+  // No fallback: a missing OTP_HMAC_SECRET must be a hard startup error, not a silent
+  // downgrade to a known/guessable secret. If the env var is absent, secret is undefined
+  // and createHmac will throw, surfacing the misconfiguration immediately at call time.
+  const secret = process.env.OTP_HMAC_SECRET;
   return createHmac("sha256", secret).update(otp).digest("hex");
 }
 
@@ -20,10 +23,10 @@ export function verifyOtpValue(storedOtp: string | null | undefined, providedOtp
       return timingSafeEqual(storedBuffer, providedBuffer);
     }
   } catch {
-    // Fall through for legacy values.
+    // Hash comparison failed (e.g. buffer length mismatch or encoding error).
+    return false;
   }
 
-  // Backward compatibility for previously stored plain OTP values.
-  return storedOtp === providedOtp;
+  return false;
 }
 

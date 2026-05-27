@@ -5,7 +5,7 @@
  * Three profiles:
  *  - upload      — generic images / attachments, 10 MB cap
  *  - uploadPdf   — PDF-only, 10 MB cap with mime-type filter
- *  - uploadLarge — video / large assets, 500 MB cap
+ *  - (no large upload profile; large assets must use direct presigned R2 PUT)
  */
 import multer from "multer";
 
@@ -24,10 +24,4 @@ export const uploadPdf = multer({
     if (mimetype === "application/pdf") return cb(null, true);
     return cb(new Error("Only PDF files are allowed"));
   },
-});
-
-/** Large-asset 500 MB in-memory upload (video files). */
-export const uploadLarge = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 500 * 1024 * 1024 },
 });

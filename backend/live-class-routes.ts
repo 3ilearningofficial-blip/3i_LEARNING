@@ -17,9 +17,6 @@ export function registerLiveClassRoutes({
   db,
   getAuthUser,
 }: RegisterLiveClassRoutesDeps): void {
-  let upcomingCache: any[] = [];
-  let upcomingCacheAt = 0;
-  const upcomingCacheTtlMs = Math.max(10_000, Number(process.env.UPCOMING_CLASSES_CACHE_MS || "30000"));
   const sanitizeLiveClass = (row: any) => {
     if (!row || typeof row !== "object") return row;
     const { cf_stream_key, cf_stream_rtmp_url, ...safe } = row;
@@ -98,6 +95,11 @@ export function registerLiveClassRoutes({
       const ex23 = sqlEnrollmentExistsForLiveList(2, 3);
       const now = Date.now();
       if (cid && user) {
+        const rawLimit = parseInt(String(req.query.limit || "20"), 10);
+        const rawOffset = parseInt(String(req.query.offset || "0"), 10);
+        const safeLimit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 200) : 20;
+        const safeOffset = Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 0;
+        const safeLimitPlusOne = safeLimit + 1;
         const result = await db.query(
           `SELECT lc.*, c.title as course_title, c.is_free as course_is_free,
             ${ex23} as is_enrolled
@@ -113,11 +115,15 @@ export function registerLiveClassRoutes({
                )
              )
              AND (lc.is_free_preview = TRUE OR ${ex23})
-           ORDER BY lc.scheduled_at DESC`,
-          [cid, user.id, now]
+           ORDER BY lc.scheduled_at DESC
+           LIMIT $4 OFFSET $5`,
+          [cid, user.id, now, safeLimitPlusOne, safeOffset]
         );
+        const hasMore = result.rows.length > safeLimit;
+        const rowsToSend = hasMore ? result.rows.slice(0, safeLimit) : result.rows;
         res.set("Cache-Control", "private, no-store");
-        return res.json(result.rows.map(sanitizeLiveClass));
+        res.set("X-Has-More", hasMore ? "true" : "false");
+        return res.json(rowsToSend.map(sanitizeLiveClass));
       }
       if (cid) {
         const result = await db.query(
@@ -195,11 +201,6 @@ export function registerLiveClassRoutes({
 
   app.get("/api/upcoming-classes", async (_req: Request, res: Response) => {
     try {
-      const now = Date.now();
-      if (upcomingCache.length > 0 && now - upcomingCacheAt <= upcomingCacheTtlMs) {
-        res.set("Cache-Control", "private, no-store");
-        return res.json(upcomingCache);
-      }
       // Only expose classes that are explicitly public, free, or free-preview.
       // Private paid-course classes must NOT appear on this unauthenticated feed —
       // their schedule, title, and course details would be visible to anyone otherwise.
@@ -221,15 +222,12 @@ export function registerLiveClassRoutes({
         LIMIT 50
       `);
       console.log(`[UpcomingClasses] returning ${result.rows.length} classes`);
-      res.set("Cache-Control", "private, no-store");
+      res.set("Cache-Control", "private, max-age=30");
       const payload = result.rows.map(toPublicUpcomingDto);
-      upcomingCache = payload;
-      upcomingCacheAt = now;
       res.json(payload);
     } catch (err) {
       console.error("[UpcomingClasses] error:", err);
-      res.set("Cache-Control", "private, no-store");
-      if (upcomingCache.length > 0) return res.json(upcomingCache);
+      res.set("Cache-Control", "private, max-age=30");
       res.json([]);
     }
   });

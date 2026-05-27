@@ -22,6 +22,10 @@
  * supported for complete disablement on worker-only instances.
  */
 
+import { deleteDownloadsForUser } from "./download-utils";
+import { getRedisClient } from "./redis-client";
+import { filterNewNotificationRecipientsRedis } from "./redis-notification-dedup";
+
 /**
  * Stable numeric key used for pg_try_advisory_lock / pg_advisory_unlock.
  * This value is arbitrary but must be unique across all advisory lock usages
@@ -79,7 +83,53 @@ export function startSchedulers(
   }
 
   startLiveClassNotificationScheduler(db, pool, sendPushToUsers);
+  startDownloadCleanupRetryScheduler(db);
   startDownloadTokenCleanupScheduler(db);
+  startStuckLiveClassCleanupScheduler(db);
+}
+
+/**
+ * Scheduler: retry offline download cleanup when it previously failed.
+ * Runs every 10 minutes and clears `enrollments.download_cleanup_pending` on success.
+ */
+function startDownloadCleanupRetryScheduler(db: DbClient): void {
+  const retryIntervalMs = 10 * 60 * 1000;
+  const retryNow = async (): Promise<void> => {
+    try {
+      const pending = await db.query(
+        `SELECT id, user_id, course_id
+         FROM enrollments
+         WHERE download_cleanup_pending = TRUE
+         LIMIT 200`
+      );
+
+      for (const row of pending.rows) {
+        const enrollmentId = Number(row.id);
+        const userId = Number(row.user_id);
+        const courseId = Number(row.course_id);
+        if (!Number.isFinite(enrollmentId) || !Number.isFinite(userId) || !Number.isFinite(courseId)) continue;
+
+        try {
+          await deleteDownloadsForUser(db, userId, courseId);
+          await db.query(
+            "UPDATE enrollments SET download_cleanup_pending = FALSE WHERE id = $1",
+            [enrollmentId]
+          );
+        } catch (err) {
+          console.error("[CleanupRetry] cleanup failed; will retry later", {
+            enrollmentId,
+            userId,
+            courseId,
+          });
+        }
+      }
+    } catch (err) {
+      console.error("[CleanupRetry] scheduler error:", err);
+    }
+  };
+
+  void retryNow();
+  setInterval(() => void retryNow(), retryIntervalMs);
 }
 
 /**
@@ -92,17 +142,14 @@ export function startSchedulers(
  * already holds the lock, this tick is skipped immediately — no double notifications.
  * The lock is always released in a finally block, even if an error occurs.
  *
- * Process-local sentNotifications Set provides a second layer of deduplication
- * within a single process lifetime (prevents resends across restart cycles).
+ * Deduplication uses Redis SET NX when REDIS_URL is set; otherwise the
+ * `notifications_sent` table keyed on (class_id, user_id, type).
  */
 function startLiveClassNotificationScheduler(
   db: DbClient,
   pool: DbPool,
   sendPushToUsers: SendPushToUsersFn
 ): void {
-  // process-local dedupe — prevents re-sending within same process restart cycle
-  const sentNotifications = new Set<string>();
-
   setInterval(async () => {
     // Acquire a dedicated connection for the advisory lock.
     // Advisory locks are session-scoped: they must be acquired and released
@@ -125,6 +172,10 @@ function startLiveClassNotificationScheduler(
       }
 
       const now = Date.now();
+
+      // Bound notifications_sent so it doesn't grow unboundedly.
+      await db.query("DELETE FROM notifications_sent WHERE sent_at < $1", [now - 24 * 60 * 60 * 1000]);
+
       const minScheduleAt = now + 29 * 60 * 1000;
       const maxScheduleAt = now + 31 * 60 * 1000;
 
@@ -143,63 +194,104 @@ function startLiveClassNotificationScheduler(
 
       for (const lc of classes.rows) {
         const expiresAt = now + 6 * 3600000;
-        const key30 = `30min_${lc.id}`;
 
-        if (!sentNotifications.has(key30)) {
-          sentNotifications.add(key30);
-          const notifTitle = "⏰ Live Class in 30 minutes!";
-          const notifMessage = `"${lc.title}" starts in 30 minutes. Get ready!`;
+        const notifTitle = "⏰ Live Class in 30 minutes!";
+        const notifMessage = `"${lc.title}" starts in 30 minutes. Get ready!`;
 
-          if (!lc.course_id || lc.is_free_preview === true || lc.is_public === true) {
-            // Free/public class — notify all students
-            const inserted = await db.query(
-              `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
-               SELECT u.id, $1, $2, 'info', $3, $4
-               FROM users u
-               WHERE u.role = 'student'
-               RETURNING user_id`,
-              [notifTitle, notifMessage, now, expiresAt]
+        // Batch size for push delivery — avoids overwhelming the push service
+        // with a single unbounded fanout. 200 ms pause between batches.
+        const PUSH_BATCH_SIZE = 500;
+        const dedupType = "live_class_reminder_30min";
+
+        let recipientIds: number[] = [];
+        const redis = await getRedisClient();
+
+        if (redis) {
+          const candidates = !lc.course_id || lc.is_free_preview === true || lc.is_public === true
+            ? await db.query(
+                `SELECT u.id::int AS user_id FROM users u WHERE u.role = 'student'`,
+                []
+              )
+            : await db.query(
+                `SELECT e.user_id::int AS user_id
+                 FROM enrollments e
+                 WHERE e.course_id = $1::int
+                   AND (e.status = 'active' OR e.status IS NULL)
+                   AND (e.valid_until IS NULL OR e.valid_until > $2::bigint)`,
+                [lc.course_id, now]
+              );
+          const candidateIds = candidates.rows.map((r: { user_id: number }) => Number(r.user_id));
+          recipientIds = await filterNewNotificationRecipientsRedis(
+            redis,
+            lc.id,
+            candidateIds,
+            dedupType
+          );
+          if (recipientIds.length) {
+            await db.query(
+              `INSERT INTO notifications_sent (class_id, user_id, type)
+               SELECT $1::int, u_id::int, $2::text
+               FROM unnest($3::int[]) AS u_id
+               ON CONFLICT (class_id, user_id, type) DO NOTHING`,
+              [lc.id, dedupType, recipientIds]
             );
-            await sendPushToUsers(
-              db,
-              inserted.rows.map((r: any) => Number(r.user_id)),
-              {
-                title: notifTitle,
-                body: notifMessage,
-                data: { type: "live_class_reminder", liveClassId: lc.id },
-              }
-            );
-            console.log(`[LiveNotif] 30min reminder sent for class=${lc.id} recipients=${inserted.rows.length}`);
-          } else {
-            // Paid class — notify only students with an active, non-expired enrollment.
-            // This prevents revoked or expired students from receiving reminders for
-            // classes they can no longer attend.
-            const inserted = await db.query(
-              `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
-               SELECT e.user_id, $1, $2, 'info', $3, $4
-               FROM enrollments e
-               WHERE e.course_id = $5
-                 AND (e.status = 'active' OR e.status IS NULL)
-                 AND (e.valid_until IS NULL OR e.valid_until > $6)
-               RETURNING user_id`,
-              [notifTitle, notifMessage, now, expiresAt, lc.course_id, now]
-            );
-            await sendPushToUsers(
-              db,
-              inserted.rows.map((r: any) => Number(r.user_id)),
-              {
-                title: notifTitle,
-                body: notifMessage,
-                data: { type: "live_class_reminder", liveClassId: lc.id, courseId: lc.course_id },
-              }
-            );
-            console.log(`[LiveNotif] 30min reminder sent for class=${lc.id} recipients=${inserted.rows.length}`);
+          }
+        } else if (!lc.course_id || lc.is_free_preview === true || lc.is_public === true) {
+          const inserted = await db.query(
+            `INSERT INTO notifications_sent (class_id, user_id, type)
+             SELECT $1::int, u.id::int, $2::text
+             FROM users u
+             WHERE u.role = 'student'
+             ON CONFLICT (class_id, user_id, type) DO NOTHING
+             RETURNING user_id`,
+            [lc.id, dedupType]
+          );
+          recipientIds = inserted.rows.map((r: { user_id: number }) => Number(r.user_id));
+        } else {
+          const inserted = await db.query(
+            `INSERT INTO notifications_sent (class_id, user_id, type)
+             SELECT $1::int, e.user_id::int, $2::text
+             FROM enrollments e
+             WHERE e.course_id = $3::int
+               AND (e.status = 'active' OR e.status IS NULL)
+               AND (e.valid_until IS NULL OR e.valid_until > $4::bigint)
+             ON CONFLICT (class_id, user_id, type) DO NOTHING
+             RETURNING user_id`,
+            [lc.id, dedupType, lc.course_id, now]
+          );
+          recipientIds = inserted.rows.map((r: { user_id: number }) => Number(r.user_id));
+        }
+
+        // If nobody was newly inserted into notifications_sent, we already sent
+        // this reminder for this class+type.
+        if (!recipientIds.length) continue;
+
+        // Create in-app notifications only for recipients we haven't notified yet.
+        await db.query(
+          `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
+           SELECT u_id::int, $1::text, $2::text, 'info', $3::bigint, $4::bigint
+           FROM unnest($5::int[]) AS u_id`,
+          [notifTitle, notifMessage, now, expiresAt, recipientIds]
+        );
+
+        for (let i = 0; i < recipientIds.length; i += PUSH_BATCH_SIZE) {
+          const batch = recipientIds.slice(i, i + PUSH_BATCH_SIZE);
+          await sendPushToUsers(db, batch, {
+            title: notifTitle,
+            body: notifMessage,
+            data: !lc.course_id || lc.is_free_preview === true || lc.is_public === true
+              ? { type: "live_class_reminder", liveClassId: lc.id }
+              : { type: "live_class_reminder", liveClassId: lc.id, courseId: lc.course_id },
+          });
+          if (i + PUSH_BATCH_SIZE < recipientIds.length) {
+            await new Promise((resolve) => setTimeout(resolve, 200));
           }
         }
+
+        console.log(`[LiveNotif] 30min reminder sent for class=${lc.id} recipients=${recipientIds.length}`);
       }
 
-      // Prevent unbounded memory growth in long-running processes
-      if (sentNotifications.size > 500) sentNotifications.clear();
+      // dedup: Redis SET NX when configured, else notifications_sent (PostgreSQL).
     } catch (err) {
       console.error("[LiveNotif] Scheduler error:", err);
     } finally {
@@ -225,7 +317,43 @@ function startLiveClassNotificationScheduler(
 }
 
 /**
- * Scheduler 2: Download token cleanup.
+ * Scheduler 2: Stuck live-class cleanup.
+ * Runs every 15 minutes. Clears the is_live flag on any class that has been
+ * marked live for over 6 hours — this handles the case where the Cloudflare
+ * Stream webhook that sets is_live=FALSE was lost (network error, cold restart,
+ * etc.), leaving the class permanently "live" in the UI.
+ *
+ * 21600000 ms = 6 hours in milliseconds.
+ * The cast to BIGINT epoch arithmetic matches the JavaScript Date.now() values
+ * stored in started_at.
+ */
+async function clearStuckLiveClasses(db: DbClient): Promise<void> {
+  try {
+    const result = await db.query(`
+      UPDATE live_classes
+      SET is_live = FALSE
+      WHERE is_live = TRUE
+        AND started_at IS NOT NULL
+        AND started_at < EXTRACT(EPOCH FROM NOW()) * 1000 - 21600000
+    `);
+    if (result.rowCount && result.rowCount > 0) {
+      console.log(`[StuckLiveCleanup] Cleared is_live flag on ${result.rowCount} stuck class(es)`);
+    }
+  } catch (err) {
+    console.error("[StuckLiveCleanup] Error clearing stuck live classes:", err);
+  }
+}
+
+function startStuckLiveClassCleanupScheduler(db: DbClient): void {
+  // Run immediately on startup to fix any classes stuck before the server restarted,
+  // then repeat every 15 minutes.
+  clearStuckLiveClasses(db);
+  setInterval(() => clearStuckLiveClasses(db), 15 * 60 * 1000);
+  console.log("[StuckLiveCleanup] Scheduler started — runs every 15 minutes");
+}
+
+/**
+ * Scheduler 3: Download token cleanup.
  * Runs every 5 minutes. Deletes expired and already-used download tokens
  * in batches of 2000 to avoid long-running DELETE operations.
  */

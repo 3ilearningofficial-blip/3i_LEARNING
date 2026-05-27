@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable,
-  ActivityIndicator, Platform, Alert,
+  ActivityIndicator, Platform, Alert, BackHandler,
 } from "react-native";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery } from "@tanstack/react-query";
@@ -33,10 +33,18 @@ export default function DownloadsScreen() {
   const { user } = useAuth();
   const { startWebDownload, forgetSavedLocally } = useWebDownloadJobs();
   const [activeTab, setActiveTab] = useState<"lectures" | "pdfs">("lectures");
+  type DownloadsView =
+    | { mode: "root" }
+    | { mode: "course"; courseTitle: string }
+    | { mode: "section"; courseTitle: string; sectionTitle: string };
+  const [view, setView] = useState<DownloadsView>({ mode: "root" });
   const [totalStorage, setTotalStorage] = useState<number>(0);
   /** Web: items with a Blob present in IndexedDB for this browser */
   const [webHeldKeys, setWebHeldKeys] = useState<Set<string>>(() => new Set());
   const downloadManager = useDownloadManager();
+  const { isStateLoaded } = downloadManager;
+  const { isWebOfflineHydrated } = useWebDownloadJobs();
+  const downloadUiReady = Platform.OS === "web" ? isWebOfflineHydrated : isStateLoaded;
 
   const { data, isLoading, refetch } = useQuery<{ materials: DownloadItem[]; lectures: DownloadItem[] }>({
     queryKey: user?.id ? myDownloadsQueryKey(user.id) : ["/api/my-downloads", "guest"],
@@ -80,6 +88,15 @@ export default function DownloadsScreen() {
   useEffect(() => {
     void refreshWebHeldKeys();
   }, [refreshWebHeldKeys]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (Platform.OS === "web" && user?.id) {
+        void refetch();
+        void refreshWebHeldKeys();
+      }
+    }, [user?.id, refetch, refreshWebHeldKeys])
+  );
 
   /**
    * Web revocation cleanup — mirrors what runForegroundAccessCheck does on native.
@@ -294,15 +311,14 @@ export default function DownloadsScreen() {
       Platform.OS === "web"
         ? webHeldKeys.has(k)
         : downloadState.status === "downloaded" && !!downloadState.localFilename;
-    const needsRedownload =
-      item.local_filename && !isAvailableOffline;
+    const needsRedownload = downloadUiReady && item.local_filename && !isAvailableOffline;
 
     return (
       <Pressable 
         key={`${item.type}-${item.id}`} 
         style={styles.card} 
         onPress={() => openFile(item)}
-        onLongPress={() => Platform.OS !== 'web' && handleDelete(item)}
+        onLongPress={() => Platform.OS !== 'web' && downloadUiReady && handleDelete(item)}
       >
         <View style={styles.cardIcon}>
           <Ionicons
@@ -326,7 +342,7 @@ export default function DownloadsScreen() {
             </View>
           )}
         </View>
-        {needsRedownload ? (
+        {!downloadUiReady ? null : needsRedownload ? (
           <Pressable 
             style={styles.redownloadBtn}
             onPress={(e) => {
@@ -355,64 +371,61 @@ export default function DownloadsScreen() {
     ? (activeTab === "lectures" ? lectures : materials)
     : [];
 
-  /**
-   * Render items grouped by course → section_title, sorted by order_index.
-   * If all items belong to a single course the course header is omitted for
-   * a cleaner look. Section headers are always shown when present.
-   */
-  const renderGrouped = (items: DownloadItem[]) => {
-    // Group by course_title
+  useEffect(() => {
+    setView({ mode: "root" });
+  }, [activeTab]);
+
+  const goBackInDownloads = useCallback(() => {
+    if (view.mode === "section") {
+      setView({ mode: "course", courseTitle: view.courseTitle });
+      return true;
+    }
+    if (view.mode === "course") {
+      setView({ mode: "root" });
+      return true;
+    }
+    return false;
+  }, [view]);
+
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      if (view.mode === "root") return false;
+      return goBackInDownloads();
+    });
+    return () => sub.remove();
+  }, [view, goBackInDownloads]);
+
+  const groupedByCourse = useMemo(() => {
     const courseMap = new Map<string, DownloadItem[]>();
-    for (const item of items) {
+    for (const item of activeItems) {
       const key = item.course_title || "Uncategorized";
       if (!courseMap.has(key)) courseMap.set(key, []);
       courseMap.get(key)!.push(item);
     }
-    const showCourseHeaders = courseMap.size > 1;
-
-    return [...courseMap.entries()].map(([courseTitle, courseItems]) => {
-      // Group by section_title within this course
-      const sectionMap = new Map<string, DownloadItem[]>();
-      for (const item of courseItems) {
-        const key = item.section_title || "__none__";
-        if (!sectionMap.has(key)) sectionMap.set(key, []);
-        sectionMap.get(key)!.push(item);
-      }
-
-      return (
-        <View key={courseTitle}>
-          {showCourseHeaders && (
-            <View style={styles.courseGroupHeader}>
-              <Ionicons name="book-outline" size={14} color={Colors.light.primary} />
-              <Text style={styles.courseGroupHeaderText} numberOfLines={1}>{courseTitle}</Text>
-            </View>
-          )}
-          {[...sectionMap.entries()].map(([sectionKey, sectionItems]) => {
-            const sorted = [...sectionItems].sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0));
-            return (
-              <View key={sectionKey}>
-                {sectionKey !== "__none__" && (
-                  <View style={styles.sectionGroupHeader}>
-                    <Text style={styles.sectionGroupHeaderText}>{sectionKey}</Text>
-                  </View>
-                )}
-                {sorted.map(renderItem)}
-              </View>
-            );
-          })}
-        </View>
-      );
-    });
-  };
+    return courseMap;
+  }, [activeItems]);
 
   return (
     <View style={[styles.container, { paddingTop: Platform.OS === "web" ? 16 : insets.top }]}>
       {/* Header */}
       <View style={styles.header}>
-        <Pressable style={styles.backBtn} onPress={() => router.back()}>
+        <Pressable
+          style={styles.backBtn}
+          onPress={() => {
+            if (view.mode !== "root" && goBackInDownloads()) return;
+            router.back();
+          }}
+        >
           <Ionicons name="arrow-back" size={20} color="#fff" />
         </Pressable>
-        <Text style={styles.headerTitle}>My Downloads</Text>
+        <Text style={styles.headerTitle} numberOfLines={1}>
+          {view.mode === "root"
+            ? "My Downloads"
+            : view.mode === "course"
+              ? view.courseTitle
+              : view.sectionTitle}
+        </Text>
       </View>
 
       {/* Storage Summary */}
@@ -473,7 +486,99 @@ export default function DownloadsScreen() {
           contentContainerStyle={styles.list}
           showsVerticalScrollIndicator={false}
         >
-          {renderGrouped(activeItems)}
+          {view.mode === "root" && (
+            <>
+              {[...groupedByCourse.entries()].map(([courseTitle, courseItems]) => {
+                const sectionKeys = new Set(
+                  courseItems.map((it) => it.section_title || "__none__")
+                );
+                const sectionCount = sectionKeys.size;
+                return (
+                  <Pressable
+                    key={courseTitle}
+                    style={styles.folderCard}
+                    onPress={() => {
+                      if (sectionCount === 1 && sectionKeys.has("__none__")) {
+                        setView({ mode: "course", courseTitle });
+                      } else {
+                        setView({ mode: "course", courseTitle });
+                      }
+                    }}
+                  >
+                    <Ionicons name="folder" size={22} color={Colors.light.primary} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.folderCardTitle} numberOfLines={2}>{courseTitle}</Text>
+                      <Text style={styles.folderCardSub}>
+                        {courseItems.length} item{courseItems.length !== 1 ? "s" : ""}
+                        {sectionCount > 1 ? ` · ${sectionCount} folders` : ""}
+                      </Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
+                  </Pressable>
+                );
+              })}
+            </>
+          )}
+          {view.mode === "course" && (() => {
+            const courseItems = groupedByCourse.get(view.courseTitle) || [];
+            const sectionMap = new Map<string, DownloadItem[]>();
+            for (const item of courseItems) {
+              const key = item.section_title || "__none__";
+              if (!sectionMap.has(key)) sectionMap.set(key, []);
+              sectionMap.get(key)!.push(item);
+            }
+            if (sectionMap.size === 1 && sectionMap.has("__none__")) {
+              const sorted = [...(sectionMap.get("__none__") || [])].sort(
+                (a, b) => (a.order_index ?? 0) - (b.order_index ?? 0)
+              );
+              return <>{sorted.map(renderItem)}</>;
+            }
+            return (
+              <>
+                {[...sectionMap.entries()].map(([sectionKey, sectionItems]) => (
+                  <Pressable
+                    key={sectionKey}
+                    style={styles.folderCard}
+                    onPress={() => {
+                      if (sectionKey === "__none__") return;
+                      setView({
+                        mode: "section",
+                        courseTitle: view.courseTitle,
+                        sectionTitle: sectionKey,
+                      });
+                    }}
+                  >
+                    <Ionicons name="folder-outline" size={20} color={Colors.light.primary} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.folderCardTitle}>
+                        {sectionKey === "__none__" ? "General" : sectionKey}
+                      </Text>
+                      <Text style={styles.folderCardSub}>
+                        {sectionItems.length} item{sectionItems.length !== 1 ? "s" : ""}
+                      </Text>
+                    </View>
+                    {sectionKey !== "__none__" && (
+                      <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
+                    )}
+                  </Pressable>
+                ))}
+                {sectionMap.has("__none__") && (
+                  <View style={{ marginTop: 8 }}>
+                    {[...(sectionMap.get("__none__") || [])]
+                      .sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0))
+                      .map(renderItem)}
+                  </View>
+                )}
+              </>
+            );
+          })()}
+          {view.mode === "section" && (() => {
+            const courseItems = groupedByCourse.get(view.courseTitle) || [];
+            const items = courseItems
+              .filter((it) => (it.section_title || "") === view.sectionTitle)
+              .sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0));
+            return <>{items.map(renderItem)}</>;
+          })()}
         </ScrollView>
       )}
     </View>
@@ -496,7 +601,20 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.15)",
     alignItems: "center", justifyContent: "center",
   },
-  headerTitle: { fontSize: 18, fontFamily: "Inter_700Bold", color: "#fff" },
+  headerTitle: { flex: 1, fontSize: 18, fontFamily: "Inter_700Bold", color: "#fff" },
+  folderCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  folderCardTitle: { fontSize: 15, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
+  folderCardSub: { fontSize: 12, fontFamily: "Inter_400Regular", color: Colors.light.textMuted, marginTop: 2 },
   tabRow: {
     flexDirection: "row",
     gap: 10,

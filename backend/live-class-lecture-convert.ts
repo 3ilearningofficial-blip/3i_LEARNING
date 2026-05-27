@@ -96,10 +96,7 @@ export async function convertLiveClassTitlePeersToLectures(
     );
 
     lectureIds.push(Number(lectureResult.rows[0]?.id));
-    await db.query(
-      "UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1",
-      [peer.course_id]
-    );
+    // `courses.total_lectures` is maintained by a trigger on `lectures`.
     if (opts.recomputeCourseProgress) {
       await opts.recomputeCourseProgress(peer.course_id);
     }

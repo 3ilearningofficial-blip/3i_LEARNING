@@ -10,6 +10,11 @@ if (process.env.NODE_ENV !== "production" || process.env.LOAD_DOTENV === "true")
   dotenv.config({ path: envPath, override: false });
 }
 
+if (!process.env.OTP_HMAC_SECRET) {
+  // Hard fail: a missing OTP secret must never silently downgrade to a guessable fallback.
+  throw new Error("OTP_HMAC_SECRET must be set");
+}
+
 import express from "express";
 import type { Request, Response, NextFunction } from "express";
 import session from "express-session";
@@ -19,6 +24,9 @@ import { ipKeyGenerator } from "express-rate-limit";
 import compression from "compression";
 import pg from "pg";
 import { PgRateLimitStore } from "./pg-rate-limit-store";
+import { getRedisClient } from "./redis-client";
+import { RedisRateLimitStore } from "./redis-rate-limit-store";
+import { setupErrorHandler } from "./error-middleware";
 import { getAiTutorHealthSnapshot } from "./ai-tutor-service";
 import { normalizeDatabaseUrl } from "./db-utils";
 
@@ -158,17 +166,13 @@ function setupApiOriginProtection(app: express.Application) {
 
     const origin = req.get("origin");
     const referer = req.get("referer");
-    const clientPlatform = (req.get("x-client-platform") || "").trim().toLowerCase();
-    const hasNativeAppHeader = clientPlatform === "android" || clientPlatform === "ios";
     const trustedOrigin = origin ? isTrustedOrigin(origin) : false;
     const trustedReferer = referer ? isTrustedOrigin(referer) : false;
-    const missingBrowserHeaders = !origin && !referer;
 
     if (trustedOrigin || trustedReferer) return next();
-    // Native app requests (expo/fetch) may omit Origin/Referer.
-    // If they explicitly identify as android/ios, allow them.
-    if (hasNativeAppHeader && missingBrowserHeaders) return next();
 
+    // Cookie-only POSTs must use a trusted Origin/Referer. Native apps must send Bearer
+    // (see authFetch in lib/query-client.ts) so they are not blocked here.
     return res.status(403).json({ message: "Cross-site request blocked" });
   });
 }
@@ -496,41 +500,6 @@ function setupApiHostSearchHints(app: express.Application) {
   });
 }
 
-function setupErrorHandler(app: express.Application) {
-  app.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
-    const error = err as {
-      status?: number;
-      statusCode?: number;
-      message?: string;
-    };
-
-    const status = error.status || error.statusCode || 500;
-    const message =
-      status >= 500 && process.env.NODE_ENV === "production"
-        ? "Internal Server Error"
-        : error.message || "Internal Server Error";
-
-    console.error("Internal Server Error:", err);
-
-    if (res.headersSent) {
-      return next(err);
-    }
-
-    // Make sure error responses still carry CORS credential headers — otherwise the
-    // browser logs a confusing "Access-Control-Allow-Credentials" error on top of
-    // whatever the underlying failure was. cors() normally handles this for
-    // happy-path responses but is bypassed when an error short-circuits the chain.
-    const origin = req.get("origin");
-    if (origin && isTrustedOrigin(origin)) {
-      res.setHeader("Access-Control-Allow-Origin", origin);
-      res.setHeader("Access-Control-Allow-Credentials", "true");
-      res.setHeader("Vary", "Origin");
-    }
-
-    return res.status(status).json({ message });
-  });
-}
-
 function normalizeOtpIdentifier(input: unknown): string {
   const raw = String(input || "").trim().toLowerCase();
   const digits = raw.replace(/\D/g, "");
@@ -649,9 +618,25 @@ function normalizeOtpIdentifier(input: unknown): string {
     });
   }
 
-  const otpSendStore = rateLimitPool ? new PgRateLimitStore(rateLimitPool) : undefined;
-  const otpVerifyStore = rateLimitPool ? new PgRateLimitStore(rateLimitPool) : undefined;
-  const globalApiStore = rateLimitPool ? new PgRateLimitStore(rateLimitPool) : undefined;
+  const redisClient = await getRedisClient();
+  const otpSendStore = redisClient
+    ? new RedisRateLimitStore(redisClient)
+    : rateLimitPool
+      ? new PgRateLimitStore(rateLimitPool)
+      : undefined;
+  const otpVerifyStore = redisClient
+    ? new RedisRateLimitStore(redisClient)
+    : rateLimitPool
+      ? new PgRateLimitStore(rateLimitPool)
+      : undefined;
+  const globalApiStore = redisClient
+    ? new RedisRateLimitStore(redisClient)
+    : rateLimitPool
+      ? new PgRateLimitStore(rateLimitPool)
+      : undefined;
+  if (redisClient) {
+    console.log("[Redis] Rate limit stores using Redis");
+  }
 
   const otpSendLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
@@ -678,6 +663,41 @@ function normalizeOtpIdentifier(input: unknown): string {
   app.use("/api/auth/send-otp", otpSendLimiter);
   app.use("/api/auth/verify-otp", otpVerifyLimiter);
 
+  const authLoginKey = (req: Request) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const raw =
+      body.identifier ?? body.email ?? body.phoneNumber ?? body.phone ?? "global";
+    return `auth-login:${ipKeyGenerator(req.ip || "")}:${normalizeOtpIdentifier(raw)}`;
+  };
+  const authLoginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 25,
+    message: { message: "Too many login attempts, please try again later" },
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: authLoginKey,
+    ...(otpSendStore ? { store: otpSendStore } : {}),
+  });
+  app.use("/api/auth/email-login", authLoginLimiter);
+  app.use("/api/auth/verify-firebase", authLoginLimiter);
+  app.use("/api/auth/firebase-login", authLoginLimiter);
+  app.use("/api/auth/register-complete", authLoginLimiter);
+
+  const mediaTokenLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 40,
+    message: { message: "Too many media requests, please slow down" },
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req: Request) => {
+      const auth = req.headers.authorization || "";
+      const suffix = auth.startsWith("Bearer ") ? auth.slice(7, 24) : ipKeyGenerator(req.ip || "");
+      return `media-token:${suffix}`;
+    },
+    ...(globalApiStore ? { store: globalApiStore } : {}),
+  });
+  app.use("/api/media-token", mediaTokenLimiter);
+
   // Global API rate limit — prevents abuse across all endpoints
   const globalApiLimiter = rateLimit({
     windowMs: 60 * 1000,
@@ -685,7 +705,14 @@ function normalizeOtpIdentifier(input: unknown): string {
     message: { message: "Too many requests, please slow down" },
     standardHeaders: true,
     legacyHeaders: false,
-    skip: (req) => req.path.startsWith("/api/auth/send-otp") || req.path.startsWith("/api/auth/verify-otp"),
+    skip: (req) =>
+      req.path.startsWith("/api/auth/send-otp") ||
+      req.path.startsWith("/api/auth/verify-otp") ||
+      req.path.startsWith("/api/auth/email-login") ||
+      req.path.startsWith("/api/auth/verify-firebase") ||
+      req.path.startsWith("/api/auth/firebase-login") ||
+      req.path.startsWith("/api/auth/register-complete") ||
+      req.path === "/api/media-token",
     ...(globalApiStore ? { store: globalApiStore } : {}),
   });
   app.use("/api", globalApiLimiter);
@@ -704,7 +731,7 @@ function normalizeOtpIdentifier(input: unknown): string {
   configureExpoAndLanding(app);
 
   // 5) Error handler (must be last)
-  setupErrorHandler(app);
+  setupErrorHandler(app, isTrustedOrigin);
 
   const port = parseInt(process.env.PORT || "5000", 10);
   logProductionReleaseHints();

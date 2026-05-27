@@ -2,12 +2,13 @@
 import { createServer, type Server } from "node:http";
 import { Pool } from "pg";
 import { PDFParse } from "pdf-parse";
-import { upload, uploadPdf, uploadLarge } from "./upload-config";
+import { upload, uploadPdf } from "./upload-config";
 import { verifyFirebaseToken } from "./firebase";
 import { getRazorpay, verifyPaymentSignature } from "./razorpay";
 import { randomInt } from "node:crypto";
 import { generateSecureToken, hashOtpValue, verifyOtpValue } from "./security-utils";
 import { getAuthUserFromRequest } from "./auth-utils";
+import { createRequireAdmin } from "./require-admin";
 import { assertActiveSessionPlatformMatches, enforceInstallationBinding } from "./native-device-binding";
 import { registerAuthRoutes } from "./auth-routes";
 import { registerPdfRoutes } from "./pdf-routes";
@@ -104,6 +105,9 @@ const pool = new Pool({
   connectionTimeoutMillis: 10000,
   idleTimeoutMillis: 10000,   // release idle connections quickly (Neon closes them anyway)
   statement_timeout: 25000,
+  // Neon / PgBouncer / long-lived sockets benefit from TCP keep-alive.
+  keepAlive: true,
+  keepAliveInitialDelayMillis: 10_000,
 });
 console.log("[DB] Main pool configured", {
   max: pgPoolMax,
@@ -259,6 +263,8 @@ async function getAuthUser(req: Request): Promise<AuthUserResolved> {
   }
   return p;
 }
+
+const requireAdmin = createRequireAdmin(getAuthUser);
 
 export async function registerRoutes(app: Express): Promise<Server> {
   if (process.env.ALLOW_RUNTIME_SCHEMA_SYNC === "true" || process.env.ALLOW_STARTUP_SCHEMA_ENSURE === "true") {
@@ -487,14 +493,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ==================== ADMIN ROUTES ====================
-  async function requireAdmin(req: Request, res: Response, next: () => void) {
-    const user = await getAuthUser(req);
-    if (!user || user.role !== "admin") {
-      return res.status(403).json({ message: "Admin access required" });
-    }
-    (req as any).user = user;
-    next();
-  }
 
   // Admin debug endpoint: inspect push-token registration health.
   app.get("/api/admin/push-tokens", requireAdmin, async (req: Request, res: Response) => {
@@ -596,7 +594,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     requireAdmin,
     getAuthUser,
     getR2Client,
-    uploadLarge,
   });
 
   registerMediaStreamRoutes({
@@ -719,6 +716,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   registerLiveStreamRoutes({
     app,
     db,
+    pool,
     requireAdmin,
     recomputeAllEnrollmentsProgressForCourse,
     getR2Client,

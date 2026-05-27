@@ -68,7 +68,9 @@ export async function updateCourseProgress(
     }
 
     const totalLec = await client.query(
-      "SELECT COUNT(*) FROM lectures WHERE course_id = $1",
+      `SELECT COUNT(*) FROM lectures
+       WHERE course_id = $1
+       AND (visible_after_at IS NULL OR visible_after_at <= EXTRACT(EPOCH FROM NOW()) * 1000)`,
       [cid]
     );
     const totalTests = await client.query(

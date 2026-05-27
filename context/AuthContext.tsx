@@ -198,6 +198,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setUser(null);
           await removeStoredAuthUser();
           queryClient.clear();
+        } else if (res.status === 401 || res.status === 403) {
+          // Server explicitly rejected the session (blocked/deleted admin or expired token).
+          // Do NOT restore cached state — log out immediately.
+          await logout();
+          return;
         } else if (Platform.OS === "web") {
           // Keep last known user on transient failures (refresh during live class, admin classroom, etc.).
           const tok = await getStoredToken();
@@ -324,7 +329,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       queryClient.clear();
     });
     return () => setUnauthorizedHandler(null);
-  }, [pathname]);
+  }, []);
 
   const login = async (userData: AuthUser) => {
     queryClient.clear();
@@ -342,12 +347,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = async () => {
+    const logoutUserId = user?.id;
     try {
       await unregisterPushForCurrentUser();
     } catch (_e) {}
     try {
       await apiRequest("POST", "/api/auth/logout");
     } catch (_e) {}
+    if (Platform.OS === "web" && logoutUserId) {
+      try {
+        const { clearWebOfflineForUser } = await import("@/lib/web-offline-store");
+        await clearWebOfflineForUser(Number(logoutUserId));
+      } catch (_e) {
+        /* non-fatal */
+      }
+    } else if (Platform.OS !== "web") {
+      try {
+        const { encryptionService } = await import("@/lib/encryptionService");
+        await encryptionService.deleteKeys();
+      } catch (_e) {
+        /* non-fatal */
+      }
+    }
     setUser(null);
     await removeStoredAuthUser();
     queryClient.clear();

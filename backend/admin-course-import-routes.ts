@@ -29,10 +29,7 @@ async function finalizeTargetCourseStats(
   recomputeAllEnrollmentsProgressForCourse: (courseId: number | string) => Promise<void>
 ): Promise<void> {
   if (opts.lectures) {
-    await db.query(
-      "UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1",
-      [targetCourseId]
-    );
+    // `courses.total_lectures` is maintained by an AFTER INSERT/DELETE trigger on `lectures`.
     await recomputeAllEnrollmentsProgressForCourse(targetCourseId);
   }
   if (opts.tests) {

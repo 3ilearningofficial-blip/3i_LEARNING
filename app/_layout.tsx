@@ -48,7 +48,14 @@ function RootLayoutNav() {
     if (!user || user.profileComplete) incompleteSplashNavDoneRef.current = false;
   }, [user?.id, user?.profileComplete]);
 
-  // AppState listener for foreground access check
+  // Native: sync offline downloads with server on cold start and when returning to foreground.
+  useEffect(() => {
+    if (Platform.OS === "web" || !user?.id) return;
+    runForegroundAccessCheck().catch((error) => {
+      console.error("[RootLayout] Initial foreground access check failed:", error);
+    });
+  }, [user?.id, runForegroundAccessCheck]);
+
   useEffect(() => {
     if (Platform.OS === 'web') return;
 

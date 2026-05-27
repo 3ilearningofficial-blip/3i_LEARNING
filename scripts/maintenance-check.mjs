@@ -20,9 +20,19 @@ const pool = new pg.Pool({
   max: 2,
 });
 
-async function q(name, sql) {
+/** Indexes created by migrations 0027–0033 that matter for prod performance. */
+const REQUIRED_INDEXES = [
+  "idx_notifications_sent_dedup",
+  "idx_lectures_video_url_normalized",
+  "idx_live_classes_recording_url_normalized",
+  "idx_enrollments_download_cleanup_pending",
+  "idx_live_classes_is_live_scheduled_at",
+  "idx_live_classes_cf_recording_uid",
+];
+
+async function q(name, sql, params = []) {
   const t0 = Date.now();
-  const res = await pool.query(sql);
+  const res = await pool.query(sql, params);
   return {
     name,
     elapsedMs: Date.now() - t0,
@@ -49,22 +59,24 @@ async function run() {
       SELECT indexname
       FROM pg_indexes
       WHERE schemaname='public'
-      AND indexname IN (
-        'idx_enrollments_user_course_status_valid_until',
-        'idx_lectures_course_section',
-        'idx_materials_course_section',
-        'idx_live_classes_course_scheduled',
-        'idx_download_tokens_token_used_expires'
-      )
+      AND indexname = ANY($1::text[])
       ORDER BY indexname
-    `),
+    `, [REQUIRED_INDEXES]),
   ]);
 
+  const found = new Set((checks[2].rows || []).map((r) => r.indexname));
+  const missingIndexes = REQUIRED_INDEXES.filter((name) => !found.has(name));
+
+  const ok = missingIndexes.length === 0;
+
   console.log(JSON.stringify({
-    ok: true,
+    ok,
     now: Date.now(),
+    missingIndexes,
     checks,
   }, null, 2));
+
+  if (!ok) process.exitCode = 1;
 }
 
 run()

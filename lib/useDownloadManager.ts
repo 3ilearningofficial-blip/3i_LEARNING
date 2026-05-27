@@ -16,6 +16,8 @@ export interface DownloadState {
 }
 
 export interface UseDownloadManagerReturn {
+  /** True once the persisted local download state has been loaded for this user. */
+  isStateLoaded: boolean;
   getDownloadState: (itemType: string, itemId: number) => DownloadState;
   startDownload: (itemType: 'lecture' | 'material', itemId: number) => Promise<void>;
   deleteDownload: (itemType: string, itemId: number) => Promise<void>;
@@ -29,13 +31,15 @@ const DownloadManagerContext = createContext<UseDownloadManagerReturn | null>(nu
 function useDownloadManagerImpl(): UseDownloadManagerReturn {
   const { user } = useAuth();
   const [stateMap, setStateMap] = useState<Map<string, DownloadState>>(new Map());
+  const [isStateLoaded, setIsStateLoaded] = useState(false);
   const storageKey = `${STORAGE_KEY_PREFIX}:${user?.id ?? "guest"}`;
   const inFlightRef = useRef<Set<string>>(new Set());
   const deleteInFlightRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     setStateMap(new Map());
-    loadState();
+    setIsStateLoaded(false);
+    void loadState().finally(() => setIsStateLoaded(true));
   }, [storageKey]);
 
   const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -393,6 +397,7 @@ function useDownloadManagerImpl(): UseDownloadManagerReturn {
   }, [user, stateMap, removeStateEntry]);
 
   return {
+    isStateLoaded,
     getDownloadState,
     startDownload,
     deleteDownload,

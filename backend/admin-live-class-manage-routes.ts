@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { purgeUserDownloadsForItem } from "./download-access-utils";
 import { buildRecordingLectureSectionTitle } from "../shared/recordingSection";
 import { sendPushToUsers } from "./push-notifications";
 import {
@@ -166,7 +167,7 @@ export function registerAdminLiveClassManageRoutes({
                 Date.now(),
               ]
             );
-            await db.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [peer.course_id]);
+            // `courses.total_lectures` is maintained by a trigger on `lectures`.
             await recomputeAllEnrollmentsProgressForCourse(peer.course_id);
           }
           return res.json(liveClassOnly);
@@ -387,6 +388,9 @@ export function registerAdminLiveClassManageRoutes({
         downloadAllowed || false,
         req.params.id,
       ]);
+      if (downloadAllowed === false) {
+        await purgeUserDownloadsForItem(db, "material", Number(req.params.id));
+      }
       if (existing.rows[0]?.course_id) {
         await recomputeAllEnrollmentsProgressForCourse(existing.rows[0].course_id);
       }

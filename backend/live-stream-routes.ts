@@ -10,9 +10,17 @@ type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
 };
 
+type DbPool = DbClient & {
+  connect: () => Promise<{
+    query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
+    release: () => void;
+  }>;
+};
+
 type RegisterLiveStreamRoutesDeps = {
   app: Express;
   db: DbClient;
+  pool?: DbPool;
   requireAdmin: (req: Request, res: Response, next: () => void) => any;
   recomputeAllEnrollmentsProgressForCourse: (courseId: number | string) => Promise<void>;
   getR2Client: () => Promise<any>;
@@ -21,14 +29,18 @@ type RegisterLiveStreamRoutesDeps = {
 export function registerLiveStreamRoutes({
   app,
   db,
+  pool,
   requireAdmin,
   recomputeAllEnrollmentsProgressForCourse,
   getR2Client,
 }: RegisterLiveStreamRoutesDeps): void {
+  // Bounded: entries are deleted on success and on permanent failure (>= MAX_ARCHIVE_ATTEMPTS).
+  // No entry survives beyond the configured retry limit, so this Map does not grow unboundedly.
   const archiveRetryState = new Map<
     string,
     { attempts: number; nextAttemptAt: number; lastStatus: number | null }
   >();
+  const MAX_ARCHIVE_ATTEMPTS = 48;
 
   const inferVideoType = (url: string): "youtube" | "cloudflare" | "r2" => {
     const lower = String(url || "").toLowerCase();
@@ -66,7 +78,14 @@ export function registerLiveStreamRoutes({
       let source: globalThis.Response | null = null;
       let matchedUrl = "";
       for (const candidateUrl of candidateUrls) {
-        const resp = await fetch(candidateUrl);
+        const controller = new AbortController();
+        const fetchTimeout = setTimeout(() => controller.abort(), 300_000);
+        let resp: globalThis.Response;
+        try {
+          resp = await fetch(candidateUrl, { signal: controller.signal });
+        } finally {
+          clearTimeout(fetchTimeout);
+        }
         if (resp.ok && resp.body) {
           source = resp;
           matchedUrl = candidateUrl;
@@ -75,16 +94,24 @@ export function registerLiveStreamRoutes({
         }
         const prev = archiveRetryState.get(recordingUid) || { attempts: 0, nextAttemptAt: 0, lastStatus: null };
         const attempts = prev.attempts + 1;
-        const backoffMs = Math.min(6 * 60 * 60 * 1000, Math.max(2 * 60 * 1000, attempts * 10 * 60 * 1000));
-        archiveRetryState.set(recordingUid, {
-          attempts,
-          nextAttemptAt: Date.now() + backoffMs,
-          lastStatus: resp.status,
-        });
-        if (attempts === 1 || attempts % 10 === 0) {
+        if (attempts >= MAX_ARCHIVE_ATTEMPTS) {
+          // Permanent failure — abandon retries and free the Map entry to avoid memory leak.
+          archiveRetryState.delete(recordingUid);
           console.warn(
-            `[CF Stream] MP4 fetch not ready uid=${recordingUid} status=${resp.status} attempt=${attempts} nextRetryInMs=${backoffMs}`
+            `[CF Stream] MP4 fetch permanently abandoned uid=${recordingUid} status=${resp.status} after ${attempts} attempts`
           );
+        } else {
+          const backoffMs = Math.min(6 * 60 * 60 * 1000, Math.max(2 * 60 * 1000, attempts * 10 * 60 * 1000));
+          archiveRetryState.set(recordingUid, {
+            attempts,
+            nextAttemptAt: Date.now() + backoffMs,
+            lastStatus: resp.status,
+          });
+          if (attempts === 1 || attempts % 10 === 0) {
+            console.warn(
+              `[CF Stream] MP4 fetch not ready uid=${recordingUid} status=${resp.status} attempt=${attempts} nextRetryInMs=${backoffMs}`
+            );
+          }
         }
       }
       if (!source || !source.body) return null;
@@ -175,7 +202,15 @@ export function registerLiveStreamRoutes({
     }
   };
 
-  /** If live-input polling is empty/delayed, find the asset by dashboard title / meta.name (still scoped by search). */
+  /**
+   * If live-input polling is empty/delayed, find the asset by dashboard title / meta.name (still scoped by search).
+   *
+   * H-03 NOTE: Title substring matching can return the wrong recording when class titles are similar.
+   * A more reliable lookup would use a dedicated `cf_recording_uid` column on `live_classes` to store
+   * the Cloudflare recording UID separately from the live-input UID (cf_stream_uid). This requires a
+   * DB migration (ALTER TABLE live_classes ADD COLUMN cf_recording_uid TEXT) before it can be used here.
+   * Until that migration is applied this function remains title-based.
+   */
   const findRecordingViaStreamSearch = async (
     accountId: string,
     apiToken: string,
@@ -202,8 +237,8 @@ export function registerLiveStreamRoutes({
         if (nameField && nameField === qLow) return true;
         return metaName.includes(qLow) || nameField.includes(qLow);
       });
-      const pool = matched.length ? matched : items.filter((v: any) => String(v?.uid || "") && String(v.uid) !== excludeLiveInputUid);
-      return pickBestCfRecording(pool, excludeLiveInputUid);
+      const candidatePool = matched.length ? matched : items.filter((v: any) => String(v?.uid || "") && String(v.uid) !== excludeLiveInputUid);
+      return pickBestCfRecording(candidatePool, excludeLiveInputUid);
     } catch {
       return null;
     }
@@ -311,7 +346,7 @@ export function registerLiveStreamRoutes({
       // R2 is optional: we always persist Cloudflare HLS when MP4 archival is unavailable.
 
       const lcResult = await db.query(
-        "SELECT id, title, cf_stream_uid, is_completed, recording_url, recording_deleted_at FROM live_classes WHERE id = $1",
+        "SELECT id, title, cf_stream_uid, cf_recording_uid, is_completed, recording_url, recording_deleted_at FROM live_classes WHERE id = $1",
         [req.params.id]
       );
       if (lcResult.rows.length === 0) return res.status(404).json({ message: "Live class not found" });
@@ -319,6 +354,7 @@ export function registerLiveStreamRoutes({
       const uid = current?.cf_stream_uid;
       const liveTitle = String(current?.title || "").trim();
       const existingRecordingUrl = String(current?.recording_url || "").trim();
+      const storedCfRecordingUid = current?.cf_recording_uid != null ? String(current.cf_recording_uid).trim() : "";
       if (current?.recording_deleted_at) {
         return res.json({ success: true, alreadyEnded: true, recordingDeleted: true });
       }
@@ -348,6 +384,11 @@ export function registerLiveStreamRoutes({
           for (let i = 0; i < maxPolls; i += 1) {
             const latest = await getLatestRecording();
             if (latest) {
+              // Persist the resolved recording UID for more reliable future lookups.
+              await db.query(
+                "UPDATE live_classes SET cf_recording_uid = $1 WHERE id = $2",
+                [latest.recordingUid, req.params.id]
+              ).catch(() => {});
               const archived = await archiveCloudflareRecordingToR2(latest.recordingUid, {
                 accountId,
                 apiToken,
@@ -358,15 +399,31 @@ export function registerLiveStreamRoutes({
             await new Promise((resolve) => setTimeout(resolve, pollMs));
           }
 
-          if (!recordingUrl && liveTitle) {
-            const viaSearch = await findRecordingViaStreamSearch(accountId, apiToken, liveTitle, uid);
-            if (viaSearch) {
-              const archived = await archiveCloudflareRecordingToR2(viaSearch.recordingUid, {
+          if (!recordingUrl) {
+            // Prefer stored UID to avoid title-based matching.
+            if (storedCfRecordingUid) {
+              const archived = await archiveCloudflareRecordingToR2(storedCfRecordingUid, {
                 accountId,
                 apiToken,
               });
-              recordingUrl = archived || viaSearch.manifestUrl;
-              console.log(`[CF Stream] Resolved recording via stream search title="${liveTitle.slice(0, 60)}"`);
+              recordingUrl = archived || null;
+            }
+
+            if (!recordingUrl && liveTitle) {
+              const viaSearch = await findRecordingViaStreamSearch(accountId, apiToken, liveTitle, uid);
+              if (viaSearch) {
+                await db.query(
+                  "UPDATE live_classes SET cf_recording_uid = $1 WHERE id = $2",
+                  [viaSearch.recordingUid, req.params.id]
+                ).catch(() => {});
+
+                const archived = await archiveCloudflareRecordingToR2(viaSearch.recordingUid, {
+                  accountId,
+                  apiToken,
+                });
+                recordingUrl = archived || viaSearch.manifestUrl;
+                console.log(`[CF Stream] Resolved recording via stream search title="${liveTitle.slice(0, 60)}"`);
+              }
             }
           }
 
@@ -420,9 +477,42 @@ export function registerLiveStreamRoutes({
     }
   });
 
+  /**
+   * Stable advisory lock key for the archive sweep.
+   * Must be unique across all pg_try_advisory_lock usages in this codebase.
+   * LIVE_NOTIF_ADVISORY_LOCK_KEY in schedulers.ts uses 31415926535.
+   */
+  const ARCHIVE_SWEEP_ADVISORY_LOCK_KEY = 7777777777;
+
   let isArchiveSweepRunning = false;
   const runArchiveSweep = async () => {
     if (isArchiveSweepRunning) return;
+
+    // Multi-instance guard: acquire a PostgreSQL session-level advisory lock so only
+    // one process runs the sweep at a time. Falls back to process-local flag only when
+    // pool is not provided (e.g. in unit tests).
+    let lockClient: Awaited<ReturnType<NonNullable<typeof pool>["connect"]>> | null = null;
+    let lockAcquired = false;
+    if (pool) {
+      try {
+        lockClient = await pool.connect();
+        const lockResult = await lockClient.query(
+          "SELECT pg_try_advisory_lock($1) AS acquired",
+          [ARCHIVE_SWEEP_ADVISORY_LOCK_KEY]
+        );
+        lockAcquired = lockResult.rows[0]?.acquired === true;
+        if (!lockAcquired) {
+          // Another instance is running the sweep — skip silently.
+          lockClient.release();
+          return;
+        }
+      } catch (lockErr) {
+        console.warn("[CF Stream] Archive sweep advisory lock error:", lockErr);
+        if (lockClient) lockClient.release();
+        return;
+      }
+    }
+
     isArchiveSweepRunning = true;
     try {
       const pending = await db.query(
@@ -517,9 +607,7 @@ export function registerLiveStreamRoutes({
                 Date.now(),
               ]
             );
-            await db.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [
-              row.course_id,
-            ]).catch(() => {});
+            // `courses.total_lectures` is maintained by a trigger on `lectures`.
             await recomputeAllEnrollmentsProgressForCourse(row.course_id).catch(() => {});
           }
         }
@@ -530,6 +618,20 @@ export function registerLiveStreamRoutes({
       console.warn("[CF Stream] Archive sweep error:", err);
     } finally {
       isArchiveSweepRunning = false;
+      // Release the advisory lock and return the connection to the pool.
+      if (lockClient) {
+        if (lockAcquired) {
+          try {
+            await lockClient.query(
+              "SELECT pg_advisory_unlock($1)",
+              [ARCHIVE_SWEEP_ADVISORY_LOCK_KEY]
+            );
+          } catch (unlockErr) {
+            console.warn("[CF Stream] Failed to release archive sweep advisory lock:", unlockErr);
+          }
+        }
+        lockClient.release();
+      }
     }
   };
   const runArchiveSweepWorker = process.env.RUN_BACKGROUND_SCHEDULERS !== "false";

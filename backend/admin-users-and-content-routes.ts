@@ -250,8 +250,14 @@ export function registerAdminUsersAndContentRoutes({
     }
   });
 
-  app.get("/api/admin/users", requireAdmin, async (_req: Request, res: Response) => {
+  app.get("/api/admin/users", requireAdmin, async (req: Request, res: Response) => {
     try {
+      const limitRaw = parseInt(String(req.query.limit ?? "50"), 10);
+      const offsetRaw = parseInt(String(req.query.offset ?? "0"), 10);
+      const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 200) : 50;
+      const offset = Number.isFinite(offsetRaw) ? Math.max(offsetRaw, 0) : 0;
+      const search = String(req.query.search ?? "").trim();
+
       const colsResult = await db.query(
         "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users'"
       );
@@ -270,7 +276,32 @@ export function registerAdminUsersAndContentRoutes({
         field("last_active_at", "NULL"),
       ].join(", ");
       const orderSql = cols.has("created_at") ? "created_at DESC NULLS LAST" : "id DESC";
-      const result = await db.query(`SELECT ${selectSql} FROM users ORDER BY ${orderSql}`);
+
+      const where: string[] = [];
+      const params: unknown[] = [];
+      if (search) {
+        params.push(`%${search}%`);
+        const p = `$${params.length}`;
+        where.push(
+          `(COALESCE(name,'') ILIKE ${p} OR COALESCE(email,'') ILIKE ${p} OR COALESCE(phone,'') ILIKE ${p})`
+        );
+      }
+      const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+      const countResult = await db.query(
+        `SELECT COUNT(*)::int AS total FROM users ${whereSql}`,
+        params
+      );
+      const total = Number(countResult.rows[0]?.total ?? 0);
+
+      params.push(limit, offset);
+      const result = await db.query(
+        `SELECT ${selectSql} FROM users ${whereSql} ORDER BY ${orderSql} LIMIT $${params.length - 1} OFFSET $${params.length}`,
+        params
+      );
+
+      res.setHeader("X-Total-Count", String(total));
+      res.setHeader("X-Has-More", String(offset + result.rows.length < total));
       res.json(
         result.rows.map((r: any) => ({
           id: r.id,

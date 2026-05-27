@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { isEnrollmentAccessRevoked } from "./download-access-utils";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -50,29 +51,60 @@ export function registerAdminEnrollmentRoutes({
       const updates: string[] = [];
       const params: unknown[] = [];
 
-      // Snapshot old values for audit log before updating
       const before = await db.query(
-        "SELECT status, valid_until FROM enrollments WHERE id = $1",
+        "SELECT user_id, course_id, status, valid_until FROM enrollments WHERE id = $1",
         [req.params.id]
       ).catch(() => ({ rows: [] }));
       const oldRow = before.rows[0] || {};
 
+      let nextStatus: unknown = oldRow.status;
+      let nextValidUntil: unknown = oldRow.valid_until;
+
       if (status !== undefined) {
-        params.push(status);
+        const statusNorm = String(status).trim().toLowerCase();
+        if (statusNorm && statusNorm !== "active" && statusNorm !== "inactive") {
+          return res.status(400).json({ message: "Invalid status" });
+        }
+        nextStatus = statusNorm === "" ? null : statusNorm || null;
+        params.push(nextStatus);
         updates.push(`status = $${params.length}`);
       }
 
       if (valid_until !== undefined) {
-        params.push(valid_until);
+        const vu = valid_until === null || valid_until === "" ? null : Number(valid_until);
+        if (vu !== null && (!Number.isFinite(vu) || vu < 0)) {
+          return res.status(400).json({ message: "Invalid valid_until" });
+        }
+        nextValidUntil = vu;
+        params.push(vu);
         updates.push(`valid_until = $${params.length}`);
       }
+
+      const willRevoke = isEnrollmentAccessRevoked(nextStatus, nextValidUntil);
 
       if (updates.length > 0) {
         params.push(req.params.id);
         await db.query(`UPDATE enrollments SET ${updates.join(", ")} WHERE id = $${params.length}`, params);
       }
 
-      // Non-blocking audit log — must not affect the response
+      if (willRevoke && oldRow.user_id && oldRow.course_id) {
+        await db.query(
+          "UPDATE enrollments SET download_cleanup_pending = TRUE WHERE id = $1",
+          [req.params.id]
+        );
+        try {
+          await deleteDownloadsForUser(Number(oldRow.user_id), Number(oldRow.course_id));
+          await db.query("UPDATE enrollments SET download_cleanup_pending = FALSE WHERE id = $1", [
+            req.params.id,
+          ]);
+        } catch (cleanupErr) {
+          console.warn("[Cleanup] enrollment PUT download cleanup failed; will retry", {
+            enrollmentId: req.params.id,
+            cleanupErr,
+          });
+        }
+      }
+
       void writeEnrollmentAuditLog(db, adminUserId, "updated", String(req.params.id), {
         old_status: oldRow.status,
         new_status: status,
@@ -96,8 +128,24 @@ export function registerAdminEnrollmentRoutes({
 
       if (enrollment.rows.length > 0) {
         const { user_id, course_id } = enrollment.rows[0];
-        await db.query("DELETE FROM enrollments WHERE id = $1", [req.params.id]);
-        await deleteDownloadsForUser(user_id, course_id);
+        // Revoke access immediately for the student.
+        // If cleanup fails, keep the enrollment row and mark it for retry.
+        await db.query(
+          "UPDATE enrollments SET status = 'inactive', download_cleanup_pending = TRUE WHERE id = $1",
+          [req.params.id]
+        );
+
+        try {
+          await deleteDownloadsForUser(user_id, course_id);
+          await db.query("UPDATE enrollments SET download_cleanup_pending = FALSE WHERE id = $1", [req.params.id]);
+        } catch (cleanupErr) {
+          console.warn("[Cleanup] download cleanup failed; will retry", {
+            enrollmentId: req.params.id,
+            user_id,
+            course_id,
+          });
+        }
+
         // Non-blocking audit log
         void writeEnrollmentAuditLog(db, adminUserId, "deleted", String(req.params.id), {
           user_id,
@@ -128,10 +176,14 @@ export function registerAdminEnrollmentRoutes({
         // allowing access to deleted content — this prevents that.
         await tx.query(
           `DELETE FROM media_tokens
-           WHERE file_url IN (
+           WHERE file_key IN (
              SELECT file_url FROM study_materials WHERE course_id = $1 AND file_url IS NOT NULL
              UNION ALL
              SELECT video_url FROM lectures WHERE course_id = $1 AND video_url IS NOT NULL
+             UNION ALL
+             SELECT pdf_url FROM lectures WHERE course_id = $1 AND pdf_url IS NOT NULL
+             UNION ALL
+             SELECT recording_url FROM live_classes WHERE course_id = $1 AND recording_url IS NOT NULL
            )`,
           [courseId]
         );

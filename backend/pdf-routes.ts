@@ -1,7 +1,7 @@
 import type { Express, Request, Response } from "express";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
-import { canonicalMediaKey } from "./media-key-utils";
+import { canonicalMediaKey, mediaKeyMatchVariants } from "./media-key-utils";
 import { presignR2GetObject } from "./r2-presign-read";
 
 type DbClient = {
@@ -72,9 +72,11 @@ export function registerPdfRoutes({ app, db, getAuthUser, getR2Client }: Registe
     if (!fileKey) {
       return res.status(400).send("Invalid key");
     }
+    const variantsForDbMatch = mediaKeyMatchVariants(key);
 
     let expMs: number | null = null;
     let validToken: string | null = null;
+    let enrollmentValidUntilMs: number | null = null;
 
     // Try to validate the provided token (if any).
     if (token && typeof token === "string") {
@@ -86,8 +88,44 @@ export function registerPdfRoutes({ app, db, getAuthUser, getR2Client }: Registe
         ])
         .catch(() => ({ rows: [] as any[] }));
       if (tokenResult.rows.length > 0) {
-        expMs = Number(tokenResult.rows[0].expires_at);
+        const tokenRow = tokenResult.rows[0];
+        expMs = Number(tokenRow.expires_at);
         validToken = token;
+
+        // Cap R2 presign by the matched enrollment's `valid_until` (I-02).
+        const userId = Number(tokenRow.user_id);
+        const candidates: number[] = [];
+
+        const lectureEnroll = await db.query(
+          `SELECT e.valid_until
+           FROM lectures l
+           JOIN enrollments e ON e.user_id = $1 AND e.course_id = l.course_id
+           WHERE l.pdf_url_normalized = ANY($2::text[])
+             AND (e.status = 'active' OR e.status IS NULL)
+           LIMIT 1`,
+          [userId, variantsForDbMatch]
+        );
+        const v1 = lectureEnroll.rows[0]?.valid_until;
+        if (v1 != null) candidates.push(Number(v1));
+
+        const materialEnroll = await db.query(
+          `SELECT e.valid_until
+           FROM study_materials sm
+           JOIN enrollments e ON e.user_id = $1 AND e.course_id = sm.course_id
+           WHERE sm.file_url_normalized = ANY($2::text[])
+             AND (e.status = 'active' OR e.status IS NULL)
+           LIMIT 1`,
+          [userId, variantsForDbMatch]
+        );
+        const v2 = materialEnroll.rows[0]?.valid_until;
+        if (v2 != null) candidates.push(Number(v2));
+
+        if (candidates.length > 0) enrollmentValidUntilMs = Math.min(...candidates);
+
+        if (enrollmentValidUntilMs != null && enrollmentValidUntilMs <= Date.now()) {
+          // Enrollment is already expired/revoked: deny even if the media token hasn't expired yet.
+          return res.status(401).send("Token expired or invalid");
+        }
       }
     }
 
@@ -120,10 +158,12 @@ export function registerPdfRoutes({ app, db, getAuthUser, getR2Client }: Registe
     }
 
     const ttlSec = Math.max(60, Math.floor((expMs - Date.now()) / 1000));
-    const readUrl = await presignR2GetObject(getR2Client, fileKey, ttlSec);
+    const readUrl = await presignR2GetObject(getR2Client, fileKey, ttlSec, enrollmentValidUntilMs);
     const publicBase = publicApiBaseUrl();
     // Use token-based proxy only when the request carried a valid media token.
-    const pdfUrl = readUrl || (validToken ? mediaProxyUrl(publicBase, fileKey, validToken) : null);
+    const pdfUrl = readUrl || (validToken && enrollmentValidUntilMs == null
+      ? mediaProxyUrl(publicBase, fileKey, validToken)
+      : null);
     if (!pdfUrl) {
       return res.status(500).send("Unable to generate access URL for this file");
     }

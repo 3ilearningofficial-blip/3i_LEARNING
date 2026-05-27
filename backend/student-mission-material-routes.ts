@@ -114,6 +114,36 @@ export function registerStudentMissionMaterialRoutes({
     }
   });
 
+  // Mission folder list for the student daily-mission UI (Group L).
+  // Uses standalone_folders where `type='mission'`.
+  app.get("/api/mission-folders", async (req: Request, res: Response) => {
+    try {
+      const user = await getAuthUser(req);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+
+      const result = await db.query(
+        `SELECT
+           id,
+           name,
+           category,
+           validity_months,
+           is_free,
+           description,
+           created_at
+         FROM standalone_folders
+         WHERE type = 'mission'
+           AND (is_hidden = FALSE OR is_hidden IS NULL)
+         ORDER BY created_at ASC`
+      );
+
+      res.set("Cache-Control", "private, no-store");
+      res.json(result.rows);
+    } catch (err) {
+      console.error("[MissionFolders] error:", err);
+      res.status(500).json({ message: "Failed to fetch mission folders" });
+    }
+  });
+
   app.get("/api/daily-mission", async (req: Request, res: Response) => {
     try {
       const user = await getAuthUser(req);

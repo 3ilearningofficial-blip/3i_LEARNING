@@ -36,3 +36,43 @@ jobs:
 
       - name: Server build
         run: npm run server:build
+
+  db-schema:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npx -y npm@11 ci
+
+      - name: Apply SQL migrations
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/test
+        run: npm run db:apply-sql
+
+      - name: Database readiness check
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/test
+        run: npm run db:check

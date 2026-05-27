@@ -28,9 +28,9 @@ export async function deleteDownloadsForUser(
   userId: number,
   courseId?: number
 ): Promise<void> {
-  try {
-    if (courseId) {
-      // Delete downloads for a specific course only
+  if (courseId) {
+    // Delete downloads for a specific course only
+    try {
       await db.query(
         `DELETE FROM user_downloads
          WHERE user_id = $1
@@ -42,13 +42,20 @@ export async function deleteDownloadsForUser(
         [userId, courseId]
       );
       console.log(`[Cleanup] Deleted downloads for user ${userId} in course ${courseId}`);
-    } else {
-      // Delete all downloads for this user across all courses
-      await db.query("DELETE FROM user_downloads WHERE user_id = $1", [userId]);
-      console.log(`[Cleanup] Deleted all downloads for user ${userId}`);
+      return;
+    } catch (err) {
+      console.error("[Cleanup] Failed to delete downloads (course scope):", err);
+      throw err;
     }
+  }
+
+  // Delete all downloads for this user across all courses
+  try {
+    await db.query("DELETE FROM user_downloads WHERE user_id = $1", [userId]);
+    console.log(`[Cleanup] Deleted all downloads for user ${userId}`);
   } catch (err) {
-    console.error("[Cleanup] Failed to delete downloads:", err);
+    console.error("[Cleanup] Failed to delete downloads (user scope):", err);
+    throw err;
   }
 }
 
@@ -73,5 +80,6 @@ export async function deleteDownloadsForCourse(
     console.log(`[Cleanup] Deleted all downloads for course ${courseId}`);
   } catch (err) {
     console.error("[Cleanup] Failed to delete course downloads:", err);
+    throw err;
   }
 }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable,
   Platform, ActivityIndicator, Alert, FlatList, Image,
@@ -37,6 +37,7 @@ interface DailyMission {
   mission_date: string;
   course_id?: number;
   category?: string;
+  folder_name?: string | null;
   xp_reward?: number;
   isCompleted?: boolean;
   userScore?: number;
@@ -165,6 +166,7 @@ export default function DailyMissionScreen() {
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
   const [activeTab, setActiveTab] = useState("all");
+  const [selectedFolderName, setSelectedFolderName] = useState<string | null>(null);
   const [screen, setScreen] = useState<Screen>("list");
   const [activeMission, setActiveMission] = useState<DailyMission | null>(null);
   const [currentQ, setCurrentQ] = useState(0);
@@ -216,6 +218,39 @@ export default function DailyMissionScreen() {
     refetchOnMount: false,
     refetchOnWindowFocus: false,
   });
+
+  const { data: missionFolders = [] } = useQuery<
+    Array<{ id: number; name: string }>
+  >({
+    queryKey: ["/api/mission-folders"],
+    queryFn: async () => {
+      const baseUrl = getApiUrl();
+      const url = new URL("/api/mission-folders", baseUrl);
+      const res = await authFetch(url.toString());
+      const payload = await res.json();
+      return Array.isArray(payload) ? payload : [];
+    },
+    staleTime: 5 * 60 * 1000,
+    gcTime: 25 * 60 * 1000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+  });
+
+  const missionsFiltered = useMemo(() => {
+    if (!selectedFolderName) return missions;
+    return missions.filter((m) => (m.folder_name ?? null) === selectedFolderName);
+  }, [missions, selectedFolderName]);
+
+  const missionCountByFolderName = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const m of missions) {
+      const fn = m.folder_name ?? null;
+      if (!fn) continue;
+      const key = String(fn);
+      map.set(key, (map.get(key) ?? 0) + 1);
+    }
+    return map;
+  }, [missions]);
 
   const completeMutation = useMutation({
     mutationFn: async (data: { missionId: number; score: number; timeTaken: number; answers: Record<number, string>; incorrect: number; skipped: number }) => {
@@ -869,9 +904,47 @@ export default function DailyMissionScreen() {
         </ScrollView>
       </LinearGradient>
 
+      {missionFolders.length > 0 && (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{ paddingHorizontal: 16, gap: 10 }}
+        >
+          <Pressable
+            onPress={() => setSelectedFolderName(null)}
+            style={[
+              styles.tab,
+              !selectedFolderName && styles.tabActive,
+              { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 999 },
+            ]}
+          >
+            <Text style={[styles.tabText, !selectedFolderName && styles.tabTextActive]}>All</Text>
+          </Pressable>
+
+          {missionFolders.map((f) => {
+            const count = missionCountByFolderName.get(f.name) ?? 0;
+            return (
+              <Pressable
+                key={f.id}
+                onPress={() => setSelectedFolderName(f.name)}
+                style={[
+                  styles.tab,
+                  selectedFolderName === f.name && styles.tabActive,
+                  { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 999 },
+                ]}
+              >
+                <Text style={[styles.tabText, selectedFolderName === f.name && styles.tabTextActive]} numberOfLines={1}>
+                  {f.name} ({count})
+                </Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+      )}
+
       {isLoading ? (
         <View style={styles.centered}><ActivityIndicator size="large" color={Colors.light.primary} /></View>
-      ) : missions.length === 0 ? (
+      ) : missionsFiltered.length === 0 ? (
         <View style={styles.emptyState}>
           <Ionicons name="flame-outline" size={60} color={Colors.light.textMuted} />
           <Text style={styles.emptyTitle}>No Missions Available</Text>
@@ -879,7 +952,7 @@ export default function DailyMissionScreen() {
         </View>
       ) : (
         <FlatList
-          data={missions}
+          data={missionsFiltered}
           keyExtractor={(item) => String(item.id)}
           contentContainerStyle={{ padding: 16, paddingBottom: bottomPadding + 100, gap: 12 }}
           renderItem={({ item }) => {

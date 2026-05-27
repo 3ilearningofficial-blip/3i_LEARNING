@@ -3,6 +3,8 @@ import { computeEnrollmentValidUntil, isEnrollmentExpired } from "./course-acces
 import { canonicalMediaKey, mediaKeyMatchVariants } from "./media-key-utils";
 import { presignR2GetObject } from "./r2-presign-read";
 import { sanitizeLectureRowForClient } from "./lecture-payload-utils";
+import { getRedisClient } from "./redis-client";
+import { checkDownloadUrlRateLimitRedis } from "./redis-rate-limit-store";
 
 type DbQueryResult = {
   rows: any[];
@@ -28,28 +30,102 @@ type RegisterCourseAccessRoutesDeps = {
 };
 
 /**
- * Lightweight in-memory rate limiter for /api/download-url.
- * Tracks per-user request counts within a sliding 60-second window.
- * Uses a Map that self-prunes on each check so memory stays bounded.
- * Max 10 token requests per user per minute — enough for legitimate bulk
- * downloads but stops hammering.
+ * Shared rate limiting for /api/download-url.
+ * Uses Redis when REDIS_URL is set; otherwise PostgreSQL `express_rate_limit`.
  */
 const DOWNLOAD_URL_RATE_WINDOW_MS = 60_000;
 const DOWNLOAD_URL_RATE_MAX = 10;
-const downloadUrlRateMap = new Map<number, { count: number; windowStart: number }>();
 
-function checkDownloadUrlRateLimit(userId: number): boolean {
+async function checkDownloadUrlRateLimit(db: DbClient, userId: number): Promise<boolean> {
+  const redis = await getRedisClient();
+  if (redis) {
+    const allowed = await checkDownloadUrlRateLimitRedis(
+      redis,
+      userId,
+      DOWNLOAD_URL_RATE_WINDOW_MS,
+      DOWNLOAD_URL_RATE_MAX
+    );
+    if (allowed !== null) return allowed;
+  }
+  return checkDownloadUrlRateLimitPg(db, userId);
+}
+
+async function assertDownloadProxyEntitlement(
+  db: DbClient,
+  userId: number,
+  itemType: string,
+  itemId: number
+): Promise<{ ok: true } | { ok: false; status: number; message: string }> {
+  if (itemType === "lecture") {
+    const r = await db.query(
+      `SELECT l.download_allowed, l.course_id, l.is_free_preview
+       FROM lectures l WHERE l.id = $1 LIMIT 1`,
+      [itemId]
+    );
+    if (r.rows.length === 0) return { ok: false, status: 404, message: "Item not found" };
+    const row = r.rows[0];
+    if (!row.download_allowed) {
+      return { ok: false, status: 403, message: "Download not allowed" };
+    }
+    if (!row.course_id || row.is_free_preview) return { ok: true };
+    const en = await db.query(
+      `SELECT valid_until FROM enrollments
+       WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL) LIMIT 1`,
+      [userId, row.course_id]
+    );
+    if (en.rows.length === 0 || isEnrollmentExpired(en.rows[0])) {
+      return { ok: false, status: 403, message: "Enrollment required" };
+    }
+    return { ok: true };
+  }
+  if (itemType === "material") {
+    const r = await db.query(
+      `SELECT sm.download_allowed, sm.course_id, sm.is_free
+       FROM study_materials sm WHERE sm.id = $1 LIMIT 1`,
+      [itemId]
+    );
+    if (r.rows.length === 0) return { ok: false, status: 404, message: "Item not found" };
+    const row = r.rows[0];
+    if (!row.download_allowed) {
+      return { ok: false, status: 403, message: "Download not allowed" };
+    }
+    if (!row.course_id || row.is_free) return { ok: true };
+    const en = await db.query(
+      `SELECT valid_until FROM enrollments
+       WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL) LIMIT 1`,
+      [userId, row.course_id]
+    );
+    if (en.rows.length === 0 || isEnrollmentExpired(en.rows[0])) {
+      return { ok: false, status: 403, message: "Enrollment required" };
+    }
+    return { ok: true };
+  }
+  return { ok: false, status: 400, message: "Invalid item type" };
+}
+
+async function checkDownloadUrlRateLimitPg(db: DbClient, userId: number): Promise<boolean> {
   const now = Date.now();
-  const entry = downloadUrlRateMap.get(userId);
-  if (!entry || now - entry.windowStart >= DOWNLOAD_URL_RATE_WINDOW_MS) {
-    downloadUrlRateMap.set(userId, { count: 1, windowStart: now });
-    return true; // allowed
-  }
-  if (entry.count >= DOWNLOAD_URL_RATE_MAX) {
-    return false; // blocked
-  }
-  entry.count += 1;
-  return true; // allowed
+  const win = DOWNLOAD_URL_RATE_WINDOW_MS;
+  const key = `download_url:user:${userId}`;
+
+  const r = await db.query(
+    `INSERT INTO express_rate_limit (bucket_key, total_hits, reset_time_ms)
+     VALUES ($1, 1, $2 + $3::bigint)
+     ON CONFLICT (bucket_key) DO UPDATE SET
+       total_hits = CASE
+         WHEN express_rate_limit.reset_time_ms <= $2::bigint THEN 1
+         ELSE express_rate_limit.total_hits + 1
+       END,
+       reset_time_ms = CASE
+         WHEN express_rate_limit.reset_time_ms <= $2::bigint THEN $2::bigint + $3::bigint
+         ELSE express_rate_limit.reset_time_ms
+       END
+     RETURNING total_hits`,
+    [key, now, win]
+  );
+
+  const totalHits = Number(r.rows[0]?.total_hits ?? 1);
+  return totalHits <= DOWNLOAD_URL_RATE_MAX;
 }
 
 export function registerCourseAccessRoutes({
@@ -113,7 +189,7 @@ export function registerCourseAccessRoutes({
   const toR2ObjectKey = (raw: string): string => canonicalMediaKey(raw);
 
   type MediaTokenAccessDecision =
-    | { allowed: true; reason: "allowed" }
+    | { allowed: true; reason: "allowed"; enrollmentValidUntilMs?: number | null }
     | { allowed: false; reason: "invalid_key" | "no_match" | "not_enrolled" | "expired" };
 
   const userCanMintMediaToken = async (user: AuthUser, requestedKeyRaw: string): Promise<MediaTokenAccessDecision> => {
@@ -129,16 +205,11 @@ export function registerCourseAccessRoutes({
       `SELECT l.course_id, l.is_free_preview
        FROM lectures l
        WHERE (
-         (l.video_url IS NOT NULL AND (
-           regexp_replace(regexp_replace(COALESCE(l.video_url, ''), '^https?://[^/]+/', ''), '^/+', '') = ANY($1::text[])
-           OR regexp_replace(COALESCE(l.video_url, ''), '^https?://[^/]+/', '') = ANY($1::text[])
-         ))
+         (l.video_url IS NOT NULL AND l.video_url_normalized = ANY($1::text[]))
          OR
-         (l.pdf_url IS NOT NULL AND (
-           regexp_replace(regexp_replace(COALESCE(l.pdf_url, ''), '^https?://[^/]+/', ''), '^/+', '') = ANY($1::text[])
-           OR regexp_replace(COALESCE(l.pdf_url, ''), '^https?://[^/]+/', '') = ANY($1::text[])
-         ))
+         (l.pdf_url IS NOT NULL AND l.pdf_url_normalized = ANY($1::text[]))
        )
+       AND (l.visible_after_at IS NULL OR l.visible_after_at <= EXTRACT(EPOCH FROM NOW()) * 1000)
        LIMIT 1`,
       [variants]
     );
@@ -153,17 +224,15 @@ export function registerCourseAccessRoutes({
       if (isEnrollmentExpired(enrollment.rows[0])) {
         return { allowed: false, reason: "expired" };
       }
-      return { allowed: true, reason: "allowed" };
+      const validUntilMs = enrollment.rows[0].valid_until != null ? Number(enrollment.rows[0].valid_until) : null;
+      return { allowed: true, reason: "allowed", enrollmentValidUntilMs: validUntilMs };
     }
 
     const liveClassMatch = await db.query(
       `SELECT lc.course_id, lc.is_free_preview
        FROM live_classes lc
        WHERE lc.recording_url IS NOT NULL
-         AND (
-           regexp_replace(regexp_replace(COALESCE(lc.recording_url, ''), '^https?://[^/]+/', ''), '^/+', '') = ANY($1::text[])
-           OR regexp_replace(COALESCE(lc.recording_url, ''), '^https?://[^/]+/', '') = ANY($1::text[])
-         )
+         AND lc.recording_url_normalized = ANY($1::text[])
        LIMIT 1`,
       [variants]
     );
@@ -178,17 +247,15 @@ export function registerCourseAccessRoutes({
       if (isEnrollmentExpired(enrollment.rows[0])) {
         return { allowed: false, reason: "expired" };
       }
-      return { allowed: true, reason: "allowed" };
+      const validUntilMs = enrollment.rows[0].valid_until != null ? Number(enrollment.rows[0].valid_until) : null;
+      return { allowed: true, reason: "allowed", enrollmentValidUntilMs: validUntilMs };
     }
 
     const materialMatch = await db.query(
       `SELECT sm.course_id, sm.is_free
        FROM study_materials sm
        WHERE sm.file_url IS NOT NULL
-         AND (
-           regexp_replace(regexp_replace(COALESCE(sm.file_url, ''), '^https?://[^/]+/', ''), '^/+', '') = ANY($1::text[])
-           OR regexp_replace(COALESCE(sm.file_url, ''), '^https?://[^/]+/', '') = ANY($1::text[])
-         )
+         AND sm.file_url_normalized = ANY($1::text[])
        LIMIT 1`,
       [variants]
     );
@@ -203,7 +270,8 @@ export function registerCourseAccessRoutes({
       if (isEnrollmentExpired(enrollment.rows[0])) {
         return { allowed: false, reason: "expired" };
       }
-      return { allowed: true, reason: "allowed" };
+      const validUntilMs = enrollment.rows[0].valid_until != null ? Number(enrollment.rows[0].valid_until) : null;
+      return { allowed: true, reason: "allowed", enrollmentValidUntilMs: validUntilMs };
     }
 
     return { allowed: false, reason: "no_match" };
@@ -232,13 +300,13 @@ export function registerCourseAccessRoutes({
         return res.status(403).json({ message: "You do not have access to this media file" });
       }
       const token = generateSecureToken();
-      const expiresAt = Date.now() + 10 * 60 * 1000;
+      const expiresAt = Date.now() + 5 * 60 * 1000;
       const storedKey = canonicalMediaKey(fileKey);
       if (!storedKey) return res.status(400).json({ message: "Invalid media file key" });
       await db.query("INSERT INTO media_tokens (token, user_id, file_key, expires_at) VALUES ($1, $2, $3, $4)", [token, user.id, storedKey, expiresAt]);
       db.query("DELETE FROM media_tokens WHERE expires_at < $1", [Date.now()]).catch(() => {});
       const ttlSec = Math.max(60, Math.floor((expiresAt - Date.now()) / 1000));
-      const readUrl = await presignR2GetObject(getR2Client, storedKey, ttlSec);
+      const readUrl = await presignR2GetObject(getR2Client, storedKey, ttlSec, decision.enrollmentValidUntilMs ?? null);
       res.set("Cache-Control", "private, no-store");
       res.json(readUrl ? { token, expiresAt, readUrl } : { token, expiresAt });
     } catch {
@@ -253,12 +321,13 @@ export function registerCourseAccessRoutes({
       let query =
         user?.role === "admin"
           ? `SELECT c.*,
-               (SELECT COUNT(*) FROM lectures l WHERE l.course_id = c.id) AS total_lectures,
-               (SELECT COUNT(*) FROM tests t WHERE t.course_id = c.id AND t.is_published = TRUE) AS total_tests,
-               (SELECT COUNT(*) FROM study_materials sm WHERE sm.course_id = c.id) AS total_materials
-             FROM courses c WHERE 1=1`
+               COALESCE(t_agg.cnt, 0) AS total_tests,
+               COALESCE(m_agg.cnt, 0) AS total_materials
+             FROM courses c
+             LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM tests WHERE is_published = TRUE GROUP BY 1) t_agg ON t_agg.course_id = c.id
+             LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM study_materials GROUP BY 1) m_agg ON m_agg.course_id = c.id
+             WHERE 1=1`
           : `SELECT c.*,
-               (SELECT COUNT(*) FROM lectures l WHERE l.course_id = c.id) AS total_lectures,
                (SELECT COUNT(*) FROM tests t WHERE t.course_id = c.id AND t.is_published = TRUE) AS total_tests,
                (SELECT COUNT(*) FROM study_materials sm WHERE sm.course_id = c.id) AS total_materials
              FROM courses c WHERE c.is_published = TRUE`;
@@ -346,6 +415,10 @@ export function registerCourseAccessRoutes({
       const fullLectures = lecturesResult.rows;
       const fullMaterials = materialsResult.rows;
       const responseLectures = fullLectures.map((row) => sanitizeLectureRowForClient(row as Record<string, unknown>));
+
+      // Enrollment status is resolved below; capture it for material gating.
+      // We check enrollment after the block that sets isEnrolled, so defer
+      // material file_url masking until after that block (see below).
       const responseMaterials = fullMaterials;
 
       if (user) {
@@ -383,13 +456,21 @@ export function registerCourseAccessRoutes({
       // what the course includes. Frontend enforces lock state + purchase prompt.
       (course as any).hasContentAccess = hasContentAccess;
 
+      // C-03: For unenrolled students, null out file_url/download_url on paid materials.
+      // Free-preview materials (is_free_preview or is_free) remain fully accessible.
+      const gatedMaterials = responseMaterials.map((m: Record<string, unknown>) => {
+        if (hasContentAccess) return m;
+        if (m.is_free_preview || m.is_free) return m;
+        return { ...m, file_url: null, download_url: null };
+      });
+
       res.set("Cache-Control", "private, no-store");
       res.json({
         ...course,
-        total_materials: responseMaterials.length,
+        total_materials: gatedMaterials.length,
         lectures: responseLectures,
         tests: testsResult.rows,
-        materials: responseMaterials,
+        materials: gatedMaterials,
       });
     } catch (err) {
       console.error(err);
@@ -450,9 +531,12 @@ export function registerCourseAccessRoutes({
       const user = await getAuthUser(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const result = await db.query(
-        `SELECT c.*, e.progress_percent, e.enrolled_at FROM courses c 
-         JOIN enrollments e ON c.id = e.course_id 
-         WHERE e.user_id = $1 ORDER BY e.enrolled_at DESC`,
+        `SELECT c.*, e.progress_percent, e.enrolled_at FROM courses c
+         JOIN enrollments e ON c.id = e.course_id
+         WHERE e.user_id = $1
+           AND (e.status = 'active' OR e.status IS NULL)
+           AND (e.valid_until IS NULL OR e.valid_until > EXTRACT(EPOCH FROM NOW()) * 1000)
+         ORDER BY e.enrolled_at DESC`,
         [user.id]
       );
       res.json(result.rows);
@@ -561,7 +645,7 @@ export function registerCourseAccessRoutes({
 
       // Rate limit: max 10 token requests per user per 60 seconds.
       // Admins bypass this limit since they may test multiple downloads.
-      if (roleNorm === "student" && !checkDownloadUrlRateLimit(user.id)) {
+      if (roleNorm === "student" && !(await checkDownloadUrlRateLimit(db, user.id))) {
         return res.status(429).json({ message: "Too many download requests. Please wait a moment before trying again." });
       }
 
@@ -687,6 +771,16 @@ export function registerCourseAccessRoutes({
       }
       const tokenData = tokenResult.rows[0];
 
+      const proxyEntitlement = await assertDownloadProxyEntitlement(
+        db,
+        Number(tokenData.user_id),
+        String(tokenData.item_type),
+        Number(tokenData.item_id)
+      );
+      if (!proxyEntitlement.ok) {
+        return res.status(proxyEntitlement.status).json({ message: proxyEntitlement.message });
+      }
+
       // If the session is still active, verify it belongs to the same user.
       // If the session has expired (user === null) we trust tokenData.user_id —
       // the token could only have been minted by that user.
@@ -707,10 +801,16 @@ export function registerCourseAccessRoutes({
         return res.status(404).json({ message: "File not found in storage" });
       }
 
+      const watermarkSecret =
+        process.env.OTP_HMAC_SECRET?.trim() || process.env.SESSION_SECRET?.trim();
+      if (!watermarkSecret) {
+        console.error("[download-proxy] Missing OTP_HMAC_SECRET / SESSION_SECRET");
+        return res.status(503).json({ message: "Server configuration error" });
+      }
       const { createHmac } = await import("crypto");
       const timestamp = Date.now();
       const watermarkData = `${tokenData.user_id}:${timestamp}`;
-      const hmac = createHmac("sha256", process.env.SESSION_SECRET || "default-secret").update(watermarkData).digest("hex");
+      const hmac = createHmac("sha256", watermarkSecret).update(watermarkData).digest("hex");
       const watermarkToken = `${watermarkData}:${hmac}`;
 
       res.setHeader("Content-Type", r2Response.ContentType || "application/octet-stream");

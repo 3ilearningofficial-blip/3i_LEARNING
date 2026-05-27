@@ -83,6 +83,8 @@ function reducer(state: JobsState, action: Action): JobsState {
 
 type Ctx = {
   jobs: JobsState;
+  /** False until IndexedDB keys for the current user have been read (avoids Download button flash). */
+  isWebOfflineHydrated: boolean;
   getJob: (itemType: string, itemId: number) => WebDlJobSnapshot | undefined;
   /** True once this lecture/material blob exists in IndexedDB (persists after job clears) */
   isItemSavedLocally: (itemType: string, itemId: number) => boolean;
@@ -100,6 +102,7 @@ type Ctx = {
 /** Used when Provider is omitted (native) — callers should no-op via Platform checks where needed */
 const WEB_DL_STUB_CTX: Ctx = {
   jobs: {},
+  isWebOfflineHydrated: true,
   getJob: () => undefined,
   isItemSavedLocally: () => false,
   forgetSavedLocally: () => {},
@@ -112,15 +115,18 @@ export function WebDownloadJobsInnerProvider({ children }: { children: React.Rea
   const { user } = useAuth();
   const [jobs, dispatch] = useReducer(reducer, {});
   const [persistedSaved, setPersistedSaved] = useState<Record<string, boolean>>({});
+  const [isWebOfflineHydrated, setIsWebOfflineHydrated] = useState(Platform.OS !== "web");
   const inFlight = useRef<Set<string>>(new Set());
 
   useEffect(() => {
+    if (Platform.OS !== "web") return;
     let cancelled = false;
+    setIsWebOfflineHydrated(false);
     (async () => {
       try {
         const userId = Number(user?.id || 0);
         if (!Number.isFinite(userId) || userId <= 0) {
-          setPersistedSaved({});
+          if (!cancelled) setPersistedSaved({});
           return;
         }
         const keys = await listWebOfflineKeys();
@@ -135,6 +141,8 @@ export function WebDownloadJobsInnerProvider({ children }: { children: React.Rea
         setPersistedSaved(next);
       } catch {
         /* ignore */
+      } finally {
+        if (!cancelled) setIsWebOfflineHydrated(true);
       }
     })();
     return () => {
@@ -315,6 +323,7 @@ export function WebDownloadJobsInnerProvider({ children }: { children: React.Rea
   const value = useMemo(
     () => ({
       jobs,
+      isWebOfflineHydrated,
       getJob,
       isItemSavedLocally,
       forgetSavedLocally,
@@ -322,6 +331,7 @@ export function WebDownloadJobsInnerProvider({ children }: { children: React.Rea
     }),
     [
       jobs,
+      isWebOfflineHydrated,
       getJob,
       isItemSavedLocally,
       forgetSavedLocally,

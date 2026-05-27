@@ -475,7 +475,9 @@ export const queryClient = new QueryClient({
       refetchInterval: false,
       // Native: avoid refetch on every app resume / tab focus; data stays warm from cache. Web: still refetch on tab focus for fresher dashboards.
       refetchOnWindowFocus: Platform.OS === "web",
-      staleTime: 3 * 60 * 1000,
+      // Keep access-sensitive data (enrollments / course access) fresh immediately after purchases.
+      // Individual queries can still opt into longer caching via their own `staleTime`.
+      staleTime: 0,
       gcTime: 20 * 60 * 1000,
       refetchOnReconnect: true,
       retry: false,

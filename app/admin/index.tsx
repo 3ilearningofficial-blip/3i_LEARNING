@@ -7,7 +7,7 @@ import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
 import { apiRequest, getApiUrl, authFetch } from "@/lib/query-client";
@@ -1360,25 +1360,43 @@ export default function AdminDashboard() {
 
   const tsCourses = React.useMemo(() => courses.filter((c: any) => c.course_type === "test_series"), [courses]);
 
-  const { data: users = [], isLoading: usersLoading } = useQuery<UserRecord[]>({
-    queryKey: ["/api/admin/users"],
-    queryFn: async () => {
+  const {
+    data: usersPages,
+    isLoading: usersLoading,
+    fetchNextPage: fetchMoreUsers,
+    hasNextPage: hasMoreUsers,
+    isFetchingNextPage: isFetchingMoreUsers,
+  } = useInfiniteQuery({
+    queryKey: ["/api/admin/users", "paged"],
+    initialPageParam: 0,
+    queryFn: async ({ pageParam }) => {
       const baseUrl = getApiUrl();
       const url = new URL("/api/admin/users", baseUrl);
+      url.searchParams.set("limit", "50");
+      url.searchParams.set("offset", String(pageParam));
       const res = await authFetch(url.toString());
       if (!res.ok) {
         console.error("Admin users fetch failed:", res.status);
-        return [];
+        return { users: [] as UserRecord[], nextOffset: undefined as number | undefined };
       }
-      return res.json();
+      const users = (await res.json()) as UserRecord[];
+      const hasMore = res.headers.get("X-Has-More") === "true";
+      return {
+        users,
+        nextOffset: hasMore ? Number(pageParam) + users.length : undefined,
+      };
     },
+    getNextPageParam: (last) => last.nextOffset,
     enabled: activeTab === "users",
     staleTime: 10 * 60 * 1000,
     gcTime: 30 * 60 * 1000,
     refetchOnMount: false,
     refetchOnWindowFocus: false,
-    refetchInterval: false,
   });
+  const users = React.useMemo(
+    () => usersPages?.pages.flatMap((p) => p.users) ?? [],
+    [usersPages]
+  );
 
   const { data: courseAccessEnrollments } = useQuery<{ courseIds: number[] }>({
     queryKey: ["/api/admin/users", courseAccessUserId, "enrollments"],
@@ -2382,14 +2400,91 @@ export default function AdminDashboard() {
     }
   };
 
+  const renderAdminMissionCard = (m: any) => {
+    const qCount = Array.isArray(m.questions) ? m.questions.length : 0;
+    const totalMarks = Array.isArray(m.questions) ? m.questions.reduce((s: number, q: any) => s + (q.marks || 0), 0) : 0;
+    return (
+      <Pressable key={m.id} style={[styles.adminCard, { flexDirection: "row", alignItems: "center" }]} onPress={async () => {
+        setSelectedMission(m);
+        setMissionAttemptsLoading(true);
+        try {
+          const baseUrl = getApiUrl();
+          const res = await authFetch(new URL(`/api/admin/daily-missions/${m.id}/attempts`, baseUrl).toString());
+          if (!res.ok) {
+            const errText = await res.text();
+            console.error("Attempts fetch failed:", res.status, errText);
+            setMissionAttempts([]);
+          } else {
+            const data = await res.json();
+            setMissionAttempts(data);
+          }
+        } catch (e) {
+          console.error("Attempts fetch error:", e);
+          setMissionAttempts([]);
+        } finally {
+          setMissionAttemptsLoading(false);
+        }
+      }}>
+        <View style={styles.adminCardContent}>
+          <View style={styles.adminCardRow}>
+            <Text style={styles.adminCardTitle} numberOfLines={2}>{m.title}</Text>
+            <View style={{ flexDirection: "row", gap: 4, alignItems: "center" }}>
+              {m.folder_name ? (
+                <View style={{ paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, backgroundColor: "#D1FAE5" }}>
+                  <Text style={{ fontSize: 9, fontFamily: "Inter_600SemiBold", color: "#0F766E" }}>📁 {m.folder_name}</Text>
+                </View>
+              ) : null}
+              <View style={[styles.typeBadge, { backgroundColor: m.mission_type === "free_practice" ? "#22C55E20" : "#F59E0B20" }]}>
+                <Text style={{ fontSize: 10, fontFamily: "Inter_600SemiBold", color: m.mission_type === "free_practice" ? "#22C55E" : "#F59E0B" }}>
+                  {m.mission_type === "free_practice" ? "Free" : "Drill"}
+                </Text>
+              </View>
+            </View>
+          </View>
+          <View style={styles.adminCardMeta}>
+            <Text style={styles.adminCardMetaText}>{qCount} questions</Text>
+            {totalMarks > 0 && <><Text style={styles.adminCardMetaText}>|</Text><Text style={styles.adminCardMetaText}>{totalMarks} marks</Text></>}
+            <Text style={styles.adminCardMetaText}>|</Text>
+            <Text style={styles.adminCardMetaText}>{m.mission_date}</Text>
+          </View>
+        </View>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <Ionicons name="people-outline" size={16} color={Colors.light.primary} />
+          <Pressable style={[styles.deleteBtn, { backgroundColor: "#EEF2FF" }]} onPress={(e) => {
+            e.stopPropagation?.();
+            setEditMission({ ...m, questions: Array.isArray(m.questions) ? m.questions.map((q: any) => ({ ...q, marks: String(q.marks || ""), solution: q.solution || "", image_url: q.image_url || "", solution_image_url: q.solution_image_url || "", subtopic: q.subtopic || "" })) : [] });
+          }}>
+            <Ionicons name="pencil-outline" size={18} color={Colors.light.primary} />
+          </Pressable>
+          <Pressable style={styles.deleteBtn} onPress={(e) => {
+            e.stopPropagation?.();
+            if (Platform.OS === "web") {
+              if (window.confirm(`Delete "${m.title}"?`)) deleteMissionMutation.mutate(m.id);
+            } else {
+              Alert.alert("Delete Mission", `Delete "${m.title}"?`, [
+                { text: "Cancel", style: "cancel" },
+                { text: "Delete", style: "destructive", onPress: () => deleteMissionMutation.mutate(m.id) },
+              ]);
+            }
+          }}>
+            <Ionicons name="trash-outline" size={18} color="#EF4444" />
+          </Pressable>
+        </View>
+      </Pressable>
+    );
+  };
+
   const tabContent = (
     <ScrollView style={styles.content} contentContainerStyle={[styles.contentInner, { paddingBottom: bottomPadding + 80 }]}>
       {/* Folder Detail View — replaces tab content when a folder is opened */}
       {openFolderView ? (() => {
         const { folder, type } = openFolderView;
         const isTest = type === "test";
-        const accentColor = isTest ? Colors.light.primary : "#DC2626";
-        const items = isTest
+        const isMission = type === "mission";
+        const accentColor = isMission ? "#0F766E" : isTest ? Colors.light.primary : "#DC2626";
+        const items = isMission
+          ? adminMissions.filter((m: any) => m.folder_name === folder.name)
+          : isTest
           ? adminTests.filter((t: any) => t.folder_name === folder.name && !t.course_id)
           : freeMaterials.filter((m: any) => m.section_title === folder.name);
 
@@ -2475,7 +2570,7 @@ export default function AdminDashboard() {
               <View style={{ flex: 1 }}>
                 <Text style={{ fontSize: 18, fontFamily: "Inter_700Bold", color: Colors.light.text }}>{folder.name}</Text>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                  <Text style={{ fontSize: 12, fontFamily: "Inter_400Regular", color: Colors.light.textMuted }}>{items.length} {isTest ? "test" : "file"}{items.length !== 1 ? "s" : ""}</Text>
+                  <Text style={{ fontSize: 12, fontFamily: "Inter_400Regular", color: Colors.light.textMuted }}>{items.length} {isMission ? "mission" : isTest ? "test" : "file"}{items.length !== 1 ? "s" : ""}</Text>
                 </View>
               </View>
               <Pressable style={{ padding: 6 }} onPress={() => setStandaloneFolderActionSheet(folder)}>
@@ -2487,22 +2582,23 @@ export default function AdminDashboard() {
             <Pressable
               style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: accentColor, borderRadius: 12, paddingVertical: 12 }}
               onPress={() => {
-                if (isTest) { setTestFolderName(folder.name); setShowCreateTest(true); }
+                if (isMission) { setMissionFolder(folder.name); setShowAddMission(true); }
+                else if (isTest) { setTestFolderName(folder.name); setShowCreateTest(true); }
                 else { setFreMatSection(folder.name); setShowAddFreeMaterial(true); }
               }}>
               <Ionicons name="add-circle-outline" size={18} color="#fff" />
-              <Text style={{ fontSize: 14, fontFamily: "Inter_600SemiBold", color: "#fff" }}>{isTest ? "Create Test" : "Add Material"}</Text>
+              <Text style={{ fontSize: 14, fontFamily: "Inter_600SemiBold", color: "#fff" }}>{isMission ? "Add Mission" : isTest ? "Create Test" : "Add Material"}</Text>
             </Pressable>
 
             {/* Items list */}
             {items.length === 0 ? (
               <View style={{ alignItems: "center", paddingVertical: 32, gap: 8 }}>
-                <Ionicons name={isTest ? "document-text-outline" : "folder-open-outline"} size={40} color={Colors.light.textMuted} />
-                <Text style={{ fontSize: 14, fontFamily: "Inter_500Medium", color: Colors.light.textMuted }}>No {isTest ? "tests" : "materials"} in this folder yet</Text>
+                <Ionicons name={isMission ? "flame-outline" : isTest ? "document-text-outline" : "folder-open-outline"} size={40} color={Colors.light.textMuted} />
+                <Text style={{ fontSize: 14, fontFamily: "Inter_500Medium", color: Colors.light.textMuted }}>No {isMission ? "missions" : isTest ? "tests" : "materials"} in this folder yet</Text>
               </View>
             ) : (
               <View style={{ gap: 8 }}>
-                {items.map((item: any) => isTest ? renderTestCard(item) : renderMatCard(item))}
+                {items.map((item: any) => isMission ? renderAdminMissionCard(item) : isTest ? renderTestCard(item) : renderMatCard(item))}
               </View>
             )}
           </View>
@@ -3320,7 +3416,22 @@ export default function AdminDashboard() {
                     {users.length === 0 ? (
                       <Text style={{ color: Colors.light.textMuted, fontFamily: "Inter_400Regular", fontSize: 14, textAlign: "center", marginTop: 20 }}>No users yet</Text>
                     ) : (
-                      users.map(renderUserCard)
+                      <>
+                        {users.map(renderUserCard)}
+                        {hasMoreUsers ? (
+                          <Pressable
+                            style={[styles.testActionBtn, { alignSelf: "center", marginTop: 12, paddingHorizontal: 20 }]}
+                            onPress={() => fetchMoreUsers()}
+                            disabled={isFetchingMoreUsers}
+                          >
+                            {isFetchingMoreUsers ? (
+                              <ActivityIndicator size="small" color={Colors.light.primary} />
+                            ) : (
+                              <Text style={[styles.testActionBtnText, { color: Colors.light.primary }]}>Load more users</Text>
+                            )}
+                          </Pressable>
+                        ) : null}
+                      </>
                     )}
 
                     {/* Inactive Users section */}
@@ -4275,128 +4386,33 @@ export default function AdminDashboard() {
               </View>
             ) : (
               (() => {
-                const renderMissionCard = (m: any) => {
-                  const qCount = Array.isArray(m.questions) ? m.questions.length : 0;
-                  const totalMarks = Array.isArray(m.questions) ? m.questions.reduce((s: number, q: any) => s + (q.marks || 0), 0) : 0;
-                  return (
-                    <Pressable key={m.id} style={[styles.adminCard, { flexDirection: "row", alignItems: "center" }]} onPress={async () => {
-                      setSelectedMission(m);
-                      setMissionAttemptsLoading(true);
-                      try {
-                        const baseUrl = getApiUrl();
-                        const res = await authFetch(new URL(`/api/admin/daily-missions/${m.id}/attempts`, baseUrl).toString());
-                        if (!res.ok) {
-                          const errText = await res.text();
-                          console.error("Attempts fetch failed:", res.status, errText);
-                          setMissionAttempts([]);
-                        } else {
-                          const data = await res.json();
-                          setMissionAttempts(data);
-                        }
-                      } catch (e) {
-                        console.error("Attempts fetch error:", e);
-                        setMissionAttempts([]);
-                      } finally {
-                        setMissionAttemptsLoading(false);
-                      }
-                    }}>
-                      <View style={styles.adminCardContent}>
-                        <View style={styles.adminCardRow}>
-                          <Text style={styles.adminCardTitle} numberOfLines={2}>{m.title}</Text>
-                          <View style={{ flexDirection: "row", gap: 4, alignItems: "center" }}>
-                            {m.folder_name ? (
-                              <View style={{ paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, backgroundColor: "#D1FAE5" }}>
-                                <Text style={{ fontSize: 9, fontFamily: "Inter_600SemiBold", color: "#0F766E" }}>📁 {m.folder_name}</Text>
-                              </View>
-                            ) : null}
-                            <View style={[styles.typeBadge, { backgroundColor: m.mission_type === "free_practice" ? "#22C55E20" : "#F59E0B20" }]}>
-                              <Text style={{ fontSize: 10, fontFamily: "Inter_600SemiBold", color: m.mission_type === "free_practice" ? "#22C55E" : "#F59E0B" }}>
-                                {m.mission_type === "free_practice" ? "Free" : "Drill"}
-                              </Text>
-                            </View>
-                          </View>
-                        </View>
-                        <View style={styles.adminCardMeta}>
-                          <Text style={styles.adminCardMetaText}>{qCount} questions</Text>
-                          {totalMarks > 0 && <><Text style={styles.adminCardMetaText}>|</Text><Text style={styles.adminCardMetaText}>{totalMarks} marks</Text></>}
-                          <Text style={styles.adminCardMetaText}>|</Text>
-                          <Text style={styles.adminCardMetaText}>{m.mission_date}</Text>
-                        </View>
-                      </View>
-                      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                        <Ionicons name="people-outline" size={16} color={Colors.light.primary} />
-                        <Pressable style={[styles.deleteBtn, { backgroundColor: "#EEF2FF" }]} onPress={(e) => {
-                          e.stopPropagation?.();
-                          setEditMission({ ...m, questions: Array.isArray(m.questions) ? m.questions.map((q: any) => ({ ...q, marks: String(q.marks || ""), solution: q.solution || "", image_url: q.image_url || "", solution_image_url: q.solution_image_url || "", subtopic: q.subtopic || "" })) : [] });
-                        }}>
-                          <Ionicons name="pencil-outline" size={18} color={Colors.light.primary} />
-                        </Pressable>
-                        <Pressable style={styles.deleteBtn} onPress={(e) => {
-                          e.stopPropagation?.();
-                          if (Platform.OS === "web") {
-                            if (window.confirm(`Delete "${m.title}"?`)) deleteMissionMutation.mutate(m.id);
-                          } else {
-                            Alert.alert("Delete Mission", `Delete "${m.title}"?`, [
-                              { text: "Cancel", style: "cancel" },
-                              { text: "Delete", style: "destructive", onPress: () => deleteMissionMutation.mutate(m.id) },
-                            ]);
-                          }
-                        }}>
-                          <Ionicons name="trash-outline" size={18} color="#EF4444" />
-                        </Pressable>
-                      </View>
-                    </Pressable>
-                  );
-                };
-
                 const folderNames = new Set(missionFolders.map((f: any) => f.name));
                 const noFolder = adminMissions.filter((m: any) => !m.folder_name || !folderNames.has(m.folder_name));
                 return (
                   <>
                     {missionFolders.map((folder: any) => {
-                      const folderKey = `mission:${folder.id}`;
-                      const isOpen = expandedFolders.has(folderKey);
                       const folderMissions = adminMissions.filter((m: any) => m.folder_name === folder.name);
                       return (
                         <View key={folder.id} style={{ marginBottom: 8 }}>
                           <Pressable
                             style={[styles.adminCard, { flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: folder.is_hidden ? "#F3F4F6" : "#ECFDF5", borderLeftWidth: 4, borderLeftColor: "#0F766E", padding: 14 }]}
-                            onPress={() => {
-                              setExpandedFolders((prev) => {
-                                const next = new Set(prev);
-                                if (next.has(folderKey)) next.delete(folderKey);
-                                else next.add(folderKey);
-                                return next;
-                              });
-                            }}
+                            onPress={() => setOpenFolderView({ folder, type: "mission" })}
                           >
                             <Ionicons name={folder.is_hidden ? "folder-outline" : "folder"} size={22} color={folder.is_hidden ? Colors.light.textMuted : "#0F766E"} />
                             <View style={{ flex: 1 }}>
                               <Text style={{ fontSize: 14, fontFamily: "Inter_700Bold", color: folder.is_hidden ? Colors.light.textMuted : Colors.light.text }}>{folder.name}{folder.is_hidden ? " (Hidden)" : ""}</Text>
                               <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>{folderMissions.length} mission{folderMissions.length !== 1 ? "s" : ""}</Text>
                             </View>
-                            <Ionicons name={isOpen ? "chevron-down" : "chevron-forward"} size={18} color={Colors.light.textMuted} />
+                            <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
                             <Pressable style={{ padding: 6 }} onPress={(e) => { e.stopPropagation?.(); setStandaloneFolderActionSheet(folder); }}>
                               <Ionicons name="ellipsis-vertical" size={18} color={Colors.light.textMuted} />
                             </Pressable>
                           </Pressable>
-                          {isOpen && (
-                            <View style={{ marginTop: 8 }}>
-                              {folderMissions.length === 0 ? (
-                                <View style={styles.infoCard}>
-                                  <Ionicons name="information-circle-outline" size={18} color={Colors.light.textMuted} />
-                                  <Text style={styles.infoText}>This folder is empty.</Text>
-                                </View>
-                              ) : (
-                                folderMissions.map(renderMissionCard)
-                              )}
-                            </View>
-                          )}
                         </View>
                       );
                     })}
                     {adminMissions.length === 0 && missionFolders.length === 0 && <View style={styles.infoCard}><Ionicons name="flame-outline" size={20} color={Colors.light.primary} /><Text style={styles.infoText}>No missions yet.</Text></View>}
-                    {noFolder.map(renderMissionCard)}
+                    {noFolder.map(renderAdminMissionCard)}
                   </>
                 );
               })()

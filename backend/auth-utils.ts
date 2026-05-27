@@ -40,6 +40,16 @@ function syncSessionUser(req: Request, user: AuthUser | null) {
  * Admins may have additional rows in `user_sessions` so multiple devices stay signed in.
  */
 export async function getAuthUserFromRequest(req: Request, db: DbClient): Promise<AuthUser | null> {
+  const cacheKey = "__auth_user_from_request_cache";
+  if (Object.prototype.hasOwnProperty.call(req as any, cacheKey)) {
+    return (req as any)[cacheKey] as AuthUser | null;
+  }
+
+  const setCache = (val: AuthUser | null): AuthUser | null => {
+    (req as any)[cacheKey] = val;
+    return val;
+  };
+
   const authHeader = req.headers.authorization;
   const bearerRaw = authHeader?.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
   const bearerToken =
@@ -57,21 +67,21 @@ export async function getAuthUserFromRequest(req: Request, db: DbClient): Promis
       const u = resolved.row as Record<string, unknown>;
       if (u.is_blocked) {
         syncSessionUser(req, null);
-        return null;
+        return setCache(null);
       }
       const authUser = rowsToAuthUser(u, token);
       syncSessionUser(req, authUser);
-      return authUser;
+      return setCache(authUser);
     } catch (e) {
       console.error("[Auth] Bearer token lookup error:", e);
-      return null;
+      return setCache(null);
     }
   }
 
   // 2) Cookie session only: must match current session (students: users.session_token;
   // admins: that token or any user_sessions token for this user).
   const sessionUser = (req.session as any).user as { id?: number; sessionToken?: string | null } | undefined;
-  if (!sessionUser?.id) return null;
+  if (!sessionUser?.id) return setCache(null);
 
   try {
     const result = await db.query(
@@ -80,29 +90,29 @@ export async function getAuthUserFromRequest(req: Request, db: DbClient): Promis
     );
     if (result.rows.length === 0) {
       syncSessionUser(req, null);
-      return null;
+      return setCache(null);
     }
     const row = result.rows[0];
     if (row.is_blocked) {
       syncSessionUser(req, null);
-      return null;
+      return setCache(null);
     }
     const cookieTok = sessionUser.sessionToken;
     if (cookieTok && !(await userHasSessionToken(db, sessionUser.id, cookieTok))) {
       syncSessionUser(req, null);
-      return null;
+      return setCache(null);
     }
     if (row.session_token && !sessionUser.sessionToken) {
       syncSessionUser(req, null);
-      return null;
+      return setCache(null);
     }
 
     const authUser = rowsToAuthUser(row, cookieTok || row.session_token);
     syncSessionUser(req, authUser);
-    return authUser;
+    return setCache(authUser);
   } catch (e) {
     console.error("[Auth] Session user lookup error:", e);
-    return null;
+    return setCache(null);
   }
 }
 

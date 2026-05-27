@@ -62,7 +62,12 @@ const OTP_COOLDOWN_MESSAGE = "Please wait before requesting another OTP.";
 const REGISTRATION_TOKEN_TTL_MS = 15 * 60 * 1000;
 
 function getTokenSecret(): string {
-  return process.env.OTP_HMAC_SECRET || process.env.SESSION_SECRET || "dev-otp-secret";
+  const secret = process.env.OTP_HMAC_SECRET;
+  if (!secret) {
+    // Startup must hard-fail if this is missing; keep this as a defensive guard.
+    throw new Error("OTP_HMAC_SECRET must be set");
+  }
+  return secret;
 }
 
 function toBase64Url(buf: Buffer): string {
@@ -734,8 +739,10 @@ export function registerAuthRoutes({
       };
       (req.session as any).user = fresh;
       res.json(fresh);
-    } catch {
-      res.json(sessionUser);
+    } catch (err) {
+      console.error("[auth/me] session validation failed:", err);
+      (req.session as any).user = null;
+      return res.status(503).json({ message: "Unable to validate session" });
     }
   });
 
@@ -748,7 +755,10 @@ export function registerAuthRoutes({
       const phoneNumber = decoded.phone_number;
       if (!phoneNumber) return res.status(400).json({ message: "Phone number not found in token" });
 
-      const phone = phoneNumber.replace(/^\+91/, "");
+      const phone = normalizePhone(phoneNumber);
+      if (!phone || phone.length < 10) {
+        return res.status(400).json({ message: "Invalid phone number in token" });
+      }
       const result = await db.query("SELECT * FROM users WHERE phone = $1", [phone]);
       if (result.rows.length === 0) {
         return res.json(registrationTokenPayloadResponse(phone, "phone"));
@@ -969,6 +979,10 @@ export function registerAuthRoutes({
         }
       }
 
+      if (typeof password === "string" && password.length > 0 && password.length < 8) {
+        return res.status(400).json({ message: "Password must be at least 8 characters" });
+      }
+
       const passwordHash = password ? await hashPassword(password) : null;
       const photo = typeof photoUrl === "string" && photoUrl.length > 0 ? photoUrl : null;
       const dob = typeof dateOfBirth === "string" && dateOfBirth.length > 0 ? dateOfBirth : null;
@@ -1000,7 +1014,18 @@ export function registerAuthRoutes({
       }
 
       const dev = typeof deviceId === "string" ? deviceId : null;
-      const finalized = await finalizeAuthenticatedSession(req, user, dev, true);
+      let finalized: Awaited<ReturnType<typeof finalizeAuthenticatedSession>>;
+      try {
+        finalized = await finalizeAuthenticatedSession(req, user, dev, true);
+      } catch (finalizeErr) {
+        // Session finalization threw — user row was already inserted. Clean up the
+        // otp_challenges row so it cannot be replayed (defensive: the DELETE above
+        // already ran, but guard against future re-ordering).
+        await db
+          .query("DELETE FROM otp_challenges WHERE identifier = $1", [payload.identifier])
+          .catch(() => {});
+        throw finalizeErr;
+      }
       if (!finalized.success) {
         return res.status(finalized.httpStatus).json({ message: finalized.message });
       }
@@ -1046,7 +1071,22 @@ export function registerAuthRoutes({
         return res.status(400).json({ message: "No profile fields provided" });
       }
 
+      // If a new email is provided, verify it isn't already taken by another account.
+      if (email !== undefined && email) {
+        const normalizedNewEmail = String(email).trim().toLowerCase();
+        const emailConflict = await db.query(
+          "SELECT id FROM users WHERE LOWER(email) = LOWER($1) AND id != $2",
+          [normalizedNewEmail, user.id]
+        );
+        if (emailConflict.rows.length > 0) {
+          return res.status(409).json({ message: "This email is already in use by another account" });
+        }
+      }
+
       let passwordHash: string | null = null;
+      if (typeof password === "string" && password.length > 0 && password.length < 8) {
+        return res.status(400).json({ message: "Password must be at least 8 characters" });
+      }
       if (password) {
         passwordHash = await hashPassword(password);
       }
@@ -1091,8 +1131,8 @@ export function registerAuthRoutes({
       if (!user) return res.status(401).json({ message: "Not authenticated" });
 
       const { oldPassword, newPassword } = req.body;
-      if (!newPassword || newPassword.length < 6) {
-        return res.status(400).json({ message: "New password must be at least 6 characters" });
+      if (!newPassword || newPassword.length < 8) {
+        return res.status(400).json({ message: "Password must be at least 8 characters" });
       }
 
       const dbUser = await db.query("SELECT password_hash FROM users WHERE id = $1", [user.id]);

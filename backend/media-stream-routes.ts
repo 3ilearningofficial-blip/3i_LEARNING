@@ -85,9 +85,32 @@ async function streamMediaGet(
   let authenticatedViaMediaToken = false;
 
   if (mediaToken) {
-    const tokenResult = await db.query("SELECT user_id FROM media_tokens WHERE token = $1 AND expires_at > $2 AND file_key = $3", [mediaToken, Date.now(), canonicalKey]);
+    const MEDIA_TOKEN_MAX_ACCESS = 800;
+    const nowMs = Date.now();
+    let tokenResult: { rows: Array<{ user_id: number; access_count?: number }> };
+    try {
+      tokenResult = await db.query(
+        `UPDATE media_tokens
+         SET access_count = access_count + 1
+         WHERE token = $1 AND expires_at > $2 AND file_key = $3
+         RETURNING user_id, access_count`,
+        [mediaToken, nowMs, canonicalKey]
+      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.includes("access_count")) throw err;
+      tokenResult = await db.query(
+        "SELECT user_id FROM media_tokens WHERE token = $1 AND expires_at > $2 AND file_key = $3",
+        [mediaToken, nowMs, canonicalKey]
+      );
+    }
     if (tokenResult.rows.length === 0) {
       res.status(401).json({ message: "Token expired or invalid" });
+      return;
+    }
+    const accessCount = Number(tokenResult.rows[0].access_count ?? 1);
+    if (accessCount > MEDIA_TOKEN_MAX_ACCESS) {
+      res.status(429).json({ message: "Token usage limit exceeded" });
       return;
     }
     const tokenUserId = tokenResult.rows[0].user_id as number;
@@ -106,6 +129,94 @@ async function streamMediaGet(
       userRole = String(roleRow.rows[0]?.role ?? "student");
     }
     authenticatedViaMediaToken = true;
+
+      // F-01: playback-time entitlement check for media-token authenticated requests.
+      // Without this, a token minted while the user was enrolled could remain usable
+      // after `enrollments.valid_until` is updated/revoked.
+      if (userRole !== "admin") {
+        const variants = mediaKeyMatchVariants(canonicalKey);
+
+        const lectureMatch = await db.query(
+          `SELECT l.course_id, l.is_free_preview
+           FROM lectures l
+           WHERE (
+             (l.video_url_normalized IS NOT NULL AND l.video_url_normalized = ANY($1::text[]))
+             OR
+             (l.pdf_url_normalized IS NOT NULL AND l.pdf_url_normalized = ANY($1::text[]))
+           )
+           AND (l.visible_after_at IS NULL OR l.visible_after_at <= EXTRACT(EPOCH FROM NOW()) * 1000)
+           LIMIT 1`,
+          [variants]
+        );
+        if (lectureMatch.rows.length > 0) {
+          const row = lectureMatch.rows[0];
+          if (!row.course_id || row.is_free_preview) {
+            // Free preview lecture stays playable.
+          } else {
+            const enrollment = await db.query(
+              "SELECT id, valid_until FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL) LIMIT 1",
+              [userId, row.course_id]
+            );
+            if (enrollment.rows.length === 0 || isEnrollmentExpired(enrollment.rows[0])) {
+              res.status(403).json({ message: "Enrollment required" });
+              return;
+            }
+          }
+        } else {
+          const liveClassMatch = await db.query(
+            `SELECT lc.course_id, lc.is_free_preview
+             FROM live_classes lc
+             WHERE lc.recording_url IS NOT NULL
+               AND lc.recording_url_normalized IS NOT NULL
+               AND lc.recording_url_normalized = ANY($1::text[])
+             LIMIT 1`,
+            [variants]
+          );
+          if (liveClassMatch.rows.length > 0) {
+            const row = liveClassMatch.rows[0];
+            if (!row.course_id || row.is_free_preview) {
+              // Free preview.
+            } else {
+              const enrollment = await db.query(
+                "SELECT id, valid_until FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL) LIMIT 1",
+                [userId, row.course_id]
+              );
+              if (enrollment.rows.length === 0 || isEnrollmentExpired(enrollment.rows[0])) {
+                res.status(403).json({ message: "Enrollment required" });
+                return;
+              }
+            }
+          } else {
+            const materialMatch = await db.query(
+              `SELECT sm.course_id, sm.is_free
+               FROM study_materials sm
+               WHERE sm.file_url IS NOT NULL
+                 AND sm.file_url_normalized IS NOT NULL
+                 AND sm.file_url_normalized = ANY($1::text[])
+               LIMIT 1`,
+              [variants]
+            );
+            if (materialMatch.rows.length > 0) {
+              const row = materialMatch.rows[0];
+              if (!row.course_id || row.is_free) {
+                // Free material stays playable.
+              } else {
+                const enrollment = await db.query(
+                  "SELECT id, valid_until FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL) LIMIT 1",
+                  [userId, row.course_id]
+                );
+                if (enrollment.rows.length === 0 || isEnrollmentExpired(enrollment.rows[0])) {
+                  res.status(403).json({ message: "Enrollment required" });
+                  return;
+                }
+              }
+            } else {
+              res.status(403).json({ message: "Enrollment required" });
+              return;
+            }
+          }
+        }
+      }
   } else {
     const user = await getAuthUser(req);
     if (!user) {
