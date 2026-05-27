@@ -19,7 +19,6 @@
     "resolveJsonModule": true,
     "skipLibCheck": true,
     "target": "ESNext",
-    "baseUrl": ".",
     "strict": true,
     "paths": {
       "@/*": [
