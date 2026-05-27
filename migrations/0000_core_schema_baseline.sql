@@ -99,6 +99,7 @@ CREATE TABLE IF NOT EXISTS live_classes (
   title TEXT NOT NULL,
   is_live BOOLEAN DEFAULT FALSE,
   is_completed BOOLEAN DEFAULT FALSE,
+  scheduled_at BIGINT,
   created_at BIGINT DEFAULT (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT
 );
 
