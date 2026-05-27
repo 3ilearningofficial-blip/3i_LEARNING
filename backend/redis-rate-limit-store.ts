@@ -8,14 +8,17 @@ export class RedisRateLimitStore {
   private windowMs = 60_000;
   readonly localKeys = false;
 
-  constructor(private readonly redis: AppRedisClient) {}
+  constructor(
+    private readonly redis: AppRedisClient,
+    private readonly bucketPrefix = "default"
+  ) {}
 
   init(options: { windowMs: number }): void {
     this.windowMs = options.windowMs;
   }
 
   private bucketKey(key: string): string {
-    return `ratelimit:${key}`;
+    return `ratelimit:${this.bucketPrefix}:${key}`;
   }
 
   async get(key: string): Promise<{ totalHits: number; resetTime: Date } | undefined> {
@@ -87,7 +90,7 @@ export class RedisRateLimitStore {
 
   async resetAll(): Promise<void> {
     try {
-      const keys = await this.redis.keys("ratelimit:*");
+      const keys = await this.redis.keys(`ratelimit:${this.bucketPrefix}:*`);
       if (keys.length) await this.redis.del(keys);
     } catch (err) {
       console.error("[RedisRateLimitStore] resetAll failed:", err);

@@ -29,8 +29,9 @@ export async function getRedisClient(): Promise<AppRedisClient | null> {
     connectPromise = (async (): Promise<AppRedisClient | null> => {
       try {
         const next = createClient({ url });
-        next.on("error", (err) => {
-          console.error("[Redis] client error:", err.message);
+        next.on("error", (err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          console.error("[Redis] client error:", message);
         });
         await next.connect();
         client = next;

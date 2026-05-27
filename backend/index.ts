@@ -619,21 +619,17 @@ function normalizeOtpIdentifier(input: unknown): string {
   }
 
   const redisClient = await getRedisClient();
-  const otpSendStore = redisClient
-    ? new RedisRateLimitStore(redisClient)
-    : rateLimitPool
-      ? new PgRateLimitStore(rateLimitPool)
-      : undefined;
-  const otpVerifyStore = redisClient
-    ? new RedisRateLimitStore(redisClient)
-    : rateLimitPool
-      ? new PgRateLimitStore(rateLimitPool)
-      : undefined;
-  const globalApiStore = redisClient
-    ? new RedisRateLimitStore(redisClient)
-    : rateLimitPool
-      ? new PgRateLimitStore(rateLimitPool)
-      : undefined;
+  const makeRateLimitStore = (prefix: string) =>
+    redisClient
+      ? new RedisRateLimitStore(redisClient, prefix)
+      : rateLimitPool
+        ? new PgRateLimitStore(rateLimitPool)
+        : undefined;
+  const otpSendStore = makeRateLimitStore("otp-send");
+  const otpVerifyStore = makeRateLimitStore("otp-verify");
+  const authLoginStore = makeRateLimitStore("auth-login");
+  const mediaTokenStore = makeRateLimitStore("media-token");
+  const globalApiStore = makeRateLimitStore("global-api");
   if (redisClient) {
     console.log("[Redis] Rate limit stores using Redis");
   }
@@ -676,7 +672,7 @@ function normalizeOtpIdentifier(input: unknown): string {
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: authLoginKey,
-    ...(otpSendStore ? { store: otpSendStore } : {}),
+    ...(authLoginStore ? { store: authLoginStore } : {}),
   });
   app.use("/api/auth/email-login", authLoginLimiter);
   app.use("/api/auth/verify-firebase", authLoginLimiter);
@@ -694,7 +690,7 @@ function normalizeOtpIdentifier(input: unknown): string {
       const suffix = auth.startsWith("Bearer ") ? auth.slice(7, 24) : ipKeyGenerator(req.ip || "");
       return `media-token:${suffix}`;
     },
-    ...(globalApiStore ? { store: globalApiStore } : {}),
+    ...(mediaTokenStore ? { store: mediaTokenStore } : {}),
   });
   app.use("/api/media-token", mediaTokenLimiter);
 
