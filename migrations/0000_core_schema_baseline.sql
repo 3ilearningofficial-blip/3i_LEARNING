@@ -118,3 +118,23 @@ CREATE TABLE IF NOT EXISTS payments (
   razorpay_order_id TEXT,
   created_at BIGINT DEFAULT (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT
 );
+
+CREATE TABLE IF NOT EXISTS lecture_progress (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  lecture_id INTEGER REFERENCES lectures(id) ON DELETE CASCADE,
+  is_completed BOOLEAN DEFAULT FALSE,
+  watch_percent INTEGER DEFAULT 0,
+  completed_at BIGINT
+);
+
+CREATE TABLE IF NOT EXISTS daily_missions (
+  id SERIAL PRIMARY KEY,
+  title TEXT NOT NULL,
+  description TEXT,
+  questions JSONB DEFAULT '[]'::jsonb,
+  mission_date DATE,
+  xp_reward INTEGER DEFAULT 50,
+  mission_type TEXT DEFAULT 'daily_drill',
+  course_id INTEGER REFERENCES courses(id) ON DELETE CASCADE
+);
