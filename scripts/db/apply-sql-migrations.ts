@@ -45,6 +45,7 @@ const migrationFiles = [
   "migrations/0031_courses_total_lectures_trigger.sql",
   "migrations/0032_live_classes_cf_recording_uid.sql",
   "migrations/0033_media_tokens_access_count.sql",
+  "migrations/0034_download_tokens_table.sql",
 ];
 
 const connectionString = process.env.DATABASE_URL;

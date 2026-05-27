@@ -23,7 +23,11 @@ function createFakeDb(initial: { liveClasses: any[]; lectures?: any[]; courses?:
 
   const query = async (text: string, params: unknown[] = []) => {
     const sql = text.replace(/\s+/g, " ").trim();
-    if (sql.includes("SELECT id, title, cf_stream_uid, is_completed, recording_url, recording_deleted_at FROM live_classes WHERE id = $1")) {
+    if (
+      sql.includes("FROM live_classes WHERE id = $1") &&
+      sql.includes("SELECT id, title, cf_stream_uid") &&
+      sql.includes("recording_deleted_at")
+    ) {
       const row = state.liveClasses.find((r) => String(r.id) === String(params[0]));
       return {
         rows: row
@@ -31,6 +35,7 @@ function createFakeDb(initial: { liveClasses: any[]; lectures?: any[]; courses?:
               id: row.id,
               title: row.title,
               cf_stream_uid: row.cf_stream_uid,
+              cf_recording_uid: row.cf_recording_uid ?? null,
               is_completed: row.is_completed,
               recording_url: row.recording_url ?? null,
               recording_deleted_at: row.recording_deleted_at ?? null,
@@ -84,6 +89,10 @@ function createFakeDb(initial: { liveClasses: any[]; lectures?: any[]; courses?:
         existing.duration_minutes = duration_minutes;
         existing.section_title = section_title;
         existing.live_class_finalized = true;
+        const course = state.courses.find((c) => Number(c.id) === Number(course_id));
+        if (course) {
+          course.total_lectures = state.lectures.filter((l) => Number(l.course_id) === Number(course_id)).length;
+        }
         return { rows: [{ id: existing.id }] };
       }
       state.lectureId += 1;
@@ -102,6 +111,10 @@ function createFakeDb(initial: { liveClasses: any[]; lectures?: any[]; courses?:
         live_class_finalized: true,
         created_at,
       });
+      const course = state.courses.find((c) => Number(c.id) === Number(course_id));
+      if (course) {
+        course.total_lectures = state.lectures.filter((l) => Number(l.course_id) === Number(course_id)).length;
+      }
       return { rows: [{ id: state.lectureId }] };
     }
     if (sql.includes("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1")) {
