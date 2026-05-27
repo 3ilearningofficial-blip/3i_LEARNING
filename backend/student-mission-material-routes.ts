@@ -33,84 +33,117 @@ export function registerStudentMissionMaterialRoutes({
     return hasActiveCourseEnrollment(Number(user.id), Number(mission.course_id));
   };
 
+  const listAccessibleDailyMissions = async (
+    user: any | null,
+    opts: { type?: string; folderName?: string },
+  ): Promise<any[]> => {
+    const { type, folderName } = opts;
+    let query = `SELECT dm.*, c.title AS course_title
+      FROM daily_missions dm
+      LEFT JOIN courses c ON c.id = dm.course_id
+      WHERE dm.mission_date <= CURRENT_DATE`;
+    const params: unknown[] = [];
+    if (type && type !== "all") {
+      params.push(type);
+      query += ` AND dm.mission_type = $${params.length}`;
+    }
+    if (folderName) {
+      params.push(folderName);
+      query += ` AND dm.folder_name = $${params.length}`;
+    }
+    query += " ORDER BY dm.mission_date DESC LIMIT 50";
+    const result = await db.query(query, params);
+
+    if (user) {
+      const missionIds = result.rows.map((m: any) => Number(m.id)).filter((id: number) => Number.isFinite(id));
+      const userMissionMap = new Map<number, any>();
+      if (missionIds.length > 0) {
+        const umBatch = await db.query(
+          "SELECT * FROM user_missions WHERE user_id = $1 AND mission_id = ANY($2::int[])",
+          [user.id, missionIds],
+        );
+        umBatch.rows.forEach((um: any) => {
+          userMissionMap.set(Number(um.mission_id), um);
+        });
+      }
+
+      const enrolledCourseIds = new Set<number>();
+      if (user.role !== "admin") {
+        const courseIds = [
+          ...new Set(
+            result.rows
+              .map((m: any) => Number(m.course_id))
+              .filter((cid: number) => Number.isFinite(cid) && cid > 0),
+          ),
+        ];
+        if (courseIds.length > 0) {
+          const enr = await db.query(
+            `SELECT course_id, valid_until FROM enrollments
+             WHERE user_id = $1 AND course_id = ANY($2::int[])
+               AND (status = 'active' OR status IS NULL)`,
+            [user.id, courseIds],
+          );
+          for (const row of enr.rows) {
+            if (!isEnrollmentExpired(row)) enrolledCourseIds.add(Number(row.course_id));
+          }
+        }
+      }
+
+      const missionAccessible = (mission: any): boolean => {
+        if (mission?.mission_type === "free_practice") return true;
+        if (user.role === "admin") return true;
+        const cid = Number(mission?.course_id);
+        if (!Number.isFinite(cid) || cid <= 0) return false;
+        return enrolledCourseIds.has(cid);
+      };
+
+      for (const mission of result.rows) {
+        mission.isAccessible = missionAccessible(mission);
+        const um = userMissionMap.get(Number(mission.id));
+        mission.isCompleted = !!um?.is_completed;
+        mission.userScore = um?.score || 0;
+        mission.userTimeTaken = um?.time_taken || 0;
+        mission.userAnswers = um?.answers || {};
+        mission.userIncorrect = um?.incorrect || 0;
+        mission.userSkipped = um?.skipped || 0;
+      }
+      if (user.role !== "admin") {
+        result.rows = result.rows.filter((m: any) => !!m.isAccessible);
+      }
+    } else {
+      for (const mission of result.rows) mission.isAccessible = mission.mission_type === "free_practice";
+      result.rows = result.rows.filter((m: any) => !!m.isAccessible);
+    }
+    return result.rows;
+  };
+
   app.get("/api/daily-missions", async (req: Request, res: Response) => {
     try {
       const user = await getAuthUser(req);
       const { type } = req.query;
-      let query = "SELECT * FROM daily_missions WHERE mission_date <= CURRENT_DATE";
-      const params: unknown[] = [];
-      if (type && type !== "all") {
-        params.push(type);
-        query += ` AND mission_type = $${params.length}`;
-      }
-      query += " ORDER BY mission_date DESC LIMIT 20";
-      const result = await db.query(query, params);
-
-      if (user) {
-        const missionIds = result.rows.map((m: any) => Number(m.id)).filter((id: number) => Number.isFinite(id));
-        const userMissionMap = new Map<number, any>();
-        if (missionIds.length > 0) {
-          const umBatch = await db.query(
-            "SELECT * FROM user_missions WHERE user_id = $1 AND mission_id = ANY($2::int[])",
-            [user.id, missionIds],
-          );
-          umBatch.rows.forEach((um: any) => {
-            userMissionMap.set(Number(um.mission_id), um);
-          });
-        }
-
-        const enrolledCourseIds = new Set<number>();
-        if (user.role !== "admin") {
-          const courseIds = [
-            ...new Set(
-              result.rows
-                .map((m: any) => Number(m.course_id))
-                .filter((cid: number) => Number.isFinite(cid) && cid > 0)
-            ),
-          ];
-          if (courseIds.length > 0) {
-            const enr = await db.query(
-              `SELECT course_id, valid_until FROM enrollments
-               WHERE user_id = $1 AND course_id = ANY($2::int[])
-                 AND (status = 'active' OR status IS NULL)`,
-              [user.id, courseIds]
-            );
-            for (const row of enr.rows) {
-              if (!isEnrollmentExpired(row)) enrolledCourseIds.add(Number(row.course_id));
-            }
-          }
-        }
-
-        const missionAccessible = (mission: any): boolean => {
-          if (mission?.mission_type === "free_practice") return true;
-          if (user.role === "admin") return true;
-          const cid = Number(mission?.course_id);
-          if (!Number.isFinite(cid) || cid <= 0) return false;
-          return enrolledCourseIds.has(cid);
-        };
-
-        for (const mission of result.rows) {
-          mission.isAccessible = missionAccessible(mission);
-          if (!mission.isAccessible && user.role !== "admin") continue;
-          const um = userMissionMap.get(Number(mission.id));
-          mission.isCompleted = !!um?.is_completed;
-          mission.userScore = um?.score || 0;
-          mission.userTimeTaken = um?.time_taken || 0;
-          mission.userAnswers = um?.answers || {};
-          mission.userIncorrect = um?.incorrect || 0;
-          mission.userSkipped = um?.skipped || 0;
-        }
-        if (user.role !== "admin") {
-          result.rows = result.rows.filter((m: any) => !!m.isAccessible);
-        }
-      } else {
-        for (const mission of result.rows) mission.isAccessible = mission.mission_type === "free_practice";
-        result.rows = result.rows.filter((m: any) => !!m.isAccessible);
-      }
-      res.json(result.rows);
+      const rows = await listAccessibleDailyMissions(user, { type: String(type || "all") });
+      res.json(rows);
     } catch (err) {
       console.error(err);
       res.status(500).json({ message: "Failed to fetch daily missions" });
+    }
+  });
+
+  app.get("/api/daily-missions/folder/:folderName", async (req: Request, res: Response) => {
+    try {
+      const user = await getAuthUser(req);
+      const { type } = req.query;
+      const folderName = decodeURIComponent(String(req.params.folderName || "")).trim();
+      if (!folderName) return res.status(400).json({ message: "Folder name required" });
+      const rows = await listAccessibleDailyMissions(user, {
+        type: String(type || "all"),
+        folderName,
+      });
+      res.set("Cache-Control", "private, no-store");
+      res.json(rows);
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ message: "Failed to fetch folder missions" });
     }
   });
 

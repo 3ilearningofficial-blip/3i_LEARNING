@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable,
-  Platform, ActivityIndicator, Alert, FlatList, Image,
+  Platform, ActivityIndicator, Alert, Image,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
@@ -13,6 +13,7 @@ import Colors from "@/constants/colors";
 import { useScreenProtection } from "@/lib/useScreenProtection";
 import { isAndroidWeb } from "@/lib/useAndroidWebGate";
 import AndroidWebGate from "@/components/AndroidWebGate";
+import { useLocalSearchParams, router } from "expo-router";
 
 interface MissionQuestion {
   id: number;
@@ -36,6 +37,7 @@ interface DailyMission {
   mission_type: string;
   mission_date: string;
   course_id?: number;
+  course_title?: string | null;
   category?: string;
   folder_name?: string | null;
   xp_reward?: number;
@@ -165,8 +167,8 @@ export default function DailyMissionScreen() {
   if (isAndroidWeb()) return <AndroidWebGate />;
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
+  const params = useLocalSearchParams<{ openMissionId?: string }>();
   const [activeTab, setActiveTab] = useState("all");
-  const [selectedFolderName, setSelectedFolderName] = useState<string | null>(null);
   const [screen, setScreen] = useState<Screen>("list");
   const [activeMission, setActiveMission] = useState<DailyMission | null>(null);
   const [currentQ, setCurrentQ] = useState(0);
@@ -219,9 +221,9 @@ export default function DailyMissionScreen() {
     refetchOnWindowFocus: false,
   });
 
-  const { data: missionFolders = [] } = useQuery<
-    Array<{ id: number; name: string }>
-  >({
+  const openMissionHandledRef = useRef<string | null>(null);
+
+  const { data: missionFolders = [] } = useQuery<Array<{ id: number; name: string }>>({
     queryKey: ["/api/mission-folders"],
     queryFn: async () => {
       const baseUrl = getApiUrl();
@@ -236,21 +238,40 @@ export default function DailyMissionScreen() {
     refetchOnWindowFocus: false,
   });
 
-  const missionsFiltered = useMemo(() => {
-    if (!selectedFolderName) return missions;
-    return missions.filter((m) => (m.folder_name ?? null) === selectedFolderName);
-  }, [missions, selectedFolderName]);
-
-  const missionCountByFolderName = useMemo(() => {
-    const map = new Map<string, number>();
+  const { visibleFolders, ungroupedMissions, enrolledCourseCount } = useMemo(() => {
+    const folderNames = new Set(missionFolders.map((f) => f.name));
+    const ungrouped = missions.filter((m) => !m.folder_name || !folderNames.has(m.folder_name));
+    const courseIds = new Set<number>();
     for (const m of missions) {
-      const fn = m.folder_name ?? null;
-      if (!fn) continue;
-      const key = String(fn);
-      map.set(key, (map.get(key) ?? 0) + 1);
+      if (m.course_id != null && Number.isFinite(Number(m.course_id))) {
+        courseIds.add(Number(m.course_id));
+      }
     }
-    return map;
-  }, [missions]);
+    const folders = missionFolders
+      .map((folder) => {
+        const folderMissions = missions.filter((m) => m.folder_name === folder.name);
+        return { folder, folderMissions };
+      })
+      .filter(({ folderMissions }) => folderMissions.length > 0);
+    return {
+      visibleFolders: folders,
+      ungroupedMissions: ungrouped,
+      enrolledCourseCount: courseIds.size,
+    };
+  }, [missions, missionFolders]);
+
+  const folderCardSubtitle = (folderMissions: DailyMission[]) => {
+    if (enrolledCourseCount <= 1) return null;
+    const titles = [
+      ...new Set(
+        folderMissions
+          .map((m) => (m.course_title ? String(m.course_title).trim() : ""))
+          .filter(Boolean),
+      ),
+    ];
+    if (titles.length === 0) return null;
+    return titles.join(" · ");
+  };
 
   const completeMutation = useMutation({
     mutationFn: async (data: { missionId: number; score: number; timeTaken: number; answers: Record<number, string>; incorrect: number; skipped: number }) => {
@@ -285,6 +306,7 @@ export default function DailyMissionScreen() {
       });
       // Also invalidate to get fresh server data
       qc.invalidateQueries({ queryKey: ["/api/daily-missions"] });
+      qc.invalidateQueries({ queryKey: ["/api/daily-missions/folder"] });
       setCompletedThisSession((prev) => new Set(prev).add(data.missionId));
       setSessionResults((prev) => ({
         ...prev,
@@ -472,6 +494,32 @@ export default function DailyMissionScreen() {
     setSkippedCount(0);
     setScreen("start");
   };
+
+  useEffect(() => {
+    const raw = params.openMissionId ? String(params.openMissionId) : "";
+    if (!raw || isLoading || screen !== "list") return;
+    if (openMissionHandledRef.current === raw) return;
+
+    const tryOpen = (list: DailyMission[]) => {
+      const found = list.find((m) => m.id === Number(raw));
+      if (!found) return false;
+      openMissionHandledRef.current = raw;
+      startMission(found);
+      router.setParams({ openMissionId: "" } as any);
+      return true;
+    };
+
+    if (tryOpen(missions)) return;
+
+    const baseUrl = getApiUrl();
+    authFetch(new URL("/api/daily-missions?type=all", baseUrl).toString())
+      .then((res) => res.json())
+      .then((payload) => {
+        const all = Array.isArray(payload) ? payload.map(normalizeMission) : [];
+        tryOpen(all);
+      })
+      .catch(() => {});
+  }, [params.openMissionId, isLoading, missions, screen]);
 
   // ─── REVIEW DETAIL SCREEN ───────────────────────────────────────────────────
   if (screen === "review" && activeMission) {
@@ -889,6 +937,110 @@ export default function DailyMissionScreen() {
     );
   }
 
+  const renderMissionCard = (item: DailyMission) => {
+    const questions: MissionQuestion[] = Array.isArray(item.questions) ? item.questions : [];
+    const qCount = questions.length;
+    const isLocked = !item.isAccessible;
+    const isCompleted =
+      item.isCompleted ||
+      completedThisSession.has(item.id) ||
+      (item.userScore !== undefined && item.userScore > 0);
+    const sessionData = sessionResults[item.id];
+    const typeLabel = item.mission_type === "free_practice" ? "Free" : "Paid";
+    const typeColor = item.mission_type === "free_practice" ? "#22C55E" : "#F59E0B";
+    const totalMarks = questions.reduce((s: number, q: MissionQuestion) => s + (q.marks || 0), 0);
+    const totalTimeSecs = questions.reduce((s: number, q: MissionQuestion) => s + (q.time_limit || 0), 0);
+    const { topics, subtopics } = uniqueTopicsAndSubtopicsFromQuestions(questions);
+    return (
+      <Pressable
+        key={item.id}
+        style={[styles.missionListCard, isLocked && styles.missionLocked, isCompleted && styles.missionDone]}
+        onPress={() => startMission(item)}
+      >
+        {isCompleted &&
+          (() => {
+            const rawAns = sessionData?.answers || item.userAnswers || {};
+            const displayScore = sessionData?.score ?? item.userScore ?? 0;
+            const earnedMarks =
+              totalMarks > 0
+                ? questions.reduce((s: number, q: MissionQuestion) => {
+                    const ans = (rawAns as any)[q.id] ?? (rawAns as any)[String(q.id)];
+                    return ans === q.correct ? s + (q.marks || 0) : s;
+                  }, 0)
+                : null;
+            return (
+              <View style={styles.attemptedBanner}>
+                <Ionicons name="checkmark-circle" size={16} color="#15803D" />
+                <Text style={styles.attemptedBannerText}>
+                  Attempted · {displayScore}/{qCount} correct
+                  {earnedMarks !== null ? ` · ${earnedMarks}/${totalMarks} marks` : ""}
+                </Text>
+                <Ionicons name="chevron-forward" size={14} color="#15803D" style={{ marginLeft: "auto" as any }} />
+              </View>
+            );
+          })()}
+        <View style={styles.missionListTop}>
+          <View style={[styles.typeBadge, { backgroundColor: typeColor + "20" }]}>
+            <Text style={[styles.typeBadgeText, { color: typeColor }]}>{typeLabel}</Text>
+          </View>
+          {isLocked && (
+            <Ionicons name="lock-closed" size={16} color={Colors.light.textMuted} style={{ marginLeft: "auto" as any }} />
+          )}
+          <Text style={styles.missionDate}>{formatDate(item.mission_date)}</Text>
+        </View>
+        <Text style={styles.missionListTitle}>{item.title}</Text>
+        {item.description ? (
+          <Text style={styles.missionListDesc} numberOfLines={2}>
+            {item.description}
+          </Text>
+        ) : null}
+        {!isCompleted && (
+          <View style={styles.missionListFooter}>
+            <View style={styles.missionListStat}>
+              <Ionicons name="help-circle-outline" size={13} color={Colors.light.textMuted} />
+              <Text style={styles.missionListStatText}>{qCount} Qs</Text>
+            </View>
+            {totalMarks > 0 && (
+              <View style={styles.missionListStat}>
+                <Ionicons name="star-outline" size={13} color="#F59E0B" />
+                <Text style={styles.missionListStatText}>{totalMarks} marks</Text>
+              </View>
+            )}
+            {totalTimeSecs > 0 && (
+              <View style={styles.missionListStat}>
+                <Ionicons name="time-outline" size={13} color={Colors.light.textMuted} />
+                <Text style={styles.missionListStatText}>{Math.ceil(totalTimeSecs / 60)} min</Text>
+              </View>
+            )}
+          </View>
+        )}
+        {(topics.length > 0 || subtopics.length > 0) && (
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
+            {topics.map((t) => (
+              <View key={`t-${t}`} style={styles.topicChip}>
+                <Text style={styles.topicChipText}>{t}</Text>
+              </View>
+            ))}
+            {subtopics.map((s) => (
+              <View key={`s-${s}`} style={[styles.topicChip, { backgroundColor: "#F3E8FF" }]}>
+                <Text style={[styles.topicChipText, { color: "#7C3AED" }]}>{s}</Text>
+              </View>
+            ))}
+          </View>
+        )}
+      </Pressable>
+    );
+  };
+
+  const hasAnyMissions = visibleFolders.length > 0 || ungroupedMissions.length > 0;
+
+  const openMissionFolder = (folderName: string) => {
+    router.push({
+      pathname: "/mission-folder/[name]",
+      params: { name: encodeURIComponent(folderName), type: activeTab },
+    } as any);
+  };
+
   // ─── MISSION LIST ───────────────────────────────────────────────────────────
   return (
     <View style={[styles.container, { paddingTop: topPadding }]}>
@@ -904,146 +1056,57 @@ export default function DailyMissionScreen() {
         </ScrollView>
       </LinearGradient>
 
-      {missionFolders.length > 0 && (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={{ paddingHorizontal: 16, gap: 10 }}
-        >
-          <Pressable
-            onPress={() => setSelectedFolderName(null)}
-            style={[
-              styles.tab,
-              !selectedFolderName && styles.tabActive,
-              { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 999 },
-            ]}
-          >
-            <Text style={[styles.tabText, !selectedFolderName && styles.tabTextActive]}>All</Text>
-          </Pressable>
-
-          {missionFolders.map((f) => {
-            const count = missionCountByFolderName.get(f.name) ?? 0;
-            return (
-              <Pressable
-                key={f.id}
-                onPress={() => setSelectedFolderName(f.name)}
-                style={[
-                  styles.tab,
-                  selectedFolderName === f.name && styles.tabActive,
-                  { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 999 },
-                ]}
-              >
-                <Text style={[styles.tabText, selectedFolderName === f.name && styles.tabTextActive]} numberOfLines={1}>
-                  {f.name} ({count})
-                </Text>
-              </Pressable>
-            );
-          })}
-        </ScrollView>
-      )}
-
       {isLoading ? (
         <View style={styles.centered}><ActivityIndicator size="large" color={Colors.light.primary} /></View>
-      ) : missionsFiltered.length === 0 ? (
+      ) : !hasAnyMissions ? (
         <View style={styles.emptyState}>
           <Ionicons name="flame-outline" size={60} color={Colors.light.textMuted} />
           <Text style={styles.emptyTitle}>No Missions Available</Text>
           <Text style={styles.emptySubtitle}>Check back later for new practice missions!</Text>
         </View>
       ) : (
-        <FlatList
-          data={missionsFiltered}
-          keyExtractor={(item) => String(item.id)}
+        <ScrollView
           contentContainerStyle={{ padding: 16, paddingBottom: bottomPadding + 100, gap: 12 }}
-          renderItem={({ item }) => {
-            const questions: MissionQuestion[] = Array.isArray(item.questions) ? item.questions : [];
-            const qCount = questions.length;
-            const isLocked = !item.isAccessible;
-            const isCompleted = item.isCompleted || completedThisSession.has(item.id) || (item.userScore !== undefined && item.userScore > 0);
-            const sessionData = sessionResults[item.id];
-            const typeLabel = item.mission_type === "free_practice" ? "Free" : "Paid";
-            const typeColor = item.mission_type === "free_practice" ? "#22C55E" : "#F59E0B";
-            const totalMarks = questions.reduce((s: number, q: MissionQuestion) => s + (q.marks || 0), 0);
-            const totalTimeSecs = questions.reduce((s: number, q: MissionQuestion) => s + (q.time_limit || 0), 0);
-            const { topics, subtopics } = uniqueTopicsAndSubtopicsFromQuestions(questions);
+          showsVerticalScrollIndicator={false}
+        >
+          {visibleFolders.map(({ folder, folderMissions }) => {
+            const subtitle = folderCardSubtitle(folderMissions);
+            const completedInFolder = folderMissions.filter(
+              (m) =>
+                m.isCompleted ||
+                completedThisSession.has(m.id) ||
+                (m.userScore !== undefined && m.userScore > 0),
+            ).length;
             return (
               <Pressable
-                style={[styles.missionListCard, isLocked && styles.missionLocked, isCompleted && styles.missionDone]}
-                onPress={() => startMission(item)}
+                key={folder.id}
+                style={styles.folderCard}
+                onPress={() => openMissionFolder(folder.name)}
               >
-                {/* Completed score banner */}
-                {isCompleted && (() => {
-                  const rawAns = sessionData?.answers || item.userAnswers || {};
-                  const displayScore = sessionData?.score ?? item.userScore ?? 0;                  const earnedMarks = totalMarks > 0 ? questions.reduce((s: number, q: MissionQuestion) => {
-                    const ans = (rawAns as any)[q.id] ?? (rawAns as any)[String(q.id)];
-                    return ans === q.correct ? s + (q.marks || 0) : s;
-                  }, 0) : null;
-                  return (
-                    <View style={styles.attemptedBanner}>
-                      <Ionicons name="checkmark-circle" size={16} color="#15803D" />
-                      <Text style={styles.attemptedBannerText}>
-                        Attempted · {displayScore}/{qCount} correct
-                        {earnedMarks !== null ? ` · ${earnedMarks}/${totalMarks} marks` : ""}
-                      </Text>
-                      <Ionicons name="chevron-forward" size={14} color="#15803D" style={{ marginLeft: "auto" as any }} />
-                    </View>
-                  );
-                })()}
-
-                {/* Top row: badges */}
-                <View style={styles.missionListTop}>
-                  <View style={[styles.typeBadge, { backgroundColor: typeColor + "20" }]}>
-                    <Text style={[styles.typeBadgeText, { color: typeColor }]}>{typeLabel}</Text>
-                  </View>
-                  {isLocked && <Ionicons name="lock-closed" size={16} color={Colors.light.textMuted} style={{ marginLeft: "auto" as any }} />}
-                  <Text style={styles.missionDate}>{formatDate(item.mission_date)}</Text>
+                <View style={styles.folderIconWrap}>
+                  <Ionicons name="folder" size={22} color="#0F766E" />
                 </View>
-
-                {/* Title */}
-                <Text style={styles.missionListTitle}>{item.title}</Text>
-                {item.description ? <Text style={styles.missionListDesc} numberOfLines={2}>{item.description}</Text> : null}
-
-                {/* Stats row — only show when not completed */}
-                {!isCompleted && (
-                  <View style={styles.missionListFooter}>
-                    <View style={styles.missionListStat}>
-                      <Ionicons name="help-circle-outline" size={13} color={Colors.light.textMuted} />
-                      <Text style={styles.missionListStatText}>{qCount} Qs</Text>
-                    </View>
-                    {totalMarks > 0 && (
-                      <View style={styles.missionListStat}>
-                        <Ionicons name="star-outline" size={13} color="#F59E0B" />
-                        <Text style={styles.missionListStatText}>{totalMarks} marks</Text>
-                      </View>
-                    )}
-                    {totalTimeSecs > 0 && (
-                      <View style={styles.missionListStat}>
-                        <Ionicons name="time-outline" size={13} color={Colors.light.textMuted} />
-                        <Text style={styles.missionListStatText}>{Math.ceil(totalTimeSecs / 60)} min</Text>
-                      </View>
-                    )}
-                  </View>
-                )}
-
-                {/* Topics / subtopics */}
-                {(topics.length > 0 || subtopics.length > 0) && (
-                  <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
-                    {topics.map((t) => (
-                      <View key={`t-${t}`} style={styles.topicChip}>
-                        <Text style={styles.topicChipText}>{t}</Text>
-                      </View>
-                    ))}
-                    {subtopics.map((s) => (
-                      <View key={`s-${s}`} style={[styles.topicChip, { backgroundColor: "#F3E8FF" }]}>
-                        <Text style={[styles.topicChipText, { color: "#7C3AED" }]}>{s}</Text>
-                      </View>
-                    ))}
-                  </View>
-                )}
+                <View style={styles.folderCardBody}>
+                  <Text style={styles.folderCardTitle} numberOfLines={2}>
+                    {folder.name}
+                  </Text>
+                  {subtitle ? (
+                    <Text style={styles.folderCardCourse} numberOfLines={2}>
+                      {subtitle}
+                    </Text>
+                  ) : null}
+                  <Text style={styles.folderCardMeta}>
+                    {folderMissions.length} mission{folderMissions.length === 1 ? "" : "s"}
+                    {completedInFolder > 0 ? ` · ${completedInFolder} done` : ""}
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={20} color={Colors.light.textMuted} />
               </Pressable>
             );
-          }}
-        />
+          })}
+
+          {ungroupedMissions.map((m) => renderMissionCard(m))}
+        </ScrollView>
       )}
     </View>
   );
@@ -1085,6 +1148,32 @@ const styles = StyleSheet.create({
   missionListFooter: { flexDirection: "row", gap: 14, flexWrap: "wrap" },
   missionListStat: { flexDirection: "row", alignItems: "center", gap: 4 },
   missionListStatText: { fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_500Medium" },
+
+  folderSection: { gap: 10 },
+  folderCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    backgroundColor: "#fff",
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: "#99F6E4",
+    borderLeftWidth: 4,
+    borderLeftColor: "#0F766E",
+  },
+  folderIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: "#CCFBF1",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  folderCardBody: { flex: 1, gap: 2 },
+  folderCardTitle: { fontSize: 16, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
+  folderCardCourse: { fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.primary },
+  folderCardMeta: { fontSize: 12, fontFamily: "Inter_400Regular", color: Colors.light.textMuted, marginTop: 2 },
 
   // Topic chips
   topicChip: { backgroundColor: "#EEF2FF", borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
