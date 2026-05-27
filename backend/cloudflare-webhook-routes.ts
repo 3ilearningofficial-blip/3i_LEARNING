@@ -21,7 +21,19 @@ function timingSafeEqualsHex(a: string, b: string): boolean {
 function verifyWebhookSignature(req: Request): boolean {
   const secret = String(process.env.CLOUDFLARE_STREAM_WEBHOOK_SECRET || "").trim();
   if (!secret) return true;
-  const raw = Buffer.isBuffer((req as any).rawBody) ? ((req as any).rawBody as Buffer) : Buffer.from(JSON.stringify(req.body || {}));
+
+  // Cloudflare Account Notifications (set up via the Notifications UI) send
+  // the literal secret in the cf-webhook-auth header — no HMAC involved.
+  const authHeader = String(req.get("cf-webhook-auth") || "").trim();
+  if (authHeader) {
+    return crypto.timingSafeEqual(Buffer.from(authHeader), Buffer.from(secret));
+  }
+
+  // Cloudflare Stream direct webhooks (set up via the Stream API) use HMAC-SHA256
+  // in the cf-webhook-signature header.
+  const raw = Buffer.isBuffer((req as any).rawBody)
+    ? ((req as any).rawBody as Buffer)
+    : Buffer.from(JSON.stringify(req.body || {}));
   const headerSig = String(req.get("cf-webhook-signature") || req.get("x-webhook-signature") || "").trim();
   if (!headerSig) return false;
   const expected = crypto.createHmac("sha256", secret).update(raw).digest("hex");
