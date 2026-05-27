@@ -10,7 +10,8 @@ export class RedisRateLimitStore {
 
   constructor(
     private readonly redis: AppRedisClient,
-    private readonly bucketPrefix = "default"
+    private readonly bucketPrefix = "default",
+    private readonly options: { failClosed?: boolean } = {}
   ) {}
 
   init(options: { windowMs: number }): void {
@@ -20,6 +21,29 @@ export class RedisRateLimitStore {
   private bucketKey(key: string): string {
     return `ratelimit:${this.bucketPrefix}:${key}`;
   }
+
+  private readonly atomicIncrementScript = `
+local key = KEYS[1]
+local nowMs = tonumber(ARGV[1])
+local windowMs = tonumber(ARGV[2])
+local existingReset = tonumber(redis.call('HGET', key, 'resetTimeMs') or '0')
+local existingHits = tonumber(redis.call('HGET', key, 'totalHits') or '0')
+local resetMs = existingReset
+local totalHits = existingHits
+
+if existingReset == 0 or existingReset <= nowMs then
+  totalHits = 1
+  resetMs = nowMs + windowMs
+else
+  totalHits = existingHits + 1
+end
+
+local ttlMs = resetMs - nowMs
+if ttlMs < 1000 then ttlMs = 1000 end
+redis.call('HSET', key, 'totalHits', tostring(totalHits), 'resetTimeMs', tostring(resetMs))
+redis.call('PEXPIRE', key, ttlMs)
+return { tostring(totalHits), tostring(resetMs) }
+`;
 
   async get(key: string): Promise<{ totalHits: number; resetTime: Date } | undefined> {
     try {
@@ -31,6 +55,9 @@ export class RedisRateLimitStore {
       };
     } catch (err) {
       console.error("[RedisRateLimitStore] get failed:", err);
+      if (this.options.failClosed) {
+        return { totalHits: Number.MAX_SAFE_INTEGER, resetTime: new Date(Date.now() + this.windowMs) };
+      }
       return undefined;
     }
   }
@@ -41,28 +68,18 @@ export class RedisRateLimitStore {
     const bucket = this.bucketKey(key);
 
     try {
-      const existing = await this.redis.hGetAll(bucket);
-      const resetMs = Number(existing.resetTimeMs || 0);
-      let totalHits = Number(existing.totalHits || 0);
-      let nextReset = resetMs;
-
-      if (!resetMs || resetMs <= now) {
-        totalHits = 1;
-        nextReset = now + win;
-      } else {
-        totalHits += 1;
-      }
-
-      const ttlMs = Math.max(1000, nextReset - now);
-      await this.redis
-        .multi()
-        .hSet(bucket, { totalHits: String(totalHits), resetTimeMs: String(nextReset) })
-        .pExpire(bucket, ttlMs)
-        .exec();
-
+      const out = (await this.redis.eval(this.atomicIncrementScript, {
+        keys: [bucket],
+        arguments: [String(now), String(win)],
+      })) as unknown as [string, string];
+      const totalHits = Number(out?.[0] || 1);
+      const nextReset = Number(out?.[1] || now + win);
       return { totalHits, resetTime: new Date(nextReset) };
     } catch (err) {
       console.error("[RedisRateLimitStore] increment failed:", err);
+      if (this.options.failClosed) {
+        return { totalHits: Number.MAX_SAFE_INTEGER, resetTime: new Date(now + win) };
+      }
       return { totalHits: 1, resetTime: new Date(now + win) };
     }
   }
@@ -90,8 +107,14 @@ export class RedisRateLimitStore {
 
   async resetAll(): Promise<void> {
     try {
-      const keys = await this.redis.keys(`ratelimit:${this.bucketPrefix}:*`);
-      if (keys.length) await this.redis.del(keys);
+      const pattern = `ratelimit:${this.bucketPrefix}:*`;
+      let cursor = "0";
+      do {
+        const scan = await this.redis.scan(cursor, { MATCH: pattern, COUNT: 200 });
+        cursor = String(scan.cursor);
+        const keys = scan.keys || [];
+        if (keys.length) await this.redis.del(keys);
+      } while (cursor !== "0");
     } catch (err) {
       console.error("[RedisRateLimitStore] resetAll failed:", err);
     }
@@ -113,24 +136,33 @@ export async function checkDownloadUrlRateLimitRedis(
     const key = `download_url:user:${userId}`;
     const bucket = `ratelimit:${key}`;
     const now = Date.now();
-    const existing = await redis.hGetAll(bucket);
-    const resetMs = Number(existing.resetTimeMs || 0);
-    let totalHits = Number(existing.totalHits || 0);
-    let nextReset = resetMs;
+    const script = `
+local key = KEYS[1]
+local nowMs = tonumber(ARGV[1])
+local windowMs = tonumber(ARGV[2])
+local existingReset = tonumber(redis.call('HGET', key, 'resetTimeMs') or '0')
+local existingHits = tonumber(redis.call('HGET', key, 'totalHits') or '0')
+local resetMs = existingReset
+local totalHits = existingHits
 
-    if (!resetMs || resetMs <= now) {
-      totalHits = 1;
-      nextReset = now + windowMs;
-    } else {
-      totalHits += 1;
-    }
+if existingReset == 0 or existingReset <= nowMs then
+  totalHits = 1
+  resetMs = nowMs + windowMs
+else
+  totalHits = existingHits + 1
+end
 
-    const ttlMs = Math.max(1000, nextReset - now);
-    await redis
-      .multi()
-      .hSet(bucket, { totalHits: String(totalHits), resetTimeMs: String(nextReset) })
-      .pExpire(bucket, ttlMs)
-      .exec();
+local ttlMs = resetMs - nowMs
+if ttlMs < 1000 then ttlMs = 1000 end
+redis.call('HSET', key, 'totalHits', tostring(totalHits), 'resetTimeMs', tostring(resetMs))
+redis.call('PEXPIRE', key, ttlMs)
+return { tostring(totalHits), tostring(resetMs) }
+`;
+    const out = (await redis.eval(script, {
+      keys: [bucket],
+      arguments: [String(now), String(windowMs)],
+    })) as unknown as [string, string];
+    const totalHits = Number(out?.[0] || 1);
 
     return totalHits <= max;
   } catch (err) {

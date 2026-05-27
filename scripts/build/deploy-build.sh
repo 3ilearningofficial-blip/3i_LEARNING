@@ -17,4 +17,16 @@ if [ -z "$DOMAIN" ]; then
 fi
 EXPO_PUBLIC_DOMAIN="$DOMAIN" npx expo export --platform web --output-dir static-build/web
 
+echo "Step 4: Running production safety checks..."
+npx tsc --noEmit
+
+HEALTH_URL="${HEALTH_URL:-https://api.3ilearning.in/api/health/version}"
+echo "Step 5: Backend health probe (${HEALTH_URL})"
+if command -v curl >/dev/null 2>&1; then
+  curl -fsSL "${HEALTH_URL}" >/dev/null || {
+    echo "Health check failed: ${HEALTH_URL}"
+    exit 1
+  }
+fi
+
 echo "=== Build complete! ==="

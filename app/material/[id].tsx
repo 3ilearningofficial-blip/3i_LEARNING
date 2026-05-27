@@ -410,6 +410,7 @@ export default function MaterialViewerScreen() {
 
   // Extract the R2 file key from the URL for token generation
   const fileKey = extractMediaFileKey(material?.file_url);
+  const userScopedFileKey = `${String(user?.id || "guest")}:${fileKey || ""}`;
 
   // Fetch a short-lived media token for PDF/video viewing (avoids srcDoc cookie issues)
   useEffect(() => {
@@ -434,7 +435,7 @@ export default function MaterialViewerScreen() {
       return;
     }
 
-    const cached = mediaTokenCache.get(fileKey);
+    const cached = mediaTokenCache.get(userScopedFileKey);
     if (cached && cached.expiresAt > Date.now()) {
       setMediaToken(cached.token);
       // Only use the presigned readUrl if it has more than 90 seconds of life left.
@@ -459,7 +460,7 @@ export default function MaterialViewerScreen() {
       if (r.ok) {
         setMediaToken(r.token);
         setMediaReadUrl(r.readUrl ?? null);
-        mediaTokenCache.set(fileKey, {
+        mediaTokenCache.set(userScopedFileKey, {
           token: r.token,
           expiresAt: r.expiresAt,
           ...(r.readUrl ? { readUrl: r.readUrl } : {}),
@@ -480,7 +481,7 @@ export default function MaterialViewerScreen() {
     return () => {
       cancelled = true;
     };
-  }, [fileKey, material?.id, isGDrive, isYouTube, mediaTokenRetryTick]);
+  }, [fileKey, material?.id, isGDrive, isYouTube, mediaTokenRetryTick, userScopedFileKey]);
 
   // Authenticated URL with token (always use API base — never the Vercel preview origin on web)
   const tokenizedUrl = toHttpsMediaUrl(

@@ -84,8 +84,8 @@ class EncryptionService {
   }
 
   /**
-   * Encrypt buffer data with AES-256-CBC
-   * Returns hex ciphertext with prepended IV (hex)
+   * Encrypt buffer data with AES-256-CBC + HMAC integrity tag.
+   * Format (v2): v2:<ivHex>:<cipherHex>:<macHex>
    */
   async encryptBuffer(
     data: string,
@@ -106,12 +106,13 @@ class EncryptionService {
         padding: CryptoJS.pad.Pkcs7,
       });
 
-      // Prepend IV to ciphertext
+      // v2 envelope with explicit integrity MAC to prevent ciphertext tampering.
       const ivHex = Array.from(ivBytes)
         .map(b => b.toString(16).padStart(2, '0'))
         .join('');
       const ciphertext = encrypted.ciphertext.toString();
-      const combined = ivHex + ciphertext;
+      const mac = CryptoJS.HmacSHA256(`${ivHex}:${ciphertext}`, CryptoJS.enc.Hex.parse(key)).toString();
+      const combined = `v2:${ivHex}:${ciphertext}:${mac}`;
 
       return combined;
     } catch (error) {
@@ -133,11 +134,24 @@ class EncryptionService {
     try {
       const key = await this.getOrCreateKey(sessionToken, deviceId);
 
-      // Split IV (first 32 hex chars = 16 bytes) and ciphertext
-      const ivHex = ciphertext.substring(0, 32);
-      const ciphertextHex = ciphertext.substring(32);
-      if (ivHex.length !== 32 || ciphertextHex.length === 0) {
-        throw new Error('Invalid encrypted payload');
+      let ivHex = "";
+      let ciphertextHex = "";
+      let macHex: string | null = null;
+      if (ciphertext.startsWith("v2:")) {
+        const parts = ciphertext.split(":");
+        if (parts.length !== 4) throw new Error("Invalid encrypted payload");
+        ivHex = parts[1];
+        ciphertextHex = parts[2];
+        macHex = parts[3];
+      } else {
+        // Legacy v1 format (iv + ciphertext) for backward compatibility.
+        ivHex = ciphertext.substring(0, 32);
+        ciphertextHex = ciphertext.substring(32);
+      }
+      if (ivHex.length !== 32 || ciphertextHex.length === 0) throw new Error('Invalid encrypted payload');
+      if (macHex) {
+        const expectedMac = CryptoJS.HmacSHA256(`${ivHex}:${ciphertextHex}`, CryptoJS.enc.Hex.parse(key)).toString();
+        if (expectedMac !== macHex) throw new Error("Encrypted payload integrity check failed");
       }
 
       // Convert IV from hex to WordArray

@@ -30,6 +30,7 @@ function parseIndexColumns(value: unknown): string[] {
 export async function checkDatabaseReadiness(db: Queryable): Promise<{
   ok: boolean;
   checks: Record<string, boolean>;
+  dependencyChecks: Record<string, "ok" | "degraded" | "not_configured">;
   missingTables: string[];
   missingColumns: string[];
   missingIndexes: string[];
@@ -96,6 +97,15 @@ export async function checkDatabaseReadiness(db: Queryable): Promise<{
     .map((s) => `${s.table}|${s.columns.join(",")}`)
     .filter((sig) => !presentUniqueKeys.has(sig));
 
+  const dependencyChecks: Record<string, "ok" | "degraded" | "not_configured"> = {
+    redis:
+      String(process.env.REDIS_URL || "").trim().length > 0 ? "ok" : "not_configured",
+    cloudflareWebhookSecret:
+      String(process.env.CLOUDFLARE_STREAM_WEBHOOK_SECRET || "").trim().length > 0
+        ? "ok"
+        : "degraded",
+  };
+
   return {
     ok: missingTables.length === 0 && missingColumns.length === 0 && missingIndexes.length === 0,
     checks: {
@@ -104,6 +114,7 @@ export async function checkDatabaseReadiness(db: Queryable): Promise<{
       columns: missingColumns.length === 0,
       indexes: missingIndexes.length === 0,
     },
+    dependencyChecks,
     missingTables,
     missingColumns,
     missingIndexes,

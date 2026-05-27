@@ -4,6 +4,13 @@ import {
   assertNativePaidPurchaseInstallation,
   finalizeInstallationBindAfterPurchase,
 } from "./native-device-binding";
+import {
+  getCachedIdempotentResponse,
+  getIdempotencyKey,
+  requestHash,
+  saveIdempotentResponse,
+} from "./idempotency";
+import { requireNumericBodyFields, requireStringBodyFields } from "./validation";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -54,6 +61,28 @@ export function registerPaymentRoutes({
   verifyPaymentSignature,
   runInTransaction,
 }: RegisterPaymentRoutesDeps): void {
+  const withIdempotency = async <T>(
+    req: Request,
+    userId: number,
+    scope: string,
+    run: () => Promise<{ statusCode?: number; body: T }>
+  ): Promise<{ statusCode: number; body: T }> => {
+    const idempotencyKey = getIdempotencyKey(req);
+    if (!idempotencyKey) {
+      const out = await run();
+      return { statusCode: out.statusCode ?? 200, body: out.body };
+    }
+    const reqHash = requestHash(req);
+    const cached = await getCachedIdempotentResponse(db, userId, scope, idempotencyKey, reqHash);
+    if (cached) {
+      return { statusCode: cached.statusCode, body: cached.responseJson as T };
+    }
+    const out = await run();
+    const statusCode = out.statusCode ?? 200;
+    await saveIdempotentResponse(db, userId, scope, idempotencyKey, reqHash, statusCode, out.body);
+    return { statusCode, body: out.body };
+  };
+
   // payment_failures table is created by migrations/0023_payment_failures.sql
   const logPaymentFailure = async (payload: {
     userId?: number | null;
@@ -272,99 +301,109 @@ export function registerPaymentRoutes({
     }
   });
 
-  app.post("/api/payments/create-order", async (req: Request, res: Response) => {
+  app.post("/api/payments/create-order", requireNumericBodyFields(["courseId"]), async (req: Request, res: Response) => {
     try {
       const user = await getAuthUser(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
 
-      const { courseId } = req.body;
-      if (!courseId) return res.status(400).json({ message: "Course ID is required" });
+      const out = await withIdempotency(req, user.id, "payments.create-order", async () => {
+        const { courseId } = req.body;
+        if (!courseId) return { statusCode: 400, body: { message: "Course ID is required" } as any };
 
-      const courseResult = await db.query("SELECT * FROM courses WHERE id = $1", [courseId]);
-      if (courseResult.rows.length === 0) return res.status(404).json({ message: "Course not found" });
+        const courseResult = await db.query("SELECT * FROM courses WHERE id = $1", [courseId]);
+        if (courseResult.rows.length === 0) return { statusCode: 404, body: { message: "Course not found" } as any };
 
-      const course = courseResult.rows[0];
-      if (course.is_free) return res.status(400).json({ message: "This course is free, no payment needed" });
-      const endTs = course.end_date != null && String(course.end_date).trim() !== ""
-        ? Date.parse(String(course.end_date).trim()) : null;
-      if (Number.isFinite(endTs) && (endTs as number) < Date.now()) {
-        return res.status(400).json({ message: "This course has ended" });
-      }
-
-      const existingEnrollment = await db.query(
-        "SELECT valid_until, status FROM enrollments WHERE user_id = $1 AND course_id = $2 LIMIT 1",
-        [user.id, courseId]
-      );
-      if (existingEnrollment.rows.length > 0) {
-        const er = existingEnrollment.rows[0];
-        const statusOk = er.status == null || String(er.status).toLowerCase() === "active";
-        if (statusOk && !isEnrollmentExpired(er)) {
-          return res.status(400).json({ message: "Already enrolled" });
+        const course = courseResult.rows[0];
+        if (course.is_free) return { statusCode: 400, body: { message: "This course is free, no payment needed" } as any };
+        const endTs = course.end_date != null && String(course.end_date).trim() !== ""
+          ? Date.parse(String(course.end_date).trim()) : null;
+        if (Number.isFinite(endTs) && (endTs as number) < Date.now()) {
+          return { statusCode: 400, body: { message: "This course has ended" } as any };
         }
-      }
 
-      const amount = Math.round(parseFloat(course.price) * 100);
-      const razorpay = getRazorpay();
-      const order = await razorpay.orders.create({
-        amount,
-        currency: "INR",
-        receipt: `course_${courseId}_user_${user.id}_${Date.now()}`,
-        notes: { courseId: courseId.toString(), userId: user.id.toString(), courseTitle: course.title, kind: "course" },
-      });
-      console.log("[Payments] create-order success");
-
-      try {
-        await db.query(
-          "INSERT INTO payments (user_id, course_id, razorpay_order_id, amount, status, click_count, created_at) VALUES ($1, $2, $3, $4, 'created', 1, $5)",
-          [user.id, courseId, order.id, amount, Date.now()]
+        const existingEnrollment = await db.query(
+          "SELECT valid_until, status FROM enrollments WHERE user_id = $1 AND course_id = $2 LIMIT 1",
+          [user.id, courseId]
         );
-      } catch (insertErr: any) {
-        if (insertErr?.code === "23505") {
-          return res.status(409).json({ message: "Duplicate payment order; try again" });
+        if (existingEnrollment.rows.length > 0) {
+          const er = existingEnrollment.rows[0];
+          const statusOk = er.status == null || String(er.status).toLowerCase() === "active";
+          if (statusOk && !isEnrollmentExpired(er)) {
+            return { statusCode: 400, body: { message: "Already enrolled" } as any };
+          }
         }
-        throw insertErr;
-      }
 
-      res.json({
-        orderId: order.id,
-        amount: order.amount,
-        currency: order.currency,
-        keyId: process.env.RAZORPAY_KEY_ID,
-        courseName: course.title,
-        courseId,
+        const amount = Math.round(parseFloat(course.price) * 100);
+        const razorpay = getRazorpay();
+        const order = await razorpay.orders.create({
+          amount,
+          currency: "INR",
+          receipt: `course_${courseId}_user_${user.id}_${Date.now()}`,
+          notes: { courseId: courseId.toString(), userId: user.id.toString(), courseTitle: course.title, kind: "course" },
+        });
+        console.log("[Payments] create-order success");
+
+        try {
+          await db.query(
+            "INSERT INTO payments (user_id, course_id, razorpay_order_id, amount, status, click_count, created_at) VALUES ($1, $2, $3, $4, 'created', 1, $5)",
+            [user.id, courseId, order.id, amount, Date.now()]
+          );
+        } catch (insertErr: any) {
+          if (insertErr?.code === "23505") {
+            return { statusCode: 409, body: { message: "Duplicate payment order; try again" } as any };
+          }
+          throw insertErr;
+        }
+
+        return {
+          statusCode: 200,
+          body: {
+            orderId: order.id,
+            amount: order.amount,
+            currency: order.currency,
+            keyId: process.env.RAZORPAY_KEY_ID,
+            courseName: course.title,
+            courseId,
+          } as any,
+        };
       });
+      return res.status(out.statusCode).json(out.body as any);
     } catch (err) {
       console.error("Create order error:", err);
       res.status(500).json({ message: "Failed to create payment order" });
     }
   });
 
-  app.post("/api/payments/verify", async (req: Request, res: Response) => {
+  app.post(
+    "/api/payments/verify",
+    requireStringBodyFields(["razorpay_order_id", "razorpay_payment_id", "razorpay_signature"]),
+    async (req: Request, res: Response) => {
     let authUserId: number | null = null;
     try {
       const user = await getAuthUser(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       authUserId = Number(user.id) || null;
 
-      const { razorpay_order_id, razorpay_payment_id, razorpay_signature, courseId } = req.body;
-      if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
-        return res.status(400).json({ message: "Payment details are required" });
-      }
+      const out = await withIdempotency(req, user.id, "payments.verify", async () => {
+        const { razorpay_order_id, razorpay_payment_id, razorpay_signature, courseId } = req.body;
+        if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+          return { statusCode: 400, body: { message: "Payment details are required" } as any };
+        }
 
-      const preBind = await assertNativePaidPurchaseInstallation(db, user.id, req);
-      if (!preBind.ok) {
-        return res.status(403).json({ message: preBind.message });
-      }
-      const result = await completeCoursePaymentByOrder({
-        orderId: razorpay_order_id,
-        paymentId: razorpay_payment_id,
-        signature: razorpay_signature,
-        expectedUserId: user.id,
-        expectedCourseId: courseId,
+        const preBind = await assertNativePaidPurchaseInstallation(db, user.id, req);
+        if (!preBind.ok) return { statusCode: 403, body: { message: preBind.message } as any };
+        const result = await completeCoursePaymentByOrder({
+          orderId: razorpay_order_id,
+          paymentId: razorpay_payment_id,
+          signature: razorpay_signature,
+          expectedUserId: user.id,
+          expectedCourseId: courseId,
+        });
+        await finalizeInstallationBindAfterPurchase(db, result.userId, req);
+        console.log("[Payments] verify success");
+        return { statusCode: 200, body: { success: true, message: "Payment verified and enrolled successfully" } as any };
       });
-      await finalizeInstallationBindAfterPurchase(db, result.userId, req);
-      console.log("[Payments] verify success");
-      res.json({ success: true, message: "Payment verified and enrolled successfully" });
+      return res.status(out.statusCode).json(out.body as any);
     } catch (err) {
       console.error("Verify payment error:", err);
       const msg = err instanceof Error ? err.message : "";
@@ -383,7 +422,8 @@ export function registerPaymentRoutes({
       }
       return res.status(status).json({ message: msg || "Payment verification failed" });
     }
-  });
+    }
+  );
 
   // Self-service repair: paid in DB but enrollment row missing (legacy bug / partial failure). Idempotent.
   app.post("/api/payments/sync-enrollment", async (req: Request, res: Response) => {
@@ -513,26 +553,32 @@ export function registerPaymentRoutes({
     }
   });
 
-  app.post("/api/tests/create-order", async (req: Request, res: Response) => {
+  app.post("/api/tests/create-order", requireNumericBodyFields(["testId"]), async (req: Request, res: Response) => {
     try {
       const user = await getAuthUser(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
-      const { testId } = req.body;
-      const testResult = await db.query("SELECT id, title, price FROM tests WHERE id = $1", [testId]);
-      if (testResult.rows.length === 0) return res.status(404).json({ message: "Test not found" });
-      const test = testResult.rows[0];
-      if (!test.price || parseFloat(test.price) <= 0) return res.status(400).json({ message: "This test is free" });
-      const existing = await db.query("SELECT id FROM test_purchases WHERE user_id = $1 AND test_id = $2", [user.id, testId]);
-      if (existing.rows.length > 0) return res.json({ alreadyPurchased: true });
-      const amount = Math.round(parseFloat(test.price) * 100);
-      const razorpay = getRazorpay();
-      const order = await razorpay.orders.create({
-        amount,
-        currency: "INR",
-        receipt: `test_${testId}_user_${user.id}_${Date.now()}`,
-        notes: { testId: String(testId), userId: String(user.id), kind: "test" },
+      const out = await withIdempotency(req, user.id, "tests.create-order", async () => {
+        const { testId } = req.body;
+        const testResult = await db.query("SELECT id, title, price FROM tests WHERE id = $1", [testId]);
+        if (testResult.rows.length === 0) return { statusCode: 404, body: { message: "Test not found" } as any };
+        const test = testResult.rows[0];
+        if (!test.price || parseFloat(test.price) <= 0) return { statusCode: 400, body: { message: "This test is free" } as any };
+        const existing = await db.query("SELECT id FROM test_purchases WHERE user_id = $1 AND test_id = $2", [user.id, testId]);
+        if (existing.rows.length > 0) return { statusCode: 200, body: { alreadyPurchased: true } as any };
+        const amount = Math.round(parseFloat(test.price) * 100);
+        const razorpay = getRazorpay();
+        const order = await razorpay.orders.create({
+          amount,
+          currency: "INR",
+          receipt: `test_${testId}_user_${user.id}_${Date.now()}`,
+          notes: { testId: String(testId), userId: String(user.id), kind: "test" },
+        });
+        return {
+          statusCode: 200,
+          body: { orderId: order.id, amount, currency: "INR", keyId: process.env.RAZORPAY_KEY_ID, testName: test.title } as any,
+        };
       });
-      res.json({ orderId: order.id, amount, currency: "INR", keyId: process.env.RAZORPAY_KEY_ID, testName: test.title });
+      return res.status(out.statusCode).json(out.body as any);
     } catch (err) {
       console.error("Test create-order error:", err);
       res.status(500).json({ message: "Failed to create payment order" });
@@ -581,40 +627,46 @@ export function registerPaymentRoutes({
     }
   });
 
-  app.post("/api/tests/verify-payment", async (req: Request, res: Response) => {
+  app.post(
+    "/api/tests/verify-payment",
+    requireStringBodyFields(["razorpay_order_id", "razorpay_payment_id", "razorpay_signature"]),
+    requireNumericBodyFields(["testId"]),
+    async (req: Request, res: Response) => {
     try {
       const user = await getAuthUser(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
-      const { razorpay_order_id, razorpay_payment_id, razorpay_signature, testId } = req.body;
-      const parsedTestId = Number(testId);
-      if (!parsedTestId) return res.status(400).json({ message: "testId is required" });
-      const isValid = verifyPaymentSignature(razorpay_order_id, razorpay_payment_id, razorpay_signature);
-      if (!isValid) return res.status(400).json({ message: "Invalid payment signature" });
-      const testResult = await db.query("SELECT id, price FROM tests WHERE id = $1", [parsedTestId]);
-      if (!testResult.rows.length) return res.status(404).json({ message: "Test not found" });
-      const expectedAmount = Math.round(parseFloat(String(testResult.rows[0].price || "0")) * 100);
-      await verifyOrderOwnershipAndAmount({
-        orderId: razorpay_order_id,
-        expectedKind: "test",
-        expectedUserId: user.id,
-        expectedItemId: parsedTestId,
-        expectedAmount,
+      const out = await withIdempotency(req, user.id, "tests.verify-payment", async () => {
+        const { razorpay_order_id, razorpay_payment_id, razorpay_signature, testId } = req.body;
+        const parsedTestId = Number(testId);
+        if (!parsedTestId) return { statusCode: 400, body: { message: "testId is required" } as any };
+        const isValid = verifyPaymentSignature(razorpay_order_id, razorpay_payment_id, razorpay_signature);
+        if (!isValid) return { statusCode: 400, body: { message: "Invalid payment signature" } as any };
+        const testResult = await db.query("SELECT id, price FROM tests WHERE id = $1", [parsedTestId]);
+        if (!testResult.rows.length) return { statusCode: 404, body: { message: "Test not found" } as any };
+        const expectedAmount = Math.round(parseFloat(String(testResult.rows[0].price || "0")) * 100);
+        await verifyOrderOwnershipAndAmount({
+          orderId: razorpay_order_id,
+          expectedKind: "test",
+          expectedUserId: user.id,
+          expectedItemId: parsedTestId,
+          expectedAmount,
+        });
+        const preTest = await assertNativePaidPurchaseInstallation(db, user.id, req);
+        if (!preTest.ok) return { statusCode: 403, body: { message: preTest.message } as any };
+        await db.query(
+          "INSERT INTO test_purchases (user_id, test_id, razorpay_order_id, razorpay_payment_id, created_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (user_id, test_id) DO NOTHING",
+          [user.id, parsedTestId, razorpay_order_id, razorpay_payment_id, Date.now()]
+        );
+        await finalizeInstallationBindAfterPurchase(db, user.id, req);
+        return { statusCode: 200, body: { success: true } as any };
       });
-      const preTest = await assertNativePaidPurchaseInstallation(db, user.id, req);
-      if (!preTest.ok) {
-        return res.status(403).json({ message: preTest.message });
-      }
-      await db.query(
-        "INSERT INTO test_purchases (user_id, test_id, razorpay_order_id, razorpay_payment_id, created_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (user_id, test_id) DO NOTHING",
-        [user.id, parsedTestId, razorpay_order_id, razorpay_payment_id, Date.now()]
-      );
-      await finalizeInstallationBindAfterPurchase(db, user.id, req);
-      res.json({ success: true });
+      return res.status(out.statusCode).json(out.body as any);
     } catch (err) {
       console.error("Test verify-payment error:", err);
       res.status(500).json({ message: "Failed to verify payment" });
     }
-  });
+    }
+  );
 
   app.get("/api/tests/:id/purchased", async (req: Request, res: Response) => {
     try {

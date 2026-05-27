@@ -12,7 +12,7 @@ import React, { useEffect, useRef } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { getApiUrl, queryClient } from "@/lib/query-client";
+import { authFetch, getApiUrl, queryClient } from "@/lib/query-client";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { WebDownloadJobsProvider } from "@/context/WebDownloadJobsContext";
 import { WebDownloadHud } from "@/components/WebDownloadHud";
@@ -20,6 +20,7 @@ import { StatusBar } from "expo-status-bar";
 import * as ScreenOrientation from "expo-screen-orientation";
 import { Platform, AppState, AppStateStatus } from "react-native";
 import { DownloadManagerProvider, useDownloadManager } from "@/lib/useDownloadManager";
+import { listWebOfflineKeys, removeWebOffline } from "@/lib/web-offline-store";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -55,6 +56,38 @@ function RootLayoutNav() {
       console.error("[RootLayout] Initial foreground access check failed:", error);
     });
   }, [user?.id, runForegroundAccessCheck]);
+
+  useEffect(() => {
+    if (Platform.OS !== "web" || !user?.id) return;
+    const syncWebRevocations = async () => {
+      try {
+        const baseUrl = getApiUrl();
+        const res = await authFetch(new URL("/api/my-downloads", baseUrl).toString());
+        if (!res.ok) return;
+        const payload = await res.json();
+        const data = payload?.data ?? payload ?? {};
+        const allowed = new Set<string>();
+        [...(data.lectures || []), ...(data.materials || [])].forEach((i: any) => {
+          const iid = Number(i.id);
+          if (!Number.isFinite(iid)) return;
+          allowed.add(`${Number(user.id)}:${String(i.type)}:${iid}`);
+        });
+        const keys = await listWebOfflineKeys();
+        for (const key of keys) {
+          if (!key.startsWith(`${Number(user.id)}:`)) continue;
+          if (allowed.has(key)) continue;
+          const [uidStr, type, idStr] = key.split(":");
+          const uid = Number(uidStr);
+          const id = Number(idStr);
+          if (!Number.isFinite(uid) || !Number.isFinite(id) || !type) continue;
+          await removeWebOffline(uid, type, id).catch(() => {});
+        }
+      } catch {
+        // best effort
+      }
+    };
+    syncWebRevocations();
+  }, [user?.id]);
 
   useEffect(() => {
     if (Platform.OS === 'web') return;

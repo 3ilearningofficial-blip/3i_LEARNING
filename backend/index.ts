@@ -30,12 +30,15 @@ import rateLimit from "express-rate-limit";
 import { ipKeyGenerator } from "express-rate-limit";
 import compression from "compression";
 import pg from "pg";
+import { randomUUID } from "node:crypto";
 import { PgRateLimitStore } from "./pg-rate-limit-store";
 import { getRedisClient } from "./redis-client";
 import { RedisRateLimitStore } from "./redis-rate-limit-store";
 import { setupErrorHandler } from "./error-middleware";
 import { getAiTutorHealthSnapshot } from "./ai-tutor-service";
 import { normalizeDatabaseUrl } from "./db-utils";
+import { getEnvFlag } from "./feature-flags";
+import { getMetricsSnapshot, metricsMiddleware } from "./observability";
 
 const app = express();
 const log = console.log;
@@ -199,6 +202,8 @@ function setupBodyParsing(app: express.Application) {
 
 function setupRequestLogging(app: express.Application) {
   app.use((req, res, next) => {
+    const reqId = req.get("x-request-id") || randomUUID();
+    res.setHeader("x-request-id", reqId);
     const start = Date.now();
     const reqPath = req.path;
     res.on("finish", () => {
@@ -206,7 +211,7 @@ function setupRequestLogging(app: express.Application) {
       const duration = Date.now() - start;
       // Only log slow requests (>500ms) or errors in production to reduce I/O
       if (duration > 500 || res.statusCode >= 500) {
-        log(`${req.method} ${reqPath} ${res.statusCode} in ${duration}ms`);
+        log(`[req:${reqId}] ${req.method} ${reqPath} ${res.statusCode} in ${duration}ms`);
       }
     });
     next();
@@ -527,6 +532,7 @@ function normalizeOtpIdentifier(input: unknown): string {
 
   // Cross-cutting middleware for responses/logging
   app.use(compression());
+  app.use(metricsMiddleware);
   setupRequestLogging(app);
 
   const isProduction = process.env.NODE_ENV === "production";
@@ -600,6 +606,10 @@ function normalizeOtpIdentifier(input: unknown): string {
     res.json({ ok: true, ...getAiTutorHealthSnapshot() });
   });
 
+  app.get("/api/metrics", (_req: Request, res: Response) => {
+    res.json(getMetricsSnapshot());
+  });
+
   const rateLimitPgSsl =
     process.env.PGSSL_NO_VERIFY === "true" && process.env.NODE_ENV !== "production"
       ? { rejectUnauthorized: false as const }
@@ -626,16 +636,18 @@ function normalizeOtpIdentifier(input: unknown): string {
   }
 
   const redisClient = await getRedisClient();
-  const makeRateLimitStore = (prefix: string) =>
+  const failClosedAuthRateLimit = getEnvFlag("FF_FAIL_CLOSED_AUTH_RATE_LIMIT", true);
+  const failClosedMediaRateLimit = getEnvFlag("FF_FAIL_CLOSED_MEDIA_RATE_LIMIT", true);
+  const makeRateLimitStore = (prefix: string, options?: { failClosed?: boolean }) =>
     redisClient
-      ? new RedisRateLimitStore(redisClient, prefix)
+      ? new RedisRateLimitStore(redisClient, prefix, options)
       : rateLimitPool
-        ? new PgRateLimitStore(rateLimitPool)
+        ? new PgRateLimitStore(rateLimitPool, options)
         : undefined;
-  const otpSendStore = makeRateLimitStore("otp-send");
-  const otpVerifyStore = makeRateLimitStore("otp-verify");
-  const authLoginStore = makeRateLimitStore("auth-login");
-  const mediaTokenStore = makeRateLimitStore("media-token");
+  const otpSendStore = makeRateLimitStore("otp-send", { failClosed: failClosedAuthRateLimit });
+  const otpVerifyStore = makeRateLimitStore("otp-verify", { failClosed: failClosedAuthRateLimit });
+  const authLoginStore = makeRateLimitStore("auth-login", { failClosed: failClosedAuthRateLimit });
+  const mediaTokenStore = makeRateLimitStore("media-token", { failClosed: failClosedMediaRateLimit });
   const globalApiStore = makeRateLimitStore("global-api");
   if (redisClient) {
     console.log("[Redis] Rate limit stores using Redis");

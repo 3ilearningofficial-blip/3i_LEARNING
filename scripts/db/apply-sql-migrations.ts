@@ -11,45 +11,14 @@ const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, "../..");
 dotenv.config({ path: path.resolve(projectRoot, ".env") });
 
-const migrationFiles = [
-  "migrations/0000_core_schema_baseline.sql",
-  "migrations/0001_production_hardening_baseline.sql",
-  "migrations/0002_runtime_tables_followup.sql",
-  "migrations/0003_runtime_schema_baseline.sql",
-  "migrations/0004_user_sessions.sql",
-  "migrations/0005_student_progress_tracking.sql",
-  "migrations/0006_web_dual_device_slots.sql",
-  "migrations/0007_enrollments_user_course_unique.sql",
-  "migrations/0008_payments_order_identity.sql",
-  "migrations/0009_otp_lockout.sql",
-  "migrations/0010_production_hardening_constraints_and_indexes.sql",
-  "migrations/0011_distributed_rate_limits_and_session.sql",
-  "migrations/0012_support_messages_notify.sql",
-  "migrations/0013_live_class_recording_dedupe.sql",
-  "migrations/0014_otp_challenges_and_send_throttle.sql",
-  "migrations/0015_lecture_transcript.sql",
-  "migrations/0016_classroom_live.sql",
-  "migrations/0017_live_class_polls.sql",
-  "migrations/0018_active_session_platform.sql",
-  "migrations/0019_live_engagement_notify.sql",
-  "migrations/0020_timer_overlay_position.sql",
-  "migrations/0021_classroom_board_archive.sql",
-  "migrations/0022_live_engagement_notify_updates.sql",
-  "migrations/0023_payment_failures.sql",
-  "migrations/0024_live_classes_scheduled_at_index.sql",
-  "migrations/0025_mission_folder_and_reorder.sql",
-  "migrations/0026_record_a_class.sql",
-  "migrations/0027_notifications_dedup_table.sql",
-  "migrations/0028_media_token_url_normalized_columns.sql",
-  "migrations/0029_download_cleanup_pending_enrollments.sql",
-  "migrations/0030_live_classes_is_live_scheduled_at_index.sql",
-  "migrations/0031_courses_total_lectures_trigger.sql",
-  "migrations/0032_live_classes_cf_recording_uid.sql",
-  "migrations/0033_media_tokens_access_count.sql",
-  "migrations/0034_download_tokens_table.sql",
-  "migrations/0035_user_missions_table.sql",
-  "migrations/0036_lecture_progress_unique_payments_razorpay.sql",
-];
+async function discoverMigrationFiles(): Promise<string[]> {
+  const migrationDir = path.resolve(projectRoot, "migrations");
+  const entries = await fs.readdir(migrationDir, { withFileTypes: true });
+  return entries
+    .filter((e) => e.isFile() && /^\d+.*\.sql$/i.test(e.name))
+    .map((e) => `migrations/${e.name}`)
+    .sort((a, b) => a.localeCompare(b));
+}
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) {
@@ -72,6 +41,7 @@ const pool = new pg.Pool({
 });
 
 async function run() {
+  const migrationFiles = await discoverMigrationFiles();
   const client = await pool.connect();
   try {
     await client.query("SELECT pg_advisory_lock($1)", [8420010]);

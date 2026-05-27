@@ -90,19 +90,22 @@ export function registerLectureRoutes({
       const row = prev.rows[0];
       const canBump = !row?.last_session_ping_at || now - Number(row.last_session_ping_at) >= debounceMs;
 
-      if (!row) {
+      if (canBump || !row) {
         await db.query(
           `INSERT INTO lecture_progress (user_id, lecture_id, watch_percent, is_completed, playback_sessions, last_session_ping_at, completed_at)
-           VALUES ($1, $2, 0, false, 1, $3, NULL)`,
-          [user.id, lectureId, now]
-        );
-      } else if (canBump) {
-        await db.query(
-          `UPDATE lecture_progress SET
-             playback_sessions = COALESCE(playback_sessions, 0) + 1,
-             last_session_ping_at = $3
-           WHERE user_id = $1 AND lecture_id = $2`,
-          [user.id, lectureId, now]
+           VALUES ($1, $2, 0, false, 1, $3, NULL)
+           ON CONFLICT (user_id, lecture_id) DO UPDATE SET
+             playback_sessions = CASE
+               WHEN lecture_progress.last_session_ping_at IS NULL OR $3 - lecture_progress.last_session_ping_at >= $4
+               THEN COALESCE(lecture_progress.playback_sessions, 0) + 1
+               ELSE COALESCE(lecture_progress.playback_sessions, 0)
+             END,
+             last_session_ping_at = CASE
+               WHEN lecture_progress.last_session_ping_at IS NULL OR $3 - lecture_progress.last_session_ping_at >= $4
+               THEN $3
+               ELSE lecture_progress.last_session_ping_at
+             END`,
+          [user.id, lectureId, now, debounceMs]
         );
       }
       res.json({ success: true, bumped: canBump || !row });

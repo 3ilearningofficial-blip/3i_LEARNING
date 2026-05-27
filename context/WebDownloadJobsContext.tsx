@@ -41,6 +41,37 @@ function userScopedPrefix(userId: number): string {
   return `${userId}:`;
 }
 
+const PENDING_SYNC_KEY = "web_download_pending_sync";
+
+type PendingSyncItem = {
+  userId: number;
+  itemType: "lecture" | "material";
+  itemId: number;
+  localFilename: string;
+  enqueuedAt: number;
+};
+
+function readPendingSync(): PendingSyncItem[] {
+  if (typeof localStorage === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(PENDING_SYNC_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function writePendingSync(items: PendingSyncItem[]): void {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(PENDING_SYNC_KEY, JSON.stringify(items));
+  } catch {
+    // ignore
+  }
+}
+
 function reducer(state: JobsState, action: Action): JobsState {
   switch (action.type) {
     case "start":
@@ -149,6 +180,43 @@ export function WebDownloadJobsInnerProvider({ children }: { children: React.Rea
       cancelled = true;
     };
   }, [user?.id]);
+
+  useEffect(() => {
+    if (Platform.OS !== "web" || !user?.id) return;
+    let cancelled = false;
+    const flushPending = async () => {
+      const pending = readPendingSync();
+      if (!pending.length) return;
+      const mine = pending.filter((p) => Number(p.userId) === Number(user.id));
+      if (!mine.length) return;
+      const apiUrl = getApiUrl();
+      const left = pending.filter((p) => Number(p.userId) !== Number(user.id));
+      for (const item of mine) {
+        if (cancelled) return;
+        try {
+          const { headers } = await prepareAuthorizedFetchHeaders(user?.sessionToken);
+          const trackRes = await fetch(`${apiUrl}/my-downloads`, {
+            method: "POST",
+            headers: { ...headers, "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({
+              itemType: item.itemType,
+              itemId: item.itemId,
+              localFilename: item.localFilename,
+            }),
+          });
+          if (!trackRes.ok) left.push(item);
+        } catch {
+          left.push(item);
+        }
+      }
+      writePendingSync(left);
+    };
+    flushPending();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id, user?.sessionToken]);
 
   const getJob = useCallback((itemType: string, itemId: number) => {
     return jobs[webDownloadPersistKey(itemType, itemId)];
@@ -302,6 +370,15 @@ export function WebDownloadJobsInnerProvider({ children }: { children: React.Rea
         });
         if (!trackRes.ok) {
           console.warn("[WebDownload] my-downloads register failed", trackRes.status);
+          const pending = readPendingSync();
+          pending.push({
+            userId: effectiveUserId,
+            itemType: params.itemType,
+            itemId: params.itemId,
+            localFilename,
+            enqueuedAt: Date.now(),
+          });
+          writePendingSync(pending);
         }
 
         await queryClient.invalidateQueries({ queryKey: myDownloadsQueryKey(effectiveUserId) });

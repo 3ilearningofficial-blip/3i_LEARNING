@@ -2,17 +2,19 @@
 set -euo pipefail
 
 # Usage:
-#   scripts/rollback-last.sh [pm2_app_id]
+#   scripts/rollback-last.sh [pm2_app_id] [target_commit]
 # Default PM2 app id = 5
+# Default target_commit = HEAD~1
 
 APP_ID="${1:-5}"
+TARGET_COMMIT="${2:-HEAD~1}"
 
 echo "[rollback] fetching latest refs..."
 git fetch --all --prune
 
 echo "[rollback] current commit: $(git rev-parse --short HEAD)"
-echo "[rollback] moving to previous commit..."
-git reset --hard HEAD~1
+echo "[rollback] switching to target commit ${TARGET_COMMIT} (non-destructive checkout)..."
+git checkout "${TARGET_COMMIT}"
 
 echo "[rollback] installing dependencies..."
 npm ci

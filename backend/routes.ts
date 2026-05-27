@@ -47,6 +47,8 @@ import { attachClassroomSyncServer } from "./classroom-sync";
 import { registerCourseAccessRoutes } from "./course-access-routes";
 import { registerUploadRoutes } from "./upload-routes";
 import { registerMediaStreamRoutes } from "./media-stream-routes";
+import { registerRuntimeFlagRoutes } from "./runtime-flag-routes";
+import { registerCloudflareWebhookRoutes } from "./cloudflare-webhook-routes";
 import { createGenerateAIAnswer } from "./ai-tutor-service";
 import { checkDatabaseReadiness } from "./db-readiness";
 import { normalizeDatabaseUrl } from "./db-utils";
@@ -84,6 +86,13 @@ function isTransientPgError(err: any): boolean {
     code === "57P01" || // admin_shutdown
     code === "57P03" // cannot_connect_now
   );
+}
+
+function isRetrySafeSql(text: string): boolean {
+  const normalized = String(text || "").trim().toUpperCase();
+  if (!normalized) return false;
+  // Safe-by-default: only retry read-only statements.
+  return normalized.startsWith("SELECT") || normalized.startsWith("WITH");
 }
 
 // Larger pool for 1000 concurrent users
@@ -182,6 +191,7 @@ type DbQueryOptions = { logSlow?: boolean };
 async function dbQuery(text: string, params?: unknown[], options?: DbQueryOptions): Promise<any> {
   const slowQueryThresholdMs = Number(process.env.DB_SLOW_QUERY_MS || "300");
   const shouldLogSlow = options?.logSlow !== false;
+  const retrySafe = isRetrySafeSql(text);
   for (let attempt = 1; attempt <= 3; attempt++) {
     const startedAt = Date.now();
     try {
@@ -195,7 +205,7 @@ async function dbQuery(text: string, params?: unknown[], options?: DbQueryOption
     } catch (err: any) {
       const elapsedMs = Date.now() - startedAt;
       const isTransient = isTransientPgError(err);
-      if (isTransient && attempt < 3) {
+      if (isTransient && retrySafe && attempt < 3) {
         console.warn("[DB] Transient error on attempt " + attempt + ", retrying...");
         await new Promise(r => setTimeout(r, 200 * attempt));
         continue;
@@ -308,14 +318,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
           ok: false,
           message: "Database schema is not fully migrated",
           checks: readiness.checks,
+          dependencyChecks: readiness.dependencyChecks,
           missingTables: readiness.missingTables,
           missingColumns: readiness.missingColumns,
           missingIndexes: readiness.missingIndexes,
         });
       }
+      const hasDegradedDependency = Object.values(readiness.dependencyChecks || {}).includes("degraded");
+      if (hasDegradedDependency) {
+        return res.status(200).json({
+          ok: true,
+          degraded: true,
+          checks: readiness.checks,
+          dependencyChecks: readiness.dependencyChecks,
+        });
+      }
       return res.json({
         ok: true,
         checks: readiness.checks,
+        dependencyChecks: readiness.dependencyChecks,
       });
     } catch (err: any) {
       return res.status(503).json({ ok: false, message: err?.message || "DB not ready" });
@@ -325,12 +346,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ==================== AUTH ROUTES ====================
 
   async function requireAuth(req: Request, res: Response, next: () => void) {
-    const user = await getAuthUser(req);
-    if (!user) {
-      return res.status(401).json({ message: "Login required" });
+    try {
+      const user = await getAuthUser(req);
+      if (!user) {
+        return res.status(401).json({ message: "Login required" });
+      }
+      (req as any).user = user;
+      next();
+    } catch (err) {
+      console.error("[Auth] requireAuth failed:", err);
+      return res.status(500).json({ message: "Authentication check failed" });
     }
-    (req as any).user = user;
-    next();
   }
 
   registerSupportRoutes({
@@ -487,6 +513,64 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   registerStandaloneFolderRoutes({
+    app,
+    db,
+    requireAdmin,
+  });
+
+  app.post("/api/admin/material-entitlements/grant", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const userId = Number(req.body?.userId);
+      const materialId = Number(req.body?.materialId);
+      const expiresAtRaw = req.body?.expiresAt;
+      const expiresAt =
+        expiresAtRaw == null || expiresAtRaw === ""
+          ? null
+          : Number.isFinite(Number(expiresAtRaw))
+            ? Number(expiresAtRaw)
+            : null;
+      if (!Number.isFinite(userId) || userId <= 0 || !Number.isFinite(materialId) || materialId <= 0) {
+        return res.status(400).json({ message: "userId and materialId are required" });
+      }
+      await db.query(
+        `INSERT INTO standalone_material_entitlements
+           (user_id, material_id, granted_at, granted_by_payment_ref, expires_at, is_active)
+         VALUES ($1, $2, $3, NULL, $4, TRUE)
+         ON CONFLICT (user_id, material_id)
+         DO UPDATE SET is_active = TRUE, expires_at = EXCLUDED.expires_at, granted_at = EXCLUDED.granted_at`,
+        [userId, materialId, Date.now(), expiresAt]
+      );
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("[Entitlement] grant failed:", err);
+      return res.status(500).json({ message: "Failed to grant entitlement" });
+    }
+  });
+
+  app.post("/api/admin/material-entitlements/revoke", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const userId = Number(req.body?.userId);
+      const materialId = Number(req.body?.materialId);
+      if (!Number.isFinite(userId) || userId <= 0 || !Number.isFinite(materialId) || materialId <= 0) {
+        return res.status(400).json({ message: "userId and materialId are required" });
+      }
+      await db.query(
+        "UPDATE standalone_material_entitlements SET is_active = FALSE WHERE user_id = $1 AND material_id = $2",
+        [userId, materialId]
+      );
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("[Entitlement] revoke failed:", err);
+      return res.status(500).json({ message: "Failed to revoke entitlement" });
+    }
+  });
+
+  registerCloudflareWebhookRoutes({
+    app,
+    db,
+  });
+
+  registerRuntimeFlagRoutes({
     app,
     db,
     requireAdmin,

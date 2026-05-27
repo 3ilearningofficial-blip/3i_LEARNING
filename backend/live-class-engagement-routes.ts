@@ -59,20 +59,23 @@ export function registerLiveClassEngagementRoutes({
         );
         const row = prev.rows[0];
         const canBump = !row?.last_session_ping_at || now - Number(row.last_session_ping_at) >= debounceMs;
-        if (!row) {
+        if (!row || canBump) {
           await db.query(
             `INSERT INTO live_class_recording_progress (user_id, live_class_id, watch_percent, playback_sessions, last_session_ping_at, updated_at)
-             VALUES ($1, $2, 0, 1, $3, $3)`,
-            [user.id, req.params.id, now]
-          );
-        } else if (canBump) {
-          await db.query(
-            `UPDATE live_class_recording_progress SET
-               playback_sessions = COALESCE(playback_sessions, 0) + 1,
-               last_session_ping_at = $3,
-               updated_at = $3
-             WHERE user_id = $1 AND live_class_id = $2`,
-            [user.id, req.params.id, now]
+             VALUES ($1, $2, 0, 1, $3, $3)
+             ON CONFLICT (user_id, live_class_id) DO UPDATE SET
+               playback_sessions = CASE
+                 WHEN live_class_recording_progress.last_session_ping_at IS NULL OR $3 - live_class_recording_progress.last_session_ping_at >= $4
+                 THEN COALESCE(live_class_recording_progress.playback_sessions, 0) + 1
+                 ELSE COALESCE(live_class_recording_progress.playback_sessions, 0)
+               END,
+               last_session_ping_at = CASE
+                 WHEN live_class_recording_progress.last_session_ping_at IS NULL OR $3 - live_class_recording_progress.last_session_ping_at >= $4
+                 THEN $3
+                 ELSE live_class_recording_progress.last_session_ping_at
+               END,
+               updated_at = $3`,
+            [user.id, req.params.id, now, debounceMs]
           );
         }
       }

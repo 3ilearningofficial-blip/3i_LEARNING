@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { isEnrollmentExpired } from "./course-access-utils";
+import { hasActiveStandaloneEntitlement } from "./standalone-entitlement-service";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -16,6 +17,13 @@ export function registerStudentMissionMaterialRoutes({
   db,
   getAuthUser,
 }: RegisterStudentMissionMaterialRoutesDeps): void {
+  const canAccessStandaloneMaterial = async (user: any | null, material: any): Promise<boolean> => {
+    if (material?.is_free) return true;
+    if (user?.role === "admin") return true;
+    if (!user?.id || !material?.id) return false;
+    return hasActiveStandaloneEntitlement(db, Number(user.id), Number(material.id));
+  };
+
   const hasActiveCourseEnrollment = async (userId: number, courseId: number): Promise<boolean> => {
     const e = await db.query(
       "SELECT valid_until FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL) LIMIT 1",
@@ -269,9 +277,17 @@ export function registerStudentMissionMaterialRoutes({
          ORDER BY sm.created_at DESC`,
         [user.id, now]
       );
+      const filteredRows = [];
+      for (const row of result.rows) {
+        if (!row.course_id) {
+          if (await canAccessStandaloneMaterial(user, row)) filteredRows.push(row);
+          continue;
+        }
+        filteredRows.push(row);
+      }
       const folders = await loadFolders();
       res.set("Cache-Control", "private, no-store");
-      res.json({ materials: result.rows, folders });
+      res.json({ materials: filteredRows, folders });
     } catch {
       res.status(500).json({ message: "Failed to fetch materials" });
     }
@@ -279,10 +295,15 @@ export function registerStudentMissionMaterialRoutes({
 
   app.get("/api/study-materials/folder/:folderName", async (req: Request, res: Response) => {
     try {
+      const user = await getAuthUser(req);
       const result = await db.query("SELECT * FROM study_materials WHERE section_title = $1 AND course_id IS NULL ORDER BY created_at DESC", [
         decodeURIComponent(String(req.params.folderName)),
       ]);
-      res.json(result.rows);
+      const safeRows: any[] = [];
+      for (const row of result.rows) {
+        if (await canAccessStandaloneMaterial(user, row)) safeRows.push(row);
+      }
+      res.json(safeRows);
     } catch {
       res.status(500).json({ message: "Failed to fetch folder materials" });
     }
@@ -305,6 +326,10 @@ export function registerStudentMissionMaterialRoutes({
             return res.status(403).json({ message: "Access denied" });
           }
         }
+      } else {
+        const user = await getAuthUser(req);
+        const allowed = await canAccessStandaloneMaterial(user, m);
+        if (!allowed) return res.status(403).json({ message: "Access denied" });
       }
       res.json(result.rows[0]);
     } catch {

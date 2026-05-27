@@ -25,6 +25,7 @@
 import { deleteDownloadsForUser } from "./download-utils";
 import { getRedisClient } from "./redis-client";
 import { filterNewNotificationRecipientsRedis } from "./redis-notification-dedup";
+import { incrementCounter, setGauge } from "./observability";
 
 /**
  * Stable numeric key used for pg_try_advisory_lock / pg_advisory_unlock.
@@ -32,6 +33,10 @@ import { filterNewNotificationRecipientsRedis } from "./redis-notification-dedup
  * in this codebase and must never change once deployed.
  */
 const LIVE_NOTIF_ADVISORY_LOCK_KEY = 31415926535;
+const DOWNLOAD_CLEANUP_RETRY_LOCK_KEY = 31415926536;
+const DOWNLOAD_TOKEN_CLEANUP_LOCK_KEY = 31415926537;
+const STUCK_LIVE_CLEANUP_LOCK_KEY = 31415926538;
+const LIVE_FINALIZE_QUEUE_LOCK_KEY = 31415926539;
 
 type DbClient = {
   query: (text: string, params?: unknown[], options?: any) => Promise<{ rows: any[]; rowCount?: number }>;
@@ -83,19 +88,37 @@ export function startSchedulers(
   }
 
   startLiveClassNotificationScheduler(db, pool, sendPushToUsers);
-  startDownloadCleanupRetryScheduler(db);
-  startDownloadTokenCleanupScheduler(db);
-  startStuckLiveClassCleanupScheduler(db);
+  startDownloadCleanupRetryScheduler(db, pool);
+  startDownloadTokenCleanupScheduler(db, pool);
+  startStuckLiveClassCleanupScheduler(db, pool);
+  startLiveFinalizeQueueScheduler(db, pool);
+}
+
+async function runWithAdvisoryLock(pool: DbPool, lockKey: number, job: () => Promise<void>): Promise<void> {
+  const client = await pool.connect();
+  let locked = false;
+  try {
+    const got = await client.query("SELECT pg_try_advisory_lock($1) AS acquired", [lockKey]);
+    locked = got.rows[0]?.acquired === true;
+    if (!locked) return;
+    await job();
+  } finally {
+    if (locked) {
+      await client.query("SELECT pg_advisory_unlock($1)", [lockKey]).catch(() => {});
+    }
+    client.release();
+  }
 }
 
 /**
  * Scheduler: retry offline download cleanup when it previously failed.
  * Runs every 10 minutes and clears `enrollments.download_cleanup_pending` on success.
  */
-function startDownloadCleanupRetryScheduler(db: DbClient): void {
+function startDownloadCleanupRetryScheduler(db: DbClient, pool: DbPool): void {
   const retryIntervalMs = 10 * 60 * 1000;
   const retryNow = async (): Promise<void> => {
     try {
+      await runWithAdvisoryLock(pool, DOWNLOAD_CLEANUP_RETRY_LOCK_KEY, async () => {
       const pending = await db.query(
         `SELECT id, user_id, course_id
          FROM enrollments
@@ -123,6 +146,7 @@ function startDownloadCleanupRetryScheduler(db: DbClient): void {
           });
         }
       }
+      });
     } catch (err) {
       console.error("[CleanupRetry] scheduler error:", err);
     }
@@ -344,11 +368,14 @@ async function clearStuckLiveClasses(db: DbClient): Promise<void> {
   }
 }
 
-function startStuckLiveClassCleanupScheduler(db: DbClient): void {
+function startStuckLiveClassCleanupScheduler(db: DbClient, pool: DbPool): void {
   // Run immediately on startup to fix any classes stuck before the server restarted,
   // then repeat every 15 minutes.
-  clearStuckLiveClasses(db);
-  setInterval(() => clearStuckLiveClasses(db), 15 * 60 * 1000);
+  runWithAdvisoryLock(pool, STUCK_LIVE_CLEANUP_LOCK_KEY, async () => clearStuckLiveClasses(db)).catch(() => {});
+  setInterval(
+    () => void runWithAdvisoryLock(pool, STUCK_LIVE_CLEANUP_LOCK_KEY, async () => clearStuckLiveClasses(db)),
+    15 * 60 * 1000
+  );
   console.log("[StuckLiveCleanup] Scheduler started — runs every 15 minutes");
 }
 
@@ -357,9 +384,10 @@ function startStuckLiveClassCleanupScheduler(db: DbClient): void {
  * Runs every 5 minutes. Deletes expired and already-used download tokens
  * in batches of 2000 to avoid long-running DELETE operations.
  */
-function startDownloadTokenCleanupScheduler(db: DbClient): void {
+function startDownloadTokenCleanupScheduler(db: DbClient, pool: DbPool): void {
   setInterval(async () => {
     try {
+      await runWithAdvisoryLock(pool, DOWNLOAD_TOKEN_CLEANUP_LOCK_KEY, async () => {
       // Delete ALL expired tokens — both used and unused (abandoned registrations).
       // Previously only used=TRUE tokens were cleaned, leaving unused-but-expired
       // tokens to accumulate indefinitely.
@@ -377,10 +405,91 @@ function startDownloadTokenCleanupScheduler(db: DbClient): void {
       if (result.rowCount && result.rowCount > 0) {
         console.log(`[TokenCleanup] Deleted ${result.rowCount} expired tokens`);
       }
+      });
     } catch (err) {
       console.error("[TokenCleanup] Error:", err);
     }
   }, 5 * 60 * 1000);
 
   console.log("[TokenCleanup] Scheduler started — runs every 5 minutes");
+}
+
+function startLiveFinalizeQueueScheduler(db: DbClient, pool: DbPool): void {
+  const tick = async (): Promise<void> => {
+    await runWithAdvisoryLock(pool, LIVE_FINALIZE_QUEUE_LOCK_KEY, async () => {
+      const now = Date.now();
+      const pending = await db.query(
+        `SELECT id, live_class_id, attempts
+         FROM live_stream_finalize_jobs
+         WHERE status IN ('pending', 'running')
+           AND next_attempt_at <= $1
+         ORDER BY next_attempt_at ASC
+         LIMIT 100`,
+        [now]
+      );
+      setGauge("live_finalize_queue_backlog", pending.rows.length);
+      for (const job of pending.rows) {
+        const jobId = Number(job.id);
+        const liveClassId = Number(job.live_class_id);
+        const attempts = Number(job.attempts || 0);
+        if (!Number.isFinite(jobId) || !Number.isFinite(liveClassId)) continue;
+        try {
+          await db.query(
+            "UPDATE live_stream_finalize_jobs SET status = 'running', updated_at = $2 WHERE id = $1",
+            [jobId, now]
+          );
+          const lc = await db.query(
+            "SELECT recording_url FROM live_classes WHERE id = $1 LIMIT 1",
+            [liveClassId]
+          );
+          const recordingUrl = String(lc.rows[0]?.recording_url || "").trim();
+          if (recordingUrl) {
+            await db.query(
+              "UPDATE live_stream_finalize_jobs SET status = 'done', updated_at = $2 WHERE id = $1",
+              [jobId, now]
+            );
+            continue;
+          }
+          const nextAttempts = attempts + 1;
+          const maxAttempts = Number(process.env.LIVE_FINALIZE_MAX_ATTEMPTS || 24);
+          const backoffMs = Math.min(10 * 60 * 1000, nextAttempts * 60 * 1000);
+          const nextAt = now + backoffMs;
+          await db.query(
+            `UPDATE live_stream_finalize_jobs
+             SET status = $2,
+                 attempts = $3,
+                 updated_at = $4,
+                 next_attempt_at = $5,
+                 last_error = $6
+             WHERE id = $1`,
+            [
+              jobId,
+              nextAttempts >= maxAttempts ? "failed" : "pending",
+              nextAttempts,
+              now,
+              nextAt,
+              "recording_url_not_ready",
+            ]
+          );
+          if (nextAttempts >= maxAttempts) incrementCounter("live_finalize_queue_failed");
+        } catch (err: any) {
+          incrementCounter("live_finalize_queue_errors");
+          await db.query(
+            `UPDATE live_stream_finalize_jobs
+             SET status = 'pending',
+                 attempts = COALESCE(attempts, 0) + 1,
+                 updated_at = $2,
+                 next_attempt_at = $3,
+                 last_error = $4
+             WHERE id = $1`,
+            [jobId, now, now + 60 * 1000, String(err?.message || "queue_error").slice(0, 500)]
+          ).catch(() => {});
+        }
+      }
+    });
+  };
+
+  void tick().catch(() => {});
+  setInterval(() => void tick().catch(() => {}), 60 * 1000);
+  console.log("[LiveFinalizeQueue] Scheduler started — runs every 60 seconds");
 }

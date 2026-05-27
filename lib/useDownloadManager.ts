@@ -322,6 +322,8 @@ function useDownloadManagerImpl(): UseDownloadManagerReturn {
         const encrypted = await FileSystem.readAsStringAsync(encPath);
 
         const tempPath = `${(FileSystem as any).cacheDirectory}dec_${state.localFilename}`;
+        // Best effort cleanup of prior plaintext temp file before decrypting a fresh copy.
+        await FileSystem.deleteAsync(tempPath, { idempotent: true }).catch(() => {});
 
         await encryptionService.decryptToUri(
           encrypted,
@@ -330,6 +332,10 @@ function useDownloadManagerImpl(): UseDownloadManagerReturn {
           user?.deviceId || 'default'
         );
 
+        // Auto-expire plaintext cache quickly to reduce offline extraction window.
+        setTimeout(() => {
+          FileSystem.deleteAsync(tempPath, { idempotent: true }).catch(() => {});
+        }, 2 * 60 * 1000);
         return tempPath;
 
       } catch {

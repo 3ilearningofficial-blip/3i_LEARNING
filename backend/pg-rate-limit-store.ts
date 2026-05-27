@@ -9,7 +9,10 @@ export class PgRateLimitStore {
   /** Marks this store as shared across instances (express-rate-limit contract). */
   readonly localKeys = false;
 
-  constructor(private readonly pool: Pool) {}
+  constructor(
+    private readonly pool: Pool,
+    private readonly options: { failClosed?: boolean } = {}
+  ) {}
 
   init(options: { windowMs: number }): void {
     this.windowMs = options.windowMs;
@@ -28,8 +31,10 @@ export class PgRateLimitStore {
         resetTime: new Date(Number(row.reset_time_ms)),
       };
     } catch (err) {
-      // Keep API available when store has transient DB issues.
       console.error("[RateLimitStore] get failed:", err);
+      if (this.options.failClosed) {
+        return { totalHits: Number.MAX_SAFE_INTEGER, resetTime: new Date(Date.now() + this.windowMs) };
+      }
       return undefined;
     }
   }
@@ -59,8 +64,10 @@ export class PgRateLimitStore {
         resetTime: new Date(Number(row.reset_time_ms)),
       };
     } catch (err) {
-      // Fail-open fallback.
       console.error("[RateLimitStore] increment failed:", err);
+      if (this.options.failClosed) {
+        return { totalHits: Number.MAX_SAFE_INTEGER, resetTime: new Date(now + win) };
+      }
       return { totalHits: 1, resetTime: new Date(now + win) };
     }
   }

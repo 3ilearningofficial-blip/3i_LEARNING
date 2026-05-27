@@ -367,6 +367,13 @@ export function registerLiveStreamRoutes({
         "UPDATE live_classes SET is_live = FALSE, ended_at = COALESCE(ended_at, $1), is_completed = TRUE WHERE id = $2",
         [endedAtNow, req.params.id]
       ).catch(() => {});
+      await db.query(
+        `INSERT INTO live_stream_finalize_jobs
+           (live_class_id, status, attempts, next_attempt_at, created_at, updated_at)
+         VALUES ($1, 'pending', 0, $2, $2, $2)
+         ON CONFLICT DO NOTHING`,
+        [Number(req.params.id), endedAtNow]
+      ).catch(() => {});
       if (!uid) return res.json({ success: true });
 
       // Respond immediately so admin UI reflects "ended" without waiting for CF to finalize the VOD.

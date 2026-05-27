@@ -16,6 +16,7 @@ export interface StoredAuthUser {
 
 const userStorageKey = "user";
 const nativeTokenKey = "sessionToken";
+const webTokenKey = "sessionToken";
 
 async function setNativeStoredToken(token?: string | null) {
   if (Platform.OS === "web") return;
@@ -39,8 +40,12 @@ async function getNativeStoredToken(): Promise<string | null> {
 
 export async function storeAuthUser(userData: StoredAuthUser) {
   if (Platform.OS === "web" && typeof localStorage !== "undefined") {
-    // Persist opaque sessionToken on web so authFetch can send Bearer alongside cookies.
-    localStorage.setItem(userStorageKey, JSON.stringify(userData));
+    const { sessionToken, ...rest } = userData;
+    localStorage.setItem(userStorageKey, JSON.stringify(rest));
+    if (typeof sessionStorage !== "undefined") {
+      if (sessionToken) sessionStorage.setItem(webTokenKey, sessionToken);
+      else sessionStorage.removeItem(webTokenKey);
+    }
   } else {
     const { sessionToken, ...rest } = userData;
     await AsyncStorage.setItem(userStorageKey, JSON.stringify(rest));
@@ -52,7 +57,10 @@ export async function getStoredAuthUser(): Promise<StoredAuthUser | null> {
   try {
     if (Platform.OS === "web" && typeof localStorage !== "undefined") {
       const stored = localStorage.getItem(userStorageKey);
-      return stored ? JSON.parse(stored) : null;
+      if (!stored) return null;
+      const parsed = JSON.parse(stored);
+      const token = typeof sessionStorage !== "undefined" ? sessionStorage.getItem(webTokenKey) : null;
+      return { ...parsed, sessionToken: token || undefined };
     }
     const stored = await AsyncStorage.getItem(userStorageKey);
     if (!stored) return null;
@@ -67,6 +75,7 @@ export async function getStoredAuthUser(): Promise<StoredAuthUser | null> {
 export async function removeStoredAuthUser() {
   if (Platform.OS === "web" && typeof localStorage !== "undefined") {
     localStorage.removeItem(userStorageKey);
+    if (typeof sessionStorage !== "undefined") sessionStorage.removeItem(webTokenKey);
   } else {
     await AsyncStorage.removeItem(userStorageKey);
     await setNativeStoredToken(null);
@@ -75,11 +84,8 @@ export async function removeStoredAuthUser() {
 
 export async function getStoredAuthToken(): Promise<string | null> {
   try {
-    if (Platform.OS === "web" && typeof localStorage !== "undefined") {
-      const stored = localStorage.getItem(userStorageKey);
-      if (!stored) return null;
-      const parsed = JSON.parse(stored) as { sessionToken?: string };
-      const t = parsed.sessionToken?.trim();
+    if (Platform.OS === "web") {
+      const t = typeof sessionStorage !== "undefined" ? sessionStorage.getItem(webTokenKey)?.trim() : null;
       return t && t !== "null" && t !== "undefined" ? t : null;
     }
     return await getNativeStoredToken();

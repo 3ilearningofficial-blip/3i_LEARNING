@@ -73,28 +73,18 @@ const DEFAULT_CATEGORIES = ["All", "NDA", "CDS", "AFCAT"];
 
 const COURSE_COLORS = ["#1A56DB", "#7C3AED", "#DC2626", "#059669", "#D97706", "#0891B2"];
 
-function ScheduledLiveCard({ lc }: { lc: any }) {
+function ScheduledLiveCard({ lc, nowMs }: { lc: any; nowMs: number }) {
   const scheduledMs = Number(lc.scheduled_at);
-  const [status, setStatus] = React.useState<"countdown" | "waiting">("countdown");
-  const [countdown, setCountdown] = React.useState("");
-  React.useEffect(() => {
-    const tick = () => {
-      const diff = scheduledMs - Date.now();
-      if (diff <= 0) {
-        setStatus("waiting");
-        return;
-      }
-      const d = Math.floor(diff / 86400000);
-      const h = Math.floor((diff % 86400000) / 3600000);
-      const m = Math.floor((diff % 3600000) / 60000);
-      const s = Math.floor((diff % 60000) / 1000);
-      setCountdown(d > 0 ? `${d}d ${h}h ${m}m` : h > 0 ? `${h}h ${m}m ${s}s` : `${m}m ${s}s`);
-      setStatus("countdown");
-    };
-    tick();
-    const timer = setInterval(tick, 1000);
-    return () => clearInterval(timer);
-  }, [scheduledMs]);
+  const diff = scheduledMs - nowMs;
+  const status: "countdown" | "waiting" = diff <= 0 ? "waiting" : "countdown";
+  const countdown = React.useMemo(() => {
+    if (diff <= 0) return "";
+    const d = Math.floor(diff / 86400000);
+    const h = Math.floor((diff % 86400000) / 3600000);
+    const m = Math.floor((diff % 3600000) / 60000);
+    const s = Math.floor((diff % 60000) / 1000);
+    return d > 0 ? `${d}d ${h}h ${m}m` : h > 0 ? `${h}h ${m}m ${s}s` : `${m}m ${s}s`;
+  }, [diff]);
 
   const scheduleDate = new Date(scheduledMs);
   const dateStr = scheduleDate.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
@@ -347,6 +337,7 @@ export default function HomeScreen() {
   const [selectedCategory, setSelectedCategory] = useState("All");
   const [refreshing, setRefreshing] = useState(false);
   const [showAllScheduled, setShowAllScheduled] = useState(false);
+  const [nowMs, setNowMs] = useState(Date.now());
 
   const topPadding = Platform.OS === "web" ? 16 : insets.top;
   const bottomPadding = Platform.OS === "web" ? 16 : insets.bottom;
@@ -363,6 +354,11 @@ export default function HomeScreen() {
       attributeFilter: ["aria-hidden"],
     });
     return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const t = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(t);
   }, []);
 
   const { data: allCourses = [], refetch: refetchCourses, isLoading } = useQuery<Course[]>({
@@ -695,7 +691,7 @@ export default function HomeScreen() {
                       </View>
                     </View>
                     {visible.map((lc: any) => (
-                      <ScheduledLiveCard key={lc.id} lc={lc} />
+                      <ScheduledLiveCard key={lc.id} lc={lc} nowMs={nowMs} />
                     ))}
                     {scheduled.length > 2 && (
                       <Pressable onPress={() => setShowAllScheduled(!showAllScheduled)}
