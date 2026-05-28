@@ -804,16 +804,18 @@ function normalizeOtpIdentifier(input: unknown): string {
       process.exit(0);
     });
     // Force exit after 10 s if requests are still pending (e.g. a stalled SSE connection).
-    setTimeout(() => {
+    // Cast via unknown: DOM typings return `number` for setTimeout, but .unref() is
+    // a Node.js-only method on NodeJS.Timeout. The cast is safe — we are always on Node.
+    (setTimeout(() => {
       console.warn("[shutdown] Forced exit after 10 s timeout");
       process.exit(1);
-    }, 10_000).unref();
+    }, 10_000) as unknown as NodeJS.Timeout).unref();
   });
 
   // Also handle SIGINT (Ctrl+C in development) with the same graceful path.
   process.on("SIGINT", () => {
-    log("[shutdown] SIGINT received — exiting");
+    log("[shutdown] SIGINT received \u2014 exiting");
     server.close(() => process.exit(0));
-    setTimeout(() => process.exit(1), 5_000).unref();
+    (setTimeout(() => process.exit(1), 5_000) as unknown as NodeJS.Timeout).unref();
   });
 })();

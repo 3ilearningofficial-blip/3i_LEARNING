@@ -1,7 +1,7 @@
 import React from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable, Switch,
-  ActivityIndicator, TextInput, Platform,
+  ActivityIndicator, TextInput, Platform, Alert,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useMutation, useQueryClient } from "@tanstack/react-query";

@@ -19,4 +19,16 @@ declare module "livekit-server-sdk" {
     addGrant(grant: VideoGrant): void;
     toJwt(): Promise<string>;
   }
+
+  export interface WebhookEvent {
+    event: string;
+    room?: { name?: string; sid?: string; [key: string]: unknown };
+    participant?: { identity?: string; sid?: string; [key: string]: unknown };
+    [key: string]: unknown;
+  }
+
+  export class WebhookReceiver {
+    constructor(apiKey: string, apiSecret: string);
+    receive(body: string, authHeader: string | undefined): Promise<WebhookEvent>;
+  }
 }

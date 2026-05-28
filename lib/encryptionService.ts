@@ -37,8 +37,10 @@ const ITERATIONS = 100_000;
 
 // ─── Low-level helpers ────────────────────────────────────────────────────
 
-function hexToBytes(hex: string): Uint8Array {
-  const bytes = new Uint8Array(hex.length / 2);
+function hexToBytes(hex: string): Uint8Array<ArrayBuffer> {
+  // Allocate with explicit ArrayBuffer so TypeScript's Web Crypto overloads accept it.
+  const buf = new ArrayBuffer(hex.length / 2);
+  const bytes = new Uint8Array(buf);
   for (let i = 0; i < bytes.length; i++) {
     bytes[i] = parseInt(hex.substring(i * 2, i * 2 + 2), 16);
   }
@@ -233,15 +235,22 @@ class EncryptionService {
     try {
       const key = await this.getOrCreateKey(sessionToken, deviceId);
 
-      const ivBytes = await Crypto.getRandomBytesAsync(16);
+      // Expo-crypto + TextEncoder return Uint8Array<ArrayBufferLike>. Web Crypto's
+      // BufferSource overload requires ArrayBuffer, so we copy into explicit ArrayBuffer views.
+      const ivRaw = await Crypto.getRandomBytesAsync(16);
+      const ivBuf = new ArrayBuffer(16);
+      new Uint8Array(ivBuf).set(ivRaw);
+      const ivBytes = new Uint8Array(ivBuf) as Uint8Array<ArrayBuffer>;
       const ivHex = bytesToHex(ivBytes);
 
       const aesKey = await importAesCbcKey(key, ['encrypt']);
-      const enc = new TextEncoder();
+      const encoded = new TextEncoder().encode(data);
+      const plainBuf = new ArrayBuffer(encoded.byteLength);
+      new Uint8Array(plainBuf).set(encoded);
       const ciphertextBuf = await crypto.subtle.encrypt(
         { name: 'AES-CBC', iv: ivBytes },
         aesKey,
-        enc.encode(data),
+        new Uint8Array(plainBuf) as Uint8Array<ArrayBuffer>,
       );
       const ciphertextHex = bytesToHex(new Uint8Array(ciphertextBuf));
       const mac = await hmacSha256Hex(key, `${ivHex}:${ciphertextHex}`);
