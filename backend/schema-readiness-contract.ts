@@ -33,29 +33,29 @@ export const REQUIRED_TABLES = [
   "express_rate_limit",
   "otp_challenges",
   "notifications_sent",
-  // Tables previously missing from this contract — added for complete coverage.
-  "daily_missions",      // 0000 baseline — holds daily drill questions
-  "lecture_progress",    // 0000 baseline — per-student lecture watch state
-  "payments",            // 0000 baseline — Razorpay payment records
-  "user_missions",       // 0035 — per-student daily mission completion records
-  // Migration 0017 — live class polling system
+  // Tables previously missing from this contract - added for complete coverage.
+  "daily_missions",      // 0000 baseline - holds daily drill questions
+  "lecture_progress",    // 0000 baseline - per-student lecture watch state
+  "payments",            // 0000 baseline - Razorpay payment records
+  "user_missions",       // 0035 - per-student daily mission completion records
+  // Migration 0017 - live class polling system
   "live_class_polls",
   "live_class_poll_options",
   "live_class_poll_votes",
   "live_class_activity_timers",
-  // Migration 0023 — payment failure audit log
+  // Migration 0023 - payment failure audit log
   "payment_failures",
-  // Migration 0037 — runtime feature flags
+  // Migration 0037 - runtime feature flags
   "runtime_feature_flags",
-  // Migration 0038 — API idempotency + standalone entitlements + webhook receipts
+  // Migration 0038 - API idempotency + standalone entitlements + webhook receipts
   "api_idempotency_keys",
   "standalone_material_entitlements",
   "webhook_event_receipts",
-  // Migration 0039 — live stream finalize job queue
+  // Migration 0039 - live stream finalize job queue
   "live_stream_finalize_jobs",
-  // Migration 0043 — per-device server-issued offline encryption secrets (ODSR-01)
+  // Migration 0043 - per-device server-issued offline encryption secrets (ODSR-01)
   "device_offline_secrets",
-  // Migration 0044 — doubts table (was in schema.ts + backend routes but missing from migrations)
+  // Migration 0044 - doubts table (was in schema.ts + backend routes but missing from migrations)
   "doubts",
 ] as const;
 
@@ -112,7 +112,7 @@ export const REQUIRED_COLUMNS: Record<string, string[]> = {
   questions: ["image_url", "solution_image_url"],
   lecture_progress: ["playback_sessions", "last_session_ping_at"],
   standalone_folders: ["category", "price", "original_price", "is_free", "description", "validity_months"],
-  // Migration 0042 — admin session device binding
+  // Migration 0042 - admin session device binding
   user_sessions: ["device_id"],
 };
 
@@ -140,4 +140,6 @@ export const REQUIRED_UNIQUE_INDEX_SPECS = [
   { table: "webhook_event_receipts", columns: ["source", "event_id"] },
   // Migration 0039
   { table: "live_stream_finalize_jobs", columns: ["live_class_id"] },
-  // Migration 0043 — per-device 
+  // Migration 0043 - per-device offline encryption secrets
+  { table: "device_offline_secrets", columns: ["user_id", "device_id"] },
+] as const;
