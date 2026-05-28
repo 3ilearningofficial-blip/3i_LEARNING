@@ -55,6 +55,8 @@ export const REQUIRED_TABLES = [
   "live_stream_finalize_jobs",
   // Migration 0043 — per-device server-issued offline encryption secrets (ODSR-01)
   "device_offline_secrets",
+  // Migration 0044 — doubts table (was in schema.ts + backend routes but missing from migrations)
+  "doubts",
 ] as const;
 
 export const REQUIRED_COLUMNS: Record<string, string[]> = {
@@ -138,6 +140,4 @@ export const REQUIRED_UNIQUE_INDEX_SPECS = [
   { table: "webhook_event_receipts", columns: ["source", "event_id"] },
   // Migration 0039
   { table: "live_stream_finalize_jobs", columns: ["live_class_id"] },
-  // Migration 0043 — per-device offline encryption secrets
-  { table: "device_offline_secrets", columns: ["user_id", "device_id"] },
-] as const;
+  // Migration 0043 — per-device 
