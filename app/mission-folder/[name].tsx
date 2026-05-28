@@ -112,7 +112,7 @@ export default function MissionFolderScreen() {
             </Text>
           </View>
           <View style={styles.folderIconWrap}>
-            <Ionicons name="folder-open" size={22} color="#0F766E" />
+            <Ionicons name="folder-open" size={22} color="#DB2777" />
           </View>
         </View>
       </LinearGradient>
@@ -183,7 +183,7 @@ const styles = StyleSheet.create({
   headerSub: { fontSize: 12, fontFamily: "Inter_400Regular", color: "rgba(255,255,255,0.5)" },
   folderIconWrap: {
     width: 44, height: 44, borderRadius: 14,
-    backgroundColor: "#CCFBF1", alignItems: "center", justifyContent: "center",
+    backgroundColor: "#FCE7F3", alignItems: "center", justifyContent: "center",
   },
   empty: { alignItems: "center", paddingTop: 60, gap: 10, paddingHorizontal: 24 },
   emptyTitle: { fontSize: 16, fontFamily: "Inter_600SemiBold", color: Colors.light.text },

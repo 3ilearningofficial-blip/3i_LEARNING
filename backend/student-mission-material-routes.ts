@@ -46,10 +46,16 @@ export function registerStudentMissionMaterialRoutes({
     opts: { type?: string; folderName?: string },
   ): Promise<any[]> => {
     const { type, folderName } = opts;
+    // For the main list (no folderName) only surface missions up to today — this is
+    // the daily-drill feed.  For a specific folder the full curriculum is shown
+    // regardless of mission_date so admins can pre-populate upcoming content.
     let query = `SELECT dm.*, c.title AS course_title
       FROM daily_missions dm
       LEFT JOIN courses c ON c.id = dm.course_id
-      WHERE dm.mission_date <= CURRENT_DATE`;
+      WHERE 1=1`;
+    if (!folderName) {
+      query += ` AND dm.mission_date <= CURRENT_DATE`;
+    }
     const params: unknown[] = [];
     if (type && type !== "all") {
       params.push(type);
@@ -59,7 +65,7 @@ export function registerStudentMissionMaterialRoutes({
       params.push(folderName);
       query += ` AND dm.folder_name = $${params.length}`;
     }
-    query += " ORDER BY dm.mission_date DESC LIMIT 50";
+    query += " ORDER BY dm.mission_date ASC LIMIT 200";
     const result = await db.query(query, params);
 
     if (user) {
@@ -76,6 +82,10 @@ export function registerStudentMissionMaterialRoutes({
       }
 
       const enrolledCourseIds = new Set<number>();
+      // Which standalone mission folders are free — missions inside free folders
+      // are visible to every authenticated student even without a course enrollment.
+      const freeFolderNames = new Set<string>();
+
       if (user.role !== "admin") {
         const courseIds = [
           ...new Set(
@@ -95,11 +105,31 @@ export function registerStudentMissionMaterialRoutes({
             if (!isEnrollmentExpired(row)) enrolledCourseIds.add(Number(row.course_id));
           }
         }
+
+        // Fetch is_free status for every folder referenced in the result set.
+        const folderNamesInResult = [
+          ...new Set(
+            result.rows
+              .map((m: any) => m.folder_name)
+              .filter((n: any) => typeof n === "string" && n.length > 0),
+          ),
+        ] as string[];
+        if (folderNamesInResult.length > 0) {
+          const freeRows = await db.query(
+            `SELECT name FROM standalone_folders
+             WHERE type = 'mission' AND is_free = TRUE AND name = ANY($1::text[])`,
+            [folderNamesInResult],
+          );
+          for (const row of freeRows.rows) freeFolderNames.add(String(row.name));
+        }
       }
 
       const missionAccessible = (mission: any): boolean => {
         if (mission?.mission_type === "free_practice") return true;
         if (user.role === "admin") return true;
+        // Missions inside a free standalone folder are accessible to all logged-in students.
+        if (mission?.folder_name && freeFolderNames.has(String(mission.folder_name))) return true;
+        // Otherwise access is gated by course enrollment.
         const cid = Number(mission?.course_id);
         if (!Number.isFinite(cid) || cid <= 0) return false;
         return enrolledCourseIds.has(cid);

@@ -1084,7 +1084,7 @@ export default function DailyMissionScreen() {
                 onPress={() => openMissionFolder(folder.name)}
               >
                 <View style={styles.folderIconWrap}>
-                  <Ionicons name="folder" size={22} color="#0F766E" />
+                  <Ionicons name="folder" size={22} color="#DB2777" />
                 </View>
                 <View style={styles.folderCardBody}>
                   <Text style={styles.folderCardTitle} numberOfLines={2}>
@@ -1158,15 +1158,15 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     padding: 14,
     borderWidth: 1,
-    borderColor: "#99F6E4",
+    borderColor: "#FBCFE8",
     borderLeftWidth: 4,
-    borderLeftColor: "#0F766E",
+    borderLeftColor: "#DB2777",
   },
   folderIconWrap: {
     width: 44,
     height: 44,
     borderRadius: 12,
-    backgroundColor: "#CCFBF1",
+    backgroundColor: "#FCE7F3",
     alignItems: "center",
     justifyContent: "center",
   },
