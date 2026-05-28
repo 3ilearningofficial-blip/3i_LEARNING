@@ -475,9 +475,13 @@ export const queryClient = new QueryClient({
       refetchInterval: false,
       // Native: avoid refetch on every app resume / tab focus; data stays warm from cache. Web: still refetch on tab focus for fresher dashboards.
       refetchOnWindowFocus: Platform.OS === "web",
-      // Keep access-sensitive data (enrollments / course access) fresh immediately after purchases.
-      // Individual queries can still opt into longer caching via their own `staleTime`.
-      staleTime: 0,
+      // FPR-01: Use a 60-second global staleTime instead of 0 to prevent redundant
+      // API calls on every navigation. staleTime: 0 means every tab switch / screen
+      // push marks all queries stale and triggers refetches — at 1,000 users this
+      // generates 15,000+ redundant API calls per session burst.
+      // Access-sensitive queries (enrollment status, payment result) override this
+      // with staleTime: 0 at the call site to stay immediately fresh after purchases.
+      staleTime: 60 * 1000,
       gcTime: 20 * 60 * 1000,
       refetchOnReconnect: true,
       retry: false,

@@ -129,6 +129,9 @@ function useDownloadManagerImpl(): UseDownloadManagerReturn {
         updateState(itemType, itemId, { status: 'downloading', progress: 0 });
 
         const baseUrl = getApiUrl();
+        // ODSR-01: ensure the encryption service knows the API base URL so it
+        // can request the server nonce on the first key derivation.
+        encryptionService.setApiBaseUrl(baseUrl);
 
         // STEP 1: get token — must send X-App-Device-Id when account has app_bound_device_id
         const tokenRes = await fetch(

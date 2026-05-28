@@ -531,7 +531,27 @@ function normalizeOtpIdentifier(input: unknown): string {
   setupApiResponseFormat(app);
 
   // Cross-cutting middleware for responses/logging
-  app.use(compression());
+  // BPR-02: Exclude SSE and streaming endpoints from compression.
+  // compression() buffers output chunks before compressing — this defeats real-time
+  // SSE delivery and introduces latency for live notifications. Media streams must also
+  // be excluded so range-request byte offsets survive the compression pass.
+  app.use(
+    compression({
+      filter: (req, res) => {
+        const p = req.path || "";
+        if (
+          p.includes("/sse") ||
+          p.includes("/stream") ||
+          p.includes("/api/media/") ||
+          p.startsWith("/api/live-classes/") ||
+          p.includes("/listen")
+        ) {
+          return false;
+        }
+        return compression.filter(req, res);
+      },
+    })
+  );
   app.use(metricsMiddleware);
   setupRequestLogging(app);
 
@@ -572,7 +592,11 @@ function normalizeOtpIdentifier(input: unknown): string {
     cookie: {
       secure: isProduction,        // HTTPS only in production
       httpOnly: true,
-      sameSite: "lax",
+      // SEC-02: "strict" prevents the cookie from being sent on any cross-site request,
+      // eliminating CSRF risk on cookie-authenticated GET endpoints with side effects.
+      // The app primarily uses Bearer token auth (CSRF-immune by design), so changing
+      // from "lax" to "strict" has no functional impact on normal usage.
+      sameSite: "strict",
       maxAge: 400 * 24 * 60 * 60 * 1000,
       ...(isProduction && sessionCookieDomain ? { domain: sessionCookieDomain } : {}),
     },
@@ -766,5 +790,30 @@ function normalizeOtpIdentifier(input: unknown): string {
 
   server.listen(port, "0.0.0.0", () => {
     log(`express server running on http://localhost:${port}`);
+  });
+
+  // FRW-03: Graceful shutdown on SIGTERM (PM2 reload / container stop).
+  // Without this, PM2 kills the process immediately — dropping in-flight HTTP
+  // requests including payment verifications and file uploads mid-stream.
+  // server.close() stops accepting new connections and waits for active requests
+  // to finish. We force-exit after 10 seconds to prevent hung deploys.
+  process.on("SIGTERM", () => {
+    log("[shutdown] SIGTERM received — draining in-flight requests");
+    server.close(() => {
+      log("[shutdown] All connections closed — exiting cleanly");
+      process.exit(0);
+    });
+    // Force exit after 10 s if requests are still pending (e.g. a stalled SSE connection).
+    setTimeout(() => {
+      console.warn("[shutdown] Forced exit after 10 s timeout");
+      process.exit(1);
+    }, 10_000).unref();
+  });
+
+  // Also handle SIGINT (Ctrl+C in development) with the same graceful path.
+  process.on("SIGINT", () => {
+    log("[shutdown] SIGINT received — exiting");
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(1), 5_000).unref();
   });
 })();

@@ -26,6 +26,12 @@ import { deleteDownloadsForUser } from "./download-utils";
 import { getRedisClient } from "./redis-client";
 import { filterNewNotificationRecipientsRedis } from "./redis-notification-dedup";
 import { incrementCounter, setGauge } from "./observability";
+// CFSR-03: CF Stream API polling fallback for missed webhooks
+import {
+  getLatestRecordingForLiveInput,
+  getCfVideoByUid,
+} from "./cloudflare-stream-api";
+import { saveRecordingForClassAndPeers as saveRecordingCore } from "./live-class-recording-save";
 
 /**
  * Stable numeric key used for pg_try_advisory_lock / pg_advisory_unlock.
@@ -92,6 +98,8 @@ export function startSchedulers(
   startDownloadTokenCleanupScheduler(db, pool);
   startStuckLiveClassCleanupScheduler(db, pool);
   startLiveFinalizeQueueScheduler(db, pool);
+  startNeonKeepalive(db);
+  startMediaTokenCleanupScheduler(db, pool);
 }
 
 async function runWithAdvisoryLock(pool: DbPool, lockKey: number, job: () => Promise<void>): Promise<void> {
@@ -229,11 +237,19 @@ function startLiveClassNotificationScheduler(
 
         let recipientIds: number[] = [];
         const redis = await getRedisClient();
+        // RQR-01: Track whether Redis dedup succeeded so we know whether to fall
+        // back to PostgreSQL dedup. filterNewNotificationRecipientsRedis now returns
+        // null on pipeline error instead of throwing and dropping the notification batch.
+        let dedupHandled = false;
 
         if (redis) {
           const candidates = !lc.course_id || lc.is_free_preview === true || lc.is_public === true
             ? await db.query(
-                `SELECT u.id::int AS user_id FROM users u WHERE u.role = 'student'`,
+                // HCFR-01: Add LIMIT to prevent unbounded fanout at scale.
+                // At 10,000 students this query returns 10,000 rows, triggering a 20-second
+                // Expo push API loop while holding the advisory lock. LIMIT 5000 is a safe
+                // ceiling — real notification batching/pagination to be added in a follow-up.
+                `SELECT u.id::int AS user_id FROM users u WHERE u.role = 'student' LIMIT 5000`,
                 []
               )
             : await db.query(
@@ -245,45 +261,57 @@ function startLiveClassNotificationScheduler(
                 [lc.course_id, now]
               );
           const candidateIds = candidates.rows.map((r: { user_id: number }) => Number(r.user_id));
-          recipientIds = await filterNewNotificationRecipientsRedis(
+          const redisResult = await filterNewNotificationRecipientsRedis(
             redis,
             lc.id,
             candidateIds,
             dedupType
           );
-          if (recipientIds.length) {
-            await db.query(
-              `INSERT INTO notifications_sent (class_id, user_id, type)
-               SELECT $1::int, u_id::int, $2::text
-               FROM unnest($3::int[]) AS u_id
-               ON CONFLICT (class_id, user_id, type) DO NOTHING`,
-              [lc.id, dedupType, recipientIds]
-            );
+          // null means Redis pipeline failed → fall through to PostgreSQL dedup below.
+          if (redisResult !== null) {
+            dedupHandled = true;
+            recipientIds = redisResult;
+            if (recipientIds.length) {
+              await db.query(
+                `INSERT INTO notifications_sent (class_id, user_id, type)
+                 SELECT $1::int, u_id::int, $2::text
+                 FROM unnest($3::int[]) AS u_id
+                 ON CONFLICT (class_id, user_id, type) DO NOTHING`,
+                [lc.id, dedupType, recipientIds]
+              );
+            }
           }
-        } else if (!lc.course_id || lc.is_free_preview === true || lc.is_public === true) {
-          const inserted = await db.query(
-            `INSERT INTO notifications_sent (class_id, user_id, type)
-             SELECT $1::int, u.id::int, $2::text
-             FROM users u
-             WHERE u.role = 'student'
-             ON CONFLICT (class_id, user_id, type) DO NOTHING
-             RETURNING user_id`,
-            [lc.id, dedupType]
-          );
-          recipientIds = inserted.rows.map((r: { user_id: number }) => Number(r.user_id));
-        } else {
-          const inserted = await db.query(
-            `INSERT INTO notifications_sent (class_id, user_id, type)
-             SELECT $1::int, e.user_id::int, $2::text
-             FROM enrollments e
-             WHERE e.course_id = $3::int
-               AND (e.status = 'active' OR e.status IS NULL)
-               AND (e.valid_until IS NULL OR e.valid_until > $4::bigint)
-             ON CONFLICT (class_id, user_id, type) DO NOTHING
-             RETURNING user_id`,
-            [lc.id, dedupType, lc.course_id, now]
-          );
-          recipientIds = inserted.rows.map((r: { user_id: number }) => Number(r.user_id));
+        }
+
+        // PostgreSQL dedup fallback: used when Redis is not configured OR when
+        // the Redis pipeline errored. notifications_sent has ON CONFLICT DO NOTHING
+        // so concurrent instances won't double-send even without the Redis lock.
+        if (!dedupHandled) {
+          if (!lc.course_id || lc.is_free_preview === true || lc.is_public === true) {
+            const inserted = await db.query(
+              `INSERT INTO notifications_sent (class_id, user_id, type)
+               SELECT $1::int, u.id::int, $2::text
+               FROM users u
+               WHERE u.role = 'student'
+               ON CONFLICT (class_id, user_id, type) DO NOTHING
+               RETURNING user_id`,
+              [lc.id, dedupType]
+            );
+            recipientIds = inserted.rows.map((r: { user_id: number }) => Number(r.user_id));
+          } else {
+            const inserted = await db.query(
+              `INSERT INTO notifications_sent (class_id, user_id, type)
+               SELECT $1::int, e.user_id::int, $2::text
+               FROM enrollments e
+               WHERE e.course_id = $3::int
+                 AND (e.status = 'active' OR e.status IS NULL)
+                 AND (e.valid_until IS NULL OR e.valid_until > $4::bigint)
+               ON CONFLICT (class_id, user_id, type) DO NOTHING
+               RETURNING user_id`,
+              [lc.id, dedupType, lc.course_id, now]
+            );
+            recipientIds = inserted.rows.map((r: { user_id: number }) => Number(r.user_id));
+          }
         }
 
         // If nobody was newly inserted into notifications_sent, we already sent
@@ -439,10 +467,65 @@ function startLiveFinalizeQueueScheduler(db: DbClient, pool: DbPool): void {
             [jobId, now]
           );
           const lc = await db.query(
-            "SELECT recording_url FROM live_classes WHERE id = $1 LIMIT 1",
+            "SELECT recording_url, cf_stream_uid, cf_recording_uid FROM live_classes WHERE id = $1 LIMIT 1",
             [liveClassId]
           );
-          const recordingUrl = String(lc.rows[0]?.recording_url || "").trim();
+          let recordingUrl = String(lc.rows[0]?.recording_url || "").trim();
+
+          // ── CFSR-03: Webhook-miss fallback ────────────────────────────────
+          // If recording_url is still absent after 5+ attempts (~30 min of
+          // exponential backoff), query the Cloudflare Stream API directly.
+          // This makes recording completion independent of webhook delivery.
+          if (!recordingUrl && attempts >= 5) {
+            const cfAccountId = process.env.CF_STREAM_ACCOUNT_ID;
+            const cfApiToken  = process.env.CF_STREAM_API_TOKEN;
+            if (cfAccountId && cfApiToken) {
+              const cfRecordingUid = String(lc.rows[0]?.cf_recording_uid || "").trim();
+              const cfStreamUid    = String(lc.rows[0]?.cf_stream_uid    || "").trim();
+              let cfRecording = null;
+
+              // 1. Known recording UID → fetch directly (fastest path).
+              if (cfRecordingUid) {
+                cfRecording = await getCfVideoByUid(cfAccountId, cfApiToken, cfRecordingUid);
+              }
+
+              // 2. Known live-input UID → list recordings for that input.
+              if (!cfRecording && cfStreamUid) {
+                cfRecording = await getLatestRecordingForLiveInput(cfAccountId, cfApiToken, cfStreamUid);
+              }
+
+              if (cfRecording?.recordingUid) {
+                // Persist the discovered recording UID so future retries skip lookups.
+                await db.query(
+                  "UPDATE live_classes SET cf_recording_uid = COALESCE(cf_recording_uid, $1) WHERE id = $2",
+                  [cfRecording.recordingUid, liveClassId]
+                ).catch(() => {});
+
+                if (cfRecording.status === "ready") {
+                  // Recording is ready — save it and complete the job.
+                  try {
+                    await saveRecordingCore(db, String(liveClassId), cfRecording.manifestUrl);
+                    recordingUrl = cfRecording.manifestUrl;
+                    incrementCounter("live_finalize_queue_cf_fallback_success");
+                    console.log(
+                      `[LiveFinalizeQueue] CFSR-03 fallback resolved recording for live_class=${liveClassId} ` +
+                      `uid=${cfRecording.recordingUid}`
+                    );
+                  } catch (saveErr) {
+                    console.warn("[LiveFinalizeQueue] CF fallback save failed:", saveErr);
+                  }
+                } else {
+                  // Found in CF but not yet ready — will retry.
+                  console.log(
+                    `[LiveFinalizeQueue] CFSR-03 fallback found recording uid=${cfRecording.recordingUid} ` +
+                    `status=${cfRecording.status} for live_class=${liveClassId} — waiting for ready`
+                  );
+                }
+              }
+            }
+          }
+          // ── end CFSR-03 ───────────────────────────────────────────────────
+
           if (recordingUrl) {
             await db.query(
               "UPDATE live_stream_finalize_jobs SET status = 'done', updated_at = $2 WHERE id = $1",
@@ -492,4 +575,61 @@ function startLiveFinalizeQueueScheduler(db: DbClient, pool: DbPool): void {
   void tick().catch(() => {});
   setInterval(() => void tick().catch(() => {}), 60 * 1000);
   console.log("[LiveFinalizeQueue] Scheduler started — runs every 60 seconds");
+}
+
+/**
+ * DQR-03: Neon serverless keepalive ping.
+ * Neon suspends its compute after a period of inactivity (typically 5 minutes on free tier).
+ * A cold-start from suspend adds 200–1300ms to the first query, which the first student
+ * of the session absorbs as a bad experience. A 30-second SELECT 1 ping keeps the
+ * compute warm at near-zero cost.
+ */
+function startNeonKeepalive(db: DbClient): void {
+  const KEEPALIVE_INTERVAL_MS = 30 * 1000;
+  setInterval(async () => {
+    try {
+      await db.query("SELECT 1");
+    } catch {
+      // Silently ignore — the main pool already handles reconnect logic.
+      // We don't want a failed keepalive ping to generate noise in the logs.
+    }
+  }, KEEPALIVE_INTERVAL_MS);
+  console.log("[Keepalive] Neon keepalive started — pings every 30s");
+}
+
+/**
+ * DQR-04: Expired media_token cleanup.
+ * media_tokens are created on every content access and are only cleaned up when a
+ * course or lecture is deleted. Expired tokens from active courses accumulate indefinitely
+ * without this scheduler. Runs every 5 minutes alongside the download token cleanup,
+ * deleting in batches of 2000 to avoid long-running DELETE scans.
+ */
+function startMediaTokenCleanupScheduler(db: DbClient, pool: DbPool): void {
+  const MEDIA_TOKEN_CLEANUP_LOCK_KEY = 31415926540;
+
+  const run = async (): Promise<void> => {
+    try {
+      await runWithAdvisoryLock(pool, MEDIA_TOKEN_CLEANUP_LOCK_KEY, async () => {
+        const result = await db.query(
+          `DELETE FROM media_tokens
+           WHERE id IN (
+             SELECT id FROM media_tokens
+             WHERE expires_at < $1
+             ORDER BY expires_at ASC
+             LIMIT 2000
+           )`,
+          [Date.now()]
+        );
+        if (result.rowCount && result.rowCount > 0) {
+          console.log(`[MediaTokenCleanup] Deleted ${result.rowCount} expired tokens`);
+        }
+      });
+    } catch (err) {
+      console.error("[MediaTokenCleanup] Error:", err);
+    }
+  };
+
+  void run();
+  setInterval(() => void run(), 5 * 60 * 1000);
+  console.log("[MediaTokenCleanup] Scheduler started — runs every 5 minutes");
 }

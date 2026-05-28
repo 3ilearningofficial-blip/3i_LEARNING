@@ -1,5 +1,6 @@
 import type { Request } from "express";
 import { resolveUserBySessionToken, userHasSessionToken } from "./user-sessions";
+import { getInstallationIdFromRequest } from "./native-device-binding";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -59,7 +60,9 @@ export async function getAuthUserFromRequest(req: Request, db: DbClient): Promis
   if (bearerToken) {
     const token = bearerToken;
     try {
-      const resolved = await resolveUserBySessionToken(db, token);
+      // SEC-04: pass device_id so admin session device binding is enforced.
+      const requestDeviceId = getInstallationIdFromRequest(req);
+      const resolved = await resolveUserBySessionToken(db, token, requestDeviceId);
       if (!resolved) {
         syncSessionUser(req, null);
         return null;

@@ -129,6 +129,29 @@ export function registerLiveClassEngagementRoutes({
     }
   });
 
+  // FPR-03: Immediate leave — called by the client when the user backgrounds the app
+  // or navigates away, so the viewer count drops within the next poll cycle rather
+  // than waiting for the 20-second TTL to expire.
+  // Safe to call for non-live / already-completed classes — it is a no-op in those cases.
+  app.delete("/api/live-classes/:id/viewers/heartbeat", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user;
+      // Set last_heartbeat to 0 so the online-window query (last_heartbeat > cutoff)
+      // immediately excludes this user without deleting the row.
+      // Deleting the row would break the ON CONFLICT upsert when they rejoin.
+      await db.query(
+        `UPDATE live_class_viewers
+         SET last_heartbeat = 0
+         WHERE live_class_id = $1 AND user_id = $2`,
+        [req.params.id, user.id]
+      );
+      res.json({ success: true });
+    } catch (err) {
+      console.error("Viewer leave error:", err);
+      res.status(500).json({ message: "Failed to update viewer leave" });
+    }
+  });
+
   app.get("/api/live-classes/:id/viewers", requireAuth, async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;

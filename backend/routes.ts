@@ -49,6 +49,7 @@ import { registerUploadRoutes } from "./upload-routes";
 import { registerMediaStreamRoutes } from "./media-stream-routes";
 import { registerRuntimeFlagRoutes } from "./runtime-flag-routes";
 import { registerCloudflareWebhookRoutes } from "./cloudflare-webhook-routes";
+import { registerLiveKitWebhookRoutes } from "./livekit-webhook-routes";
 import { createGenerateAIAnswer } from "./ai-tutor-service";
 import { checkDatabaseReadiness } from "./db-readiness";
 import { normalizeDatabaseUrl } from "./db-utils";
@@ -566,6 +567,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   registerCloudflareWebhookRoutes({
+    app,
+    db,
+  });
+
+  // CFSR-01: LiveKit room_finished webhook — safety net to set is_live = FALSE
+  // even when the admin "End Class" button is never clicked (crash, network drop, etc.).
+  registerLiveKitWebhookRoutes({
     app,
     db,
   });

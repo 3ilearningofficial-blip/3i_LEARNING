@@ -392,6 +392,8 @@ export default function LiveClassScreen() {
   const [nativeYoutubeFallback, setNativeYoutubeFallback] = useState(false);
   const chatListRef = useRef<FlatList>(null);
   const lastMsgTimeRef = useRef<number>(0);
+  // FPR-03: Track previous AppState so we only fire leave on active→background transitions.
+  const prevAppStateRef = useRef<string>(AppState.currentState);
   const forceFullChatRefreshRef = useRef(false);
   const didAutoplayDirectRecording = useRef(false);
   const cfHlsWebViewRef = useRef<WebView>(null);
@@ -404,18 +406,51 @@ export default function LiveClassScreen() {
   }, []);
   /** Web: live chat uses SSE when connected; native keeps HTTP polling only. */
   const [chatSseActive, setChatSseActive] = useState(false);
+  // FPR-03: Screen active tracking + immediate viewer-leave on background / unmount.
+  //
+  // Why: The server's online-window query excludes viewers whose last_heartbeat is
+  // older than 20 seconds. Without an explicit leave, a viewer who backgrounds the
+  // app or navigates away stays in the count for up to 20 s. Sending DELETE immediately
+  // sets last_heartbeat = 0, dropping them on the admin's very next viewer-list poll.
+  //
+  // The delete request is best-effort (catch silences failures). On web we add
+  // keepalive: true so the request outlives the page if the tab is closed.
   useEffect(() => {
+    const sendLeave = () => {
+      if (!id) return;
+      const opts: RequestInit = { method: "DELETE" };
+      if (Platform.OS === "web") (opts as any).keepalive = true;
+      authFetch(`/api/live-classes/${id}/viewers/heartbeat`, opts).catch(() => {});
+    };
+
     if (Platform.OS === "web") {
-      const onVisibility = () => setIsScreenActive(!document.hidden);
-      onVisibility();
+      const onVisibility = () => {
+        const active = !document.hidden;
+        setIsScreenActive(active);
+        if (!active) sendLeave(); // tab hidden → fire leave immediately
+      };
+      onVisibility(); // sync initial state
       document.addEventListener("visibilitychange", onVisibility);
-      return () => document.removeEventListener("visibilitychange", onVisibility);
+      return () => {
+        document.removeEventListener("visibilitychange", onVisibility);
+        sendLeave(); // component unmounts (navigation away while tab still visible)
+      };
     }
+
     const sub = AppState.addEventListener("change", (state) => {
+      const wasActive = prevAppStateRef.current === "active";
+      prevAppStateRef.current = state;
       setIsScreenActive(state === "active");
+      // Only fire leave on the active → inactive/background transition, not the reverse.
+      if (wasActive && state !== "active") sendLeave();
     });
-    return () => sub.remove();
-  }, []);
+
+    return () => {
+      sub.remove();
+      // Navigation away: app stays in foreground so AppState never fires. Explicit cleanup needed.
+      sendLeave();
+    };
+  }, [id]); // id is stable from route params — effectively runs once on mount
 
   const { data: liveClassData } = useQuery<{ youtube_url: string; title: string; is_completed: boolean; is_live: boolean; started_at?: number; show_viewer_count: boolean; cf_playback_hls?: string; stream_type?: string; recording_url?: string; duration_minutes?: number; scheduled_at?: number; has_access?: boolean; is_enrolled?: boolean; course_id?: number; is_public?: boolean; chat_mode?: string }>({
     queryKey: liveClassQueryKey(String(id)),

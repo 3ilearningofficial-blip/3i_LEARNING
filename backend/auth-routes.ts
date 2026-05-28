@@ -1,6 +1,19 @@
 import type { Express, Request, Response } from "express";
-import { createHmac, timingSafeEqual } from "node:crypto";
 import { hashPassword, isScryptHash, verifyLegacySha256, verifyPassword } from "./password-utils";
+import {
+  GENERIC_LOGIN_ERROR,
+  GENERIC_OTP_ERROR,
+  OTP_LOCKOUT_MESSAGE,
+  OTP_COOLDOWN_MESSAGE,
+  signRegistrationToken,
+  verifyRegistrationToken,
+  buildSessionUserFromRow,
+  regenerateSession,
+  destroySession,
+  normalizePhone,
+  normalizeEmail,
+  evaluateOtpSendThrottle,
+} from "./auth-service";
 import {
   assertActiveSessionPlatformMatches,
   assertLoginAllowedForInstallation,
@@ -45,167 +58,6 @@ type RegisterAuthRoutesDeps = {
   runInTransaction: <T>(fn: (tx: DbClient) => Promise<T>) => Promise<T>;
 };
 
-const GENERIC_LOGIN_ERROR = "Invalid credentials";
-const GENERIC_OTP_ERROR = "Invalid or expired OTP";
-
-// Per-user OTP send policy: min 2 minutes between sends; up to 3 OTP sends per
-// cycle; after the 3rd successful send, lock further sends for 24h. (Counters
-// reset when the 24h lock expires.)
-const OTP_RESEND_COOLDOWN_MS = 2 * 60 * 1000;
-const OTP_SENDS_PER_CYCLE = 3;
-const OTP_SEND_LOCK_MS = 24 * 60 * 60 * 1000;
-const OTP_LOCKOUT_MESSAGE = "Too many OTP attempts. Please try again after 24 hours.";
-const OTP_COOLDOWN_MESSAGE = "Please wait before requesting another OTP.";
-
-// Short-lived registration token for OTP-verified phones that don't yet have a
-// users row (issued by /api/auth/verify-otp, consumed by /api/auth/register-complete).
-const REGISTRATION_TOKEN_TTL_MS = 15 * 60 * 1000;
-
-function getTokenSecret(): string {
-  const secret = process.env.OTP_HMAC_SECRET;
-  if (!secret) {
-    // Startup must hard-fail if this is missing; keep this as a defensive guard.
-    throw new Error("OTP_HMAC_SECRET must be set");
-  }
-  return secret;
-}
-
-function toBase64Url(buf: Buffer): string {
-  return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-}
-
-function fromBase64Url(input: string): Buffer {
-  const pad = input.length % 4 === 0 ? "" : "=".repeat(4 - (input.length % 4));
-  return Buffer.from(input.replace(/-/g, "+").replace(/_/g, "/") + pad, "base64");
-}
-
-type RegistrationTokenPayload = {
-  identifier: string;
-  type: "phone" | "email";
-  phone?: string;
-  email?: string;
-  exp: number;
-};
-
-function signRegistrationToken(payload: Omit<RegistrationTokenPayload, "exp">): string {
-  const body: RegistrationTokenPayload = { ...payload, exp: Date.now() + REGISTRATION_TOKEN_TTL_MS };
-  const b64 = toBase64Url(Buffer.from(JSON.stringify(body), "utf8"));
-  const sig = toBase64Url(createHmac("sha256", getTokenSecret()).update(b64).digest());
-  return `${b64}.${sig}`;
-}
-
-function verifyRegistrationToken(token: string | null | undefined): RegistrationTokenPayload | null {
-  if (!token || typeof token !== "string") return null;
-  const dot = token.indexOf(".");
-  if (dot <= 0) return null;
-  const b64 = token.slice(0, dot);
-  const sig = token.slice(dot + 1);
-  const expected = toBase64Url(createHmac("sha256", getTokenSecret()).update(b64).digest());
-  const sigBuf = Buffer.from(sig, "utf8");
-  const expBuf = Buffer.from(expected, "utf8");
-  if (sigBuf.length !== expBuf.length) return null;
-  if (!timingSafeEqual(sigBuf, expBuf)) return null;
-  try {
-    const json = fromBase64Url(b64).toString("utf8");
-    const obj = JSON.parse(json) as RegistrationTokenPayload;
-    if (typeof obj.exp !== "number" || obj.exp < Date.now()) return null;
-    if (obj.type !== "phone" && obj.type !== "email") return null;
-    if (typeof obj.identifier !== "string" || !obj.identifier) return null;
-    return obj;
-  } catch {
-    return null;
-  }
-}
-
-/** Same fields as GET /api/auth/me so the client can show DOB, photo, etc. without a second fetch. */
-function buildSessionUserFromRow(
-  row: Record<string, any>,
-  opts: { sessionToken: string; deviceId?: string | null }
-) {
-  return {
-    id: row.id,
-    name: row.name,
-    email: row.email,
-    phone: row.phone,
-    role: row.role,
-    deviceId: opts.deviceId,
-    sessionToken: opts.sessionToken,
-    profileComplete: !!(row.profile_complete),
-    date_of_birth: row.date_of_birth ?? null,
-    photo_url: row.photo_url ?? null,
-  };
-}
-
-/** Mitigate session fixation: new session id before attaching authenticated user. */
-function regenerateSession(req: Request): Promise<void> {
-  return new Promise((resolve, reject) => {
-    req.session.regenerate((err: Error | null) => {
-      if (err) reject(err);
-      else resolve();
-    });
-  });
-}
-
-function destroySession(req: Request): Promise<void> {
-  return new Promise((resolve, reject) => {
-    req.session.destroy((err) => {
-      if (err) reject(err);
-      else resolve();
-    });
-  });
-}
-
-function normalizePhone(input: unknown): string {
-  const digits = String(input || "").replace(/\D/g, "");
-  if (digits.length >= 10) return digits.slice(-10);
-  return digits;
-}
-
-function normalizeEmail(input: unknown): string {
-  return String(input || "").trim().toLowerCase();
-}
-
-type ThrottleSnapshot = {
-  send_count: number;
-  /** Millis of last accepted send-otp (cooldown anchor). */
-  last_send_at: number | null;
-  send_locked_until: number | null;
-};
-
-type ThrottleDecision =
-  | {
-      ok: true;
-      nextCount: number;
-      lastSendAt: number;
-      /** When this send completes the 3rd OTP in the cycle, block further sends until this time. */
-      newSendLockedUntil: number | null;
-    }
-  | { ok: false; lockedUntil: number; reason: "quota" | "cooldown" };
-
-/**
- * Enforces: (1) active 24h lock → deny; (2) min 2 min between sends → deny with cooldown;
- * (3) at most 3 sends per cycle → after 3rd send, caller persists 24h lock.
- */
-function evaluateOtpSendThrottle(snap: ThrottleSnapshot, now: number): ThrottleDecision {
-  const lockedUntil = snap.send_locked_until != null ? Number(snap.send_locked_until) : null;
-  if (lockedUntil != null && lockedUntil > now) {
-    return { ok: false, lockedUntil, reason: "quota" };
-  }
-  const lastSend = snap.last_send_at != null ? Number(snap.last_send_at) : null;
-  if (lastSend != null && now - lastSend < OTP_RESEND_COOLDOWN_MS) {
-    return { ok: false, lockedUntil: lastSend + OTP_RESEND_COOLDOWN_MS, reason: "cooldown" };
-  }
-  let count = Number(snap.send_count) || 0;
-  if (lockedUntil != null && lockedUntil <= now) {
-    count = 0;
-  }
-  if (count >= OTP_SENDS_PER_CYCLE) {
-    return { ok: false, lockedUntil: now + OTP_SEND_LOCK_MS, reason: "quota" };
-  }
-  const nextCount = count + 1;
-  const newSendLockedUntil = nextCount >= OTP_SENDS_PER_CYCLE ? now + OTP_SEND_LOCK_MS : null;
-  return { ok: true, nextCount, lastSendAt: now, newSendLockedUntil };
-}
 
 export function registerAuthRoutes({
   app,
@@ -1140,23 +992,4 @@ export function registerAuthRoutes({
       const storedHash = dbUser.rows[0].password_hash as string | null;
 
       if (storedHash && !oldPassword) {
-        return res.status(400).json({ message: "Current password is required" });
-      }
-
-      if (oldPassword && storedHash) {
-        const validOld = isScryptHash(storedHash)
-          ? await verifyPassword(oldPassword, storedHash)
-          : verifyLegacySha256(oldPassword, user.id, storedHash);
-        if (!validOld) {
-          return res.status(401).json({ message: "Current password is incorrect" });
-        }
-      }
-
-      const newHash = await hashPassword(newPassword);
-      await db.query("UPDATE users SET password_hash = $1 WHERE id = $2", [newHash, user.id]);
-      res.json({ success: true });
-    } catch {
-      res.status(500).json({ message: "Failed to change password" });
-    }
-  });
-}
+        return res.status(400).json({ message: "Current password i

@@ -126,10 +126,20 @@ export function registerLectureRoutes({
       const lecture = access.lecture;
       const courseId = lecture.course_id ? Number(lecture.course_id) : null;
       const normalizedWatchPercent = Math.max(0, Math.min(100, Number(watchPercent) || 0));
+      // RCR-02: Use GREATEST for watch_percent (never regress a higher value) and
+      // OR logic for is_completed (once marked complete, never un-complete).
+      // A stale client ping (e.g. watchPercent=30 after a 100% save) must not
+      // overwrite the student's completion record and erase their course progress.
       await db.query(
-        `INSERT INTO lecture_progress (user_id, lecture_id, watch_percent, is_completed, completed_at) 
-         VALUES ($1, $2, $3, $4, $5) 
-         ON CONFLICT (user_id, lecture_id) DO UPDATE SET watch_percent = $3, is_completed = $4, completed_at = $5`,
+        `INSERT INTO lecture_progress (user_id, lecture_id, watch_percent, is_completed, completed_at)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (user_id, lecture_id) DO UPDATE SET
+           watch_percent  = GREATEST(lecture_progress.watch_percent, EXCLUDED.watch_percent),
+           is_completed   = lecture_progress.is_completed OR EXCLUDED.is_completed,
+           completed_at   = CASE
+             WHEN EXCLUDED.is_completed AND NOT lecture_progress.is_completed THEN EXCLUDED.completed_at
+             ELSE lecture_progress.completed_at
+           END`,
         [user.id, lectureId, normalizedWatchPercent, Boolean(isCompleted), isCompleted ? Date.now() : null]
       );
       if (courseId && isCompleted) {

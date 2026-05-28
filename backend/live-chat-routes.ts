@@ -54,21 +54,49 @@ export function registerLiveChatRoutes({
 }: RegisterLiveChatRoutesDeps): void {
   const listenPoolMax = listenPool.options.max ?? 32;
 
+  // SB-04: Paginated chat fetch.
+  // On join: returns the last 50 messages (no cursor) so the initial load is bounded.
+  // A 2-hour live class at 100 active students could generate 5,000+ messages.
+  // Fetching all of them per late-joining student = 2MB+ JSON response per request.
+  //
+  // Cursor behaviour:
+  //   ?after=<timestamp>   → messages newer than cursor (used by SSE scroll-down refresh)
+  //   ?before=<timestamp>  → 50 messages older than cursor (used for scroll-up / load older)
+  //   (no cursor)          → last 50 messages in the class (initial load)
   app.get("/api/live-classes/:id/chat", async (req: Request, res: Response) => {
     try {
       const hasAccess = await checkLiveClassAccess(req, res, db, getAuthUser, req.params.id as string);
       if (!hasAccess) return;
-      const { after } = req.query;
-      let query = "SELECT * FROM live_chat_messages WHERE live_class_id = $1";
-      const params: unknown[] = [req.params.id];
+      const { after, before } = req.query;
+      const PAGE_SIZE = 50;
+      let rows: any[];
+
       if (after) {
-        params.push(after);
-        query += ` AND created_at > $${params.length}`;
+        // SSE refresh / poll: messages after a known cursor, oldest-first.
+        const result = await db.query(
+          "SELECT * FROM live_chat_messages WHERE live_class_id = $1 AND created_at > $2 ORDER BY created_at ASC LIMIT $3",
+          [req.params.id, after, PAGE_SIZE]
+        );
+        rows = result.rows;
+      } else if (before) {
+        // Scroll-up: load older messages before a cursor. Fetch in DESC then reverse so
+        // the client receives them in chronological order for easy prepending.
+        const result = await db.query(
+          "SELECT * FROM live_chat_messages WHERE live_class_id = $1 AND created_at < $2 ORDER BY created_at DESC LIMIT $3",
+          [req.params.id, before, PAGE_SIZE]
+        );
+        rows = result.rows.reverse();
+      } else {
+        // Initial join: return the most recent PAGE_SIZE messages (DESC then reverse).
+        const result = await db.query(
+          "SELECT * FROM live_chat_messages WHERE live_class_id = $1 ORDER BY created_at DESC LIMIT $2",
+          [req.params.id, PAGE_SIZE]
+        );
+        rows = result.rows.reverse();
       }
-      query += " ORDER BY created_at ASC LIMIT 200";
-      const result = await db.query(query, params);
+
       res.set("Cache-Control", "private, no-store");
-      res.json(result.rows);
+      res.json(rows);
     } catch {
       res.status(500).json({ message: "Failed to fetch chat" });
     }

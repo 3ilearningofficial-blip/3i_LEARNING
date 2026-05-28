@@ -53,6 +53,8 @@ export const REQUIRED_TABLES = [
   "webhook_event_receipts",
   // Migration 0039 — live stream finalize job queue
   "live_stream_finalize_jobs",
+  // Migration 0043 — per-device server-issued offline encryption secrets (ODSR-01)
+  "device_offline_secrets",
 ] as const;
 
 export const REQUIRED_COLUMNS: Record<string, string[]> = {
@@ -108,6 +110,8 @@ export const REQUIRED_COLUMNS: Record<string, string[]> = {
   questions: ["image_url", "solution_image_url"],
   lecture_progress: ["playback_sessions", "last_session_ping_at"],
   standalone_folders: ["category", "price", "original_price", "is_free", "description", "validity_months"],
+  // Migration 0042 — admin session device binding
+  user_sessions: ["device_id"],
 };
 
 export const REQUIRED_UNIQUE_INDEX_SPECS = [
@@ -134,4 +138,6 @@ export const REQUIRED_UNIQUE_INDEX_SPECS = [
   { table: "webhook_event_receipts", columns: ["source", "event_id"] },
   // Migration 0039
   { table: "live_stream_finalize_jobs", columns: ["live_class_id"] },
+  // Migration 0043 — per-device offline encryption secrets
+  { table: "device_offline_secrets", columns: ["user_id", "device_id"] },
 ] as const;

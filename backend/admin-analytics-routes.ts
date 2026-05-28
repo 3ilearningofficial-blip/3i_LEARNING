@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { getRedisClient } from "./redis-client";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -10,6 +11,12 @@ type RegisterAdminAnalyticsRoutesDeps = {
   requireAdmin: (req: Request, res: Response, next: () => void) => any;
 };
 
+// SB-03: Cache TTL for analytics results.
+// Analytics data 60 seconds stale is perfectly acceptable for a dashboard.
+// This prevents the 15+ concurrent DB queries that fire when an admin refreshes
+// the page rapidly — each refresh previously exhausted the entire connection pool.
+const ANALYTICS_CACHE_TTL_SEC = 60;
+
 export function registerAdminAnalyticsRoutes({
   app,
   db,
@@ -18,6 +25,23 @@ export function registerAdminAnalyticsRoutes({
   app.get("/api/admin/analytics", requireAdmin, async (req: Request, res: Response) => {
     try {
       const { period, startDate, endDate } = req.query;
+
+      // SB-03: Check Redis cache first. Cache key encodes the query parameters so
+      // different time ranges are cached independently. The TTL is 60 seconds —
+      // stale data is acceptable for an admin analytics dashboard.
+      const cacheKey = `analytics:${String(period || "all")}:${String(startDate || "")}:${String(endDate || "")}`;
+      try {
+        const redis = await getRedisClient();
+        if (redis) {
+          const cached = await redis.get(cacheKey);
+          if (cached) {
+            res.setHeader("X-Cache", "HIT");
+            return res.json(JSON.parse(cached));
+          }
+        }
+      } catch {
+        // Redis unavailable — fall through to DB queries silently.
+      }
 
       const now = Date.now();
       const day = 86400000;
@@ -233,7 +257,7 @@ export function registerAdminAnalyticsRoutes({
         safeRows(db.query(`SELECT COALESCE(SUM(t.price), 0) as total FROM test_purchases tp JOIN tests t ON t.id = tp.test_id`), [{ total: "0" }]),
       ]);
 
-      res.json({
+      const analyticsResult = {
         totalEnrollments: parseInt(enrollRows[0]?.total_enrollments || "0"),
         totalRevenue: parseFloat(revenueRows[0]?.total_revenue || "0"),
         lifetimeRevenue: parseFloat(lifetimeRows[0]?.lifetime_revenue || "0"),
@@ -247,7 +271,20 @@ export function registerAdminAnalyticsRoutes({
         bookPurchases: bookPurchaseRows,
         bookAbandonedCheckouts: bookAbandonedRows,
         testPurchases: testPurchaseRows,
-      });
+      };
+
+      // SB-03: Store result in Redis for 60 seconds before sending.
+      try {
+        const redis = await getRedisClient();
+        if (redis) {
+          await redis.set(cacheKey, JSON.stringify(analyticsResult), { EX: ANALYTICS_CACHE_TTL_SEC });
+        }
+      } catch {
+        // Redis write failure is non-fatal — we still return data to the client.
+      }
+
+      res.setHeader("X-Cache", "MISS");
+      res.json(analyticsResult);
     } catch (err) {
       console.error("Analytics error:", err);
       res.status(500).json({ message: "Failed to fetch analytics" });

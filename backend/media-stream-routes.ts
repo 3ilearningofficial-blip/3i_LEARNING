@@ -89,30 +89,45 @@ async function streamMediaGet(
     const nowMs = Date.now();
     let tokenResult: { rows: Array<{ user_id: number; access_count?: number }> };
     try {
+      // SEC-05: Enforce the access_count limit atomically inside the UPDATE WHERE clause.
+      // Previously the UPDATE incremented unconditionally then checked after the fact —
+      // a client could exceed the limit during the window between increment and check.
+      // Now the UPDATE only proceeds if access_count is still under the cap.
+      // If the limit is already reached, 0 rows are returned → we distinguish this from
+      // an invalid token via a follow-up SELECT below.
       tokenResult = await db.query(
         `UPDATE media_tokens
          SET access_count = access_count + 1
-         WHERE token = $1 AND expires_at > $2 AND file_key = $3
+         WHERE token = $1
+           AND expires_at > $2
+           AND file_key = $3
+           AND access_count < $4
          RETURNING user_id, access_count`,
-        [mediaToken, nowMs, canonicalKey]
+        [mediaToken, nowMs, canonicalKey, MEDIA_TOKEN_MAX_ACCESS]
       );
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (!msg.includes("access_count")) throw err;
+      // Fallback for pre-migration schema where access_count column doesn't exist yet.
       tokenResult = await db.query(
         "SELECT user_id FROM media_tokens WHERE token = $1 AND expires_at > $2 AND file_key = $3",
         [mediaToken, nowMs, canonicalKey]
       );
     }
     if (tokenResult.rows.length === 0) {
-      res.status(401).json({ message: "Token expired or invalid" });
+      // Distinguish "limit exceeded" from "token invalid/expired" for a correct status code.
+      const limitCheck = await db.query(
+        "SELECT access_count FROM media_tokens WHERE token = $1 AND expires_at > $2 AND file_key = $3 LIMIT 1",
+        [mediaToken, nowMs, canonicalKey]
+      ).catch(() => ({ rows: [] as any[] }));
+      if (limitCheck.rows.length > 0 && Number(limitCheck.rows[0].access_count) >= MEDIA_TOKEN_MAX_ACCESS) {
+        res.status(429).json({ message: "Token usage limit exceeded" });
+      } else {
+        res.status(401).json({ message: "Token expired or invalid" });
+      }
       return;
     }
-    const accessCount = Number(tokenResult.rows[0].access_count ?? 1);
-    if (accessCount > MEDIA_TOKEN_MAX_ACCESS) {
-      res.status(429).json({ message: "Token usage limit exceeded" });
-      return;
-    }
+    // access_count guard is now enforced atomically in the UPDATE WHERE clause above.
     const tokenUserId = tokenResult.rows[0].user_id as number;
     const sessionUser = await getAuthUser(req);
     // Session cookie is often absent on api.* when the app runs on www/root domain — pdf.js/video still sends ?token=... only.

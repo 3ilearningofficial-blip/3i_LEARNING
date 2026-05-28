@@ -5,6 +5,7 @@ import { presignR2GetObject } from "./r2-presign-read";
 import { sanitizeLectureRowForClient } from "./lecture-payload-utils";
 import { getRedisClient } from "./redis-client";
 import { checkDownloadUrlRateLimitRedis } from "./redis-rate-limit-store";
+import crypto from "node:crypto";
 
 type DbQueryResult = {
   rows: any[];
@@ -369,10 +370,15 @@ export function registerCourseAccessRoutes({
         }));
       }
 
-      res.set("Cache-Control", "private, no-store");
+      // BPR-03: Authenticated responses include per-user enrollment status and must not
+      // be cached at CDN or shared caches. Unauthenticated catalog browsing is identical
+      // for all visitors, so a short public cache reduces DB load during traffic spikes.
       if (user) {
-        const enrolledCourses = courses.filter((c: any) => c.isEnrolled);
-        void enrolledCourses;
+        res.set("Cache-Control", "private, no-store");
+      } else {
+        // 30s max-age + 60s stale-while-revalidate: browsers serve instantly from cache
+        // and refresh in the background. Course catalog changes infrequently.
+        res.set("Cache-Control", "public, max-age=30, stale-while-revalidate=60");
       }
       res.json(courses);
     } catch (err) {
@@ -384,6 +390,9 @@ export function registerCourseAccessRoutes({
   app.get("/api/courses/:id/folders", async (req: Request, res: Response) => {
     try {
       const result = await db.query("SELECT * FROM course_folders WHERE course_id = $1 AND is_hidden = FALSE ORDER BY created_at ASC", [req.params.id]);
+      // BPR-03: Folder structure is the same for all users (visibility is pre-filtered by
+      // is_hidden). Cache aggressively — folders change only when an admin edits the course.
+      res.set("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
       res.json(result.rows);
     } catch {
       res.status(500).json({ message: "Failed to fetch folders" });
@@ -405,20 +414,23 @@ export function registerCourseAccessRoutes({
       } else {
         (course as any).courseEnded = false;
       }
-      // For non-admin users, hide lectures whose visible_after_at is in the future.
-      // Admins always see all lectures regardless of scheduled visibility.
+      // BPR-01: Run the three independent child-data queries in parallel with Promise.all.
+      // Previously these were sequential awaits — 3 round trips × ~50ms each = 150ms of
+      // unnecessary latency. lectures, tests, and study_materials do not depend on each other.
       const nowMs = Date.now();
-      const lecturesResult = user?.role === "admin"
-        ? await db.query(
-            "SELECT * FROM lectures WHERE course_id = $1 ORDER BY order_index",
-            [courseIdParam]
-          )
-        : await db.query(
-            "SELECT * FROM lectures WHERE course_id = $1 AND (visible_after_at IS NULL OR visible_after_at <= $2) ORDER BY order_index",
-            [courseIdParam, nowMs]
-          );
-      const testsResult = await db.query("SELECT * FROM tests WHERE course_id = $1 AND is_published = TRUE ORDER BY COALESCE(order_index, 0) ASC, created_at ASC, id ASC", [courseIdParam]);
-      const materialsResult = await db.query("SELECT * FROM study_materials WHERE course_id = $1 ORDER BY COALESCE(order_index, 0) ASC, created_at ASC, id ASC", [courseIdParam]);
+      const [lecturesResult, testsResult, materialsResult] = await Promise.all([
+        user?.role === "admin"
+          ? db.query(
+              "SELECT * FROM lectures WHERE course_id = $1 ORDER BY order_index",
+              [courseIdParam]
+            )
+          : db.query(
+              "SELECT * FROM lectures WHERE course_id = $1 AND (visible_after_at IS NULL OR visible_after_at <= $2) ORDER BY order_index",
+              [courseIdParam, nowMs]
+            ),
+        db.query("SELECT * FROM tests WHERE course_id = $1 AND is_published = TRUE ORDER BY COALESCE(order_index, 0) ASC, created_at ASC, id ASC", [courseIdParam]),
+        db.query("SELECT * FROM study_materials WHERE course_id = $1 ORDER BY COALESCE(order_index, 0) ASC, created_at ASC, id ASC", [courseIdParam]),
+      ]);
       const fullLectures = lecturesResult.rows;
       const fullMaterials = materialsResult.rows;
       const responseLectures = fullLectures.map((row) => sanitizeLectureRowForClient(row as Record<string, unknown>));
@@ -848,6 +860,60 @@ export function registerCourseAccessRoutes({
       if (!res.headersSent) {
         res.status(500).json({ message: "Failed to download file" });
       }
+    }
+  });
+
+  // ─── ODSR-01: Server-issued offline encryption nonce ───────────────────────
+  // Issues a single random 32-byte hex nonce per (user, device) pair.
+  // The nonce is included in the client's PBKDF2 key derivation so the
+  // encryption key cannot be reconstructed without this device's SecureStore.
+  //
+  // Security properties:
+  //  - The server stores only HMAC-SHA256(nonce, OTP_HMAC_SECRET) — it cannot
+  //    reconstruct the plaintext nonce.
+  //  - If the client loses SecureStore (e.g., app reinstall), existing encrypted
+  //    files become permanently inaccessible — this is the intended trade-off.
+  //  - Subsequent calls from the same device return 409 (idempotency guard).
+  app.post("/api/offline/device-secret", async (req: Request, res: Response) => {
+    try {
+      const user = await getAuthUser(req);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+
+      const deviceId = String(req.get("x-app-device-id") || "").trim();
+      if (!deviceId) return res.status(400).json({ message: "x-app-device-id header required" });
+
+      // Idempotency: if a secret has already been issued for this device, refuse.
+      const existing = await db.query(
+        "SELECT id FROM device_offline_secrets WHERE user_id = $1 AND device_id = $2",
+        [user.id, deviceId]
+      );
+      if (existing.rows.length > 0) {
+        return res.status(409).json({
+          message: "A secret has already been issued for this device. Re-issue is not permitted.",
+          code: "already_issued",
+        });
+      }
+
+      // Generate a cryptographically random 32-byte nonce.
+      const nonceBytes = crypto.randomBytes(32);
+      const nonceHex = nonceBytes.toString("hex");
+
+      // Store only the HMAC of the nonce — server cannot reconstruct plaintext.
+      const hmacSecret = process.env.OTP_HMAC_SECRET || "";
+      const nonceHash = crypto.createHmac("sha256", hmacSecret).update(nonceHex).digest("hex");
+
+      await db.query(
+        `INSERT INTO device_offline_secrets (user_id, device_id, secret_hash, issued_at)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (user_id, device_id) DO NOTHING`,
+        [user.id, deviceId, nonceHash, Date.now()]
+      );
+
+      // Return the plaintext nonce — this is the only time it will ever be sent.
+      res.json({ nonce: nonceHex });
+    } catch (err) {
+      console.error("[offline/device-secret] Error:", err);
+      res.status(500).json({ message: "Failed to issue device secret" });
     }
   });
 

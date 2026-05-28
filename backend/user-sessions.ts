@@ -24,9 +24,19 @@ export function isSessionLastActiveValid(row: Record<string, unknown>): boolean 
   return la >= sessionMinActiveAt(row);
 }
 
+/**
+ * SEC-04: Resolve a session token to a user row.
+ *
+ * When `deviceId` is supplied (from the x-app-device-id request header) and
+ * the admin session row in user_sessions was created with a device_id, the
+ * two must match.  Sessions created before device binding was introduced
+ * (device_id IS NULL) are allowed from any device to prevent breaking
+ * existing admin sessions during the rollout.
+ */
 export async function resolveUserBySessionToken(
   db: DbLike,
-  token: string
+  token: string,
+  deviceId?: string | null
 ): Promise<{ row: Record<string, unknown>; matchedVia: "primary" | "extra" } | null> {
   const primary = await db.query(
     "SELECT * FROM users WHERE session_token = $1 AND COALESCE(is_blocked, FALSE) = FALSE",
@@ -39,16 +49,33 @@ export async function resolveUserBySessionToken(
     }
   }
   const minCreatedAt = Date.now() - ADMIN_SESSION_MAX_AGE_MS;
+  // Fetch session row including device_id for binding validation.
   const extra = await db.query(
-    `SELECT u.* FROM users u
+    `SELECT u.*, s.device_id AS _session_device_id
+     FROM users u
      INNER JOIN user_sessions s ON s.user_id = u.id AND s.session_token = $1
      WHERE u.role = 'admin' AND COALESCE(u.is_blocked, FALSE) = FALSE AND s.created_at >= $2`,
     [token, minCreatedAt]
   );
-  if (extra.rows.length > 0) {
-    return { row: extra.rows[0] as Record<string, unknown>, matchedVia: "extra" };
+  if (extra.rows.length === 0) return null;
+
+  const sessionRow = extra.rows[0] as Record<string, unknown>;
+  const boundDevice = sessionRow._session_device_id as string | null;
+
+  // SEC-04: If the session was created with a device_id, the request must
+  // come from the same device.  If boundDevice is null (old session), skip
+  // the check to avoid breaking admins who logged in before this migration.
+  if (boundDevice && deviceId && boundDevice !== deviceId) {
+    console.warn(
+      `[AdminSessionBinding] Device mismatch for user ${sessionRow.id}: ` +
+      `bound=${boundDevice} attempted=${deviceId}`
+    );
+    return null;
   }
-  return null;
+
+  // Remove the internal column before returning the user row.
+  const { _session_device_id: _discarded, ...userRow } = sessionRow;
+  return { row: userRow as Record<string, unknown>, matchedVia: "extra" };
 }
 
 /** Whether this token is still valid for this user (primary or admin multi-session row). */
@@ -90,11 +117,13 @@ export async function persistLoginSession(
   const platformFamily = !isAdmin && opts.req ? getActiveSessionPlatformFamily(opts.req) : null;
 
   if (isAdmin) {
-    await db.query("INSERT INTO user_sessions (user_id, session_token, created_at) VALUES ($1, $2, $3)", [
-      user.id,
-      token,
-      now,
-    ]);
+    // SEC-04: Record the device_id in the session row so subsequent requests
+    // from a different device are rejected.  device_id may be null for web
+    // admin sessions that don't send the x-app-device-id header.
+    await db.query(
+      "INSERT INTO user_sessions (user_id, session_token, device_id, created_at) VALUES ($1, $2, $3, $4)",
+      [user.id, token, deviceId ?? null, now]
+    );
     const urow = await db.query("SELECT session_token FROM users WHERE id = $1", [user.id]);
     const hasPrimary = !!urow.rows[0]?.session_token;
     if (!hasPrimary) {

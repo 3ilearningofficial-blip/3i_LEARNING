@@ -5,6 +5,10 @@ import {
   buildLegacyMp4CandidateUrls,
   ensureCloudflareMp4DownloadUrl,
 } from "./cloudflare-stream-download";
+import {
+  getLatestRecordingForLiveInput as _getLatestRecordingForLiveInput,
+  findRecordingViaStreamSearch as _findRecordingViaStreamSearch,
+} from "./cloudflare-stream-api";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -178,29 +182,7 @@ export function registerLiveStreamRoutes({
     };
   };
 
-  const getLatestRecordingForLiveInput = async (
-    accountId: string,
-    apiToken: string,
-    liveInputUid: string
-  ): Promise<{ manifestUrl: string; recordingUid: string } | null> => {
-    try {
-      const videosRes = await fetch(
-        `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/live_inputs/${liveInputUid}/videos`,
-        { headers: { Authorization: `Bearer ${apiToken}` } }
-      );
-      if (!videosRes.ok) {
-        const txt = await videosRes.text().catch(() => "");
-        console.warn("[CF Stream] live_inputs/.../videos HTTP", videosRes.status, txt.slice(0, 280));
-        return null;
-      }
-      const videosData = (await videosRes.json()) as any;
-      const items = normalizeCfVideoItems(videosData);
-      if (!items.length) return null;
-      return pickBestCfRecording(items, liveInputUid);
-    } catch {
-      return null;
-    }
-  };
+  const getLatestRecordingForLiveInput = _getLatestRecordingForLiveInput;
 
   /**
    * If live-input polling is empty/delayed, find the asset by dashboard title / meta.name (still scoped by search).
@@ -211,38 +193,7 @@ export function registerLiveStreamRoutes({
    * DB migration (ALTER TABLE live_classes ADD COLUMN cf_recording_uid TEXT) before it can be used here.
    * Until that migration is applied this function remains title-based.
    */
-  const findRecordingViaStreamSearch = async (
-    accountId: string,
-    apiToken: string,
-    liveClassTitle: string,
-    excludeLiveInputUid: string
-  ): Promise<{ manifestUrl: string; recordingUid: string } | null> => {
-    const q = String(liveClassTitle || "").trim();
-    if (q.length < 2) return null;
-    try {
-      const u = new URL(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream`);
-      u.searchParams.set("search", q);
-      u.searchParams.set("limit", "40");
-      const res = await fetch(u.toString(), { headers: { Authorization: `Bearer ${apiToken}` } });
-      if (!res.ok) return null;
-      const data = (await res.json()) as any;
-      const items = normalizeCfVideoItems(data);
-      const qLow = q.toLowerCase();
-      const matched = items.filter((v: any) => {
-        const id = String(v?.uid || v?.id || "");
-        if (!id || id === excludeLiveInputUid) return false;
-        const metaName = String(v?.meta?.name || "").trim().toLowerCase();
-        const nameField = String(v?.name || "").trim().toLowerCase();
-        if (metaName && metaName === qLow) return true;
-        if (nameField && nameField === qLow) return true;
-        return metaName.includes(qLow) || nameField.includes(qLow);
-      });
-      const candidatePool = matched.length ? matched : items.filter((v: any) => String(v?.uid || "") && String(v.uid) !== excludeLiveInputUid);
-      return pickBestCfRecording(candidatePool, excludeLiveInputUid);
-    } catch {
-      return null;
-    }
-  };
+  const findRecordingViaStreamSearch = _findRecordingViaStreamSearch;
   const saveRecordingForClassAndPeers = (liveClassId: string, recordingUrl: string, sectionTitle?: string) =>
     saveRecordingCore(db, liveClassId, recordingUrl, {
       sectionTitle,

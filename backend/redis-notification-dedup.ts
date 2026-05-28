@@ -9,6 +9,9 @@ function dedupKey(classId: number, userId: number, type: string): string {
 /**
  * Returns user IDs that were not notified yet for this class+type (SET NX per user).
  * Processes in batches to avoid huge pipelines.
+ *
+ * RQR-01: Returns null on any Redis error so the caller can fall back to PostgreSQL
+ * dedup rather than dropping the entire notification batch silently.
  */
 export async function filterNewNotificationRecipientsRedis(
   redis: AppRedisClient,
@@ -16,22 +19,26 @@ export async function filterNewNotificationRecipientsRedis(
   userIds: number[],
   type: string,
   batchSize = 500
-): Promise<number[]> {
+): Promise<number[] | null> {
   const accepted: number[] = [];
 
-  for (let i = 0; i < userIds.length; i += batchSize) {
-    const batch = userIds.slice(i, i + batchSize);
-    const multi = redis.multi();
-    for (const userId of batch) {
-      multi.set(dedupKey(classId, userId, type), "1", { NX: true, EX: NOTIF_DEDUP_TTL_SEC });
+  try {
+    for (let i = 0; i < userIds.length; i += batchSize) {
+      const batch = userIds.slice(i, i + batchSize);
+      const multi = redis.multi();
+      for (const userId of batch) {
+        multi.set(dedupKey(classId, userId, type), "1", { NX: true, EX: NOTIF_DEDUP_TTL_SEC });
+      }
+      const replies = await multi.exec();
+      batch.forEach((userId, idx) => {
+        const reply = replies?.[idx];
+        // SET NX returns null when the key already exists; any non-null reply means we claimed the slot.
+        if (reply != null) accepted.push(userId);
+      });
     }
-    const replies = await multi.exec();
-    batch.forEach((userId, idx) => {
-      const reply = replies?.[idx];
-      // SET NX returns null when the key already exists; any non-null reply means we claimed the slot.
-      if (reply != null) accepted.push(userId);
-    });
+    return accepted;
+  } catch (err) {
+    console.error("[Redis] filterNewNotificationRecipientsRedis pipeline failed, falling back to PostgreSQL:", err);
+    return null; // caller detects null and uses PostgreSQL dedup instead
   }
-
-  return accepted;
 }

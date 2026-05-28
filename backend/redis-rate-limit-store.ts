@@ -87,10 +87,20 @@ return { tostring(totalHits), tostring(resetMs) }
   async decrement(key: string): Promise<void> {
     try {
       const bucket = this.bucketKey(key);
-      const hits = await this.redis.hGet(bucket, "totalHits");
-      if (hits) {
-        const next = Math.max(0, Number(hits) - 1);
-        await this.redis.hSet(bucket, "totalHits", String(next));
+      const raw = await this.redis.hGetAll(bucket);
+      if (raw?.totalHits) {
+        const next = Math.max(0, Number(raw.totalHits) - 1);
+        // RQR-02: Use a pipeline so the hSet and pExpire are sent atomically.
+        // If the key expired between hGetAll and hSet, hSet would create a new
+        // key without a TTL, leaving a zombie entry. We always refresh the TTL
+        // to ensure every key created by decrement has a bounded lifetime.
+        const resetMs = raw.resetTimeMs ? Number(raw.resetTimeMs) : Date.now() + this.windowMs;
+        const ttlMs = Math.max(1000, resetMs - Date.now());
+        await this.redis
+          .multi()
+          .hSet(bucket, "totalHits", String(next))
+          .pExpire(bucket, ttlMs)
+          .exec();
       }
     } catch (err) {
       console.error("[RedisRateLimitStore] decrement failed:", err);

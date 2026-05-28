@@ -191,7 +191,13 @@ export function registerUploadRoutes({
         Key: key,
         ContentType: contentType,
       });
-      const uploadUrl = await getSignedUrl(r2, command, { expiresIn: 600 });
+      // CFSR-02: Use a 1-hour expiry for video uploads, 10 minutes for everything else.
+      // A 500MB lecture video on a 1 Mbps connection takes ~67 minutes to upload —
+      // the previous 600s (10 min) presigned URL expired mid-upload, causing a 403 from R2.
+      // Security risk of a 1-hour PUT URL is minimal: it is bound to a specific R2 key
+      // and can only PUT (not GET, LIST, or DELETE) that single object.
+      const isVideo = String(contentType).startsWith("video/");
+      const uploadUrl = await getSignedUrl(r2, command, { expiresIn: isVideo ? 3600 : 600 });
       const publicUrl = `${getPublicApiBaseUrl(req)}/api/media/${key}`;
       console.log(`[R2] Presigned URL generated for ${key}, public: ${publicUrl}`);
       res.json({ uploadUrl, publicUrl, key });
