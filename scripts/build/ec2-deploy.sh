@@ -45,7 +45,7 @@ echo "      Commit: $(git rev-parse --short HEAD)"
 
 # ── Step 2: Install dependencies ───────────────────────────
 echo "[2/7] Installing dependencies..."
-npm ci --omit=dev 2>&1 | tail -5
+npm ci 2>&1 | tail -5
 
 # ── Step 3: Apply DB migrations (ABORT ON FAILURE) ─────────
 echo "[3/7] Applying SQL migrations..."
