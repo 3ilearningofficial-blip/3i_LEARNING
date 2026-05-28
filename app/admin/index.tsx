@@ -6242,4 +6242,5 @@ const styles = StyleSheet.create({
   testActionRow: { flexDirection: "row", gap: 6, marginTop: 8 },
   testActionBtn: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: Colors.light.secondary, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 },
   testActionBtnText: { fontSize: 11, fontFamily: "Inter_600SemiBold", color: Colors.light.primary },
-  testActionBtnLa
+  testActionBtnLarge: { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: Colors.light.background, borderRadius: 14, padding: 16, borderWidth: 1, borderColor: Colors.light.border },
+});

@@ -992,4 +992,23 @@ export function registerAuthRoutes({
       const storedHash = dbUser.rows[0].password_hash as string | null;
 
       if (storedHash && !oldPassword) {
-        return res.status(400).json({ message: "Current password i
+        return res.status(400).json({ message: "Current password is required" });
+      }
+
+      if (oldPassword && storedHash) {
+        const validOld = isScryptHash(storedHash)
+          ? await verifyPassword(oldPassword, storedHash)
+          : verifyLegacySha256(oldPassword, user.id, storedHash);
+        if (!validOld) {
+          return res.status(401).json({ message: "Current password is incorrect" });
+        }
+      }
+
+      const newHash = await hashPassword(newPassword);
+      await db.query("UPDATE users SET password_hash = $1 WHERE id = $2", [newHash, user.id]);
+      res.json({ success: true });
+    } catch {
+      res.status(500).json({ message: "Failed to change password" });
+    }
+  });
+}
