@@ -53,6 +53,8 @@ export const REQUIRED_TABLES = [
   "webhook_event_receipts",
   // Migration 0039 - live stream finalize job queue
   "live_stream_finalize_jobs",
+  // Migration 0040b - live chat messages (existed in production, was missing from migrations)
+  "live_chat_messages",
   // Migration 0043 - per-device server-issued offline encryption secrets (ODSR-01)
   "device_offline_secrets",
   // Migration 0044 - doubts table (was in schema.ts + backend routes but missing from migrations)
