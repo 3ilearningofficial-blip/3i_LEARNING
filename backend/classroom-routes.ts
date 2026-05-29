@@ -116,6 +116,37 @@ export function registerClassroomRoutes({
     }
   });
 
+  /**
+   * Returns the caller's current session bearer token so the tldraw WebSocket
+   * sync URI can include it as ?access_token=... rather than relying on
+   * sessionStorage (which is unreliable across navigations) or session cookies
+   * (which don't always get sent on cross-subdomain WS upgrades).
+   * The token is read from the Authorization header or users.session_token.
+   */
+  app.get("/api/live-classes/:id/classroom/sync-token", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getAuthUser(req);
+      if (!user) return res.status(401).json({ message: "Unauthorized" });
+      const lc = await loadLiveClass(db, String(req.params.id));
+      if (!lc) return res.status(404).json({ message: "Live class not found" });
+      if (String(lc.stream_type || "").toLowerCase() !== "classroom") {
+        return res.status(400).json({ message: "Not a classroom stream" });
+      }
+      // Return the bearer token the client is already using so the WS URL can carry it.
+      const bearerRaw = (req.headers.authorization || "").replace(/^Bearer\s+/i, "").trim();
+      const token = bearerRaw || (await db.query(
+        "SELECT session_token FROM users WHERE id = $1",
+        [user.id]
+      ).then(r => String(r.rows[0]?.session_token || "")));
+      if (!token) return res.status(401).json({ message: "No session token found" });
+      res.set("Cache-Control", "no-store");
+      res.json({ token });
+    } catch (err) {
+      console.error("[Classroom] sync-token error:", err);
+      res.status(500).json({ message: "Failed to get sync token" });
+    }
+  });
+
   app.get(
     "/api/admin/live-classes/:id/classroom/board-checkpoint",
     requireAdmin,
