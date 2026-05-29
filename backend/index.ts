@@ -161,18 +161,13 @@ function setupCors(app: express.Application) {
     exposedHeaders: ["Content-Length", "Content-Type", "Content-Disposition"],
     preflightContinue: false,
     optionsSuccessStatus: 204,
+    // maxAge: 0 tells the browser never to cache preflight responses.
+    // Without this, Chrome caches a preflight that lacks PATCH for up to 600s
+    // and "Disable cache" in DevTools does NOT clear the CORS preflight cache.
+    maxAge: 0,
   };
 
   app.use(cors(corsOptions));
-
-  // Prevent Cloudflare (and any other CDN) from caching preflight responses.
-  // Without this, a cached OPTIONS 204 without PATCH causes browser CORS failures
-  // even after the server config is correct.
-  // Express 5 / path-to-regexp v8 no longer accepts bare "*" — use a regex instead.
-  app.options(/.*/, (_req: Request, res: Response) => {
-    res.setHeader("Cache-Control", "no-store");
-    res.sendStatus(204);
-  });
 }
 
 function setupApiOriginProtection(app: express.Application) {
