@@ -30,6 +30,7 @@ type Props = {
   editor: Editor | null;
   boardEl: HTMLElement | null;
   subfolder?: string;
+  isRecordingMode?: boolean;
   onClose: () => void;
   onConfirmEnd: (archive: EndSessionArchive | null) => Promise<void>;
 };
@@ -41,6 +42,7 @@ export default function ClassroomEndSessionModal({
   editor,
   boardEl,
   subfolder,
+  isRecordingMode = false,
   onClose,
   onConfirmEnd,
 }: Props) {
@@ -156,11 +158,11 @@ export default function ClassroomEndSessionModal({
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.backdrop}>
         <View style={styles.card}>
-          <Text style={styles.title}>End live class</Text>
+          <Text style={styles.title}>{isRecordingMode ? "Stop Recording" : "End live class"}</Text>
           <Text style={styles.subtitle}>
             {canExport
-              ? `Download your whiteboard (${pageCount} page${pageCount === 1 ? "" : "s"}) before ending. A cloud backup (PDF + images) is saved to R2 when you end class.`
-              : "Whiteboard is still loading. You can end class without a local download; cloud backup runs when the board is ready."}
+              ? `Download your whiteboard (${pageCount} page${pageCount === 1 ? "" : "s"}) before ending. A cloud backup (PDF + images) is saved to R2 when you ${isRecordingMode ? "stop recording" : "end class"}.`
+              : `Whiteboard is still loading. You can ${isRecordingMode ? "stop recording" : "end class"} without a local download; cloud backup runs when the board is ready.`}
           </Text>
 
           {error ? <Text style={styles.error}>{error}</Text> : null}
@@ -213,7 +215,7 @@ export default function ClassroomEndSessionModal({
               {ending ? (
                 <ActivityIndicator color="#fff" size="small" />
               ) : (
-                <Text style={styles.endBtnText}>Save to cloud & End class</Text>
+                <Text style={styles.endBtnText}>{isRecordingMode ? "Save to cloud & Stop recording" : "Save to cloud & End class"}</Text>
               )}
             </Pressable>
           </View>

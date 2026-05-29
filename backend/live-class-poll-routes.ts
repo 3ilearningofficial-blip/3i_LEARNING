@@ -389,7 +389,19 @@ export function registerLiveClassPollRoutes({
   );
 
   /** SSE: poll / timer / hand-raise changes via PostgreSQL NOTIFY (migration 0019). */
-  app.get("/api/live-classes/:id/engagement/stream", requireAuth, async (req: Request, res: Response) => {
+  // EventSource cannot set headers — promote ?access_token query param to Authorization
+  // so the requireAuth middleware can validate it the same way as Bearer tokens.
+  app.get(
+    "/api/live-classes/:id/engagement/stream",
+    (req: Request, _res: Response, next: () => void) => {
+      const qToken = String(req.query.access_token || "").trim();
+      if (qToken && !req.headers.authorization) {
+        (req as any).headers = { ...req.headers, authorization: `Bearer ${qToken}` };
+      }
+      next();
+    },
+    requireAuth,
+    async (req: Request, res: Response) => {
     const liveClassIdStr = String(req.params.id);
     const hasAccess = await checkEngagementStreamAccess(req, res, db, getAuthUser, liveClassIdStr);
     if (!hasAccess) return;
@@ -490,4 +502,4 @@ export function registerLiveClassPollRoutes({
       void cleanup();
     }
   });
-}
+}  // end registerLiveClassPollRoutes

@@ -359,6 +359,7 @@ export default function AdminClassroomPage() {
         editor={editor}
         boardEl={boardEl}
         subfolder={String(liveClass?.lecture_subfolder_title || "").trim() || undefined}
+        isRecordingMode={isRecordingMode}
         onClose={() => setEndModalOpen(false)}
         onConfirmEnd={completeEndClass}
       />

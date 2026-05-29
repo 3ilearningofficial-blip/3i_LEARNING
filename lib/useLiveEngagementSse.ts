@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Platform } from "react-native";
 import { useQueryClient } from "@tanstack/react-query";
 import { getBaseUrl } from "@/lib/query-client";
+import { getStoredAuthToken } from "@/lib/auth-storage";
 
 type Options = {
   liveClassId: string | undefined;
@@ -53,7 +54,7 @@ export function useLiveEngagementSse({ liveClassId, enabled = true, isAdmin = fa
       }
     };
 
-    const connect = () => {
+    const connect = async () => {
       if (closed) return;
       if (es) {
         es.close();
@@ -61,7 +62,11 @@ export function useLiveEngagementSse({ liveClassId, enabled = true, isAdmin = fa
       }
 
       const base = getBaseUrl();
-      const url = `${base}/api/live-classes/${encodeURIComponent(liveClassId)}/engagement/stream`;
+      const token = await getStoredAuthToken();
+      const params = new URLSearchParams();
+      if (token) params.set("access_token", token);
+      const qs = params.toString();
+      const url = `${base}/api/live-classes/${encodeURIComponent(liveClassId)}/engagement/stream${qs ? `?${qs}` : ""}`;
       es = new EventSource(url, { withCredentials: true } as EventSourceInit);
 
       es.onopen = () => {
