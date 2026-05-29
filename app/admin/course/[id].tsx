@@ -18,6 +18,8 @@ import { fetch } from "expo/fetch";
 import BulkUploadModal from "@/components/BulkUploadModal";
 import { DEFAULT_LIVE_RECORDING_SECTION } from "@shared/recordingSection";
 import { useDocumentVisibility } from "@/lib/useDocumentVisibility";
+import SortableList from "@/components/admin/SortableList";
+import SortableItem from "@/components/admin/SortableItem";
 
 interface Lecture {
   id: number;
@@ -797,6 +799,23 @@ export default function AdminCourseScreen() {
     reorderMutation.mutate({ itemType, items: payload });
   };
 
+  /** Called by SortableList after a drag-and-drop reorder. */
+  const reorderByDrag = (
+    itemType: "test" | "material",
+    groupItems: Array<TestItem | Material>,
+    activeId: string | number,
+    overId: string | number
+  ) => {
+    const from = groupItems.findIndex((i) => i.id === Number(activeId));
+    const to = groupItems.findIndex((i) => i.id === Number(overId));
+    if (from === -1 || to === -1 || from === to) return;
+    const reordered = [...groupItems];
+    const [moved] = reordered.splice(from, 1);
+    reordered.splice(to, 0, moved);
+    const payload = reordered.map((item, idx) => ({ id: item.id, orderIndex: idx }));
+    reorderMutation.mutate({ itemType, items: payload });
+  };
+
   const loadQuestions = async (testId: number) => {
     setQuestionsLoading(true);
     try {
@@ -1159,8 +1178,14 @@ export default function AdminCourseScreen() {
             })}
             {(() => {
               const ungroupedTests = courseTests.filter((t: any) => !t.folder_name);
-              return ungroupedTests.map((test: any, idx: number) => (
-                <View key={test.id} style={styles.testCard}>
+              return (
+              <SortableList
+                ids={ungroupedTests.map((t: any) => t.id)}
+                onReorder={(a, o) => reorderByDrag("test", ungroupedTests, a, o)}
+              >
+              {ungroupedTests.map((test: any, idx: number) => (
+                <SortableItem key={test.id} id={test.id}>
+                <View style={styles.testCard}>
                   <View style={styles.testCardRow}>
                     <Text style={styles.testCardTitle}>{test.title}</Text>
                     <View style={{ flexDirection: "row", gap: 4, alignItems: "center" }}>
@@ -1212,7 +1237,10 @@ export default function AdminCourseScreen() {
                     </Pressable>
                   </View>
                 </View>
-              ));
+                </SortableItem>
+              ))}
+              </SortableList>
+              );
             })()}
           </View>
         )}
@@ -1268,8 +1296,14 @@ export default function AdminCourseScreen() {
             })}
             {(() => {
               const ungroupedMaterials = courseMaterials.filter((m: any) => !m.section_title);
-              return ungroupedMaterials.map((mat: any, idx: number) => (
-                <View key={mat.id} style={styles.itemCard}>
+              return (
+              <SortableList
+                ids={ungroupedMaterials.map((m: any) => m.id)}
+                onReorder={(a, o) => reorderByDrag("material", ungroupedMaterials, a, o)}
+              >
+              {ungroupedMaterials.map((mat: any, idx: number) => (
+                <SortableItem key={mat.id} id={mat.id}>
+                <View style={styles.itemCard}>
                   <View style={styles.itemRow}>
                     <View style={[styles.itemIcon, { backgroundColor: "#FEE2E2" }]}>
                       <Ionicons name="document-text" size={16} color="#DC2626" />
@@ -1315,7 +1349,10 @@ export default function AdminCourseScreen() {
                     </View>
                   </View>
                 </View>
-              ));
+                </SortableItem>
+              ))}
+              </SortableList>
+              );
             })()}
           </View>
         )}
