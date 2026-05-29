@@ -128,9 +128,3 @@
   },
   "private": true
 }
-"axios": ">=1.15.2",
-    "tmp": ">=0.2.6",
-    "fast-xml-builder": ">=1.2.0"
-  },
-  "private": true
-}
