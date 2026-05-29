@@ -61,10 +61,10 @@ export function registerLectureRoutes({
       const user = await getAuthUser(req);
       if (!user) return res.json({ is_completed: false, watch_percent: 0, playback_sessions: 0 });
       const result = await db.query(
-        "SELECT is_completed, watch_percent, COALESCE(playback_sessions, 0) AS playback_sessions FROM lecture_progress WHERE user_id = $1 AND lecture_id = $2",
+        "SELECT is_completed, watch_percent, COALESCE(playback_sessions, 0) AS playback_sessions, COALESCE(last_position_seconds, 0) AS last_position_seconds FROM lecture_progress WHERE user_id = $1 AND lecture_id = $2",
         [user.id, req.params.id]
       );
-      if (result.rows.length === 0) return res.json({ is_completed: false, watch_percent: 0, playback_sessions: 0 });
+      if (result.rows.length === 0) return res.json({ is_completed: false, watch_percent: 0, playback_sessions: 0, last_position_seconds: 0 });
       res.json(result.rows[0]);
     } catch {
       res.json({ is_completed: false, watch_percent: 0, playback_sessions: 0 });
@@ -119,28 +119,28 @@ export function registerLectureRoutes({
       const user = await getAuthUser(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const lectureId = String(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id);
-      const { watchPercent, isCompleted } = req.body;
+      const { watchPercent, isCompleted, lastPositionSeconds } = req.body;
       const access = await canAccessLecture(user, lectureId);
       if (!access.lecture) return res.status(404).json({ message: "Lecture not found" });
       if (!access.allowed) return res.status(403).json({ message: "Access denied for this lecture" });
       const lecture = access.lecture;
       const courseId = lecture.course_id ? Number(lecture.course_id) : null;
       const normalizedWatchPercent = Math.max(0, Math.min(100, Number(watchPercent) || 0));
+      const normalizedPosition = Math.max(0, Math.floor(Number(lastPositionSeconds) || 0));
       // RCR-02: Use GREATEST for watch_percent (never regress a higher value) and
       // OR logic for is_completed (once marked complete, never un-complete).
-      // A stale client ping (e.g. watchPercent=30 after a 100% save) must not
-      // overwrite the student's completion record and erase their course progress.
       await db.query(
-        `INSERT INTO lecture_progress (user_id, lecture_id, watch_percent, is_completed, completed_at)
-         VALUES ($1, $2, $3, $4, $5)
+        `INSERT INTO lecture_progress (user_id, lecture_id, watch_percent, is_completed, completed_at, last_position_seconds)
+         VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (user_id, lecture_id) DO UPDATE SET
-           watch_percent  = GREATEST(lecture_progress.watch_percent, EXCLUDED.watch_percent),
-           is_completed   = lecture_progress.is_completed OR EXCLUDED.is_completed,
-           completed_at   = CASE
+           watch_percent          = GREATEST(lecture_progress.watch_percent, EXCLUDED.watch_percent),
+           is_completed           = lecture_progress.is_completed OR EXCLUDED.is_completed,
+           last_position_seconds  = EXCLUDED.last_position_seconds,
+           completed_at           = CASE
              WHEN EXCLUDED.is_completed AND NOT lecture_progress.is_completed THEN EXCLUDED.completed_at
              ELSE lecture_progress.completed_at
            END`,
-        [user.id, lectureId, normalizedWatchPercent, Boolean(isCompleted), isCompleted ? Date.now() : null]
+        [user.id, lectureId, normalizedWatchPercent, Boolean(isCompleted), isCompleted ? Date.now() : null, normalizedPosition]
       );
       if (courseId && isCompleted) {
         await updateCourseProgress(user.id, Number(courseId));

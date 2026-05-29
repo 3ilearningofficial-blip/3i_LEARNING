@@ -18,6 +18,21 @@ export function registerLiveClassEngagementRoutes({
   requireAuth,
   requireAdmin,
 }: RegisterLiveClassEngagementRoutesDeps): void {
+  /** Get recording progress including last resume position. */
+  app.get("/api/live-classes/:id/recording-progress", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user;
+      const result = await db.query(
+        "SELECT watch_percent, COALESCE(last_position_seconds, 0) AS last_position_seconds FROM live_class_recording_progress WHERE user_id = $1 AND live_class_id = $2",
+        [user.id, req.params.id]
+      );
+      if (result.rows.length === 0) return res.json({ watch_percent: 0, last_position_seconds: 0 });
+      res.json(result.rows[0]);
+    } catch {
+      res.json({ watch_percent: 0, last_position_seconds: 0 });
+    }
+  });
+
   /** Recording replay progress (after class is completed): debounced session count + optional watch %. */
   app.post("/api/live-classes/:id/recording-progress", requireAuth, async (req: Request, res: Response) => {
     try {
@@ -37,18 +52,20 @@ export function registerLiveClassEngagementRoutes({
       const body = req.body || {};
       const openSession = Boolean(body.openSession);
       const watchPercentRaw = body.watchPercent != null ? Number(body.watchPercent) : null;
+      const lastPositionSeconds = Math.max(0, Math.floor(Number(body.lastPositionSeconds) || 0));
       const now = Date.now();
       const debounceMs = 8 * 60 * 1000;
 
       if (watchPercentRaw != null && Number.isFinite(watchPercentRaw)) {
         const wp = Math.max(0, Math.min(100, Math.round(watchPercentRaw)));
         await db.query(
-          `INSERT INTO live_class_recording_progress (user_id, live_class_id, watch_percent, playback_sessions, last_session_ping_at, updated_at)
-           VALUES ($1, $2, $3, 0, NULL, $4)
+          `INSERT INTO live_class_recording_progress (user_id, live_class_id, watch_percent, playback_sessions, last_session_ping_at, updated_at, last_position_seconds)
+           VALUES ($1, $2, $3, 0, NULL, $4, $5)
            ON CONFLICT (user_id, live_class_id) DO UPDATE SET
              watch_percent = GREATEST(live_class_recording_progress.watch_percent, EXCLUDED.watch_percent),
+             last_position_seconds = EXCLUDED.last_position_seconds,
              updated_at = EXCLUDED.updated_at`,
-          [user.id, req.params.id, wp, now]
+          [user.id, req.params.id, wp, now, lastPositionSeconds]
         );
       }
 

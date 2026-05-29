@@ -90,7 +90,7 @@ function isHlsManifestUrl(url: string): boolean {
   return false;
 }
 
-function buildCloudflareStreamHtml(videoId: string, signedUrl?: string): string {
+function buildCloudflareStreamHtml(videoId: string, signedUrl?: string, startAt = 0): string {
   const streamUrl = signedUrl || `https://customer-${process.env.EXPO_PUBLIC_CLOUDFLARE_ACCOUNT_ID || ''}.cloudflarestream.com/${videoId}/manifest/video.m3u8`;
   
   return `<!DOCTYPE html>
@@ -122,6 +122,8 @@ document.addEventListener('contextmenu', function(e) { e.preventDefault(); retur
 // Disable text selection
 document.addEventListener('selectstart', function(e) { e.preventDefault(); return false; });
 
+var cfStartAt = ${startAt > 5 ? startAt - 2 : startAt};
+var cfLastSaved = 0;
 // Get player instance
 const player = document.getElementById('player');
 var media = document.querySelector('video');
@@ -137,8 +139,15 @@ if (media) {
 // Notify React Native when ready
 if (player) {
   player.addEventListener('loadstart', function() {
+    if (cfStartAt > 0) { try { (player as any).currentTime = cfStartAt; } catch(e) {} }
     if (window.ReactNativeWebView) {
       window.ReactNativeWebView.postMessage('ready');
+    }
+  });
+  player.addEventListener('timeupdate', function() {
+    var ct = Math.floor((player as any).currentTime || 0);
+    if (Math.abs(ct - cfLastSaved) >= 10 && window.ReactNativeWebView) {
+      cfLastSaved = ct; window.ReactNativeWebView.postMessage(JSON.stringify({ event: 'timeupdate', currentTime: ct }));
     }
   });
   
@@ -172,7 +181,7 @@ if (navigator.userAgent.includes('Android')) {
 </html>`;
 }
 
-function buildDirectVideoHtml(url: string): string {
+function buildDirectVideoHtml(url: string, startAt = 0): string {
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -192,10 +201,22 @@ document.addEventListener('contextmenu', function(e) { e.preventDefault(); });
 // Disable long-press save on mobile
 var v0 = document.querySelector('video');
 if (v0) v0.addEventListener('contextmenu', function(e) { e.preventDefault(); return false; });
-// Muted + programmatic play — reliable autoplay on mobile / in-app webviews
 (function(){
   var v = document.querySelector('video');
   if (!v) return;
+  var startAt = ${startAt > 5 ? startAt - 2 : startAt};
+  var lastSaved = 0;
+  if (startAt > 0) {
+    v.addEventListener('canplay', function oncp() { v.currentTime = startAt; v.removeEventListener('canplay', oncp); }, { once: true });
+  }
+  setInterval(function() {
+    if (!v.paused && !v.ended) {
+      var ct = Math.floor(v.currentTime);
+      if (Math.abs(ct - lastSaved) >= 10 && window.ReactNativeWebView) {
+        lastSaved = ct; window.ReactNativeWebView.postMessage(JSON.stringify({ event: 'timeupdate', currentTime: ct }));
+      }
+    }
+  }, 5000);
   v.muted = true;
   var tryUnmute = function() { v.muted = false; };
   var p = v.play();
@@ -224,7 +245,7 @@ function buildYouTubeHtml(videoId: string): string {
 }
 
 // Native-only: YouTube IFrame API with custom controls (zero YouTube branding)
-function buildNativeYouTubeHtml(videoId: string): string {
+function buildNativeYouTubeHtml(videoId: string, startAt = 0): string {
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -276,12 +297,15 @@ function onYouTubeIframeAPIReady(){
 p=new YT.Player('player',{videoId:'${videoId}',
 playerVars:{autoplay:1,mute:1,controls:0,modestbranding:1,rel:0,showinfo:0,iv_load_policy:3,cc_load_policy:0,playsinline:1,disablekb:1,fs:0},
 events:{onReady:onRdy,onStateChange:onSt}});}
-function onRdy(e){rdy=1;e.target.playVideo();up();sc();
+var startAt=${startAt > 5 ? startAt - 2 : startAt};
+var lastSavedTime=0;
+function onRdy(e){rdy=1;if(startAt>0){e.target.seekTo(startAt,true);}e.target.playVideo();up();sc();
 window.ReactNativeWebView&&window.ReactNativeWebView.postMessage('ready');}
 function onSt(e){var s=e.data;
 document.getElementById('ld').style.display=s===3?'block':'none';
 document.getElementById('bp').className=(s===1||s===3)?'bp h':'bp';upi();
-if(s===0&&window.ReactNativeWebView){window.ReactNativeWebView.postMessage(JSON.stringify({event:'ended'}));}}
+if(s===0&&window.ReactNativeWebView){window.ReactNativeWebView.postMessage(JSON.stringify({event:'ended'}));}
+if(s===1){tickPos();}}
 function tp(){if(!rdy)return;p.getPlayerState()===1?p.pauseVideo():p.playVideo();}
 function upi(){var pl=p&&p.getPlayerState()===1;
 document.getElementById('pli').innerHTML=pl?'<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>':'<path d="M8 5v14l11-7z"/>';}
@@ -299,6 +323,9 @@ document.getElementById('pf').style.width=(c/d*100)+'%';
 document.getElementById('tt').textContent=fm(c)+' / '+fm(d);
 var l=p.getVideoLoadedFraction?p.getVideoLoadedFraction():0;
 document.getElementById('bf').style.width=(l*100)+'%';}requestAnimationFrame(up);}
+function tickPos(){if(!rdy||!p)return;var ct=Math.floor(p.getCurrentTime()||0);
+if(Math.abs(ct-lastSavedTime)>=10&&window.ReactNativeWebView){lastSavedTime=ct;window.ReactNativeWebView.postMessage(JSON.stringify({event:'timeupdate',currentTime:ct}));}
+if(p.getPlayerState()===1)setTimeout(tickPos,5000);}
 function sc(){document.getElementById('ctl').className='ctl';clearTimeout(ht);
 ht=setTimeout(function(){if(p&&p.getPlayerState()===1)document.getElementById('ctl').className='ctl h';},4000);}
 document.addEventListener('contextmenu',function(e){e.preventDefault();});
@@ -411,6 +438,7 @@ export default function LectureScreen() {
   const [playerRetryTick, setPlayerRetryTick] = useState(0);
   const autoCompleteSentRef = useRef(false);
   const autoPlaybackRetryRef = useRef(false);
+  const lastSavedPositionRef = useRef(0);
   const [mediaTokenError, setMediaTokenError] = useState<string | null>(null);
   const [mediaTokenRetryTick, setMediaTokenRetryTick] = useState(0);
 
@@ -612,9 +640,10 @@ export default function LectureScreen() {
   const isDirect = !videoId && !isStreamId && !isBoardImage && isDirectVideoUrl(playbackUrl);
   
   const youtubeHtml = videoId ? buildYouTubeHtml(videoId) : "";
-  const nativeYouTubeHtml = videoId ? buildNativeYouTubeHtml(videoId) : "";
-  const streamHtml = isStreamId ? buildCloudflareStreamHtml(playbackUrl) : "";
-  const directVideoHtml = isDirect ? buildDirectVideoHtml(playbackUrl) : "";
+  const resumeAt = Number(progressData?.last_position_seconds) || 0;
+  const nativeYouTubeHtml = videoId ? buildNativeYouTubeHtml(videoId, resumeAt) : "";
+  const streamHtml = isStreamId ? buildCloudflareStreamHtml(playbackUrl, undefined, resumeAt) : "";
+  const directVideoHtml = isDirect ? buildDirectVideoHtml(playbackUrl, resumeAt) : "";
 
   useEffect(() => {
     if (!isCfHls || Platform.OS !== "web" || !playbackUrl) return;
@@ -711,6 +740,14 @@ export default function LectureScreen() {
         setIsVideoPlaying(true);
       } else if (data.event === 'error') {
         handlePlaybackError();
+      } else if (data.event === 'timeupdate' && typeof data.currentTime === 'number') {
+        const pos = Math.floor(data.currentTime);
+        if (pos > 0 && Math.abs(pos - lastSavedPositionRef.current) >= 10) {
+          lastSavedPositionRef.current = pos;
+          apiRequest("POST", `/api/lectures/${id}/progress`, {
+            watchPercent: 0, isCompleted: false, lastPositionSeconds: pos,
+          }).catch(() => {});
+        }
       } else if (data.event === 'pause' || data.event === 'ended') {
         setIsVideoPlaying(false);
         if (data.event === 'ended') {

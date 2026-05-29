@@ -237,7 +237,7 @@ function isCloudflareStreamId(str: string): boolean {
   return /^[a-f0-9]{32}$/i.test(str.trim());
 }
 
-function buildCloudflareStreamHtml(videoId: string): string {
+function buildCloudflareStreamHtml(videoId: string, _signedUrl?: string, startAt = 0): string {
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -274,9 +274,18 @@ if (media) {
   media.disablePictureInPicture = true;
   media.disableRemotePlayback = true;
 }
-if (player && window.ReactNativeWebView) {
+var lcStartAt = ${startAt > 5 ? startAt - 2 : startAt};
+var lcLastSaved = 0;
+if (player) {
   player.addEventListener('loadstart', function() {
-    window.ReactNativeWebView.postMessage('ready');
+    if (lcStartAt > 0) { try { player.currentTime = lcStartAt; } catch(e) {} }
+    if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage('ready');
+  });
+  player.addEventListener('timeupdate', function() {
+    var ct = Math.floor(player.currentTime || 0);
+    if (Math.abs(ct - lcLastSaved) >= 10 && window.ReactNativeWebView) {
+      lcLastSaved = ct; window.ReactNativeWebView.postMessage(JSON.stringify({ event: 'timeupdate', currentTime: ct }));
+    }
   });
 }
 </script>
@@ -694,7 +703,16 @@ export default function LiveClassScreen() {
     return null;
   }, [recordingFileKey, recordingTokenError, recordingToken]);
 
-  /** Count recording replay visits for admin dashboards (debounced on server ~8 min). */
+  /** Count recording replay visits + load resume position. */
+  const isRecordingReplay = !!liveClassData?.is_completed && !!(recordingUrl || cfHlsUrl);
+  const { data: recordingProgressData } = useQuery<{ watch_percent: number; last_position_seconds: number }>({
+    queryKey: [`/api/live-classes/${id}/recording-progress`],
+    enabled: !!id && isRecordingReplay,
+    staleTime: 0,
+  });
+  const recordingResumeAt = Number(recordingProgressData?.last_position_seconds) || 0;
+  const recordingLastSavedRef = useRef(0);
+
   useEffect(() => {
     if (!id || !isScreenActive || !liveClassData?.is_completed || !recordingUrl.trim()) return;
     const tid = setTimeout(() => {
@@ -726,7 +744,7 @@ export default function LiveClassScreen() {
     setNativeYoutubeFallback(false);
   }, [videoUrl]);
   const hasYouTubeId = Boolean(videoId);
-  const streamHtml = isStreamId ? buildCloudflareStreamHtml(videoUrl) : "";
+  const streamHtml = isStreamId ? buildCloudflareStreamHtml(videoUrl, undefined, recordingResumeAt) : "";
 
   const { data: viewerData } = useQuery<{ count: number; viewers: any[]; visible: boolean }>({
     queryKey: [`/api/live-classes/${id}/viewers`],
@@ -911,6 +929,14 @@ export default function LiveClassScreen() {
       const data = JSON.parse(event.nativeEvent.data);
       if (data.event === 'play') {
         markPlayed();
+      } else if (data.event === 'timeupdate' && typeof data.currentTime === 'number' && liveClassData?.is_completed) {
+        const pos = Math.floor(data.currentTime);
+        if (pos > 0 && Math.abs(pos - recordingLastSavedRef.current) >= 10) {
+          recordingLastSavedRef.current = pos;
+          apiRequest("POST", `/api/live-classes/${id}/recording-progress`, {
+            watchPercent: 0, lastPositionSeconds: pos,
+          }).catch(() => {});
+        }
       } else if (data.event === 'pause' || data.event === 'ended') {
         setIsVideoPlaying(false);
       }
