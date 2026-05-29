@@ -65,7 +65,7 @@ module.exports = {
     // ─── HTTP API Workers ───────────────────────────────────────────────────────
     {
       name: "backend",
-      script: "./server_dist/index.js",
+      script: "./server_dist/index.mjs",
 
       // 2 workers: enough for I/O concurrency without overloading a single EC2.
       // Increase to 4 on a c5.large or larger instance.
@@ -103,7 +103,7 @@ module.exports = {
     // ─── Background Scheduler Process ──────────────────────────────────────────
     {
       name: "scheduler",
-      script: "./server_dist/index.js",
+      script: "./server_dist/index.mjs",
 
       // Single instance ONLY. Advisory locks in schedulers.ts prevent double-firing
       // even if this is accidentally started twice, but 1 instance is the intention.
