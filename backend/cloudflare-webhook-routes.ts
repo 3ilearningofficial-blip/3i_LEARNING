@@ -20,7 +20,12 @@ function timingSafeEqualsHex(a: string, b: string): boolean {
 
 function verifyWebhookSignature(req: Request): boolean {
   const secret = String(process.env.CLOUDFLARE_STREAM_WEBHOOK_SECRET || "").trim();
-  if (!secret) return true;
+  // Fail-closed: if no secret is configured, reject ALL incoming webhooks.
+  // Fail-open (return true) would allow anyone who discovers this URL to POST
+  // fake recording-ready or stream-disconnect events, triggering DB writes and
+  // notifications for classes that never happened.
+  // To enable webhooks, set CLOUDFLARE_STREAM_WEBHOOK_SECRET in .env.
+  if (!secret) return false;
 
   // Cloudflare Account Notifications (set up via the Notifications UI) send
   // the literal secret in the cf-webhook-auth header — no HMAC involved.

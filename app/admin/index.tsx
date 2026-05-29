@@ -2125,7 +2125,7 @@ export default function AdminDashboard() {
                   <View style={{ gap: 10 }}>
                     {(() => {
                       // Group by title + scheduled_at to merge multi-course schedules into one card
-                      const groups: { key: string; title: string; scheduledAt: string; isLive: boolean; ids: number[]; courseNames: string[]; streamType?: string; lecture_section_title?: string | null; lecture_subfolder_title?: string | null }[] = [];
+                      const groups: { key: string; title: string; scheduledAt: string; isLive: boolean; isRecordingMode: boolean; ids: number[]; courseNames: string[]; streamType?: string; lecture_section_title?: string | null; lecture_subfolder_title?: string | null }[] = [];
                       for (const lc of upcomingClasses) {
                         const key = `${lc.title}_${lc.scheduled_at}`;
                         const existing = groups.find(g => g.key === key);
@@ -2137,7 +2137,7 @@ export default function AdminDashboard() {
                           if (!existing.lecture_section_title && lc.lecture_section_title) existing.lecture_section_title = lc.lecture_section_title;
                           if (!existing.lecture_subfolder_title && lc.lecture_subfolder_title) existing.lecture_subfolder_title = lc.lecture_subfolder_title;
                         } else {
-                          groups.push({ key, title: lc.title, scheduledAt: lc.scheduled_at, isLive: !!lc.is_live, ids: [lc.id], courseNames: lc.course_title ? [lc.course_title] : [], streamType: lc.stream_type, lecture_section_title: lc.lecture_section_title || null, lecture_subfolder_title: lc.lecture_subfolder_title || null });
+                          groups.push({ key, title: lc.title, scheduledAt: lc.scheduled_at, isLive: !!lc.is_live, isRecordingMode: !!lc.is_recording_mode, ids: [lc.id], courseNames: lc.course_title ? [lc.course_title] : [], streamType: lc.stream_type, lecture_section_title: lc.lecture_section_title || null, lecture_subfolder_title: lc.lecture_subfolder_title || null });
                         }
                       }
                       if (groups.length === 0) {
@@ -2154,7 +2154,7 @@ export default function AdminDashboard() {
                           {visible.map((g) => {
                             const schedTime = g.scheduledAt ? new Date(parseInt(g.scheduledAt)).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
                             return (
-                              <View key={g.key} style={{ backgroundColor: g.isLive ? "#FEF2F2" : "#F8FAFC", borderRadius: 12, padding: 12, borderLeftWidth: 3, borderLeftColor: g.isLive ? "#DC2626" : Colors.light.primary, gap: 8 }}>
+                              <View key={g.key} style={{ backgroundColor: g.isLive ? "#FEF2F2" : g.isRecordingMode ? "#F5F3FF" : "#F8FAFC", borderRadius: 12, padding: 12, borderLeftWidth: 3, borderLeftColor: g.isLive ? "#DC2626" : g.isRecordingMode ? "#7C3AED" : Colors.light.primary, gap: 8 }}>
                                 <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
                                   <View style={{ flex: 1, gap: 2 }}>
                                     <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
@@ -2170,12 +2170,12 @@ export default function AdminDashboard() {
                                 <View style={{ flexDirection: "row", gap: 6 }}>
                                   {!g.isLive ? (
                                     <Pressable
-                                      style={{ flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, backgroundColor: "#DC2626", borderRadius: 8, paddingVertical: 8 }}
+                                      style={{ flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, backgroundColor: g.isRecordingMode ? "#7C3AED" : "#DC2626", borderRadius: 8, paddingVertical: 8 }}
                                       onPress={() => {
                                         router.push(`/admin/live/${g.ids[0]}/choose-stream` as any);
                                       }}>
-                                      <Ionicons name="radio" size={14} color="#fff" />
-                                      <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#fff" }}>Start Live</Text>
+                                      <Ionicons name={g.isRecordingMode ? "videocam" : "radio"} size={14} color="#fff" />
+                                      <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#fff" }}>{g.isRecordingMode ? "Start Recording" : "Start Live"}</Text>
                                     </Pressable>
                                   ) : (
                                     <>

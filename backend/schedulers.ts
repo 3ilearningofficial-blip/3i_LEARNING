@@ -443,6 +443,21 @@ function startDownloadTokenCleanupScheduler(db: DbClient, pool: DbPool): void {
 }
 
 function startLiveFinalizeQueueScheduler(db: DbClient, pool: DbPool): void {
+  // On startup, reset any jobs stuck in 'running' from a previous process crash.
+  // A job is only safe to be in 'running' while the process that picked it up is alive.
+  // After restart there are no active workers, so 'running' = orphaned. Reset to 'pending'
+  // so the scheduler picks them up on the next tick and re-processes them cleanly.
+  db.query(
+    "UPDATE live_stream_finalize_jobs SET status = 'pending', updated_at = $1 WHERE status = 'running'",
+    [Date.now()]
+  ).then((r) => {
+    if ((r.rowCount ?? 0) > 0) {
+      console.log(`[FinalizeQueue] Startup: reset ${r.rowCount} stuck 'running' job(s) to 'pending'`);
+    }
+  }).catch((err) => {
+    console.error("[FinalizeQueue] Startup reset of stuck jobs failed:", err);
+  });
+
   const tick = async (): Promise<void> => {
     await runWithAdvisoryLock(pool, LIVE_FINALIZE_QUEUE_LOCK_KEY, async () => {
       const now = Date.now();

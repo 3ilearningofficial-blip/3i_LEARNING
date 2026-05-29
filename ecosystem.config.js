@@ -80,8 +80,10 @@ module.exports = {
       },
 
       // FRW-03: PM2 waits for the process to signal readiness before routing traffic.
-      // The server calls process.send('ready') after listen() completes.
-      wait_ready: false, // set to true if you add process.send('ready') in index.ts
+      // The server calls process.send('ready') after listen() completes (index.ts).
+      // This ensures DB pools and session middleware are fully initialized before
+      // any student requests arrive during rolling deploys or crash recovery.
+      wait_ready: true,
       listen_timeout: 10000,
 
       // Zero-downtime reload: new process starts, old drains, then exits.

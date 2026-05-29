@@ -20,9 +20,17 @@ function getBucket(key: string): Bucket {
 }
 
 export function metricsMiddleware(req: Request, res: Response, next: NextFunction): void {
-  const key = `${req.method} ${req.path}`;
+  // Use req.route.path (the Express route pattern, e.g. /api/courses/:id) rather than
+  // req.path (the actual URL, e.g. /api/courses/123). Using req.path causes the Map to
+  // grow one entry per unique URL — unbounded memory growth as content is added.
+  // req.route is set by Express after the matching route handler runs, so we read it
+  // inside the 'finish' event where it is guaranteed to be populated.
+  const capturedPath = req.path;
   const start = Date.now();
   res.on("finish", () => {
+    // Prefer the matched route pattern over the raw path to prevent unbounded Map growth.
+    const routePattern = (req as any).route?.path;
+    const key = `${req.method} ${routePattern || capturedPath}`;
     const b = getBucket(key);
     b.count += 1;
     b.totalLatencyMs += Date.now() - start;

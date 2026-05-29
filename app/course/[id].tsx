@@ -76,6 +76,8 @@ interface LiveClass {
   ended_at?: number;
   duration_minutes?: number;
   section_title?: string;
+  /** True when this class is a scheduled recording (not a live interactive session). */
+  is_recording_mode?: boolean;
 }
 
 interface EnrolledStudent {
@@ -246,7 +248,13 @@ export default function CourseDetailScreen() {
     queryKey: liveClassesForCourseQueryKey(id),
     queryFn: async () => {
       const baseUrl = getApiUrl();
-      const url = new URL(`/api/live-classes?courseId=${id}`, baseUrl);
+      // Pass admin=true so admins see ALL scheduled classes (including non-free-preview
+      // and recording-mode classes). Without this, admins would only see is_free_preview=TRUE
+      // classes because they are not enrolled in the course.
+      const url = new URL(
+        `/api/live-classes?courseId=${id}${isAdmin ? "&admin=true" : ""}`,
+        baseUrl
+      );
       const res = await authFetch(url.toString());
       if (!res.ok) return [];
       return res.json();
@@ -262,7 +270,12 @@ export default function CourseDetailScreen() {
     gcTime: 15 * 60 * 1000,
   });
 
-  /** Live tab: show upcoming + currently live only; recordings live under Lectures → Live Class Recordings. */
+  /**
+   * Live tab: show upcoming + currently live sessions.
+   * For admins: also show scheduled recording-mode classes (is_recording_mode=true)
+   * so they can confirm their scheduled recordings appear before publishing.
+   * Completed classes are hidden here — their recordings appear under Lectures → Live Class Recordings.
+   */
   const liveClassesForTab = useMemo(() => {
     return (liveClasses || []).filter((lc) => {
       if (lc.is_live) return true;
@@ -1464,13 +1477,23 @@ setTimeout(function() {
                           }}
                         >
                           <LinearGradient
-                            colors={lc.is_live ? ["#DC2626", "#EF4444"] : lc.is_completed ? ["#1A56DB", "#3B82F6"] : ["#6B7280", "#9CA3AF"]}
+                            colors={
+                              lc.is_live
+                                ? ["#DC2626", "#EF4444"]
+                                : lc.is_completed
+                                  ? ["#1A56DB", "#3B82F6"]
+                                  : (lc as any).is_recording_mode
+                                    ? ["#7C3AED", "#8B5CF6"]
+                                    : ["#6B7280", "#9CA3AF"]
+                            }
                             style={styles.liveStatusBadge}
                           >
                             {lc.is_live ? (
                               <><View style={styles.liveDot} /><Text style={styles.liveStatusText}>LIVE</Text></>
                             ) : lc.is_completed ? (
                               <Ionicons name="play" size={14} color="#fff" />
+                            ) : (lc as any).is_recording_mode ? (
+                              <><Ionicons name="radio" size={12} color="#fff" /><Text style={[styles.liveStatusText, { fontSize: 9 }]}> REC</Text></>
                             ) : (
                               <Ionicons name="time" size={14} color="#fff" />
                             )}

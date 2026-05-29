@@ -150,7 +150,13 @@ export function registerAuthRoutes({
       const otp = generateOTP();
       const otpHash = hashOtpValue(otp);
       const otpExpires = now + 10 * 60 * 1000;
-      const isDev = process.env.NODE_ENV !== "production";
+      // OTP is ONLY returned in the response when both conditions are true:
+      // 1. NODE_ENV is explicitly 'development' (not just "not production")
+      // 2. EXPOSE_DEV_OTP=true is explicitly set in the environment
+      // This double-guard ensures a misconfigured NODE_ENV in production never leaks OTPs.
+      const isDev =
+        process.env.NODE_ENV === "development" &&
+        process.env.EXPOSE_DEV_OTP === "true";
 
       let lockedUntilForClient: number | null = null;
 

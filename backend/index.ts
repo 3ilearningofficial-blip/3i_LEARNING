@@ -622,7 +622,16 @@ function normalizeOtpIdentifier(input: unknown): string {
   setupApiHostSearchHints(app);
 
   // Lightweight version/health endpoint for deploy consistency checks.
-  app.get("/api/health/version", (_req: Request, res: Response) => {
+  // In production: returns minimal { ok: true } without git hash unless a valid
+  // METRICS_SECRET Bearer token is provided. This prevents commit hash enumeration.
+  app.get("/api/health/version", (req: Request, res: Response) => {
+    const secret = process.env.METRICS_SECRET?.trim();
+    const auth = String(req.headers.authorization || "");
+    const isAuthed = !!secret && auth.startsWith("Bearer ") && auth.slice(7).trim() === secret;
+    if (process.env.NODE_ENV === "production" && !isAuthed) {
+      // Return only a basic liveness signal without internal details.
+      return res.json({ ok: true });
+    }
     res.json(getBackendVersion());
   });
 
@@ -630,7 +639,20 @@ function normalizeOtpIdentifier(input: unknown): string {
     res.json({ ok: true, ...getAiTutorHealthSnapshot() });
   });
 
-  app.get("/api/metrics", (_req: Request, res: Response) => {
+  // Metrics endpoint exposes route names, error rates, and latencies.
+  // Require METRICS_SECRET Bearer token in production to prevent reconnaissance.
+  app.get("/api/metrics", (req: Request, res: Response) => {
+    const secret = process.env.METRICS_SECRET?.trim();
+    if (secret) {
+      const auth = String(req.headers.authorization || "");
+      if (!auth.startsWith("Bearer ") || auth.slice(7).trim() !== secret) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+    } else if (process.env.NODE_ENV === "production") {
+      // No secret configured in production — block entirely to avoid
+      // exposing route map and error rates to unauthenticated callers.
+      return res.status(403).json({ error: "Forbidden" });
+    }
     res.json(getMetricsSnapshot());
   });
 
@@ -790,6 +812,13 @@ function normalizeOtpIdentifier(input: unknown): string {
 
   server.listen(port, "0.0.0.0", () => {
     log(`express server running on http://localhost:${port}`);
+    // FRW-03: Signal PM2 that the server is ready to receive traffic.
+    // Requires wait_ready: true in ecosystem.config.js.
+    // Without this signal, PM2 routes requests to the new process immediately
+    // on fork — before DB pools and session middleware are initialized.
+    if (typeof process.send === "function") {
+      process.send("ready");
+    }
   });
 
   // FRW-03: Graceful shutdown on SIGTERM (PM2 reload / container stop).

@@ -5,6 +5,10 @@ export type AppRedisClient = ReturnType<typeof createClient>;
 let client: AppRedisClient | null = null;
 let connectPromise: Promise<AppRedisClient | null> | null = null;
 
+// Track whether we've already logged the fallback warning for this process lifetime.
+// Prevents log spam — log once when Redis becomes unavailable, not on every request.
+let fallbackWarningLogged = false;
+
 function redisUrl(): string | null {
   const raw = process.env.REDIS_URL?.trim();
   return raw && raw.length > 0 ? raw : null;
@@ -21,7 +25,16 @@ export function isRedisConfigured(): boolean {
  */
 export async function getRedisClient(): Promise<AppRedisClient | null> {
   const url = redisUrl();
-  if (!url) return null;
+  if (!url) {
+    if (!fallbackWarningLogged) {
+      fallbackWarningLogged = true;
+      console.warn(
+        "[Redis] REDIS_URL not set — rate limiting and notification dedup are using PostgreSQL fallback. " +
+        "This increases DB write load under traffic. Set REDIS_URL in .env to resolve."
+      );
+    }
+    return null;
+  }
 
   if (client?.isOpen) return client;
 
@@ -35,10 +48,22 @@ export async function getRedisClient(): Promise<AppRedisClient | null> {
         });
         await next.connect();
         client = next;
-        console.log("[Redis] connected");
+        if (fallbackWarningLogged) {
+          console.log("[Redis] reconnected — resuming Redis-backed rate limiting and dedup");
+          fallbackWarningLogged = false;
+        } else {
+          console.log("[Redis] connected");
+        }
         return next;
       } catch (err) {
-        console.error("[Redis] connect failed:", err);
+        console.error("[Redis] connect failed — falling back to PostgreSQL for rate limiting and dedup:", err);
+        if (!fallbackWarningLogged) {
+          fallbackWarningLogged = true;
+          console.warn(
+            "[Redis] FALLBACK ACTIVE — all Redis-dependent features (rate limits, OTP dedup, notification dedup) " +
+            "are now using PostgreSQL. Check REDIS_URL and Upstash connectivity."
+          );
+        }
         client = null;
         return null;
       } finally {

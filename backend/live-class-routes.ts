@@ -199,12 +199,37 @@ export function registerLiveClassRoutes({
     }
   });
 
-  app.get("/api/upcoming-classes", async (_req: Request, res: Response) => {
+  app.get("/api/upcoming-classes", async (req: Request, res: Response) => {
     try {
-      // Only expose classes that are explicitly public, free, or free-preview.
-      // Private paid-course classes must NOT appear on this unauthenticated feed —
-      // their schedule, title, and course details would be visible to anyone otherwise.
-      const result = await db.query(`
+      const user = await getAuthUser(req);
+      const isAdmin = user?.role === "admin";
+
+      let result;
+      if (isAdmin) {
+        // Admins see ALL upcoming classes across all courses — including paid, private,
+        // and recording-mode classes. This powers the "Upcoming Class" widget on the
+        // admin dashboard so admins can see every class they've scheduled.
+        result = await db.query(`
+          SELECT lc.*, c.title as course_title, c.is_free as course_is_free, c.category as course_category
+          FROM live_classes lc
+          LEFT JOIN courses c ON c.id = lc.course_id
+          WHERE lc.is_completed IS NOT TRUE
+          ORDER BY
+            lc.is_live DESC,
+            lc.scheduled_at ASC NULLS LAST
+          LIMIT 200
+        `);
+        console.log(`[UpcomingClasses] admin: returning ${result.rows.length} classes`);
+        res.set("Cache-Control", "private, no-store");
+        // Admins receive the full row (including stream keys are stripped by sanitizeLiveClass
+        // but playback/meeting URLs are kept so admin can act on them).
+        return res.json(result.rows.map(sanitizeLiveClass));
+      }
+
+      // Public/student feed: only expose classes that are explicitly public, free, or
+      // free-preview. Private paid-course classes must NOT appear here — their schedule,
+      // title, and course details would be visible to unauthenticated users otherwise.
+      result = await db.query(`
         SELECT lc.*, c.title as course_title, c.is_free as course_is_free, c.category as course_category
         FROM live_classes lc
         LEFT JOIN courses c ON c.id = lc.course_id
@@ -221,10 +246,9 @@ export function registerLiveClassRoutes({
           lc.scheduled_at ASC NULLS LAST
         LIMIT 50
       `);
-      console.log(`[UpcomingClasses] returning ${result.rows.length} classes`);
+      console.log(`[UpcomingClasses] public: returning ${result.rows.length} classes`);
       res.set("Cache-Control", "private, max-age=30");
-      const payload = result.rows.map(toPublicUpcomingDto);
-      res.json(payload);
+      res.json(result.rows.map(toPublicUpcomingDto));
     } catch (err) {
       console.error("[UpcomingClasses] error:", err);
       res.set("Cache-Control", "private, max-age=30");
