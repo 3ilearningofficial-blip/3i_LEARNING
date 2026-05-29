@@ -1196,15 +1196,34 @@ export default function LiveClassScreen() {
           </View>
 
           <View style={styles.webSidebar}>
+            {/* Wide-web tab bar: Chat | Students (admin only) */}
             {isAdmin && (
-              <View style={styles.webStudentsWrap}>
+              <View style={styles.mobileAdminTabBar}>
+                <Pressable
+                  style={[styles.mobileAdminTab, mobileAdminTab === "chat" && styles.mobileAdminTabActive]}
+                  onPress={() => setMobileAdminTab("chat")}
+                >
+                  <Ionicons name="chatbubbles" size={16} color={mobileAdminTab === "chat" ? "#fff" : Colors.light.textMuted} />
+                  <Text style={[styles.mobileAdminTabText, mobileAdminTab === "chat" && styles.mobileAdminTabTextActive]}>Chat</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.mobileAdminTab, mobileAdminTab === "students" && styles.mobileAdminTabActive]}
+                  onPress={() => setMobileAdminTab("students")}
+                >
+                  <Ionicons name="people" size={16} color={mobileAdminTab === "students" ? "#fff" : Colors.light.textMuted} />
+                  <Text style={[styles.mobileAdminTabText, mobileAdminTab === "students" && styles.mobileAdminTabTextActive]}>Students</Text>
+                </Pressable>
+              </View>
+            )}
+            {isAdmin && mobileAdminTab === "students" ? (
+              <View style={styles.webChatWrap}>
                 <LiveStudentsPanel
                   liveClassId={String(id)}
                   showViewerCount={liveClassData?.show_viewer_count ?? true}
                   parentViewers={parentViewersPayload}
                 />
               </View>
-            )}
+            ) : (
             <View style={styles.webChatWrap}>
               <View style={styles.chatContainer}>
                 <View style={styles.chatHeader}>
@@ -1303,6 +1322,7 @@ export default function LiveClassScreen() {
                 </View>
               </View>
             </View>
+            )}
           </View>
         </View>
       ) : (

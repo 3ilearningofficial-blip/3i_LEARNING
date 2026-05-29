@@ -137,13 +137,26 @@ export function registerPdfRoutes({ app, db, getAuthUser, getR2Client }: Registe
       // regexp_replace normalization as the media-stream and course-access routes.
       // We deliberately avoid LIKE/ILIKE here because fileKey is user-provided and
       // LIKE special characters (% _) would make the match incorrectly broad.
+      // Normalize the stored file_url for comparison:
+      // 1. Strip protocol + host  (e.g. https://api.3ilearning.in/)
+      // 2. Strip /api/media/ prefix that is present when the URL was built
+      //    via the media-proxy route (the most common storage format)
+      // 3. Strip any remaining leading slashes
+      // This produces a bare key like "materials/filename.pdf" that matches
+      // the canonicalMediaKey value we computed from the request parameter.
       const freeCheck = await db
         .query(
           `SELECT 1 FROM study_materials
            WHERE is_free = TRUE
              AND (
-               regexp_replace(regexp_replace(COALESCE(file_url,''),'^https?://[^/]+/',''),'^/+','') = $1
-               OR regexp_replace(COALESCE(file_url,''),'^https?://[^/]+/','') = $1
+               regexp_replace(
+                 regexp_replace(
+                   regexp_replace(COALESCE(file_url,''), '^https?://[^/]+/', ''),
+                   '^/?api/media/', ''
+                 ),
+                 '^/+', ''
+               ) = $1
+               OR regexp_replace(COALESCE(file_url_normalized,''), '^/?api/media/', '') = $1
              )
            LIMIT 1`,
           [fileKey]
