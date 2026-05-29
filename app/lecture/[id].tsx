@@ -478,13 +478,13 @@ export default function LectureScreen() {
     },
   });
 
-  const { data: progressData } = useQuery<{ is_completed: boolean }>({
+  const { data: progressData } = useQuery<{ is_completed: boolean; watch_percent?: number; playback_sessions?: number; last_position_seconds?: number }>({
     queryKey: [`/api/lectures/${id}/progress`],
     queryFn: async () => {
       const baseUrl = getApiUrl();
       const url = new URL(`/api/lectures/${id}/progress`, baseUrl);
       const res = await authFetch(url.toString());
-      if (!res.ok) return { is_completed: false };
+      if (!res.ok) return { is_completed: false, last_position_seconds: 0 };
       return res.json();
     },
     enabled: !!id,
