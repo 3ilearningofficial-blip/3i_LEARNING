@@ -200,12 +200,15 @@ export default function LiveSetupPage() {
               <MediaDeviceSelectors webrtc={webrtc} />
             ) : null}
             <Text style={styles.streamLabel}>Stream: {streamType}</Text>
-            <SharedLiveSettings
-              chatMode={chatMode}
-              onChatModeChange={setChatMode}
-              showViewerCount={showViewerCount}
-              onShowViewerCountChange={setShowViewerCount}
-            />
+            {/* Chat mode and viewer count are irrelevant for recording sessions */}
+            {!liveClass?.is_recording_mode && (
+              <SharedLiveSettings
+                chatMode={chatMode}
+                onChatModeChange={setChatMode}
+                showViewerCount={showViewerCount}
+                onShowViewerCountChange={setShowViewerCount}
+              />
+            )}
             {validationError ? <Text style={styles.validationError}>{validationError}</Text> : null}
           </ScrollView>
 

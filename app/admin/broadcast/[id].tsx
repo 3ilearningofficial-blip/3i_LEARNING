@@ -44,7 +44,7 @@ function buildYouTubeEmbedUrl(videoId: string): string {
   return `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&mute=0&playsinline=1&rel=0&modestbranding=1&showinfo=0&iv_load_policy=3&cc_load_policy=0&fs=1&disablekb=0&controls=1`;
 }
 
-function buildHlsPlayerHtml(hlsUrl: string): string {
+function buildHlsPlayerHtml(hlsUrl: string, isRecording = false): string {
   // Also try the live manifest variant
   const liveHlsUrl = hlsUrl.includes('/manifest/video.m3u8')
     ? hlsUrl.replace('/manifest/video.m3u8', '/manifest/video.m3u8')
@@ -63,7 +63,7 @@ video { width: 100%; height: 100%; object-fit: contain; background: #000; }
 .spinner { width: 40px; height: 40px; border: 3px solid #333; border-top-color: #F6821F; border-radius: 50%; animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .msg { font-size: 14px; color: #aaa; text-align: center; line-height: 1.6; }
-.live-badge { background: #ef4444; color: #fff; font-size: 12px; font-weight: 700; padding: 4px 12px; border-radius: 4px; letter-spacing: 1px; display: none; position: absolute; top: 12px; left: 12px; }
+.live-badge { background: ${isRecording ? '#7C3AED' : '#ef4444'}; color: #fff; font-size: 12px; font-weight: 700; padding: 4px 12px; border-radius: 4px; letter-spacing: 1px; display: none; position: absolute; top: 12px; left: 12px; }
 .live-badge.show { display: block; }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #fff; margin-right: 6px; animation: blink 1s infinite; }
 @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
@@ -75,7 +75,7 @@ video { width: 100%; height: 100%; object-fit: contain; background: #000; }
   <div class="spinner"></div>
   <div class="msg" id="msg">OBS is streaming...<br><small style="color:#666">Waiting for Cloudflare to process stream<br>(takes 15–30 seconds)</small></div>
 </div>
-<div class="live-badge" id="liveBadge"><span class="dot"></span>LIVE</div>
+<div class="live-badge" id="liveBadge"><span class="dot"></span>${isRecording ? 'REC' : 'LIVE'}</div>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@latest/dist/hls.min.js"></script>
 <script>
 var video = document.getElementById('v');
@@ -426,12 +426,16 @@ export default function BroadcastPage() {
 
   const handleEndClass = useCallback(async () => {
     // Use window.confirm on web (Alert.alert buttons don't work on web)
+    const confirmMsg = isRecordingMode ? "Stop this recording?" : "End this live class?";
+    const alertTitle = isRecordingMode ? "Stop Recording" : "End Class";
+    const alertBody = isRecordingMode ? "Are you sure you want to stop the recording?" : "Are you sure you want to end this live class?";
+    const actionLabel = isRecordingMode ? "Stop Recording" : "End Class";
     const confirmed = Platform.OS === "web"
-      ? window.confirm("End this live class?")
+      ? window.confirm(confirmMsg)
       : await new Promise<boolean>(resolve =>
-          Alert.alert("End Class", "Are you sure you want to end this live class?", [
+          Alert.alert(alertTitle, alertBody, [
             { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
-            { text: "End Class", style: "destructive", onPress: () => resolve(true) },
+            { text: actionLabel, style: "destructive", onPress: () => resolve(true) },
           ])
         );
     if (!confirmed) return;
@@ -631,7 +635,7 @@ export default function BroadcastPage() {
             cfPlaybackHls ? (
               Platform.OS === "web" ? (
                 <iframe
-                  srcDoc={buildHlsPlayerHtml(cfPlaybackHls)}
+                  srcDoc={buildHlsPlayerHtml(cfPlaybackHls, isRecordingMode)}
                   style={{
                     position: "absolute" as any,
                     top: 0, left: 0, width: "100%", height: "100%", border: "none",
