@@ -168,7 +168,8 @@ function setupCors(app: express.Application) {
   // Prevent Cloudflare (and any other CDN) from caching preflight responses.
   // Without this, a cached OPTIONS 204 without PATCH causes browser CORS failures
   // even after the server config is correct.
-  app.options("*", (_req: Request, res: Response) => {
+  // Express 5 / path-to-regexp v8 no longer accepts bare "*" — use a regex instead.
+  app.options(/.*/, (_req: Request, res: Response) => {
     res.setHeader("Cache-Control", "no-store");
     res.sendStatus(204);
   });
