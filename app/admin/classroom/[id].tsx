@@ -76,7 +76,7 @@ export default function AdminClassroomPage() {
     queryKey: [`/api/live-classes/${liveClassId}/viewers`],
     queryFn: async () => {
       const res = await authFetch(
-        `${getApiUrl()}/api/live-classes/${encodeURIComponent(liveClassId)}/viewers`
+        `${getApiUrl()}/live-classes/${encodeURIComponent(liveClassId)}/viewers`
       );
       if (!res.ok) throw new Error("Failed to fetch viewers");
       return res.json();

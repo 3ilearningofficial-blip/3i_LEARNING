@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Platform } from "react-native";
 import { useQueryClient } from "@tanstack/react-query";
-import { getApiUrl } from "@/lib/query-client";
+import { getBaseUrl } from "@/lib/query-client";
 
 type Options = {
   liveClassId: string | undefined;
@@ -60,7 +60,7 @@ export function useLiveEngagementSse({ liveClassId, enabled = true, isAdmin = fa
         es = null;
       }
 
-      const base = getApiUrl();
+      const base = getBaseUrl();
       const url = `${base}/api/live-classes/${encodeURIComponent(liveClassId)}/engagement/stream`;
       es = new EventSource(url, { withCredentials: true } as EventSourceInit);
 

@@ -79,7 +79,7 @@ export async function restoreClassroomBoardCheckpoint(
   if (Platform.OS !== "web") return false;
   try {
     const res = await authFetch(
-      `${getApiUrl()}/api/admin/live-classes/${encodeURIComponent(liveClassId)}/classroom/board-checkpoint`
+      `${getApiUrl()}/admin/live-classes/${encodeURIComponent(liveClassId)}/classroom/board-checkpoint`
     );
     if (!res.ok) return false;
     const data = await res.json();
