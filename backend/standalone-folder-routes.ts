@@ -32,11 +32,61 @@ export function registerStandaloneFolderRoutes({
         params.push(type);
         q += ` WHERE type = $1`;
       }
-      q += " ORDER BY created_at ASC";
+      q += " ORDER BY order_index ASC, created_at ASC";
       const result = await db.query(q, params);
       res.json(result.rows);
     } catch {
       res.status(500).json({ message: "Failed to fetch folders" });
+    }
+  });
+
+  /**
+   * PATCH /api/admin/standalone/reorder
+   * Body: { itemType: "test" | "material" | "folder", items: [{ id, orderIndex }] }
+   *
+   * Bulk-updates order_index for FREE (non-course) tests / study_materials, or
+   * for standalone_folders. Mirrors the course reorder endpoint but scopes item
+   * updates to `course_id IS NULL` so it can never touch course-owned rows.
+   * itemType -> table is hardcoded so user input is never interpolated into SQL.
+   */
+  app.patch("/api/admin/standalone/reorder", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const { itemType, items } = req.body as { itemType: string; items: Array<{ id: number; orderIndex: number }> };
+      const TABLE_BY_TYPE: Record<string, { table: string; nonCourse: boolean }> = {
+        test: { table: "tests", nonCourse: true },
+        material: { table: "study_materials", nonCourse: true },
+        folder: { table: "standalone_folders", nonCourse: false },
+      };
+      const target = TABLE_BY_TYPE[itemType];
+      if (!target) {
+        return res.status(400).json({ message: "itemType must be one of: test, material, folder" });
+      }
+      if (!Array.isArray(items)) {
+        return res.status(400).json({ message: "items must be an array" });
+      }
+      const ids: number[] = [];
+      const orders: number[] = [];
+      for (const it of items) {
+        const idNum = Number(it?.id);
+        const orderNum = Number(it?.orderIndex);
+        if (!Number.isFinite(idNum) || idNum <= 0 || !Number.isFinite(orderNum)) continue;
+        ids.push(idNum);
+        orders.push(orderNum);
+      }
+      if (ids.length === 0) return res.json({ success: true, updated: 0 });
+
+      // `table` comes from the hardcoded allowlist above - safe to interpolate.
+      const courseScope = target.nonCourse ? ` AND ${target.table}.course_id IS NULL` : "";
+      await db.query(
+        `UPDATE ${target.table} SET order_index = v.order_index
+         FROM (SELECT unnest($1::int[]) AS id, unnest($2::int[]) AS order_index) v
+         WHERE ${target.table}.id = v.id${courseScope}`,
+        [ids, orders]
+      );
+      res.json({ success: true, updated: ids.length });
+    } catch (err) {
+      console.error("[standalone-reorder] error:", err);
+      res.status(500).json({ message: "Failed to reorder items" });
     }
   });
 

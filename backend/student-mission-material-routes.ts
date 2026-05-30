@@ -204,7 +204,7 @@ export function registerStudentMissionMaterialRoutes({
          FROM standalone_folders
          WHERE type = 'mission'
            AND (is_hidden = FALSE OR is_hidden IS NULL)
-         ORDER BY created_at ASC`
+         ORDER BY order_index ASC, created_at ASC`
       );
 
       res.set("Cache-Control", "private, no-store");
@@ -268,7 +268,7 @@ export function registerStudentMissionMaterialRoutes({
       const loadFolders = async () => {
         if (free !== "true") return [];
         const foldersResult = await db.query(
-          "SELECT * FROM standalone_folders WHERE type = 'material' AND (is_hidden = FALSE OR is_hidden IS NULL) ORDER BY created_at ASC"
+          "SELECT * FROM standalone_folders WHERE type = 'material' AND (is_hidden = FALSE OR is_hidden IS NULL) ORDER BY order_index ASC, created_at ASC"
         );
         return foldersResult.rows;
       };
@@ -276,7 +276,7 @@ export function registerStudentMissionMaterialRoutes({
       if (user?.role === "admin") {
         let query = "SELECT * FROM study_materials";
         if (free === "true") query += " WHERE is_free = TRUE";
-        query += " ORDER BY created_at DESC";
+        query += " ORDER BY COALESCE(order_index, 0) ASC, created_at DESC";
         const result = await db.query(query, []);
         const folders = await loadFolders();
         res.set("Cache-Control", "private, no-store");
@@ -285,7 +285,7 @@ export function registerStudentMissionMaterialRoutes({
 
       if (!user) {
         const result = await db.query(
-          "SELECT id, title, description, file_type, course_id, is_free, section_title, download_allowed, created_at, file_url FROM study_materials WHERE is_free = TRUE ORDER BY created_at DESC"
+          "SELECT id, title, description, file_type, course_id, is_free, section_title, download_allowed, created_at, file_url FROM study_materials WHERE is_free = TRUE ORDER BY COALESCE(order_index, 0) ASC, created_at DESC"
         );
         const folders = await loadFolders();
         res.set("Cache-Control", "private, no-store");
@@ -304,7 +304,7 @@ export function registerStudentMissionMaterialRoutes({
                 AND (e.status = 'active' OR e.status IS NULL)
                 AND (e.valid_until IS NULL OR e.valid_until > $2)
             )
-         ORDER BY sm.created_at DESC`,
+         ORDER BY COALESCE(sm.order_index, 0) ASC, sm.created_at DESC`,
         [user.id, now]
       );
       const filteredRows = [];
@@ -326,7 +326,7 @@ export function registerStudentMissionMaterialRoutes({
   app.get("/api/study-materials/folder/:folderName", async (req: Request, res: Response) => {
     try {
       const user = await getAuthUser(req);
-      const result = await db.query("SELECT * FROM study_materials WHERE section_title = $1 AND course_id IS NULL ORDER BY created_at DESC", [
+      const result = await db.query("SELECT * FROM study_materials WHERE section_title = $1 AND course_id IS NULL ORDER BY COALESCE(order_index, 0) ASC, created_at DESC", [
         decodeURIComponent(String(req.params.folderName)),
       ]);
       const safeRows: any[] = [];

@@ -816,6 +816,54 @@ export default function AdminCourseScreen() {
     reorderMutation.mutate({ itemType, items: payload });
   };
 
+  /**
+   * Folders are derived from a mix of item section names and course_folders
+   * rows, so they are keyed by NAME (not numeric id) for drag. Order is
+   * persisted via course_folders.order_index. Folders that exist only as an
+   * item's section name (no row yet) are created on demand so the order can be
+   * saved. Web-only drag; native keeps the order it reads back from the server.
+   */
+  const sortFolderNamesByOrder = (names: string[], type: "lecture" | "test" | "material"): string[] =>
+    [...names].sort((a, b) => {
+      const fa = safeFolders.find((f: any) => f.name === a && f.type === type);
+      const fb = safeFolders.find((f: any) => f.name === b && f.type === type);
+      const oa = fa?.order_index ?? Number.MAX_SAFE_INTEGER;
+      const ob = fb?.order_index ?? Number.MAX_SAFE_INTEGER;
+      return oa - ob;
+    });
+
+  const reorderFoldersByDrag = async (
+    type: "lecture" | "test" | "material",
+    folderNames: string[],
+    activeName: string | number,
+    overName: string | number
+  ) => {
+    const names = [...folderNames];
+    const from = names.indexOf(String(activeName));
+    const to = names.indexOf(String(overName));
+    if (from === -1 || to === -1 || from === to) return;
+    const [moved] = names.splice(from, 1);
+    names.splice(to, 0, moved);
+    try {
+      const items: Array<{ id: number; orderIndex: number }> = [];
+      for (let i = 0; i < names.length; i += 1) {
+        const name = names[i];
+        let folderRow = safeFolders.find((df: any) => df.name === name && df.type === type);
+        if (!folderRow) {
+          const created = await apiRequest("POST", `/api/admin/courses/${id}/folders`, { name, type });
+          folderRow = await created.json();
+        }
+        if (folderRow?.id != null) items.push({ id: Number(folderRow.id), orderIndex: i });
+      }
+      if (items.length) {
+        await reorderMutation.mutateAsync({ itemType: "folder", items });
+      }
+      await refetchFolders();
+    } catch {
+      Alert.alert("Error", "Failed to reorder folders");
+    }
+  };
+
   const loadQuestions = async (testId: number) => {
     setQuestionsLoading(true);
     try {
@@ -1048,17 +1096,28 @@ export default function AdminCourseScreen() {
               <Text style={styles.infoText}>Tap a folder to open it. Or add lectures directly without a folder.</Text>
             </View>
             {/* Folder cards */}
-            {[...new Set([
-              ...courseLectures.map((l: any) => l.section_title).filter(Boolean),
-              ...safeFolders.filter((f: any) => f.type === "lecture").map((f: any) => f.name),
-            ].map((n: string) => getLectureRootName(n)))].map((folderName: any) => {
+            {(() => {
+              const lectureFolderNames = sortFolderNamesByOrder(
+                [...new Set([
+                  ...courseLectures.map((l: any) => l.section_title).filter(Boolean),
+                  ...safeFolders.filter((f: any) => f.type === "lecture").map((f: any) => f.name),
+                ].map((n: string) => getLectureRootName(n)))],
+                "lecture"
+              );
+              return (
+              <SortableList
+                ids={lectureFolderNames}
+                onReorder={(a, o) => reorderFoldersByDrag("lecture", lectureFolderNames, a, o)}
+              >
+              {lectureFolderNames.map((folderName: any) => {
               const count = courseLectures.filter((l: any) => {
                 const sec = typeof l.section_title === "string" ? l.section_title : "";
                 return sec === folderName || sec.startsWith(`${folderName} /`);
               }).length;
               const folder = safeFolders.find((f: any) => f.name === folderName && f.type === "lecture");
               return (
-                <View key={folderName} style={[styles.itemCard, { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: folder?.is_hidden ? "#F3F4F6" : "#EEF2FF" }]}>
+                <SortableItem key={folderName} id={folderName}>
+                <View style={[styles.itemCard, { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: folder?.is_hidden ? "#F3F4F6" : "#EEF2FF" }]}>
                   <Pressable style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 12 }}
                     onPress={() => { setFolderAddMode(false); setOpenAdminFolder({ name: folderName, type: "lecture" }); }}>
                     <View style={{ width: 40, height: 40, borderRadius: 10, backgroundColor: Colors.light.primary + "20", alignItems: "center", justifyContent: "center" }}>
@@ -1078,8 +1137,12 @@ export default function AdminCourseScreen() {
                     <Ionicons name="ellipsis-vertical" size={18} color={Colors.light.textMuted} />
                   </Pressable>
                 </View>
+                </SortableItem>
               );
-            })}
+              })}
+              </SortableList>
+              );
+            })()}
             {/* Lectures without folder */}
             {(() => {
               const ungroupedLectures = courseLectures.filter((l: any) => !l.section_title);
@@ -1159,14 +1222,25 @@ export default function AdminCourseScreen() {
               </View>
             </View>
             {/* Folder cards for tests */}
-            {[...new Set([
-              ...courseTests.map((t: any) => t.folder_name).filter(Boolean),
-              ...safeFolders.filter((f: any) => f.type === "test").map((f: any) => f.name),
-            ])].map((folderName: any) => {
+            {(() => {
+              const testFolderNames = sortFolderNamesByOrder(
+                [...new Set([
+                  ...courseTests.map((t: any) => t.folder_name).filter(Boolean),
+                  ...safeFolders.filter((f: any) => f.type === "test").map((f: any) => f.name),
+                ])],
+                "test"
+              );
+              return (
+              <SortableList
+                ids={testFolderNames}
+                onReorder={(a, o) => reorderFoldersByDrag("test", testFolderNames, a, o)}
+              >
+              {testFolderNames.map((folderName: any) => {
               const count = courseTests.filter((t: any) => t.folder_name === folderName).length;
               const folder = safeFolders.find((f: any) => f.name === folderName && f.type === "test");
               return (
-                <View key={folderName} style={[styles.itemCard, { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: folder?.is_hidden ? "#F3F4F6" : "#EEF2FF" }]}>
+                <SortableItem key={folderName} id={folderName}>
+                <View style={[styles.itemCard, { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: folder?.is_hidden ? "#F3F4F6" : "#EEF2FF" }]}>
                   <Pressable style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 12 }}
                     onPress={() => { setFolderAddMode(false); setOpenAdminFolder({ name: folderName, type: "test" }); }}>
                     <View style={{ width: 40, height: 40, borderRadius: 10, backgroundColor: Colors.light.primary + "20", alignItems: "center", justifyContent: "center" }}>
@@ -1186,8 +1260,12 @@ export default function AdminCourseScreen() {
                     <Ionicons name="ellipsis-vertical" size={18} color={Colors.light.textMuted} />
                   </Pressable>
                 </View>
+                </SortableItem>
               );
-            })}
+              })}
+              </SortableList>
+              );
+            })()}
             {(() => {
               const ungroupedTests = courseTests.filter((t: any) => !t.folder_name);
               return (
@@ -1201,21 +1279,25 @@ export default function AdminCourseScreen() {
                   <View style={styles.testCardRow}>
                     <Text style={styles.testCardTitle}>{test.title}</Text>
                     <View style={{ flexDirection: "row", gap: 4, alignItems: "center" }}>
-                      {/* Up/Down reorder buttons */}
-                      <Pressable
-                        style={[styles.deleteItemBtn, { backgroundColor: "#F3F4F6", opacity: idx === 0 ? 0.3 : 1 }]}
-                        disabled={idx === 0 || reorderMutation.isPending}
-                        onPress={() => moveItem("test", ungroupedTests, idx, "up")}
-                      >
-                        <Ionicons name="chevron-up" size={14} color={Colors.light.text} />
-                      </Pressable>
-                      <Pressable
-                        style={[styles.deleteItemBtn, { backgroundColor: "#F3F4F6", opacity: idx === ungroupedTests.length - 1 ? 0.3 : 1 }]}
-                        disabled={idx === ungroupedTests.length - 1 || reorderMutation.isPending}
-                        onPress={() => moveItem("test", ungroupedTests, idx, "down")}
-                      >
-                        <Ionicons name="chevron-down" size={14} color={Colors.light.text} />
-                      </Pressable>
+                      {/* Up/Down reorder buttons (native only; web uses drag handle) */}
+                      {Platform.OS !== "web" && (
+                        <>
+                          <Pressable
+                            style={[styles.deleteItemBtn, { backgroundColor: "#F3F4F6", opacity: idx === 0 ? 0.3 : 1 }]}
+                            disabled={idx === 0 || reorderMutation.isPending}
+                            onPress={() => moveItem("test", ungroupedTests, idx, "up")}
+                          >
+                            <Ionicons name="chevron-up" size={14} color={Colors.light.text} />
+                          </Pressable>
+                          <Pressable
+                            style={[styles.deleteItemBtn, { backgroundColor: "#F3F4F6", opacity: idx === ungroupedTests.length - 1 ? 0.3 : 1 }]}
+                            disabled={idx === ungroupedTests.length - 1 || reorderMutation.isPending}
+                            onPress={() => moveItem("test", ungroupedTests, idx, "down")}
+                          >
+                            <Ionicons name="chevron-down" size={14} color={Colors.light.text} />
+                          </Pressable>
+                        </>
+                      )}
                       <Pressable style={[styles.deleteItemBtn, { backgroundColor: "#EEF2FF" }]} onPress={() => setEditTest({ ...test, durationMinutes: String(test.duration_minutes), difficulty: test.difficulty || "moderate" })}>
                         <Ionicons name="pencil-outline" size={14} color={Colors.light.primary} />
                       </Pressable>
@@ -1277,14 +1359,25 @@ export default function AdminCourseScreen() {
               <Text style={styles.infoText}>Add PDFs, notes, or reference links. Use "Folder Name" to organize materials into folders.</Text>
             </View>
             {/* Folder cards for materials */}
-            {[...new Set([
-              ...courseMaterials.map((m: any) => m.section_title).filter(Boolean),
-              ...safeFolders.filter((f: any) => f.type === "material").map((f: any) => f.name),
-            ])].map((folderName: any) => {
+            {(() => {
+              const materialFolderNames = sortFolderNamesByOrder(
+                [...new Set([
+                  ...courseMaterials.map((m: any) => m.section_title).filter(Boolean),
+                  ...safeFolders.filter((f: any) => f.type === "material").map((f: any) => f.name),
+                ])],
+                "material"
+              );
+              return (
+              <SortableList
+                ids={materialFolderNames}
+                onReorder={(a, o) => reorderFoldersByDrag("material", materialFolderNames, a, o)}
+              >
+              {materialFolderNames.map((folderName: any) => {
               const count = courseMaterials.filter((m: any) => m.section_title === folderName).length;
               const folder = safeFolders.find((f: any) => f.name === folderName && f.type === "material");
               return (
-                <View key={folderName} style={[styles.itemCard, { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: folder?.is_hidden ? "#F3F4F6" : "#FFF1F2" }]}>
+                <SortableItem key={folderName} id={folderName}>
+                <View style={[styles.itemCard, { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: folder?.is_hidden ? "#F3F4F6" : "#FFF1F2" }]}>
                   <Pressable style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 12 }}
                     onPress={() => { setFolderAddMode(false); setOpenAdminFolder({ name: folderName, type: "material" }); }}>
                     <View style={{ width: 40, height: 40, borderRadius: 10, backgroundColor: "#DC262620", alignItems: "center", justifyContent: "center" }}>
@@ -1304,8 +1397,12 @@ export default function AdminCourseScreen() {
                     <Ionicons name="ellipsis-vertical" size={18} color={Colors.light.textMuted} />
                   </Pressable>
                 </View>
+                </SortableItem>
               );
-            })}
+              })}
+              </SortableList>
+              );
+            })()}
             {(() => {
               const ungroupedMaterials = courseMaterials.filter((m: any) => !m.section_title);
               return (
@@ -1325,21 +1422,25 @@ export default function AdminCourseScreen() {
                       <Text style={styles.itemMeta}>{mat.file_type?.toUpperCase() || "PDF"}{mat.description ? ` · ${mat.description}` : ""}</Text>
                     </View>
                     <View style={{ flexDirection: "row", gap: 4, alignItems: "center" }}>
-                      {/* Up/Down reorder buttons */}
-                      <Pressable
-                        style={[styles.deleteItemBtn, { backgroundColor: "#F3F4F6", opacity: idx === 0 ? 0.3 : 1 }]}
-                        disabled={idx === 0 || reorderMutation.isPending}
-                        onPress={() => moveItem("material", ungroupedMaterials, idx, "up")}
-                      >
-                        <Ionicons name="chevron-up" size={14} color={Colors.light.text} />
-                      </Pressable>
-                      <Pressable
-                        style={[styles.deleteItemBtn, { backgroundColor: "#F3F4F6", opacity: idx === ungroupedMaterials.length - 1 ? 0.3 : 1 }]}
-                        disabled={idx === ungroupedMaterials.length - 1 || reorderMutation.isPending}
-                        onPress={() => moveItem("material", ungroupedMaterials, idx, "down")}
-                      >
-                        <Ionicons name="chevron-down" size={14} color={Colors.light.text} />
-                      </Pressable>
+                      {/* Up/Down reorder buttons (native only; web uses drag handle) */}
+                      {Platform.OS !== "web" && (
+                        <>
+                          <Pressable
+                            style={[styles.deleteItemBtn, { backgroundColor: "#F3F4F6", opacity: idx === 0 ? 0.3 : 1 }]}
+                            disabled={idx === 0 || reorderMutation.isPending}
+                            onPress={() => moveItem("material", ungroupedMaterials, idx, "up")}
+                          >
+                            <Ionicons name="chevron-up" size={14} color={Colors.light.text} />
+                          </Pressable>
+                          <Pressable
+                            style={[styles.deleteItemBtn, { backgroundColor: "#F3F4F6", opacity: idx === ungroupedMaterials.length - 1 ? 0.3 : 1 }]}
+                            disabled={idx === ungroupedMaterials.length - 1 || reorderMutation.isPending}
+                            onPress={() => moveItem("material", ungroupedMaterials, idx, "down")}
+                          >
+                            <Ionicons name="chevron-down" size={14} color={Colors.light.text} />
+                          </Pressable>
+                        </>
+                      )}
                       <Pressable style={[styles.deleteItemBtn, { backgroundColor: "#EEF2FF" }]} onPress={() => setEditMaterial({ ...mat, sectionTitle: mat.section_title || "", downloadAllowed: mat.download_allowed || false })}>
                         <Ionicons name="pencil-outline" size={16} color={Colors.light.primary} />
                       </Pressable>
@@ -2231,26 +2332,36 @@ export default function AdminCourseScreen() {
                   )}
                   {(() => {
                     const folderTests = course?.tests?.filter((t: any) => t.folder_name === openAdminFolder.name) || [];
-                    return folderTests.map((test: any, idx: number) => (
-                      <View key={test.id} style={{ marginBottom: 8 }}>
+                    return (
+                    <SortableList
+                      ids={folderTests.map((t: any) => t.id)}
+                      onReorder={(a, o) => reorderByDrag("test", folderTests, a, o)}
+                    >
+                    {folderTests.map((test: any, idx: number) => (
+                      <SortableItem key={test.id} id={test.id}>
+                      <View style={{ marginBottom: 8 }}>
                         <View style={[styles.testCard]}>
                           <View style={styles.testCardRow}>
                             <Text style={styles.testCardTitle}>{test.title}</Text>
                             <View style={{ flexDirection: "row", gap: 4, alignItems: "center" }}>
-                              <Pressable
-                                style={[styles.deleteItemBtn, { backgroundColor: "#F3F4F6", opacity: idx === 0 ? 0.3 : 1 }]}
-                                disabled={idx === 0 || reorderMutation.isPending}
-                                onPress={() => moveItem("test", folderTests, idx, "up")}
-                              >
-                                <Ionicons name="chevron-up" size={13} color={Colors.light.text} />
-                              </Pressable>
-                              <Pressable
-                                style={[styles.deleteItemBtn, { backgroundColor: "#F3F4F6", opacity: idx === folderTests.length - 1 ? 0.3 : 1 }]}
-                                disabled={idx === folderTests.length - 1 || reorderMutation.isPending}
-                                onPress={() => moveItem("test", folderTests, idx, "down")}
-                              >
-                                <Ionicons name="chevron-down" size={13} color={Colors.light.text} />
-                              </Pressable>
+                              {Platform.OS !== "web" && (
+                                <>
+                                  <Pressable
+                                    style={[styles.deleteItemBtn, { backgroundColor: "#F3F4F6", opacity: idx === 0 ? 0.3 : 1 }]}
+                                    disabled={idx === 0 || reorderMutation.isPending}
+                                    onPress={() => moveItem("test", folderTests, idx, "up")}
+                                  >
+                                    <Ionicons name="chevron-up" size={13} color={Colors.light.text} />
+                                  </Pressable>
+                                  <Pressable
+                                    style={[styles.deleteItemBtn, { backgroundColor: "#F3F4F6", opacity: idx === folderTests.length - 1 ? 0.3 : 1 }]}
+                                    disabled={idx === folderTests.length - 1 || reorderMutation.isPending}
+                                    onPress={() => moveItem("test", folderTests, idx, "down")}
+                                  >
+                                    <Ionicons name="chevron-down" size={13} color={Colors.light.text} />
+                                  </Pressable>
+                                </>
+                              )}
                               <Pressable style={[styles.deleteItemBtn, { backgroundColor: "#EEF2FF" }]} onPress={() => {
                                 setFolderEditTest({ ...test, durationMinutes: String(test.duration_minutes), totalMarks: String(test.total_marks), difficulty: test.difficulty || "moderate" });
                               }}>
@@ -2281,16 +2392,27 @@ export default function AdminCourseScreen() {
                           </View>
                         </View>
                       </View>
-                    ));
+                      </SortableItem>
+                    ))}
+                    </SortableList>
+                    );
                   })()}
                 </>
               )}
               {openAdminFolder?.type === "lecture" && (
                 <>
-                  {getDirectLectureSubfolders(openAdminFolder.name).map((childName) => {
+                  {(() => {
+                    const subfolders = sortFolderNamesByOrder(getDirectLectureSubfolders(openAdminFolder.name), "lecture");
+                    return (
+                    <SortableList
+                      ids={subfolders}
+                      onReorder={(a, o) => reorderFoldersByDrag("lecture", subfolders, a, o)}
+                    >
+                    {subfolders.map((childName) => {
                     const childCount = course?.lectures?.filter((l: any) => l.section_title === childName).length || 0;
                     return (
-                      <View key={childName} style={[styles.itemCard, { marginBottom: 8 }]}>
+                      <SortableItem key={childName} id={childName}>
+                      <View style={[styles.itemCard, { marginBottom: 8 }]}>
                         <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
                           <Pressable
                             style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 12 }}
@@ -2325,8 +2447,12 @@ export default function AdminCourseScreen() {
                           </Pressable>
                         </View>
                       </View>
+                      </SortableItem>
                     );
-                  })}
+                    })}
+                    </SortableList>
+                    );
+                  })()}
                   {course?.lectures?.filter((l: any) => l.section_title === openAdminFolder.name).length === 0 &&
                     getDirectLectureSubfolders(openAdminFolder.name).length === 0 &&
                     !folderAddModal && (
@@ -2335,14 +2461,40 @@ export default function AdminCourseScreen() {
                       <Text style={styles.infoText}>This folder is empty. Tap "Add Lecture" to add lectures.</Text>
                     </View>
                   )}
-                  {course?.lectures?.filter((l: any) => l.section_title === openAdminFolder.name).map((lecture: any) => (
-                    <View key={lecture.id} style={[styles.itemCard, { marginBottom: 8 }]}>
+                  {(() => {
+                    const folderLectures = course?.lectures?.filter((l: any) => l.section_title === openAdminFolder.name) || [];
+                    return (
+                    <SortableList
+                      ids={folderLectures.map((l: any) => l.id)}
+                      onReorder={(a, o) => reorderByDrag("lecture", folderLectures, a, o)}
+                    >
+                    {folderLectures.map((lecture: any, idx: number) => (
+                    <SortableItem key={lecture.id} id={lecture.id}>
+                    <View style={[styles.itemCard, { marginBottom: 8 }]}>
                       <View style={styles.itemRow}>
                         <View style={styles.itemIcon}><Ionicons name="videocam" size={16} color={Colors.light.primary} /></View>
                         <View style={styles.itemInfo}>
                           <Text style={styles.itemTitle}>{lecture.title}</Text>
                           <Text style={styles.itemMeta}>{lecture.duration_minutes}min · Order {lecture.order_index}</Text>
                         </View>
+                        {Platform.OS !== "web" && (
+                          <>
+                            <Pressable
+                              style={[styles.deleteItemBtn, { backgroundColor: "#F3F4F6", opacity: idx === 0 ? 0.3 : 1, marginRight: 4 }]}
+                              disabled={idx === 0 || reorderMutation.isPending}
+                              onPress={() => moveItem("lecture", folderLectures, idx, "up")}
+                            >
+                              <Ionicons name="chevron-up" size={13} color={Colors.light.text} />
+                            </Pressable>
+                            <Pressable
+                              style={[styles.deleteItemBtn, { backgroundColor: "#F3F4F6", opacity: idx === folderLectures.length - 1 ? 0.3 : 1, marginRight: 4 }]}
+                              disabled={idx === folderLectures.length - 1 || reorderMutation.isPending}
+                              onPress={() => moveItem("lecture", folderLectures, idx, "down")}
+                            >
+                              <Ionicons name="chevron-down" size={13} color={Colors.light.text} />
+                            </Pressable>
+                          </>
+                        )}
                         <Pressable
                           style={[styles.deleteItemBtn, { backgroundColor: "#EEF2FF", marginRight: 4 }]}
                           onPress={() => {
@@ -2366,7 +2518,11 @@ export default function AdminCourseScreen() {
                         </Pressable>
                       </View>
                     </View>
-                  ))}
+                    </SortableItem>
+                    ))}
+                    </SortableList>
+                    );
+                  })()}
                 </>
               )}
               {openAdminFolder?.type === "material" && (
@@ -2379,8 +2535,14 @@ export default function AdminCourseScreen() {
                   )}
                   {(() => {
                     const folderMaterials = course?.materials?.filter((m: any) => m.section_title === openAdminFolder.name) || [];
-                    return folderMaterials.map((mat: any, idx: number) => (
-                      <View key={mat.id} style={[styles.itemCard, { marginBottom: 8 }]}>
+                    return (
+                    <SortableList
+                      ids={folderMaterials.map((m: any) => m.id)}
+                      onReorder={(a, o) => reorderByDrag("material", folderMaterials, a, o)}
+                    >
+                    {folderMaterials.map((mat: any, idx: number) => (
+                      <SortableItem key={mat.id} id={mat.id}>
+                      <View style={[styles.itemCard, { marginBottom: 8 }]}>
                         <View style={styles.itemRow}>
                           <View style={[styles.itemIcon, { backgroundColor: "#FEE2E2" }]}><Ionicons name="document-text" size={16} color="#DC2626" /></View>
                           <View style={styles.itemInfo}>
@@ -2388,20 +2550,24 @@ export default function AdminCourseScreen() {
                             <Text style={styles.itemMeta}>{mat.file_type?.toUpperCase() || "PDF"}</Text>
                           </View>
                           <View style={{ flexDirection: "row", gap: 4, alignItems: "center" }}>
-                            <Pressable
-                              style={[styles.deleteItemBtn, { backgroundColor: "#F3F4F6", opacity: idx === 0 ? 0.3 : 1 }]}
-                              disabled={idx === 0 || reorderMutation.isPending}
-                              onPress={() => moveItem("material", folderMaterials, idx, "up")}
-                            >
-                              <Ionicons name="chevron-up" size={13} color={Colors.light.text} />
-                            </Pressable>
-                            <Pressable
-                              style={[styles.deleteItemBtn, { backgroundColor: "#F3F4F6", opacity: idx === folderMaterials.length - 1 ? 0.3 : 1 }]}
-                              disabled={idx === folderMaterials.length - 1 || reorderMutation.isPending}
-                              onPress={() => moveItem("material", folderMaterials, idx, "down")}
-                            >
-                              <Ionicons name="chevron-down" size={13} color={Colors.light.text} />
-                            </Pressable>
+                            {Platform.OS !== "web" && (
+                              <>
+                                <Pressable
+                                  style={[styles.deleteItemBtn, { backgroundColor: "#F3F4F6", opacity: idx === 0 ? 0.3 : 1 }]}
+                                  disabled={idx === 0 || reorderMutation.isPending}
+                                  onPress={() => moveItem("material", folderMaterials, idx, "up")}
+                                >
+                                  <Ionicons name="chevron-up" size={13} color={Colors.light.text} />
+                                </Pressable>
+                                <Pressable
+                                  style={[styles.deleteItemBtn, { backgroundColor: "#F3F4F6", opacity: idx === folderMaterials.length - 1 ? 0.3 : 1 }]}
+                                  disabled={idx === folderMaterials.length - 1 || reorderMutation.isPending}
+                                  onPress={() => moveItem("material", folderMaterials, idx, "down")}
+                                >
+                                  <Ionicons name="chevron-down" size={13} color={Colors.light.text} />
+                                </Pressable>
+                              </>
+                            )}
                             <Pressable style={[styles.deleteItemBtn, { backgroundColor: "#EEF2FF" }]} onPress={() => setFolderEditMaterial({ ...mat, fileUrl: mat.file_url || "", fileType: mat.file_type || "pdf", sectionTitle: mat.section_title || "", description: mat.description || "", downloadAllowed: mat.download_allowed || false })}>
                               <Ionicons name="pencil" size={14} color={Colors.light.primary} />
                             </Pressable>
@@ -2411,7 +2577,10 @@ export default function AdminCourseScreen() {
                           </View>
                         </View>
                       </View>
-                    ));
+                      </SortableItem>
+                    ))}
+                    </SortableList>
+                    );
                   })()}
                 </>
               )}

@@ -43,7 +43,7 @@ export function registerTestCoreRoutes({
         params.push(type);
         query += ` AND test_type = $${params.length}`;
       }
-      query += " ORDER BY created_at DESC";
+      query += " ORDER BY COALESCE(t.order_index, 0) ASC, t.created_at DESC";
       const user = await getAuthUser(req);
       const result = await db.query(query, params);
       let tests: any[] = result.rows;

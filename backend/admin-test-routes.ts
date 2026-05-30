@@ -25,7 +25,7 @@ export function registerAdminTestRoutes({
         FROM tests t 
         LEFT JOIN courses c ON t.course_id = c.id 
         WHERE t.course_id IS NULL
-        ORDER BY t.created_at DESC
+        ORDER BY COALESCE(t.order_index, 0) ASC, t.created_at DESC
       `);
       res.set("Cache-Control", "private, no-store");
       res.json(result.rows);
