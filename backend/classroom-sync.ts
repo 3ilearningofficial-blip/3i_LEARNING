@@ -613,7 +613,8 @@ export function attachClassroomSyncServer(
     if (!match) return;
 
     wss.handleUpgrade(req, socket, head, (socketConn) => {
-      void handleConnection(socketConn, req, match[1], db, getR2Client, match[2] || null);
+      const pathToken = match[2] ? decodeURIComponent(match[2]) : null;
+      void handleConnection(socketConn, req, match[1], db, getR2Client, pathToken);
     });
   });
 }
