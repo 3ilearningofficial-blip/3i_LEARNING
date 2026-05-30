@@ -88,8 +88,15 @@ export function startSchedulers(
 ): void {
   const runBackgroundSchedulers = process.env.RUN_BACKGROUND_SCHEDULERS !== "false";
 
+  // The keepalive must run in EVERY process — including api-only workers
+  // (RUN_BACKGROUND_SCHEDULERS=false). It exercises this process's own pool
+  // connections every 30s so the (cross-region) TLS sessions to Neon stay warm
+  // and the pooler doesn't drop them during quiet periods. Without this, the
+  // first request after an idle gap pays the full cold-connection handshake.
+  startNeonKeepalive(db);
+
   if (!runBackgroundSchedulers) {
-    console.log("[Schedulers] Background schedulers disabled (RUN_BACKGROUND_SCHEDULERS=false)");
+    console.log("[Schedulers] Background schedulers disabled (RUN_BACKGROUND_SCHEDULERS=false); keepalive still active");
     return;
   }
 
@@ -98,7 +105,6 @@ export function startSchedulers(
   startDownloadTokenCleanupScheduler(db, pool);
   startStuckLiveClassCleanupScheduler(db, pool);
   startLiveFinalizeQueueScheduler(db, pool);
-  startNeonKeepalive(db);
   startMediaTokenCleanupScheduler(db, pool);
 }
 

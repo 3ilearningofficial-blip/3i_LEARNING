@@ -104,6 +104,14 @@ if (!databaseUrl) {
 }
 
 const pgPoolMax = Math.min(50, Math.max(1, parseInt(process.env.PG_POOL_MAX || "10", 10) || 10));
+// Keep a few connections permanently warm. node-pg never reaps below `min`, so
+// these TLS sessions to Neon stay open and avoid paying the (cross-region)
+// handshake on every burst. This is the single biggest lever against the
+// repeated 1–3s "cold connection" spikes when EC2 and Neon are far apart; the
+// per-query round-trip itself only improves by co-locating the two regions.
+// Both are env-overridable so they can be tuned/reverted without a code change.
+const pgPoolMin = Math.min(pgPoolMax, Math.max(0, parseInt(process.env.PG_POOL_MIN || "2", 10) || 0));
+const pgIdleTimeoutMs = Math.max(1000, parseInt(process.env.PG_POOL_IDLE_MS || "60000", 10) || 60000);
 const pool = new Pool({
   connectionString: databaseUrl,
   ssl:
@@ -111,9 +119,9 @@ const pool = new Pool({
       ? { rejectUnauthorized: false }
       : { rejectUnauthorized: true },
   max: pgPoolMax,
-  min: 1,
+  min: pgPoolMin,
   connectionTimeoutMillis: 10000,
-  idleTimeoutMillis: 10000,   // release idle connections quickly (Neon closes them anyway)
+  idleTimeoutMillis: pgIdleTimeoutMs,
   statement_timeout: 25000,
   // Neon / PgBouncer / long-lived sockets benefit from TCP keep-alive.
   keepAlive: true,
@@ -121,6 +129,8 @@ const pool = new Pool({
 });
 console.log("[DB] Main pool configured", {
   max: pgPoolMax,
+  min: pgPoolMin,
+  idleTimeoutMs: pgIdleTimeoutMs,
   nodeEnv: process.env.NODE_ENV || "development",
   sslNoVerify: process.env.PGSSL_NO_VERIFY === "true",
 });
