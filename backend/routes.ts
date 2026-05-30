@@ -259,7 +259,14 @@ async function getAuthUser(req: Request): Promise<AuthUserResolved> {
       const user = await getAuthUserFromRequest(req, db);
       if (!user) return null;
       const boundOk = await enforceInstallationBinding(db, req, user.id, user.role);
-      if (!boundOk.ok) {
+      // Only a CONFIRMED different device (device_binding_mismatch) ends the
+      // session — that is the intended "bound device used on another device"
+      // logout. A merely MISSING device-id header (device_id_missing) must NOT
+      // log out an already-authenticated student: it happens intermittently when
+      // a request reaches the server without x-app-device-id (transient
+      // AsyncStorage/localStorage read failure, SSE, or a non-wrapped fetch),
+      // and was causing active users to be logged out mid-lecture.
+      if (!boundOk.ok && boundOk.code === "device_binding_mismatch") {
         (req.session as any).user = null;
         return null;
       }

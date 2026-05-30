@@ -501,7 +501,10 @@ export function registerAuthRoutes({
               photo_url: row.photo_url,
             };
             const bindBearer = await enforceInstallationBinding(db, req, row.id as number, row.role as string);
-            if (!bindBearer.ok) {
+            // Only a CONFIRMED different device ends the session. A missing
+            // device-id header (device_id_missing) must not log out an active
+            // student — see getAuthUser in routes.ts for the full rationale.
+            if (!bindBearer.ok && bindBearer.code === "device_binding_mismatch") {
               (req.session as any).user = null;
               return res.status(401).json({ message: bindBearer.code });
             }
@@ -570,7 +573,10 @@ export function registerAuthRoutes({
         }
       }
       const bindSes = await enforceInstallationBinding(db, req, sessionUser.id, row.role);
-      if (!bindSes.ok) {
+      // Only a CONFIRMED different device ends the session. A missing device-id
+      // header (device_id_missing) must not log out an active student — see
+      // getAuthUser in routes.ts for the full rationale.
+      if (!bindSes.ok && bindSes.code === "device_binding_mismatch") {
         (req.session as any).user = null;
         return res.status(401).json({ message: bindSes.code });
       }

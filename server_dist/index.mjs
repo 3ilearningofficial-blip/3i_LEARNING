@@ -26,10 +26,12 @@ var init_pg_rate_limit_store = __esm({
   "backend/pg-rate-limit-store.ts"() {
     "use strict";
     PgRateLimitStore = class {
-      constructor(pool2) {
+      constructor(pool2, options = {}) {
         this.pool = pool2;
+        this.options = options;
       }
       pool;
+      options;
       windowMs = 6e4;
       /** Marks this store as shared across instances (express-rate-limit contract). */
       localKeys = false;
@@ -50,6 +52,9 @@ var init_pg_rate_limit_store = __esm({
           };
         } catch (err) {
           console.error("[RateLimitStore] get failed:", err);
+          if (this.options.failClosed) {
+            return { totalHits: Number.MAX_SAFE_INTEGER, resetTime: new Date(Date.now() + this.windowMs) };
+          }
           return void 0;
         }
       }
@@ -79,6 +84,9 @@ var init_pg_rate_limit_store = __esm({
           };
         } catch (err) {
           console.error("[RateLimitStore] increment failed:", err);
+          if (this.options.failClosed) {
+            return { totalHits: Number.MAX_SAFE_INTEGER, resetTime: new Date(now + win) };
+          }
           return { totalHits: 1, resetTime: new Date(now + win) };
         }
       }
@@ -104,6 +112,227 @@ var init_pg_rate_limit_store = __esm({
           await this.pool.query(`DELETE FROM express_rate_limit`);
         } catch (err) {
           console.error("[RateLimitStore] resetAll failed:", err);
+        }
+      }
+      shutdown() {
+      }
+    };
+  }
+});
+
+// backend/redis-client.ts
+import { createClient } from "redis";
+function redisUrl() {
+  const raw = process.env.REDIS_URL?.trim();
+  return raw && raw.length > 0 ? raw : null;
+}
+async function getRedisClient() {
+  const url = redisUrl();
+  if (!url) {
+    if (!fallbackWarningLogged) {
+      fallbackWarningLogged = true;
+      console.warn(
+        "[Redis] REDIS_URL not set \u2014 rate limiting and notification dedup are using PostgreSQL fallback. This increases DB write load under traffic. Set REDIS_URL in .env to resolve."
+      );
+    }
+    return null;
+  }
+  if (client?.isOpen) return client;
+  if (!connectPromise) {
+    connectPromise = (async () => {
+      try {
+        const next = createClient({ url });
+        next.on("error", (err) => {
+          const message = err instanceof Error ? err.message : String(err);
+          console.error("[Redis] client error:", message);
+        });
+        await next.connect();
+        client = next;
+        if (fallbackWarningLogged) {
+          console.log("[Redis] reconnected \u2014 resuming Redis-backed rate limiting and dedup");
+          fallbackWarningLogged = false;
+        } else {
+          console.log("[Redis] connected");
+        }
+        return next;
+      } catch (err) {
+        console.error("[Redis] connect failed \u2014 falling back to PostgreSQL for rate limiting and dedup:", err);
+        if (!fallbackWarningLogged) {
+          fallbackWarningLogged = true;
+          console.warn(
+            "[Redis] FALLBACK ACTIVE \u2014 all Redis-dependent features (rate limits, OTP dedup, notification dedup) are now using PostgreSQL. Check REDIS_URL and Upstash connectivity."
+          );
+        }
+        client = null;
+        return null;
+      } finally {
+        connectPromise = null;
+      }
+    })();
+  }
+  return connectPromise;
+}
+var client, connectPromise, fallbackWarningLogged;
+var init_redis_client = __esm({
+  "backend/redis-client.ts"() {
+    "use strict";
+    client = null;
+    connectPromise = null;
+    fallbackWarningLogged = false;
+  }
+});
+
+// backend/redis-rate-limit-store.ts
+async function checkDownloadUrlRateLimitRedis(redis, userId, windowMs, max) {
+  try {
+    const key = `download_url:user:${userId}`;
+    const bucket = `ratelimit:${key}`;
+    const now = Date.now();
+    const script = `
+local key = KEYS[1]
+local nowMs = tonumber(ARGV[1])
+local windowMs = tonumber(ARGV[2])
+local existingReset = tonumber(redis.call('HGET', key, 'resetTimeMs') or '0')
+local existingHits = tonumber(redis.call('HGET', key, 'totalHits') or '0')
+local resetMs = existingReset
+local totalHits = existingHits
+
+if existingReset == 0 or existingReset <= nowMs then
+  totalHits = 1
+  resetMs = nowMs + windowMs
+else
+  totalHits = existingHits + 1
+end
+
+local ttlMs = resetMs - nowMs
+if ttlMs < 1000 then ttlMs = 1000 end
+redis.call('HSET', key, 'totalHits', tostring(totalHits), 'resetTimeMs', tostring(resetMs))
+redis.call('PEXPIRE', key, ttlMs)
+return { tostring(totalHits), tostring(resetMs) }
+`;
+    const out = await redis.eval(script, {
+      keys: [bucket],
+      arguments: [String(now), String(windowMs)]
+    });
+    const totalHits = Number(out?.[0] || 1);
+    return totalHits <= max;
+  } catch (err) {
+    console.error("[Redis] download-url rate limit failed:", err);
+    return null;
+  }
+}
+var RedisRateLimitStore;
+var init_redis_rate_limit_store = __esm({
+  "backend/redis-rate-limit-store.ts"() {
+    "use strict";
+    RedisRateLimitStore = class {
+      constructor(redis, bucketPrefix = "default", options = {}) {
+        this.redis = redis;
+        this.bucketPrefix = bucketPrefix;
+        this.options = options;
+      }
+      redis;
+      bucketPrefix;
+      options;
+      windowMs = 6e4;
+      localKeys = false;
+      init(options) {
+        this.windowMs = options.windowMs;
+      }
+      bucketKey(key) {
+        return `ratelimit:${this.bucketPrefix}:${key}`;
+      }
+      atomicIncrementScript = `
+local key = KEYS[1]
+local nowMs = tonumber(ARGV[1])
+local windowMs = tonumber(ARGV[2])
+local existingReset = tonumber(redis.call('HGET', key, 'resetTimeMs') or '0')
+local existingHits = tonumber(redis.call('HGET', key, 'totalHits') or '0')
+local resetMs = existingReset
+local totalHits = existingHits
+
+if existingReset == 0 or existingReset <= nowMs then
+  totalHits = 1
+  resetMs = nowMs + windowMs
+else
+  totalHits = existingHits + 1
+end
+
+local ttlMs = resetMs - nowMs
+if ttlMs < 1000 then ttlMs = 1000 end
+redis.call('HSET', key, 'totalHits', tostring(totalHits), 'resetTimeMs', tostring(resetMs))
+redis.call('PEXPIRE', key, ttlMs)
+return { tostring(totalHits), tostring(resetMs) }
+`;
+      async get(key) {
+        try {
+          const raw = await this.redis.hGetAll(this.bucketKey(key));
+          if (!raw.totalHits) return void 0;
+          return {
+            totalHits: Number(raw.totalHits),
+            resetTime: new Date(Number(raw.resetTimeMs))
+          };
+        } catch (err) {
+          console.error("[RedisRateLimitStore] get failed:", err);
+          if (this.options.failClosed) {
+            return { totalHits: Number.MAX_SAFE_INTEGER, resetTime: new Date(Date.now() + this.windowMs) };
+          }
+          return void 0;
+        }
+      }
+      async increment(key) {
+        const now = Date.now();
+        const win = this.windowMs;
+        const bucket = this.bucketKey(key);
+        try {
+          const out = await this.redis.eval(this.atomicIncrementScript, {
+            keys: [bucket],
+            arguments: [String(now), String(win)]
+          });
+          const totalHits = Number(out?.[0] || 1);
+          const nextReset = Number(out?.[1] || now + win);
+          return { totalHits, resetTime: new Date(nextReset) };
+        } catch (err) {
+          console.error("[RedisRateLimitStore] increment failed:", err);
+          if (this.options.failClosed) {
+            return { totalHits: Number.MAX_SAFE_INTEGER, resetTime: new Date(now + win) };
+          }
+          return { totalHits: 1, resetTime: new Date(now + win) };
+        }
+      }
+      async decrement(key) {
+        try {
+          const bucket = this.bucketKey(key);
+          const raw = await this.redis.hGetAll(bucket);
+          if (raw?.totalHits) {
+            const next = Math.max(0, Number(raw.totalHits) - 1);
+            const resetMs = raw.resetTimeMs ? Number(raw.resetTimeMs) : Date.now() + this.windowMs;
+            const ttlMs = Math.max(1e3, resetMs - Date.now());
+            await this.redis.multi().hSet(bucket, "totalHits", String(next)).pExpire(bucket, ttlMs).exec();
+          }
+        } catch (err) {
+          console.error("[RedisRateLimitStore] decrement failed:", err);
+        }
+      }
+      async resetKey(key) {
+        try {
+          await this.redis.del(this.bucketKey(key));
+        } catch (err) {
+          console.error("[RedisRateLimitStore] resetKey failed:", err);
+        }
+      }
+      async resetAll() {
+        try {
+          const pattern = `ratelimit:${this.bucketPrefix}:*`;
+          let cursor = "0";
+          do {
+            const scan = await this.redis.scan(cursor, { MATCH: pattern, COUNT: 200 });
+            cursor = String(scan.cursor);
+            const keys = scan.keys || [];
+            if (keys.length) await this.redis.del(keys);
+          } while (cursor !== "0");
+        } catch (err) {
+          console.error("[RedisRateLimitStore] resetAll failed:", err);
         }
       }
       shutdown() {
@@ -139,6 +368,17 @@ function createGenerateAIAnswer(db2) {
     const q = String(question || "").trim();
     const t = String(topic || "").trim();
     if (!q) return "Please share your full question so I can help step by step.";
+    const BLOCKED_PATTERNS = [
+      /\b(suicide|self.harm|self harm|kill (your|my)self)\b/i,
+      /\b(make|build|create|synthesize).{0,30}(bomb|explosive|weapon|poison|drug)\b/i,
+      /\b(porn|pornograph|nude|naked|sex video)\b/i,
+      /\b(hack|crack|exploit|phish).{0,20}(password|account|system|server)\b/i
+    ];
+    const rawInput = `${q} ${t}`;
+    if (BLOCKED_PATTERNS.some((re) => re.test(rawInput))) {
+      console.warn(`[AI Tutor] Blocked input from userId=${userId ?? "anon"} (content guard)`);
+      return "I can only help with academic study questions. Please ask something related to your course material.";
+    }
     const tokenize = (text) => text.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w.length > 2);
     const stop = /* @__PURE__ */ new Set([
       "the",
@@ -409,9 +649,94 @@ var init_db_utils = __esm({
   }
 });
 
+// backend/feature-flags.ts
+function parseBoolean(input) {
+  if (typeof input === "boolean") return input;
+  if (typeof input === "number") return input === 1 ? true : input === 0 ? false : null;
+  const raw = String(input ?? "").trim().toLowerCase();
+  if (!raw) return null;
+  if (["1", "true", "yes", "on"].includes(raw)) return true;
+  if (["0", "false", "no", "off"].includes(raw)) return false;
+  return null;
+}
+function getEnvFlag(name, fallback = false) {
+  const parsed = parseBoolean(process.env[name]);
+  return parsed == null ? fallback : parsed;
+}
+function listDefaultFlags() {
+  return { ...DEFAULT_FLAGS };
+}
+var DEFAULT_FLAGS;
+var init_feature_flags = __esm({
+  "backend/feature-flags.ts"() {
+    "use strict";
+    DEFAULT_FLAGS = {
+      fail_closed_auth_rate_limit: true,
+      fail_closed_media_rate_limit: true,
+      enable_cloudflare_stream_webhooks: false,
+      enable_runtime_flags_api: true
+    };
+  }
+});
+
+// backend/observability.ts
+function getBucket(key) {
+  let b = routeMetrics.get(key);
+  if (!b) {
+    b = { count: 0, errorCount: 0, totalLatencyMs: 0 };
+    routeMetrics.set(key, b);
+  }
+  return b;
+}
+function metricsMiddleware(req, res, next) {
+  const capturedPath = req.path;
+  const start = Date.now();
+  res.on("finish", () => {
+    const routePattern = req.route?.path;
+    const key = `${req.method} ${routePattern || capturedPath}`;
+    const b = getBucket(key);
+    b.count += 1;
+    b.totalLatencyMs += Date.now() - start;
+    if (res.statusCode >= 500) b.errorCount += 1;
+  });
+  next();
+}
+function getMetricsSnapshot() {
+  const routes = [];
+  for (const [key, b] of routeMetrics) {
+    routes.push({
+      key,
+      count: b.count,
+      errorRate: b.count > 0 ? b.errorCount / b.count : 0,
+      avgLatencyMs: b.count > 0 ? Math.round(b.totalLatencyMs / b.count) : 0
+    });
+  }
+  return {
+    collectedAt: Date.now(),
+    routes: routes.sort((a, b) => b.count - a.count).slice(0, 300),
+    counters: Object.fromEntries(counters.entries()),
+    gauges: Object.fromEntries(gauges.entries())
+  };
+}
+function incrementCounter(name, by = 1) {
+  counters.set(name, (counters.get(name) || 0) + by);
+}
+function setGauge(name, value) {
+  gauges.set(name, value);
+}
+var routeMetrics, counters, gauges;
+var init_observability = __esm({
+  "backend/observability.ts"() {
+    "use strict";
+    routeMetrics = /* @__PURE__ */ new Map();
+    counters = /* @__PURE__ */ new Map();
+    gauges = /* @__PURE__ */ new Map();
+  }
+});
+
 // backend/upload-config.ts
 import multer from "multer";
-var upload, uploadPdf, uploadLarge;
+var upload, uploadPdf;
 var init_upload_config = __esm({
   "backend/upload-config.ts"() {
     "use strict";
@@ -427,10 +752,6 @@ var init_upload_config = __esm({
         if (mimetype === "application/pdf") return cb(null, true);
         return cb(new Error("Only PDF files are allowed"));
       }
-    });
-    uploadLarge = multer({
-      storage: multer.memoryStorage(),
-      limits: { fileSize: 500 * 1024 * 1024 }
     });
   }
 });
@@ -503,7 +824,10 @@ function generateSecureToken(bytes = 32) {
   return randomBytes(bytes).toString("hex");
 }
 function hashOtpValue(otp) {
-  const secret = process.env.OTP_HMAC_SECRET || process.env.SESSION_SECRET || "dev-otp-secret";
+  const secret = process.env.OTP_HMAC_SECRET?.trim();
+  if (!secret) {
+    throw new Error("OTP_HMAC_SECRET must be set");
+  }
   return createHmac("sha256", secret).update(otp).digest("hex");
 }
 function verifyOtpValue(storedOtp, providedOtp) {
@@ -516,8 +840,9 @@ function verifyOtpValue(storedOtp, providedOtp) {
       return timingSafeEqual(storedBuffer, providedBuffer);
     }
   } catch {
+    return false;
   }
-  return storedOtp === providedOtp;
+  return false;
 }
 var init_security_utils = __esm({
   "backend/security-utils.ts"() {
@@ -867,7 +1192,7 @@ function isSessionLastActiveValid(row) {
   if (!la) return true;
   return la >= sessionMinActiveAt(row);
 }
-async function resolveUserBySessionToken(db2, token) {
+async function resolveUserBySessionToken(db2, token, deviceId) {
   const primary = await db2.query(
     "SELECT * FROM users WHERE session_token = $1 AND COALESCE(is_blocked, FALSE) = FALSE",
     [token]
@@ -880,15 +1205,23 @@ async function resolveUserBySessionToken(db2, token) {
   }
   const minCreatedAt = Date.now() - ADMIN_SESSION_MAX_AGE_MS;
   const extra = await db2.query(
-    `SELECT u.* FROM users u
+    `SELECT u.*, s.device_id AS _session_device_id
+     FROM users u
      INNER JOIN user_sessions s ON s.user_id = u.id AND s.session_token = $1
      WHERE u.role = 'admin' AND COALESCE(u.is_blocked, FALSE) = FALSE AND s.created_at >= $2`,
     [token, minCreatedAt]
   );
-  if (extra.rows.length > 0) {
-    return { row: extra.rows[0], matchedVia: "extra" };
+  if (extra.rows.length === 0) return null;
+  const sessionRow = extra.rows[0];
+  const boundDevice = sessionRow._session_device_id;
+  if (boundDevice && deviceId && boundDevice !== deviceId) {
+    console.warn(
+      `[AdminSessionBinding] Device mismatch for user ${sessionRow.id}: bound=${boundDevice} attempted=${deviceId}`
+    );
+    return null;
   }
-  return null;
+  const { _session_device_id: _discarded, ...userRow } = sessionRow;
+  return { row: userRow, matchedVia: "extra" };
 }
 async function userHasSessionToken(db2, userId, token) {
   if (!token) return false;
@@ -916,11 +1249,10 @@ async function persistLoginSession(db2, user, token, deviceId, opts) {
   const now = Date.now();
   const platformFamily = !isAdmin && opts.req ? getActiveSessionPlatformFamily(opts.req) : null;
   if (isAdmin) {
-    await db2.query("INSERT INTO user_sessions (user_id, session_token, created_at) VALUES ($1, $2, $3)", [
-      user.id,
-      token,
-      now
-    ]);
+    await db2.query(
+      "INSERT INTO user_sessions (user_id, session_token, device_id, created_at) VALUES ($1, $2, $3, $4)",
+      [user.id, token, deviceId ?? null, now]
+    );
     const urow = await db2.query("SELECT session_token FROM users WHERE id = $1", [user.id]);
     const hasPrimary = !!urow.rows[0]?.session_token;
     if (!hasPrimary) {
@@ -995,13 +1327,22 @@ function syncSessionUser(req, user) {
   }
 }
 async function getAuthUserFromRequest(req, db2) {
+  const cacheKey = "__auth_user_from_request_cache";
+  if (Object.prototype.hasOwnProperty.call(req, cacheKey)) {
+    return req[cacheKey];
+  }
+  const setCache = (val) => {
+    req[cacheKey] = val;
+    return val;
+  };
   const authHeader = req.headers.authorization;
   const bearerRaw = authHeader?.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
   const bearerToken = bearerRaw && bearerRaw !== "null" && bearerRaw !== "undefined" ? bearerRaw : "";
   if (bearerToken) {
     const token = bearerToken;
     try {
-      const resolved = await resolveUserBySessionToken(db2, token);
+      const requestDeviceId = getInstallationIdFromRequest(req);
+      const resolved = await resolveUserBySessionToken(db2, token, requestDeviceId);
       if (!resolved) {
         syncSessionUser(req, null);
         return null;
@@ -1009,18 +1350,18 @@ async function getAuthUserFromRequest(req, db2) {
       const u = resolved.row;
       if (u.is_blocked) {
         syncSessionUser(req, null);
-        return null;
+        return setCache(null);
       }
       const authUser = rowsToAuthUser(u, token);
       syncSessionUser(req, authUser);
-      return authUser;
+      return setCache(authUser);
     } catch (e) {
       console.error("[Auth] Bearer token lookup error:", e);
-      return null;
+      return setCache(null);
     }
   }
   const sessionUser = req.session.user;
-  if (!sessionUser?.id) return null;
+  if (!sessionUser?.id) return setCache(null);
   try {
     const result = await db2.query(
       "SELECT id, name, email, phone, role, session_token, profile_complete, is_blocked FROM users WHERE id = $1",
@@ -1028,34 +1369,53 @@ async function getAuthUserFromRequest(req, db2) {
     );
     if (result.rows.length === 0) {
       syncSessionUser(req, null);
-      return null;
+      return setCache(null);
     }
     const row = result.rows[0];
     if (row.is_blocked) {
       syncSessionUser(req, null);
-      return null;
+      return setCache(null);
     }
     const cookieTok = sessionUser.sessionToken;
     if (cookieTok && !await userHasSessionToken(db2, sessionUser.id, cookieTok)) {
       syncSessionUser(req, null);
-      return null;
+      return setCache(null);
     }
     if (row.session_token && !sessionUser.sessionToken) {
       syncSessionUser(req, null);
-      return null;
+      return setCache(null);
     }
     const authUser = rowsToAuthUser(row, cookieTok || row.session_token);
     syncSessionUser(req, authUser);
-    return authUser;
+    return setCache(authUser);
   } catch (e) {
     console.error("[Auth] Session user lookup error:", e);
-    return null;
+    return setCache(null);
   }
 }
 var init_auth_utils = __esm({
   "backend/auth-utils.ts"() {
     "use strict";
     init_user_sessions();
+    init_native_device_binding();
+  }
+});
+
+// backend/require-admin.ts
+function createRequireAdmin(getAuthUser2) {
+  return async function requireAdmin2(req, res, next) {
+    const user = await getAuthUser2(req);
+    if (!user || user.role !== "admin") {
+      res.status(403).json({ message: "Admin access required" });
+      return;
+    }
+    req.user = user;
+    next();
+  };
+}
+var init_require_admin = __esm({
+  "backend/require-admin.ts"() {
+    "use strict";
   }
 });
 
@@ -1101,6 +1461,132 @@ var init_password_utils = __esm({
     pbkdf2Async = promisify(pbkdf2Cb);
     PBKDF2_ITERATIONS = 21e4;
     KEY_LEN = 64;
+  }
+});
+
+// backend/auth-service.ts
+import { createHmac as createHmac2, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
+function getTokenSecret() {
+  const secret = process.env.OTP_HMAC_SECRET;
+  if (!secret) {
+    throw new Error("OTP_HMAC_SECRET must be set");
+  }
+  return secret;
+}
+function toBase64Url(buf) {
+  return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+function fromBase64Url(input) {
+  const pad = input.length % 4 === 0 ? "" : "=".repeat(4 - input.length % 4);
+  return Buffer.from(input.replace(/-/g, "+").replace(/_/g, "/") + pad, "base64");
+}
+function signRegistrationToken(payload) {
+  const body = {
+    ...payload,
+    exp: Date.now() + REGISTRATION_TOKEN_TTL_MS
+  };
+  const b64 = toBase64Url(Buffer.from(JSON.stringify(body), "utf8"));
+  const sig = toBase64Url(createHmac2("sha256", getTokenSecret()).update(b64).digest());
+  return `${b64}.${sig}`;
+}
+function verifyRegistrationToken(token) {
+  if (!token || typeof token !== "string") return null;
+  const dot = token.indexOf(".");
+  if (dot <= 0) return null;
+  const b64 = token.slice(0, dot);
+  const sig = token.slice(dot + 1);
+  const expected = toBase64Url(
+    createHmac2("sha256", getTokenSecret()).update(b64).digest()
+  );
+  const sigBuf = Buffer.from(sig, "utf8");
+  const expBuf = Buffer.from(expected, "utf8");
+  if (sigBuf.length !== expBuf.length) return null;
+  if (!timingSafeEqual3(sigBuf, expBuf)) return null;
+  try {
+    const json = fromBase64Url(b64).toString("utf8");
+    const obj = JSON.parse(json);
+    if (typeof obj.exp !== "number" || obj.exp < Date.now()) return null;
+    if (obj.type !== "phone" && obj.type !== "email") return null;
+    if (typeof obj.identifier !== "string" || !obj.identifier) return null;
+    return obj;
+  } catch {
+    return null;
+  }
+}
+function buildSessionUserFromRow(row, opts) {
+  return {
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    phone: row.phone,
+    role: row.role,
+    deviceId: opts.deviceId,
+    sessionToken: opts.sessionToken,
+    profileComplete: !!row.profile_complete,
+    date_of_birth: row.date_of_birth ?? null,
+    photo_url: row.photo_url ?? null
+  };
+}
+function regenerateSession(req) {
+  return new Promise((resolve2, reject) => {
+    req.session.regenerate((err) => {
+      if (err) reject(err);
+      else resolve2();
+    });
+  });
+}
+function destroySession(req) {
+  return new Promise((resolve2, reject) => {
+    req.session.destroy((err) => {
+      if (err) reject(err);
+      else resolve2();
+    });
+  });
+}
+function normalizePhone(input) {
+  const digits = String(input || "").replace(/\D/g, "");
+  if (digits.length >= 10) return digits.slice(-10);
+  return digits;
+}
+function normalizeEmail(input) {
+  return String(input || "").trim().toLowerCase();
+}
+function evaluateOtpSendThrottle(snap, now) {
+  const lockedUntil = snap.send_locked_until != null ? Number(snap.send_locked_until) : null;
+  if (lockedUntil != null && lockedUntil > now) {
+    return { ok: false, lockedUntil, reason: "quota" };
+  }
+  const lastSend = snap.last_send_at != null ? Number(snap.last_send_at) : null;
+  if (lastSend != null && now - lastSend < OTP_RESEND_COOLDOWN_MS) {
+    return {
+      ok: false,
+      lockedUntil: lastSend + OTP_RESEND_COOLDOWN_MS,
+      reason: "cooldown"
+    };
+  }
+  let count = Number(snap.send_count) || 0;
+  if (lockedUntil != null && lockedUntil <= now) {
+    count = 0;
+  }
+  if (count >= OTP_SENDS_PER_CYCLE) {
+    return { ok: false, lockedUntil: now + OTP_SEND_LOCK_MS, reason: "quota" };
+  }
+  const nextCount = count + 1;
+  const newSendLockedUntil = nextCount >= OTP_SENDS_PER_CYCLE ? now + OTP_SEND_LOCK_MS : null;
+  return { ok: true, nextCount, lastSendAt: now, newSendLockedUntil };
+}
+var REGISTRATION_TOKEN_TTL_MS, OTP_RESEND_COOLDOWN_MS, OTP_SENDS_PER_CYCLE, OTP_SEND_LOCK_MS, OTP_LOCKOUT_MESSAGE, OTP_COOLDOWN_MESSAGE, GENERIC_LOGIN_ERROR, GENERIC_OTP_ERROR;
+var init_auth_service = __esm({
+  "backend/auth-service.ts"() {
+    "use strict";
+    REGISTRATION_TOKEN_TTL_MS = 15 * 60 * 1e3;
+    OTP_RESEND_COOLDOWN_MS = 2 * 60 * 1e3;
+    OTP_SENDS_PER_CYCLE = 3;
+    OTP_SEND_LOCK_MS = 24 * 60 * 60 * 1e3;
+    OTP_LOCKOUT_MESSAGE = "Too many OTP attempts. Please try again after 24 hours.";
+    OTP_COOLDOWN_MESSAGE = "Please wait before requesting another OTP.";
+    GENERIC_LOGIN_ERROR = "Invalid credentials";
+    GENERIC_OTP_ERROR = "Invalid or expired OTP";
   }
 });
 
@@ -1192,103 +1678,6 @@ var init_user_account_purge = __esm({
 });
 
 // backend/auth-routes.ts
-import { createHmac as createHmac2, timingSafeEqual as timingSafeEqual3 } from "node:crypto";
-function getTokenSecret() {
-  return process.env.OTP_HMAC_SECRET || process.env.SESSION_SECRET || "dev-otp-secret";
-}
-function toBase64Url(buf) {
-  return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-}
-function fromBase64Url(input) {
-  const pad = input.length % 4 === 0 ? "" : "=".repeat(4 - input.length % 4);
-  return Buffer.from(input.replace(/-/g, "+").replace(/_/g, "/") + pad, "base64");
-}
-function signRegistrationToken(payload) {
-  const body = { ...payload, exp: Date.now() + REGISTRATION_TOKEN_TTL_MS };
-  const b64 = toBase64Url(Buffer.from(JSON.stringify(body), "utf8"));
-  const sig = toBase64Url(createHmac2("sha256", getTokenSecret()).update(b64).digest());
-  return `${b64}.${sig}`;
-}
-function verifyRegistrationToken(token) {
-  if (!token || typeof token !== "string") return null;
-  const dot = token.indexOf(".");
-  if (dot <= 0) return null;
-  const b64 = token.slice(0, dot);
-  const sig = token.slice(dot + 1);
-  const expected = toBase64Url(createHmac2("sha256", getTokenSecret()).update(b64).digest());
-  const sigBuf = Buffer.from(sig, "utf8");
-  const expBuf = Buffer.from(expected, "utf8");
-  if (sigBuf.length !== expBuf.length) return null;
-  if (!timingSafeEqual3(sigBuf, expBuf)) return null;
-  try {
-    const json = fromBase64Url(b64).toString("utf8");
-    const obj = JSON.parse(json);
-    if (typeof obj.exp !== "number" || obj.exp < Date.now()) return null;
-    if (obj.type !== "phone" && obj.type !== "email") return null;
-    if (typeof obj.identifier !== "string" || !obj.identifier) return null;
-    return obj;
-  } catch {
-    return null;
-  }
-}
-function buildSessionUserFromRow(row, opts) {
-  return {
-    id: row.id,
-    name: row.name,
-    email: row.email,
-    phone: row.phone,
-    role: row.role,
-    deviceId: opts.deviceId,
-    sessionToken: opts.sessionToken,
-    profileComplete: !!row.profile_complete,
-    date_of_birth: row.date_of_birth ?? null,
-    photo_url: row.photo_url ?? null
-  };
-}
-function regenerateSession(req) {
-  return new Promise((resolve2, reject) => {
-    req.session.regenerate((err) => {
-      if (err) reject(err);
-      else resolve2();
-    });
-  });
-}
-function destroySession(req) {
-  return new Promise((resolve2, reject) => {
-    req.session.destroy((err) => {
-      if (err) reject(err);
-      else resolve2();
-    });
-  });
-}
-function normalizePhone(input) {
-  const digits = String(input || "").replace(/\D/g, "");
-  if (digits.length >= 10) return digits.slice(-10);
-  return digits;
-}
-function normalizeEmail(input) {
-  return String(input || "").trim().toLowerCase();
-}
-function evaluateOtpSendThrottle(snap, now) {
-  const lockedUntil = snap.send_locked_until != null ? Number(snap.send_locked_until) : null;
-  if (lockedUntil != null && lockedUntil > now) {
-    return { ok: false, lockedUntil, reason: "quota" };
-  }
-  const lastSend = snap.last_send_at != null ? Number(snap.last_send_at) : null;
-  if (lastSend != null && now - lastSend < OTP_RESEND_COOLDOWN_MS) {
-    return { ok: false, lockedUntil: lastSend + OTP_RESEND_COOLDOWN_MS, reason: "cooldown" };
-  }
-  let count = Number(snap.send_count) || 0;
-  if (lockedUntil != null && lockedUntil <= now) {
-    count = 0;
-  }
-  if (count >= OTP_SENDS_PER_CYCLE) {
-    return { ok: false, lockedUntil: now + OTP_SEND_LOCK_MS, reason: "quota" };
-  }
-  const nextCount = count + 1;
-  const newSendLockedUntil = nextCount >= OTP_SENDS_PER_CYCLE ? now + OTP_SEND_LOCK_MS : null;
-  return { ok: true, nextCount, lastSendAt: now, newSendLockedUntil };
-}
 function registerAuthRoutes({
   app: app2,
   db: db2,
@@ -1363,7 +1752,7 @@ function registerAuthRoutes({
       const otp = generateOTP2();
       const otpHash = hashOtpValue2(otp);
       const otpExpires = now + 10 * 60 * 1e3;
-      const isDev = process.env.NODE_ENV !== "production";
+      const isDev = process.env.NODE_ENV === "development" && process.env.EXPOSE_DEV_OTP === "true";
       let lockedUntilForClient = null;
       const userRow = isPhone ? await db2.query(
         "SELECT id, otp_send_count, otp_send_window_start, otp_send_locked_until FROM users WHERE phone = $1",
@@ -1658,7 +2047,7 @@ function registerAuthRoutes({
               photo_url: row.photo_url
             };
             const bindBearer = await enforceInstallationBinding(db2, req, row.id, row.role);
-            if (!bindBearer.ok) {
+            if (!bindBearer.ok && bindBearer.code === "device_binding_mismatch") {
               req.session.user = null;
               return res.status(401).json({ message: bindBearer.code });
             }
@@ -1719,7 +2108,7 @@ function registerAuthRoutes({
         }
       }
       const bindSes = await enforceInstallationBinding(db2, req, sessionUser.id, row.role);
-      if (!bindSes.ok) {
+      if (!bindSes.ok && bindSes.code === "device_binding_mismatch") {
         req.session.user = null;
         return res.status(401).json({ message: bindSes.code });
       }
@@ -1746,8 +2135,10 @@ function registerAuthRoutes({
       };
       req.session.user = fresh;
       res.json(fresh);
-    } catch {
-      res.json(sessionUser);
+    } catch (err) {
+      console.error("[auth/me] session validation failed:", err);
+      req.session.user = null;
+      return res.status(503).json({ message: "Unable to validate session" });
     }
   });
   app2.post("/api/auth/firebase-login", async (req, res) => {
@@ -1757,7 +2148,10 @@ function registerAuthRoutes({
       const decoded = await verifyFirebaseToken2(idToken);
       const phoneNumber = decoded.phone_number;
       if (!phoneNumber) return res.status(400).json({ message: "Phone number not found in token" });
-      const phone = phoneNumber.replace(/^\+91/, "");
+      const phone = normalizePhone(phoneNumber);
+      if (!phone || phone.length < 10) {
+        return res.status(400).json({ message: "Invalid phone number in token" });
+      }
       const result = await db2.query("SELECT * FROM users WHERE phone = $1", [phone]);
       if (result.rows.length === 0) {
         return res.json(registrationTokenPayloadResponse(phone, "phone"));
@@ -1947,6 +2341,9 @@ function registerAuthRoutes({
           return res.status(409).json({ message: "This email is already in use. Use a different email or sign in." });
         }
       }
+      if (typeof password === "string" && password.length > 0 && password.length < 8) {
+        return res.status(400).json({ message: "Password must be at least 8 characters" });
+      }
       const passwordHash = password ? await hashPassword(password) : null;
       const photo = typeof photoUrl === "string" && photoUrl.length > 0 ? photoUrl : null;
       const dob = typeof dateOfBirth === "string" && dateOfBirth.length > 0 ? dateOfBirth : null;
@@ -1972,7 +2369,14 @@ function registerAuthRoutes({
         return res.status(gate.httpStatus).json({ message: gate.message });
       }
       const dev = typeof deviceId === "string" ? deviceId : null;
-      const finalized = await finalizeAuthenticatedSession(req, user, dev, true);
+      let finalized;
+      try {
+        finalized = await finalizeAuthenticatedSession(req, user, dev, true);
+      } catch (finalizeErr) {
+        await db2.query("DELETE FROM otp_challenges WHERE identifier = $1", [payload.identifier]).catch(() => {
+        });
+        throw finalizeErr;
+      }
       if (!finalized.success) {
         return res.status(finalized.httpStatus).json({ message: finalized.message });
       }
@@ -2008,7 +2412,20 @@ function registerAuthRoutes({
       if (normalizedName === void 0 && dateOfBirth === void 0 && email === void 0 && photoUrl === void 0 && !password) {
         return res.status(400).json({ message: "No profile fields provided" });
       }
+      if (email !== void 0 && email) {
+        const normalizedNewEmail = String(email).trim().toLowerCase();
+        const emailConflict = await db2.query(
+          "SELECT id FROM users WHERE LOWER(email) = LOWER($1) AND id != $2",
+          [normalizedNewEmail, user.id]
+        );
+        if (emailConflict.rows.length > 0) {
+          return res.status(409).json({ message: "This email is already in use by another account" });
+        }
+      }
       let passwordHash = null;
+      if (typeof password === "string" && password.length > 0 && password.length < 8) {
+        return res.status(400).json({ message: "Password must be at least 8 characters" });
+      }
       if (password) {
         passwordHash = await hashPassword(password);
       }
@@ -2061,8 +2478,8 @@ function registerAuthRoutes({
       const user = await getAuthUser2(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const { oldPassword, newPassword } = req.body;
-      if (!newPassword || newPassword.length < 6) {
-        return res.status(400).json({ message: "New password must be at least 6 characters" });
+      if (!newPassword || newPassword.length < 8) {
+        return res.status(400).json({ message: "Password must be at least 8 characters" });
       }
       const dbUser = await db2.query("SELECT password_hash FROM users WHERE id = $1", [user.id]);
       if (dbUser.rows.length === 0) return res.status(404).json({ message: "User not found" });
@@ -2084,22 +2501,14 @@ function registerAuthRoutes({
     }
   });
 }
-var GENERIC_LOGIN_ERROR, GENERIC_OTP_ERROR, OTP_RESEND_COOLDOWN_MS, OTP_SENDS_PER_CYCLE, OTP_SEND_LOCK_MS, OTP_LOCKOUT_MESSAGE, OTP_COOLDOWN_MESSAGE, REGISTRATION_TOKEN_TTL_MS;
 var init_auth_routes = __esm({
   "backend/auth-routes.ts"() {
     "use strict";
     init_password_utils();
+    init_auth_service();
     init_native_device_binding();
     init_user_sessions();
     init_user_account_purge();
-    GENERIC_LOGIN_ERROR = "Invalid credentials";
-    GENERIC_OTP_ERROR = "Invalid or expired OTP";
-    OTP_RESEND_COOLDOWN_MS = 2 * 60 * 1e3;
-    OTP_SENDS_PER_CYCLE = 3;
-    OTP_SEND_LOCK_MS = 24 * 60 * 60 * 1e3;
-    OTP_LOCKOUT_MESSAGE = "Too many OTP attempts. Please try again after 24 hours.";
-    OTP_COOLDOWN_MESSAGE = "Please wait before requesting another OTP.";
-    REGISTRATION_TOKEN_TTL_MS = 15 * 60 * 1e3;
   }
 });
 
@@ -2171,17 +2580,25 @@ var init_media_key_utils = __esm({
 });
 
 // backend/r2-presign-read.ts
-async function presignR2GetObject(getR2Client, objectKey, expiresInSeconds) {
+async function presignR2GetObject(getR2Client, objectKey, expiresInSeconds, enrollmentValidUntilMs) {
   const bucket = String(process.env.R2_BUCKET_NAME || "").trim();
   if (!bucket || !objectKey) return null;
   try {
     const r2 = await getR2Client();
     const { getSignedUrl } = await import("@aws-sdk/s3-request-presigner");
     const { GetObjectCommand } = await import("@aws-sdk/client-s3");
+    const nowMs2 = Date.now();
+    const baseExpiresInSeconds = Math.min(Math.max(60, expiresInSeconds), 7 * 24 * 60 * 60);
+    let effectiveExpiresInSeconds = baseExpiresInSeconds;
+    if (typeof enrollmentValidUntilMs === "number") {
+      const capSeconds = Math.floor((enrollmentValidUntilMs - nowMs2) / 1e3);
+      if (!Number.isFinite(capSeconds) || capSeconds <= 0) return null;
+      effectiveExpiresInSeconds = Math.min(baseExpiresInSeconds, Math.max(1, capSeconds));
+    }
     return await getSignedUrl(
       r2,
       new GetObjectCommand({ Bucket: bucket, Key: objectKey }),
-      { expiresIn: Math.min(Math.max(60, expiresInSeconds), 7 * 24 * 60 * 60) }
+      { expiresIn: effectiveExpiresInSeconds }
     );
   } catch (err) {
     console.warn("[r2-presign-read] failed:", err?.message || err);
@@ -2240,8 +2657,10 @@ function registerPdfRoutes({ app: app2, db: db2, getAuthUser: getAuthUser2, getR
     if (!fileKey) {
       return res.status(400).send("Invalid key");
     }
+    const variantsForDbMatch = mediaKeyMatchVariants(key);
     let expMs = null;
     let validToken = null;
+    let enrollmentValidUntilMs = null;
     if (token && typeof token === "string") {
       const tokenResult = await db2.query("SELECT user_id, expires_at FROM media_tokens WHERE token = $1 AND expires_at > $2 AND file_key = $3", [
         token,
@@ -2249,8 +2668,37 @@ function registerPdfRoutes({ app: app2, db: db2, getAuthUser: getAuthUser2, getR
         fileKey
       ]).catch(() => ({ rows: [] }));
       if (tokenResult.rows.length > 0) {
-        expMs = Number(tokenResult.rows[0].expires_at);
+        const tokenRow = tokenResult.rows[0];
+        expMs = Number(tokenRow.expires_at);
         validToken = token;
+        const userId = Number(tokenRow.user_id);
+        const candidates = [];
+        const lectureEnroll = await db2.query(
+          `SELECT e.valid_until
+           FROM lectures l
+           JOIN enrollments e ON e.user_id = $1 AND e.course_id = l.course_id
+           WHERE l.pdf_url_normalized = ANY($2::text[])
+             AND (e.status = 'active' OR e.status IS NULL)
+           LIMIT 1`,
+          [userId, variantsForDbMatch]
+        );
+        const v1 = lectureEnroll.rows[0]?.valid_until;
+        if (v1 != null) candidates.push(Number(v1));
+        const materialEnroll = await db2.query(
+          `SELECT e.valid_until
+           FROM study_materials sm
+           JOIN enrollments e ON e.user_id = $1 AND e.course_id = sm.course_id
+           WHERE sm.file_url_normalized = ANY($2::text[])
+             AND (e.status = 'active' OR e.status IS NULL)
+           LIMIT 1`,
+          [userId, variantsForDbMatch]
+        );
+        const v2 = materialEnroll.rows[0]?.valid_until;
+        if (v2 != null) candidates.push(Number(v2));
+        if (candidates.length > 0) enrollmentValidUntilMs = Math.min(...candidates);
+        if (enrollmentValidUntilMs != null && enrollmentValidUntilMs <= Date.now()) {
+          return res.status(401).send("Token expired or invalid");
+        }
       }
     }
     if (expMs === null) {
@@ -2258,8 +2706,14 @@ function registerPdfRoutes({ app: app2, db: db2, getAuthUser: getAuthUser2, getR
         `SELECT 1 FROM study_materials
            WHERE is_free = TRUE
              AND (
-               regexp_replace(regexp_replace(COALESCE(file_url,''),'^https?://[^/]+/',''),'^/+','') = $1
-               OR regexp_replace(COALESCE(file_url,''),'^https?://[^/]+/','') = $1
+               regexp_replace(
+                 regexp_replace(
+                   regexp_replace(COALESCE(file_url,''), '^https?://[^/]+/', ''),
+                   '^/?api/media/', ''
+                 ),
+                 '^/+', ''
+               ) = $1
+               OR regexp_replace(COALESCE(file_url_normalized,''), '^/?api/media/', '') = $1
              )
            LIMIT 1`,
         [fileKey]
@@ -2270,9 +2724,9 @@ function registerPdfRoutes({ app: app2, db: db2, getAuthUser: getAuthUser2, getR
       expMs = Date.now() + 10 * 60 * 1e3;
     }
     const ttlSec = Math.max(60, Math.floor((expMs - Date.now()) / 1e3));
-    const readUrl = await presignR2GetObject(getR2Client, fileKey, ttlSec);
+    const readUrl = await presignR2GetObject(getR2Client, fileKey, ttlSec, enrollmentValidUntilMs);
     const publicBase = publicApiBaseUrl();
-    const pdfUrl = readUrl || (validToken ? mediaProxyUrl(publicBase, fileKey, validToken) : null);
+    const pdfUrl = readUrl || (validToken && enrollmentValidUntilMs == null ? mediaProxyUrl(publicBase, fileKey, validToken) : null);
     if (!pdfUrl) {
       return res.status(500).send("Unable to generate access URL for this file");
     }
@@ -2501,6 +2955,93 @@ var init_course_access_utils = __esm({
   }
 });
 
+// backend/idempotency.ts
+import crypto2 from "node:crypto";
+function stableJson(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  const keys = Object.keys(value).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableJson(value[k])}`).join(",")}}`;
+}
+function requestHash(req) {
+  const body = stableJson(req.body ?? {});
+  return crypto2.createHash("sha256").update(body).digest("hex");
+}
+function getIdempotencyKey(req) {
+  const raw = String(req.get("idempotency-key") || req.get("x-idempotency-key") || "").trim();
+  if (!raw) return null;
+  if (raw.length > 128) return raw.slice(0, 128);
+  return raw;
+}
+async function getCachedIdempotentResponse(db2, userId, scope, idempotencyKey, reqHash) {
+  const result = await db2.query(
+    `SELECT status_code, response_json, request_hash
+     FROM api_idempotency_keys
+     WHERE user_id = $1 AND scope = $2 AND idempotency_key = $3
+     ORDER BY id DESC
+     LIMIT 1`,
+    [userId, scope, idempotencyKey]
+  );
+  if (!result.rows.length) return null;
+  const row = result.rows[0];
+  if (String(row.request_hash) !== reqHash) {
+    throw new Error("Idempotency key reuse with different payload");
+  }
+  return {
+    statusCode: Number(row.status_code) || 200,
+    responseJson: row.response_json ?? {}
+  };
+}
+async function saveIdempotentResponse(db2, userId, scope, idempotencyKey, reqHash, statusCode, responseJson) {
+  await db2.query(
+    `INSERT INTO api_idempotency_keys
+       (user_id, scope, idempotency_key, request_hash, response_json, status_code, created_at)
+     VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
+     ON CONFLICT (user_id, scope, idempotency_key)
+     DO UPDATE SET
+       request_hash = EXCLUDED.request_hash,
+       response_json = EXCLUDED.response_json,
+       status_code = EXCLUDED.status_code,
+       created_at = EXCLUDED.created_at`,
+    [userId, scope, idempotencyKey, reqHash, JSON.stringify(responseJson ?? {}), statusCode, Date.now()]
+  );
+}
+var init_idempotency = __esm({
+  "backend/idempotency.ts"() {
+    "use strict";
+  }
+});
+
+// backend/validation.ts
+function requireNumericBodyFields(fields) {
+  return (req, res, next) => {
+    for (const field of fields) {
+      const raw = req.body?.[field];
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n <= 0) {
+        return res.status(400).json({ message: `${field} must be a positive number` });
+      }
+    }
+    next();
+  };
+}
+function requireStringBodyFields(fields) {
+  return (req, res, next) => {
+    for (const field of fields) {
+      const raw = String(req.body?.[field] ?? "").trim();
+      if (!raw) {
+        return res.status(400).json({ message: `${field} is required` });
+      }
+    }
+    next();
+  };
+}
+var init_validation = __esm({
+  "backend/validation.ts"() {
+    "use strict";
+  }
+});
+
 // backend/payment-routes.ts
 function httpStatusForCourseVerifyError(message) {
   switch (message) {
@@ -2532,6 +3073,22 @@ function registerPaymentRoutes({
   verifyPaymentSignature: verifyPaymentSignature2,
   runInTransaction: runInTransaction2
 }) {
+  const withIdempotency = async (req, userId, scope, run) => {
+    const idempotencyKey = getIdempotencyKey(req);
+    if (!idempotencyKey) {
+      const out2 = await run();
+      return { statusCode: out2.statusCode ?? 200, body: out2.body };
+    }
+    const reqHash = requestHash(req);
+    const cached = await getCachedIdempotentResponse(db2, userId, scope, idempotencyKey, reqHash);
+    if (cached) {
+      return { statusCode: cached.statusCode, body: cached.responseJson };
+    }
+    const out = await run();
+    const statusCode = out.statusCode ?? 200;
+    await saveIdempotentResponse(db2, userId, scope, idempotencyKey, reqHash, statusCode, out.body);
+    return { statusCode, body: out.body };
+  };
   const logPaymentFailure = async (payload) => {
     try {
       await db2.query(
@@ -2550,7 +3107,8 @@ function registerPaymentRoutes({
         ]
       );
     } catch (err) {
-      console.error("[Payments] failed to log payment failure:", err);
+      console.error("[Payment] Failed to log payment failure:", err);
+      throw err;
     }
   };
   const verifyOrderOwnershipAndAmount = async ({
@@ -2670,141 +3228,151 @@ function registerPaymentRoutes({
       const price = course.rows[0]?.price || 0;
       const pricePaisa = Math.round(parseFloat(String(price)) * 100);
       const now = Date.now();
-      const updated = await db2.query(
-        `UPDATE payments AS p
-         SET click_count = COALESCE(p.click_count, 1) + 1,
-             status = 'created'
-         FROM (
-           SELECT id FROM payments
+      await runInTransaction2(async (tx) => {
+        const existing = await tx.query(
+          `SELECT id, status FROM payments
            WHERE user_id = $1 AND course_id = $2
-             AND (status = 'created' OR status IS NULL)
-             AND (razorpay_order_id IS NULL OR btrim(razorpay_order_id) = '')
            ORDER BY created_at DESC
            LIMIT 1
-         ) AS sub
-         WHERE p.id = sub.id
-         RETURNING p.id`,
-        [user.id, courseId]
-      );
-      if (updated.rows.length === 0) {
-        const paid = await db2.query(
-          "SELECT id FROM payments WHERE user_id = $1 AND course_id = $2 AND status = 'paid' LIMIT 1",
+           FOR UPDATE`,
           [user.id, courseId]
         );
-        if (paid.rows.length === 0) {
-          await db2.query(
+        if (existing.rows.length > 0) {
+          const row = existing.rows[0];
+          if (row.status !== "paid") {
+            await tx.query(
+              `UPDATE payments
+               SET click_count = COALESCE(click_count, 1) + 1,
+                   status = 'created'
+               WHERE id = $1`,
+              [row.id]
+            );
+          }
+        } else {
+          await tx.query(
             `INSERT INTO payments (user_id, course_id, amount, status, click_count, created_at)
              VALUES ($1, $2, $3, 'created', 1, $4)`,
             [user.id, courseId, pricePaisa, now]
           );
         }
-      }
+      });
       res.json({ ok: true });
     } catch {
       res.json({ ok: true });
     }
   });
-  app2.post("/api/payments/create-order", async (req, res) => {
+  app2.post("/api/payments/create-order", requireNumericBodyFields(["courseId"]), async (req, res) => {
     try {
       const user = await getAuthUser2(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
-      const { courseId } = req.body;
-      if (!courseId) return res.status(400).json({ message: "Course ID is required" });
-      const courseResult = await db2.query("SELECT * FROM courses WHERE id = $1", [courseId]);
-      if (courseResult.rows.length === 0) return res.status(404).json({ message: "Course not found" });
-      const course = courseResult.rows[0];
-      if (course.is_free) return res.status(400).json({ message: "This course is free, no payment needed" });
-      const endTs = course.end_date != null && String(course.end_date).trim() !== "" ? Date.parse(String(course.end_date).trim()) : null;
-      if (Number.isFinite(endTs) && endTs < Date.now()) {
-        return res.status(400).json({ message: "This course has ended" });
-      }
-      const existingEnrollment = await db2.query(
-        "SELECT valid_until, status FROM enrollments WHERE user_id = $1 AND course_id = $2 LIMIT 1",
-        [user.id, courseId]
-      );
-      if (existingEnrollment.rows.length > 0) {
-        const er = existingEnrollment.rows[0];
-        const statusOk = er.status == null || String(er.status).toLowerCase() === "active";
-        if (statusOk && !isEnrollmentExpired(er)) {
-          return res.status(400).json({ message: "Already enrolled" });
+      const out = await withIdempotency(req, user.id, "payments.create-order", async () => {
+        const { courseId } = req.body;
+        if (!courseId) return { statusCode: 400, body: { message: "Course ID is required" } };
+        const courseResult = await db2.query("SELECT * FROM courses WHERE id = $1", [courseId]);
+        if (courseResult.rows.length === 0) return { statusCode: 404, body: { message: "Course not found" } };
+        const course = courseResult.rows[0];
+        if (course.is_free) return { statusCode: 400, body: { message: "This course is free, no payment needed" } };
+        const endTs = course.end_date != null && String(course.end_date).trim() !== "" ? Date.parse(String(course.end_date).trim()) : null;
+        if (Number.isFinite(endTs) && endTs < Date.now()) {
+          return { statusCode: 400, body: { message: "This course has ended" } };
         }
-      }
-      const amount = Math.round(parseFloat(course.price) * 100);
-      const razorpay = getRazorpay2();
-      const order = await razorpay.orders.create({
-        amount,
-        currency: "INR",
-        receipt: `course_${courseId}_user_${user.id}_${Date.now()}`,
-        notes: { courseId: courseId.toString(), userId: user.id.toString(), courseTitle: course.title, kind: "course" }
-      });
-      console.log("[Payments] create-order success");
-      try {
-        await db2.query(
-          "INSERT INTO payments (user_id, course_id, razorpay_order_id, amount, status, click_count, created_at) VALUES ($1, $2, $3, $4, 'created', 1, $5)",
-          [user.id, courseId, order.id, amount, Date.now()]
+        const existingEnrollment = await db2.query(
+          "SELECT valid_until, status FROM enrollments WHERE user_id = $1 AND course_id = $2 LIMIT 1",
+          [user.id, courseId]
         );
-      } catch (insertErr) {
-        if (insertErr?.code === "23505") {
-          return res.status(409).json({ message: "Duplicate payment order; try again" });
+        if (existingEnrollment.rows.length > 0) {
+          const er = existingEnrollment.rows[0];
+          const statusOk = er.status == null || String(er.status).toLowerCase() === "active";
+          if (statusOk && !isEnrollmentExpired(er)) {
+            return { statusCode: 400, body: { message: "Already enrolled" } };
+          }
         }
-        throw insertErr;
-      }
-      res.json({
-        orderId: order.id,
-        amount: order.amount,
-        currency: order.currency,
-        keyId: process.env.RAZORPAY_KEY_ID,
-        courseName: course.title,
-        courseId
+        const amount = Math.round(parseFloat(course.price) * 100);
+        const razorpay = getRazorpay2();
+        const order = await razorpay.orders.create({
+          amount,
+          currency: "INR",
+          receipt: `course_${courseId}_user_${user.id}_${Date.now()}`,
+          notes: { courseId: courseId.toString(), userId: user.id.toString(), courseTitle: course.title, kind: "course" }
+        });
+        console.log("[Payments] create-order success");
+        try {
+          await db2.query(
+            "INSERT INTO payments (user_id, course_id, razorpay_order_id, amount, status, click_count, created_at) VALUES ($1, $2, $3, $4, 'created', 1, $5)",
+            [user.id, courseId, order.id, amount, Date.now()]
+          );
+        } catch (insertErr) {
+          if (insertErr?.code === "23505") {
+            return { statusCode: 409, body: { message: "Duplicate payment order; try again" } };
+          }
+          throw insertErr;
+        }
+        return {
+          statusCode: 200,
+          body: {
+            orderId: order.id,
+            amount: order.amount,
+            currency: order.currency,
+            keyId: process.env.RAZORPAY_KEY_ID,
+            courseName: course.title,
+            courseId
+          }
+        };
       });
+      return res.status(out.statusCode).json(out.body);
     } catch (err) {
       console.error("Create order error:", err);
       res.status(500).json({ message: "Failed to create payment order" });
     }
   });
-  app2.post("/api/payments/verify", async (req, res) => {
-    let authUserId = null;
-    try {
-      const user = await getAuthUser2(req);
-      if (!user) return res.status(401).json({ message: "Not authenticated" });
-      authUserId = Number(user.id) || null;
-      const { razorpay_order_id, razorpay_payment_id, razorpay_signature, courseId } = req.body;
-      if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
-        return res.status(400).json({ message: "Payment details are required" });
+  app2.post(
+    "/api/payments/verify",
+    requireStringBodyFields(["razorpay_order_id", "razorpay_payment_id", "razorpay_signature"]),
+    async (req, res) => {
+      let authUserId = null;
+      try {
+        const user = await getAuthUser2(req);
+        if (!user) return res.status(401).json({ message: "Not authenticated" });
+        authUserId = Number(user.id) || null;
+        const out = await withIdempotency(req, user.id, "payments.verify", async () => {
+          const { razorpay_order_id, razorpay_payment_id, razorpay_signature, courseId } = req.body;
+          if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+            return { statusCode: 400, body: { message: "Payment details are required" } };
+          }
+          const preBind = await assertNativePaidPurchaseInstallation(db2, user.id, req);
+          if (!preBind.ok) return { statusCode: 403, body: { message: preBind.message } };
+          const result = await completeCoursePaymentByOrder({
+            orderId: razorpay_order_id,
+            paymentId: razorpay_payment_id,
+            signature: razorpay_signature,
+            expectedUserId: user.id,
+            expectedCourseId: courseId
+          });
+          await finalizeInstallationBindAfterPurchase(db2, result.userId, req);
+          console.log("[Payments] verify success");
+          return { statusCode: 200, body: { success: true, message: "Payment verified and enrolled successfully" } };
+        });
+        return res.status(out.statusCode).json(out.body);
+      } catch (err) {
+        console.error("Verify payment error:", err);
+        const msg = err instanceof Error ? err.message : "";
+        await logPaymentFailure({
+          userId: authUserId,
+          courseId: Number(req.body?.courseId) || null,
+          orderId: req.body?.razorpay_order_id || null,
+          paymentId: req.body?.razorpay_payment_id || null,
+          source: "verify",
+          reason: msg || "Payment verification failed",
+          rawError: err instanceof Error ? { message: err.message, stack: err.stack } : err
+        });
+        const status = httpStatusForCourseVerifyError(msg);
+        if (status === 500) {
+          return res.status(500).json({ message: "Payment verification failed" });
+        }
+        return res.status(status).json({ message: msg || "Payment verification failed" });
       }
-      const preBind = await assertNativePaidPurchaseInstallation(db2, user.id, req);
-      if (!preBind.ok) {
-        return res.status(403).json({ message: preBind.message });
-      }
-      const result = await completeCoursePaymentByOrder({
-        orderId: razorpay_order_id,
-        paymentId: razorpay_payment_id,
-        signature: razorpay_signature,
-        expectedUserId: user.id,
-        expectedCourseId: courseId
-      });
-      await finalizeInstallationBindAfterPurchase(db2, result.userId, req);
-      console.log("[Payments] verify success");
-      res.json({ success: true, message: "Payment verified and enrolled successfully" });
-    } catch (err) {
-      console.error("Verify payment error:", err);
-      const msg = err instanceof Error ? err.message : "";
-      await logPaymentFailure({
-        userId: authUserId,
-        courseId: Number(req.body?.courseId) || null,
-        orderId: req.body?.razorpay_order_id || null,
-        paymentId: req.body?.razorpay_payment_id || null,
-        source: "verify",
-        reason: msg || "Payment verification failed",
-        rawError: err instanceof Error ? { message: err.message, stack: err.stack } : err
-      });
-      const status = httpStatusForCourseVerifyError(msg);
-      if (status === 500) {
-        return res.status(500).json({ message: "Payment verification failed" });
-      }
-      return res.status(status).json({ message: msg || "Payment verification failed" });
     }
-  });
+  );
   app2.post("/api/payments/sync-enrollment", async (req, res) => {
     try {
       const user = await getAuthUser2(req);
@@ -2923,26 +3491,32 @@ function registerPaymentRoutes({
       res.json({ ok: true });
     }
   });
-  app2.post("/api/tests/create-order", async (req, res) => {
+  app2.post("/api/tests/create-order", requireNumericBodyFields(["testId"]), async (req, res) => {
     try {
       const user = await getAuthUser2(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
-      const { testId } = req.body;
-      const testResult = await db2.query("SELECT id, title, price FROM tests WHERE id = $1", [testId]);
-      if (testResult.rows.length === 0) return res.status(404).json({ message: "Test not found" });
-      const test = testResult.rows[0];
-      if (!test.price || parseFloat(test.price) <= 0) return res.status(400).json({ message: "This test is free" });
-      const existing = await db2.query("SELECT id FROM test_purchases WHERE user_id = $1 AND test_id = $2", [user.id, testId]);
-      if (existing.rows.length > 0) return res.json({ alreadyPurchased: true });
-      const amount = Math.round(parseFloat(test.price) * 100);
-      const razorpay = getRazorpay2();
-      const order = await razorpay.orders.create({
-        amount,
-        currency: "INR",
-        receipt: `test_${testId}_user_${user.id}_${Date.now()}`,
-        notes: { testId: String(testId), userId: String(user.id), kind: "test" }
+      const out = await withIdempotency(req, user.id, "tests.create-order", async () => {
+        const { testId } = req.body;
+        const testResult = await db2.query("SELECT id, title, price FROM tests WHERE id = $1", [testId]);
+        if (testResult.rows.length === 0) return { statusCode: 404, body: { message: "Test not found" } };
+        const test = testResult.rows[0];
+        if (!test.price || parseFloat(test.price) <= 0) return { statusCode: 400, body: { message: "This test is free" } };
+        const existing = await db2.query("SELECT id FROM test_purchases WHERE user_id = $1 AND test_id = $2", [user.id, testId]);
+        if (existing.rows.length > 0) return { statusCode: 200, body: { alreadyPurchased: true } };
+        const amount = Math.round(parseFloat(test.price) * 100);
+        const razorpay = getRazorpay2();
+        const order = await razorpay.orders.create({
+          amount,
+          currency: "INR",
+          receipt: `test_${testId}_user_${user.id}_${Date.now()}`,
+          notes: { testId: String(testId), userId: String(user.id), kind: "test" }
+        });
+        return {
+          statusCode: 200,
+          body: { orderId: order.id, amount, currency: "INR", keyId: process.env.RAZORPAY_KEY_ID, testName: test.title }
+        };
       });
-      res.json({ orderId: order.id, amount, currency: "INR", keyId: process.env.RAZORPAY_KEY_ID, testName: test.title });
+      return res.status(out.statusCode).json(out.body);
     } catch (err) {
       console.error("Test create-order error:", err);
       res.status(500).json({ message: "Failed to create payment order" });
@@ -2988,40 +3562,46 @@ function registerPaymentRoutes({
       return res.redirect(fail);
     }
   });
-  app2.post("/api/tests/verify-payment", async (req, res) => {
-    try {
-      const user = await getAuthUser2(req);
-      if (!user) return res.status(401).json({ message: "Not authenticated" });
-      const { razorpay_order_id, razorpay_payment_id, razorpay_signature, testId } = req.body;
-      const parsedTestId = Number(testId);
-      if (!parsedTestId) return res.status(400).json({ message: "testId is required" });
-      const isValid = verifyPaymentSignature2(razorpay_order_id, razorpay_payment_id, razorpay_signature);
-      if (!isValid) return res.status(400).json({ message: "Invalid payment signature" });
-      const testResult = await db2.query("SELECT id, price FROM tests WHERE id = $1", [parsedTestId]);
-      if (!testResult.rows.length) return res.status(404).json({ message: "Test not found" });
-      const expectedAmount = Math.round(parseFloat(String(testResult.rows[0].price || "0")) * 100);
-      await verifyOrderOwnershipAndAmount({
-        orderId: razorpay_order_id,
-        expectedKind: "test",
-        expectedUserId: user.id,
-        expectedItemId: parsedTestId,
-        expectedAmount
-      });
-      const preTest = await assertNativePaidPurchaseInstallation(db2, user.id, req);
-      if (!preTest.ok) {
-        return res.status(403).json({ message: preTest.message });
+  app2.post(
+    "/api/tests/verify-payment",
+    requireStringBodyFields(["razorpay_order_id", "razorpay_payment_id", "razorpay_signature"]),
+    requireNumericBodyFields(["testId"]),
+    async (req, res) => {
+      try {
+        const user = await getAuthUser2(req);
+        if (!user) return res.status(401).json({ message: "Not authenticated" });
+        const out = await withIdempotency(req, user.id, "tests.verify-payment", async () => {
+          const { razorpay_order_id, razorpay_payment_id, razorpay_signature, testId } = req.body;
+          const parsedTestId = Number(testId);
+          if (!parsedTestId) return { statusCode: 400, body: { message: "testId is required" } };
+          const isValid = verifyPaymentSignature2(razorpay_order_id, razorpay_payment_id, razorpay_signature);
+          if (!isValid) return { statusCode: 400, body: { message: "Invalid payment signature" } };
+          const testResult = await db2.query("SELECT id, price FROM tests WHERE id = $1", [parsedTestId]);
+          if (!testResult.rows.length) return { statusCode: 404, body: { message: "Test not found" } };
+          const expectedAmount = Math.round(parseFloat(String(testResult.rows[0].price || "0")) * 100);
+          await verifyOrderOwnershipAndAmount({
+            orderId: razorpay_order_id,
+            expectedKind: "test",
+            expectedUserId: user.id,
+            expectedItemId: parsedTestId,
+            expectedAmount
+          });
+          const preTest = await assertNativePaidPurchaseInstallation(db2, user.id, req);
+          if (!preTest.ok) return { statusCode: 403, body: { message: preTest.message } };
+          await db2.query(
+            "INSERT INTO test_purchases (user_id, test_id, razorpay_order_id, razorpay_payment_id, created_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (user_id, test_id) DO NOTHING",
+            [user.id, parsedTestId, razorpay_order_id, razorpay_payment_id, Date.now()]
+          );
+          await finalizeInstallationBindAfterPurchase(db2, user.id, req);
+          return { statusCode: 200, body: { success: true } };
+        });
+        return res.status(out.statusCode).json(out.body);
+      } catch (err) {
+        console.error("Test verify-payment error:", err);
+        res.status(500).json({ message: "Failed to verify payment" });
       }
-      await db2.query(
-        "INSERT INTO test_purchases (user_id, test_id, razorpay_order_id, razorpay_payment_id, created_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (user_id, test_id) DO NOTHING",
-        [user.id, parsedTestId, razorpay_order_id, razorpay_payment_id, Date.now()]
-      );
-      await finalizeInstallationBindAfterPurchase(db2, user.id, req);
-      res.json({ success: true });
-    } catch (err) {
-      console.error("Test verify-payment error:", err);
-      res.status(500).json({ message: "Failed to verify payment" });
     }
-  });
+  );
   app2.get("/api/tests/:id/purchased", async (req, res) => {
     try {
       const user = await getAuthUser2(req);
@@ -3038,6 +3618,8 @@ var init_payment_routes = __esm({
     "use strict";
     init_course_access_utils();
     init_native_device_binding();
+    init_idempotency();
+    init_validation();
   }
 });
 
@@ -3075,7 +3657,7 @@ function registerSupportRoutes({
   listenPool: listenPool2,
   getAuthUser: getAuthUser2,
   requireAuth,
-  requireAdmin
+  requireAdmin: requireAdmin2
 }) {
   const listenPoolMax = listenPool2.options.max ?? 32;
   app2.get("/api/support/messages", async (req, res) => {
@@ -3222,7 +3804,7 @@ data: ${JSON.stringify({ message: "Realtime unavailable" })}
       res.status(500).json({ message: "Failed to send message" });
     }
   });
-  app2.get("/api/admin/support/conversations", requireAdmin, async (_req, res) => {
+  app2.get("/api/admin/support/conversations", requireAdmin2, async (_req, res) => {
     try {
       const result = await db2.query(`
         SELECT u.id AS user_id, u.name, u.email, u.phone,
@@ -3239,7 +3821,7 @@ data: ${JSON.stringify({ message: "Realtime unavailable" })}
       res.status(500).json({ message: "Failed to fetch conversations" });
     }
   });
-  app2.get("/api/admin/support/messages/:userId", requireAdmin, async (req, res) => {
+  app2.get("/api/admin/support/messages/:userId", requireAdmin2, async (req, res) => {
     try {
       const result = await db2.query(
         "SELECT * FROM support_messages WHERE user_id = $1 ORDER BY created_at ASC",
@@ -3250,7 +3832,7 @@ data: ${JSON.stringify({ message: "Realtime unavailable" })}
       res.status(500).json({ message: "Failed to fetch messages" });
     }
   });
-  app2.get("/api/admin/support/messages/:userId/stream", requireAdmin, async (req, res) => {
+  app2.get("/api/admin/support/messages/:userId/stream", requireAdmin2, async (req, res) => {
     const threadUserId = Number(req.params.userId);
     if (!Number.isFinite(threadUserId) || threadUserId <= 0) {
       return res.status(400).json({ message: "Invalid user" });
@@ -3346,7 +3928,7 @@ data: ${JSON.stringify({ message: "Realtime unavailable" })}
       void cleanup();
     }
   });
-  app2.post("/api/admin/support/messages/:userId/mark-read", requireAdmin, async (req, res) => {
+  app2.post("/api/admin/support/messages/:userId/mark-read", requireAdmin2, async (req, res) => {
     try {
       await db2.query(
         "UPDATE support_messages SET is_read = TRUE WHERE user_id = $1 AND sender = 'user' AND is_read = FALSE",
@@ -3357,7 +3939,7 @@ data: ${JSON.stringify({ message: "Realtime unavailable" })}
       res.status(500).json({ message: "Failed to mark messages read" });
     }
   });
-  app2.post("/api/admin/support/messages/:userId", requireAdmin, async (req, res) => {
+  app2.post("/api/admin/support/messages/:userId", requireAdmin2, async (req, res) => {
     try {
       const { message } = req.body;
       if (!message?.trim()) return res.status(400).json({ message: "Message required" });
@@ -3440,24 +4022,37 @@ function registerLiveChatRoutes({
   listenPool: listenPool2,
   getAuthUser: getAuthUser2,
   requireAuth,
-  requireAdmin
+  requireAdmin: requireAdmin2
 }) {
   const listenPoolMax = listenPool2.options.max ?? 32;
   app2.get("/api/live-classes/:id/chat", async (req, res) => {
     try {
       const hasAccess = await checkLiveClassAccess(req, res, db2, getAuthUser2, req.params.id);
       if (!hasAccess) return;
-      const { after } = req.query;
-      let query = "SELECT * FROM live_chat_messages WHERE live_class_id = $1";
-      const params = [req.params.id];
+      const { after, before } = req.query;
+      const PAGE_SIZE = 50;
+      let rows;
       if (after) {
-        params.push(after);
-        query += ` AND created_at > $${params.length}`;
+        const result = await db2.query(
+          "SELECT * FROM live_chat_messages WHERE live_class_id = $1 AND created_at > $2 ORDER BY created_at ASC LIMIT $3",
+          [req.params.id, after, PAGE_SIZE]
+        );
+        rows = result.rows;
+      } else if (before) {
+        const result = await db2.query(
+          "SELECT * FROM live_chat_messages WHERE live_class_id = $1 AND created_at < $2 ORDER BY created_at DESC LIMIT $3",
+          [req.params.id, before, PAGE_SIZE]
+        );
+        rows = result.rows.reverse();
+      } else {
+        const result = await db2.query(
+          "SELECT * FROM live_chat_messages WHERE live_class_id = $1 ORDER BY created_at DESC LIMIT $2",
+          [req.params.id, PAGE_SIZE]
+        );
+        rows = result.rows.reverse();
       }
-      query += " ORDER BY created_at ASC LIMIT 200";
-      const result = await db2.query(query, params);
       res.set("Cache-Control", "private, no-store");
-      res.json(result.rows);
+      res.json(rows);
     } catch {
       res.status(500).json({ message: "Failed to fetch chat" });
     }
@@ -3582,7 +4177,7 @@ data: ${JSON.stringify({ message: "Realtime unavailable" })}
       res.status(500).json({ message: "Failed to send message" });
     }
   });
-  app2.delete("/api/admin/live-classes/:lcId/chat/:msgId", requireAdmin, async (req, res) => {
+  app2.delete("/api/admin/live-classes/:lcId/chat/:msgId", requireAdmin2, async (req, res) => {
     try {
       await db2.query("DELETE FROM live_chat_messages WHERE id = $1 AND live_class_id = $2", [req.params.msgId, req.params.lcId]);
       res.json({ success: true });
@@ -3625,8 +4220,21 @@ function registerLiveClassEngagementRoutes({
   app: app2,
   db: db2,
   requireAuth,
-  requireAdmin
+  requireAdmin: requireAdmin2
 }) {
+  app2.get("/api/live-classes/:id/recording-progress", requireAuth, async (req, res) => {
+    try {
+      const user = req.user;
+      const result = await db2.query(
+        "SELECT watch_percent, COALESCE(last_position_seconds, 0) AS last_position_seconds FROM live_class_recording_progress WHERE user_id = $1 AND live_class_id = $2",
+        [user.id, req.params.id]
+      );
+      if (result.rows.length === 0) return res.json({ watch_percent: 0, last_position_seconds: 0 });
+      res.json(result.rows[0]);
+    } catch {
+      res.json({ watch_percent: 0, last_position_seconds: 0 });
+    }
+  });
   app2.post("/api/live-classes/:id/recording-progress", requireAuth, async (req, res) => {
     try {
       const user = req.user;
@@ -3645,17 +4253,19 @@ function registerLiveClassEngagementRoutes({
       const body = req.body || {};
       const openSession = Boolean(body.openSession);
       const watchPercentRaw = body.watchPercent != null ? Number(body.watchPercent) : null;
+      const lastPositionSeconds = Math.max(0, Math.floor(Number(body.lastPositionSeconds) || 0));
       const now = Date.now();
       const debounceMs = 8 * 60 * 1e3;
       if (watchPercentRaw != null && Number.isFinite(watchPercentRaw)) {
         const wp = Math.max(0, Math.min(100, Math.round(watchPercentRaw)));
         await db2.query(
-          `INSERT INTO live_class_recording_progress (user_id, live_class_id, watch_percent, playback_sessions, last_session_ping_at, updated_at)
-           VALUES ($1, $2, $3, 0, NULL, $4)
+          `INSERT INTO live_class_recording_progress (user_id, live_class_id, watch_percent, playback_sessions, last_session_ping_at, updated_at, last_position_seconds)
+           VALUES ($1, $2, $3, 0, NULL, $4, $5)
            ON CONFLICT (user_id, live_class_id) DO UPDATE SET
              watch_percent = GREATEST(live_class_recording_progress.watch_percent, EXCLUDED.watch_percent),
+             last_position_seconds = EXCLUDED.last_position_seconds,
              updated_at = EXCLUDED.updated_at`,
-          [user.id, req.params.id, wp, now]
+          [user.id, req.params.id, wp, now, lastPositionSeconds]
         );
       }
       if (openSession) {
@@ -3665,20 +4275,23 @@ function registerLiveClassEngagementRoutes({
         );
         const row = prev.rows[0];
         const canBump = !row?.last_session_ping_at || now - Number(row.last_session_ping_at) >= debounceMs;
-        if (!row) {
+        if (!row || canBump) {
           await db2.query(
             `INSERT INTO live_class_recording_progress (user_id, live_class_id, watch_percent, playback_sessions, last_session_ping_at, updated_at)
-             VALUES ($1, $2, 0, 1, $3, $3)`,
-            [user.id, req.params.id, now]
-          );
-        } else if (canBump) {
-          await db2.query(
-            `UPDATE live_class_recording_progress SET
-               playback_sessions = COALESCE(playback_sessions, 0) + 1,
-               last_session_ping_at = $3,
-               updated_at = $3
-             WHERE user_id = $1 AND live_class_id = $2`,
-            [user.id, req.params.id, now]
+             VALUES ($1, $2, 0, 1, $3, $3)
+             ON CONFLICT (user_id, live_class_id) DO UPDATE SET
+               playback_sessions = CASE
+                 WHEN live_class_recording_progress.last_session_ping_at IS NULL OR $3 - live_class_recording_progress.last_session_ping_at >= $4
+                 THEN COALESCE(live_class_recording_progress.playback_sessions, 0) + 1
+                 ELSE COALESCE(live_class_recording_progress.playback_sessions, 0)
+               END,
+               last_session_ping_at = CASE
+                 WHEN live_class_recording_progress.last_session_ping_at IS NULL OR $3 - live_class_recording_progress.last_session_ping_at >= $4
+                 THEN $3
+                 ELSE live_class_recording_progress.last_session_ping_at
+               END,
+               updated_at = $3`,
+            [user.id, req.params.id, now, debounceMs]
           );
         }
       }
@@ -3723,6 +4336,21 @@ function registerLiveClassEngagementRoutes({
     } catch (err) {
       console.error("Viewer heartbeat error:", err);
       res.status(500).json({ message: "Failed to update heartbeat" });
+    }
+  });
+  app2.delete("/api/live-classes/:id/viewers/heartbeat", requireAuth, async (req, res) => {
+    try {
+      const user = req.user;
+      await db2.query(
+        `UPDATE live_class_viewers
+         SET last_heartbeat = 0
+         WHERE live_class_id = $1 AND user_id = $2`,
+        [req.params.id, user.id]
+      );
+      res.json({ success: true });
+    } catch (err) {
+      console.error("Viewer leave error:", err);
+      res.status(500).json({ message: "Failed to update viewer leave" });
     }
   });
   app2.get("/api/live-classes/:id/viewers", requireAuth, async (req, res) => {
@@ -3792,7 +4420,7 @@ function registerLiveClassEngagementRoutes({
       res.status(500).json({ message: "Failed to lower hand" });
     }
   });
-  app2.get("/api/admin/live-classes/:id/raised-hands", requireAdmin, async (req, res) => {
+  app2.get("/api/admin/live-classes/:id/raised-hands", requireAdmin2, async (req, res) => {
     try {
       const result = await db2.query(
         "SELECT id, user_id, user_name, raised_at FROM live_class_hand_raises WHERE live_class_id = $1 ORDER BY raised_at ASC",
@@ -3804,7 +4432,7 @@ function registerLiveClassEngagementRoutes({
       res.status(500).json({ message: "Failed to fetch raised hands" });
     }
   });
-  app2.post("/api/admin/live-classes/:id/raised-hands/:userId/resolve", requireAdmin, async (req, res) => {
+  app2.post("/api/admin/live-classes/:id/raised-hands/:userId/resolve", requireAdmin2, async (req, res) => {
     try {
       await db2.query("DELETE FROM live_class_hand_raises WHERE live_class_id = $1 AND user_id = $2", [req.params.id, req.params.userId]);
       res.json({ success: true });
@@ -3880,12 +4508,14 @@ async function saveRecordingForClassAndPeers(db2, liveClassId, recordingUrl, opt
       row.lecture_subfolder_title,
       opts.sectionTitle
     );
+    const visibleAfterAt = row.is_recording_mode && row.visible_after_at ? Number(row.visible_after_at) : null;
     const lectureResult = await db2.query(
       `INSERT INTO lectures (
          course_id, title, description, video_url, video_type, duration_minutes,
-         order_index, is_free_preview, section_title, live_class_id, live_class_finalized, created_at
+         order_index, is_free_preview, section_title, live_class_id, live_class_finalized,
+         visible_after_at, created_at
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE, $11)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE, $11, $12)
        ON CONFLICT (live_class_id) WHERE live_class_id IS NOT NULL
        DO UPDATE SET
          course_id = EXCLUDED.course_id,
@@ -3905,6 +4535,7 @@ async function saveRecordingForClassAndPeers(db2, liveClassId, recordingUrl, opt
          END,
          duration_minutes = EXCLUDED.duration_minutes,
          section_title = EXCLUDED.section_title,
+         visible_after_at = EXCLUDED.visible_after_at,
          live_class_finalized = TRUE
        RETURNING id`,
       [
@@ -3918,14 +4549,11 @@ async function saveRecordingForClassAndPeers(db2, liveClassId, recordingUrl, opt
         false,
         recordSection,
         row.id,
+        visibleAfterAt,
         Date.now()
       ]
     );
     lectureIds.push(Number(lectureResult.rows[0]?.id));
-    await db2.query(
-      "UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1",
-      [row.course_id]
-    );
     if (opts.recomputeCourseProgress) {
       await opts.recomputeCourseProgress(row.course_id);
     }
@@ -4033,15 +4661,131 @@ var init_cloudflare_stream_download = __esm({
   }
 });
 
+// backend/cloudflare-stream-api.ts
+function normalizeCfVideoItems(payload) {
+  const raw = payload?.result;
+  if (Array.isArray(raw)) return raw;
+  if (Array.isArray(raw?.videos)) return raw.videos;
+  if (Array.isArray(payload?.videos)) return payload.videos;
+  return [];
+}
+function pickBestCfRecording(items, excludeUid) {
+  if (!items.length) return null;
+  const filtered = items.filter((v) => {
+    const id = String(v?.uid || v?.id || "");
+    return id && (!excludeUid || id !== excludeUid);
+  });
+  const pool2 = filtered.length ? filtered : items;
+  const statusRank = (s) => {
+    const x = String(s || "").toLowerCase();
+    if (x === "ready") return 0;
+    if (x === "inprogress" || x.includes("progress") || x === "queued" || x === "downloading") return 1;
+    return 2;
+  };
+  const sorted = [...pool2].sort((a, b) => {
+    const ra = statusRank(a?.status);
+    const rb = statusRank(b?.status);
+    if (ra !== rb) return ra - rb;
+    const ta = Number(a?.modified || a?.created || 0);
+    const tb = Number(b?.modified || b?.created || 0);
+    return tb - ta;
+  });
+  const best = sorted[0];
+  const recordingUid = String(best?.uid || best?.id || "").trim();
+  if (!recordingUid || recordingUid === excludeUid) return null;
+  return {
+    recordingUid,
+    manifestUrl: `https://videodelivery.net/${recordingUid}/manifest/video.m3u8`,
+    status: String(best?.status || "unknown")
+  };
+}
+async function getLatestRecordingForLiveInput(accountId, apiToken, liveInputUid) {
+  try {
+    const res = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/live_inputs/${liveInputUid}/videos`,
+      { headers: { Authorization: `Bearer ${apiToken}` } }
+    );
+    if (!res.ok) {
+      console.warn("[CF Stream API] live_inputs videos HTTP", res.status);
+      return null;
+    }
+    const data = await res.json();
+    const items = normalizeCfVideoItems(data);
+    if (!items.length) return null;
+    return pickBestCfRecording(items, liveInputUid);
+  } catch {
+    return null;
+  }
+}
+async function getCfVideoByUid(accountId, apiToken, videoUid) {
+  try {
+    const res = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/${videoUid}`,
+      { headers: { Authorization: `Bearer ${apiToken}` } }
+    );
+    if (!res.ok) {
+      console.warn("[CF Stream API] get video HTTP", res.status, `uid=${videoUid}`);
+      return null;
+    }
+    const data = await res.json();
+    const vid = data?.result;
+    const uid = String(vid?.uid || "").trim();
+    if (!uid) return null;
+    return {
+      recordingUid: uid,
+      manifestUrl: `https://videodelivery.net/${uid}/manifest/video.m3u8`,
+      status: String(vid?.status?.state || vid?.status || "unknown")
+    };
+  } catch {
+    return null;
+  }
+}
+async function findRecordingViaStreamSearch(accountId, apiToken, liveClassTitle, excludeLiveInputUid) {
+  const q = String(liveClassTitle || "").trim();
+  if (q.length < 2) return null;
+  try {
+    const u = new URL(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream`);
+    u.searchParams.set("search", q);
+    u.searchParams.set("limit", "40");
+    const res = await fetch(u.toString(), {
+      headers: { Authorization: `Bearer ${apiToken}` }
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const items = normalizeCfVideoItems(data);
+    const qLow = q.toLowerCase();
+    const matched = items.filter((v) => {
+      const id = String(v?.uid || v?.id || "");
+      if (!id || id === excludeLiveInputUid) return false;
+      const metaName = String(v?.meta?.name || "").trim().toLowerCase();
+      const nameField = String(v?.name || "").trim().toLowerCase();
+      if (metaName && metaName === qLow) return true;
+      if (nameField && nameField === qLow) return true;
+      return metaName.includes(qLow) || nameField.includes(qLow);
+    });
+    const pool2 = matched.length ? matched : items.filter((v) => String(v?.uid || "") && String(v.uid) !== excludeLiveInputUid);
+    return pickBestCfRecording(pool2, excludeLiveInputUid);
+  } catch {
+    return null;
+  }
+}
+var init_cloudflare_stream_api = __esm({
+  "backend/cloudflare-stream-api.ts"() {
+    "use strict";
+  }
+});
+
 // backend/live-stream-routes.ts
 function registerLiveStreamRoutes({
   app: app2,
   db: db2,
-  requireAdmin,
+  pool: pool2,
+  requireAdmin: requireAdmin2,
   recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse3,
   getR2Client
 }) {
   const archiveRetryState = /* @__PURE__ */ new Map();
+  const MAX_ARCHIVE_ATTEMPTS = 48;
   const inferVideoType3 = (url) => {
     const lower = String(url || "").toLowerCase();
     if (lower.includes("youtube.com") || lower.includes("youtu.be")) return "youtube";
@@ -4072,7 +4816,14 @@ function registerLiveStreamRoutes({
       let source = null;
       let matchedUrl = "";
       for (const candidateUrl of candidateUrls) {
-        const resp = await fetch(candidateUrl);
+        const controller = new AbortController();
+        const fetchTimeout = setTimeout(() => controller.abort(), 3e5);
+        let resp;
+        try {
+          resp = await fetch(candidateUrl, { signal: controller.signal });
+        } finally {
+          clearTimeout(fetchTimeout);
+        }
         if (resp.ok && resp.body) {
           source = resp;
           matchedUrl = candidateUrl;
@@ -4081,16 +4832,23 @@ function registerLiveStreamRoutes({
         }
         const prev = archiveRetryState.get(recordingUid) || { attempts: 0, nextAttemptAt: 0, lastStatus: null };
         const attempts = prev.attempts + 1;
-        const backoffMs = Math.min(6 * 60 * 60 * 1e3, Math.max(2 * 60 * 1e3, attempts * 10 * 60 * 1e3));
-        archiveRetryState.set(recordingUid, {
-          attempts,
-          nextAttemptAt: Date.now() + backoffMs,
-          lastStatus: resp.status
-        });
-        if (attempts === 1 || attempts % 10 === 0) {
+        if (attempts >= MAX_ARCHIVE_ATTEMPTS) {
+          archiveRetryState.delete(recordingUid);
           console.warn(
-            `[CF Stream] MP4 fetch not ready uid=${recordingUid} status=${resp.status} attempt=${attempts} nextRetryInMs=${backoffMs}`
+            `[CF Stream] MP4 fetch permanently abandoned uid=${recordingUid} status=${resp.status} after ${attempts} attempts`
           );
+        } else {
+          const backoffMs = Math.min(6 * 60 * 60 * 1e3, Math.max(2 * 60 * 1e3, attempts * 10 * 60 * 1e3));
+          archiveRetryState.set(recordingUid, {
+            attempts,
+            nextAttemptAt: Date.now() + backoffMs,
+            lastStatus: resp.status
+          });
+          if (attempts === 1 || attempts % 10 === 0) {
+            console.warn(
+              `[CF Stream] MP4 fetch not ready uid=${recordingUid} status=${resp.status} attempt=${attempts} nextRetryInMs=${backoffMs}`
+            );
+          }
         }
       }
       if (!source || !source.body) return null;
@@ -4117,27 +4875,27 @@ function registerLiveStreamRoutes({
       return null;
     }
   };
-  const normalizeCfVideoItems = (payload) => {
+  const normalizeCfVideoItems2 = (payload) => {
     const raw = payload?.result;
     if (Array.isArray(raw)) return raw;
     if (Array.isArray(raw?.videos)) return raw.videos;
     if (Array.isArray(payload?.videos)) return payload.videos;
     return [];
   };
-  const pickBestCfRecording = (items, excludeUid) => {
+  const pickBestCfRecording2 = (items, excludeUid) => {
     if (!items.length) return null;
     const filtered = items.filter((v) => {
       const id = String(v?.uid || v?.id || "");
       return id && (!excludeUid || id !== excludeUid);
     });
-    const pool2 = filtered.length ? filtered : items;
+    const pool3 = filtered.length ? filtered : items;
     const statusRank = (s) => {
       const x = String(s || "").toLowerCase();
       if (x === "ready") return 0;
       if (x.includes("progress") || x === "queued" || x === "downloading") return 1;
       return 2;
     };
-    const sorted = [...pool2].sort((a, b) => {
+    const sorted = [...pool3].sort((a, b) => {
       const ra = statusRank(a?.status);
       const rb = statusRank(b?.status);
       if (ra !== rb) return ra - rb;
@@ -4153,57 +4911,13 @@ function registerLiveStreamRoutes({
       recordingUid
     };
   };
-  const getLatestRecordingForLiveInput = async (accountId, apiToken, liveInputUid) => {
-    try {
-      const videosRes = await fetch(
-        `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/live_inputs/${liveInputUid}/videos`,
-        { headers: { Authorization: `Bearer ${apiToken}` } }
-      );
-      if (!videosRes.ok) {
-        const txt = await videosRes.text().catch(() => "");
-        console.warn("[CF Stream] live_inputs/.../videos HTTP", videosRes.status, txt.slice(0, 280));
-        return null;
-      }
-      const videosData = await videosRes.json();
-      const items = normalizeCfVideoItems(videosData);
-      if (!items.length) return null;
-      return pickBestCfRecording(items, liveInputUid);
-    } catch {
-      return null;
-    }
-  };
-  const findRecordingViaStreamSearch = async (accountId, apiToken, liveClassTitle, excludeLiveInputUid) => {
-    const q = String(liveClassTitle || "").trim();
-    if (q.length < 2) return null;
-    try {
-      const u = new URL(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream`);
-      u.searchParams.set("search", q);
-      u.searchParams.set("limit", "40");
-      const res = await fetch(u.toString(), { headers: { Authorization: `Bearer ${apiToken}` } });
-      if (!res.ok) return null;
-      const data = await res.json();
-      const items = normalizeCfVideoItems(data);
-      const qLow = q.toLowerCase();
-      const matched = items.filter((v) => {
-        const id = String(v?.uid || v?.id || "");
-        if (!id || id === excludeLiveInputUid) return false;
-        const metaName = String(v?.meta?.name || "").trim().toLowerCase();
-        const nameField = String(v?.name || "").trim().toLowerCase();
-        if (metaName && metaName === qLow) return true;
-        if (nameField && nameField === qLow) return true;
-        return metaName.includes(qLow) || nameField.includes(qLow);
-      });
-      const pool2 = matched.length ? matched : items.filter((v) => String(v?.uid || "") && String(v.uid) !== excludeLiveInputUid);
-      return pickBestCfRecording(pool2, excludeLiveInputUid);
-    } catch {
-      return null;
-    }
-  };
+  const getLatestRecordingForLiveInput2 = getLatestRecordingForLiveInput;
+  const findRecordingViaStreamSearch2 = findRecordingViaStreamSearch;
   const saveRecordingForClassAndPeers2 = (liveClassId, recordingUrl, sectionTitle) => saveRecordingForClassAndPeers(db2, liveClassId, recordingUrl, {
     sectionTitle,
     recomputeCourseProgress: recomputeAllEnrollmentsProgressForCourse3
   });
-  app2.post("/api/admin/live-classes/:id/stream/create", requireAdmin, async (req, res) => {
+  app2.post("/api/admin/live-classes/:id/stream/create", requireAdmin2, async (req, res) => {
     try {
       const accountId = process.env.CF_STREAM_ACCOUNT_ID || process.env.R2_ACCOUNT_ID;
       const apiToken = process.env.CF_STREAM_API_TOKEN;
@@ -4255,7 +4969,7 @@ function registerLiveStreamRoutes({
       res.status(500).json({ message: "Failed to create Cloudflare Stream live input" });
     }
   });
-  app2.get("/api/admin/live-classes/:id/stream/status", requireAdmin, async (req, res) => {
+  app2.get("/api/admin/live-classes/:id/stream/status", requireAdmin2, async (req, res) => {
     try {
       const accountId = process.env.CF_STREAM_ACCOUNT_ID || process.env.R2_ACCOUNT_ID;
       const apiToken = process.env.CF_STREAM_API_TOKEN;
@@ -4278,13 +4992,13 @@ function registerLiveStreamRoutes({
       res.status(500).json({ message: "Failed to get stream status" });
     }
   });
-  app2.post("/api/admin/live-classes/:id/stream/end", requireAdmin, async (req, res) => {
+  app2.post("/api/admin/live-classes/:id/stream/end", requireAdmin2, async (req, res) => {
     try {
       const accountId = process.env.CF_STREAM_ACCOUNT_ID || process.env.R2_ACCOUNT_ID;
       const apiToken = process.env.CF_STREAM_API_TOKEN;
       if (!accountId || !apiToken) return res.status(500).json({ message: "CF Stream credentials not configured" });
       const lcResult = await db2.query(
-        "SELECT id, title, cf_stream_uid, is_completed, recording_url, recording_deleted_at FROM live_classes WHERE id = $1",
+        "SELECT id, title, cf_stream_uid, cf_recording_uid, is_completed, recording_url, recording_deleted_at FROM live_classes WHERE id = $1",
         [req.params.id]
       );
       if (lcResult.rows.length === 0) return res.status(404).json({ message: "Live class not found" });
@@ -4292,6 +5006,7 @@ function registerLiveStreamRoutes({
       const uid = current?.cf_stream_uid;
       const liveTitle = String(current?.title || "").trim();
       const existingRecordingUrl = String(current?.recording_url || "").trim();
+      const storedCfRecordingUid = current?.cf_recording_uid != null ? String(current.cf_recording_uid).trim() : "";
       if (current?.recording_deleted_at) {
         return res.json({ success: true, alreadyEnded: true, recordingDeleted: true });
       }
@@ -4304,9 +5019,17 @@ function registerLiveStreamRoutes({
         [endedAtNow, req.params.id]
       ).catch(() => {
       });
+      await db2.query(
+        `INSERT INTO live_stream_finalize_jobs
+           (live_class_id, status, attempts, next_attempt_at, created_at, updated_at)
+         VALUES ($1, 'pending', 0, $2, $2, $2)
+         ON CONFLICT DO NOTHING`,
+        [Number(req.params.id), endedAtNow]
+      ).catch(() => {
+      });
       if (!uid) return res.json({ success: true });
       res.json({ success: true, recordingPending: true });
-      const getLatestRecording = async () => getLatestRecordingForLiveInput(accountId, apiToken, uid);
+      const getLatestRecording = async () => getLatestRecordingForLiveInput2(accountId, apiToken, uid);
       void (async () => {
         try {
           let recordingUrl = null;
@@ -4315,6 +5038,11 @@ function registerLiveStreamRoutes({
           for (let i = 0; i < maxPolls; i += 1) {
             const latest = await getLatestRecording();
             if (latest) {
+              await db2.query(
+                "UPDATE live_classes SET cf_recording_uid = $1 WHERE id = $2",
+                [latest.recordingUid, req.params.id]
+              ).catch(() => {
+              });
               const archived = await archiveCloudflareRecordingToR2(latest.recordingUid, {
                 accountId,
                 apiToken
@@ -4324,15 +5052,29 @@ function registerLiveStreamRoutes({
             }
             await new Promise((resolve2) => setTimeout(resolve2, pollMs));
           }
-          if (!recordingUrl && liveTitle) {
-            const viaSearch = await findRecordingViaStreamSearch(accountId, apiToken, liveTitle, uid);
-            if (viaSearch) {
-              const archived = await archiveCloudflareRecordingToR2(viaSearch.recordingUid, {
+          if (!recordingUrl) {
+            if (storedCfRecordingUid) {
+              const archived = await archiveCloudflareRecordingToR2(storedCfRecordingUid, {
                 accountId,
                 apiToken
               });
-              recordingUrl = archived || viaSearch.manifestUrl;
-              console.log(`[CF Stream] Resolved recording via stream search title="${liveTitle.slice(0, 60)}"`);
+              recordingUrl = archived || null;
+            }
+            if (!recordingUrl && liveTitle) {
+              const viaSearch = await findRecordingViaStreamSearch2(accountId, apiToken, liveTitle, uid);
+              if (viaSearch) {
+                await db2.query(
+                  "UPDATE live_classes SET cf_recording_uid = $1 WHERE id = $2",
+                  [viaSearch.recordingUid, req.params.id]
+                ).catch(() => {
+                });
+                const archived = await archiveCloudflareRecordingToR2(viaSearch.recordingUid, {
+                  accountId,
+                  apiToken
+                });
+                recordingUrl = archived || viaSearch.manifestUrl;
+                console.log(`[CF Stream] Resolved recording via stream search title="${liveTitle.slice(0, 60)}"`);
+              }
             }
           }
           if (recordingUrl) {
@@ -4363,7 +5105,7 @@ function registerLiveStreamRoutes({
       res.status(500).json({ message: "Failed to end stream" });
     }
   });
-  app2.post("/api/admin/live-classes/:id/recording", requireAdmin, async (req, res) => {
+  app2.post("/api/admin/live-classes/:id/recording", requireAdmin2, async (req, res) => {
     try {
       const { recordingUrl, sectionTitle } = req.body;
       if (!recordingUrl) {
@@ -4380,9 +5122,30 @@ function registerLiveStreamRoutes({
       res.status(500).json({ message: "Failed to save recording" });
     }
   });
+  const ARCHIVE_SWEEP_ADVISORY_LOCK_KEY = 7777777777;
   let isArchiveSweepRunning = false;
   const runArchiveSweep = async () => {
     if (isArchiveSweepRunning) return;
+    let lockClient = null;
+    let lockAcquired = false;
+    if (pool2) {
+      try {
+        lockClient = await pool2.connect();
+        const lockResult = await lockClient.query(
+          "SELECT pg_try_advisory_lock($1) AS acquired",
+          [ARCHIVE_SWEEP_ADVISORY_LOCK_KEY]
+        );
+        lockAcquired = lockResult.rows[0]?.acquired === true;
+        if (!lockAcquired) {
+          lockClient.release();
+          return;
+        }
+      } catch (lockErr) {
+        console.warn("[CF Stream] Archive sweep advisory lock error:", lockErr);
+        if (lockClient) lockClient.release();
+        return;
+      }
+    }
     isArchiveSweepRunning = true;
     try {
       const pending = await db2.query(
@@ -4403,14 +5166,14 @@ function registerLiveStreamRoutes({
         const currentUrl = String(row.recording_url || "").trim();
         let recordingUid = extractCloudflareRecordingUid(currentUrl);
         if (!recordingUid && accountId && apiToken && row.cf_stream_uid) {
-          const latest = await getLatestRecordingForLiveInput(accountId, apiToken, String(row.cf_stream_uid));
+          const latest = await getLatestRecordingForLiveInput2(accountId, apiToken, String(row.cf_stream_uid));
           recordingUid = latest?.recordingUid || null;
         }
         if (recordingUid && currentUrl) {
           const head = await fetch(`https://videodelivery.net/${recordingUid}/manifest/video.m3u8`, { method: "HEAD" }).catch(() => null);
           if (!head || !head.ok) {
             if (accountId && apiToken && row.cf_stream_uid) {
-              const latest = await getLatestRecordingForLiveInput(accountId, apiToken, String(row.cf_stream_uid));
+              const latest = await getLatestRecordingForLiveInput2(accountId, apiToken, String(row.cf_stream_uid));
               recordingUid = latest?.recordingUid || recordingUid;
             }
           }
@@ -4475,10 +5238,6 @@ function registerLiveStreamRoutes({
                 Date.now()
               ]
             );
-            await db2.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [
-              row.course_id
-            ]).catch(() => {
-            });
             await recomputeAllEnrollmentsProgressForCourse3(row.course_id).catch(() => {
             });
           }
@@ -4490,6 +5249,19 @@ function registerLiveStreamRoutes({
       console.warn("[CF Stream] Archive sweep error:", err);
     } finally {
       isArchiveSweepRunning = false;
+      if (lockClient) {
+        if (lockAcquired) {
+          try {
+            await lockClient.query(
+              "SELECT pg_advisory_unlock($1)",
+              [ARCHIVE_SWEEP_ADVISORY_LOCK_KEY]
+            );
+          } catch (unlockErr) {
+            console.warn("[CF Stream] Failed to release archive sweep advisory lock:", unlockErr);
+          }
+        }
+        lockClient.release();
+      }
     }
   };
   const runArchiveSweepWorker = process.env.RUN_BACKGROUND_SCHEDULERS !== "false";
@@ -4510,6 +5282,7 @@ var init_live_stream_routes = __esm({
     init_recordingSection();
     init_live_class_recording_save();
     init_cloudflare_stream_download();
+    init_cloudflare_stream_api();
   }
 });
 
@@ -4517,7 +5290,7 @@ var init_live_stream_routes = __esm({
 function registerSiteSettingsRoutes({
   app: app2,
   db: db2,
-  requireAdmin
+  requireAdmin: requireAdmin2
 }) {
   let lastSettingsCache = null;
   let lastSettingsCacheAt = 0;
@@ -4543,7 +5316,7 @@ function registerSiteSettingsRoutes({
       res.json({});
     }
   });
-  app2.put("/api/admin/site-settings", requireAdmin, async (req, res) => {
+  app2.put("/api/admin/site-settings", requireAdmin2, async (req, res) => {
     try {
       const { settings } = req.body;
       if (!settings || typeof settings !== "object") return res.status(400).json({ message: "Settings object required" });
@@ -4900,10 +5673,6 @@ var init_course_content_transfer = __esm({
 // backend/admin-course-import-routes.ts
 async function finalizeTargetCourseStats(db2, targetCourseId, opts, updateCourseTestCounts3, recomputeAllEnrollmentsProgressForCourse3) {
   if (opts.lectures) {
-    await db2.query(
-      "UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1",
-      [targetCourseId]
-    );
     await recomputeAllEnrollmentsProgressForCourse3(targetCourseId);
   }
   if (opts.tests) {
@@ -4913,12 +5682,12 @@ async function finalizeTargetCourseStats(db2, targetCourseId, opts, updateCourse
 function registerAdminCourseImportRoutes({
   app: app2,
   db: db2,
-  requireAdmin,
+  requireAdmin: requireAdmin2,
   updateCourseTestCounts: updateCourseTestCounts3,
   recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse3,
   runInTransaction: runInTransaction2
 }) {
-  app2.get("/api/admin/courses/:id/import-content-preview", requireAdmin, async (req, res) => {
+  app2.get("/api/admin/courses/:id/import-content-preview", requireAdmin2, async (req, res) => {
     try {
       const sourceCourseId = parseCourseId(req.query.sourceCourseId);
       if (!sourceCourseId) {
@@ -4931,7 +5700,7 @@ function registerAdminCourseImportRoutes({
       res.status(500).json({ message: "Failed to load import preview" });
     }
   });
-  app2.post("/api/admin/courses/:id/import-content", requireAdmin, async (req, res) => {
+  app2.post("/api/admin/courses/:id/import-content", requireAdmin2, async (req, res) => {
     try {
       const targetCourseId = parseCourseId(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id);
       const sourceCourseId = parseCourseId(req.body?.sourceCourseId);
@@ -4959,7 +5728,7 @@ function registerAdminCourseImportRoutes({
       res.status(status).json({ message: msg });
     }
   });
-  app2.post("/api/admin/courses/:id/import-lectures", requireAdmin, async (req, res) => {
+  app2.post("/api/admin/courses/:id/import-lectures", requireAdmin2, async (req, res) => {
     try {
       const targetCourseId = parseCourseId(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id);
       const { lectureIds } = req.body;
@@ -4983,7 +5752,7 @@ function registerAdminCourseImportRoutes({
       res.status(500).json({ message: "Failed to import lectures" });
     }
   });
-  app2.post("/api/admin/courses/:id/import-tests", requireAdmin, async (req, res) => {
+  app2.post("/api/admin/courses/:id/import-tests", requireAdmin2, async (req, res) => {
     try {
       const targetCourseId = parseCourseId(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id);
       const { testIds } = req.body;
@@ -5007,7 +5776,7 @@ function registerAdminCourseImportRoutes({
       res.status(500).json({ message: "Failed to import tests" });
     }
   });
-  app2.post("/api/admin/courses/:id/import-materials", requireAdmin, async (req, res) => {
+  app2.post("/api/admin/courses/:id/import-materials", requireAdmin2, async (req, res) => {
     try {
       const targetCourseId = parseCourseId(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id);
       const { materialIds } = req.body;
@@ -5044,10 +5813,10 @@ function normalizeFolderName(value) {
 function registerAdminCourseManagementRoutes({
   app: app2,
   db: db2,
-  requireAdmin,
+  requireAdmin: requireAdmin2,
   updateCourseTestCounts: updateCourseTestCounts3
 }) {
-  app2.get("/api/admin/all-materials", requireAdmin, async (_req, res) => {
+  app2.get("/api/admin/all-materials", requireAdmin2, async (_req, res) => {
     try {
       const result = await db2.query(`
         SELECT sm.*, c.title as course_title, c.course_type 
@@ -5060,7 +5829,7 @@ function registerAdminCourseManagementRoutes({
       res.status(500).json({ message: "Failed to fetch materials" });
     }
   });
-  app2.get("/api/admin/all-lectures", requireAdmin, async (_req, res) => {
+  app2.get("/api/admin/all-lectures", requireAdmin2, async (_req, res) => {
     try {
       const result = await db2.query(`
         SELECT l.*, c.title as course_title, c.course_type 
@@ -5073,7 +5842,7 @@ function registerAdminCourseManagementRoutes({
       res.status(500).json({ message: "Failed to fetch lectures" });
     }
   });
-  app2.get("/api/admin/all-tests", requireAdmin, async (_req, res) => {
+  app2.get("/api/admin/all-tests", requireAdmin2, async (_req, res) => {
     try {
       const result = await db2.query(`
         SELECT t.*, c.title as course_title, c.course_type 
@@ -5086,15 +5855,15 @@ function registerAdminCourseManagementRoutes({
       res.status(500).json({ message: "Failed to fetch tests" });
     }
   });
-  app2.get("/api/admin/courses/:id/folders", requireAdmin, async (req, res) => {
+  app2.get("/api/admin/courses/:id/folders", requireAdmin2, async (req, res) => {
     try {
-      const result = await db2.query("SELECT * FROM course_folders WHERE course_id = $1 ORDER BY created_at ASC", [req.params.id]);
+      const result = await db2.query("SELECT * FROM course_folders WHERE course_id = $1 ORDER BY order_index ASC, created_at ASC", [req.params.id]);
       res.json(result.rows);
     } catch {
       res.status(500).json({ message: "Failed to fetch folders" });
     }
   });
-  app2.post("/api/admin/courses/:id/folders", requireAdmin, async (req, res) => {
+  app2.post("/api/admin/courses/:id/folders", requireAdmin2, async (req, res) => {
     try {
       const { name, type } = req.body;
       const normalizedName = normalizeFolderName(name);
@@ -5122,7 +5891,7 @@ function registerAdminCourseManagementRoutes({
       res.status(500).json({ message: "Failed to create folder" });
     }
   });
-  app2.put("/api/admin/courses/:id/folders/:folderId", requireAdmin, async (req, res) => {
+  app2.put("/api/admin/courses/:id/folders/:folderId", requireAdmin2, async (req, res) => {
     try {
       const { isHidden, name } = req.body;
       if (name !== void 0) {
@@ -5177,15 +5946,22 @@ function registerAdminCourseManagementRoutes({
       res.status(500).json({ message: "Failed to update folder" });
     }
   });
-  app2.patch("/api/admin/courses/:id/reorder", requireAdmin, async (req, res) => {
+  app2.patch("/api/admin/courses/:id/reorder", requireAdmin2, async (req, res) => {
     try {
       const courseId = Number(req.params.id);
       if (!Number.isFinite(courseId) || courseId <= 0) {
         return res.status(400).json({ message: "Invalid course id" });
       }
       const { itemType, items } = req.body;
-      if (itemType !== "test" && itemType !== "material") {
-        return res.status(400).json({ message: "itemType must be 'test' or 'material'" });
+      const TABLE_BY_TYPE = {
+        test: "tests",
+        material: "study_materials",
+        lecture: "lectures",
+        folder: "course_folders"
+      };
+      const table = TABLE_BY_TYPE[itemType];
+      if (!table) {
+        return res.status(400).json({ message: "itemType must be one of: test, material, lecture, folder" });
       }
       if (!Array.isArray(items) || items.length === 0) {
         return res.status(400).json({ message: "items must be a non-empty array" });
@@ -5200,28 +5976,19 @@ function registerAdminCourseManagementRoutes({
         orders.push(orderIdx);
       }
       if (ids.length === 0) return res.json({ success: true, updated: 0 });
-      if (itemType === "test") {
-        await db2.query(
-          `UPDATE tests SET order_index = v.order_index
-           FROM (SELECT unnest($1::int[]) AS id, unnest($2::int[]) AS order_index) v
-           WHERE tests.id = v.id AND tests.course_id = $3`,
-          [ids, orders, courseId]
-        );
-      } else {
-        await db2.query(
-          `UPDATE study_materials SET order_index = v.order_index
-           FROM (SELECT unnest($1::int[]) AS id, unnest($2::int[]) AS order_index) v
-           WHERE study_materials.id = v.id AND study_materials.course_id = $3`,
-          [ids, orders, courseId]
-        );
-      }
+      await db2.query(
+        `UPDATE ${table} SET order_index = v.order_index
+         FROM (SELECT unnest($1::int[]) AS id, unnest($2::int[]) AS order_index) v
+         WHERE ${table}.id = v.id AND ${table}.course_id = $3`,
+        [ids, orders, courseId]
+      );
       res.json({ success: true, updated: ids.length });
     } catch (err) {
       console.error("[reorder] error:", err);
       res.status(500).json({ message: "Failed to reorder items" });
     }
   });
-  app2.delete("/api/admin/courses/:id/folders/:folderId", requireAdmin, async (req, res) => {
+  app2.delete("/api/admin/courses/:id/folders/:folderId", requireAdmin2, async (req, res) => {
     try {
       await db2.query(
         `WITH target AS (
@@ -5272,11 +6039,23 @@ var init_admin_course_management_routes = __esm({
 function registerAdminAnalyticsRoutes({
   app: app2,
   db: db2,
-  requireAdmin
+  requireAdmin: requireAdmin2
 }) {
-  app2.get("/api/admin/analytics", requireAdmin, async (req, res) => {
+  app2.get("/api/admin/analytics", requireAdmin2, async (req, res) => {
     try {
       const { period, startDate, endDate } = req.query;
+      const cacheKey = `analytics:${String(period || "all")}:${String(startDate || "")}:${String(endDate || "")}`;
+      try {
+        const redis = await getRedisClient();
+        if (redis) {
+          const cached = await redis.get(cacheKey);
+          if (cached) {
+            res.setHeader("X-Cache", "HIT");
+            return res.json(JSON.parse(cached));
+          }
+        }
+      } catch {
+      }
       const now = Date.now();
       const day = 864e5;
       const toSafeTs = (value) => {
@@ -5318,7 +6097,11 @@ function registerAdminAnalyticsRoutes({
         try {
           const result = await query;
           return result.rows;
-        } catch {
+        } catch (err) {
+          console.error(
+            "[Analytics] Query failed, using fallback data:",
+            err instanceof Error ? err.message : String(err)
+          );
           return fallbackRows;
         }
       };
@@ -5479,7 +6262,7 @@ function registerAdminAnalyticsRoutes({
         `)),
         safeRows(db2.query(`SELECT COALESCE(SUM(t.price), 0) as total FROM test_purchases tp JOIN tests t ON t.id = tp.test_id`), [{ total: "0" }])
       ]);
-      res.json({
+      const analyticsResult = {
         totalEnrollments: parseInt(enrollRows[0]?.total_enrollments || "0"),
         totalRevenue: parseFloat(revenueRows[0]?.total_revenue || "0"),
         lifetimeRevenue: parseFloat(lifetimeRows[0]?.lifetime_revenue || "0"),
@@ -5493,13 +6276,22 @@ function registerAdminAnalyticsRoutes({
         bookPurchases: bookPurchaseRows,
         bookAbandonedCheckouts: bookAbandonedRows,
         testPurchases: testPurchaseRows
-      });
+      };
+      try {
+        const redis = await getRedisClient();
+        if (redis) {
+          await redis.set(cacheKey, JSON.stringify(analyticsResult), { EX: ANALYTICS_CACHE_TTL_SEC });
+        }
+      } catch {
+      }
+      res.setHeader("X-Cache", "MISS");
+      res.json(analyticsResult);
     } catch (err) {
       console.error("Analytics error:", err);
       res.status(500).json({ message: "Failed to fetch analytics" });
     }
   });
-  app2.post("/api/admin/analytics/reset-abandoned", requireAdmin, async (_req, res) => {
+  app2.post("/api/admin/analytics/reset-abandoned", requireAdmin2, async (_req, res) => {
     try {
       await Promise.all([
         db2.query("UPDATE payments SET status = 'reset' WHERE status = 'created' OR status IS NULL"),
@@ -5511,7 +6303,7 @@ function registerAdminAnalyticsRoutes({
       res.status(500).json({ message: "Failed to reset abandoned analytics data" });
     }
   });
-  app2.get("/api/admin/courses/:id/enrollments", requireAdmin, async (req, res) => {
+  app2.get("/api/admin/courses/:id/enrollments", requireAdmin2, async (req, res) => {
     try {
       const result = await db2.query(
         `SELECT
@@ -5591,7 +6383,7 @@ function registerAdminAnalyticsRoutes({
       res.status(500).json({ message: "Failed to fetch enrollments" });
     }
   });
-  app2.get("/api/admin/courses/:courseId/enrollments/:userId/detail", requireAdmin, async (req, res) => {
+  app2.get("/api/admin/courses/:courseId/enrollments/:userId/detail", requireAdmin2, async (req, res) => {
     try {
       const courseId = parseInt(String(req.params.courseId), 10);
       const userId = parseInt(String(req.params.userId), 10);
@@ -5674,8 +6466,31 @@ function registerAdminAnalyticsRoutes({
     }
   });
 }
+var ANALYTICS_CACHE_TTL_SEC;
 var init_admin_analytics_routes = __esm({
   "backend/admin-analytics-routes.ts"() {
+    "use strict";
+    init_redis_client();
+    ANALYTICS_CACHE_TTL_SEC = 60;
+  }
+});
+
+// backend/download-access-utils.ts
+async function purgeUserDownloadsForItem(db2, itemType, itemId) {
+  await db2.query("DELETE FROM user_downloads WHERE item_type = $1 AND item_id = $2", [
+    itemType,
+    itemId
+  ]);
+}
+function isEnrollmentAccessRevoked(status, validUntil, nowMs2 = Date.now()) {
+  const s = String(status ?? "").toLowerCase();
+  if (s === "inactive" || s === "revoked" || s === "cancelled") return true;
+  const vu = validUntil != null ? Number(validUntil) : null;
+  if (vu != null && Number.isFinite(vu) && vu < nowMs2) return true;
+  return false;
+}
+var init_download_access_utils = __esm({
+  "backend/download-access-utils.ts"() {
     "use strict";
   }
 });
@@ -5694,33 +6509,63 @@ async function writeEnrollmentAuditLog(db2, adminUserId, action, enrollmentId, m
 function registerAdminEnrollmentRoutes({
   app: app2,
   db: db2,
-  requireAdmin,
+  requireAdmin: requireAdmin2,
   deleteDownloadsForUser: deleteDownloadsForUser3,
   deleteDownloadsForCourse: deleteDownloadsForCourse3,
   runInTransaction: runInTransaction2
 }) {
-  app2.put("/api/admin/enrollments/:id", requireAdmin, async (req, res) => {
+  app2.put("/api/admin/enrollments/:id", requireAdmin2, async (req, res) => {
     try {
       const adminUserId = Number(req.user?.id) || null;
       const { status, valid_until } = req.body;
       const updates = [];
       const params = [];
       const before = await db2.query(
-        "SELECT status, valid_until FROM enrollments WHERE id = $1",
+        "SELECT user_id, course_id, status, valid_until FROM enrollments WHERE id = $1",
         [req.params.id]
       ).catch(() => ({ rows: [] }));
       const oldRow = before.rows[0] || {};
+      let nextStatus = oldRow.status;
+      let nextValidUntil = oldRow.valid_until;
       if (status !== void 0) {
-        params.push(status);
+        const statusNorm = String(status).trim().toLowerCase();
+        if (statusNorm && statusNorm !== "active" && statusNorm !== "inactive") {
+          return res.status(400).json({ message: "Invalid status" });
+        }
+        nextStatus = statusNorm === "" ? null : statusNorm || null;
+        params.push(nextStatus);
         updates.push(`status = $${params.length}`);
       }
       if (valid_until !== void 0) {
-        params.push(valid_until);
+        const vu = valid_until === null || valid_until === "" ? null : Number(valid_until);
+        if (vu !== null && (!Number.isFinite(vu) || vu < 0)) {
+          return res.status(400).json({ message: "Invalid valid_until" });
+        }
+        nextValidUntil = vu;
+        params.push(vu);
         updates.push(`valid_until = $${params.length}`);
       }
+      const willRevoke = isEnrollmentAccessRevoked(nextStatus, nextValidUntil);
       if (updates.length > 0) {
         params.push(req.params.id);
         await db2.query(`UPDATE enrollments SET ${updates.join(", ")} WHERE id = $${params.length}`, params);
+      }
+      if (willRevoke && oldRow.user_id && oldRow.course_id) {
+        await db2.query(
+          "UPDATE enrollments SET download_cleanup_pending = TRUE WHERE id = $1",
+          [req.params.id]
+        );
+        try {
+          await deleteDownloadsForUser3(Number(oldRow.user_id), Number(oldRow.course_id));
+          await db2.query("UPDATE enrollments SET download_cleanup_pending = FALSE WHERE id = $1", [
+            req.params.id
+          ]);
+        } catch (cleanupErr) {
+          console.warn("[Cleanup] enrollment PUT download cleanup failed; will retry", {
+            enrollmentId: req.params.id,
+            cleanupErr
+          });
+        }
       }
       void writeEnrollmentAuditLog(db2, adminUserId, "updated", String(req.params.id), {
         old_status: oldRow.status,
@@ -5733,7 +6578,7 @@ function registerAdminEnrollmentRoutes({
       res.status(500).json({ message: "Failed to update enrollment" });
     }
   });
-  app2.delete("/api/admin/enrollments/:id", requireAdmin, async (req, res) => {
+  app2.delete("/api/admin/enrollments/:id", requireAdmin2, async (req, res) => {
     try {
       const adminUserId = Number(req.user?.id) || null;
       const enrollment = await db2.query(
@@ -5742,8 +6587,20 @@ function registerAdminEnrollmentRoutes({
       );
       if (enrollment.rows.length > 0) {
         const { user_id, course_id } = enrollment.rows[0];
-        await db2.query("DELETE FROM enrollments WHERE id = $1", [req.params.id]);
-        await deleteDownloadsForUser3(user_id, course_id);
+        await db2.query(
+          "UPDATE enrollments SET status = 'inactive', download_cleanup_pending = TRUE WHERE id = $1",
+          [req.params.id]
+        );
+        try {
+          await deleteDownloadsForUser3(user_id, course_id);
+          await db2.query("UPDATE enrollments SET download_cleanup_pending = FALSE WHERE id = $1", [req.params.id]);
+        } catch (cleanupErr) {
+          console.warn("[Cleanup] download cleanup failed; will retry", {
+            enrollmentId: req.params.id,
+            user_id,
+            course_id
+          });
+        }
         void writeEnrollmentAuditLog(db2, adminUserId, "deleted", String(req.params.id), {
           user_id,
           course_id,
@@ -5758,17 +6615,21 @@ function registerAdminEnrollmentRoutes({
       res.status(500).json({ message: "Failed to remove enrollment" });
     }
   });
-  app2.delete("/api/admin/courses/:id", requireAdmin, async (req, res) => {
+  app2.delete("/api/admin/courses/:id", requireAdmin2, async (req, res) => {
     try {
       const courseId = req.params.id;
       await deleteDownloadsForCourse3(parseInt(Array.isArray(courseId) ? courseId[0] : courseId));
       await runInTransaction2(async (tx) => {
         await tx.query(
           `DELETE FROM media_tokens
-           WHERE file_url IN (
+           WHERE file_key IN (
              SELECT file_url FROM study_materials WHERE course_id = $1 AND file_url IS NOT NULL
              UNION ALL
              SELECT video_url FROM lectures WHERE course_id = $1 AND video_url IS NOT NULL
+             UNION ALL
+             SELECT pdf_url FROM lectures WHERE course_id = $1 AND pdf_url IS NOT NULL
+             UNION ALL
+             SELECT recording_url FROM live_classes WHERE course_id = $1 AND recording_url IS NOT NULL
            )`,
           [courseId]
         );
@@ -5792,6 +6653,7 @@ function registerAdminEnrollmentRoutes({
 var init_admin_enrollment_routes = __esm({
   "backend/admin-enrollment-routes.ts"() {
     "use strict";
+    init_download_access_utils();
   }
 });
 
@@ -5822,7 +6684,7 @@ var init_async_utils = __esm({
 function registerAdminLectureRoutes({
   app: app2,
   db: db2,
-  requireAdmin,
+  requireAdmin: requireAdmin2,
   getR2Client,
   recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse3
 }) {
@@ -5848,7 +6710,7 @@ function registerAdminLectureRoutes({
     if (u.includes("/api/media/") || u.includes("r2.dev") || u.includes("cdn.") || u.endsWith(".mp4") || u.endsWith(".mov") || u.endsWith(".mkv")) return "r2";
     return "upload";
   };
-  app2.post("/api/admin/lectures", requireAdmin, async (req, res) => {
+  app2.post("/api/admin/lectures", requireAdmin2, async (req, res) => {
     try {
       const { courseId, title, description, transcript, videoUrl, fileUrl, videoType, pdfUrl, durationMinutes: durationMinutes2, orderIndex, isFreePreview, sectionTitle, lectureSubfolderTitle, downloadAllowed } = req.body;
       const parsedCourseId = Number(courseId);
@@ -5892,7 +6754,6 @@ function registerAdminLectureRoutes({
           Date.now()
         ]
       );
-      await db2.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [parsedCourseId]);
       await recomputeAllEnrollmentsProgressForCourse3(parsedCourseId);
       res.json(result.rows[0]);
     } catch (err) {
@@ -5910,7 +6771,7 @@ function registerAdminLectureRoutes({
       res.status(500).json({ message: "Failed to add lecture", detail: err instanceof Error ? err.message : "unknown_error" });
     }
   });
-  app2.put("/api/admin/lectures/:id", requireAdmin, async (req, res) => {
+  app2.put("/api/admin/lectures/:id", requireAdmin2, async (req, res) => {
     try {
       const { title, description, transcript, videoUrl, videoType, durationMinutes: durationMinutes2, orderIndex, isFreePreview, sectionTitle, lectureSubfolderTitle, downloadAllowed } = req.body;
       const normalizedSectionTitle = resolveLectureSectionTitle(
@@ -5936,6 +6797,9 @@ function registerAdminLectureRoutes({
           req.params.id
         ]
       );
+      if (downloadAllowed === false) {
+        await purgeUserDownloadsForItem(db2, "lecture", Number(req.params.id));
+      }
       const row = await db2.query("SELECT course_id FROM lectures WHERE id = $1 LIMIT 1", [req.params.id]);
       if (row.rows[0]?.course_id) {
         await recomputeAllEnrollmentsProgressForCourse3(row.rows[0].course_id);
@@ -5945,7 +6809,7 @@ function registerAdminLectureRoutes({
       res.status(500).json({ message: "Failed to update lecture" });
     }
   });
-  app2.delete("/api/admin/lectures/:id", requireAdmin, async (req, res) => {
+  app2.delete("/api/admin/lectures/:id", requireAdmin2, async (req, res) => {
     try {
       let lec;
       try {
@@ -5964,10 +6828,6 @@ function registerAdminLectureRoutes({
       }
       const lecture = lec.rows[0];
       await db2.query("DELETE FROM lectures WHERE id = $1", [req.params.id]);
-      await db2.query(
-        "UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1",
-        [lecture.course_id]
-      );
       await recomputeAllEnrollmentsProgressForCourse3(lecture.course_id);
       if (lecture.live_class_id) {
         try {
@@ -6021,6 +6881,7 @@ function registerAdminLectureRoutes({
 var init_admin_lecture_routes = __esm({
   "backend/admin-lecture-routes.ts"() {
     "use strict";
+    init_download_access_utils();
     init_async_utils();
   }
 });
@@ -6119,17 +6980,17 @@ var init_push_notifications = __esm({
 function registerAdminTestRoutes({
   app: app2,
   db: db2,
-  requireAdmin,
+  requireAdmin: requireAdmin2,
   updateCourseTestCounts: updateCourseTestCounts3
 }) {
-  app2.get("/api/admin/tests", requireAdmin, async (_req, res) => {
+  app2.get("/api/admin/tests", requireAdmin2, async (_req, res) => {
     try {
       const result = await db2.query(`
         SELECT t.*, c.title as course_title 
         FROM tests t 
         LEFT JOIN courses c ON t.course_id = c.id 
         WHERE t.course_id IS NULL
-        ORDER BY t.created_at DESC
+        ORDER BY COALESCE(t.order_index, 0) ASC, t.created_at DESC
       `);
       res.set("Cache-Control", "private, no-store");
       res.json(result.rows);
@@ -6137,7 +6998,7 @@ function registerAdminTestRoutes({
       res.status(500).json({ message: "Failed to fetch tests" });
     }
   });
-  app2.post("/api/admin/tests", requireAdmin, async (req, res) => {
+  app2.post("/api/admin/tests", requireAdmin2, async (req, res) => {
     try {
       const { title, description, courseId, durationMinutes: durationMinutes2, totalMarks, passingMarks, testType, folderName, difficulty, scheduledAt, miniCourseId, price } = req.body;
       const result = await db2.query(
@@ -6188,7 +7049,7 @@ function registerAdminTestRoutes({
       res.status(500).json({ message: "Failed to create test" });
     }
   });
-  app2.post("/api/admin/questions", requireAdmin, async (req, res) => {
+  app2.post("/api/admin/questions", requireAdmin2, async (req, res) => {
     try {
       const rawList = Array.isArray(req.body) ? req.body : [req.body];
       const testId = rawList[0]?.testId;
@@ -6370,11 +7231,11 @@ function parseQuestionsFromText(text) {
 function registerAdminQuestionBulkRoutes({
   app: app2,
   db: db2,
-  requireAdmin,
+  requireAdmin: requireAdmin2,
   upload: upload3,
   PDFParse: PDFParse2
 }) {
-  app2.post("/api/admin/questions/bulk-text", requireAdmin, async (req, res) => {
+  app2.post("/api/admin/questions/bulk-text", requireAdmin2, async (req, res) => {
     try {
       const { testId, text, defaultMarks, defaultNegativeMarks, save } = req.body;
       if (!testId || !text) {
@@ -6403,7 +7264,7 @@ function registerAdminQuestionBulkRoutes({
       res.status(500).json({ message: "Failed to parse and add questions" });
     }
   });
-  app2.post("/api/admin/questions/bulk-pdf", requireAdmin, upload3.single("pdf"), async (req, res) => {
+  app2.post("/api/admin/questions/bulk-pdf", requireAdmin2, upload3.single("pdf"), async (req, res) => {
     try {
       const testId = req.body.testId;
       const defaultMarks = parseInt(req.body.defaultMarks) || 4;
@@ -6443,7 +7304,7 @@ function registerAdminQuestionBulkRoutes({
       });
     }
   });
-  app2.post("/api/admin/questions/bulk-save", requireAdmin, async (req, res) => {
+  app2.post("/api/admin/questions/bulk-save", requireAdmin2, async (req, res) => {
     try {
       const { testId, questions, defaultMarks, defaultNegativeMarks } = req.body;
       if (!testId || !Array.isArray(questions) || questions.length === 0) {
@@ -6477,12 +7338,12 @@ var init_admin_question_bulk_routes = __esm({
 function registerAdminUsersAndContentRoutes({
   app: app2,
   db: db2,
-  requireAdmin,
+  requireAdmin: requireAdmin2,
   deleteDownloadsForUser: deleteDownloadsForUser3,
   runInTransaction: runInTransaction2,
   recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse3
 }) {
-  app2.post("/api/admin/study-materials", requireAdmin, async (req, res) => {
+  app2.post("/api/admin/study-materials", requireAdmin2, async (req, res) => {
     try {
       const { title, description, fileUrl, fileType, courseId, isFree, sectionTitle, downloadAllowed } = req.body;
       const normalizedTitle = typeof title === "string" ? title.trim() : "";
@@ -6551,14 +7412,16 @@ function registerAdminUsersAndContentRoutes({
       res.status(500).json({ message: "Failed to add material", detail: err instanceof Error ? err.message : "unknown_error" });
     }
   });
-  app2.post("/api/admin/live-classes", requireAdmin, async (req, res) => {
+  app2.post("/api/admin/live-classes", requireAdmin2, async (req, res) => {
     try {
-      const { title, description, courseId, youtubeUrl, scheduledAt, isLive, isPublic, notifyEmail, notifyBell, isFreePreview, streamType, chatMode, showViewerCount, lectureSectionTitle, lectureSubfolderTitle } = req.body;
+      const { title, description, courseId, youtubeUrl, scheduledAt, isLive, isPublic, notifyEmail, notifyBell, isFreePreview, streamType, chatMode, showViewerCount, lectureSectionTitle, lectureSubfolderTitle, isRecordingMode, visibleAfterAt } = req.body;
       const mainSec = typeof lectureSectionTitle === "string" && lectureSectionTitle.trim() !== "" ? lectureSectionTitle.trim() : null;
       const subSec = typeof lectureSubfolderTitle === "string" && lectureSubfolderTitle.trim() !== "" ? lectureSubfolderTitle.trim() : null;
+      const recMode = isRecordingMode === true;
+      const visAfter = recMode && visibleAfterAt && Number.isFinite(Number(visibleAfterAt)) ? Number(visibleAfterAt) : null;
       const result = await db2.query(
-        `INSERT INTO live_classes (title, description, course_id, youtube_url, scheduled_at, is_live, is_public, notify_email, notify_bell, is_free_preview, stream_type, chat_mode, show_viewer_count, lecture_section_title, lecture_subfolder_title, created_at) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING *`,
+        `INSERT INTO live_classes (title, description, course_id, youtube_url, scheduled_at, is_live, is_public, notify_email, notify_bell, is_free_preview, stream_type, chat_mode, show_viewer_count, lecture_section_title, lecture_subfolder_title, is_recording_mode, visible_after_at, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) RETURNING *`,
         [
           title,
           description,
@@ -6566,7 +7429,8 @@ function registerAdminUsersAndContentRoutes({
           youtubeUrl || null,
           scheduledAt,
           isLive || false,
-          isPublic || false,
+          recMode ? false : isPublic || false,
+          // recording sessions are never public
           notifyEmail || false,
           notifyBell || false,
           isFreePreview || false,
@@ -6575,17 +7439,19 @@ function registerAdminUsersAndContentRoutes({
           showViewerCount !== false,
           mainSec,
           subSec,
+          recMode,
+          visAfter,
           Date.now()
         ]
       );
-      console.log(`[LiveClass] created id=${result.rows[0]?.id} title="${title}" courseId=${courseId} scheduledAt=${scheduledAt} isLive=${isLive}`);
+      console.log(`[LiveClass] created id=${result.rows[0]?.id} title="${title}" courseId=${courseId} scheduledAt=${scheduledAt} isLive=${isLive} isRecordingMode=${recMode}`);
       res.json(result.rows[0]);
     } catch (err) {
       console.error("[LiveClass] create failed", err);
       res.status(500).json({ message: "Failed to add live class" });
     }
   });
-  app2.get("/api/admin/device-block-events", requireAdmin, async (_req, res) => {
+  app2.get("/api/admin/device-block-events", requireAdmin2, async (_req, res) => {
     try {
       const result = await db2.query(
         `SELECT e.id, e.user_id, e.attempted_device_id, e.bound_device_id, e.phone, e.email, e.platform, e.reason, e.created_at,
@@ -6601,7 +7467,7 @@ function registerAdminUsersAndContentRoutes({
       res.status(500).json({ message: "Failed to load device block events" });
     }
   });
-  app2.get("/api/admin/device-denied-users", requireAdmin, async (_req, res) => {
+  app2.get("/api/admin/device-denied-users", requireAdmin2, async (_req, res) => {
     try {
       const result = await db2.query(
         `SELECT u.id AS user_id,
@@ -6626,7 +7492,7 @@ function registerAdminUsersAndContentRoutes({
       res.status(500).json({ message: "Failed to load device-denied users" });
     }
   });
-  app2.post("/api/admin/users/:id/reset-device-binding", requireAdmin, async (req, res) => {
+  app2.post("/api/admin/users/:id/reset-device-binding", requireAdmin2, async (req, res) => {
     try {
       const uid = parseInt(String(req.params.id), 10);
       if (!Number.isFinite(uid)) return res.status(400).json({ message: "Invalid user id" });
@@ -6645,7 +7511,7 @@ function registerAdminUsersAndContentRoutes({
       res.status(500).json({ message: "Failed to reset device binding" });
     }
   });
-  app2.post("/api/admin/users/cleanup-pending", requireAdmin, async (_req, res) => {
+  app2.post("/api/admin/users/cleanup-pending", requireAdmin2, async (_req, res) => {
     try {
       const cutoff = Date.now() - 24 * 60 * 60 * 1e3;
       const candidates = await db2.query(
@@ -6680,8 +7546,13 @@ function registerAdminUsersAndContentRoutes({
       res.status(500).json({ message: "Failed to clean up pending signups" });
     }
   });
-  app2.get("/api/admin/users", requireAdmin, async (_req, res) => {
+  app2.get("/api/admin/users", requireAdmin2, async (req, res) => {
     try {
+      const limitRaw = parseInt(String(req.query.limit ?? "50"), 10);
+      const offsetRaw = parseInt(String(req.query.offset ?? "0"), 10);
+      const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 200) : 50;
+      const offset = Number.isFinite(offsetRaw) ? Math.max(offsetRaw, 0) : 0;
+      const search = String(req.query.search ?? "").trim();
       const colsResult = await db2.query(
         "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users'"
       );
@@ -6699,7 +7570,28 @@ function registerAdminUsersAndContentRoutes({
         field("last_active_at", "NULL")
       ].join(", ");
       const orderSql = cols.has("created_at") ? "created_at DESC NULLS LAST" : "id DESC";
-      const result = await db2.query(`SELECT ${selectSql} FROM users ORDER BY ${orderSql}`);
+      const where = [];
+      const params = [];
+      if (search) {
+        params.push(`%${search}%`);
+        const p = `$${params.length}`;
+        where.push(
+          `(COALESCE(name,'') ILIKE ${p} OR COALESCE(email,'') ILIKE ${p} OR COALESCE(phone,'') ILIKE ${p})`
+        );
+      }
+      const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+      const countResult = await db2.query(
+        `SELECT COUNT(*)::int AS total FROM users ${whereSql}`,
+        params
+      );
+      const total = Number(countResult.rows[0]?.total ?? 0);
+      params.push(limit, offset);
+      const result = await db2.query(
+        `SELECT ${selectSql} FROM users ${whereSql} ORDER BY ${orderSql} LIMIT $${params.length - 1} OFFSET $${params.length}`,
+        params
+      );
+      res.setHeader("X-Total-Count", String(total));
+      res.setHeader("X-Has-More", String(offset + result.rows.length < total));
       res.json(
         result.rows.map((r) => ({
           id: r.id,
@@ -6717,7 +7609,7 @@ function registerAdminUsersAndContentRoutes({
       res.status(500).json({ message: "Failed to fetch users" });
     }
   });
-  app2.get("/api/admin/users/:id/enrollments", requireAdmin, async (req, res) => {
+  app2.get("/api/admin/users/:id/enrollments", requireAdmin2, async (req, res) => {
     try {
       const userId = parseInt(String(req.params.id), 10);
       if (!Number.isFinite(userId)) return res.status(400).json({ message: "Invalid user id" });
@@ -6734,7 +7626,7 @@ function registerAdminUsersAndContentRoutes({
       res.status(500).json({ message: "Failed to fetch user enrollments" });
     }
   });
-  app2.put("/api/admin/users/:id/block", requireAdmin, async (req, res) => {
+  app2.put("/api/admin/users/:id/block", requireAdmin2, async (req, res) => {
     try {
       const { blocked } = req.body;
       if (blocked) {
@@ -6750,7 +7642,7 @@ function registerAdminUsersAndContentRoutes({
       res.status(500).json({ message: "Failed to update user" });
     }
   });
-  app2.delete("/api/admin/users/:id", requireAdmin, async (req, res) => {
+  app2.delete("/api/admin/users/:id", requireAdmin2, async (req, res) => {
     try {
       const userId = parseInt(String(req.params.id), 10);
       if (!Number.isFinite(userId)) return res.status(400).json({ message: "Invalid user id" });
@@ -6787,10 +7679,10 @@ var init_admin_users_and_content_routes = __esm({
 function registerAdminTestManagementRoutes({
   app: app2,
   db: db2,
-  requireAdmin,
+  requireAdmin: requireAdmin2,
   updateCourseTestCounts: updateCourseTestCounts3
 }) {
-  app2.get("/api/admin/tests/:id/questions", requireAdmin, async (req, res) => {
+  app2.get("/api/admin/tests/:id/questions", requireAdmin2, async (req, res) => {
     try {
       const result = await db2.query("SELECT * FROM questions WHERE test_id = $1 ORDER BY order_index ASC, id ASC", [req.params.id]);
       res.json(result.rows);
@@ -6798,7 +7690,7 @@ function registerAdminTestManagementRoutes({
       res.status(500).json({ message: "Failed to fetch questions" });
     }
   });
-  app2.put("/api/admin/questions/:id", requireAdmin, async (req, res) => {
+  app2.put("/api/admin/questions/:id", requireAdmin2, async (req, res) => {
     try {
       const { questionText, optionA, optionB, optionC, optionD, correctOption, explanation, topic, marks, negativeMarks, difficulty, imageUrl, solutionImageUrl } = req.body;
       await db2.query(
@@ -6810,7 +7702,7 @@ function registerAdminTestManagementRoutes({
       res.status(500).json({ message: "Failed to update question" });
     }
   });
-  app2.delete("/api/admin/questions/:id", requireAdmin, async (req, res) => {
+  app2.delete("/api/admin/questions/:id", requireAdmin2, async (req, res) => {
     try {
       const q = await db2.query("SELECT test_id FROM questions WHERE id = $1", [req.params.id]);
       await db2.query("DELETE FROM questions WHERE id = $1", [req.params.id]);
@@ -6822,7 +7714,7 @@ function registerAdminTestManagementRoutes({
       res.status(500).json({ message: "Failed to delete question" });
     }
   });
-  app2.put("/api/admin/tests/:id", requireAdmin, async (req, res) => {
+  app2.put("/api/admin/tests/:id", requireAdmin2, async (req, res) => {
     try {
       const { title, description, durationMinutes: durationMinutes2, totalMarks, testType, folderName, difficulty, scheduledAt, passingMarks, courseId, price } = req.body;
       const priceVal = price !== void 0 ? parseFloat(price) || 0 : null;
@@ -6845,7 +7737,7 @@ function registerAdminTestManagementRoutes({
       res.status(500).json({ message: "Failed to update test" });
     }
   });
-  app2.delete("/api/admin/tests/:id", requireAdmin, async (req, res) => {
+  app2.delete("/api/admin/tests/:id", requireAdmin2, async (req, res) => {
     try {
       const testRow = await db2.query("SELECT course_id FROM tests WHERE id = $1", [req.params.id]);
       const courseId = testRow.rows[0]?.course_id;
@@ -6870,9 +7762,9 @@ var init_admin_test_management_routes = __esm({
 function registerAdminDailyMissionRoutes({
   app: app2,
   db: db2,
-  requireAdmin
+  requireAdmin: requireAdmin2
 }) {
-  app2.post("/api/admin/daily-missions", requireAdmin, async (req, res) => {
+  app2.post("/api/admin/daily-missions", requireAdmin2, async (req, res) => {
     try {
       const { title, description, questions, missionDate, xpReward, missionType, courseId, folderName } = req.body;
       if (!title || !questions || !Array.isArray(questions) || questions.length === 0) {
@@ -6919,7 +7811,7 @@ function registerAdminDailyMissionRoutes({
       res.status(500).json({ message: "Failed to create daily mission" });
     }
   });
-  app2.put("/api/admin/daily-missions/:id", requireAdmin, async (req, res) => {
+  app2.put("/api/admin/daily-missions/:id", requireAdmin2, async (req, res) => {
     try {
       const { title, description, questions, missionDate, xpReward, missionType, courseId, folderName } = req.body;
       const folderNameNorm = typeof folderName === "string" && folderName.trim() ? folderName.trim() : null;
@@ -6932,7 +7824,7 @@ function registerAdminDailyMissionRoutes({
       res.status(500).json({ message: "Failed to update mission" });
     }
   });
-  app2.delete("/api/admin/daily-missions/:id", requireAdmin, async (req, res) => {
+  app2.delete("/api/admin/daily-missions/:id", requireAdmin2, async (req, res) => {
     try {
       await db2.query("DELETE FROM daily_missions WHERE id = $1", [req.params.id]);
       res.json({ success: true });
@@ -6940,15 +7832,15 @@ function registerAdminDailyMissionRoutes({
       res.status(500).json({ message: "Failed to delete mission" });
     }
   });
-  app2.get("/api/admin/daily-missions", requireAdmin, async (_req, res) => {
+  app2.get("/api/admin/daily-missions", requireAdmin2, async (_req, res) => {
     try {
-      const result = await db2.query("SELECT * FROM daily_missions ORDER BY mission_date DESC LIMIT 50");
+      const result = await db2.query("SELECT * FROM daily_missions ORDER BY COALESCE(order_index, 0) ASC, mission_date DESC LIMIT 50");
       res.json(result.rows);
     } catch {
       res.status(500).json({ message: "Failed to fetch missions" });
     }
   });
-  app2.get("/api/admin/daily-missions/:id/attempts", requireAdmin, async (req, res) => {
+  app2.get("/api/admin/daily-missions/:id/attempts", requireAdmin2, async (req, res) => {
     try {
       const result = await db2.query(
         `
@@ -6983,9 +7875,9 @@ var init_admin_daily_mission_routes = __esm({
 function registerAdminNotificationRoutes({
   app: app2,
   db: db2,
-  requireAdmin
+  requireAdmin: requireAdmin2
 }) {
-  app2.post("/api/admin/notifications/send", requireAdmin, async (req, res) => {
+  app2.post("/api/admin/notifications/send", requireAdmin2, async (req, res) => {
     try {
       const { userId, title, message, type, target, courseId, imageUrl, expiresAfterHours } = req.body;
       let userIds = [];
@@ -7027,7 +7919,7 @@ function registerAdminNotificationRoutes({
       res.status(500).json({ message: "Failed to send notification" });
     }
   });
-  app2.get("/api/admin/notifications/history", requireAdmin, async (_req, res) => {
+  app2.get("/api/admin/notifications/history", requireAdmin2, async (_req, res) => {
     try {
       const result = await db2.query(
         "SELECT an.*, c.title as course_title FROM admin_notifications an LEFT JOIN courses c ON c.id = an.course_id ORDER BY an.created_at DESC LIMIT 100"
@@ -7039,7 +7931,7 @@ function registerAdminNotificationRoutes({
       res.status(500).json({ message: "Failed to fetch notification history" });
     }
   });
-  app2.put("/api/admin/notifications/:id", requireAdmin, async (req, res) => {
+  app2.put("/api/admin/notifications/:id", requireAdmin2, async (req, res) => {
     try {
       const { title, message } = req.body;
       const anId = parseInt(String(req.params.id));
@@ -7050,7 +7942,7 @@ function registerAdminNotificationRoutes({
       res.status(500).json({ message: "Failed to update notification" });
     }
   });
-  app2.put("/api/admin/notifications/:id/hide", requireAdmin, async (req, res) => {
+  app2.put("/api/admin/notifications/:id/hide", requireAdmin2, async (req, res) => {
     try {
       const { hidden } = req.body;
       const anId = parseInt(String(req.params.id));
@@ -7064,7 +7956,7 @@ function registerAdminNotificationRoutes({
       res.status(500).json({ message: "Failed to update notification" });
     }
   });
-  app2.delete("/api/admin/notifications/:id", requireAdmin, async (req, res) => {
+  app2.delete("/api/admin/notifications/:id", requireAdmin2, async (req, res) => {
     try {
       const anId = parseInt(String(req.params.id));
       const r1 = await db2.query("DELETE FROM notifications WHERE admin_notif_id = $1", [anId]);
@@ -7088,9 +7980,9 @@ var init_admin_notification_routes = __esm({
 function registerAdminCourseCrudRoutes({
   app: app2,
   db: db2,
-  requireAdmin
+  requireAdmin: requireAdmin2
 }) {
-  app2.post("/api/admin/courses", requireAdmin, async (req, res) => {
+  app2.post("/api/admin/courses", requireAdmin2, async (req, res) => {
     try {
       const { title, description, teacherName, price, originalPrice, category, isFree, level, durationHours, courseType, subject, startDate, endDate, validityMonths, thumbnail, coverColor } = req.body;
       const COVER_COLORS = ["#1A56DB", "#7C3AED", "#DC2626", "#059669", "#D97706", "#0891B2", "#DB2777", "#EA580C"];
@@ -7107,7 +7999,7 @@ function registerAdminCourseCrudRoutes({
       res.status(500).json({ message: err?.message || "Failed to create course" });
     }
   });
-  app2.put("/api/admin/courses/:id", requireAdmin, async (req, res) => {
+  app2.put("/api/admin/courses/:id", requireAdmin2, async (req, res) => {
     try {
       const { title, description, teacherName, price, originalPrice, category, isFree, level, durationHours, isPublished, totalTests, subject, courseType, startDate, endDate, validityMonths, thumbnail, coverColor } = req.body;
       const vm = validityMonths != null && String(validityMonths).trim() !== "" ? Math.max(0, parseFloat(String(validityMonths)) || 0) || null : null;
@@ -7131,7 +8023,7 @@ var init_admin_course_crud_routes = __esm({
 function registerBookRoutes({
   app: app2,
   db: db2,
-  requireAdmin,
+  requireAdmin: requireAdmin2,
   getAuthUser: getAuthUser2,
   getRazorpay: getRazorpay2,
   verifyPaymentSignature: verifyPaymentSignature2
@@ -7187,7 +8079,7 @@ function registerBookRoutes({
       res.status(500).json({ message: "Failed to fetch purchased books" });
     }
   });
-  app2.get("/api/admin/books", requireAdmin, async (_req, res) => {
+  app2.get("/api/admin/books", requireAdmin2, async (_req, res) => {
     try {
       const result = await db2.query("SELECT * FROM books ORDER BY created_at DESC");
       res.json(result.rows);
@@ -7195,7 +8087,7 @@ function registerBookRoutes({
       res.status(500).json({ message: "Failed to fetch books" });
     }
   });
-  app2.post("/api/admin/books", requireAdmin, async (req, res) => {
+  app2.post("/api/admin/books", requireAdmin2, async (req, res) => {
     try {
       const { title, description, author, price, originalPrice, coverUrl, fileUrl, isPublished } = req.body;
       if (!title) return res.status(400).json({ message: "Title is required" });
@@ -7209,7 +8101,7 @@ function registerBookRoutes({
       res.status(500).json({ message: "Failed to create book" });
     }
   });
-  app2.put("/api/admin/books/:id", requireAdmin, async (req, res) => {
+  app2.put("/api/admin/books/:id", requireAdmin2, async (req, res) => {
     try {
       const { title, description, author, price, originalPrice, coverUrl, fileUrl, isPublished } = req.body;
       await db2.query(
@@ -7221,7 +8113,7 @@ function registerBookRoutes({
       res.status(500).json({ message: "Failed to update book" });
     }
   });
-  app2.put("/api/admin/books/:id/hide", requireAdmin, async (req, res) => {
+  app2.put("/api/admin/books/:id/hide", requireAdmin2, async (req, res) => {
     try {
       const { hidden } = req.body;
       await db2.query("UPDATE books SET is_hidden = $1 WHERE id = $2", [hidden, req.params.id]);
@@ -7230,7 +8122,7 @@ function registerBookRoutes({
       res.status(500).json({ message: "Failed to update book" });
     }
   });
-  app2.delete("/api/admin/books/:id", requireAdmin, async (req, res) => {
+  app2.delete("/api/admin/books/:id", requireAdmin2, async (req, res) => {
     try {
       await db2.query("DELETE FROM book_purchases WHERE book_id = $1", [req.params.id]);
       await db2.query("DELETE FROM book_click_tracking WHERE book_id = $1", [req.params.id]).catch(() => {
@@ -7371,9 +8263,9 @@ function normalizeStandaloneFolderName(value) {
 function registerStandaloneFolderRoutes({
   app: app2,
   db: db2,
-  requireAdmin
+  requireAdmin: requireAdmin2
 }) {
-  app2.get("/api/admin/standalone-folders", requireAdmin, async (req, res) => {
+  app2.get("/api/admin/standalone-folders", requireAdmin2, async (req, res) => {
     try {
       const { type } = req.query;
       let q = "SELECT * FROM standalone_folders";
@@ -7382,14 +8274,53 @@ function registerStandaloneFolderRoutes({
         params.push(type);
         q += ` WHERE type = $1`;
       }
-      q += " ORDER BY created_at ASC";
+      q += " ORDER BY order_index ASC, created_at ASC";
       const result = await db2.query(q, params);
       res.json(result.rows);
     } catch {
       res.status(500).json({ message: "Failed to fetch folders" });
     }
   });
-  app2.post("/api/admin/standalone-folders", requireAdmin, async (req, res) => {
+  app2.patch("/api/admin/standalone/reorder", requireAdmin2, async (req, res) => {
+    try {
+      const { itemType, items } = req.body;
+      const TABLE_BY_TYPE = {
+        test: { table: "tests", nonCourse: true },
+        material: { table: "study_materials", nonCourse: true },
+        mission: { table: "daily_missions", nonCourse: false },
+        folder: { table: "standalone_folders", nonCourse: false }
+      };
+      const target = TABLE_BY_TYPE[itemType];
+      if (!target) {
+        return res.status(400).json({ message: "itemType must be one of: test, material, mission, folder" });
+      }
+      if (!Array.isArray(items)) {
+        return res.status(400).json({ message: "items must be an array" });
+      }
+      const ids = [];
+      const orders = [];
+      for (const it of items) {
+        const idNum = Number(it?.id);
+        const orderNum = Number(it?.orderIndex);
+        if (!Number.isFinite(idNum) || idNum <= 0 || !Number.isFinite(orderNum)) continue;
+        ids.push(idNum);
+        orders.push(orderNum);
+      }
+      if (ids.length === 0) return res.json({ success: true, updated: 0 });
+      const courseScope = target.nonCourse ? ` AND ${target.table}.course_id IS NULL` : "";
+      await db2.query(
+        `UPDATE ${target.table} SET order_index = v.order_index
+         FROM (SELECT unnest($1::int[]) AS id, unnest($2::int[]) AS order_index) v
+         WHERE ${target.table}.id = v.id${courseScope}`,
+        [ids, orders]
+      );
+      res.json({ success: true, updated: ids.length });
+    } catch (err) {
+      console.error("[standalone-reorder] error:", err);
+      res.status(500).json({ message: "Failed to reorder items" });
+    }
+  });
+  app2.post("/api/admin/standalone-folders", requireAdmin2, async (req, res) => {
     try {
       const { name, type, category, price, originalPrice, isFree, description, validityMonths } = req.body;
       const normalizedName = normalizeStandaloneFolderName(name);
@@ -7425,7 +8356,7 @@ function registerStandaloneFolderRoutes({
       res.status(500).json({ message: "Failed to create folder" });
     }
   });
-  app2.put("/api/admin/standalone-folders/:id", requireAdmin, async (req, res) => {
+  app2.put("/api/admin/standalone-folders/:id", requireAdmin2, async (req, res) => {
     try {
       const { name, isHidden, category, price, originalPrice, isFree, description, validityMonths } = req.body;
       if (name !== void 0) {
@@ -7493,7 +8424,7 @@ function registerStandaloneFolderRoutes({
       res.status(500).json({ message: "Failed to update folder" });
     }
   });
-  app2.delete("/api/admin/standalone-folders/:id", requireAdmin, async (req, res) => {
+  app2.delete("/api/admin/standalone-folders/:id", requireAdmin2, async (req, res) => {
     try {
       await db2.query(
         `WITH target AS (
@@ -7553,7 +8484,7 @@ function registerDoubtNotificationRoutes({
   db: db2,
   pool: pool2,
   getAuthUser: getAuthUser2,
-  requireAdmin,
+  requireAdmin: requireAdmin2,
   generateAIAnswer: generateAIAnswer2
 }) {
   const buildAdminDoubtFilter = ({
@@ -7636,7 +8567,7 @@ function registerDoubtNotificationRoutes({
       res.status(500).json({ message: "Failed to clear doubt history" });
     }
   });
-  app2.get("/api/admin/doubts", requireAdmin, async (req, res) => {
+  app2.get("/api/admin/doubts", requireAdmin2, async (req, res) => {
     try {
       const daysRaw = String(req.query.days || "").trim();
       const topicFilter = String(req.query.topic || "").trim();
@@ -7739,7 +8670,7 @@ function registerDoubtNotificationRoutes({
       res.status(500).json({ message: "Failed to fetch admin doubts" });
     }
   });
-  app2.delete("/api/admin/doubts", requireAdmin, async (req, res) => {
+  app2.delete("/api/admin/doubts", requireAdmin2, async (req, res) => {
     try {
       const daysRaw = String(req.query.days || "").trim();
       const topicFilter = String(req.query.topic || "").trim();
@@ -7770,7 +8701,7 @@ function registerDoubtNotificationRoutes({
       res.status(500).json({ message: "Failed to clear doubts" });
     }
   });
-  app2.get("/api/admin/doubts/students", requireAdmin, async (req, res) => {
+  app2.get("/api/admin/doubts/students", requireAdmin2, async (req, res) => {
     try {
       const daysRaw = String(req.query.days || "").trim();
       const topicFilter = String(req.query.topic || "").trim();
@@ -7843,7 +8774,7 @@ function registerDoubtNotificationRoutes({
       res.status(500).json({ message: "Failed to fetch student doubt history" });
     }
   });
-  app2.get("/api/admin/doubts/student/:userId", requireAdmin, async (req, res) => {
+  app2.get("/api/admin/doubts/student/:userId", requireAdmin2, async (req, res) => {
     try {
       const userId = Number(req.params.userId);
       if (!Number.isFinite(userId) || userId <= 0) return res.status(400).json({ message: "Invalid user id" });
@@ -7894,7 +8825,7 @@ function registerDoubtNotificationRoutes({
       res.status(500).json({ message: "Failed to fetch student doubts" });
     }
   });
-  app2.get("/api/admin/doubts/frequent", requireAdmin, async (req, res) => {
+  app2.get("/api/admin/doubts/frequent", requireAdmin2, async (req, res) => {
     try {
       const daysRaw = String(req.query.days || "").trim();
       const q = String(req.query.q || "").trim();
@@ -7952,7 +8883,7 @@ function registerDoubtNotificationRoutes({
       res.status(500).json({ message: "Failed to fetch frequent questions" });
     }
   });
-  app2.get("/api/admin/doubts/frequent/students", requireAdmin, async (req, res) => {
+  app2.get("/api/admin/doubts/frequent/students", requireAdmin2, async (req, res) => {
     try {
       const pattern = normalizeQuestionPattern(String(req.query.pattern || ""));
       if (!pattern) return res.status(400).json({ message: "Pattern is required" });
@@ -8063,12 +8994,39 @@ var init_doubt_notification_routes = __esm({
   }
 });
 
+// backend/standalone-entitlement-service.ts
+async function hasActiveStandaloneEntitlement(db2, userId, materialId) {
+  const now = Date.now();
+  const ent = await db2.query(
+    `SELECT id
+     FROM standalone_material_entitlements
+     WHERE user_id = $1
+       AND material_id = $2
+       AND is_active = TRUE
+       AND (expires_at IS NULL OR expires_at > $3)
+     LIMIT 1`,
+    [userId, materialId, now]
+  );
+  return ent.rows.length > 0;
+}
+var init_standalone_entitlement_service = __esm({
+  "backend/standalone-entitlement-service.ts"() {
+    "use strict";
+  }
+});
+
 // backend/student-mission-material-routes.ts
 function registerStudentMissionMaterialRoutes({
   app: app2,
   db: db2,
   getAuthUser: getAuthUser2
 }) {
+  const canAccessStandaloneMaterial = async (user, material) => {
+    if (material?.is_free) return true;
+    if (user?.role === "admin") return true;
+    if (!user?.id || !material?.id) return false;
+    return hasActiveStandaloneEntitlement(db2, Number(user.id), Number(material.id));
+  };
   const hasActiveCourseEnrollment = async (userId, courseId) => {
     const e = await db2.query(
       "SELECT valid_until FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL) LIMIT 1",
@@ -8084,78 +9042,149 @@ function registerStudentMissionMaterialRoutes({
     if (!mission?.course_id) return false;
     return hasActiveCourseEnrollment(Number(user.id), Number(mission.course_id));
   };
+  const listAccessibleDailyMissions = async (user, opts) => {
+    const { type, folderName } = opts;
+    let query = `SELECT dm.*, c.title AS course_title
+      FROM daily_missions dm
+      LEFT JOIN courses c ON c.id = dm.course_id
+      WHERE 1=1`;
+    if (!folderName) {
+      query += ` AND dm.mission_date <= CURRENT_DATE`;
+    }
+    const params = [];
+    if (type && type !== "all") {
+      params.push(type);
+      query += ` AND dm.mission_type = $${params.length}`;
+    }
+    if (folderName) {
+      params.push(folderName);
+      query += ` AND dm.folder_name = $${params.length}`;
+    }
+    query += " ORDER BY COALESCE(dm.order_index, 0) ASC, dm.mission_date ASC LIMIT 200";
+    const result = await db2.query(query, params);
+    if (user) {
+      const missionIds = result.rows.map((m) => Number(m.id)).filter((id) => Number.isFinite(id));
+      const userMissionMap = /* @__PURE__ */ new Map();
+      if (missionIds.length > 0) {
+        const umBatch = await db2.query(
+          "SELECT * FROM user_missions WHERE user_id = $1 AND mission_id = ANY($2::int[])",
+          [user.id, missionIds]
+        );
+        umBatch.rows.forEach((um) => {
+          userMissionMap.set(Number(um.mission_id), um);
+        });
+      }
+      const enrolledCourseIds = /* @__PURE__ */ new Set();
+      const freeFolderNames = /* @__PURE__ */ new Set();
+      if (user.role !== "admin") {
+        const courseIds = [
+          ...new Set(
+            result.rows.map((m) => Number(m.course_id)).filter((cid) => Number.isFinite(cid) && cid > 0)
+          )
+        ];
+        if (courseIds.length > 0) {
+          const enr = await db2.query(
+            `SELECT course_id, valid_until FROM enrollments
+             WHERE user_id = $1 AND course_id = ANY($2::int[])
+               AND (status = 'active' OR status IS NULL)`,
+            [user.id, courseIds]
+          );
+          for (const row of enr.rows) {
+            if (!isEnrollmentExpired(row)) enrolledCourseIds.add(Number(row.course_id));
+          }
+        }
+        const folderNamesInResult = [
+          ...new Set(
+            result.rows.map((m) => m.folder_name).filter((n) => typeof n === "string" && n.length > 0)
+          )
+        ];
+        if (folderNamesInResult.length > 0) {
+          const freeRows = await db2.query(
+            `SELECT name FROM standalone_folders
+             WHERE type = 'mission' AND is_free = TRUE AND name = ANY($1::text[])`,
+            [folderNamesInResult]
+          );
+          for (const row of freeRows.rows) freeFolderNames.add(String(row.name));
+        }
+      }
+      const missionAccessible = (mission) => {
+        if (mission?.mission_type === "free_practice") return true;
+        if (user.role === "admin") return true;
+        if (mission?.folder_name && freeFolderNames.has(String(mission.folder_name))) return true;
+        const cid = Number(mission?.course_id);
+        if (!Number.isFinite(cid) || cid <= 0) return false;
+        return enrolledCourseIds.has(cid);
+      };
+      for (const mission of result.rows) {
+        mission.isAccessible = missionAccessible(mission);
+        const um = userMissionMap.get(Number(mission.id));
+        mission.isCompleted = !!um?.is_completed;
+        mission.userScore = um?.score || 0;
+        mission.userTimeTaken = um?.time_taken || 0;
+        mission.userAnswers = um?.answers || {};
+        mission.userIncorrect = um?.incorrect || 0;
+        mission.userSkipped = um?.skipped || 0;
+      }
+      if (user.role !== "admin") {
+        result.rows = result.rows.filter((m) => !!m.isAccessible);
+      }
+    } else {
+      for (const mission of result.rows) mission.isAccessible = mission.mission_type === "free_practice";
+      result.rows = result.rows.filter((m) => !!m.isAccessible);
+    }
+    return result.rows;
+  };
   app2.get("/api/daily-missions", async (req, res) => {
     try {
       const user = await getAuthUser2(req);
       const { type } = req.query;
-      let query = "SELECT * FROM daily_missions WHERE mission_date <= CURRENT_DATE";
-      const params = [];
-      if (type && type !== "all") {
-        params.push(type);
-        query += ` AND mission_type = $${params.length}`;
-      }
-      query += " ORDER BY mission_date DESC LIMIT 20";
-      const result = await db2.query(query, params);
-      if (user) {
-        const missionIds = result.rows.map((m) => Number(m.id)).filter((id) => Number.isFinite(id));
-        const userMissionMap = /* @__PURE__ */ new Map();
-        if (missionIds.length > 0) {
-          const umBatch = await db2.query(
-            "SELECT * FROM user_missions WHERE user_id = $1 AND mission_id = ANY($2::int[])",
-            [user.id, missionIds]
-          );
-          umBatch.rows.forEach((um) => {
-            userMissionMap.set(Number(um.mission_id), um);
-          });
-        }
-        const enrolledCourseIds = /* @__PURE__ */ new Set();
-        if (user.role !== "admin") {
-          const courseIds = [
-            ...new Set(
-              result.rows.map((m) => Number(m.course_id)).filter((cid) => Number.isFinite(cid) && cid > 0)
-            )
-          ];
-          if (courseIds.length > 0) {
-            const enr = await db2.query(
-              `SELECT course_id, valid_until FROM enrollments
-               WHERE user_id = $1 AND course_id = ANY($2::int[])
-                 AND (status = 'active' OR status IS NULL)`,
-              [user.id, courseIds]
-            );
-            for (const row of enr.rows) {
-              if (!isEnrollmentExpired(row)) enrolledCourseIds.add(Number(row.course_id));
-            }
-          }
-        }
-        const missionAccessible = (mission) => {
-          if (mission?.mission_type === "free_practice") return true;
-          if (user.role === "admin") return true;
-          const cid = Number(mission?.course_id);
-          if (!Number.isFinite(cid) || cid <= 0) return false;
-          return enrolledCourseIds.has(cid);
-        };
-        for (const mission of result.rows) {
-          mission.isAccessible = missionAccessible(mission);
-          if (!mission.isAccessible && user.role !== "admin") continue;
-          const um = userMissionMap.get(Number(mission.id));
-          mission.isCompleted = !!um?.is_completed;
-          mission.userScore = um?.score || 0;
-          mission.userTimeTaken = um?.time_taken || 0;
-          mission.userAnswers = um?.answers || {};
-          mission.userIncorrect = um?.incorrect || 0;
-          mission.userSkipped = um?.skipped || 0;
-        }
-        if (user.role !== "admin") {
-          result.rows = result.rows.filter((m) => !!m.isAccessible);
-        }
-      } else {
-        for (const mission of result.rows) mission.isAccessible = mission.mission_type === "free_practice";
-        result.rows = result.rows.filter((m) => !!m.isAccessible);
-      }
-      res.json(result.rows);
+      const rows = await listAccessibleDailyMissions(user, { type: String(type || "all") });
+      res.json(rows);
     } catch (err) {
       console.error(err);
       res.status(500).json({ message: "Failed to fetch daily missions" });
+    }
+  });
+  app2.get("/api/daily-missions/folder/:folderName", async (req, res) => {
+    try {
+      const user = await getAuthUser2(req);
+      const { type } = req.query;
+      const folderName = decodeURIComponent(String(req.params.folderName || "")).trim();
+      if (!folderName) return res.status(400).json({ message: "Folder name required" });
+      const rows = await listAccessibleDailyMissions(user, {
+        type: String(type || "all"),
+        folderName
+      });
+      res.set("Cache-Control", "private, no-store");
+      res.json(rows);
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ message: "Failed to fetch folder missions" });
+    }
+  });
+  app2.get("/api/mission-folders", async (req, res) => {
+    try {
+      const user = await getAuthUser2(req);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+      const result = await db2.query(
+        `SELECT
+           id,
+           name,
+           category,
+           validity_months,
+           is_free,
+           description,
+           created_at
+         FROM standalone_folders
+         WHERE type = 'mission'
+           AND (is_hidden = FALSE OR is_hidden IS NULL)
+         ORDER BY order_index ASC, created_at ASC`
+      );
+      res.set("Cache-Control", "private, no-store");
+      res.json(result.rows);
+    } catch (err) {
+      console.error("[MissionFolders] error:", err);
+      res.status(500).json({ message: "Failed to fetch mission folders" });
     }
   });
   app2.get("/api/daily-mission", async (req, res) => {
@@ -8208,14 +9237,14 @@ function registerStudentMissionMaterialRoutes({
       const loadFolders = async () => {
         if (free !== "true") return [];
         const foldersResult = await db2.query(
-          "SELECT * FROM standalone_folders WHERE type = 'material' AND (is_hidden = FALSE OR is_hidden IS NULL) ORDER BY created_at ASC"
+          "SELECT * FROM standalone_folders WHERE type = 'material' AND (is_hidden = FALSE OR is_hidden IS NULL) ORDER BY order_index ASC, created_at ASC"
         );
         return foldersResult.rows;
       };
       if (user?.role === "admin") {
         let query = "SELECT * FROM study_materials";
         if (free === "true") query += " WHERE is_free = TRUE";
-        query += " ORDER BY created_at DESC";
+        query += " ORDER BY COALESCE(order_index, 0) ASC, created_at DESC";
         const result2 = await db2.query(query, []);
         const folders2 = await loadFolders();
         res.set("Cache-Control", "private, no-store");
@@ -8223,7 +9252,7 @@ function registerStudentMissionMaterialRoutes({
       }
       if (!user) {
         const result2 = await db2.query(
-          "SELECT id, title, description, file_type, course_id, is_free, section_title, download_allowed, created_at, file_url FROM study_materials WHERE is_free = TRUE ORDER BY created_at DESC"
+          "SELECT id, title, description, file_type, course_id, is_free, section_title, download_allowed, created_at, file_url FROM study_materials WHERE is_free = TRUE ORDER BY COALESCE(order_index, 0) ASC, created_at DESC"
         );
         const folders2 = await loadFolders();
         res.set("Cache-Control", "private, no-store");
@@ -8241,22 +9270,35 @@ function registerStudentMissionMaterialRoutes({
                 AND (e.status = 'active' OR e.status IS NULL)
                 AND (e.valid_until IS NULL OR e.valid_until > $2)
             )
-         ORDER BY sm.created_at DESC`,
+         ORDER BY COALESCE(sm.order_index, 0) ASC, sm.created_at DESC`,
         [user.id, now]
       );
+      const filteredRows = [];
+      for (const row of result.rows) {
+        if (!row.course_id) {
+          if (await canAccessStandaloneMaterial(user, row)) filteredRows.push(row);
+          continue;
+        }
+        filteredRows.push(row);
+      }
       const folders = await loadFolders();
       res.set("Cache-Control", "private, no-store");
-      res.json({ materials: result.rows, folders });
+      res.json({ materials: filteredRows, folders });
     } catch {
       res.status(500).json({ message: "Failed to fetch materials" });
     }
   });
   app2.get("/api/study-materials/folder/:folderName", async (req, res) => {
     try {
-      const result = await db2.query("SELECT * FROM study_materials WHERE section_title = $1 AND course_id IS NULL ORDER BY created_at DESC", [
+      const user = await getAuthUser2(req);
+      const result = await db2.query("SELECT * FROM study_materials WHERE section_title = $1 AND course_id IS NULL ORDER BY COALESCE(order_index, 0) ASC, created_at DESC", [
         decodeURIComponent(String(req.params.folderName))
       ]);
-      res.json(result.rows);
+      const safeRows = [];
+      for (const row of result.rows) {
+        if (await canAccessStandaloneMaterial(user, row)) safeRows.push(row);
+      }
+      res.json(safeRows);
     } catch {
       res.status(500).json({ message: "Failed to fetch folder materials" });
     }
@@ -8278,6 +9320,10 @@ function registerStudentMissionMaterialRoutes({
             return res.status(403).json({ message: "Access denied" });
           }
         }
+      } else {
+        const user = await getAuthUser2(req);
+        const allowed = await canAccessStandaloneMaterial(user, m);
+        if (!allowed) return res.status(403).json({ message: "Access denied" });
       }
       res.json(result.rows[0]);
     } catch {
@@ -8289,6 +9335,7 @@ var init_student_mission_material_routes = __esm({
   "backend/student-mission-material-routes.ts"() {
     "use strict";
     init_course_access_utils();
+    init_standalone_entitlement_service();
   }
 });
 
@@ -8349,10 +9396,10 @@ function registerLectureRoutes({
       const user = await getAuthUser2(req);
       if (!user) return res.json({ is_completed: false, watch_percent: 0, playback_sessions: 0 });
       const result = await db2.query(
-        "SELECT is_completed, watch_percent, COALESCE(playback_sessions, 0) AS playback_sessions FROM lecture_progress WHERE user_id = $1 AND lecture_id = $2",
+        "SELECT is_completed, watch_percent, COALESCE(playback_sessions, 0) AS playback_sessions, COALESCE(last_position_seconds, 0) AS last_position_seconds FROM lecture_progress WHERE user_id = $1 AND lecture_id = $2",
         [user.id, req.params.id]
       );
-      if (result.rows.length === 0) return res.json({ is_completed: false, watch_percent: 0, playback_sessions: 0 });
+      if (result.rows.length === 0) return res.json({ is_completed: false, watch_percent: 0, playback_sessions: 0, last_position_seconds: 0 });
       res.json(result.rows[0]);
     } catch {
       res.json({ is_completed: false, watch_percent: 0, playback_sessions: 0 });
@@ -8374,19 +9421,22 @@ function registerLectureRoutes({
       );
       const row = prev.rows[0];
       const canBump = !row?.last_session_ping_at || now - Number(row.last_session_ping_at) >= debounceMs;
-      if (!row) {
+      if (canBump || !row) {
         await db2.query(
           `INSERT INTO lecture_progress (user_id, lecture_id, watch_percent, is_completed, playback_sessions, last_session_ping_at, completed_at)
-           VALUES ($1, $2, 0, false, 1, $3, NULL)`,
-          [user.id, lectureId, now]
-        );
-      } else if (canBump) {
-        await db2.query(
-          `UPDATE lecture_progress SET
-             playback_sessions = COALESCE(playback_sessions, 0) + 1,
-             last_session_ping_at = $3
-           WHERE user_id = $1 AND lecture_id = $2`,
-          [user.id, lectureId, now]
+           VALUES ($1, $2, 0, false, 1, $3, NULL)
+           ON CONFLICT (user_id, lecture_id) DO UPDATE SET
+             playback_sessions = CASE
+               WHEN lecture_progress.last_session_ping_at IS NULL OR $3 - lecture_progress.last_session_ping_at >= $4
+               THEN COALESCE(lecture_progress.playback_sessions, 0) + 1
+               ELSE COALESCE(lecture_progress.playback_sessions, 0)
+             END,
+             last_session_ping_at = CASE
+               WHEN lecture_progress.last_session_ping_at IS NULL OR $3 - lecture_progress.last_session_ping_at >= $4
+               THEN $3
+               ELSE lecture_progress.last_session_ping_at
+             END`,
+          [user.id, lectureId, now, debounceMs]
         );
       }
       res.json({ success: true, bumped: canBump || !row });
@@ -8399,18 +9449,26 @@ function registerLectureRoutes({
       const user = await getAuthUser2(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const lectureId = String(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id);
-      const { watchPercent, isCompleted } = req.body;
+      const { watchPercent, isCompleted, lastPositionSeconds } = req.body;
       const access = await canAccessLecture(user, lectureId);
       if (!access.lecture) return res.status(404).json({ message: "Lecture not found" });
       if (!access.allowed) return res.status(403).json({ message: "Access denied for this lecture" });
       const lecture = access.lecture;
       const courseId = lecture.course_id ? Number(lecture.course_id) : null;
       const normalizedWatchPercent = Math.max(0, Math.min(100, Number(watchPercent) || 0));
+      const normalizedPosition = Math.max(0, Math.floor(Number(lastPositionSeconds) || 0));
       await db2.query(
-        `INSERT INTO lecture_progress (user_id, lecture_id, watch_percent, is_completed, completed_at) 
-         VALUES ($1, $2, $3, $4, $5) 
-         ON CONFLICT (user_id, lecture_id) DO UPDATE SET watch_percent = $3, is_completed = $4, completed_at = $5`,
-        [user.id, lectureId, normalizedWatchPercent, Boolean(isCompleted), isCompleted ? Date.now() : null]
+        `INSERT INTO lecture_progress (user_id, lecture_id, watch_percent, is_completed, completed_at, last_position_seconds)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (user_id, lecture_id) DO UPDATE SET
+           watch_percent          = GREATEST(lecture_progress.watch_percent, EXCLUDED.watch_percent),
+           is_completed           = lecture_progress.is_completed OR EXCLUDED.is_completed,
+           last_position_seconds  = EXCLUDED.last_position_seconds,
+           completed_at           = CASE
+             WHEN EXCLUDED.is_completed AND NOT lecture_progress.is_completed THEN EXCLUDED.completed_at
+             ELSE lecture_progress.completed_at
+           END`,
+        [user.id, lectureId, normalizedWatchPercent, Boolean(isCompleted), isCompleted ? Date.now() : null, normalizedPosition]
       );
       if (courseId && isCompleted) {
         await updateCourseProgress3(user.id, Number(courseId));
@@ -8693,7 +9751,7 @@ function registerTestCoreRoutes({
         params.push(type);
         query += ` AND test_type = $${params.length}`;
       }
-      query += " ORDER BY created_at DESC";
+      query += " ORDER BY COALESCE(t.order_index, 0) ASC, t.created_at DESC";
       const user = await getAuthUser2(req);
       const result = await db2.query(query, params);
       let tests = result.rows;
@@ -9121,9 +10179,6 @@ function registerLiveClassRoutes({
   db: db2,
   getAuthUser: getAuthUser2
 }) {
-  let upcomingCache = [];
-  let upcomingCacheAt = 0;
-  const upcomingCacheTtlMs = Math.max(1e4, Number(process.env.UPCOMING_CLASSES_CACHE_MS || "30000"));
   const sanitizeLiveClass = (row) => {
     if (!row || typeof row !== "object") return row;
     const { cf_stream_key, cf_stream_rtmp_url, ...safe } = row;
@@ -9192,11 +10247,17 @@ function registerLiveClassRoutes({
       const ex23 = sqlEnrollmentExistsForLiveList(2, 3);
       const now = Date.now();
       if (cid && user) {
+        const rawLimit = parseInt(String(req.query.limit || "20"), 10);
+        const rawOffset = parseInt(String(req.query.offset || "0"), 10);
+        const safeLimit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 200) : 20;
+        const safeOffset = Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 0;
+        const safeLimitPlusOne = safeLimit + 1;
         const result2 = await db2.query(
           `SELECT lc.*, c.title as course_title, c.is_free as course_is_free,
             ${ex23} as is_enrolled
            FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
            WHERE lc.course_id = $1
+             AND COALESCE(lc.is_recording_mode, FALSE) = FALSE
              AND (
                lc.is_completed IS NOT TRUE
                OR (
@@ -9206,17 +10267,22 @@ function registerLiveClassRoutes({
                )
              )
              AND (lc.is_free_preview = TRUE OR ${ex23})
-           ORDER BY lc.scheduled_at DESC`,
-          [cid, user.id, now]
+           ORDER BY lc.scheduled_at DESC
+           LIMIT $4 OFFSET $5`,
+          [cid, user.id, now, safeLimitPlusOne, safeOffset]
         );
+        const hasMore = result2.rows.length > safeLimit;
+        const rowsToSend = hasMore ? result2.rows.slice(0, safeLimit) : result2.rows;
         res.set("Cache-Control", "private, no-store");
-        return res.json(result2.rows.map(sanitizeLiveClass));
+        res.set("X-Has-More", hasMore ? "true" : "false");
+        return res.json(rowsToSend.map(sanitizeLiveClass));
       }
       if (cid) {
         const result2 = await db2.query(
           `SELECT lc.*, c.title as course_title, c.is_free as course_is_free, FALSE as is_enrolled
            FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
            WHERE lc.course_id = $1
+             AND COALESCE(lc.is_recording_mode, FALSE) = FALSE
              AND (
                lc.is_completed IS NOT TRUE
                OR (
@@ -9238,14 +10304,15 @@ function registerLiveClassRoutes({
           `SELECT lc.*, c.title as course_title, c.is_free as course_is_free,
             ${ex12} as is_enrolled
            FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
-           WHERE (
-             lc.is_completed IS NOT TRUE
-             OR (
-               lc.recording_url IS NOT NULL
-               OR lc.cf_playback_hls IS NOT NULL
-               OR (lc.youtube_url IS NOT NULL AND TRIM(lc.youtube_url) != '')
+           WHERE COALESCE(lc.is_recording_mode, FALSE) = FALSE
+             AND (
+               lc.is_completed IS NOT TRUE
+               OR (
+                 lc.recording_url IS NOT NULL
+                 OR lc.cf_playback_hls IS NOT NULL
+                 OR (lc.youtube_url IS NOT NULL AND TRIM(lc.youtube_url) != '')
+               )
              )
-           )
              AND (
                (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
                OR (lc.course_id IS NOT NULL AND (lc.is_free_preview = TRUE OR ${ex12}))
@@ -9259,14 +10326,15 @@ function registerLiveClassRoutes({
       const result = await db2.query(
         `SELECT lc.*, c.title as course_title, c.is_free as course_is_free, FALSE as is_enrolled
          FROM live_classes lc LEFT JOIN courses c ON c.id = lc.course_id
-         WHERE (
-           lc.is_completed IS NOT TRUE
-           OR (
-             lc.recording_url IS NOT NULL
-             OR lc.cf_playback_hls IS NOT NULL
-             OR (lc.youtube_url IS NOT NULL AND TRIM(lc.youtube_url) != '')
+         WHERE COALESCE(lc.is_recording_mode, FALSE) = FALSE
+           AND (
+             lc.is_completed IS NOT TRUE
+             OR (
+               lc.recording_url IS NOT NULL
+               OR lc.cf_playback_hls IS NOT NULL
+               OR (lc.youtube_url IS NOT NULL AND TRIM(lc.youtube_url) != '')
+             )
            )
-         )
            AND (
              (lc.course_id IS NULL AND (lc.is_public = TRUE OR lc.is_free_preview = TRUE))
              OR (lc.course_id IS NOT NULL AND lc.is_free_preview = TRUE)
@@ -9281,18 +10349,32 @@ function registerLiveClassRoutes({
       res.json([]);
     }
   });
-  app2.get("/api/upcoming-classes", async (_req, res) => {
+  app2.get("/api/upcoming-classes", async (req, res) => {
     try {
-      const now = Date.now();
-      if (upcomingCache.length > 0 && now - upcomingCacheAt <= upcomingCacheTtlMs) {
+      const user = await getAuthUser2(req);
+      const isAdmin = user?.role === "admin";
+      let result;
+      if (isAdmin) {
+        result = await db2.query(`
+          SELECT lc.*, c.title as course_title, c.is_free as course_is_free, c.category as course_category
+          FROM live_classes lc
+          LEFT JOIN courses c ON c.id = lc.course_id
+          WHERE lc.is_completed IS NOT TRUE
+          ORDER BY
+            lc.is_live DESC,
+            lc.scheduled_at ASC NULLS LAST
+          LIMIT 200
+        `);
+        console.log(`[UpcomingClasses] admin: returning ${result.rows.length} classes`);
         res.set("Cache-Control", "private, no-store");
-        return res.json(upcomingCache);
+        return res.json(result.rows.map(sanitizeLiveClass));
       }
-      const result = await db2.query(`
+      result = await db2.query(`
         SELECT lc.*, c.title as course_title, c.is_free as course_is_free, c.category as course_category
         FROM live_classes lc
         LEFT JOIN courses c ON c.id = lc.course_id
         WHERE lc.is_completed IS NOT TRUE
+          AND COALESCE(lc.is_recording_mode, FALSE) = FALSE
           AND (
             lc.course_id IS NULL
             OR lc.is_public = TRUE
@@ -9304,16 +10386,12 @@ function registerLiveClassRoutes({
           lc.scheduled_at ASC NULLS LAST
         LIMIT 50
       `);
-      console.log(`[UpcomingClasses] returning ${result.rows.length} classes`);
-      res.set("Cache-Control", "private, no-store");
-      const payload = result.rows.map(toPublicUpcomingDto);
-      upcomingCache = payload;
-      upcomingCacheAt = now;
-      res.json(payload);
+      console.log(`[UpcomingClasses] public: returning ${result.rows.length} classes`);
+      res.set("Cache-Control", "private, max-age=30");
+      res.json(result.rows.map(toPublicUpcomingDto));
     } catch (err) {
       console.error("[UpcomingClasses] error:", err);
-      res.set("Cache-Control", "private, no-store");
-      if (upcomingCache.length > 0) return res.json(upcomingCache);
+      res.set("Cache-Control", "private, max-age=30");
       res.json([]);
     }
   });
@@ -9418,10 +10496,6 @@ async function convertLiveClassTitlePeersToLectures(db2, anchor, opts = {}) {
       ]
     );
     lectureIds.push(Number(lectureResult.rows[0]?.id));
-    await db2.query(
-      "UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1",
-      [peer.course_id]
-    );
     if (opts.recomputeCourseProgress) {
       await opts.recomputeCourseProgress(peer.course_id);
     }
@@ -9442,7 +10516,7 @@ var init_live_class_lecture_convert = __esm({
 function registerAdminLiveClassManageRoutes({
   app: app2,
   db: db2,
-  requireAdmin,
+  requireAdmin: requireAdmin2,
   getR2Client,
   recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse3
 }) {
@@ -9452,7 +10526,7 @@ function registerAdminLiveClassManageRoutes({
     if (lower.includes("videodelivery.net") || lower.endsWith(".m3u8")) return "cloudflare";
     return "r2";
   };
-  app2.post("/api/admin/live-classes/cleanup", requireAdmin, async (_req, res) => {
+  app2.post("/api/admin/live-classes/cleanup", requireAdmin2, async (_req, res) => {
     try {
       console.log("[Cleanup] Starting live class cleanup...");
       const findResult = await db2.query(`
@@ -9479,7 +10553,7 @@ function registerAdminLiveClassManageRoutes({
       res.status(500).json({ message: "Failed to cleanup live classes" });
     }
   });
-  app2.put("/api/admin/live-classes/:id", requireAdmin, async (req, res) => {
+  app2.put("/api/admin/live-classes/:id", requireAdmin2, async (req, res) => {
     try {
       const { isLive, isCompleted, youtubeUrl, title, description, convertToLecture, sectionTitle, scheduledAt, notifyEmail, notifyBell, isFreePreview, streamType, chatMode, showViewerCount, recordingUrl, cfStreamUid, lectureSectionTitle, lectureSubfolderTitle } = req.body;
       const updates = [];
@@ -9564,7 +10638,6 @@ function registerAdminLiveClassManageRoutes({
                 Date.now()
               ]
             );
-            await db2.query("UPDATE courses SET total_lectures = (SELECT COUNT(*) FROM lectures WHERE course_id = $1) WHERE id = $1", [peer.course_id]);
             await recomputeAllEnrollmentsProgressForCourse3(peer.course_id);
           }
           return res.json(liveClassOnly);
@@ -9721,7 +10794,7 @@ function registerAdminLiveClassManageRoutes({
       res.status(500).json({ message: "Failed to update live class" });
     }
   });
-  app2.delete("/api/admin/live-classes/:id", requireAdmin, async (req, res) => {
+  app2.delete("/api/admin/live-classes/:id", requireAdmin2, async (req, res) => {
     try {
       await db2.query("DELETE FROM live_classes WHERE id = $1", [req.params.id]);
       res.json({ success: true });
@@ -9729,7 +10802,7 @@ function registerAdminLiveClassManageRoutes({
       res.status(500).json({ message: "Failed to delete live class" });
     }
   });
-  app2.put("/api/admin/study-materials/:id", requireAdmin, async (req, res) => {
+  app2.put("/api/admin/study-materials/:id", requireAdmin2, async (req, res) => {
     try {
       const { title, description, fileUrl, fileType, isFree, sectionTitle, downloadAllowed } = req.body;
       const existing = await db2.query("SELECT course_id FROM study_materials WHERE id = $1 LIMIT 1", [req.params.id]);
@@ -9743,6 +10816,9 @@ function registerAdminLiveClassManageRoutes({
         downloadAllowed || false,
         req.params.id
       ]);
+      if (downloadAllowed === false) {
+        await purgeUserDownloadsForItem(db2, "material", Number(req.params.id));
+      }
       if (existing.rows[0]?.course_id) {
         await recomputeAllEnrollmentsProgressForCourse3(existing.rows[0].course_id);
       }
@@ -9751,7 +10827,7 @@ function registerAdminLiveClassManageRoutes({
       res.status(500).json({ message: "Failed to update material" });
     }
   });
-  app2.delete("/api/admin/study-materials/:id", requireAdmin, async (req, res) => {
+  app2.delete("/api/admin/study-materials/:id", requireAdmin2, async (req, res) => {
     try {
       const material = await db2.query("SELECT file_url, course_id FROM study_materials WHERE id = $1", [req.params.id]);
       if (material.rows.length > 0 && material.rows[0].file_url) {
@@ -9792,6 +10868,7 @@ function registerAdminLiveClassManageRoutes({
 var init_admin_live_class_manage_routes = __esm({
   "backend/admin-live-class-manage-routes.ts"() {
     "use strict";
+    init_download_access_utils();
     init_recordingSection();
     init_push_notifications();
     init_live_class_lecture_convert();
@@ -9818,7 +10895,7 @@ function registerClassroomRoutes({
   app: app2,
   db: db2,
   requireAuth,
-  requireAdmin,
+  requireAdmin: requireAdmin2,
   getAuthUser: getAuthUser2,
   recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse3
 }) {
@@ -9883,9 +10960,31 @@ function registerClassroomRoutes({
       res.status(500).json({ message: "Failed to create classroom token" });
     }
   });
+  app2.get("/api/live-classes/:id/classroom/sync-token", requireAuth, async (req, res) => {
+    try {
+      const user = await getAuthUser2(req);
+      if (!user) return res.status(401).json({ message: "Unauthorized" });
+      const lc = await loadLiveClass(db2, String(req.params.id));
+      if (!lc) return res.status(404).json({ message: "Live class not found" });
+      if (String(lc.stream_type || "").toLowerCase() !== "classroom") {
+        return res.status(400).json({ message: "Not a classroom stream" });
+      }
+      const bearerRaw = (req.headers.authorization || "").replace(/^Bearer\s+/i, "").trim();
+      const token = bearerRaw || await db2.query(
+        "SELECT session_token FROM users WHERE id = $1",
+        [user.id]
+      ).then((r) => String(r.rows[0]?.session_token || ""));
+      if (!token) return res.status(401).json({ message: "No session token found" });
+      res.set("Cache-Control", "no-store");
+      res.json({ token });
+    } catch (err) {
+      console.error("[Classroom] sync-token error:", err);
+      res.status(500).json({ message: "Failed to get sync token" });
+    }
+  });
   app2.get(
     "/api/admin/live-classes/:id/classroom/board-checkpoint",
-    requireAdmin,
+    requireAdmin2,
     async (req, res) => {
       try {
         const lc = await loadLiveClass(db2, String(req.params.id));
@@ -9902,7 +11001,7 @@ function registerClassroomRoutes({
   );
   app2.put(
     "/api/admin/live-classes/:id/classroom/board-checkpoint",
-    requireAdmin,
+    requireAdmin2,
     async (req, res) => {
       try {
         const liveClassId = String(req.params.id);
@@ -9922,7 +11021,7 @@ function registerClassroomRoutes({
       }
     }
   );
-  app2.put("/api/admin/live-classes/:id/classroom/board-snapshot", requireAdmin, async (req, res) => {
+  app2.put("/api/admin/live-classes/:id/classroom/board-snapshot", requireAdmin2, async (req, res) => {
     try {
       const liveClassId = String(req.params.id);
       const { boardSnapshotUrl, recordingUrl } = req.body || {};
@@ -9937,7 +11036,7 @@ function registerClassroomRoutes({
       res.status(500).json({ message: "Failed to save board snapshot" });
     }
   });
-  app2.post("/api/admin/live-classes/:id/classroom/finalize", requireAdmin, async (req, res) => {
+  app2.post("/api/admin/live-classes/:id/classroom/finalize", requireAdmin2, async (req, res) => {
     try {
       const liveClassId = String(req.params.id);
       const lc = await loadLiveClass(db2, liveClassId);
@@ -10096,11 +11195,11 @@ function registerLiveClassPollRoutes({
   db: db2,
   listenPool: listenPool2,
   requireAuth,
-  requireAdmin,
+  requireAdmin: requireAdmin2,
   getAuthUser: getAuthUser2
 }) {
   const listenPoolMax = listenPool2.options.max ?? 32;
-  app2.post("/api/admin/live-classes/:id/polls", requireAdmin, async (req, res) => {
+  app2.post("/api/admin/live-classes/:id/polls", requireAdmin2, async (req, res) => {
     try {
       const liveClassId = String(req.params.id);
       const user = await getAuthUser2(req);
@@ -10154,7 +11253,7 @@ function registerLiveClassPollRoutes({
       res.status(500).json({ message: "Failed to create poll" });
     }
   });
-  app2.post("/api/admin/live-classes/:id/polls/:pollId/end", requireAdmin, async (req, res) => {
+  app2.post("/api/admin/live-classes/:id/polls/:pollId/end", requireAdmin2, async (req, res) => {
     try {
       const t = nowMs();
       await db2.query(
@@ -10166,7 +11265,7 @@ function registerLiveClassPollRoutes({
       res.status(500).json({ message: "Failed to end poll" });
     }
   });
-  app2.get("/api/admin/live-classes/:id/polls/session", requireAdmin, async (req, res) => {
+  app2.get("/api/admin/live-classes/:id/polls/session", requireAdmin2, async (req, res) => {
     try {
       const liveClassId = String(req.params.id);
       await finalizeExpiredPolls(db2, liveClassId);
@@ -10199,7 +11298,7 @@ function registerLiveClassPollRoutes({
       res.status(500).json({ message: "Failed to load session polls" });
     }
   });
-  app2.get("/api/admin/live-classes/:id/polls/:pollId/results", requireAdmin, async (req, res) => {
+  app2.get("/api/admin/live-classes/:id/polls/:pollId/results", requireAdmin2, async (req, res) => {
     try {
       const pollId = Number(req.params.pollId);
       const pollRes = await db2.query("SELECT * FROM live_class_polls WHERE id = $1 AND live_class_id = $2", [
@@ -10302,7 +11401,7 @@ function registerLiveClassPollRoutes({
       res.status(500).json({ message: "Failed to vote" });
     }
   });
-  app2.post("/api/admin/live-classes/:id/activity-timer", requireAdmin, async (req, res) => {
+  app2.post("/api/admin/live-classes/:id/activity-timer", requireAdmin2, async (req, res) => {
     try {
       const liveClassId = String(req.params.id);
       const user = await getAuthUser2(req);
@@ -10357,7 +11456,7 @@ function registerLiveClassPollRoutes({
   });
   app2.patch(
     "/api/admin/live-classes/:id/activity-timer/overlay-position",
-    requireAdmin,
+    requireAdmin2,
     async (req, res) => {
       try {
         const liveClassId = String(req.params.id);
@@ -10384,96 +11483,107 @@ function registerLiveClassPollRoutes({
       }
     }
   );
-  app2.get("/api/live-classes/:id/engagement/stream", requireAuth, async (req, res) => {
-    const liveClassIdStr = String(req.params.id);
-    const hasAccess = await checkEngagementStreamAccess(req, res, db2, getAuthUser2, liveClassIdStr);
-    if (!hasAccess) return;
-    if (!tryAcquireSseListen(listenPoolMax)) {
-      return res.status(503).json({ message: "Too many realtime connections; try again shortly." });
-    }
-    let closed = false;
-    let listenClient = null;
-    const cleanup = async () => {
-      if (closed) return;
-      closed = true;
-      releaseSseListen();
-      const c = listenClient;
-      listenClient = null;
-      if (!c) return;
-      try {
-        c.removeAllListeners("notification");
-        await c.query("UNLISTEN live_engagement");
-      } catch {
+  app2.get(
+    "/api/live-classes/:id/engagement/stream",
+    (req, _res, next) => {
+      const qToken = String(req.query.access_token || "").trim();
+      if (qToken && !req.headers.authorization) {
+        req.headers = { ...req.headers, authorization: `Bearer ${qToken}` };
       }
-      try {
-        c.release();
-      } catch {
+      next();
+    },
+    requireAuth,
+    async (req, res) => {
+      const liveClassIdStr = String(req.params.id);
+      const hasAccess = await checkEngagementStreamAccess(req, res, db2, getAuthUser2, liveClassIdStr);
+      if (!hasAccess) return;
+      if (!tryAcquireSseListen(listenPoolMax)) {
+        return res.status(503).json({ message: "Too many realtime connections; try again shortly." });
       }
-    };
-    try {
-      listenClient = await listenPool2.connect();
-    } catch (e) {
-      console.error("[Engagement SSE] listen pool connect failed", e);
-      releaseSseListen();
-      return res.status(503).json({ message: "Realtime unavailable" });
-    }
-    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
-    res.setHeader("Cache-Control", "no-cache, no-transform");
-    res.setHeader("Connection", "keep-alive");
-    res.setHeader("X-Accel-Buffering", "no");
-    res.flushHeaders?.();
-    const onNotify = (msg) => {
-      if (closed) return;
+      let closed = false;
+      let listenClient = null;
+      const cleanup = async () => {
+        if (closed) return;
+        closed = true;
+        releaseSseListen();
+        const c = listenClient;
+        listenClient = null;
+        if (!c) return;
+        try {
+          c.removeAllListeners("notification");
+          await c.query("UNLISTEN live_engagement");
+        } catch {
+        }
+        try {
+          c.release();
+        } catch {
+        }
+      };
       try {
-        const payload = JSON.parse(String(msg.payload || "{}"));
-        if (String(payload.liveClassId ?? "") !== liveClassIdStr) return;
-        if (!payload.type) return;
-        res.write(`data: ${JSON.stringify({ type: payload.type })}
+        listenClient = await listenPool2.connect();
+      } catch (e) {
+        console.error("[Engagement SSE] listen pool connect failed", e);
+        releaseSseListen();
+        return res.status(503).json({ message: "Realtime unavailable" });
+      }
+      res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+      res.setHeader("Cache-Control", "no-cache, no-transform");
+      res.setHeader("Connection", "keep-alive");
+      res.setHeader("X-Accel-Buffering", "no");
+      res.flushHeaders?.();
+      const onNotify = (msg) => {
+        if (closed) return;
+        try {
+          const payload = JSON.parse(String(msg.payload || "{}"));
+          if (String(payload.liveClassId ?? "") !== liveClassIdStr) return;
+          if (!payload.type) return;
+          res.write(`data: ${JSON.stringify({ type: payload.type })}
 
 `);
-      } catch {
+        } catch {
+        }
+      };
+      const conn = listenClient;
+      if (!conn) {
+        releaseSseListen();
+        return res.status(503).json({ message: "Realtime unavailable" });
       }
-    };
-    const conn = listenClient;
-    if (!conn) {
-      releaseSseListen();
-      return res.status(503).json({ message: "Realtime unavailable" });
-    }
-    conn.on("notification", onNotify);
-    try {
-      await conn.query("LISTEN live_engagement");
-    } catch (e) {
-      console.error("[Engagement SSE] LISTEN failed", e);
-      await cleanup();
+      conn.on("notification", onNotify);
       try {
-        res.write(`event: error
+        await conn.query("LISTEN live_engagement");
+      } catch (e) {
+        console.error("[Engagement SSE] LISTEN failed", e);
+        await cleanup();
+        try {
+          res.write(`event: error
 data: ${JSON.stringify({ message: "Realtime unavailable" })}
 
 `);
-      } catch {
+        } catch {
+        }
+        res.end();
+        return;
       }
-      res.end();
-      return;
-    }
-    const ping = setInterval(() => {
-      if (closed) return;
-      try {
-        res.write(`: ping ${Date.now()}
+      const ping = setInterval(() => {
+        if (closed) return;
+        try {
+          res.write(`: ping ${Date.now()}
 
 `);
+        } catch {
+        }
+      }, 25e3);
+      req.on("close", () => {
+        clearInterval(ping);
+        void cleanup();
+      });
+      try {
+        res.write(": stream ok\n\n");
       } catch {
+        void cleanup();
       }
-    }, 25e3);
-    req.on("close", () => {
-      clearInterval(ping);
-      void cleanup();
-    });
-    try {
-      res.write(": stream ok\n\n");
-    } catch {
-      void cleanup();
     }
-  });
+  );
 }
 var init_live_class_poll_routes = __esm({
   "backend/live-class-poll-routes.ts"() {
@@ -10809,18 +11919,88 @@ var init_classroom_sync = __esm({
 });
 
 // backend/course-access-routes.ts
-function checkDownloadUrlRateLimit(userId) {
+import crypto3 from "node:crypto";
+async function checkDownloadUrlRateLimit(db2, userId) {
+  const redis = await getRedisClient();
+  if (redis) {
+    const allowed = await checkDownloadUrlRateLimitRedis(
+      redis,
+      userId,
+      DOWNLOAD_URL_RATE_WINDOW_MS,
+      DOWNLOAD_URL_RATE_MAX
+    );
+    if (allowed !== null) return allowed;
+  }
+  return checkDownloadUrlRateLimitPg(db2, userId);
+}
+async function assertDownloadProxyEntitlement(db2, userId, itemType, itemId) {
+  if (itemType === "lecture") {
+    const r = await db2.query(
+      `SELECT l.download_allowed, l.course_id, l.is_free_preview
+       FROM lectures l WHERE l.id = $1 LIMIT 1`,
+      [itemId]
+    );
+    if (r.rows.length === 0) return { ok: false, status: 404, message: "Item not found" };
+    const row = r.rows[0];
+    if (!row.download_allowed) {
+      return { ok: false, status: 403, message: "Download not allowed" };
+    }
+    if (!row.course_id || row.is_free_preview) return { ok: true };
+    const en = await db2.query(
+      `SELECT valid_until FROM enrollments
+       WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL) LIMIT 1`,
+      [userId, row.course_id]
+    );
+    if (en.rows.length === 0 || isEnrollmentExpired(en.rows[0])) {
+      return { ok: false, status: 403, message: "Enrollment required" };
+    }
+    return { ok: true };
+  }
+  if (itemType === "material") {
+    const r = await db2.query(
+      `SELECT sm.download_allowed, sm.course_id, sm.is_free
+       FROM study_materials sm WHERE sm.id = $1 LIMIT 1`,
+      [itemId]
+    );
+    if (r.rows.length === 0) return { ok: false, status: 404, message: "Item not found" };
+    const row = r.rows[0];
+    if (!row.download_allowed) {
+      return { ok: false, status: 403, message: "Download not allowed" };
+    }
+    if (!row.course_id || row.is_free) return { ok: true };
+    const en = await db2.query(
+      `SELECT valid_until FROM enrollments
+       WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL) LIMIT 1`,
+      [userId, row.course_id]
+    );
+    if (en.rows.length === 0 || isEnrollmentExpired(en.rows[0])) {
+      return { ok: false, status: 403, message: "Enrollment required" };
+    }
+    return { ok: true };
+  }
+  return { ok: false, status: 400, message: "Invalid item type" };
+}
+async function checkDownloadUrlRateLimitPg(db2, userId) {
   const now = Date.now();
-  const entry = downloadUrlRateMap.get(userId);
-  if (!entry || now - entry.windowStart >= DOWNLOAD_URL_RATE_WINDOW_MS) {
-    downloadUrlRateMap.set(userId, { count: 1, windowStart: now });
-    return true;
-  }
-  if (entry.count >= DOWNLOAD_URL_RATE_MAX) {
-    return false;
-  }
-  entry.count += 1;
-  return true;
+  const win = DOWNLOAD_URL_RATE_WINDOW_MS;
+  const key = `download_url:user:${userId}`;
+  const r = await db2.query(
+    `INSERT INTO express_rate_limit (bucket_key, total_hits, reset_time_ms)
+     VALUES ($1, 1, $2 + $3::bigint)
+     ON CONFLICT (bucket_key) DO UPDATE SET
+       total_hits = CASE
+         WHEN express_rate_limit.reset_time_ms <= $2::bigint THEN 1
+         ELSE express_rate_limit.total_hits + 1
+       END,
+       reset_time_ms = CASE
+         WHEN express_rate_limit.reset_time_ms <= $2::bigint THEN $2::bigint + $3::bigint
+         ELSE express_rate_limit.reset_time_ms
+       END
+     RETURNING total_hits`,
+    [key, now, win]
+  );
+  const totalHits = Number(r.rows[0]?.total_hits ?? 1);
+  return totalHits <= DOWNLOAD_URL_RATE_MAX;
 }
 function registerCourseAccessRoutes({
   app: app2,
@@ -10886,16 +12066,11 @@ function registerCourseAccessRoutes({
       `SELECT l.course_id, l.is_free_preview
        FROM lectures l
        WHERE (
-         (l.video_url IS NOT NULL AND (
-           regexp_replace(regexp_replace(COALESCE(l.video_url, ''), '^https?://[^/]+/', ''), '^/+', '') = ANY($1::text[])
-           OR regexp_replace(COALESCE(l.video_url, ''), '^https?://[^/]+/', '') = ANY($1::text[])
-         ))
+         (l.video_url IS NOT NULL AND l.video_url_normalized = ANY($1::text[]))
          OR
-         (l.pdf_url IS NOT NULL AND (
-           regexp_replace(regexp_replace(COALESCE(l.pdf_url, ''), '^https?://[^/]+/', ''), '^/+', '') = ANY($1::text[])
-           OR regexp_replace(COALESCE(l.pdf_url, ''), '^https?://[^/]+/', '') = ANY($1::text[])
-         ))
+         (l.pdf_url IS NOT NULL AND l.pdf_url_normalized = ANY($1::text[]))
        )
+       AND (l.visible_after_at IS NULL OR l.visible_after_at <= EXTRACT(EPOCH FROM NOW()) * 1000)
        LIMIT 1`,
       [variants]
     );
@@ -10910,16 +12085,14 @@ function registerCourseAccessRoutes({
       if (isEnrollmentExpired(enrollment.rows[0])) {
         return { allowed: false, reason: "expired" };
       }
-      return { allowed: true, reason: "allowed" };
+      const validUntilMs = enrollment.rows[0].valid_until != null ? Number(enrollment.rows[0].valid_until) : null;
+      return { allowed: true, reason: "allowed", enrollmentValidUntilMs: validUntilMs };
     }
     const liveClassMatch = await db2.query(
       `SELECT lc.course_id, lc.is_free_preview
        FROM live_classes lc
        WHERE lc.recording_url IS NOT NULL
-         AND (
-           regexp_replace(regexp_replace(COALESCE(lc.recording_url, ''), '^https?://[^/]+/', ''), '^/+', '') = ANY($1::text[])
-           OR regexp_replace(COALESCE(lc.recording_url, ''), '^https?://[^/]+/', '') = ANY($1::text[])
-         )
+         AND lc.recording_url_normalized = ANY($1::text[])
        LIMIT 1`,
       [variants]
     );
@@ -10934,16 +12107,14 @@ function registerCourseAccessRoutes({
       if (isEnrollmentExpired(enrollment.rows[0])) {
         return { allowed: false, reason: "expired" };
       }
-      return { allowed: true, reason: "allowed" };
+      const validUntilMs = enrollment.rows[0].valid_until != null ? Number(enrollment.rows[0].valid_until) : null;
+      return { allowed: true, reason: "allowed", enrollmentValidUntilMs: validUntilMs };
     }
     const materialMatch = await db2.query(
       `SELECT sm.course_id, sm.is_free
        FROM study_materials sm
        WHERE sm.file_url IS NOT NULL
-         AND (
-           regexp_replace(regexp_replace(COALESCE(sm.file_url, ''), '^https?://[^/]+/', ''), '^/+', '') = ANY($1::text[])
-           OR regexp_replace(COALESCE(sm.file_url, ''), '^https?://[^/]+/', '') = ANY($1::text[])
-         )
+         AND sm.file_url_normalized = ANY($1::text[])
        LIMIT 1`,
       [variants]
     );
@@ -10958,7 +12129,8 @@ function registerCourseAccessRoutes({
       if (isEnrollmentExpired(enrollment.rows[0])) {
         return { allowed: false, reason: "expired" };
       }
-      return { allowed: true, reason: "allowed" };
+      const validUntilMs = enrollment.rows[0].valid_until != null ? Number(enrollment.rows[0].valid_until) : null;
+      return { allowed: true, reason: "allowed", enrollmentValidUntilMs: validUntilMs };
     }
     return { allowed: false, reason: "no_match" };
   };
@@ -10984,14 +12156,14 @@ function registerCourseAccessRoutes({
         return res.status(403).json({ message: "You do not have access to this media file" });
       }
       const token = generateSecureToken2();
-      const expiresAt = Date.now() + 10 * 60 * 1e3;
+      const expiresAt = Date.now() + 5 * 60 * 1e3;
       const storedKey = canonicalMediaKey(fileKey);
       if (!storedKey) return res.status(400).json({ message: "Invalid media file key" });
       await db2.query("INSERT INTO media_tokens (token, user_id, file_key, expires_at) VALUES ($1, $2, $3, $4)", [token, user.id, storedKey, expiresAt]);
       db2.query("DELETE FROM media_tokens WHERE expires_at < $1", [Date.now()]).catch(() => {
       });
       const ttlSec = Math.max(60, Math.floor((expiresAt - Date.now()) / 1e3));
-      const readUrl = await presignR2GetObject(getR2Client, storedKey, ttlSec);
+      const readUrl = await presignR2GetObject(getR2Client, storedKey, ttlSec, decision.enrollmentValidUntilMs ?? null);
       res.set("Cache-Control", "private, no-store");
       res.json(readUrl ? { token, expiresAt, readUrl } : { token, expiresAt });
     } catch {
@@ -11003,14 +12175,18 @@ function registerCourseAccessRoutes({
       const user = await getAuthUser2(req);
       const { category, search } = req.query;
       let query = user?.role === "admin" ? `SELECT c.*,
-               (SELECT COUNT(*) FROM lectures l WHERE l.course_id = c.id) AS total_lectures,
-               (SELECT COUNT(*) FROM tests t WHERE t.course_id = c.id AND t.is_published = TRUE) AS total_tests,
-               (SELECT COUNT(*) FROM study_materials sm WHERE sm.course_id = c.id) AS total_materials
-             FROM courses c WHERE 1=1` : `SELECT c.*,
-               (SELECT COUNT(*) FROM lectures l WHERE l.course_id = c.id) AS total_lectures,
-               (SELECT COUNT(*) FROM tests t WHERE t.course_id = c.id AND t.is_published = TRUE) AS total_tests,
-               (SELECT COUNT(*) FROM study_materials sm WHERE sm.course_id = c.id) AS total_materials
-             FROM courses c WHERE c.is_published = TRUE`;
+               COALESCE(t_agg.cnt, 0) AS total_tests,
+               COALESCE(m_agg.cnt, 0) AS total_materials
+             FROM courses c
+             LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM tests WHERE is_published = TRUE GROUP BY 1) t_agg ON t_agg.course_id = c.id
+             LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM study_materials GROUP BY 1) m_agg ON m_agg.course_id = c.id
+             WHERE 1=1` : `SELECT c.*,
+               COALESCE(t_agg.cnt, 0) AS total_tests,
+               COALESCE(m_agg.cnt, 0) AS total_materials
+             FROM courses c
+             LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM tests WHERE is_published = TRUE GROUP BY 1) t_agg ON t_agg.course_id = c.id
+             LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM study_materials GROUP BY 1) m_agg ON m_agg.course_id = c.id
+             WHERE c.is_published = TRUE`;
       const params = [];
       if (search) {
         params.push(`%${search}%`);
@@ -11038,10 +12214,10 @@ function registerCourseAccessRoutes({
           progress: enrollMap.get(Number(c.id)) ?? 0
         }));
       }
-      res.set("Cache-Control", "private, no-store");
       if (user) {
-        const enrolledCourses = courses.filter((c) => c.isEnrolled);
-        void enrolledCourses;
+        res.set("Cache-Control", "private, no-store");
+      } else {
+        res.set("Cache-Control", "public, max-age=30, stale-while-revalidate=60");
       }
       res.json(courses);
     } catch (err) {
@@ -11051,7 +12227,8 @@ function registerCourseAccessRoutes({
   });
   app2.get("/api/courses/:id/folders", async (req, res) => {
     try {
-      const result = await db2.query("SELECT * FROM course_folders WHERE course_id = $1 AND is_hidden = FALSE ORDER BY created_at ASC", [req.params.id]);
+      const result = await db2.query("SELECT * FROM course_folders WHERE course_id = $1 AND is_hidden = FALSE ORDER BY order_index ASC, created_at ASC", [req.params.id]);
+      res.set("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
       res.json(result.rows);
     } catch {
       res.status(500).json({ message: "Failed to fetch folders" });
@@ -11070,9 +12247,18 @@ function registerCourseAccessRoutes({
       } else {
         course.courseEnded = false;
       }
-      const lecturesResult = await db2.query("SELECT * FROM lectures WHERE course_id = $1 ORDER BY order_index", [courseIdParam]);
-      const testsResult = await db2.query("SELECT * FROM tests WHERE course_id = $1 AND is_published = TRUE ORDER BY COALESCE(order_index, 0) ASC, created_at ASC, id ASC", [courseIdParam]);
-      const materialsResult = await db2.query("SELECT * FROM study_materials WHERE course_id = $1 ORDER BY COALESCE(order_index, 0) ASC, created_at ASC, id ASC", [courseIdParam]);
+      const nowMs2 = Date.now();
+      const [lecturesResult, testsResult, materialsResult] = await Promise.all([
+        user?.role === "admin" ? db2.query(
+          "SELECT * FROM lectures WHERE course_id = $1 ORDER BY order_index",
+          [courseIdParam]
+        ) : db2.query(
+          "SELECT * FROM lectures WHERE course_id = $1 AND (visible_after_at IS NULL OR visible_after_at <= $2) ORDER BY order_index",
+          [courseIdParam, nowMs2]
+        ),
+        db2.query("SELECT * FROM tests WHERE course_id = $1 AND is_published = TRUE ORDER BY COALESCE(order_index, 0) ASC, created_at ASC, id ASC", [courseIdParam]),
+        db2.query("SELECT * FROM study_materials WHERE course_id = $1 ORDER BY COALESCE(order_index, 0) ASC, created_at ASC, id ASC", [courseIdParam])
+      ]);
       const fullLectures = lecturesResult.rows;
       const fullMaterials = materialsResult.rows;
       const responseLectures = fullLectures.map((row) => sanitizeLectureRowForClient(row));
@@ -11106,13 +12292,18 @@ function registerCourseAccessRoutes({
       }
       const hasContentAccess = await canAccessCourseContent(user, courseIdParam);
       course.hasContentAccess = hasContentAccess;
+      const gatedMaterials = responseMaterials.map((m) => {
+        if (hasContentAccess) return m;
+        if (m.is_free_preview || m.is_free) return m;
+        return { ...m, file_url: null, download_url: null };
+      });
       res.set("Cache-Control", "private, no-store");
       res.json({
         ...course,
-        total_materials: responseMaterials.length,
+        total_materials: gatedMaterials.length,
         lectures: responseLectures,
         tests: testsResult.rows,
-        materials: responseMaterials
+        materials: gatedMaterials
       });
     } catch (err) {
       console.error(err);
@@ -11167,9 +12358,12 @@ function registerCourseAccessRoutes({
       const user = await getAuthUser2(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const result = await db2.query(
-        `SELECT c.*, e.progress_percent, e.enrolled_at FROM courses c 
-         JOIN enrollments e ON c.id = e.course_id 
-         WHERE e.user_id = $1 ORDER BY e.enrolled_at DESC`,
+        `SELECT c.*, e.progress_percent, e.enrolled_at FROM courses c
+         JOIN enrollments e ON c.id = e.course_id
+         WHERE e.user_id = $1
+           AND (e.status = 'active' OR e.status IS NULL)
+           AND (e.valid_until IS NULL OR e.valid_until > EXTRACT(EPOCH FROM NOW()) * 1000)
+         ORDER BY e.enrolled_at DESC`,
         [user.id]
       );
       res.json(result.rows);
@@ -11267,7 +12461,7 @@ function registerCourseAccessRoutes({
       if (!user || roleNorm !== "student" && roleNorm !== "admin") {
         return res.status(401).json({ message: "Not authenticated" });
       }
-      if (roleNorm === "student" && !checkDownloadUrlRateLimit(user.id)) {
+      if (roleNorm === "student" && !await checkDownloadUrlRateLimit(db2, user.id)) {
         return res.status(429).json({ message: "Too many download requests. Please wait a moment before trying again." });
       }
       const bypassEnrollment = roleNorm === "admin";
@@ -11334,8 +12528,8 @@ function registerCourseAccessRoutes({
       if (!cleanR2Key) {
         return res.status(404).json({ message: "File URL not found" });
       }
-      const { randomUUID } = await import("crypto");
-      const token = randomUUID();
+      const { randomUUID: randomUUID2 } = await import("crypto");
+      const token = randomUUID2();
       const createdAt = Date.now();
       const expiresAt = createdAt + 5 * 60 * 1e3;
       await db2.query("INSERT INTO download_tokens (token, user_id, item_type, item_id, r2_key, created_at, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7)", [
@@ -11369,6 +12563,15 @@ function registerCourseAccessRoutes({
         return res.status(403).json({ message: "Token invalid or expired" });
       }
       const tokenData = tokenResult.rows[0];
+      const proxyEntitlement = await assertDownloadProxyEntitlement(
+        db2,
+        Number(tokenData.user_id),
+        String(tokenData.item_type),
+        Number(tokenData.item_id)
+      );
+      if (!proxyEntitlement.ok) {
+        return res.status(proxyEntitlement.status).json({ message: proxyEntitlement.message });
+      }
       const user = await getAuthUser2(req);
       if (user && Number(tokenData.user_id) !== Number(user.id)) {
         return res.status(403).json({ message: "Token does not belong to this user" });
@@ -11383,10 +12586,15 @@ function registerCourseAccessRoutes({
       if (!r2Response.Body) {
         return res.status(404).json({ message: "File not found in storage" });
       }
+      const watermarkSecret = process.env.OTP_HMAC_SECRET?.trim() || process.env.SESSION_SECRET?.trim();
+      if (!watermarkSecret) {
+        console.error("[download-proxy] Missing OTP_HMAC_SECRET / SESSION_SECRET");
+        return res.status(503).json({ message: "Server configuration error" });
+      }
       const { createHmac: createHmac3 } = await import("crypto");
       const timestamp = Date.now();
       const watermarkData = `${tokenData.user_id}:${timestamp}`;
-      const hmac = createHmac3("sha256", process.env.SESSION_SECRET || "default-secret").update(watermarkData).digest("hex");
+      const hmac = createHmac3("sha256", watermarkSecret).update(watermarkData).digest("hex");
       const watermarkToken = `${watermarkData}:${hmac}`;
       res.setHeader("Content-Type", r2Response.ContentType || "application/octet-stream");
       res.setHeader("Content-Disposition", "attachment");
@@ -11417,6 +12625,38 @@ function registerCourseAccessRoutes({
       }
     }
   });
+  app2.post("/api/offline/device-secret", async (req, res) => {
+    try {
+      const user = await getAuthUser2(req);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+      const deviceId = String(req.get("x-app-device-id") || "").trim();
+      if (!deviceId) return res.status(400).json({ message: "x-app-device-id header required" });
+      const existing = await db2.query(
+        "SELECT id FROM device_offline_secrets WHERE user_id = $1 AND device_id = $2",
+        [user.id, deviceId]
+      );
+      if (existing.rows.length > 0) {
+        return res.status(409).json({
+          message: "A secret has already been issued for this device. Re-issue is not permitted.",
+          code: "already_issued"
+        });
+      }
+      const nonceBytes = crypto3.randomBytes(32);
+      const nonceHex = nonceBytes.toString("hex");
+      const hmacSecret = process.env.OTP_HMAC_SECRET || "";
+      const nonceHash = crypto3.createHmac("sha256", hmacSecret).update(nonceHex).digest("hex");
+      await db2.query(
+        `INSERT INTO device_offline_secrets (user_id, device_id, secret_hash, issued_at)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (user_id, device_id) DO NOTHING`,
+        [user.id, deviceId, nonceHash, Date.now()]
+      );
+      res.json({ nonce: nonceHex });
+    } catch (err) {
+      console.error("[offline/device-secret] Error:", err);
+      res.status(500).json({ message: "Failed to issue device secret" });
+    }
+  });
   app2.get("/api/my-payments", async (req, res) => {
     try {
       const user = await getAuthUser2(req);
@@ -11443,7 +12683,7 @@ function registerCourseAccessRoutes({
     }
   });
 }
-var DOWNLOAD_URL_RATE_WINDOW_MS, DOWNLOAD_URL_RATE_MAX, downloadUrlRateMap;
+var DOWNLOAD_URL_RATE_WINDOW_MS, DOWNLOAD_URL_RATE_MAX;
 var init_course_access_routes = __esm({
   "backend/course-access-routes.ts"() {
     "use strict";
@@ -11451,9 +12691,10 @@ var init_course_access_routes = __esm({
     init_media_key_utils();
     init_r2_presign_read();
     init_lecture_payload_utils();
+    init_redis_client();
+    init_redis_rate_limit_store();
     DOWNLOAD_URL_RATE_WINDOW_MS = 6e4;
     DOWNLOAD_URL_RATE_MAX = 10;
-    downloadUrlRateMap = /* @__PURE__ */ new Map();
   }
 });
 
@@ -11506,10 +12747,9 @@ function buildPresignedObjectKey(body) {
 }
 function registerUploadRoutes({
   app: app2,
-  requireAdmin,
+  requireAdmin: requireAdmin2,
   getAuthUser: getAuthUser2,
-  getR2Client,
-  uploadLarge: uploadLarge2
+  getR2Client
 }) {
   app2.post("/api/upload/presign-profile", async (req, res) => {
     try {
@@ -11517,14 +12757,21 @@ function registerUploadRoutes({
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const { filename, contentType } = req.body;
       if (!filename || !contentType) return res.status(400).json({ message: "filename and contentType required" });
-      if (!contentType.startsWith("image/")) return res.status(400).json({ message: "Only image uploads allowed" });
+      const ALLOWED_PROFILE_MIME_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+      if (!ALLOWED_PROFILE_MIME_TYPES.includes(String(contentType))) {
+        return res.status(400).json({ message: "Only JPEG, PNG, WebP, or GIF images are allowed for profile photos" });
+      }
       if (!process.env.R2_ACCOUNT_ID || !process.env.R2_ACCESS_KEY_ID || !process.env.R2_SECRET_ACCESS_KEY) {
         return res.status(500).json({ message: "R2 credentials not configured." });
       }
       const { PutObjectCommand } = await import("@aws-sdk/client-s3");
       const { getSignedUrl } = await import("@aws-sdk/s3-request-presigner");
       const r2 = await getR2Client();
-      const ext = filename.split(".").pop() || "jpg";
+      const ext = (filename.split(".").pop() || "").toLowerCase();
+      const ALLOWED_IMAGE_EXTENSIONS = ["jpg", "jpeg", "png", "webp", "gif"];
+      if (!ALLOWED_IMAGE_EXTENSIONS.includes(ext)) {
+        return res.status(400).json({ message: "Invalid file type. Allowed: jpg, jpeg, png, webp, gif" });
+      }
       const key = `images/profile-${user.id}-${Date.now()}.${ext}`;
       const command = new PutObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: key, ContentType: contentType });
       const uploadUrl = await getSignedUrl(r2, command, { expiresIn: 600 });
@@ -11535,7 +12782,7 @@ function registerUploadRoutes({
       res.status(500).json({ message: "Failed to generate upload URL" });
     }
   });
-  app2.get("/api/admin/upload/live-class-recording-folders", requireAdmin, async (req, res) => {
+  app2.get("/api/admin/upload/live-class-recording-folders", requireAdmin2, async (req, res) => {
     try {
       if (!process.env.R2_BUCKET_NAME) return res.status(500).json({ message: "R2 not configured" });
       const { ListObjectsV2Command } = await import("@aws-sdk/client-s3");
@@ -11571,7 +12818,7 @@ function registerUploadRoutes({
       res.status(500).json({ message: "Failed to list folders" });
     }
   });
-  app2.post("/api/admin/upload/live-class-recording-folders", requireAdmin, async (req, res) => {
+  app2.post("/api/admin/upload/live-class-recording-folders", requireAdmin2, async (req, res) => {
     try {
       if (!process.env.R2_BUCKET_NAME) return res.status(500).json({ message: "R2 not configured" });
       const name = sanitizeLiveRecordingSubfolder(req.body.name);
@@ -11593,10 +12840,33 @@ function registerUploadRoutes({
       res.status(500).json({ message: "Failed to create folder" });
     }
   });
-  app2.post("/api/upload/presign", requireAdmin, async (req, res) => {
+  const ALLOWED_ADMIN_MIME_TYPES = /* @__PURE__ */ new Set([
+    // Images
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+    // Documents
+    "application/pdf",
+    // Video (Cloudflare Stream handles these; direct R2 for recordings)
+    "video/mp4",
+    "video/webm",
+    "video/quicktime",
+    // Audio
+    "audio/mpeg",
+    "audio/mp4",
+    "audio/ogg",
+    "audio/wav"
+  ]);
+  app2.post("/api/upload/presign", requireAdmin2, async (req, res) => {
     try {
       const { filename, contentType, folder, subfolder } = req.body;
       if (!filename || !contentType) return res.status(400).json({ message: "filename and contentType required" });
+      if (!ALLOWED_ADMIN_MIME_TYPES.has(String(contentType))) {
+        return res.status(400).json({
+          message: `Content type '${contentType}' is not allowed. Permitted types: images (JPEG/PNG/WebP/GIF), PDF, MP4/WebM/MOV video, and common audio formats.`
+        });
+      }
       if (!process.env.R2_ACCOUNT_ID || !process.env.R2_ACCESS_KEY_ID || !process.env.R2_SECRET_ACCESS_KEY) {
         return res.status(500).json({ message: "R2 credentials not configured. Check .env file." });
       }
@@ -11613,7 +12883,8 @@ function registerUploadRoutes({
         Key: key,
         ContentType: contentType
       });
-      const uploadUrl = await getSignedUrl(r2, command, { expiresIn: 600 });
+      const isVideo = String(contentType).startsWith("video/");
+      const uploadUrl = await getSignedUrl(r2, command, { expiresIn: isVideo ? 3600 : 600 });
       const publicUrl = `${getPublicApiBaseUrl(req)}/api/media/${key}`;
       console.log(`[R2] Presigned URL generated for ${key}, public: ${publicUrl}`);
       res.json({ uploadUrl, publicUrl, key });
@@ -11622,47 +12893,30 @@ function registerUploadRoutes({
       res.status(500).json({ message: "Failed to generate upload URL" });
     }
   });
-  app2.post("/api/upload/to-r2", requireAdmin, uploadLarge2.single("file"), async (req, res) => {
-    try {
-      if (process.env.ALLOW_SERVER_BUFFER_UPLOAD !== "true") {
-        return res.status(403).json({
-          message: "Direct buffered upload is disabled. Use /api/upload/presign and upload from client instead."
-        });
-      }
-      if (!req.file) return res.status(400).json({ message: "No file uploaded" });
-      const file = req.file;
-      const folder = req.body.folder || "uploads";
-      const subfolder = req.body.subfolder;
-      if (!process.env.R2_ACCOUNT_ID || !process.env.R2_ACCESS_KEY_ID || !process.env.R2_SECRET_ACCESS_KEY) {
-        return res.status(500).json({ message: "R2 credentials not configured." });
-      }
-      const { PutObjectCommand } = await import("@aws-sdk/client-s3");
-      const r2 = await getR2Client();
-      const keyResult = buildPresignedObjectKey({ filename: file.originalname, folder, subfolder });
-      if ("error" in keyResult) {
-        return res.status(400).json({ message: keyResult.error });
-      }
-      const { key } = keyResult;
-      await r2.send(
-        new PutObjectCommand({
-          Bucket: process.env.R2_BUCKET_NAME,
-          Key: key,
-          Body: file.buffer,
-          ContentType: file.mimetype
-        })
-      );
-      const publicUrl = `${getPublicApiBaseUrl(req)}/api/media/${key}`;
-      console.log(`[R2] Server upload complete: ${key} (${file.size} bytes)`);
-      res.json({ publicUrl, key });
-    } catch (err) {
-      console.error("[R2] Server upload error:", err?.message || err);
-      res.status(500).json({ message: "Failed to upload file" });
-    }
+  app2.post("/api/upload/to-r2", requireAdmin2, async (_req, res) => {
+    res.status(410).json({
+      message: "Server-side buffered uploads are disabled. Use /api/upload/presign and upload from the client directly to R2."
+    });
   });
-  app2.delete("/api/upload/file", requireAdmin, async (req, res) => {
+  app2.delete("/api/upload/file", requireAdmin2, async (req, res) => {
     try {
       const { key } = req.body;
       if (!key) return res.status(400).json({ message: "key required" });
+      const ALLOWED_KEY_PREFIXES = [
+        "uploads/",
+        "course-materials/",
+        "profile-images/",
+        "thumbnails/",
+        "course-thumbnails/",
+        "materials/",
+        "lectures/",
+        "books/",
+        "videos/",
+        "images/",
+        "live-class-recording/"
+      ];
+      const keyAllowed = ALLOWED_KEY_PREFIXES.some((prefix) => String(key).startsWith(prefix));
+      if (!keyAllowed) return res.status(403).json({ message: "Invalid file key \u2014 operation not permitted" });
       const { DeleteObjectCommand } = await import("@aws-sdk/client-s3");
       const r2 = await getR2Client();
       await r2.send(new DeleteObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: key }));
@@ -11718,9 +12972,38 @@ async function streamMediaGet(req, res, db2, getAuthUser2, getR2Client, key) {
   let userRole = "student";
   let authenticatedViaMediaToken = false;
   if (mediaToken) {
-    const tokenResult = await db2.query("SELECT user_id FROM media_tokens WHERE token = $1 AND expires_at > $2 AND file_key = $3", [mediaToken, Date.now(), canonicalKey]);
+    const MEDIA_TOKEN_MAX_ACCESS = 800;
+    const nowMs2 = Date.now();
+    let tokenResult;
+    try {
+      tokenResult = await db2.query(
+        `UPDATE media_tokens
+         SET access_count = access_count + 1
+         WHERE token = $1
+           AND expires_at > $2
+           AND file_key = $3
+           AND access_count < $4
+         RETURNING user_id, access_count`,
+        [mediaToken, nowMs2, canonicalKey, MEDIA_TOKEN_MAX_ACCESS]
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.includes("access_count")) throw err;
+      tokenResult = await db2.query(
+        "SELECT user_id FROM media_tokens WHERE token = $1 AND expires_at > $2 AND file_key = $3",
+        [mediaToken, nowMs2, canonicalKey]
+      );
+    }
     if (tokenResult.rows.length === 0) {
-      res.status(401).json({ message: "Token expired or invalid" });
+      const limitCheck = await db2.query(
+        "SELECT access_count FROM media_tokens WHERE token = $1 AND expires_at > $2 AND file_key = $3 LIMIT 1",
+        [mediaToken, nowMs2, canonicalKey]
+      ).catch(() => ({ rows: [] }));
+      if (limitCheck.rows.length > 0 && Number(limitCheck.rows[0].access_count) >= MEDIA_TOKEN_MAX_ACCESS) {
+        res.status(429).json({ message: "Token usage limit exceeded" });
+      } else {
+        res.status(401).json({ message: "Token expired or invalid" });
+      }
       return;
     }
     const tokenUserId = tokenResult.rows[0].user_id;
@@ -11737,6 +13020,86 @@ async function streamMediaGet(req, res, db2, getAuthUser2, getR2Client, key) {
       userRole = String(roleRow.rows[0]?.role ?? "student");
     }
     authenticatedViaMediaToken = true;
+    if (userRole !== "admin") {
+      const variants = mediaKeyMatchVariants(canonicalKey);
+      const lectureMatch = await db2.query(
+        `SELECT l.course_id, l.is_free_preview
+           FROM lectures l
+           WHERE (
+             (l.video_url_normalized IS NOT NULL AND l.video_url_normalized = ANY($1::text[]))
+             OR
+             (l.pdf_url_normalized IS NOT NULL AND l.pdf_url_normalized = ANY($1::text[]))
+           )
+           AND (l.visible_after_at IS NULL OR l.visible_after_at <= EXTRACT(EPOCH FROM NOW()) * 1000)
+           LIMIT 1`,
+        [variants]
+      );
+      if (lectureMatch.rows.length > 0) {
+        const row = lectureMatch.rows[0];
+        if (!row.course_id || row.is_free_preview) {
+        } else {
+          const enrollment = await db2.query(
+            "SELECT id, valid_until FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL) LIMIT 1",
+            [userId, row.course_id]
+          );
+          if (enrollment.rows.length === 0 || isEnrollmentExpired(enrollment.rows[0])) {
+            res.status(403).json({ message: "Enrollment required" });
+            return;
+          }
+        }
+      } else {
+        const liveClassMatch = await db2.query(
+          `SELECT lc.course_id, lc.is_free_preview
+             FROM live_classes lc
+             WHERE lc.recording_url IS NOT NULL
+               AND lc.recording_url_normalized IS NOT NULL
+               AND lc.recording_url_normalized = ANY($1::text[])
+             LIMIT 1`,
+          [variants]
+        );
+        if (liveClassMatch.rows.length > 0) {
+          const row = liveClassMatch.rows[0];
+          if (!row.course_id || row.is_free_preview) {
+          } else {
+            const enrollment = await db2.query(
+              "SELECT id, valid_until FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL) LIMIT 1",
+              [userId, row.course_id]
+            );
+            if (enrollment.rows.length === 0 || isEnrollmentExpired(enrollment.rows[0])) {
+              res.status(403).json({ message: "Enrollment required" });
+              return;
+            }
+          }
+        } else {
+          const materialMatch = await db2.query(
+            `SELECT sm.course_id, sm.is_free
+               FROM study_materials sm
+               WHERE sm.file_url IS NOT NULL
+                 AND sm.file_url_normalized IS NOT NULL
+                 AND sm.file_url_normalized = ANY($1::text[])
+               LIMIT 1`,
+            [variants]
+          );
+          if (materialMatch.rows.length > 0) {
+            const row = materialMatch.rows[0];
+            if (!row.course_id || row.is_free) {
+            } else {
+              const enrollment = await db2.query(
+                "SELECT id, valid_until FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL) LIMIT 1",
+                [userId, row.course_id]
+              );
+              if (enrollment.rows.length === 0 || isEnrollmentExpired(enrollment.rows[0])) {
+                res.status(403).json({ message: "Enrollment required" });
+                return;
+              }
+            }
+          } else {
+            res.status(403).json({ message: "Enrollment required" });
+            return;
+          }
+        }
+      }
+    }
   } else {
     const user = await getAuthUser2(req);
     if (!user) {
@@ -11985,6 +13348,212 @@ var init_media_stream_routes = __esm({
   }
 });
 
+// backend/runtime-flag-routes.ts
+function registerRuntimeFlagRoutes({
+  app: app2,
+  db: db2,
+  requireAdmin: requireAdmin2
+}) {
+  app2.get("/api/admin/runtime-flags", requireAdmin2, async (_req, res) => {
+    try {
+      const rows = await db2.query(
+        "SELECT key, enabled, description, updated_at FROM runtime_feature_flags ORDER BY key ASC"
+      );
+      return res.json({ defaults: listDefaultFlags(), flags: rows.rows });
+    } catch (err) {
+      console.error("[RuntimeFlags] list error:", err);
+      return res.status(500).json({ message: "Failed to load runtime flags" });
+    }
+  });
+  app2.put("/api/admin/runtime-flags/:key", requireAdmin2, async (req, res) => {
+    try {
+      const key = String(req.params.key || "").trim();
+      if (!key) return res.status(400).json({ message: "Invalid flag key" });
+      const enabled = req.body?.enabled === true;
+      const descriptionRaw = String(req.body?.description ?? "").trim();
+      const description = descriptionRaw || null;
+      await db2.query(
+        `INSERT INTO runtime_feature_flags (key, enabled, description, updated_at)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (key) DO UPDATE SET enabled = EXCLUDED.enabled, description = EXCLUDED.description, updated_at = EXCLUDED.updated_at`,
+        [key, enabled, description, Date.now()]
+      );
+      return res.json({ success: true, key, enabled });
+    } catch (err) {
+      console.error("[RuntimeFlags] update error:", err);
+      return res.status(500).json({ message: "Failed to update runtime flag" });
+    }
+  });
+}
+var init_runtime_flag_routes = __esm({
+  "backend/runtime-flag-routes.ts"() {
+    "use strict";
+    init_feature_flags();
+  }
+});
+
+// backend/cloudflare-webhook-routes.ts
+import crypto4 from "node:crypto";
+function timingSafeEqualsHex(a, b) {
+  const aa = Buffer.from(a, "hex");
+  const bb = Buffer.from(b, "hex");
+  if (aa.length !== bb.length) return false;
+  return crypto4.timingSafeEqual(aa, bb);
+}
+function verifyWebhookSignature(req) {
+  const secret = String(process.env.CLOUDFLARE_STREAM_WEBHOOK_SECRET || "").trim();
+  if (!secret) return false;
+  const authHeader = String(req.get("cf-webhook-auth") || "").trim();
+  if (authHeader) {
+    return crypto4.timingSafeEqual(Buffer.from(authHeader), Buffer.from(secret));
+  }
+  const raw = Buffer.isBuffer(req.rawBody) ? req.rawBody : Buffer.from(JSON.stringify(req.body || {}));
+  const headerSig = String(req.get("cf-webhook-signature") || req.get("x-webhook-signature") || "").trim();
+  if (!headerSig) return false;
+  const expected = crypto4.createHmac("sha256", secret).update(raw).digest("hex");
+  return timingSafeEqualsHex(expected, headerSig);
+}
+function registerCloudflareWebhookRoutes({
+  app: app2,
+  db: db2
+}) {
+  app2.post("/api/webhooks/cloudflare/stream", async (req, res) => {
+    try {
+      if (process.env.FF_ENABLE_CLOUDFLARE_STREAM_WEBHOOKS === "false") {
+        return res.status(202).json({ message: "webhook disabled" });
+      }
+      if (!verifyWebhookSignature(req)) {
+        return res.status(401).json({ message: "Invalid webhook signature" });
+      }
+      const eventType = String(req.body?.type || req.body?.event || "").toLowerCase();
+      const eventId = String(req.body?.id || req.body?.event_id || req.get("cf-event-id") || "").trim();
+      const uid = String(req.body?.uid || req.body?.data?.uid || req.body?.video?.uid || "").trim();
+      if (!uid || !eventId) {
+        console.log(`[CloudflareWebhook] test ping received \u2014 eventType=${eventType || "none"}, body=${JSON.stringify(req.body || {}).slice(0, 200)}`);
+        return res.json({ ok: true });
+      }
+      try {
+        await db2.query(
+          `INSERT INTO webhook_event_receipts (source, event_id, event_type, received_at)
+           VALUES ($1, $2, $3, $4)`,
+          ["cloudflare_stream", eventId, eventType || null, Date.now()]
+        );
+      } catch (err) {
+        if (String(err?.code || "") === "23505") {
+          incrementCounter("cloudflare_webhook_duplicates");
+          return res.status(202).json({ ok: true, duplicate: true });
+        }
+        throw err;
+      }
+      if (eventType.includes("live_input.disconnected") || eventType.includes("input.disconnected")) {
+        await db2.query("UPDATE live_classes SET is_live = FALSE WHERE cf_stream_uid = $1 AND is_completed IS NOT TRUE", [uid]);
+      }
+      if (eventType.includes("video.ready") || eventType.includes("recording.ready")) {
+        await db2.query(
+          "UPDATE live_classes SET cf_recording_uid = COALESCE(cf_recording_uid, $1) WHERE (cf_stream_uid = $2 OR cf_recording_uid = $1) AND is_completed IS NOT TRUE",
+          [uid, String(req.body?.data?.live_input_uid || req.body?.live_input_uid || "")]
+        );
+      }
+      return res.json({ ok: true });
+    } catch (err) {
+      console.error("[CloudflareWebhook] stream webhook error:", err);
+      return res.status(500).json({ message: "Webhook handling failed" });
+    }
+  });
+}
+var init_cloudflare_webhook_routes = __esm({
+  "backend/cloudflare-webhook-routes.ts"() {
+    "use strict";
+    init_observability();
+  }
+});
+
+// backend/livekit-webhook-routes.ts
+import { WebhookReceiver } from "livekit-server-sdk";
+function parseLiveClassId(roomName) {
+  const match = String(roomName || "").match(/^lc-(\d+)$/);
+  if (!match) return null;
+  const id = Number(match[1]);
+  return Number.isFinite(id) && id > 0 ? id : null;
+}
+function registerLiveKitWebhookRoutes({
+  app: app2,
+  db: db2
+}) {
+  const apiKey = process.env.LIVEKIT_API_KEY;
+  const apiSecret = process.env.LIVEKIT_API_SECRET;
+  if (!apiKey || !apiSecret) {
+    console.warn(
+      "[LiveKit Webhook] LIVEKIT_API_KEY or LIVEKIT_API_SECRET not set \u2014 webhook endpoint registered but signature verification will always reject. Set both env vars and configure the webhook URL in the LiveKit dashboard."
+    );
+  }
+  const receiver = apiKey && apiSecret ? new WebhookReceiver(apiKey, apiSecret) : null;
+  app2.post("/api/webhooks/livekit", async (req, res) => {
+    res.status(200).end();
+    void (async () => {
+      try {
+        if (!receiver) {
+          console.warn("[LiveKit Webhook] Ignoring event \u2014 receiver not initialised (missing env vars).");
+          return;
+        }
+        const rawBody = req.rawBody;
+        if (!rawBody || !Buffer.isBuffer(rawBody)) {
+          console.warn("[LiveKit Webhook] rawBody missing \u2014 cannot verify signature. Skipping event.");
+          return;
+        }
+        const authHeader = req.headers["authorization"];
+        if (!authHeader) {
+          console.warn("[LiveKit Webhook] Missing Authorization header \u2014 dropping event.");
+          return;
+        }
+        let event;
+        try {
+          event = await receiver.receive(rawBody.toString("utf-8"), authHeader);
+        } catch (verifyErr) {
+          console.warn("[LiveKit Webhook] Signature verification failed:", verifyErr);
+          return;
+        }
+        const eventName = event?.event;
+        console.log(`[LiveKit Webhook] Received event="${eventName}" room="${event?.room?.name ?? ""}"`);
+        if (eventName !== "room_finished") {
+          return;
+        }
+        const roomName = String(event?.room?.name ?? "");
+        const liveClassId = parseLiveClassId(roomName);
+        if (!liveClassId) {
+          console.log(`[LiveKit Webhook] room_finished for unrecognised room "${roomName}" \u2014 ignoring.`);
+          return;
+        }
+        const result = await db2.query(
+          `UPDATE live_classes
+           SET is_live = FALSE,
+               ended_at = COALESCE(ended_at, $1)
+           WHERE id = $2
+             AND is_live = TRUE
+           RETURNING id, is_completed`,
+          [Date.now(), liveClassId]
+        );
+        if (result.rows.length === 0) {
+          console.log(`[LiveKit Webhook] room_finished for live_class=${liveClassId}: is_live already FALSE or class not found \u2014 no-op.`);
+          return;
+        }
+        const row = result.rows[0];
+        console.log(
+          `[LiveKit Webhook] room_finished \u2014 set is_live=FALSE for live_class=${liveClassId} (is_completed=${row.is_completed}). ` + (row.is_completed ? "Class was already fully ended by admin." : "Class ended via LiveKit timeout/disconnect \u2014 admin may still need to finalise the recording.")
+        );
+      } catch (err) {
+        console.error("[LiveKit Webhook] Unhandled error processing event:", err);
+      }
+    })();
+  });
+  console.log("[LiveKit Webhook] POST /api/webhooks/livekit registered");
+}
+var init_livekit_webhook_routes = __esm({
+  "backend/livekit-webhook-routes.ts"() {
+    "use strict";
+  }
+});
+
 // backend/schema-readiness-contract.ts
 var REQUIRED_TABLES, REQUIRED_COLUMNS, REQUIRED_UNIQUE_INDEX_SPECS;
 var init_schema_readiness_contract = __esm({
@@ -12023,7 +13592,38 @@ var init_schema_readiness_contract = __esm({
       "user_push_tokens",
       "session",
       "express_rate_limit",
-      "otp_challenges"
+      "otp_challenges",
+      "notifications_sent",
+      // Tables previously missing from this contract - added for complete coverage.
+      "daily_missions",
+      // 0000 baseline - holds daily drill questions
+      "lecture_progress",
+      // 0000 baseline - per-student lecture watch state
+      "payments",
+      // 0000 baseline - Razorpay payment records
+      "user_missions",
+      // 0035 - per-student daily mission completion records
+      // Migration 0017 - live class polling system
+      "live_class_polls",
+      "live_class_poll_options",
+      "live_class_poll_votes",
+      "live_class_activity_timers",
+      // Migration 0023 - payment failure audit log
+      "payment_failures",
+      // Migration 0037 - runtime feature flags
+      "runtime_feature_flags",
+      // Migration 0038 - API idempotency + standalone entitlements + webhook receipts
+      "api_idempotency_keys",
+      "standalone_material_entitlements",
+      "webhook_event_receipts",
+      // Migration 0039 - live stream finalize job queue
+      "live_stream_finalize_jobs",
+      // Migration 0040b - live chat messages (existed in production, was missing from migrations)
+      "live_chat_messages",
+      // Migration 0043 - per-device server-issued offline encryption secrets (ODSR-01)
+      "device_offline_secrets",
+      // Migration 0044 - doubts table (was in schema.ts + backend routes but missing from migrations)
+      "doubts"
     ];
     REQUIRED_COLUMNS = {
       users: [
@@ -12040,7 +13640,7 @@ var init_schema_readiness_contract = __esm({
         "otp_send_window_start",
         "otp_send_locked_until"
       ],
-      enrollments: ["status", "valid_until"],
+      enrollments: ["status", "valid_until", "download_cleanup_pending"],
       live_classes: [
         "recording_url",
         "stream_type",
@@ -12058,16 +13658,28 @@ var init_schema_readiness_contract = __esm({
         "board_pdf_url",
         "board_pages_json",
         "board_sync_checkpoint_url",
-        "board_checkpoint_at"
+        "board_checkpoint_at",
+        "cf_recording_uid",
+        "recording_url_normalized"
       ],
       notifications: ["source", "expires_at", "is_hidden", "admin_notif_id", "image_url"],
       courses: ["subject", "cover_color", "pyq_count", "mock_count", "practice_count"],
-      lectures: ["download_allowed", "section_title", "live_class_id", "live_class_finalized", "transcript"],
-      study_materials: ["download_allowed", "section_title"],
+      lectures: [
+        "download_allowed",
+        "section_title",
+        "live_class_id",
+        "live_class_finalized",
+        "transcript",
+        "video_url_normalized",
+        "pdf_url_normalized"
+      ],
+      study_materials: ["download_allowed", "section_title", "file_url_normalized"],
       tests: ["difficulty", "scheduled_at", "price", "mini_course_id"],
       questions: ["image_url", "solution_image_url"],
       lecture_progress: ["playback_sessions", "last_session_ping_at"],
-      standalone_folders: ["category", "price", "original_price", "is_free", "description", "validity_months"]
+      standalone_folders: ["category", "price", "original_price", "is_free", "description", "validity_months"],
+      // Migration 0042 - admin session device binding
+      user_sessions: ["device_id"]
     };
     REQUIRED_UNIQUE_INDEX_SPECS = [
       { table: "enrollments", columns: ["user_id", "course_id"] },
@@ -12085,7 +13697,16 @@ var init_schema_readiness_contract = __esm({
       { table: "site_settings", columns: ["key"] },
       { table: "user_push_tokens", columns: ["expo_push_token"] },
       { table: "users", columns: ["phone"] },
-      { table: "users", columns: ["email"] }
+      { table: "users", columns: ["email"] },
+      { table: "notifications_sent", columns: ["class_id", "user_id", "type"] },
+      // Migration 0038
+      { table: "api_idempotency_keys", columns: ["user_id", "scope", "idempotency_key"] },
+      { table: "standalone_material_entitlements", columns: ["user_id", "material_id"] },
+      { table: "webhook_event_receipts", columns: ["source", "event_id"] },
+      // Migration 0039
+      { table: "live_stream_finalize_jobs", columns: ["live_class_id"] },
+      // Migration 0043 - per-device offline encryption secrets
+      { table: "device_offline_secrets", columns: ["user_id", "device_id"] }
     ];
   }
 });
@@ -12129,6 +13750,7 @@ async function checkDatabaseReadiness(db2) {
   }
   const missingColumns = [];
   for (const [table, columns] of Object.entries(REQUIRED_COLUMNS)) {
+    if (!presentTables.has(table)) continue;
     const set = presentColumns.get(table) ?? /* @__PURE__ */ new Set();
     for (const column of columns) {
       if (!set.has(column)) {
@@ -12156,7 +13778,11 @@ async function checkDatabaseReadiness(db2) {
     const cols = parseIndexColumns(row.cols);
     presentUniqueKeys.add(`${table}|${cols.join(",")}`);
   }
-  const missingIndexes = REQUIRED_UNIQUE_INDEX_SPECS.map((s) => `${s.table}|${s.columns.join(",")}`).filter((sig) => !presentUniqueKeys.has(sig));
+  const missingIndexes = REQUIRED_UNIQUE_INDEX_SPECS.filter((s) => presentTables.has(s.table)).map((s) => `${s.table}|${s.columns.join(",")}`).filter((sig) => !presentUniqueKeys.has(sig));
+  const dependencyChecks = {
+    redis: String(process.env.REDIS_URL || "").trim().length > 0 ? "ok" : "not_configured",
+    cloudflareWebhookSecret: String(process.env.CLOUDFLARE_STREAM_WEBHOOK_SECRET || "").trim().length > 0 ? "ok" : "degraded"
+  };
   return {
     ok: missingTables.length === 0 && missingColumns.length === 0 && missingIndexes.length === 0,
     checks: {
@@ -12165,6 +13791,7 @@ async function checkDatabaseReadiness(db2) {
       columns: missingColumns.length === 0,
       indexes: missingIndexes.length === 0
     },
+    dependencyChecks,
     missingTables,
     missingColumns,
     missingIndexes
@@ -12262,27 +13889,29 @@ async function updateCourseTestCounts(db2, courseId) {
 }
 async function updateCourseProgress(db2, userId, courseId, runTx) {
   const cid = String(courseId);
-  const doUpdate = async (client) => {
+  const doUpdate = async (client2) => {
     if (runTx) {
-      await client.query(
+      await client2.query(
         "SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2 FOR UPDATE",
         [userId, cid]
       );
     }
-    const totalLec = await client.query(
-      "SELECT COUNT(*) FROM lectures WHERE course_id = $1",
+    const totalLec = await client2.query(
+      `SELECT COUNT(*) FROM lectures
+       WHERE course_id = $1
+       AND (visible_after_at IS NULL OR visible_after_at <= EXTRACT(EPOCH FROM NOW()) * 1000)`,
       [cid]
     );
-    const totalTests = await client.query(
+    const totalTests = await client2.query(
       "SELECT COUNT(*) FROM tests WHERE course_id = $1 AND is_published = TRUE",
       [cid]
     );
-    const completedLec = await client.query(
+    const completedLec = await client2.query(
       `SELECT COUNT(*) FROM lecture_progress lp JOIN lectures l ON lp.lecture_id = l.id
        WHERE lp.user_id = $1 AND l.course_id = $2 AND lp.is_completed = TRUE`,
       [userId, cid]
     );
-    const completedTests = await client.query(
+    const completedTests = await client2.query(
       `SELECT COUNT(DISTINCT test_id) FROM test_attempts
        WHERE user_id = $1 AND test_id IN (SELECT id FROM tests WHERE course_id = $2) AND status = 'completed'`,
       [userId, cid]
@@ -12290,7 +13919,7 @@ async function updateCourseProgress(db2, userId, courseId, runTx) {
     const total = parseInt(totalLec.rows[0].count) + parseInt(totalTests.rows[0].count);
     const completed = parseInt(completedLec.rows[0].count) + parseInt(completedTests.rows[0].count);
     const progress = total > 0 ? Math.round(completed / total * 100) : 0;
-    await client.query(
+    await client2.query(
       "UPDATE enrollments SET progress_percent = $1 WHERE user_id = $2 AND course_id = $3",
       [progress, userId, cid]
     );
@@ -12366,6 +13995,88 @@ var init_progress_utils = __esm({
   }
 });
 
+// backend/download-utils.ts
+async function deleteDownloadsForUser(db2, userId, courseId) {
+  if (courseId) {
+    try {
+      await db2.query(
+        `DELETE FROM user_downloads
+         WHERE user_id = $1
+         AND (
+           (item_type = 'lecture' AND item_id IN (SELECT id FROM lectures WHERE course_id = $2))
+           OR
+           (item_type = 'material' AND item_id IN (SELECT id FROM study_materials WHERE course_id = $2))
+         )`,
+        [userId, courseId]
+      );
+      console.log(`[Cleanup] Deleted downloads for user ${userId} in course ${courseId}`);
+      return;
+    } catch (err) {
+      console.error("[Cleanup] Failed to delete downloads (course scope):", err);
+      throw err;
+    }
+  }
+  try {
+    await db2.query("DELETE FROM user_downloads WHERE user_id = $1", [userId]);
+    console.log(`[Cleanup] Deleted all downloads for user ${userId}`);
+  } catch (err) {
+    console.error("[Cleanup] Failed to delete downloads (user scope):", err);
+    throw err;
+  }
+}
+async function deleteDownloadsForCourse(db2, courseId) {
+  try {
+    await db2.query(
+      `DELETE FROM user_downloads
+       WHERE (item_type = 'lecture' AND item_id IN (SELECT id FROM lectures WHERE course_id = $1))
+       OR (item_type = 'material' AND item_id IN (SELECT id FROM study_materials WHERE course_id = $1))`,
+      [courseId]
+    );
+    console.log(`[Cleanup] Deleted all downloads for course ${courseId}`);
+  } catch (err) {
+    console.error("[Cleanup] Failed to delete course downloads:", err);
+    throw err;
+  }
+}
+var init_download_utils = __esm({
+  "backend/download-utils.ts"() {
+    "use strict";
+  }
+});
+
+// backend/redis-notification-dedup.ts
+function dedupKey(classId, userId, type) {
+  return `notif:sent:${classId}:${userId}:${type}`;
+}
+async function filterNewNotificationRecipientsRedis(redis, classId, userIds, type, batchSize = 500) {
+  const accepted = [];
+  try {
+    for (let i = 0; i < userIds.length; i += batchSize) {
+      const batch = userIds.slice(i, i + batchSize);
+      const multi = redis.multi();
+      for (const userId of batch) {
+        multi.set(dedupKey(classId, userId, type), "1", { NX: true, EX: NOTIF_DEDUP_TTL_SEC });
+      }
+      const replies = await multi.exec();
+      batch.forEach((userId, idx) => {
+        const reply = replies?.[idx];
+        if (reply != null) accepted.push(userId);
+      });
+    }
+    return accepted;
+  } catch (err) {
+    console.error("[Redis] filterNewNotificationRecipientsRedis pipeline failed, falling back to PostgreSQL:", err);
+    return null;
+  }
+}
+var NOTIF_DEDUP_TTL_SEC;
+var init_redis_notification_dedup = __esm({
+  "backend/redis-notification-dedup.ts"() {
+    "use strict";
+    NOTIF_DEDUP_TTL_SEC = 24 * 60 * 60;
+  }
+});
+
 // backend/schedulers.ts
 function startSchedulers(db2, pool2, sendPushToUsers2) {
   const runBackgroundSchedulers = process.env.RUN_BACKGROUND_SCHEDULERS !== "false";
@@ -12374,10 +14085,68 @@ function startSchedulers(db2, pool2, sendPushToUsers2) {
     return;
   }
   startLiveClassNotificationScheduler(db2, pool2, sendPushToUsers2);
-  startDownloadTokenCleanupScheduler(db2);
+  startDownloadCleanupRetryScheduler(db2, pool2);
+  startDownloadTokenCleanupScheduler(db2, pool2);
+  startStuckLiveClassCleanupScheduler(db2, pool2);
+  startLiveFinalizeQueueScheduler(db2, pool2);
+  startNeonKeepalive(db2);
+  startMediaTokenCleanupScheduler(db2, pool2);
+}
+async function runWithAdvisoryLock(pool2, lockKey, job) {
+  const client2 = await pool2.connect();
+  let locked = false;
+  try {
+    const got = await client2.query("SELECT pg_try_advisory_lock($1) AS acquired", [lockKey]);
+    locked = got.rows[0]?.acquired === true;
+    if (!locked) return;
+    await job();
+  } finally {
+    if (locked) {
+      await client2.query("SELECT pg_advisory_unlock($1)", [lockKey]).catch(() => {
+      });
+    }
+    client2.release();
+  }
+}
+function startDownloadCleanupRetryScheduler(db2, pool2) {
+  const retryIntervalMs = 10 * 60 * 1e3;
+  const retryNow = async () => {
+    try {
+      await runWithAdvisoryLock(pool2, DOWNLOAD_CLEANUP_RETRY_LOCK_KEY, async () => {
+        const pending = await db2.query(
+          `SELECT id, user_id, course_id
+         FROM enrollments
+         WHERE download_cleanup_pending = TRUE
+         LIMIT 200`
+        );
+        for (const row of pending.rows) {
+          const enrollmentId = Number(row.id);
+          const userId = Number(row.user_id);
+          const courseId = Number(row.course_id);
+          if (!Number.isFinite(enrollmentId) || !Number.isFinite(userId) || !Number.isFinite(courseId)) continue;
+          try {
+            await deleteDownloadsForUser(db2, userId, courseId);
+            await db2.query(
+              "UPDATE enrollments SET download_cleanup_pending = FALSE WHERE id = $1",
+              [enrollmentId]
+            );
+          } catch (err) {
+            console.error("[CleanupRetry] cleanup failed; will retry later", {
+              enrollmentId,
+              userId,
+              courseId
+            });
+          }
+        }
+      });
+    } catch (err) {
+      console.error("[CleanupRetry] scheduler error:", err);
+    }
+  };
+  void retryNow();
+  setInterval(() => void retryNow(), retryIntervalMs);
 }
 function startLiveClassNotificationScheduler(db2, pool2, sendPushToUsers2) {
-  const sentNotifications = /* @__PURE__ */ new Set();
   setInterval(async () => {
     let lockClient = null;
     let lockAcquired = false;
@@ -12392,6 +14161,7 @@ function startLiveClassNotificationScheduler(db2, pool2, sendPushToUsers2) {
         return;
       }
       const now = Date.now();
+      await db2.query("DELETE FROM notifications_sent WHERE sent_at < $1", [now - 24 * 60 * 60 * 1e3]);
       const minScheduleAt = now + 29 * 60 * 1e3;
       const maxScheduleAt = now + 31 * 60 * 1e3;
       const classes = await db2.query(
@@ -12408,55 +14178,97 @@ function startLiveClassNotificationScheduler(db2, pool2, sendPushToUsers2) {
       );
       for (const lc of classes.rows) {
         const expiresAt = now + 6 * 36e5;
-        const key30 = `30min_${lc.id}`;
-        if (!sentNotifications.has(key30)) {
-          sentNotifications.add(key30);
-          const notifTitle = "\u23F0 Live Class in 30 minutes!";
-          const notifMessage = `"${lc.title}" starts in 30 minutes. Get ready!`;
-          if (!lc.course_id || lc.is_free_preview === true || lc.is_public === true) {
-            const inserted = await db2.query(
-              `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
-               SELECT u.id, $1, $2, 'info', $3, $4
-               FROM users u
-               WHERE u.role = 'student'
-               RETURNING user_id`,
-              [notifTitle, notifMessage, now, expiresAt]
-            );
-            await sendPushToUsers2(
-              db2,
-              inserted.rows.map((r) => Number(r.user_id)),
-              {
-                title: notifTitle,
-                body: notifMessage,
-                data: { type: "live_class_reminder", liveClassId: lc.id }
-              }
-            );
-            console.log(`[LiveNotif] 30min reminder sent for class=${lc.id} recipients=${inserted.rows.length}`);
-          } else {
-            const inserted = await db2.query(
-              `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
-               SELECT e.user_id, $1, $2, 'info', $3, $4
-               FROM enrollments e
-               WHERE e.course_id = $5
-                 AND (e.status = 'active' OR e.status IS NULL)
-                 AND (e.valid_until IS NULL OR e.valid_until > $6)
-               RETURNING user_id`,
-              [notifTitle, notifMessage, now, expiresAt, lc.course_id, now]
-            );
-            await sendPushToUsers2(
-              db2,
-              inserted.rows.map((r) => Number(r.user_id)),
-              {
-                title: notifTitle,
-                body: notifMessage,
-                data: { type: "live_class_reminder", liveClassId: lc.id, courseId: lc.course_id }
-              }
-            );
-            console.log(`[LiveNotif] 30min reminder sent for class=${lc.id} recipients=${inserted.rows.length}`);
+        const notifTitle = "\u23F0 Live Class in 30 minutes!";
+        const notifMessage = `"${lc.title}" starts in 30 minutes. Get ready!`;
+        const PUSH_BATCH_SIZE = 500;
+        const dedupType = "live_class_reminder_30min";
+        let recipientIds = [];
+        const redis = await getRedisClient();
+        let dedupHandled = false;
+        if (redis) {
+          const candidates = !lc.course_id || lc.is_free_preview === true || lc.is_public === true ? await db2.query(
+            // HCFR-01: Add LIMIT to prevent unbounded fanout at scale.
+            // At 10,000 students this query returns 10,000 rows, triggering a 20-second
+            // Expo push API loop while holding the advisory lock. LIMIT 5000 is a safe
+            // ceiling — real notification batching/pagination to be added in a follow-up.
+            `SELECT u.id::int AS user_id FROM users u WHERE u.role = 'student' LIMIT 5000`,
+            []
+          ) : await db2.query(
+            `SELECT e.user_id::int AS user_id
+                 FROM enrollments e
+                 WHERE e.course_id = $1::int
+                   AND (e.status = 'active' OR e.status IS NULL)
+                   AND (e.valid_until IS NULL OR e.valid_until > $2::bigint)`,
+            [lc.course_id, now]
+          );
+          const candidateIds = candidates.rows.map((r) => Number(r.user_id));
+          const redisResult = await filterNewNotificationRecipientsRedis(
+            redis,
+            lc.id,
+            candidateIds,
+            dedupType
+          );
+          if (redisResult !== null) {
+            dedupHandled = true;
+            recipientIds = redisResult;
+            if (recipientIds.length) {
+              await db2.query(
+                `INSERT INTO notifications_sent (class_id, user_id, type)
+                 SELECT $1::int, u_id::int, $2::text
+                 FROM unnest($3::int[]) AS u_id
+                 ON CONFLICT (class_id, user_id, type) DO NOTHING`,
+                [lc.id, dedupType, recipientIds]
+              );
+            }
           }
         }
+        if (!dedupHandled) {
+          if (!lc.course_id || lc.is_free_preview === true || lc.is_public === true) {
+            const inserted = await db2.query(
+              `INSERT INTO notifications_sent (class_id, user_id, type)
+               SELECT $1::int, u.id::int, $2::text
+               FROM users u
+               WHERE u.role = 'student'
+               ON CONFLICT (class_id, user_id, type) DO NOTHING
+               RETURNING user_id`,
+              [lc.id, dedupType]
+            );
+            recipientIds = inserted.rows.map((r) => Number(r.user_id));
+          } else {
+            const inserted = await db2.query(
+              `INSERT INTO notifications_sent (class_id, user_id, type)
+               SELECT $1::int, e.user_id::int, $2::text
+               FROM enrollments e
+               WHERE e.course_id = $3::int
+                 AND (e.status = 'active' OR e.status IS NULL)
+                 AND (e.valid_until IS NULL OR e.valid_until > $4::bigint)
+               ON CONFLICT (class_id, user_id, type) DO NOTHING
+               RETURNING user_id`,
+              [lc.id, dedupType, lc.course_id, now]
+            );
+            recipientIds = inserted.rows.map((r) => Number(r.user_id));
+          }
+        }
+        if (!recipientIds.length) continue;
+        await db2.query(
+          `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
+           SELECT u_id::int, $1::text, $2::text, 'info', $3::bigint, $4::bigint
+           FROM unnest($5::int[]) AS u_id`,
+          [notifTitle, notifMessage, now, expiresAt, recipientIds]
+        );
+        for (let i = 0; i < recipientIds.length; i += PUSH_BATCH_SIZE) {
+          const batch = recipientIds.slice(i, i + PUSH_BATCH_SIZE);
+          await sendPushToUsers2(db2, batch, {
+            title: notifTitle,
+            body: notifMessage,
+            data: !lc.course_id || lc.is_free_preview === true || lc.is_public === true ? { type: "live_class_reminder", liveClassId: lc.id } : { type: "live_class_reminder", liveClassId: lc.id, courseId: lc.course_id }
+          });
+          if (i + PUSH_BATCH_SIZE < recipientIds.length) {
+            await new Promise((resolve2) => setTimeout(resolve2, 200));
+          }
+        }
+        console.log(`[LiveNotif] 30min reminder sent for class=${lc.id} recipients=${recipientIds.length}`);
       }
-      if (sentNotifications.size > 500) sentNotifications.clear();
     } catch (err) {
       console.error("[LiveNotif] Scheduler error:", err);
     } finally {
@@ -12477,11 +14289,37 @@ function startLiveClassNotificationScheduler(db2, pool2, sendPushToUsers2) {
   }, 60 * 1e3);
   console.log("[LiveNotif] Scheduler started \u2014 checks every 60s");
 }
-function startDownloadTokenCleanupScheduler(db2) {
+async function clearStuckLiveClasses(db2) {
+  try {
+    const result = await db2.query(`
+      UPDATE live_classes
+      SET is_live = FALSE
+      WHERE is_live = TRUE
+        AND started_at IS NOT NULL
+        AND started_at < EXTRACT(EPOCH FROM NOW()) * 1000 - 21600000
+    `);
+    if (result.rowCount && result.rowCount > 0) {
+      console.log(`[StuckLiveCleanup] Cleared is_live flag on ${result.rowCount} stuck class(es)`);
+    }
+  } catch (err) {
+    console.error("[StuckLiveCleanup] Error clearing stuck live classes:", err);
+  }
+}
+function startStuckLiveClassCleanupScheduler(db2, pool2) {
+  runWithAdvisoryLock(pool2, STUCK_LIVE_CLEANUP_LOCK_KEY, async () => clearStuckLiveClasses(db2)).catch(() => {
+  });
+  setInterval(
+    () => void runWithAdvisoryLock(pool2, STUCK_LIVE_CLEANUP_LOCK_KEY, async () => clearStuckLiveClasses(db2)),
+    15 * 60 * 1e3
+  );
+  console.log("[StuckLiveCleanup] Scheduler started \u2014 runs every 15 minutes");
+}
+function startDownloadTokenCleanupScheduler(db2, pool2) {
   setInterval(async () => {
     try {
-      const result = await db2.query(
-        `DELETE FROM download_tokens
+      await runWithAdvisoryLock(pool2, DOWNLOAD_TOKEN_CLEANUP_LOCK_KEY, async () => {
+        const result = await db2.query(
+          `DELETE FROM download_tokens
          WHERE id IN (
            SELECT id
            FROM download_tokens
@@ -12489,64 +14327,199 @@ function startDownloadTokenCleanupScheduler(db2) {
            ORDER BY expires_at ASC
            LIMIT 2000
          )`,
-        [Date.now()]
-      );
-      if (result.rowCount && result.rowCount > 0) {
-        console.log(`[TokenCleanup] Deleted ${result.rowCount} expired tokens`);
-      }
+          [Date.now()]
+        );
+        if (result.rowCount && result.rowCount > 0) {
+          console.log(`[TokenCleanup] Deleted ${result.rowCount} expired tokens`);
+        }
+      });
     } catch (err) {
       console.error("[TokenCleanup] Error:", err);
     }
   }, 5 * 60 * 1e3);
   console.log("[TokenCleanup] Scheduler started \u2014 runs every 5 minutes");
 }
-var LIVE_NOTIF_ADVISORY_LOCK_KEY;
+function startLiveFinalizeQueueScheduler(db2, pool2) {
+  db2.query(
+    "UPDATE live_stream_finalize_jobs SET status = 'pending', updated_at = $1 WHERE status = 'running'",
+    [Date.now()]
+  ).then((r) => {
+    if ((r.rowCount ?? 0) > 0) {
+      console.log(`[FinalizeQueue] Startup: reset ${r.rowCount} stuck 'running' job(s) to 'pending'`);
+    }
+  }).catch((err) => {
+    console.error("[FinalizeQueue] Startup reset of stuck jobs failed:", err);
+  });
+  const tick = async () => {
+    await runWithAdvisoryLock(pool2, LIVE_FINALIZE_QUEUE_LOCK_KEY, async () => {
+      const now = Date.now();
+      const pending = await db2.query(
+        `SELECT id, live_class_id, attempts
+         FROM live_stream_finalize_jobs
+         WHERE status IN ('pending', 'running')
+           AND next_attempt_at <= $1
+         ORDER BY next_attempt_at ASC
+         LIMIT 100`,
+        [now]
+      );
+      setGauge("live_finalize_queue_backlog", pending.rows.length);
+      for (const job of pending.rows) {
+        const jobId = Number(job.id);
+        const liveClassId = Number(job.live_class_id);
+        const attempts = Number(job.attempts || 0);
+        if (!Number.isFinite(jobId) || !Number.isFinite(liveClassId)) continue;
+        try {
+          await db2.query(
+            "UPDATE live_stream_finalize_jobs SET status = 'running', updated_at = $2 WHERE id = $1",
+            [jobId, now]
+          );
+          const lc = await db2.query(
+            "SELECT recording_url, cf_stream_uid, cf_recording_uid FROM live_classes WHERE id = $1 LIMIT 1",
+            [liveClassId]
+          );
+          let recordingUrl = String(lc.rows[0]?.recording_url || "").trim();
+          if (!recordingUrl && attempts >= 5) {
+            const cfAccountId = process.env.CF_STREAM_ACCOUNT_ID;
+            const cfApiToken = process.env.CF_STREAM_API_TOKEN;
+            if (cfAccountId && cfApiToken) {
+              const cfRecordingUid = String(lc.rows[0]?.cf_recording_uid || "").trim();
+              const cfStreamUid = String(lc.rows[0]?.cf_stream_uid || "").trim();
+              let cfRecording = null;
+              if (cfRecordingUid) {
+                cfRecording = await getCfVideoByUid(cfAccountId, cfApiToken, cfRecordingUid);
+              }
+              if (!cfRecording && cfStreamUid) {
+                cfRecording = await getLatestRecordingForLiveInput(cfAccountId, cfApiToken, cfStreamUid);
+              }
+              if (cfRecording?.recordingUid) {
+                await db2.query(
+                  "UPDATE live_classes SET cf_recording_uid = COALESCE(cf_recording_uid, $1) WHERE id = $2",
+                  [cfRecording.recordingUid, liveClassId]
+                ).catch(() => {
+                });
+                if (cfRecording.status === "ready") {
+                  try {
+                    await saveRecordingForClassAndPeers(db2, String(liveClassId), cfRecording.manifestUrl);
+                    recordingUrl = cfRecording.manifestUrl;
+                    incrementCounter("live_finalize_queue_cf_fallback_success");
+                    console.log(
+                      `[LiveFinalizeQueue] CFSR-03 fallback resolved recording for live_class=${liveClassId} uid=${cfRecording.recordingUid}`
+                    );
+                  } catch (saveErr) {
+                    console.warn("[LiveFinalizeQueue] CF fallback save failed:", saveErr);
+                  }
+                } else {
+                  console.log(
+                    `[LiveFinalizeQueue] CFSR-03 fallback found recording uid=${cfRecording.recordingUid} status=${cfRecording.status} for live_class=${liveClassId} \u2014 waiting for ready`
+                  );
+                }
+              }
+            }
+          }
+          if (recordingUrl) {
+            await db2.query(
+              "UPDATE live_stream_finalize_jobs SET status = 'done', updated_at = $2 WHERE id = $1",
+              [jobId, now]
+            );
+            continue;
+          }
+          const nextAttempts = attempts + 1;
+          const maxAttempts = Number(process.env.LIVE_FINALIZE_MAX_ATTEMPTS || 24);
+          const backoffMs = Math.min(10 * 60 * 1e3, nextAttempts * 60 * 1e3);
+          const nextAt = now + backoffMs;
+          await db2.query(
+            `UPDATE live_stream_finalize_jobs
+             SET status = $2,
+                 attempts = $3,
+                 updated_at = $4,
+                 next_attempt_at = $5,
+                 last_error = $6
+             WHERE id = $1`,
+            [
+              jobId,
+              nextAttempts >= maxAttempts ? "failed" : "pending",
+              nextAttempts,
+              now,
+              nextAt,
+              "recording_url_not_ready"
+            ]
+          );
+          if (nextAttempts >= maxAttempts) incrementCounter("live_finalize_queue_failed");
+        } catch (err) {
+          incrementCounter("live_finalize_queue_errors");
+          await db2.query(
+            `UPDATE live_stream_finalize_jobs
+             SET status = 'pending',
+                 attempts = COALESCE(attempts, 0) + 1,
+                 updated_at = $2,
+                 next_attempt_at = $3,
+                 last_error = $4
+             WHERE id = $1`,
+            [jobId, now, now + 60 * 1e3, String(err?.message || "queue_error").slice(0, 500)]
+          ).catch(() => {
+          });
+        }
+      }
+    });
+  };
+  void tick().catch(() => {
+  });
+  setInterval(() => void tick().catch(() => {
+  }), 60 * 1e3);
+  console.log("[LiveFinalizeQueue] Scheduler started \u2014 runs every 60 seconds");
+}
+function startNeonKeepalive(db2) {
+  const KEEPALIVE_INTERVAL_MS = 30 * 1e3;
+  setInterval(async () => {
+    try {
+      await db2.query("SELECT 1");
+    } catch {
+    }
+  }, KEEPALIVE_INTERVAL_MS);
+  console.log("[Keepalive] Neon keepalive started \u2014 pings every 30s");
+}
+function startMediaTokenCleanupScheduler(db2, pool2) {
+  const MEDIA_TOKEN_CLEANUP_LOCK_KEY = 31415926540;
+  const run = async () => {
+    try {
+      await runWithAdvisoryLock(pool2, MEDIA_TOKEN_CLEANUP_LOCK_KEY, async () => {
+        const result = await db2.query(
+          `DELETE FROM media_tokens
+           WHERE id IN (
+             SELECT id FROM media_tokens
+             WHERE expires_at < $1
+             ORDER BY expires_at ASC
+             LIMIT 2000
+           )`,
+          [Date.now()]
+        );
+        if (result.rowCount && result.rowCount > 0) {
+          console.log(`[MediaTokenCleanup] Deleted ${result.rowCount} expired tokens`);
+        }
+      });
+    } catch (err) {
+      console.error("[MediaTokenCleanup] Error:", err);
+    }
+  };
+  void run();
+  setInterval(() => void run(), 5 * 60 * 1e3);
+  console.log("[MediaTokenCleanup] Scheduler started \u2014 runs every 5 minutes");
+}
+var LIVE_NOTIF_ADVISORY_LOCK_KEY, DOWNLOAD_CLEANUP_RETRY_LOCK_KEY, DOWNLOAD_TOKEN_CLEANUP_LOCK_KEY, STUCK_LIVE_CLEANUP_LOCK_KEY, LIVE_FINALIZE_QUEUE_LOCK_KEY;
 var init_schedulers = __esm({
   "backend/schedulers.ts"() {
     "use strict";
+    init_download_utils();
+    init_redis_client();
+    init_redis_notification_dedup();
+    init_observability();
+    init_cloudflare_stream_api();
+    init_live_class_recording_save();
     LIVE_NOTIF_ADVISORY_LOCK_KEY = 31415926535;
-  }
-});
-
-// backend/download-utils.ts
-async function deleteDownloadsForUser(db2, userId, courseId) {
-  try {
-    if (courseId) {
-      await db2.query(
-        `DELETE FROM user_downloads
-         WHERE user_id = $1
-         AND (
-           (item_type = 'lecture' AND item_id IN (SELECT id FROM lectures WHERE course_id = $2))
-           OR
-           (item_type = 'material' AND item_id IN (SELECT id FROM study_materials WHERE course_id = $2))
-         )`,
-        [userId, courseId]
-      );
-      console.log(`[Cleanup] Deleted downloads for user ${userId} in course ${courseId}`);
-    } else {
-      await db2.query("DELETE FROM user_downloads WHERE user_id = $1", [userId]);
-      console.log(`[Cleanup] Deleted all downloads for user ${userId}`);
-    }
-  } catch (err) {
-    console.error("[Cleanup] Failed to delete downloads:", err);
-  }
-}
-async function deleteDownloadsForCourse(db2, courseId) {
-  try {
-    await db2.query(
-      `DELETE FROM user_downloads
-       WHERE (item_type = 'lecture' AND item_id IN (SELECT id FROM lectures WHERE course_id = $1))
-       OR (item_type = 'material' AND item_id IN (SELECT id FROM study_materials WHERE course_id = $1))`,
-      [courseId]
-    );
-    console.log(`[Cleanup] Deleted all downloads for course ${courseId}`);
-  } catch (err) {
-    console.error("[Cleanup] Failed to delete course downloads:", err);
-  }
-}
-var init_download_utils = __esm({
-  "backend/download-utils.ts"() {
-    "use strict";
+    DOWNLOAD_CLEANUP_RETRY_LOCK_KEY = 31415926536;
+    DOWNLOAD_TOKEN_CLEANUP_LOCK_KEY = 31415926537;
+    STUCK_LIVE_CLEANUP_LOCK_KEY = 31415926538;
+    LIVE_FINALIZE_QUEUE_LOCK_KEY = 31415926539;
   }
 });
 
@@ -12565,24 +14538,29 @@ function isTransientPgError(err) {
   return message.includes("connection terminated") || message.includes("connection timeout") || message.includes("getaddrinfo eai_again") || message.includes("timeout exceeded when trying to connect") || code === "ECONNRESET" || code === "ECONNREFUSED" || code === "EAI_AGAIN" || code === "ETIMEDOUT" || code === "57P01" || // admin_shutdown
   code === "57P03";
 }
+function isRetrySafeSql(text) {
+  const normalized = String(text || "").trim().toUpperCase();
+  if (!normalized) return false;
+  return normalized.startsWith("SELECT") || normalized.startsWith("WITH");
+}
 async function runInTransaction(fn) {
   const maxAttempts = 3;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const client = await pool.connect();
+    const client2 = await pool.connect();
     try {
-      await client.query("BEGIN");
+      await client2.query("BEGIN");
       const exec = {
         query: async (text, params) => {
-          const r = await client.query(text, params);
+          const r = await client2.query(text, params);
           return { rows: r.rows };
         }
       };
       const out = await fn(exec);
-      await client.query("COMMIT");
+      await client2.query("COMMIT");
       return out;
     } catch (e) {
       try {
-        await client.query("ROLLBACK");
+        await client2.query("ROLLBACK");
       } catch {
       }
       if (isTransientPgError(e) && attempt < maxAttempts) {
@@ -12592,7 +14570,7 @@ async function runInTransaction(fn) {
       }
       throw e;
     } finally {
-      client.release();
+      client2.release();
     }
   }
   throw new Error("Transaction failed after retries");
@@ -12600,6 +14578,7 @@ async function runInTransaction(fn) {
 async function dbQuery(text, params, options) {
   const slowQueryThresholdMs = Number(process.env.DB_SLOW_QUERY_MS || "300");
   const shouldLogSlow = options?.logSlow !== false;
+  const retrySafe = isRetrySafeSql(text);
   for (let attempt = 1; attempt <= 3; attempt++) {
     const startedAt = Date.now();
     try {
@@ -12613,7 +14592,7 @@ async function dbQuery(text, params, options) {
     } catch (err) {
       const elapsedMs = Date.now() - startedAt;
       const isTransient = isTransientPgError(err);
-      if (isTransient && attempt < 3) {
+      if (isTransient && retrySafe && attempt < 3) {
         console.warn("[DB] Transient error on attempt " + attempt + ", retrying...");
         await new Promise((r) => setTimeout(r, 200 * attempt));
         continue;
@@ -12639,7 +14618,7 @@ async function getAuthUser(req) {
       const user = await getAuthUserFromRequest(req, db);
       if (!user) return null;
       const boundOk = await enforceInstallationBinding(db, req, user.id, user.role);
-      if (!boundOk.ok) {
+      if (!boundOk.ok && boundOk.code === "device_binding_mismatch") {
         req.session.user = null;
         return null;
       }
@@ -12688,26 +14667,42 @@ async function registerRoutes(app2) {
           ok: false,
           message: "Database schema is not fully migrated",
           checks: readiness.checks,
+          dependencyChecks: readiness.dependencyChecks,
           missingTables: readiness.missingTables,
           missingColumns: readiness.missingColumns,
           missingIndexes: readiness.missingIndexes
         });
       }
+      const hasDegradedDependency = Object.values(readiness.dependencyChecks || {}).includes("degraded");
+      if (hasDegradedDependency) {
+        return res.status(200).json({
+          ok: true,
+          degraded: true,
+          checks: readiness.checks,
+          dependencyChecks: readiness.dependencyChecks
+        });
+      }
       return res.json({
         ok: true,
-        checks: readiness.checks
+        checks: readiness.checks,
+        dependencyChecks: readiness.dependencyChecks
       });
     } catch (err) {
       return res.status(503).json({ ok: false, message: err?.message || "DB not ready" });
     }
   });
   async function requireAuth(req, res, next) {
-    const user = await getAuthUser(req);
-    if (!user) {
-      return res.status(401).json({ message: "Login required" });
+    try {
+      const user = await getAuthUser(req);
+      if (!user) {
+        return res.status(401).json({ message: "Login required" });
+      }
+      req.user = user;
+      next();
+    } catch (err) {
+      console.error("[Auth] requireAuth failed:", err);
+      return res.status(500).json({ message: "Authentication check failed" });
     }
-    req.user = user;
-    next();
   }
   registerSupportRoutes({
     app: app2,
@@ -12848,14 +14843,59 @@ async function registerRoutes(app2) {
     db,
     requireAdmin
   });
-  async function requireAdmin(req, res, next) {
-    const user = await getAuthUser(req);
-    if (!user || user.role !== "admin") {
-      return res.status(403).json({ message: "Admin access required" });
+  app2.post("/api/admin/material-entitlements/grant", requireAdmin, async (req, res) => {
+    try {
+      const userId = Number(req.body?.userId);
+      const materialId = Number(req.body?.materialId);
+      const expiresAtRaw = req.body?.expiresAt;
+      const expiresAt = expiresAtRaw == null || expiresAtRaw === "" ? null : Number.isFinite(Number(expiresAtRaw)) ? Number(expiresAtRaw) : null;
+      if (!Number.isFinite(userId) || userId <= 0 || !Number.isFinite(materialId) || materialId <= 0) {
+        return res.status(400).json({ message: "userId and materialId are required" });
+      }
+      await db.query(
+        `INSERT INTO standalone_material_entitlements
+           (user_id, material_id, granted_at, granted_by_payment_ref, expires_at, is_active)
+         VALUES ($1, $2, $3, NULL, $4, TRUE)
+         ON CONFLICT (user_id, material_id)
+         DO UPDATE SET is_active = TRUE, expires_at = EXCLUDED.expires_at, granted_at = EXCLUDED.granted_at`,
+        [userId, materialId, Date.now(), expiresAt]
+      );
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("[Entitlement] grant failed:", err);
+      return res.status(500).json({ message: "Failed to grant entitlement" });
     }
-    req.user = user;
-    next();
-  }
+  });
+  app2.post("/api/admin/material-entitlements/revoke", requireAdmin, async (req, res) => {
+    try {
+      const userId = Number(req.body?.userId);
+      const materialId = Number(req.body?.materialId);
+      if (!Number.isFinite(userId) || userId <= 0 || !Number.isFinite(materialId) || materialId <= 0) {
+        return res.status(400).json({ message: "userId and materialId are required" });
+      }
+      await db.query(
+        "UPDATE standalone_material_entitlements SET is_active = FALSE WHERE user_id = $1 AND material_id = $2",
+        [userId, materialId]
+      );
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("[Entitlement] revoke failed:", err);
+      return res.status(500).json({ message: "Failed to revoke entitlement" });
+    }
+  });
+  registerCloudflareWebhookRoutes({
+    app: app2,
+    db
+  });
+  registerLiveKitWebhookRoutes({
+    app: app2,
+    db
+  });
+  registerRuntimeFlagRoutes({
+    app: app2,
+    db,
+    requireAdmin
+  });
   app2.get("/api/admin/push-tokens", requireAdmin, async (req, res) => {
     try {
       const userIdRaw = String(req.query.userId || "").trim();
@@ -12947,8 +14987,7 @@ async function registerRoutes(app2) {
     app: app2,
     requireAdmin,
     getAuthUser,
-    getR2Client,
-    uploadLarge
+    getR2Client
   });
   registerMediaStreamRoutes({
     app: app2,
@@ -13054,6 +15093,7 @@ async function registerRoutes(app2) {
   registerLiveStreamRoutes({
     app: app2,
     db,
+    pool,
     requireAdmin,
     recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse2,
     getR2Client
@@ -13079,7 +15119,7 @@ async function registerRoutes(app2) {
   attachClassroomSyncServer(httpServer, db, getR2Client);
   return httpServer;
 }
-var databaseUrlRaw, databaseUrl, pgPoolMax, pool, listenPool, db, generateAIAnswer, updateCourseProgress2, recomputeAllEnrollmentsProgressForCourse2, updateCourseTestCounts2, deleteDownloadsForUser2, deleteDownloadsForCourse2, authUserLazyKey;
+var databaseUrlRaw, databaseUrl, pgPoolMax, pool, listenPool, db, generateAIAnswer, updateCourseProgress2, recomputeAllEnrollmentsProgressForCourse2, updateCourseTestCounts2, deleteDownloadsForUser2, deleteDownloadsForCourse2, authUserLazyKey, requireAdmin;
 var init_routes = __esm({
   "backend/routes.ts"() {
     "use strict";
@@ -13088,6 +15128,7 @@ var init_routes = __esm({
     init_razorpay();
     init_security_utils();
     init_auth_utils();
+    init_require_admin();
     init_native_device_binding();
     init_auth_routes();
     init_pdf_routes();
@@ -13126,6 +15167,9 @@ var init_routes = __esm({
     init_course_access_routes();
     init_upload_routes();
     init_media_stream_routes();
+    init_runtime_flag_routes();
+    init_cloudflare_webhook_routes();
+    init_livekit_webhook_routes();
     init_ai_tutor_service();
     init_db_readiness();
     init_db_utils();
@@ -13148,7 +15192,10 @@ var init_routes = __esm({
       connectionTimeoutMillis: 1e4,
       idleTimeoutMillis: 1e4,
       // release idle connections quickly (Neon closes them anyway)
-      statement_timeout: 25e3
+      statement_timeout: 25e3,
+      // Neon / PgBouncer / long-lived sockets benefit from TCP keep-alive.
+      keepAlive: true,
+      keepAliveInitialDelayMillis: 1e4
     });
     console.log("[DB] Main pool configured", {
       max: pgPoolMax,
@@ -13185,13 +15232,14 @@ var init_routes = __esm({
     deleteDownloadsForUser2 = (userId, courseId) => deleteDownloadsForUser(db, userId, courseId);
     deleteDownloadsForCourse2 = (courseId) => deleteDownloadsForCourse(db, courseId);
     authUserLazyKey = /* @__PURE__ */ Symbol("authUserLazy");
+    requireAdmin = createRequireAdmin(getAuthUser);
   }
 });
 
 // backend/index.ts
 init_pg_rate_limit_store();
-init_ai_tutor_service();
-init_db_utils();
+init_redis_client();
+init_redis_rate_limit_store();
 import dotenv from "dotenv";
 import * as fs from "fs";
 import * as path from "path";
@@ -13202,12 +15250,45 @@ import rateLimit from "express-rate-limit";
 import { ipKeyGenerator } from "express-rate-limit";
 import compression from "compression";
 import pg from "pg";
+import { randomUUID } from "node:crypto";
+
+// backend/error-middleware.ts
+function setupErrorHandler(app2, isTrustedOrigin2) {
+  app2.use((err, req, res, next) => {
+    const error = err;
+    const status = error.status || error.statusCode || 500;
+    const message = status >= 500 && process.env.NODE_ENV === "production" ? "Internal Server Error" : error.message || "Internal Server Error";
+    console.error("Internal Server Error:", err);
+    if (res.headersSent) {
+      return next(err);
+    }
+    const origin = req.get("origin");
+    if (origin && isTrustedOrigin2(origin)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+      res.setHeader("Vary", "Origin");
+    }
+    return res.status(status).json({ message });
+  });
+}
+
+// backend/index.ts
+init_ai_tutor_service();
+init_db_utils();
+init_feature_flags();
+init_observability();
 import cors from "cors";
 var envPath = path.resolve(process.cwd(), ".env");
 if (process.env.NODE_ENV !== "production" || process.env.LOAD_DOTENV === "true") {
   dotenv.config({ path: envPath });
 } else if (fs.existsSync(envPath)) {
   dotenv.config({ path: envPath, override: false });
+}
+if (!process.env.OTP_HMAC_SECRET) {
+  throw new Error("OTP_HMAC_SECRET must be set");
+}
+if (process.env.NODE_ENV === "production" && !process.env.SESSION_SECRET) {
+  throw new Error("SESSION_SECRET must be set in production");
 }
 var app = express();
 var log = console.log;
@@ -13307,7 +15388,11 @@ function setupCors(app2) {
     credentials: true,
     exposedHeaders: ["Content-Length", "Content-Type", "Content-Disposition"],
     preflightContinue: false,
-    optionsSuccessStatus: 204
+    optionsSuccessStatus: 204,
+    // maxAge: 0 tells the browser never to cache preflight responses.
+    // Without this, Chrome caches a preflight that lacks PATCH for up to 600s
+    // and "Disable cache" in DevTools does NOT clear the CORS preflight cache.
+    maxAge: 0
   };
   app2.use(cors(corsOptions));
 }
@@ -13319,13 +15404,9 @@ function setupApiOriginProtection(app2) {
     if (!hasCookie || hasBearer) return next();
     const origin = req.get("origin");
     const referer = req.get("referer");
-    const clientPlatform = (req.get("x-client-platform") || "").trim().toLowerCase();
-    const hasNativeAppHeader = clientPlatform === "android" || clientPlatform === "ios";
     const trustedOrigin = origin ? isTrustedOrigin(origin) : false;
     const trustedReferer = referer ? isTrustedOrigin(referer) : false;
-    const missingBrowserHeaders = !origin && !referer;
     if (trustedOrigin || trustedReferer) return next();
-    if (hasNativeAppHeader && missingBrowserHeaders) return next();
     return res.status(403).json({ message: "Cross-site request blocked" });
   });
 }
@@ -13343,13 +15424,15 @@ function setupBodyParsing(app2) {
 }
 function setupRequestLogging(app2) {
   app2.use((req, res, next) => {
+    const reqId = req.get("x-request-id") || randomUUID();
+    res.setHeader("x-request-id", reqId);
     const start = Date.now();
     const reqPath = req.path;
     res.on("finish", () => {
       if (!reqPath.startsWith("/api")) return;
       const duration = Date.now() - start;
       if (duration > 500 || res.statusCode >= 500) {
-        log(`${req.method} ${reqPath} ${res.statusCode} in ${duration}ms`);
+        log(`[req:${reqId}] ${req.method} ${reqPath} ${res.statusCode} in ${duration}ms`);
       }
     });
     next();
@@ -13539,24 +15622,6 @@ function setupApiHostSearchHints(app2) {
     next();
   });
 }
-function setupErrorHandler(app2) {
-  app2.use((err, req, res, next) => {
-    const error = err;
-    const status = error.status || error.statusCode || 500;
-    const message = status >= 500 && process.env.NODE_ENV === "production" ? "Internal Server Error" : error.message || "Internal Server Error";
-    console.error("Internal Server Error:", err);
-    if (res.headersSent) {
-      return next(err);
-    }
-    const origin = req.get("origin");
-    if (origin && isTrustedOrigin(origin)) {
-      res.setHeader("Access-Control-Allow-Origin", origin);
-      res.setHeader("Access-Control-Allow-Credentials", "true");
-      res.setHeader("Vary", "Origin");
-    }
-    return res.status(status).json({ message });
-  });
-}
 function normalizeOtpIdentifier(input) {
   const raw = String(input || "").trim().toLowerCase();
   const digits = raw.replace(/\D/g, "");
@@ -13568,7 +15633,18 @@ function normalizeOtpIdentifier(input) {
   setupCors(app);
   setupBodyParsing(app);
   setupApiResponseFormat(app);
-  app.use(compression());
+  app.use(
+    compression({
+      filter: (req, res) => {
+        const p = req.path || "";
+        if (p.includes("/sse") || p.includes("/stream") || p.includes("/api/media/") || p.startsWith("/api/live-classes/") || p.includes("/listen")) {
+          return false;
+        }
+        return compression.filter(req, res);
+      }
+    })
+  );
+  app.use(metricsMiddleware);
   setupRequestLogging(app);
   const isProduction = process.env.NODE_ENV === "production";
   app.set("trust proxy", 1);
@@ -13600,7 +15676,11 @@ function normalizeOtpIdentifier(input) {
       secure: isProduction,
       // HTTPS only in production
       httpOnly: true,
-      sameSite: "lax",
+      // SEC-02: "strict" prevents the cookie from being sent on any cross-site request,
+      // eliminating CSRF risk on cookie-authenticated GET endpoints with side effects.
+      // The app primarily uses Bearer token auth (CSRF-immune by design), so changing
+      // from "lax" to "strict" has no functional impact on normal usage.
+      sameSite: "strict",
       maxAge: 400 * 24 * 60 * 60 * 1e3,
       ...isProduction && sessionCookieDomain ? { domain: sessionCookieDomain } : {}
     }
@@ -13621,11 +15701,29 @@ function normalizeOtpIdentifier(input) {
   app.use(session(sessionConfig));
   setupApiOriginProtection(app);
   setupApiHostSearchHints(app);
-  app.get("/api/health/version", (_req, res) => {
+  app.get("/api/health/version", (req, res) => {
+    const secret = process.env.METRICS_SECRET?.trim();
+    const auth2 = String(req.headers.authorization || "");
+    const isAuthed = !!secret && auth2.startsWith("Bearer ") && auth2.slice(7).trim() === secret;
+    if (process.env.NODE_ENV === "production" && !isAuthed) {
+      return res.json({ ok: true });
+    }
     res.json(getBackendVersion());
   });
   app.get("/api/health/ai-providers", (_req, res) => {
     res.json({ ok: true, ...getAiTutorHealthSnapshot() });
+  });
+  app.get("/api/metrics", (req, res) => {
+    const secret = process.env.METRICS_SECRET?.trim();
+    if (secret) {
+      const auth2 = String(req.headers.authorization || "");
+      if (!auth2.startsWith("Bearer ") || auth2.slice(7).trim() !== secret) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+    } else if (process.env.NODE_ENV === "production") {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+    res.json(getMetricsSnapshot());
   });
   const rateLimitPgSsl = process.env.PGSSL_NO_VERIFY === "true" && process.env.NODE_ENV !== "production" ? { rejectUnauthorized: false } : { rejectUnauthorized: true };
   const rateLimitPool = typeof process.env.DATABASE_URL === "string" && process.env.DATABASE_URL.trim().length > 0 ? new pg.Pool({
@@ -13645,9 +15743,18 @@ function normalizeOtpIdentifier(input) {
       console.error("[RateLimitPool] idle client error:", err.message);
     });
   }
-  const otpSendStore = rateLimitPool ? new PgRateLimitStore(rateLimitPool) : void 0;
-  const otpVerifyStore = rateLimitPool ? new PgRateLimitStore(rateLimitPool) : void 0;
-  const globalApiStore = rateLimitPool ? new PgRateLimitStore(rateLimitPool) : void 0;
+  const redisClient = await getRedisClient();
+  const failClosedAuthRateLimit = getEnvFlag("FF_FAIL_CLOSED_AUTH_RATE_LIMIT", true);
+  const failClosedMediaRateLimit = getEnvFlag("FF_FAIL_CLOSED_MEDIA_RATE_LIMIT", true);
+  const makeRateLimitStore = (prefix, options) => redisClient ? new RedisRateLimitStore(redisClient, prefix, options) : rateLimitPool ? new PgRateLimitStore(rateLimitPool, options) : void 0;
+  const otpSendStore = makeRateLimitStore("otp-send", { failClosed: failClosedAuthRateLimit });
+  const otpVerifyStore = makeRateLimitStore("otp-verify", { failClosed: failClosedAuthRateLimit });
+  const authLoginStore = makeRateLimitStore("auth-login", { failClosed: failClosedAuthRateLimit });
+  const mediaTokenStore = makeRateLimitStore("media-token", { failClosed: failClosedMediaRateLimit });
+  const globalApiStore = makeRateLimitStore("global-api");
+  if (redisClient) {
+    console.log("[Redis] Rate limit stores using Redis");
+  }
   const otpSendLimiter = rateLimit({
     windowMs: 15 * 60 * 1e3,
     max: 20,
@@ -13672,13 +15779,45 @@ function normalizeOtpIdentifier(input) {
   });
   app.use("/api/auth/send-otp", otpSendLimiter);
   app.use("/api/auth/verify-otp", otpVerifyLimiter);
+  const authLoginKey = (req) => {
+    const body = req.body ?? {};
+    const raw = body.identifier ?? body.email ?? body.phoneNumber ?? body.phone ?? "global";
+    return `auth-login:${ipKeyGenerator(req.ip || "")}:${normalizeOtpIdentifier(raw)}`;
+  };
+  const authLoginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1e3,
+    max: 25,
+    message: { message: "Too many login attempts, please try again later" },
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: authLoginKey,
+    ...authLoginStore ? { store: authLoginStore } : {}
+  });
+  app.use("/api/auth/email-login", authLoginLimiter);
+  app.use("/api/auth/verify-firebase", authLoginLimiter);
+  app.use("/api/auth/firebase-login", authLoginLimiter);
+  app.use("/api/auth/register-complete", authLoginLimiter);
+  const mediaTokenLimiter = rateLimit({
+    windowMs: 60 * 1e3,
+    max: 40,
+    message: { message: "Too many media requests, please slow down" },
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => {
+      const auth2 = req.headers.authorization || "";
+      const suffix = auth2.startsWith("Bearer ") ? auth2.slice(7, 24) : ipKeyGenerator(req.ip || "");
+      return `media-token:${suffix}`;
+    },
+    ...mediaTokenStore ? { store: mediaTokenStore } : {}
+  });
+  app.use("/api/media-token", mediaTokenLimiter);
   const globalApiLimiter = rateLimit({
     windowMs: 60 * 1e3,
     max: 600,
     message: { message: "Too many requests, please slow down" },
     standardHeaders: true,
     legacyHeaders: false,
-    skip: (req) => req.path.startsWith("/api/auth/send-otp") || req.path.startsWith("/api/auth/verify-otp"),
+    skip: (req) => req.path.startsWith("/api/auth/send-otp") || req.path.startsWith("/api/auth/verify-otp") || req.path.startsWith("/api/auth/email-login") || req.path.startsWith("/api/auth/verify-firebase") || req.path.startsWith("/api/auth/firebase-login") || req.path.startsWith("/api/auth/register-complete") || req.path === "/api/media-token",
     ...globalApiStore ? { store: globalApiStore } : {}
   });
   app.use("/api", globalApiLimiter);
@@ -13691,7 +15830,7 @@ function normalizeOtpIdentifier(input) {
     res.status(404).send("Not found");
   });
   configureExpoAndLanding(app);
-  setupErrorHandler(app);
+  setupErrorHandler(app, isTrustedOrigin);
   const port = parseInt(process.env.PORT || "5000", 10);
   logProductionReleaseHints();
   try {
@@ -13708,5 +15847,24 @@ function normalizeOtpIdentifier(input) {
   }
   server.listen(port, "0.0.0.0", () => {
     log(`express server running on http://localhost:${port}`);
+    if (typeof process.send === "function") {
+      process.send("ready");
+    }
+  });
+  process.on("SIGTERM", () => {
+    log("[shutdown] SIGTERM received \u2014 draining in-flight requests");
+    server.close(() => {
+      log("[shutdown] All connections closed \u2014 exiting cleanly");
+      process.exit(0);
+    });
+    setTimeout(() => {
+      console.warn("[shutdown] Forced exit after 10 s timeout");
+      process.exit(1);
+    }, 1e4).unref();
+  });
+  process.on("SIGINT", () => {
+    log("[shutdown] SIGINT received \u2014 exiting");
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(1), 5e3).unref();
   });
 })();
