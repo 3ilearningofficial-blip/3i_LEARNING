@@ -1,5 +1,5 @@
 import { Platform } from "react-native";
-import { getBaseUrl } from "@/lib/query-client";
+import { authFetch, getBaseUrl } from "@/lib/query-client";
 
 /**
  * WebSocket sync must hit the Express API host. The marketing/app domain (3ilearning.in,
@@ -35,36 +35,25 @@ export async function buildClassroomSyncUriWithAuth(
   const uri = buildClassroomSyncUri(liveClassId, preview);
   if (Platform.OS !== "web") return uri;
 
-  // Fetch a fresh token from the server via HTTP (which reliably sends the session cookie)
-  // rather than reading from sessionStorage (unreliable across navigations/cross-tab).
+  // Fetch a short-lived signed sync token via HTTP (cookie + Bearer). authFetch
+  // unwraps { success, data: { token } } so we always read the inner payload.
   let token: string | null = null;
   try {
     const base = getClassroomSyncHttpBase();
-    const headers: Record<string, string> = {};
-    // Also send sessionStorage token as Bearer if available (belt-and-suspenders)
-    if (typeof sessionStorage !== "undefined") {
-      const t = sessionStorage.getItem("sessionToken")?.trim();
-      if (t && t !== "null" && t !== "undefined") headers["Authorization"] = `Bearer ${t}`;
-    }
-    const res = await fetch(
-      `${base}/api/live-classes/${encodeURIComponent(String(liveClassId))}/classroom/sync-token`,
-      { credentials: "include", headers }
+    const res = await authFetch(
+      `${base}/api/live-classes/${encodeURIComponent(String(liveClassId))}/classroom/sync-token`
     );
     if (res.ok) {
-      const data = await res.json() as { token?: string };
-      token = data.token || null;
+      const data = (await res.json()) as { token?: string };
+      const t = data?.token?.trim();
+      if (t) token = t;
     }
   } catch {
-    // Fallback: read from sessionStorage
-    if (typeof sessionStorage !== "undefined") {
-      const t = sessionStorage.getItem("sessionToken")?.trim();
-      if (t && t !== "null" && t !== "undefined") token = t;
-    }
+    /* no token — WS auth will fail clearly */
   }
 
-  // Do not use `sessionId` — reserved by @tldraw/sync useSync for its own query param.
-  const params = new URLSearchParams();
-  if (token) params.set("access_token", token);
-  const qs = params.toString();
-  return qs ? `${uri}?${qs}` : uri;
+  // tldraw's useSync rebuilds the socket URL and DROPS query params, and a browser
+  // cannot set an Authorization header on a WebSocket — so the (short-lived, signed)
+  // token must ride in the URL PATH, which tldraw preserves.
+  return token ? `${uri}/${encodeURIComponent(token)}` : uri;
 }

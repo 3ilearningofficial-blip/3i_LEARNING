@@ -4,6 +4,7 @@ import { userCanAccessLiveClassContent } from "./live-class-access";
 import { buildRecordingLectureSectionTitle } from "../shared/recordingSection";
 import { saveRecordingForClassAndPeers } from "./live-class-recording-save";
 import { convertLiveClassTitlePeersToLectures } from "./live-class-lecture-convert";
+import { signClassroomSyncToken } from "./classroom-sync";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -132,13 +133,10 @@ export function registerClassroomRoutes({
       if (String(lc.stream_type || "").toLowerCase() !== "classroom") {
         return res.status(400).json({ message: "Not a classroom stream" });
       }
-      // Return the bearer token the client is already using so the WS URL can carry it.
-      const bearerRaw = (req.headers.authorization || "").replace(/^Bearer\s+/i, "").trim();
-      const token = bearerRaw || (await db.query(
-        "SELECT session_token FROM users WHERE id = $1",
-        [user.id]
-      ).then(r => String(r.rows[0]?.session_token || "")));
-      if (!token) return res.status(401).json({ message: "No session token found" });
+      // Issue a short-lived, single-purpose signed token (NOT the raw session
+      // token) for the tldraw WS to carry in its URL path. ~2-min TTL, bound to
+      // this user + live class, verified by the sync server on connect.
+      const token = signClassroomSyncToken(user.id, String(req.params.id));
       res.set("Cache-Control", "no-store");
       res.json({ token });
     } catch (err) {

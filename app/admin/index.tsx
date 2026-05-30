@@ -2295,9 +2295,9 @@ export default function AdminDashboard() {
                                         onPress={async () => {
                                           if (endingLiveGroupKey === g.key) return;
                                           const confirmed = Platform.OS === "web"
-                                            ? window.confirm("End this live class?")
+                                            ? window.confirm(g.isRecordingMode ? "End this recording?" : "End this live class?")
                                             : await new Promise<boolean>(resolve =>
-                                                Alert.alert("End Live Class", "Are you sure?", [
+                                                Alert.alert(g.isRecordingMode ? "End Recording" : "End Live Class", "Are you sure?", [
                                                   { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
                                                   { text: "End Class", style: "destructive", onPress: () => resolve(true) },
                                                 ])
@@ -2326,7 +2326,7 @@ export default function AdminDashboard() {
                                         }}>
                                         <Ionicons name="stop-circle" size={14} color="#fff" />
                                         <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#fff" }}>
-                                          {endingLiveGroupKey === g.key ? "Ending..." : "End Live"}
+                                          {endingLiveGroupKey === g.key ? "Ending..." : (g.isRecordingMode ? "End Rec" : "End Live")}
                                         </Text>
                                       </Pressable>
                                     </>
