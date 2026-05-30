@@ -56,6 +56,9 @@ const TABS = [
   { key: "free_practice", label: "Free Practice" },
 ];
 
+/** Accent color for mission folders, applied like lecture/test folders in course view. */
+const MISSION_FOLDER_COLOR = "#DB2777";
+
 function normalizeTopicLabel(s: unknown): string {
   return String(s ?? "").trim().replace(/\s+/g, " ");
 }
@@ -1080,11 +1083,11 @@ export default function DailyMissionScreen() {
             return (
               <Pressable
                 key={folder.id}
-                style={styles.folderCard}
+                style={[styles.folderCard, { borderLeftColor: MISSION_FOLDER_COLOR }]}
                 onPress={() => openMissionFolder(folder.name)}
               >
-                <View style={styles.folderIconWrap}>
-                  <Ionicons name="folder" size={22} color="#DB2777" />
+                <View style={[styles.folderIconWrap, { backgroundColor: MISSION_FOLDER_COLOR + "18" }]}>
+                  <Ionicons name="folder" size={22} color={MISSION_FOLDER_COLOR} />
                 </View>
                 <View style={styles.folderCardBody}>
                   <Text style={styles.folderCardTitle} numberOfLines={2}>
@@ -1156,23 +1159,24 @@ const styles = StyleSheet.create({
     gap: 12,
     backgroundColor: "#fff",
     borderRadius: 14,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: "#FBCFE8",
+    padding: 16,
     borderLeftWidth: 4,
-    borderLeftColor: "#DB2777",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    elevation: 2,
   },
   folderIconWrap: {
     width: 44,
     height: 44,
     borderRadius: 12,
-    backgroundColor: "#FCE7F3",
     alignItems: "center",
     justifyContent: "center",
   },
   folderCardBody: { flex: 1, gap: 2 },
-  folderCardTitle: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
-  folderCardCourse: { fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.primary },
+  folderCardTitle: { fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text },
+  folderCardCourse: { fontSize: 13, fontFamily: "Inter_500Medium", color: MISSION_FOLDER_COLOR },
   folderCardMeta: { fontSize: 12, fontFamily: "Inter_400Regular", color: Colors.light.textMuted, marginTop: 2 },
 
   // Topic chips
