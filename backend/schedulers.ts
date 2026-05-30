@@ -633,8 +633,8 @@ function startMediaTokenCleanupScheduler(db: DbClient, pool: DbPool): void {
       await runWithAdvisoryLock(pool, MEDIA_TOKEN_CLEANUP_LOCK_KEY, async () => {
         const result = await db.query(
           `DELETE FROM media_tokens
-           WHERE id IN (
-             SELECT id FROM media_tokens
+           WHERE token IN (
+             SELECT token FROM media_tokens
              WHERE expires_at < $1
              ORDER BY expires_at ASC
              LIMIT 2000
