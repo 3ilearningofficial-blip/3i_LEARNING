@@ -60,7 +60,7 @@ export default function ClassroomCompositePlayer({ liveClassId, enabled = true, 
           cameraVideoRef={cameraRef}
           pipPosition={normalizePipPosition(pipPosition)}
         />
-        <audio ref={audioRef as React.RefObject<HTMLAudioElement>} autoPlay playsInline />
+        <audio ref={audioRef as React.RefObject<HTMLAudioElement>} autoPlay />
 
         {isLoading || !connected || reconnecting ? (
           <View style={styles.loading}>
