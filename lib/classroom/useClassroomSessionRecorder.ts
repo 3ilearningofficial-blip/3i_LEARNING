@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useMediaRecorder } from "@/lib/useMediaRecorder";
 import type { Room } from "livekit-client";
 import { Track } from "livekit-client";
@@ -39,47 +39,59 @@ function buildRecordingStream(compositeStream: MediaStream | null, room: Room | 
 
 export function useClassroomSessionRecorder(enabled: boolean): ClassroomSessionRecorder {
   const recorder = useMediaRecorder();
+  const isRecordingRef = useRef(false);
   const compositeStreamRef = useRef<MediaStream | null>(null);
   const roomRef = useRef<Room | null>(null);
   const startedRef = useRef(false);
 
+  useEffect(() => {
+    isRecordingRef.current = recorder.isRecording;
+  }, [recorder.isRecording]);
+
   const startSessionRecording = useCallback(
     (compositeStream: MediaStream | null, room: Room | null) => {
-      if (!enabled || startedRef.current || recorder.isRecording) return;
+      if (!enabled || startedRef.current || isRecordingRef.current) return;
       compositeStreamRef.current = compositeStream;
       roomRef.current = room;
       const stream = buildRecordingStream(compositeStream, room);
-      if (!stream) return;
+      const hasLiveVideo = stream
+        ?.getVideoTracks()
+        .some((track) => track.readyState === "live");
+      if (!stream || !hasLiveVideo) return;
       recorder.startRecording(stream);
       startedRef.current = true;
     },
-    [enabled, recorder]
+    [enabled, recorder.startRecording]
   );
 
   const stopAndGetBlob = useCallback(async (): Promise<Blob | null> => {
-    if (!recorder.isRecording && !startedRef.current) return null;
+    if (!isRecordingRef.current && !startedRef.current) return null;
     try {
       return await recorder.stopRecording();
     } finally {
       startedRef.current = false;
+      isRecordingRef.current = false;
       compositeStreamRef.current = null;
       roomRef.current = null;
     }
-  }, [recorder]);
+  }, [recorder.stopRecording]);
 
   useEffect(() => {
     if (!enabled) return;
     return () => {
-      if (recorder.isRecording) {
+      if (isRecordingRef.current) {
         void recorder.stopRecording();
       }
     };
-  }, [enabled, recorder]);
+  }, [enabled, recorder.stopRecording]);
 
-  return {
-    isRecording: recorder.isRecording,
-    startSessionRecording,
-    stopAndGetBlob,
-    error: recorder.error,
-  };
+  return useMemo(
+    () => ({
+      isRecording: recorder.isRecording,
+      startSessionRecording,
+      stopAndGetBlob,
+      error: recorder.error,
+    }),
+    [recorder.isRecording, startSessionRecording, stopAndGetBlob, recorder.error]
+  );
 }

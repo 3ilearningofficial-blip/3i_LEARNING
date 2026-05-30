@@ -104,7 +104,9 @@ export default function AdminClassroomPage() {
 
   useLiveEngagementSse({
     liveClassId,
-    enabled: !!sessionActive && Platform.OS === "web",
+    // Recording-only sessions are private and have no student engagement panel.
+    // Opening the SSE endpoint there creates noisy 401s while the teacher is recording.
+    enabled: !!sessionActive && !isRecordingMode && Platform.OS === "web",
     isAdmin: true,
   });
 
@@ -167,7 +169,7 @@ export default function AdminClassroomPage() {
       sessionRecorder.startSessionRecording(compositeStream, liveKitRoomRef.current);
     }, 1500);
     return () => clearTimeout(t);
-  }, [isLive, sessionActive, sessionRecorder, compositeStream]);
+  }, [isLive, sessionActive, sessionRecorder.startSessionRecording, compositeStream]);
 
   const chatModeResolved = useMemo(
     () => (liveClass?.chat_mode as "public" | "private") || "public",

@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useMemo, useRef } from "react";
 
 export interface UseMediaRecorderReturn {
   isRecording: boolean;
@@ -82,10 +82,13 @@ export function useMediaRecorder(): UseMediaRecorderReturn {
     });
   }, []);
 
-  return {
-    isRecording,
-    startRecording,
-    stopRecording,
-    error,
-  };
+  return useMemo(
+    () => ({
+      isRecording,
+      startRecording,
+      stopRecording,
+      error,
+    }),
+    [isRecording, startRecording, stopRecording, error]
+  );
 }
