@@ -43,8 +43,13 @@ export function useLiveKitRoom(
   const recordingCompositeRef = useRef<ClassroomCompositeHandle | null>(null);
   const publishedTracksRef = useRef<PublishedTracks>({});
   const publishingRef = useRef(false);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectAttemptsRef = useRef(0);
+  const intentionalDisconnectRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
+  const [reconnectNonce, setReconnectNonce] = useState(0);
   const [micEnabled, setMicEnabled] = useState(true);
   const [camEnabled, setCamEnabled] = useState(true);
   const [compositeStream, setCompositeStream] = useState<MediaStream | null>(null);
@@ -124,6 +129,7 @@ export function useLiveKitRoom(
           boardEl,
           cameraId: prefs.cameraId,
           greenScreen: prefs.greenScreenEnabled,
+          pipPosition: prefs.pipPosition,
           fps: 30,
         });
         publishBundleRef.current = bundle;
@@ -149,6 +155,7 @@ export function useLiveKitRoom(
           boardEl,
           cameraId: prefs.cameraId,
           greenScreen: prefs.greenScreenEnabled,
+          pipPosition: prefs.pipPosition,
         });
         recordingCompositeRef.current = handle;
         setCompositeStream(handle.stream);
@@ -219,12 +226,40 @@ export function useLiveKitRoom(
     if (!enabled || !tokenPayload?.token || !tokenPayload.url) return;
 
     const gen = ++connectGenRef.current;
+    intentionalDisconnectRef.current = false;
     const room = new Room({ adaptiveStream: true, dynacast: true });
     roomRef.current = room;
 
     const onRemoteSubscribed = () => attachRemoteTeacher();
 
+    // LiveKit's own ICE-restart recovery (transient blips).
+    const onReconnecting = () => {
+      if (connectGenRef.current === gen) setReconnecting(true);
+    };
+    const onReconnected = () => {
+      if (connectGenRef.current !== gen) return;
+      setReconnecting(false);
+      setConnected(true);
+      setError(null);
+      reconnectAttemptsRef.current = 0;
+      attachRemoteTeacher();
+    };
+    // Hard drop: rebuild a fresh Room with capped backoff (unless we tore down on purpose).
+    const onDisconnected = () => {
+      if (connectGenRef.current !== gen) return;
+      setConnected(false);
+      if (intentionalDisconnectRef.current || !enabled) return;
+      const attempt = reconnectAttemptsRef.current++;
+      const delay = Math.min(1000 * 2 ** attempt, 15000);
+      setReconnecting(true);
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = setTimeout(() => setReconnectNonce((n) => n + 1), delay);
+    };
+
     room.on(RoomEvent.TrackSubscribed, onRemoteSubscribed);
+    room.on(RoomEvent.Reconnecting, onReconnecting);
+    room.on(RoomEvent.Reconnected, onReconnected);
+    room.on(RoomEvent.Disconnected, onDisconnected);
 
     const connect = async () => {
       try {
@@ -232,7 +267,9 @@ export function useLiveKitRoom(
         if (connectGenRef.current !== gen) return;
 
         setConnected(true);
+        setReconnecting(false);
         setError(null);
+        reconnectAttemptsRef.current = 0;
 
         const prefs = loadClassroomMediaDevices();
         if (tokenPayload.canPublish) {
@@ -254,17 +291,35 @@ export function useLiveKitRoom(
         }
       } catch (e: unknown) {
         if (connectGenRef.current !== gen) return;
-        setError(e instanceof Error ? e.message : "Failed to connect video");
         setConnected(false);
+        // Retry the initial connect too (e.g. server warm-up / transient 5xx).
+        if (!intentionalDisconnectRef.current && enabled) {
+          const attempt = reconnectAttemptsRef.current++;
+          const delay = Math.min(1000 * 2 ** attempt, 15000);
+          setReconnecting(true);
+          if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+          reconnectTimerRef.current = setTimeout(() => setReconnectNonce((n) => n + 1), delay);
+        } else {
+          setError(e instanceof Error ? e.message : "Failed to connect video");
+        }
       }
     };
 
     void connect();
 
     return () => {
+      intentionalDisconnectRef.current = true;
       if (connectGenRef.current === gen) {
         connectGenRef.current += 1;
       }
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+      room.off(RoomEvent.TrackSubscribed, onRemoteSubscribed);
+      room.off(RoomEvent.Reconnecting, onReconnecting);
+      room.off(RoomEvent.Reconnected, onReconnected);
+      room.off(RoomEvent.Disconnected, onDisconnected);
       void unpublishCompositeTracks();
       stopComposite();
       void room.disconnect();
@@ -272,7 +327,7 @@ export function useLiveKitRoom(
       setConnected(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, tokenPayload?.token, tokenPayload?.url, tokenPayload?.canPublish]);
+  }, [enabled, tokenPayload?.token, tokenPayload?.url, tokenPayload?.canPublish, reconnectNonce]);
 
   useEffect(() => {
     if (!connected || !boardEl || !tokenPayload?.canPublish) return;
@@ -338,6 +393,7 @@ export function useLiveKitRoom(
   return {
     error,
     connected,
+    reconnecting,
     micEnabled,
     camEnabled,
     compositeStream,

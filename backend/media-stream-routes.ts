@@ -66,6 +66,27 @@ async function r2GetWithRetry<T>(
   }
 }
 
+// Non-sensitive display/marketing image buckets. Files here (welcome-page photos,
+// avatars, course thumbnails) are shown on the public site and to every signed-in
+// user, so they are served WITHOUT auth. Course content lives under other prefixes
+// (lectures/, videos/, materials/, course-materials/, books/, live-class-recording/,
+// uploads/) and is never made public by this list.
+const PUBLIC_DISPLAY_MEDIA_PREFIXES = [
+  "images/",
+  "profile-images/",
+  "thumbnails/",
+  "course-thumbnails/",
+];
+// Second guard: only actual image files are exposed publicly, so a stray non-image
+// object accidentally placed under a display prefix is never served without auth.
+const PUBLIC_IMAGE_EXTENSION = /\.(png|jpe?g|webp|gif)$/i;
+
+function isPublicDisplayMediaKey(key: string): boolean {
+  const k = key.replace(/^\/+/, "").toLowerCase();
+  if (!PUBLIC_DISPLAY_MEDIA_PREFIXES.some((prefix) => k.startsWith(prefix))) return false;
+  return PUBLIC_IMAGE_EXTENSION.test(k);
+}
+
 async function streamMediaGet(
   req: Request,
   res: Response,
@@ -79,12 +100,19 @@ async function streamMediaGet(
     res.status(400).json({ message: "No file key" });
     return;
   }
+  // Public marketing/display images (welcome-page photos, avatars, course
+  // thumbnails) skip all auth so logged-out visitors AND students load them the
+  // same way admins do. Without this, /api/media/images/... returns 401 for guests
+  // and 403 for students (the key matches no enrolled course).
+  const isPublicAsset = isPublicDisplayMediaKey(canonicalKey);
   const mediaToken = req.query.token as string | undefined;
   let userId: number | null = null;
   let userRole = "student";
   let authenticatedViaMediaToken = false;
 
-  if (mediaToken) {
+  if (isPublicAsset) {
+    // No authentication or entitlement check — these are public assets.
+  } else if (mediaToken) {
     const MEDIA_TOKEN_MAX_ACCESS = 800;
     const nowMs = Date.now();
     let tokenResult: { rows: Array<{ user_id: number; access_count?: number }> };
@@ -243,7 +271,8 @@ async function streamMediaGet(
   }
 
   // Media token mint already validates entitlement for this user + key.
-  if (!authenticatedViaMediaToken && userRole !== "admin") {
+  // Public display assets are exempt — they were served above without auth.
+  if (!isPublicAsset && !authenticatedViaMediaToken && userRole !== "admin") {
     const keyVariants = mediaKeyMatchVariants(canonicalKey);
 
     const matResult = await db.query(
@@ -397,7 +426,10 @@ async function streamMediaGet(
     // re-requests range chunks repeatedly on page navigation. All other content stays
     // no-store so signed-token access controls aren't undermined.
     const isPdf = typeof headContentType === "string" && /pdf/i.test(headContentType);
-    res.setHeader("Cache-Control", isPdf ? "private, max-age=300" : "private, no-store");
+    res.setHeader(
+      "Cache-Control",
+      isPublicAsset ? "public, max-age=300" : isPdf ? "private, max-age=300" : "private, no-store"
+    );
     res.setHeader("Content-Disposition", "inline");
 
     const stream = obj.Body as any;
@@ -426,7 +458,10 @@ async function streamMediaGet(
     // cache instead of R2). Other media stays no-store so signed-token access
     // controls aren't undermined.
     const isPdf = typeof obj.ContentType === "string" && /pdf/i.test(obj.ContentType);
-    res.setHeader("Cache-Control", isPdf ? "private, max-age=300" : "private, no-store");
+    res.setHeader(
+      "Cache-Control",
+      isPublicAsset ? "public, max-age=300" : isPdf ? "private, max-age=300" : "private, no-store"
+    );
     res.setHeader("Content-Disposition", "inline");
 
     const stream = obj.Body as any;

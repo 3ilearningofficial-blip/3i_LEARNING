@@ -42,6 +42,7 @@ type Props = {
   startedAt?: number | null;
   isCompleted: boolean;
   chatMode?: string;
+  pipPosition?: string;
   topPadding: number;
   bottomPadding: number;
 };
@@ -54,6 +55,7 @@ export default function ClassroomStudentView({
   startedAt,
   isCompleted,
   chatMode = "public",
+  pipPosition,
   topPadding,
   bottomPadding,
 }: Props) {
@@ -271,7 +273,7 @@ export default function ClassroomStudentView({
             </View>
           ) : watchComposite ? (
             <>
-              <ClassroomCompositePlayer liveClassId={liveClassId} enabled />
+              <ClassroomCompositePlayer liveClassId={liveClassId} enabled pipPosition={pipPosition} />
               <ClassroomLiveOverlays liveClassId={liveClassId} sessionActive={isLive} />
               {!isWide && chatOpen ? renderChatPanel() : null}
             </>

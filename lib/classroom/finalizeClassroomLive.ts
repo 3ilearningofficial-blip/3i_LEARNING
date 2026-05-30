@@ -135,6 +135,11 @@ export async function finalizeClassroomLiveSession(
           subfolder
         );
         boardSnapshotUrl = publicUrl;
+      } catch (e) {
+        // Non-fatal: a failed snapshot upload (e.g. R2 CORS / transient) must not
+        // abort finalize — the class still ends and saves using the sync
+        // checkpoint / archive passed below.
+        console.warn("[Classroom] board snapshot upload failed; finalizing with checkpoint/archive:", e);
       } finally {
         URL.revokeObjectURL(objectUrl);
       }

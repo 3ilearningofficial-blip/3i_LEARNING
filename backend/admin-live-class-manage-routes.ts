@@ -66,7 +66,9 @@ export function registerAdminLiveClassManageRoutes({
 
   app.put("/api/admin/live-classes/:id", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { isLive, isCompleted, youtubeUrl, title, description, convertToLecture, sectionTitle, scheduledAt, notifyEmail, notifyBell, isFreePreview, streamType, chatMode, showViewerCount, recordingUrl, cfStreamUid, lectureSectionTitle, lectureSubfolderTitle } = req.body;
+      const { isLive, isCompleted, youtubeUrl, title, description, convertToLecture, sectionTitle, scheduledAt, notifyEmail, notifyBell, isFreePreview, streamType, chatMode, showViewerCount, recordingUrl, cfStreamUid, lectureSectionTitle, lectureSubfolderTitle, pipPosition } = req.body;
+      const normalizedPipPosition =
+        pipPosition === undefined ? undefined : pipPosition === "bottom-right" ? "bottom-right" : "top-right";
       const updates: string[] = [];
       const params: unknown[] = [];
       const add = (col: string, val: unknown) => {
@@ -87,6 +89,7 @@ export function registerAdminLiveClassManageRoutes({
       if (streamType !== undefined) add("stream_type", streamType);
       if (chatMode !== undefined) add("chat_mode", chatMode);
       if (showViewerCount !== undefined) add("show_viewer_count", showViewerCount);
+      if (normalizedPipPosition !== undefined) add("pip_position", normalizedPipPosition);
       if (recordingUrl !== undefined) add("recording_url", recordingUrl);
       if (cfStreamUid !== undefined) add("cf_stream_uid", cfStreamUid);
       if (lectureSectionTitle !== undefined) add("lecture_section_title", typeof lectureSectionTitle === "string" && lectureSectionTitle.trim() === "" ? null : lectureSectionTitle);
@@ -221,6 +224,7 @@ export function registerAdminLiveClassManageRoutes({
         if (streamType !== undefined) syncAdd("stream_type", streamType);
         if (chatMode !== undefined) syncAdd("chat_mode", chatMode);
         if (showViewerCount !== undefined) syncAdd("show_viewer_count", showViewerCount);
+        if (normalizedPipPosition !== undefined) syncAdd("pip_position", normalizedPipPosition);
         if (cfStreamUid !== undefined) syncAdd("cf_stream_uid", cfStreamUid);
         const cfStreamKey = (req.body as any).cfStreamKey;
         const cfStreamRtmpUrl = (req.body as any).cfStreamRtmpUrl;

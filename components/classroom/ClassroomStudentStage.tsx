@@ -1,9 +1,12 @@
 import React, { useEffect, useState } from "react";
 import { View, StyleSheet, Platform } from "react-native";
+import { DEFAULT_PIP_POSITION, type ClassroomPipPosition } from "@/lib/classroom/mediaDevices";
 
 type Props = {
   boardVideoRef: React.RefObject<HTMLVideoElement | null>;
   cameraVideoRef: React.RefObject<HTMLVideoElement | null>;
+  /** Corner where the teacher PiP sits; matches the recording composite. */
+  pipPosition?: ClassroomPipPosition;
 };
 
 const boardStyle = {
@@ -27,39 +30,32 @@ const pipBaseStyle: React.CSSProperties = {
   backgroundColor: "transparent",
 };
 
-function getInitialPipStyle(): React.CSSProperties {
-  if (Platform.OS !== "web" || typeof window === "undefined") {
-    return { ...pipBaseStyle, top: 12, right: 12 };
+function getPipStyleFor(position: ClassroomPipPosition): React.CSSProperties {
+  // Narrow phones get a larger bottom inset so the PiP clears the on-screen
+  // controls; the chosen corner (top vs bottom) always matches the recording.
+  const narrow =
+    Platform.OS === "web" && typeof window !== "undefined" && window.innerWidth < 768;
+  if (position === "bottom-right") {
+    return { ...pipBaseStyle, right: 12, bottom: narrow ? 72 : 12 };
   }
-  const landscape = window.matchMedia("(orientation: landscape)").matches;
-  const wide = window.innerWidth >= 768;
-  const topRight = wide || landscape;
-  return {
-    ...pipBaseStyle,
-    top: topRight ? 12 : undefined,
-    right: 12,
-    bottom: topRight ? undefined : 72,
-  };
+  return { ...pipBaseStyle, right: 12, top: 12 };
 }
 
-/** Student live stage: board full-bleed + responsive teacher PiP overlay. */
-export default function ClassroomStudentStage({ boardVideoRef, cameraVideoRef }: Props) {
-  const [pipStyle, setPipStyle] = useState<React.CSSProperties>(getInitialPipStyle);
+/** Student live stage: board full-bleed + teacher PiP overlay in the admin-chosen corner. */
+export default function ClassroomStudentStage({
+  boardVideoRef,
+  cameraVideoRef,
+  pipPosition = DEFAULT_PIP_POSITION,
+}: Props) {
+  const [pipStyle, setPipStyle] = useState<React.CSSProperties>(() => getPipStyleFor(pipPosition));
 
   useEffect(() => {
-    if (Platform.OS !== "web" || typeof window === "undefined") return;
+    if (Platform.OS !== "web" || typeof window === "undefined") {
+      setPipStyle(getPipStyleFor(pipPosition));
+      return;
+    }
 
-    const update = () => {
-      const landscape = window.matchMedia("(orientation: landscape)").matches;
-      const wide = window.innerWidth >= 768;
-      const topRight = wide || landscape;
-      setPipStyle({
-        ...pipBaseStyle,
-        top: topRight ? 12 : undefined,
-        right: 12,
-        bottom: topRight ? undefined : 72,
-      });
-    };
+    const update = () => setPipStyle(getPipStyleFor(pipPosition));
 
     update();
     window.addEventListener("resize", update);
@@ -69,7 +65,7 @@ export default function ClassroomStudentStage({ boardVideoRef, cameraVideoRef }:
       window.removeEventListener("resize", update);
       mq.removeEventListener("change", update);
     };
-  }, []);
+  }, [pipPosition]);
 
   if (Platform.OS !== "web") return null;
 

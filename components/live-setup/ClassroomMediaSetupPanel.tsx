@@ -8,6 +8,8 @@ import MediaDeviceDropdown from "./MediaDeviceDropdown";
 import {
   loadClassroomMediaDevices,
   saveClassroomMediaDevices,
+  normalizePipPosition,
+  type ClassroomPipPosition,
 } from "@/lib/classroom/mediaDevices";
 import Colors from "@/constants/colors";
 
@@ -18,9 +20,12 @@ type Props = {
 
 export default function ClassroomMediaSetupPanel({ webrtc, livekitConfigured }: Props) {
   const [greenScreen, setGreenScreen] = useState(false);
+  const [pipPosition, setPipPosition] = useState<ClassroomPipPosition>("top-right");
 
   useEffect(() => {
-    setGreenScreen(!!loadClassroomMediaDevices().greenScreenEnabled);
+    const prefs = loadClassroomMediaDevices();
+    setGreenScreen(!!prefs.greenScreenEnabled);
+    setPipPosition(normalizePipPosition(prefs.pipPosition));
   }, []);
 
   const toggleGreenScreen = () => {
@@ -28,6 +33,12 @@ export default function ClassroomMediaSetupPanel({ webrtc, livekitConfigured }: 
     setGreenScreen(next);
     const prefs = loadClassroomMediaDevices();
     saveClassroomMediaDevices({ ...prefs, greenScreenEnabled: next });
+  };
+
+  const selectPipPosition = (next: ClassroomPipPosition) => {
+    setPipPosition(next);
+    const prefs = loadClassroomMediaDevices();
+    saveClassroomMediaDevices({ ...prefs, pipPosition: next });
   };
 
   if (Platform.OS !== "web") {
@@ -83,6 +94,44 @@ export default function ClassroomMediaSetupPanel({ webrtc, livekitConfigured }: 
       <Text style={styles.hint}>
         Use a physical green backdrop behind you. Preview shows keyed video when this toggle is on.
       </Text>
+
+      <View style={styles.pipBlock}>
+        <View style={styles.toggleLabelWrap}>
+          <Ionicons name="person-circle-outline" size={18} color={Colors.light.primary} />
+          <Text style={styles.toggleLabel}>Teacher video corner</Text>
+        </View>
+        <View style={styles.segment}>
+          <Pressable
+            style={[styles.segmentBtn, pipPosition === "top-right" && styles.segmentBtnOn]}
+            onPress={() => selectPipPosition("top-right")}
+          >
+            <Ionicons
+              name="arrow-up"
+              size={14}
+              color={pipPosition === "top-right" ? "#fff" : Colors.light.textMuted}
+            />
+            <Text style={[styles.segmentText, pipPosition === "top-right" && styles.segmentTextOn]}>
+              Top right
+            </Text>
+          </Pressable>
+          <Pressable
+            style={[styles.segmentBtn, pipPosition === "bottom-right" && styles.segmentBtnOn]}
+            onPress={() => selectPipPosition("bottom-right")}
+          >
+            <Ionicons
+              name="arrow-down"
+              size={14}
+              color={pipPosition === "bottom-right" ? "#fff" : Colors.light.textMuted}
+            />
+            <Text style={[styles.segmentText, pipPosition === "bottom-right" && styles.segmentTextOn]}>
+              Bottom right
+            </Text>
+          </Pressable>
+        </View>
+        <Text style={styles.hint}>
+          Where you appear over the board for students and in the recording.
+        </Text>
+      </View>
     </View>
   );
 }
@@ -129,4 +178,24 @@ const styles = StyleSheet.create({
   },
   knobOn: { alignSelf: "flex-end" },
   hint: { fontSize: 11, color: Colors.light.textMuted, marginTop: 6, lineHeight: 15 },
+  pipBlock: { marginTop: 16, gap: 8 },
+  segment: {
+    flexDirection: "row",
+    gap: 8,
+    backgroundColor: "#F3F4F6",
+    borderRadius: 10,
+    padding: 4,
+  },
+  segmentBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: 9,
+    borderRadius: 8,
+  },
+  segmentBtnOn: { backgroundColor: Colors.light.primary },
+  segmentText: { fontSize: 12, fontWeight: "600", color: Colors.light.textMuted },
+  segmentTextOn: { color: "#fff" },
 });

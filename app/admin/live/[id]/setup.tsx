@@ -23,7 +23,7 @@ import SharedLiveSettings from "@/components/live-setup/SharedLiveSettings";
 import MediaDeviceSelectors from "@/components/live-setup/MediaDeviceSelectors";
 import ClassroomMediaSetupPanel from "@/components/live-setup/ClassroomMediaSetupPanel";
 import ClassroomSetupPreview from "@/components/live-setup/ClassroomSetupPreview";
-import { loadClassroomMediaDevices, saveClassroomMediaDevices } from "@/lib/classroom/mediaDevices";
+import { loadClassroomMediaDevices, saveClassroomMediaDevices, normalizePipPosition } from "@/lib/classroom/mediaDevices";
 import CloudflareSetupPreview, { type CfStreamInfo } from "@/components/live-setup/CloudflareSetupPreview";
 import RtmpSetupPreview from "@/components/live-setup/RtmpSetupPreview";
 import WebrtcSetupPreview from "@/components/live-setup/WebrtcSetupPreview";
@@ -120,6 +120,10 @@ export default function LiveSetupPage() {
         body.youtubeUrl = (youtubeUrl || liveClass?.youtube_url || "").trim();
       } else if (streamType === "cloudflare" && youtubeUrl.trim()) {
         body.youtubeUrl = youtubeUrl.trim();
+      }
+
+      if (streamType === "classroom" && Platform.OS === "web") {
+        body.pipPosition = normalizePipPosition(loadClassroomMediaDevices().pipPosition);
       }
 
       await apiRequest("PUT", `/api/admin/live-classes/${liveClassId}`, body);

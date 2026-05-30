@@ -461,7 +461,7 @@ export default function LiveClassScreen() {
     };
   }, [id]); // id is stable from route params — effectively runs once on mount
 
-  const { data: liveClassData } = useQuery<{ youtube_url: string; title: string; is_completed: boolean; is_live: boolean; started_at?: number; show_viewer_count: boolean; cf_playback_hls?: string; stream_type?: string; recording_url?: string; duration_minutes?: number; scheduled_at?: number; has_access?: boolean; is_enrolled?: boolean; course_id?: number; is_public?: boolean; chat_mode?: string }>({
+  const { data: liveClassData } = useQuery<{ youtube_url: string; title: string; is_completed: boolean; is_live: boolean; started_at?: number; show_viewer_count: boolean; cf_playback_hls?: string; stream_type?: string; recording_url?: string; duration_minutes?: number; scheduled_at?: number; has_access?: boolean; is_enrolled?: boolean; course_id?: number; is_public?: boolean; chat_mode?: string; pip_position?: string }>({
     queryKey: liveClassQueryKey(String(id)),
     refetchInterval: (query) => {
       if (!isScreenActive) return false;
@@ -1005,6 +1005,7 @@ export default function LiveClassScreen() {
           startedAt={Number(liveClassData?.started_at || 0) || null}
           isCompleted={!!liveClassData?.is_completed}
           chatMode={liveClassData?.chat_mode}
+          pipPosition={liveClassData?.pip_position}
           topPadding={topPadding}
           bottomPadding={bottomPadding}
         />

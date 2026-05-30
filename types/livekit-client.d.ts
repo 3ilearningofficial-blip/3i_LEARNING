@@ -7,11 +7,15 @@ declare module "livekit-client" {
     localParticipant: LocalParticipant;
     remoteParticipants: Map<string, RemoteParticipant>;
     on(event: RoomEvent, listener: () => void): void;
+    off(event: RoomEvent, listener: () => void): void;
   }
 
   export enum RoomEvent {
     TrackSubscribed = "trackSubscribed",
     LocalTrackPublished = "localTrackPublished",
+    Reconnecting = "reconnecting",
+    Reconnected = "reconnected",
+    Disconnected = "disconnected",
   }
 
   export namespace Track {

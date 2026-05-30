@@ -30,7 +30,8 @@ export async function startChromaCameraPublish(
   await sourceVideo.play();
 
   const canvas = document.createElement("canvas");
-  const ctx = canvas.getContext("2d");
+  // willReadFrequently: chroma keying calls getImageData every frame.
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
   if (!ctx) throw new Error("Canvas not supported");
 
   const outputStream = canvas.captureStream(30);

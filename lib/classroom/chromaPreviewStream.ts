@@ -22,7 +22,8 @@ export function attachChromaPreviewToVideo(
   }
 
   const chromaCanvas = document.createElement("canvas");
-  const chromaCtx = chromaCanvas.getContext("2d");
+  // willReadFrequently: chroma keying calls getImageData every frame.
+  const chromaCtx = chromaCanvas.getContext("2d", { willReadFrequently: true });
   const outCanvas = document.createElement("canvas");
   const outCtx = outCanvas.getContext("2d");
   if (!chromaCtx || !outCtx) {

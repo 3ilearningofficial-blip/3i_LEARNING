@@ -12,6 +12,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/context/AuthContext";
 import { getApiUrl, authFetch } from "@/lib/query-client";
+import { blurActiveElementWeb } from "@/lib/navigate-auth-back";
 import Colors from "@/constants/colors";
 
 const DEFAULT_FEATURES = [
@@ -339,10 +340,12 @@ export default function WelcomeScreen() {
         body: JSON.stringify({ fileKey: pankajMediaKey }),
       });
       if (!res.ok) {
-        // Session has expired or is invalid — invalidate the user cache so
-        // stale user.id no longer triggers auth-gated queries for logged-out
-        // visitors. This is non-blocking: welcome page keeps rendering.
-        if (res.status === 401 || res.status === 403) {
+        // Only a 401 means the session is gone — invalidate so stale user.id no
+        // longer triggers auth-gated queries. A 403 just means this user can't mint
+        // a token for this key (e.g. public welcome images): the session is still
+        // valid, so don't nuke it. Non-blocking either way — the welcome page falls
+        // back to the plain (now public) image URL and keeps rendering.
+        if (res.status === 401) {
           void qc.invalidateQueries({ queryKey: ["/api/auth/me"] });
         }
         return {};
@@ -381,11 +384,13 @@ export default function WelcomeScreen() {
   const features = getFeatures(cfg);
 
   const handleLogin = () => {
+    blurActiveElementWeb();
     if (user) router.replace("/(tabs)");
     else router.push("/(auth)/email-login" as any);
   };
 
   const handleSignup = () => {
+    blurActiveElementWeb();
     if (user) router.replace("/(tabs)");
     else router.push("/(auth)/login" as any);
   };
@@ -403,6 +408,7 @@ export default function WelcomeScreen() {
   };
 
   const handleOpenWebApp = () => {
+    blurActiveElementWeb();
     if (user) router.replace("/(tabs)");
     else router.push("/(auth)/email-login" as any);
   };

@@ -191,6 +191,8 @@ export const liveClasses = pgTable("live_classes", {
   recordingUrl: text("recording_url"),
   streamType: text("stream_type").default("rtmp"),
   showViewerCount: boolean("show_viewer_count").default(true),
+  // Teacher PiP corner for classroom student view + recording (migration 0050).
+  pipPosition: text("pip_position").default("top-right"),
   // Tombstone set by the lecture-delete handler so background finalize/sweep loops
   // do not resurrect the recording row a few seconds later.
   recordingDeletedAt: bigint("recording_deleted_at", { mode: "number" }),

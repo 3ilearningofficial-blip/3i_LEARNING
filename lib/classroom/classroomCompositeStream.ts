@@ -2,6 +2,7 @@ import type { Editor } from "tldraw";
 import { drawVideoWithChromaKey } from "./chromaKey";
 import { resolveBoardCaptureElement } from "./resolveBoardCaptureElement";
 import { COMPOSITE_WIDTH, COMPOSITE_HEIGHT } from "./slideConstants";
+import { normalizePipPosition, type ClassroomPipPosition } from "./mediaDevices";
 
 export { COMPOSITE_WIDTH, COMPOSITE_HEIGHT };
 
@@ -12,12 +13,21 @@ const DEFAULT_FPS = 30;
 
 export const CLASSROOM_SPLIT_STREAM = true;
 
+/** Top-left corner of the PiP rectangle for the chosen corner (always right-aligned). */
+export function computePipOrigin(position: ClassroomPipPosition): { pipX: number; pipY: number } {
+  const pipX = COMPOSITE_WIDTH - PIP_WIDTH - PIP_MARGIN;
+  const pipY =
+    position === "bottom-right" ? COMPOSITE_HEIGHT - PIP_HEIGHT - PIP_MARGIN : PIP_MARGIN;
+  return { pipX, pipY };
+}
+
 export type ClassroomStreamOptions = {
   editor?: Editor | null;
   boardEl: HTMLElement | null;
   cameraId?: string;
   greenScreen?: boolean;
   fps?: number;
+  pipPosition?: ClassroomPipPosition;
 };
 
 export type BoardStreamHandle = {
@@ -218,7 +228,7 @@ export async function startClassroomPublishBundle(
 
   const boardState = await setupBoardCapture(opts, fps);
   const chromaCanvas = opts.greenScreen ? document.createElement("canvas") : null;
-  const chromaCtx = chromaCanvas?.getContext("2d") ?? null;
+  const chromaCtx = chromaCanvas?.getContext("2d", { willReadFrequently: true }) ?? null;
 
   const boardCanvas = document.createElement("canvas");
   boardCanvas.width = COMPOSITE_WIDTH;
@@ -265,8 +275,7 @@ export async function startClassroomPublishBundle(
   recCanvas.height = COMPOSITE_HEIGHT;
   const recCtx = recCanvas.getContext("2d");
   if (!recCtx) throw new Error("Canvas not supported");
-  const pipX = COMPOSITE_WIDTH - PIP_WIDTH - PIP_MARGIN;
-  const pipY = PIP_MARGIN;
+  const { pipX, pipY } = computePipOrigin(normalizePipPosition(opts.pipPosition));
   let recRaf = 0;
   const recPaint = () => {
     drawBoardLayer(recCtx, boardState.captureEl, boardState.boardVideo);
@@ -343,7 +352,7 @@ export async function startClassroomCameraStream(opts: {
   const cameraVideo = await openCameraVideo(opts.cameraId);
 
   const chromaCanvas = opts.greenScreen ? document.createElement("canvas") : null;
-  const chromaCtx = chromaCanvas?.getContext("2d") ?? null;
+  const chromaCtx = chromaCanvas?.getContext("2d", { willReadFrequently: true }) ?? null;
 
   const outCanvas = document.createElement("canvas");
   outCanvas.width = PIP_WIDTH;

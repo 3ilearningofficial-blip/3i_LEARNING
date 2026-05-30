@@ -113,45 +113,53 @@ export async function uploadToR2(
   // =========================
   // 🚀 Upload using XHR (for progress)
   // =========================
-  await new Promise<void>((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
+  const putBlobOnce = () =>
+    new Promise<void>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
 
-    xhr.open("PUT", uploadUrl);
-    xhr.setRequestHeader("Content-Type", contentType);
+      xhr.open("PUT", uploadUrl);
+      xhr.setRequestHeader("Content-Type", contentType);
 
-    xhr.timeout = 1000 * 60 * 10;
+      xhr.timeout = 1000 * 60 * 10;
 
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable && onProgress) {
-        const percent = Math.round((e.loaded / e.total) * 100);
-        onProgress(percent);
-      }
-    };
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable && onProgress) {
+          const percent = Math.round((e.loaded / e.total) * 100);
+          onProgress(percent);
+        }
+      };
 
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        if (onProgress) onProgress(100);
-        resolve();
-      } else {
-        reject(
-          new Error(
-            `R2 upload failed: ${xhr.status}. Check R2 CORS settings.`
-          )
-        );
-      }
-    };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          if (onProgress) onProgress(100);
+          resolve();
+        } else {
+          reject(new Error(`R2 upload failed: ${xhr.status}. Check R2 CORS settings.`));
+        }
+      };
 
-    xhr.onerror = () =>
-      reject(
-        new Error(
-          "Upload failed — check Cloudflare R2 CORS configuration."
-        )
-      );
+      xhr.onerror = () =>
+        reject(new Error("Upload failed — check Cloudflare R2 CORS configuration."));
 
-    xhr.ontimeout = () => reject(new Error("Upload timeout"));
+      xhr.ontimeout = () => reject(new Error("Upload timeout"));
 
-    xhr.send(blob);
-  });
+      xhr.send(blob);
+    });
+
+  // One automatic retry: presigned PUTs can fail on a transient network blip or
+  // a brief R2 5xx. A deterministic CORS rejection will simply fail again and
+  // surface the same error, so the caller's fallback (board checkpoint/archive)
+  // still kicks in.
+  try {
+    await putBlobOnce();
+  } catch (firstErr) {
+    await new Promise((r) => setTimeout(r, 800));
+    try {
+      await putBlobOnce();
+    } catch {
+      throw firstErr;
+    }
+  }
 
   return { publicUrl, key };
 }

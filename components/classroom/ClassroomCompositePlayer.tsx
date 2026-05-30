@@ -3,20 +3,21 @@ import { View, StyleSheet, Platform, ActivityIndicator, Pressable, Text } from "
 import { useClassroomToken } from "@/lib/classroom/useClassroomToken";
 import { useLiveKitRoom } from "@/lib/classroom/useLiveKitRoom";
 import ClassroomStudentStage from "@/components/classroom/ClassroomStudentStage";
+import { normalizePipPosition } from "@/lib/classroom/mediaDevices";
 import Colors from "@/constants/colors";
 
 type Props = {
   liveClassId: string;
   enabled?: boolean;
+  /** Teacher PiP corner chosen by the admin; defaults to top-right. */
+  pipPosition?: string;
 };
 
 /** Full-area LiveKit player for students (board + responsive teacher PiP + audio). */
-export default function ClassroomCompositePlayer({ liveClassId, enabled = true }: Props) {
+export default function ClassroomCompositePlayer({ liveClassId, enabled = true, pipPosition }: Props) {
   const { data: tokenPayload, isLoading } = useClassroomToken(liveClassId, enabled);
-  const { setRemoteBoardEl, setRemoteCameraEl, setRemoteAudioEl, connected, error } = useLiveKitRoom(
-    tokenPayload,
-    enabled && Platform.OS === "web"
-  );
+  const { setRemoteBoardEl, setRemoteCameraEl, setRemoteAudioEl, connected, reconnecting, error } =
+    useLiveKitRoom(tokenPayload, enabled && Platform.OS === "web");
   const boardRef = useRef<HTMLVideoElement | null>(null);
   const cameraRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -52,22 +53,29 @@ export default function ClassroomCompositePlayer({ liveClassId, enabled = true }
   return (
     <View style={styles.wrap}>
       <View style={styles.frame}>
-        {isLoading || !connected ? (
+        {/* Keep the stage mounted across reconnects so the last frame and the
+            <video>/<audio> elements persist instead of flashing to black. */}
+        <ClassroomStudentStage
+          boardVideoRef={boardRef}
+          cameraVideoRef={cameraRef}
+          pipPosition={normalizePipPosition(pipPosition)}
+        />
+        <audio ref={audioRef as React.RefObject<HTMLAudioElement>} autoPlay playsInline />
+
+        {isLoading || !connected || reconnecting ? (
           <View style={styles.loading}>
             <ActivityIndicator size="large" color={Colors.light.primary} />
+            <Text style={styles.loadingText}>
+              {reconnecting && !isLoading ? "Reconnecting…" : "Connecting…"}
+            </Text>
           </View>
         ) : null}
-        {error ? null : (
-          <>
-            <ClassroomStudentStage boardVideoRef={boardRef} cameraVideoRef={cameraRef} />
-            <audio ref={audioRef as React.RefObject<HTMLAudioElement>} autoPlay playsInline />
-            {audioBlocked ? (
-              <Pressable style={styles.unmuteBtn} onPress={enableAudio}>
-                <Text style={styles.unmuteText}>Tap to enable sound</Text>
-              </Pressable>
-            ) : null}
-          </>
-        )}
+
+        {audioBlocked ? (
+          <Pressable style={styles.unmuteBtn} onPress={enableAudio}>
+            <Text style={styles.unmuteText}>Tap to enable sound</Text>
+          </Pressable>
+        ) : null}
       </View>
     </View>
   );
@@ -93,9 +101,11 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     justifyContent: "center",
     alignItems: "center",
+    gap: 10,
     zIndex: 2,
     backgroundColor: "rgba(0,0,0,0.5)",
   },
+  loadingText: { color: "#fff", fontSize: 13, fontWeight: "600" },
   unmuteBtn: {
     position: "absolute",
     bottom: 16,
