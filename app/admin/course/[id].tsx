@@ -770,7 +770,7 @@ export default function AdminCourseScreen() {
    * so the list refreshes with the persisted order.
    */
   const reorderMutation = useMutation({
-    mutationFn: async ({ itemType, items }: { itemType: "test" | "material"; items: Array<{ id: number; orderIndex: number }> }) => {
+    mutationFn: async ({ itemType, items }: { itemType: "test" | "material" | "lecture" | "folder"; items: Array<{ id: number; orderIndex: number }> }) => {
       await apiRequest("PATCH", `/api/admin/courses/${id}/reorder`, { itemType, items });
     },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] }); },
@@ -784,8 +784,8 @@ export default function AdminCourseScreen() {
    * update ALL items in the group in one request — preventing gaps.
    */
   const moveItem = (
-    itemType: "test" | "material",
-    groupItems: Array<TestItem | Material>,
+    itemType: "test" | "material" | "lecture" | "folder",
+    groupItems: Array<{ id: number }>,
     fromIdx: number,
     direction: "up" | "down"
   ) => {
@@ -801,8 +801,8 @@ export default function AdminCourseScreen() {
 
   /** Called by SortableList after a drag-and-drop reorder. */
   const reorderByDrag = (
-    itemType: "test" | "material",
-    groupItems: Array<TestItem | Material>,
+    itemType: "test" | "material" | "lecture" | "folder",
+    groupItems: Array<{ id: number }>,
     activeId: string | number,
     overId: string | number
   ) => {
@@ -1081,8 +1081,16 @@ export default function AdminCourseScreen() {
               );
             })}
             {/* Lectures without folder */}
-            {courseLectures.filter((l: any) => !l.section_title).map((lecture) => (
-              <View key={lecture.id} style={styles.itemCard}>
+            {(() => {
+              const ungroupedLectures = courseLectures.filter((l: any) => !l.section_title);
+              return (
+              <SortableList
+                ids={ungroupedLectures.map((l: any) => l.id)}
+                onReorder={(a, o) => reorderByDrag("lecture", ungroupedLectures, a, o)}
+              >
+              {ungroupedLectures.map((lecture: any) => (
+                <SortableItem key={lecture.id} id={lecture.id}>
+                <View style={styles.itemCard}>
                 {lecture.section_title && (
                   <View style={styles.itemSectionBadge}>
                     <Ionicons name="folder" size={12} color={Colors.light.primary} />
@@ -1127,7 +1135,11 @@ export default function AdminCourseScreen() {
                   </Pressable>
                 </View>
               </View>
-            ))}
+                </SortableItem>
+              ))}
+              </SortableList>
+              );
+            })()}
           </View>
         )}
 
