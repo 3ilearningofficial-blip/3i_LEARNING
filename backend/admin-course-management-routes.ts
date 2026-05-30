@@ -69,7 +69,7 @@ export function registerAdminCourseManagementRoutes({
 
   app.get("/api/admin/courses/:id/folders", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const result = await db.query("SELECT * FROM course_folders WHERE course_id = $1 ORDER BY created_at ASC", [req.params.id]);
+      const result = await db.query("SELECT * FROM course_folders WHERE course_id = $1 ORDER BY order_index ASC, created_at ASC", [req.params.id]);
       res.json(result.rows);
     } catch {
       res.status(500).json({ message: "Failed to fetch folders" });
@@ -181,8 +181,18 @@ export function registerAdminCourseManagementRoutes({
         return res.status(400).json({ message: "Invalid course id" });
       }
       const { itemType, items } = req.body as { itemType: string; items: Array<{ id: number; orderIndex: number }> };
-      if (itemType !== "test" && itemType !== "material") {
-        return res.status(400).json({ message: "itemType must be 'test' or 'material'" });
+      // Allowlist of reorderable item types -> their table. Hardcoded so user
+      // input is NEVER interpolated into SQL. All four tables share the same
+      // columns (id, order_index, course_id), so the UPDATE below is identical.
+      const TABLE_BY_TYPE: Record<string, string> = {
+        test: "tests",
+        material: "study_materials",
+        lecture: "lectures",
+        folder: "course_folders",
+      };
+      const table = TABLE_BY_TYPE[itemType];
+      if (!table) {
+        return res.status(400).json({ message: "itemType must be one of: test, material, lecture, folder" });
       }
       if (!Array.isArray(items) || items.length === 0) {
         return res.status(400).json({ message: "items must be a non-empty array" });
@@ -199,21 +209,14 @@ export function registerAdminCourseManagementRoutes({
       }
       if (ids.length === 0) return res.json({ success: true, updated: 0 });
 
-      if (itemType === "test") {
-        await db.query(
-          `UPDATE tests SET order_index = v.order_index
-           FROM (SELECT unnest($1::int[]) AS id, unnest($2::int[]) AS order_index) v
-           WHERE tests.id = v.id AND tests.course_id = $3`,
-          [ids, orders, courseId]
-        );
-      } else {
-        await db.query(
-          `UPDATE study_materials SET order_index = v.order_index
-           FROM (SELECT unnest($1::int[]) AS id, unnest($2::int[]) AS order_index) v
-           WHERE study_materials.id = v.id AND study_materials.course_id = $3`,
-          [ids, orders, courseId]
-        );
-      }
+      // `table` comes from the hardcoded TABLE_BY_TYPE allowlist above - safe to
+      // interpolate (table/column names cannot be passed as query parameters).
+      await db.query(
+        `UPDATE ${table} SET order_index = v.order_index
+         FROM (SELECT unnest($1::int[]) AS id, unnest($2::int[]) AS order_index) v
+         WHERE ${table}.id = v.id AND ${table}.course_id = $3`,
+        [ids, orders, courseId]
+      );
       res.json({ success: true, updated: ids.length });
     } catch (err) {
       console.error("[reorder] error:", err);

@@ -389,7 +389,7 @@ export function registerCourseAccessRoutes({
 
   app.get("/api/courses/:id/folders", async (req: Request, res: Response) => {
     try {
-      const result = await db.query("SELECT * FROM course_folders WHERE course_id = $1 AND is_hidden = FALSE ORDER BY created_at ASC", [req.params.id]);
+      const result = await db.query("SELECT * FROM course_folders WHERE course_id = $1 AND is_hidden = FALSE ORDER BY order_index ASC, created_at ASC", [req.params.id]);
       // BPR-03: Folder structure is the same for all users (visibility is pre-filtered by
       // is_hidden). Cache aggressively — folders change only when an admin edits the course.
       res.set("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
