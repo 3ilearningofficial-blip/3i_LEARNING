@@ -23,14 +23,18 @@ export async function updateCourseTestCounts(
   db: DbClient,
   courseId: number | string
 ): Promise<void> {
-  const id = String(courseId);
+  const id = Number(courseId);
+  if (!Number.isFinite(id)) {
+    console.warn("[Progress] updateCourseTestCounts skipped invalid courseId:", courseId);
+    return;
+  }
   await db.query(
     `UPDATE courses SET
-      total_tests    = (SELECT COUNT(*) FROM tests WHERE course_id = $1),
-      pyq_count      = (SELECT COUNT(*) FROM tests WHERE course_id = $1 AND test_type = 'pyq'),
-      mock_count     = (SELECT COUNT(*) FROM tests WHERE course_id = $1 AND test_type = 'mock'),
-      practice_count = (SELECT COUNT(*) FROM tests WHERE course_id = $1 AND test_type = 'practice')
-    WHERE id = $1`,
+      total_tests    = (SELECT COUNT(*) FROM tests WHERE course_id = $1::int),
+      pyq_count      = (SELECT COUNT(*) FROM tests WHERE course_id = $1::int AND test_type = 'pyq'),
+      mock_count     = (SELECT COUNT(*) FROM tests WHERE course_id = $1::int AND test_type = 'mock'),
+      practice_count = (SELECT COUNT(*) FROM tests WHERE course_id = $1::int AND test_type = 'practice')
+    WHERE id = $1::int`,
     [id]
   );
   await recomputeAllEnrollmentsProgressForCourse(db, id);
@@ -54,7 +58,11 @@ export async function updateCourseProgress(
   courseId: number | string,
   runTx?: <T>(fn: (tx: DbClient) => Promise<T>) => Promise<T>
 ): Promise<void> {
-  const cid = String(courseId);
+  const cid = Number(courseId);
+  if (!Number.isFinite(cid)) {
+    console.warn("[Progress] updateCourseProgress skipped invalid courseId:", courseId);
+    return;
+  }
 
   const doUpdate = async (client: DbClient) => {
     // Acquire a row-level lock on the enrollment to prevent concurrent progress
@@ -62,29 +70,29 @@ export async function updateCourseProgress(
     // If no enrollment exists yet, the lock is a no-op and we proceed safely.
     if (runTx) {
       await client.query(
-        "SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2 FOR UPDATE",
+        "SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2::int FOR UPDATE",
         [userId, cid]
       );
     }
 
     const totalLec = await client.query(
       `SELECT COUNT(*) FROM lectures
-       WHERE course_id = $1
+       WHERE course_id = $1::int
        AND (visible_after_at IS NULL OR visible_after_at <= EXTRACT(EPOCH FROM NOW()) * 1000)`,
       [cid]
     );
     const totalTests = await client.query(
-      "SELECT COUNT(*) FROM tests WHERE course_id = $1 AND is_published = TRUE",
+      "SELECT COUNT(*) FROM tests WHERE course_id = $1::int AND is_published = TRUE",
       [cid]
     );
     const completedLec = await client.query(
       `SELECT COUNT(*) FROM lecture_progress lp JOIN lectures l ON lp.lecture_id = l.id
-       WHERE lp.user_id = $1 AND l.course_id = $2 AND lp.is_completed = TRUE`,
+       WHERE lp.user_id = $1 AND l.course_id = $2::int AND lp.is_completed = TRUE`,
       [userId, cid]
     );
     const completedTests = await client.query(
       `SELECT COUNT(DISTINCT test_id) FROM test_attempts
-       WHERE user_id = $1 AND test_id IN (SELECT id FROM tests WHERE course_id = $2) AND status = 'completed'`,
+       WHERE user_id = $1 AND test_id IN (SELECT id FROM tests WHERE course_id = $2::int) AND status = 'completed'`,
       [userId, cid]
     );
 
@@ -93,7 +101,7 @@ export async function updateCourseProgress(
     const progress = total > 0 ? Math.round((completed / total) * 100) : 0;
 
     await client.query(
-      "UPDATE enrollments SET progress_percent = $1 WHERE user_id = $2 AND course_id = $3",
+      "UPDATE enrollments SET progress_percent = $1 WHERE user_id = $2 AND course_id = $3::int",
       [progress, userId, cid]
     );
   };
@@ -123,22 +131,26 @@ export async function recomputeAllEnrollmentsProgressForCourse(
   db: DbClient,
   courseId: number | string
 ): Promise<void> {
-  const cid = String(courseId);
+  const cid = Number(courseId);
+  if (!Number.isFinite(cid)) {
+    console.warn("[Progress] recomputeAllEnrollmentsProgressForCourse skipped invalid courseId:", courseId);
+    return;
+  }
   try {
     await db.query(
       `WITH
          -- Course-level totals — computed once, not once per student
          total_lec AS (
-           SELECT COUNT(*)::bigint AS n FROM lectures WHERE course_id = $1
+           SELECT COUNT(*)::bigint AS n FROM lectures WHERE course_id = $1::int
          ),
          total_tests AS (
-           SELECT COUNT(*)::bigint AS n FROM tests WHERE course_id = $1 AND is_published = TRUE
+           SELECT COUNT(*)::bigint AS n FROM tests WHERE course_id = $1::int AND is_published = TRUE
          ),
          -- Per-student lecture completions — single table scan across all students
          lec_done AS (
            SELECT lp.user_id, COUNT(*)::bigint AS n
            FROM lecture_progress lp
-           JOIN lectures l ON lp.lecture_id = l.id AND l.course_id = $1
+           JOIN lectures l ON lp.lecture_id = l.id AND l.course_id = $1::int
            WHERE lp.is_completed = TRUE
            GROUP BY lp.user_id
          ),
@@ -146,7 +158,7 @@ export async function recomputeAllEnrollmentsProgressForCourse(
          tests_done AS (
            SELECT ta.user_id, COUNT(DISTINCT ta.test_id)::bigint AS n
            FROM test_attempts ta
-           JOIN tests t ON ta.test_id = t.id AND t.course_id = $1 AND t.is_published = TRUE
+           JOIN tests t ON ta.test_id = t.id AND t.course_id = $1::int AND t.is_published = TRUE
            WHERE ta.status = 'completed'
            GROUP BY ta.user_id
          )
@@ -168,7 +180,7 @@ export async function recomputeAllEnrollmentsProgressForCourse(
          CROSS JOIN total_tests tt
          LEFT JOIN lec_done  ld ON ld.user_id = en.user_id
          LEFT JOIN tests_done td ON td.user_id = en.user_id
-         WHERE en.course_id::text = $1 AND (en.status = 'active' OR en.status IS NULL)
+         WHERE en.course_id = $1::int AND (en.status = 'active' OR en.status IS NULL)
        ) AS calc
        WHERE e.user_id = calc.user_id AND e.course_id = calc.course_id`,
       [cid]
