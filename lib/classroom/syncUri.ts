@@ -62,9 +62,8 @@ export async function buildClassroomSyncUriWithAuth(
     }
   }
 
-  // Do not use `sessionId` — reserved by @tldraw/sync useSync for its own query param.
-  const params = new URLSearchParams();
-  if (token) params.set("access_token", token);
-  const qs = params.toString();
-  return qs ? `${uri}?${qs}` : uri;
+  // tldraw's useSync rebuilds the socket URL and DROPS query params, and a browser
+  // cannot set an Authorization header on a WebSocket — so the (short-lived, signed)
+  // token must ride in the URL PATH, which tldraw preserves.
+  return token ? `${uri}/${encodeURIComponent(token)}` : uri;
 }

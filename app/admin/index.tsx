@@ -17,8 +17,6 @@ import Colors from "@/constants/colors";
 import { useAuth } from "@/context/AuthContext";
 import { fetch } from "expo/fetch";
 import BulkUploadModal from "@/components/BulkUploadModal";
-import SortableList from "@/components/admin/SortableList";
-import SortableItem from "@/components/admin/SortableItem";
 import { buildRecordingLectureSectionTitle, prefillLiveRecordingFormFields } from "@shared/recordingSection";
 import type { DeviceDeniedUserRow, UserRecord } from "./user-types";
 // AdminImageBoxInline is used throughout many sections — keep it eagerly loaded.
@@ -1001,70 +999,6 @@ export default function AdminDashboard() {
     },
   });
 
-  /**
-   * Drag-reorder for free (non-course) standalone content. `itemType`:
-   *   - "test"/"material": reorders FREE tests / study_materials (course_id IS NULL)
-   *   - "folder": reorders standalone_folders rows (test/material/mission)
-   * Web-only drag; native keeps server order. Persists via the dedicated
-   * /api/admin/standalone/reorder endpoint, then refreshes the relevant lists.
-   */
-  const standaloneReorderMutation = useMutation({
-    mutationFn: async ({ itemType, items }: { itemType: "test" | "material" | "mission" | "folder"; items: Array<{ id: number; orderIndex: number }> }) => {
-      await apiRequest("PATCH", "/api/admin/standalone/reorder", { itemType, items });
-    },
-    onSuccess: (_, vars) => {
-      if (vars.itemType === "test") qc.invalidateQueries({ queryKey: ["/api/admin/tests"] });
-      else if (vars.itemType === "material") qc.invalidateQueries({ queryKey: ["/api/study-materials"] });
-      else if (vars.itemType === "mission") qc.invalidateQueries({ queryKey: ["/api/admin/daily-missions"] });
-      else { refetchTestFolders(); refetchMaterialFolders(); refetchMissionFolders(); }
-    },
-    onError: () => Alert.alert("Error", "Failed to reorder items"),
-  });
-
-  const reorderStandaloneByDrag = (
-    itemType: "test" | "material" | "mission" | "folder",
-    groupItems: Array<{ id: number; type?: string }>,
-    activeId: string | number,
-    overId: string | number
-  ) => {
-    const from = groupItems.findIndex((i) => i.id === Number(activeId));
-    const to = groupItems.findIndex((i) => i.id === Number(overId));
-    if (from === -1 || to === -1 || from === to) return;
-    const reordered = [...groupItems];
-    const [moved] = reordered.splice(from, 1);
-    reordered.splice(to, 0, moved);
-    const payload = reordered.map((item, idx) => ({ id: item.id, orderIndex: idx }));
-
-    // Optimistic: reorder the cached list immediately so it doesn't snap back
-    // while the PATCH round-trips; the next refetch reconciles with the server.
-    const orderById = new Map(payload.map((p) => [p.id, p.orderIndex]));
-    const applyOrder = (arr: any[]) =>
-      arr
-        .map((it: any) => (orderById.has(it.id) ? { ...it, order_index: orderById.get(it.id) } : it))
-        .sort((a: any, b: any) => (a.order_index ?? 0) - (b.order_index ?? 0));
-
-    if (itemType === "test") {
-      qc.setQueryData<any[]>(["/api/admin/tests"], (prev) => (Array.isArray(prev) ? applyOrder(prev) : prev));
-    } else if (itemType === "mission") {
-      qc.setQueryData<any[]>(["/api/admin/daily-missions"], (prev) => (Array.isArray(prev) ? applyOrder(prev) : prev));
-    } else if (itemType === "material") {
-      qc.setQueryData<any>(["/api/study-materials", "free"], (prev: any) => {
-        if (Array.isArray(prev)) return applyOrder(prev);
-        if (prev?.materials && Array.isArray(prev.materials)) return { ...prev, materials: applyOrder(prev.materials) };
-        return prev;
-      });
-    } else if (itemType === "folder") {
-      const folderType = (groupItems[0] as any)?.type;
-      if (folderType) {
-        qc.setQueryData<any[]>(["/api/admin/standalone-folders", folderType], (prev) =>
-          Array.isArray(prev) ? applyOrder(prev) : prev
-        );
-      }
-    }
-
-    standaloneReorderMutation.mutate({ itemType, items: payload });
-  };
-
   const updateQuestionMutation = useMutation({
     mutationFn: async (data: any) => {
       await apiRequest("PUT", `/api/admin/questions/${data.id}`, data);
@@ -1759,31 +1693,9 @@ export default function AdminDashboard() {
                 <Ionicons name={isMission ? "flame-outline" : isTest ? "document-text-outline" : "folder-open-outline"} size={40} color={Colors.light.textMuted} />
                 <Text style={{ fontSize: 14, fontFamily: "Inter_500Medium", color: Colors.light.textMuted }}>No {isMission ? "missions" : isTest ? "tests" : "materials"} in this folder yet</Text>
               </View>
-            ) : isMission ? (
-              <View style={{ gap: 8 }}>
-                <SortableList
-                  ids={items.map((i: any) => i.id)}
-                  onReorder={(a, o) => reorderStandaloneByDrag("mission", items, a, o)}
-                >
-                  {items.map((item: any) => (
-                    <SortableItem key={item.id} id={item.id}>
-                      {renderAdminMissionCard(item)}
-                    </SortableItem>
-                  ))}
-                </SortableList>
-              </View>
             ) : (
               <View style={{ gap: 8 }}>
-                <SortableList
-                  ids={items.map((i: any) => i.id)}
-                  onReorder={(a, o) => reorderStandaloneByDrag(isTest ? "test" : "material", items, a, o)}
-                >
-                  {items.map((item: any) => (
-                    <SortableItem key={item.id} id={item.id}>
-                      {isTest ? renderTestCard(item) : renderMatCard(item)}
-                    </SortableItem>
-                  ))}
-                </SortableList>
+                {items.map((item: any) => isMission ? renderAdminMissionCard(item) : isTest ? renderTestCard(item) : renderMatCard(item))}
               </View>
             )}
           </View>
@@ -2295,9 +2207,9 @@ export default function AdminDashboard() {
                                         onPress={async () => {
                                           if (endingLiveGroupKey === g.key) return;
                                           const confirmed = Platform.OS === "web"
-                                            ? window.confirm("End this live class?")
+                                            ? window.confirm(g.isRecordingMode ? "End this recording?" : "End this live class?")
                                             : await new Promise<boolean>(resolve =>
-                                                Alert.alert("End Live Class", "Are you sure?", [
+                                                Alert.alert(g.isRecordingMode ? "End Recording" : "End Live Class", "Are you sure?", [
                                                   { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
                                                   { text: "End Class", style: "destructive", onPress: () => resolve(true) },
                                                 ])
@@ -2326,7 +2238,7 @@ export default function AdminDashboard() {
                                         }}>
                                         <Ionicons name="stop-circle" size={14} color="#fff" />
                                         <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#fff" }}>
-                                          {endingLiveGroupKey === g.key ? "Ending..." : "End Live"}
+                                          {endingLiveGroupKey === g.key ? "Ending..." : (g.isRecordingMode ? "End Rec" : "End Live")}
                                         </Text>
                                       </Pressable>
                                     </>
@@ -2408,15 +2320,10 @@ export default function AdminDashboard() {
               const noFolder = freeMaterials.filter((m: any) => !m.section_title || !folderNames.has(m.section_title));
               return (
                 <>
-                  <SortableList
-                    ids={materialFolders.map((f: any) => f.id)}
-                    onReorder={(a, o) => reorderStandaloneByDrag("folder", materialFolders, a, o)}
-                  >
                   {materialFolders.map((folder: any) => {
                     const folderMats = freeMaterials.filter((m: any) => m.section_title === folder.name);
                     return (
-                      <SortableItem key={folder.id} id={folder.id}>
-                      <View style={{ marginBottom: 8 }}>
+                      <View key={folder.id} style={{ marginBottom: 8 }}>
                         <Pressable style={[styles.adminCard, { flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: folder.is_hidden ? "#F3F4F6" : "#FEE2E2", borderLeftWidth: 4, borderLeftColor: "#DC2626", padding: 14 }]}
                           onPress={() => setOpenFolderView({ folder, type: "material" })}>
                           <Ionicons name={folder.is_hidden ? "folder-outline" : "folder"} size={22} color={folder.is_hidden ? Colors.light.textMuted : "#DC2626"} />
@@ -2430,21 +2337,10 @@ export default function AdminDashboard() {
                           </Pressable>
                         </Pressable>
                       </View>
-                      </SortableItem>
                     );
                   })}
-                  </SortableList>
                   {freeMaterials.length === 0 && materialFolders.length === 0 && <Text style={{ fontSize: 14, fontFamily: "Inter_500Medium", color: Colors.light.textMuted, textAlign: "center", marginTop: 30 }}>No free materials yet</Text>}
-                  <SortableList
-                    ids={noFolder.map((m: any) => m.id)}
-                    onReorder={(a, o) => reorderStandaloneByDrag("material", noFolder, a, o)}
-                  >
-                  {noFolder.map((mat: any) => (
-                    <SortableItem key={mat.id} id={mat.id}>
-                      {renderMatCard(mat)}
-                    </SortableItem>
-                  ))}
-                  </SortableList>
+                  {noFolder.map(renderMatCard)}
                 </>
               );
             })()}
@@ -3170,15 +3066,10 @@ export default function AdminDashboard() {
               const noFolder = adminTests.filter((t: any) => !t.folder_name || !folderNames.has(t.folder_name));
               return (
                 <>
-                  <SortableList
-                    ids={testFolders.map((f: any) => f.id)}
-                    onReorder={(a, o) => reorderStandaloneByDrag("folder", testFolders, a, o)}
-                  >
                   {testFolders.map((folder: any) => {
                     const folderTests = adminTests.filter((t: any) => t.folder_name === folder.name);
                     return (
-                      <SortableItem key={folder.id} id={folder.id}>
-                      <View style={{ marginBottom: 8 }}>
+                      <View key={folder.id} style={{ marginBottom: 8 }}>
                         <Pressable style={[styles.adminCard, { flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: folder.is_hidden ? "#F3F4F6" : "#EEF2FF", borderLeftWidth: 4, borderLeftColor: Colors.light.primary, padding: 14 }]}
                           onPress={() => setOpenFolderView({ folder, type: "test" })}>
                           <Ionicons name={folder.is_hidden ? "folder-outline" : "folder"} size={22} color={folder.is_hidden ? Colors.light.textMuted : Colors.light.primary} />
@@ -3192,21 +3083,10 @@ export default function AdminDashboard() {
                           </Pressable>
                         </Pressable>
                       </View>
-                      </SortableItem>
                     );
                   })}
-                  </SortableList>
                   {adminTests.length === 0 && testFolders.length === 0 && <View style={styles.infoCard}><Ionicons name="document-text-outline" size={20} color={Colors.light.primary} /><Text style={styles.infoText}>No tests yet.</Text></View>}
-                  <SortableList
-                    ids={noFolder.map((t: any) => t.id)}
-                    onReorder={(a, o) => reorderStandaloneByDrag("test", noFolder, a, o)}
-                  >
-                  {noFolder.map((test: any) => (
-                    <SortableItem key={test.id} id={test.id}>
-                      {renderTestCard(test)}
-                    </SortableItem>
-                  ))}
-                  </SortableList>
+                  {noFolder.map(renderTestCard)}
                 </>
               );
             })()}
@@ -3611,15 +3491,10 @@ export default function AdminDashboard() {
                 const noFolder = adminMissions.filter((m: any) => !m.folder_name || !folderNames.has(m.folder_name));
                 return (
                   <>
-                    <SortableList
-                      ids={missionFolders.map((f: any) => f.id)}
-                      onReorder={(a, o) => reorderStandaloneByDrag("folder", missionFolders, a, o)}
-                    >
                     {missionFolders.map((folder: any) => {
                       const folderMissions = adminMissions.filter((m: any) => m.folder_name === folder.name);
                       return (
-                        <SortableItem key={folder.id} id={folder.id}>
-                        <View style={{ marginBottom: 8 }}>
+                        <View key={folder.id} style={{ marginBottom: 8 }}>
                           <Pressable
                             style={[styles.adminCard, { flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: folder.is_hidden ? "#F3F4F6" : "#ECFDF5", borderLeftWidth: 4, borderLeftColor: "#0F766E", padding: 14 }]}
                             onPress={() => setOpenFolderView({ folder, type: "mission" })}
@@ -3635,10 +3510,8 @@ export default function AdminDashboard() {
                             </Pressable>
                           </Pressable>
                         </View>
-                        </SortableItem>
                       );
                     })}
-                    </SortableList>
                     {adminMissions.length === 0 && missionFolders.length === 0 && <View style={styles.infoCard}><Ionicons name="flame-outline" size={20} color={Colors.light.primary} /><Text style={styles.infoText}>No missions yet.</Text></View>}
                     {noFolder.map(renderAdminMissionCard)}
                   </>
