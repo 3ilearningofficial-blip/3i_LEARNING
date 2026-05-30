@@ -114,8 +114,8 @@ export function registerAdminUsersAndContentRoutes({
           scheduledAt,
           isLive || false,
           recMode ? false : (isPublic || false),  // recording sessions are never public
-          notifyEmail || false,
-          notifyBell || false,
+          recMode ? false : (notifyEmail || false),
+          recMode ? false : (notifyBell || false),
           isFreePreview || false,
           streamType || "rtmp",
           chatMode || "public",

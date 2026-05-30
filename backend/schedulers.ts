@@ -222,6 +222,7 @@ function startLiveClassNotificationScheduler(
          FROM live_classes lc
          WHERE lc.is_completed IS NOT TRUE
            AND lc.is_live IS NOT TRUE
+           AND COALESCE(lc.is_recording_mode, FALSE) = FALSE
            AND lc.notify_bell = TRUE
            AND lc.scheduled_at IS NOT NULL
            AND lc.scheduled_at BETWEEN $1 AND $2

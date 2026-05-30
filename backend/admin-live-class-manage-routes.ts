@@ -182,8 +182,9 @@ export function registerAdminLiveClassManageRoutes({
       const sql = "UPDATE live_classes SET " + updates.join(", ") + " WHERE id = " + whereIdx + " RETURNING *";
       const result = await db.query(sql, params);
       const liveClass = result.rows[0];
+      const isRecordingMode = liveClass?.is_recording_mode === true;
 
-      if (isLive === true && liveClass.course_id) {
+      if (isLive === true && !isRecordingMode && liveClass.course_id) {
         const recipients =
           (liveClass.is_free_preview === true || liveClass.is_public === true)
             ? await db.query("SELECT id AS user_id FROM users WHERE role = 'student'")
@@ -245,35 +246,37 @@ export function registerAdminLiveClassManageRoutes({
           )
           .catch(() => {});
 
-        const otherClasses = await db
-          .query("SELECT course_id FROM live_classes WHERE id != $1 AND title = $2 AND is_completed IS NOT TRUE AND course_id IS NOT NULL", [req.params.id, liveClass.title])
-          .catch(() => ({ rows: [] as any[] }));
-        const peerExpiresAt = Date.now() + 12 * 3600000;
-        const extraRecipients = new Set<number>();
-        for (const other of otherClasses.rows) {
-          const enrolled = await db.query("SELECT user_id FROM enrollments WHERE course_id = $1", [other.course_id]).catch(() => ({ rows: [] as any[] }));
-          for (const e of enrolled.rows) {
-            extraRecipients.add(Number(e.user_id));
+        if (!isRecordingMode) {
+          const otherClasses = await db
+            .query("SELECT course_id FROM live_classes WHERE id != $1 AND title = $2 AND is_completed IS NOT TRUE AND course_id IS NOT NULL", [req.params.id, liveClass.title])
+            .catch(() => ({ rows: [] as any[] }));
+          const peerExpiresAt = Date.now() + 12 * 3600000;
+          const extraRecipients = new Set<number>();
+          for (const other of otherClasses.rows) {
+            const enrolled = await db.query("SELECT user_id FROM enrollments WHERE course_id = $1", [other.course_id]).catch(() => ({ rows: [] as any[] }));
+            for (const e of enrolled.rows) {
+              extraRecipients.add(Number(e.user_id));
+            }
           }
-        }
-        const peerNotifTitle = "🔴 Live Class Started!";
-        const peerNotifMessage = '"' + liveClass.title + '" is live now. Join now!';
-        const peerNow = Date.now();
-        if (extraRecipients.size > 0) {
-          const peerIds = [...extraRecipients];
-          await db
-            .query(
-              `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
-               SELECT u, $2::text, $3::text, 'info', $4::bigint, $5::bigint
-               FROM unnest($1::int[]) AS u`,
-              [peerIds, peerNotifTitle, peerNotifMessage, peerNow, peerExpiresAt]
-            )
-            .catch(() => {});
-          await sendPushToUsers(db, peerIds, {
-            title: "🔴 Live Class Started!",
-            body: `"${liveClass.title}" is live now. Join now!`,
-            data: { type: "live_class_started", liveClassId: liveClass.id, courseId: liveClass.course_id || null },
-          });
+          const peerNotifTitle = "🔴 Live Class Started!";
+          const peerNotifMessage = '"' + liveClass.title + '" is live now. Join now!';
+          const peerNow = Date.now();
+          if (extraRecipients.size > 0) {
+            const peerIds = [...extraRecipients];
+            await db
+              .query(
+                `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
+                 SELECT u, $2::text, $3::text, 'info', $4::bigint, $5::bigint
+                 FROM unnest($1::int[]) AS u`,
+                [peerIds, peerNotifTitle, peerNotifMessage, peerNow, peerExpiresAt]
+              )
+              .catch(() => {});
+            await sendPushToUsers(db, peerIds, {
+              title: "🔴 Live Class Started!",
+              body: `"${liveClass.title}" is live now. Join now!`,
+              data: { type: "live_class_started", liveClassId: liveClass.id, courseId: liveClass.course_id || null },
+            });
+          }
         }
       }
 

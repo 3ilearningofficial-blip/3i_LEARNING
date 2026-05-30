@@ -1171,7 +1171,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   folderCardBody: { flex: 1, gap: 2 },
-  folderCardTitle: { fontSize: 16, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
+  folderCardTitle: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
   folderCardCourse: { fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.primary },
   folderCardMeta: { fontSize: 12, fontFamily: "Inter_400Regular", color: Colors.light.textMuted, marginTop: 2 },
 
