@@ -223,7 +223,7 @@ export default function DailyMissionScreen() {
 
   const openMissionHandledRef = useRef<string | null>(null);
 
-  const { data: missionFolders = [] } = useQuery<Array<{ id: number; name: string }>>({
+  const { data: missionFolders = [] } = useQuery<{ id: number; name: string }[]>({
     queryKey: ["/api/mission-folders"],
     queryFn: async () => {
       const baseUrl = getApiUrl();

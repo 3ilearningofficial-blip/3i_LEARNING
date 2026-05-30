@@ -48,7 +48,7 @@ export async function purgeStudentAccountById(db: DbExec, userId: number): Promi
          AND column_name = 'user_id'
          AND table_name <> 'users'`
     );
-    for (const row of discovered.rows as Array<{ table_name?: string }>) {
+    for (const row of discovered.rows as { table_name?: string }[]) {
       const tableName = String(row.table_name || "");
       if (!/^[a-z_][a-z0-9_]*$/.test(tableName)) continue;
       await safeDeleteByUser(tableName);

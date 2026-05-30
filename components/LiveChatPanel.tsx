@@ -99,7 +99,7 @@ export default function LiveChatPanel({
     queryFn: async () => {
       const res = await apiRequest("GET", `/api/admin/live-classes/${liveClassId}/raised-hands`, undefined);
       if (!res.ok) return [];
-      const rows = (await res.json()) as Array<Record<string, unknown>>;
+      const rows = (await res.json()) as Record<string, unknown>[];
       return rows.map((h) => ({
         id: Number(h.id),
         userId: Number(h.userId ?? h.user_id),

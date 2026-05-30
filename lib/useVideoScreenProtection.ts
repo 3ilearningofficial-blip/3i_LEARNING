@@ -11,7 +11,7 @@ export function useVideoScreenProtection(enabled: boolean = false) {
   useEffect(() => {
     if (!enabled || Platform.OS === "web") return;
 
-    let cleanupFunctions: Array<() => void> = [];
+    let cleanupFunctions: (() => void)[] = [];
 
     // iOS: Use expo-screen-capture
     if (Platform.OS === "ios") {

@@ -1009,7 +1009,7 @@ export default function AdminDashboard() {
    * /api/admin/standalone/reorder endpoint, then refreshes the relevant lists.
    */
   const standaloneReorderMutation = useMutation({
-    mutationFn: async ({ itemType, items }: { itemType: "test" | "material" | "mission" | "folder"; items: Array<{ id: number; orderIndex: number }> }) => {
+    mutationFn: async ({ itemType, items }: { itemType: "test" | "material" | "mission" | "folder"; items: { id: number; orderIndex: number }[] }) => {
       await apiRequest("PATCH", "/api/admin/standalone/reorder", { itemType, items });
     },
     onSuccess: (_, vars) => {
@@ -1023,7 +1023,7 @@ export default function AdminDashboard() {
 
   const reorderStandaloneByDrag = (
     itemType: "test" | "material" | "mission" | "folder",
-    groupItems: Array<{ id: number; type?: string }>,
+    groupItems: { id: number; type?: string }[],
     activeId: string | number,
     overId: string | number
   ) => {

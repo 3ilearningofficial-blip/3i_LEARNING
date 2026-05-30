@@ -40,7 +40,7 @@ export function metricsMiddleware(req: Request, res: Response, next: NextFunctio
 }
 
 export function getMetricsSnapshot() {
-  const routes: Array<{ key: string; count: number; errorRate: number; avgLatencyMs: number }> = [];
+  const routes: { key: string; count: number; errorRate: number; avgLatencyMs: number }[] = [];
   for (const [key, b] of routeMetrics) {
     routes.push({
       key,

@@ -4,7 +4,7 @@ type Queryable = {
   query: (
     text: string,
     params?: unknown[]
-  ) => Promise<{ rows: Array<Record<string, any>> }>;
+  ) => Promise<{ rows: Record<string, any>[] }>;
 };
 
 function parseIndexColumns(value: unknown): string[] {

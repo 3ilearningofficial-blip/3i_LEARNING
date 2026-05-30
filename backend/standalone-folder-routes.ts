@@ -51,7 +51,7 @@ export function registerStandaloneFolderRoutes({
    */
   app.patch("/api/admin/standalone/reorder", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { itemType, items } = req.body as { itemType: string; items: Array<{ id: number; orderIndex: number }> };
+      const { itemType, items } = req.body as { itemType: string; items: { id: number; orderIndex: number }[] };
       const TABLE_BY_TYPE: Record<string, { table: string; nonCourse: boolean }> = {
         test: { table: "tests", nonCourse: true },
         material: { table: "study_materials", nonCourse: true },

@@ -115,7 +115,7 @@ async function streamMediaGet(
   } else if (mediaToken) {
     const MEDIA_TOKEN_MAX_ACCESS = 800;
     const nowMs = Date.now();
-    let tokenResult: { rows: Array<{ user_id: number; access_count?: number }> };
+    let tokenResult: { rows: { user_id: number; access_count?: number }[] };
     try {
       // SEC-05: Enforce the access_count limit atomically inside the UPDATE WHERE clause.
       // Previously the UPDATE incremented unconditionally then checked after the fact —

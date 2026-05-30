@@ -770,7 +770,7 @@ export default function AdminCourseScreen() {
    * so the list refreshes with the persisted order.
    */
   const reorderMutation = useMutation({
-    mutationFn: async ({ itemType, items }: { itemType: "test" | "material" | "lecture" | "folder"; items: Array<{ id: number; orderIndex: number }> }) => {
+    mutationFn: async ({ itemType, items }: { itemType: "test" | "material" | "lecture" | "folder"; items: { id: number; orderIndex: number }[] }) => {
       await apiRequest("PATCH", `/api/admin/courses/${id}/reorder`, { itemType, items });
     },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] }); },
@@ -785,7 +785,7 @@ export default function AdminCourseScreen() {
    */
   const moveItem = (
     itemType: "test" | "material" | "lecture" | "folder",
-    groupItems: Array<{ id: number }>,
+    groupItems: { id: number }[],
     fromIdx: number,
     direction: "up" | "down"
   ) => {
@@ -808,7 +808,7 @@ export default function AdminCourseScreen() {
    */
   const reorderByDrag = (
     itemType: "test" | "material" | "lecture",
-    groupItems: Array<{ id: number }>,
+    groupItems: { id: number }[],
     activeId: string | number,
     overId: string | number
   ) => {
@@ -873,7 +873,7 @@ export default function AdminCourseScreen() {
     );
 
     try {
-      const items: Array<{ id: number; orderIndex: number }> = [];
+      const items: { id: number; orderIndex: number }[] = [];
       for (let i = 0; i < names.length; i += 1) {
         const name = names[i];
         let folderRow = safeFolders.find((df: any) => df.name === name && df.type === type);

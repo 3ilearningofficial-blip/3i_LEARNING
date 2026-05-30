@@ -12,7 +12,7 @@ type RegisterAdminQuestionBulkRoutesDeps = {
   PDFParse: any;
 };
 
-function parseQuestionsFromText(text: string): Array<{ questionText: string; optionA: string; optionB: string; optionC: string; optionD: string; correctOption: string }> {
+function parseQuestionsFromText(text: string): { questionText: string; optionA: string; optionB: string; optionC: string; optionD: string; correctOption: string }[] {
   type Q = { questionText: string; optionA: string; optionB: string; optionC: string; optionD: string; correctOption: string };
   const questions: Q[] = [];
 

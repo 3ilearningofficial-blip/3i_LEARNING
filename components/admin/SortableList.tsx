@@ -32,7 +32,7 @@ if (Platform.OS === "web") {
 }
 
 type Props = {
-  ids: Array<string | number>;
+  ids: (string | number)[];
   onReorder: (activeId: string | number, overId: string | number) => void;
   children: React.ReactNode;
 };

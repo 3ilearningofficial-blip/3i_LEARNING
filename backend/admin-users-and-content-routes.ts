@@ -226,7 +226,7 @@ export function registerAdminUsersAndContentRoutes({
 
       const ids: number[] = candidates.rows.map((r: any) => Number(r.id)).filter((n: number) => Number.isFinite(n));
       const deleted: number[] = [];
-      const failed: Array<{ id: number; error: string }> = [];
+      const failed: { id: number; error: string }[] = [];
 
       for (const id of ids) {
         try {

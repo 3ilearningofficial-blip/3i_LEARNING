@@ -180,7 +180,7 @@ export function registerAdminCourseManagementRoutes({
       if (!Number.isFinite(courseId) || courseId <= 0) {
         return res.status(400).json({ message: "Invalid course id" });
       }
-      const { itemType, items } = req.body as { itemType: string; items: Array<{ id: number; orderIndex: number }> };
+      const { itemType, items } = req.body as { itemType: string; items: { id: number; orderIndex: number }[] };
       // Allowlist of reorderable item types -> their table. Hardcoded so user
       // input is NEVER interpolated into SQL. All four tables share the same
       // columns (id, order_index, course_id), so the UPDATE below is identical.
