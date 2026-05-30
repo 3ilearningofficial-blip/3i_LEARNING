@@ -126,6 +126,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setUser(stored);
             return;
           }
+          // Don't hard-logout mid-playback on a transient anonymous response;
+          // keep the local session and let the next refresh re-validate.
+          if (Platform.OS === "web" && onProtectedRoute && stored) {
+            setUser(stored);
+            return;
+          }
           setUser(null);
           await removeStoredAuthUser();
           queryClient.clear();
@@ -199,6 +205,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           await removeStoredAuthUser();
           queryClient.clear();
         } else if (res.status === 401 || res.status === 403) {
+          // Keep the student signed in while they are actively on a lecture/
+          // live-class/material/admin page; a real logout still happens on the
+          // next refresh from a non-playback route.
+          if (Platform.OS === "web" && onProtectedRoute && stored) {
+            setUser(stored);
+            return;
+          }
           // Server explicitly rejected the session (blocked/deleted admin or expired token).
           // Do NOT restore cached state — log out immediately.
           await logout();
