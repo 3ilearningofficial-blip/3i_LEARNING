@@ -55,11 +55,12 @@ export function registerStandaloneFolderRoutes({
       const TABLE_BY_TYPE: Record<string, { table: string; nonCourse: boolean }> = {
         test: { table: "tests", nonCourse: true },
         material: { table: "study_materials", nonCourse: true },
+        mission: { table: "daily_missions", nonCourse: false },
         folder: { table: "standalone_folders", nonCourse: false },
       };
       const target = TABLE_BY_TYPE[itemType];
       if (!target) {
-        return res.status(400).json({ message: "itemType must be one of: test, material, folder" });
+        return res.status(400).json({ message: "itemType must be one of: test, material, mission, folder" });
       }
       if (!Array.isArray(items)) {
         return res.status(400).json({ message: "items must be an array" });

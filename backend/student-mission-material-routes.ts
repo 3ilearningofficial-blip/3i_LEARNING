@@ -65,7 +65,7 @@ export function registerStudentMissionMaterialRoutes({
       params.push(folderName);
       query += ` AND dm.folder_name = $${params.length}`;
     }
-    query += " ORDER BY dm.mission_date ASC LIMIT 200";
+    query += " ORDER BY COALESCE(dm.order_index, 0) ASC, dm.mission_date ASC LIMIT 200";
     const result = await db.query(query, params);
 
     if (user) {

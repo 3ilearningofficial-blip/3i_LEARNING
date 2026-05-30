@@ -92,7 +92,7 @@ export function registerAdminDailyMissionRoutes({
 
   app.get("/api/admin/daily-missions", requireAdmin, async (_req: Request, res: Response) => {
     try {
-      const result = await db.query("SELECT * FROM daily_missions ORDER BY mission_date DESC LIMIT 50");
+      const result = await db.query("SELECT * FROM daily_missions ORDER BY COALESCE(order_index, 0) ASC, mission_date DESC LIMIT 50");
       res.json(result.rows);
     } catch {
       res.status(500).json({ message: "Failed to fetch missions" });

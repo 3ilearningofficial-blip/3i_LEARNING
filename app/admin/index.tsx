@@ -1009,20 +1009,21 @@ export default function AdminDashboard() {
    * /api/admin/standalone/reorder endpoint, then refreshes the relevant lists.
    */
   const standaloneReorderMutation = useMutation({
-    mutationFn: async ({ itemType, items }: { itemType: "test" | "material" | "folder"; items: Array<{ id: number; orderIndex: number }> }) => {
+    mutationFn: async ({ itemType, items }: { itemType: "test" | "material" | "mission" | "folder"; items: Array<{ id: number; orderIndex: number }> }) => {
       await apiRequest("PATCH", "/api/admin/standalone/reorder", { itemType, items });
     },
     onSuccess: (_, vars) => {
       if (vars.itemType === "test") qc.invalidateQueries({ queryKey: ["/api/admin/tests"] });
       else if (vars.itemType === "material") qc.invalidateQueries({ queryKey: ["/api/study-materials"] });
+      else if (vars.itemType === "mission") qc.invalidateQueries({ queryKey: ["/api/admin/daily-missions"] });
       else { refetchTestFolders(); refetchMaterialFolders(); refetchMissionFolders(); }
     },
     onError: () => Alert.alert("Error", "Failed to reorder items"),
   });
 
   const reorderStandaloneByDrag = (
-    itemType: "test" | "material" | "folder",
-    groupItems: Array<{ id: number }>,
+    itemType: "test" | "material" | "mission" | "folder",
+    groupItems: Array<{ id: number; type?: string }>,
     activeId: string | number,
     overId: string | number
   ) => {
@@ -1033,6 +1034,34 @@ export default function AdminDashboard() {
     const [moved] = reordered.splice(from, 1);
     reordered.splice(to, 0, moved);
     const payload = reordered.map((item, idx) => ({ id: item.id, orderIndex: idx }));
+
+    // Optimistic: reorder the cached list immediately so it doesn't snap back
+    // while the PATCH round-trips; the next refetch reconciles with the server.
+    const orderById = new Map(payload.map((p) => [p.id, p.orderIndex]));
+    const applyOrder = (arr: any[]) =>
+      arr
+        .map((it: any) => (orderById.has(it.id) ? { ...it, order_index: orderById.get(it.id) } : it))
+        .sort((a: any, b: any) => (a.order_index ?? 0) - (b.order_index ?? 0));
+
+    if (itemType === "test") {
+      qc.setQueryData<any[]>(["/api/admin/tests"], (prev) => (Array.isArray(prev) ? applyOrder(prev) : prev));
+    } else if (itemType === "mission") {
+      qc.setQueryData<any[]>(["/api/admin/daily-missions"], (prev) => (Array.isArray(prev) ? applyOrder(prev) : prev));
+    } else if (itemType === "material") {
+      qc.setQueryData<any>(["/api/study-materials", "free"], (prev: any) => {
+        if (Array.isArray(prev)) return applyOrder(prev);
+        if (prev?.materials && Array.isArray(prev.materials)) return { ...prev, materials: applyOrder(prev.materials) };
+        return prev;
+      });
+    } else if (itemType === "folder") {
+      const folderType = (groupItems[0] as any)?.type;
+      if (folderType) {
+        qc.setQueryData<any[]>(["/api/admin/standalone-folders", folderType], (prev) =>
+          Array.isArray(prev) ? applyOrder(prev) : prev
+        );
+      }
+    }
+
     standaloneReorderMutation.mutate({ itemType, items: payload });
   };
 
@@ -1732,7 +1761,16 @@ export default function AdminDashboard() {
               </View>
             ) : isMission ? (
               <View style={{ gap: 8 }}>
-                {items.map((item: any) => renderAdminMissionCard(item))}
+                <SortableList
+                  ids={items.map((i: any) => i.id)}
+                  onReorder={(a, o) => reorderStandaloneByDrag("mission", items, a, o)}
+                >
+                  {items.map((item: any) => (
+                    <SortableItem key={item.id} id={item.id}>
+                      {renderAdminMissionCard(item)}
+                    </SortableItem>
+                  ))}
+                </SortableList>
               </View>
             ) : (
               <View style={{ gap: 8 }}>

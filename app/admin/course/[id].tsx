@@ -799,9 +799,15 @@ export default function AdminCourseScreen() {
     reorderMutation.mutate({ itemType, items: payload });
   };
 
-  /** Called by SortableList after a drag-and-drop reorder. */
+  /**
+   * Called by SortableList after a drag-and-drop reorder.
+   * Optimistically reorders the cached course detail so the item stays where
+   * it was dropped immediately (no snap-back while the slow PATCH round-trips),
+   * then persists. The server query (sorted by order_index) reconciles on the
+   * next refetch; on error the invalidation restores the true server order.
+   */
   const reorderByDrag = (
-    itemType: "test" | "material" | "lecture" | "folder",
+    itemType: "test" | "material" | "lecture",
     groupItems: Array<{ id: number }>,
     activeId: string | number,
     overId: string | number
@@ -813,6 +819,17 @@ export default function AdminCourseScreen() {
     const [moved] = reordered.splice(from, 1);
     reordered.splice(to, 0, moved);
     const payload = reordered.map((item, idx) => ({ id: item.id, orderIndex: idx }));
+
+    const orderById = new Map(payload.map((p) => [p.id, p.orderIndex]));
+    const key = itemType === "test" ? "tests" : itemType === "material" ? "materials" : "lectures";
+    qc.setQueryData<CourseDetail | undefined>(["/api/courses", String(id)], (prev) => {
+      if (!prev || !Array.isArray((prev as any)[key])) return prev;
+      const updated = (prev as any)[key]
+        .map((it: any) => (orderById.has(it.id) ? { ...it, order_index: orderById.get(it.id) } : it))
+        .sort((a: any, b: any) => (a.order_index ?? 0) - (b.order_index ?? 0));
+      return { ...prev, [key]: updated } as CourseDetail;
+    });
+
     reorderMutation.mutate({ itemType, items: payload });
   };
 
@@ -844,6 +861,17 @@ export default function AdminCourseScreen() {
     if (from === -1 || to === -1 || from === to) return;
     const [moved] = names.splice(from, 1);
     names.splice(to, 0, moved);
+
+    // Optimistic: reflect the new folder order immediately (no snap-back).
+    const orderByName = new Map(names.map((n, i) => [n, i] as const));
+    qc.setQueryData<any[]>(["/api/admin/courses", id, "folders"], (prev) =>
+      Array.isArray(prev)
+        ? prev.map((f: any) =>
+            f.type === type && orderByName.has(f.name) ? { ...f, order_index: orderByName.get(f.name) } : f
+          )
+        : prev
+    );
+
     try {
       const items: Array<{ id: number; orderIndex: number }> = [];
       for (let i = 0; i < names.length; i += 1) {
