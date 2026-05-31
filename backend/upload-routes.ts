@@ -160,6 +160,10 @@ export function registerUploadRoutes({
     "video/mp4", "video/webm", "video/quicktime",
     // Audio
     "audio/mpeg", "audio/mp4", "audio/ogg", "audio/wav",
+    // Data — interactive classroom board sync checkpoints (tldraw snapshots).
+    // Safe to allow: browsers render application/json inline as text and never
+    // execute it as script (unlike SVG/HTML, which remain excluded).
+    "application/json",
   ]);
 
   app.post("/api/upload/presign", requireAdmin, async (req: Request, res: Response) => {

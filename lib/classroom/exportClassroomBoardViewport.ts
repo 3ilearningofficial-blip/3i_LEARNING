@@ -1,4 +1,4 @@
-import type { Editor, TLPage, TLPageId } from "tldraw";
+import { Box, type Editor, type TLPage, type TLPageId } from "tldraw";
 import {
   EXPORT_SCALE,
   SLIDE_ASPECT,
@@ -7,7 +7,7 @@ import {
   getSlideBounds,
 } from "./slideConstants";
 
-type PageBoundsLike = { x: number; y: number; w: number; h: number };
+export type PageBoundsLike = { x: number; y: number; w: number; h: number };
 
 const CONTENT_PADDING = 24;
 
@@ -59,6 +59,32 @@ function boxToBounds(box: { x: number; y: number; w: number; h: number }): PageB
   return { x: box.x, y: box.y, w: box.w, h: box.h };
 }
 
+/**
+ * Page-coordinate bounds for the editor's CURRENT page, fitted to the board
+ * preview aspect (PPT-style slide frame). Shared by export and live capture so
+ * both render the identical region. Caller must set the current page first.
+ */
+export function getCurrentPageExportBounds(
+  editor: Editor,
+  boardEl: HTMLElement | null
+): PageBoundsLike {
+  const aspect = getBoardAspect(boardEl);
+  const useFixedSlide =
+    aspect === SLIDE_ASPECT &&
+    (boardEl?.getAttribute?.("data-classroom-slide-frame") === "true" ||
+      !!boardEl?.closest?.("[data-classroom-slide-frame]"));
+
+  if (useFixedSlide) {
+    return getSlideBounds();
+  }
+
+  const contentBounds = editor.getCurrentPageBounds();
+  if (contentBounds && contentBounds.w > 0 && contentBounds.h > 0) {
+    return fitBoundsToSlideAspect(boxToBounds(contentBounds), aspect);
+  }
+  return fitBoundsToSlideAspect({ x: 0, y: 0, w: SLIDE_LOGICAL_W, h: SLIDE_LOGICAL_H }, aspect);
+}
+
 async function createBlankSlidePng(width: number, height: number): Promise<Blob> {
   const canvas = document.createElement("canvas");
   canvas.width = width;
@@ -92,13 +118,12 @@ export async function exportClassroomBoardAllPagesPng(
   const pages = editor.getPages();
   if (pages.length === 0) return null;
 
-  const aspect = getBoardAspect(boardEl);
   const originalPageId = editor.getCurrentPageId();
   const exports: BoardPageExport[] = [];
 
   try {
     for (const page of pages) {
-      const slide = await exportSingleBoardPage(editor, page, aspect, boardEl);
+      const slide = await exportSingleBoardPage(editor, page, boardEl);
       if (slide) exports.push(slide);
     }
   } finally {
@@ -117,7 +142,6 @@ export async function exportClassroomBoardAllPagesPng(
 async function exportSingleBoardPage(
   editor: Editor,
   page: TLPage,
-  aspect: number,
   boardEl: HTMLElement | null
 ): Promise<BoardPageExport | null> {
   editor.setCurrentPage(page.id as TLPageId);
@@ -125,22 +149,7 @@ async function exportSingleBoardPage(
   const shapeIds = [...editor.getPageShapeIds(page.id)];
   const pageName = String((page as { name?: string }).name || "Page").trim() || "Page";
 
-  let bounds: PageBoundsLike;
-  const useFixedSlide =
-    aspect === SLIDE_ASPECT &&
-    (boardEl?.getAttribute?.("data-classroom-slide-frame") === "true" ||
-      !!boardEl?.closest?.("[data-classroom-slide-frame]"));
-
-  if (useFixedSlide) {
-    bounds = getSlideBounds();
-  } else {
-    const contentBounds = editor.getCurrentPageBounds();
-    if (contentBounds && contentBounds.w > 0 && contentBounds.h > 0) {
-      bounds = fitBoundsToSlideAspect(boxToBounds(contentBounds), aspect);
-    } else {
-      bounds = fitBoundsToSlideAspect({ x: 0, y: 0, w: SLIDE_LOGICAL_W, h: SLIDE_LOGICAL_H }, aspect);
-    }
-  }
+  const bounds = getCurrentPageExportBounds(editor, boardEl);
 
   const width = Math.max(1, Math.round(bounds.w * EXPORT_SCALE));
   const height = Math.max(1, Math.round(bounds.h * EXPORT_SCALE));
@@ -153,7 +162,7 @@ async function exportSingleBoardPage(
   try {
     const { blob } = await editor.toImage(shapeIds, {
       format: "png",
-      bounds: bounds as never,
+      bounds: Box.From(bounds),
       background: true,
       scale: EXPORT_SCALE,
       padding: 0,

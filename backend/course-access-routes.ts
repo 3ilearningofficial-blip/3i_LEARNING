@@ -454,18 +454,40 @@ export function registerCourseAccessRoutes({
 
         if ((course as any).isEnrolled) {
           const lpResult = await db.query(
-            `SELECT lp.lecture_id, lp.is_completed
+            `SELECT lp.lecture_id, lp.is_completed,
+                    COALESCE(lp.watch_percent, 0) AS watch_percent,
+                    COALESCE(lp.last_position_seconds, 0) AS last_position_seconds
              FROM lecture_progress lp
              JOIN lectures l ON l.id = lp.lecture_id
              WHERE lp.user_id = $1 AND l.course_id = $2`,
             [user.id, courseIdParam],
           );
-          const lpMap: Record<number, boolean> = {};
-          lpResult.rows.forEach((lp: { lecture_id: number; is_completed: boolean }) => {
-            lpMap[lp.lecture_id] = lp.is_completed;
-          });
-          lecturesResult.rows.forEach((l: Record<string, unknown>) => {
-            l.isCompleted = lpMap[l.id as number] || false;
+          const lpMap: Record<
+            number,
+            { is_completed: boolean; watch_percent: number; last_position_seconds: number }
+          > = {};
+          lpResult.rows.forEach(
+            (lp: {
+              lecture_id: number;
+              is_completed: boolean;
+              watch_percent: number;
+              last_position_seconds: number;
+            }) => {
+              lpMap[lp.lecture_id] = {
+                is_completed: lp.is_completed,
+                watch_percent: Number(lp.watch_percent) || 0,
+                last_position_seconds: Number(lp.last_position_seconds) || 0,
+              };
+            },
+          );
+          // Attach progress onto the array actually returned to the client
+          // (responseLectures are sanitized copies, so mutating lecturesResult.rows
+          // would not reach the response).
+          responseLectures.forEach((l: Record<string, unknown>) => {
+            const prog = lpMap[l.id as number];
+            l.isCompleted = prog?.is_completed || false;
+            l.watch_percent = prog?.watch_percent || 0;
+            l.last_position_seconds = prog?.last_position_seconds || 0;
           });
         }
       }

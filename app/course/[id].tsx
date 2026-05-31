@@ -1169,14 +1169,6 @@ setTimeout(function() {
                               </View>
                               {!canAccess ? <Ionicons name="lock-closed" size={18} color={Colors.light.textMuted} /> : null}
                             </Pressable>
-                            <DownloadButton
-                              itemType="lecture"
-                              itemId={lec.id}
-                              downloadAllowed={lec.download_allowed || false}
-                              isEnrolled={course.isEnrolled}
-                              title={lec.title || 'Lecture'}
-                              fileType={(lec as { pdf_url?: string; video_url?: string }).pdf_url && !(lec as { video_url?: string }).video_url ? 'pdf' : 'video'}
-                            />
                           </View>
                         );
                       })}

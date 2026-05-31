@@ -139,15 +139,15 @@ if (media) {
 // Notify React Native when ready
 if (player) {
   player.addEventListener('loadstart', function() {
-    if (cfStartAt > 0) { try { (player as any).currentTime = cfStartAt; } catch(e) {} }
+    if (cfStartAt > 0) { try { player.currentTime = cfStartAt; } catch(e) {} }
     if (window.ReactNativeWebView) {
       window.ReactNativeWebView.postMessage('ready');
     }
   });
   player.addEventListener('timeupdate', function() {
-    var ct = Math.floor((player as any).currentTime || 0);
+    var ct = Math.floor(player.currentTime || 0);
     if (Math.abs(ct - cfLastSaved) >= 10 && window.ReactNativeWebView) {
-      cfLastSaved = ct; window.ReactNativeWebView.postMessage(JSON.stringify({ event: 'timeupdate', currentTime: ct }));
+      cfLastSaved = ct; window.ReactNativeWebView.postMessage(JSON.stringify({ event: 'timeupdate', currentTime: ct, duration: Math.floor(player.duration || 0) }));
     }
   });
   
@@ -213,7 +213,7 @@ if (v0) v0.addEventListener('contextmenu', function(e) { e.preventDefault(); ret
     if (!v.paused && !v.ended) {
       var ct = Math.floor(v.currentTime);
       if (Math.abs(ct - lastSaved) >= 10 && window.ReactNativeWebView) {
-        lastSaved = ct; window.ReactNativeWebView.postMessage(JSON.stringify({ event: 'timeupdate', currentTime: ct }));
+        lastSaved = ct; window.ReactNativeWebView.postMessage(JSON.stringify({ event: 'timeupdate', currentTime: ct, duration: Math.floor(v.duration || 0) }));
       }
     }
   }, 5000);
@@ -324,7 +324,7 @@ document.getElementById('tt').textContent=fm(c)+' / '+fm(d);
 var l=p.getVideoLoadedFraction?p.getVideoLoadedFraction():0;
 document.getElementById('bf').style.width=(l*100)+'%';}requestAnimationFrame(up);}
 function tickPos(){if(!rdy||!p)return;var ct=Math.floor(p.getCurrentTime()||0);
-if(Math.abs(ct-lastSavedTime)>=10&&window.ReactNativeWebView){lastSavedTime=ct;window.ReactNativeWebView.postMessage(JSON.stringify({event:'timeupdate',currentTime:ct}));}
+if(Math.abs(ct-lastSavedTime)>=10&&window.ReactNativeWebView){lastSavedTime=ct;window.ReactNativeWebView.postMessage(JSON.stringify({event:'timeupdate',currentTime:ct,duration:Math.floor((p.getDuration&&p.getDuration())||0)}));}
 if(p.getPlayerState()===1)setTimeout(tickPos,5000);}
 function sc(){document.getElementById('ctl').className='ctl';clearTimeout(ht);
 ht=setTimeout(function(){if(p&&p.getPlayerState()===1)document.getElementById('ctl').className='ctl h';},4000);}
@@ -345,10 +345,10 @@ function WebYouTubePlayer({ videoId, onReady }: { videoId: string; onReady: () =
   );
 }
 
-function WebCloudflareStreamPlayer({ videoId, onReady }: { videoId: string; onReady: () => void }) {
+function WebCloudflareStreamPlayer({ videoId, resumeAt = 0, onReady }: { videoId: string; resumeAt?: number; onReady: () => void }) {
   return (
     <iframe
-      srcDoc={buildCloudflareStreamHtml(videoId)}
+      srcDoc={buildCloudflareStreamHtml(videoId, undefined, resumeAt)}
       style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" } as any}
       allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
       onLoad={onReady}
@@ -358,18 +358,26 @@ function WebCloudflareStreamPlayer({ videoId, onReady }: { videoId: string; onRe
 
 function WebDirectVideoPlayer({
   url,
+  resumeAt = 0,
   onReady,
   onError,
+  onPosition,
 }: {
   url: string;
+  resumeAt?: number;
   onReady: () => void;
   onError: () => void;
+  /** Reports playback position so the parent can persist resume + watch percent. */
+  onPosition?: (currentTime: number, duration: number) => void;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const calledRef = useRef(false);
   const didAutoplay = useRef(false);
+  const didSeekRef = useRef(false);
+  const lastReportRef = useRef(0);
   useEffect(() => {
     didAutoplay.current = false;
+    didSeekRef.current = false;
   }, [url]);
   useEffect(() => {
     if (!calledRef.current) {
@@ -377,6 +385,18 @@ function WebDirectVideoPlayer({
       onReady();
     }
   }, [onReady]);
+  const seekToResume = (v: HTMLVideoElement) => {
+    if (didSeekRef.current) return;
+    didSeekRef.current = true;
+    const target = resumeAt > 5 ? resumeAt - 2 : resumeAt;
+    if (target > 0 && Number.isFinite(v.duration) && target < v.duration) {
+      try {
+        v.currentTime = target;
+      } catch {
+        /* seek not ready */
+      }
+    }
+  };
   return (
     <video
       ref={videoRef as any}
@@ -388,13 +408,15 @@ function WebDirectVideoPlayer({
       disableRemotePlayback
       style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "contain", backgroundColor: "#000" } as any}
       onContextMenu={(e: any) => e.preventDefault()}
-      onLoadedMetadata={() => {
+      onLoadedMetadata={(e) => {
+        seekToResume(e.currentTarget);
         if (!calledRef.current) {
           calledRef.current = true;
           onReady();
         }
       }}
       onCanPlay={(e) => {
+        seekToResume(e.currentTarget);
         if (didAutoplay.current) return;
         didAutoplay.current = true;
         const v = e.currentTarget;
@@ -407,6 +429,16 @@ function WebDirectVideoPlayer({
             v.muted = true;
             v.play().catch(() => {});
           });
+      }}
+      onTimeUpdate={(e) => {
+        if (!onPosition) return;
+        const v = e.currentTarget;
+        if (v.paused || v.ended) return;
+        const ct = Math.floor(v.currentTime || 0);
+        if (ct > 0 && Math.abs(ct - lastReportRef.current) >= 5) {
+          lastReportRef.current = ct;
+          onPosition(ct, Math.floor(v.duration || 0));
+        }
       }}
       onError={() => onError()}
       onEnded={() => {
@@ -684,6 +716,22 @@ export default function LectureScreen() {
     void markComplete({ auto: true });
   };
 
+  // Persist resume position + a real watch percent (never marks complete here).
+  const persistPlaybackPosition = useCallback(
+    (pos: number, duration: number) => {
+      if (!(pos > 0) || Math.abs(pos - lastSavedPositionRef.current) < 5) return;
+      lastSavedPositionRef.current = pos;
+      const watchPercent =
+        duration > 0 ? Math.max(0, Math.min(100, Math.round((pos / duration) * 100))) : 0;
+      apiRequest("POST", `/api/lectures/${id}/progress`, {
+        watchPercent,
+        isCompleted: false,
+        lastPositionSeconds: pos,
+      }).catch(() => {});
+    },
+    [id],
+  );
+
   const triggerPlayerRetry = useCallback((auto = false) => {
     setHasError(false);
     setIsLoading(true);
@@ -744,8 +792,11 @@ export default function LectureScreen() {
         const pos = Math.floor(data.currentTime);
         if (pos > 0 && Math.abs(pos - lastSavedPositionRef.current) >= 10) {
           lastSavedPositionRef.current = pos;
+          const duration = Math.floor(Number(data.duration) || 0);
+          const watchPercent =
+            duration > 0 ? Math.max(0, Math.min(100, Math.round((pos / duration) * 100))) : 0;
           apiRequest("POST", `/api/lectures/${id}/progress`, {
-            watchPercent: 0, isCompleted: false, lastPositionSeconds: pos,
+            watchPercent, isCompleted: false, lastPositionSeconds: pos,
           }).catch(() => {});
         }
       } else if (data.event === 'pause' || data.event === 'ended') {
@@ -782,16 +833,6 @@ export default function LectureScreen() {
             <Text style={styles.lectureTitleText} numberOfLines={1}>{title || "Lecture"}</Text>
           </View>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            {lectureData && (
-              <DownloadButton
-                itemType="lecture"
-                itemId={parseInt(id)}
-                downloadAllowed={lectureData.download_allowed || false}
-                isEnrolled={true}
-                title={lectureData.title || title || 'Lecture'}
-                fileType={lectureData.pdf_url && !lectureData.video_url ? 'pdf' : 'video'}
-              />
-            )}
             {isCompleted && (
               <View style={styles.completedBadge}>
                 <Ionicons name="checkmark-circle" size={20} color="#22C55E" />
@@ -877,7 +918,7 @@ export default function LectureScreen() {
         {!hasError && canMountPlayer && videoId && Platform.OS === "web" ? (
           <WebYouTubePlayer key={`yt-web-${playerRetryTick}`} videoId={videoId} onReady={() => setIsLoading(false)} />
         ) : !hasError && canMountPlayer && isStreamId && Platform.OS === "web" ? (
-          <WebCloudflareStreamPlayer key={`cf-web-${playerRetryTick}`} videoId={playbackUrl} onReady={() => setIsLoading(false)} />
+          <WebCloudflareStreamPlayer key={`cf-web-${playerRetryTick}`} videoId={playbackUrl} resumeAt={resumeAt} onReady={() => setIsLoading(false)} />
         ) : !hasError && canMountPlayer && isCfHls && Platform.OS === "web" ? (
           <iframe
             key={`hls-web-${playerRetryTick}`}
@@ -945,8 +986,10 @@ export default function LectureScreen() {
           <WebDirectVideoPlayer
             key={`direct-web-${playerRetryTick}`}
             url={playbackUrl}
+            resumeAt={resumeAt}
             onReady={() => setIsLoading(false)}
             onError={handlePlaybackError}
+            onPosition={persistPlaybackPosition}
           />
         ) : !hasError && canMountPlayer && isDirect && Platform.OS !== "web" ? (
           <WebView
@@ -1001,24 +1044,43 @@ export default function LectureScreen() {
       >
         <Text style={styles.lectureInfoTitle}>{title || "Lecture"}</Text>
 
-        {!isCompleted && (
-          <Pressable
-            style={({ pressed }) => [styles.completeBtn, pressed && { opacity: 0.9 }]}
-            onPress={() => void markComplete()}
-          >
-            <LinearGradient colors={["#22C55E", "#16A34A"]} style={styles.completeBtnGradient}>
-              <Ionicons name="checkmark-circle" size={20} color="#fff" />
-              <Text style={styles.completeBtnText}>Mark as Complete</Text>
-            </LinearGradient>
-          </Pressable>
-        )}
+        <View style={styles.actionRow}>
+          {lectureData && (
+            <DownloadButton
+              itemType="lecture"
+              itemId={parseInt(id)}
+              downloadAllowed={lectureData.download_allowed || false}
+              isEnrolled={true}
+              title={lectureData.title || title || "Lecture"}
+              fileType={lectureData.pdf_url && !lectureData.video_url ? "pdf" : "video"}
+            />
+          )}
 
-        {isCompleted && (
-          <View style={styles.completedBanner}>
-            <Ionicons name="checkmark-circle" size={24} color="#22C55E" />
-            <Text style={styles.completedBannerText}>Lecture completed!</Text>
-          </View>
-        )}
+          <Pressable
+            style={({ pressed }) => [styles.missionsBtn, pressed && { opacity: 0.85 }]}
+            onPress={() => router.push("/(tabs)/daily-mission" as any)}
+          >
+            <Ionicons name="flag" size={18} color={Colors.light.primary} />
+            <Text style={styles.missionsBtnText}>Missions</Text>
+          </Pressable>
+
+          {!isCompleted ? (
+            <Pressable
+              style={({ pressed }) => [styles.completeBtn, { flex: 1 }, pressed && { opacity: 0.9 }]}
+              onPress={() => void markComplete()}
+            >
+              <LinearGradient colors={["#22C55E", "#16A34A"]} style={styles.completeBtnGradient}>
+                <Ionicons name="checkmark-circle" size={20} color="#fff" />
+                <Text style={styles.completeBtnText}>Mark as Complete</Text>
+              </LinearGradient>
+            </Pressable>
+          ) : (
+            <View style={[styles.completedBanner, { flex: 1 }]}>
+              <Ionicons name="checkmark-circle" size={24} color="#22C55E" />
+              <Text style={styles.completedBannerText}>Lecture completed!</Text>
+            </View>
+          )}
+        </View>
       </ScrollView>
         </>
       )}
@@ -1080,6 +1142,19 @@ const styles = StyleSheet.create({
   infoSection: { flex: 1, backgroundColor: Colors.light.background },
   infoContent: { padding: 20, gap: 14 },
   lectureInfoTitle: { fontSize: 18, fontFamily: "Inter_700Bold", color: Colors.light.text },
+  actionRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  missionsBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: "#fff",
+  },
+  missionsBtnText: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.primary },
   completeBtn: { borderRadius: 14, overflow: "hidden" },
   completeBtnGradient: { flexDirection: "row", alignItems: "center", justifyContent: "center", paddingVertical: 14, gap: 8 },
   completeBtnText: { fontSize: 15, fontFamily: "Inter_600SemiBold", color: "#fff" },

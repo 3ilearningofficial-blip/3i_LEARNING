@@ -38,6 +38,8 @@ interface Lecture {
   pdf_url?: string;
   download_allowed?: boolean;
   created_at?: number;
+  watch_percent?: number;
+  last_position_seconds?: number;
 }
 
 interface CourseTest {
@@ -436,7 +438,12 @@ export default function CourseFolderScreen() {
                 <View style={[styles.lectureNumber, lecture.isCompleted && styles.lectureNumberDone]}>
                   {lecture.isCompleted ? <Ionicons name="checkmark" size={16} color="#fff" /> : <Text style={styles.lectureNumberText}>{idx + 1}</Text>}
                 </View>
-                <LectureListPreview videoUrl={lecture.video_url} pdfUrl={lecture.pdf_url} />
+                <LectureListPreview
+                  videoUrl={lecture.video_url}
+                  pdfUrl={lecture.pdf_url}
+                  progressPercent={lecture.watch_percent}
+                  completed={lecture.isCompleted}
+                />
                 <View style={styles.lectureInfo}>
                   <Text style={styles.lectureTitle}>{lecture.title}</Text>
                   <View style={styles.lectureMetaRow}>
@@ -459,14 +466,6 @@ export default function CourseFolderScreen() {
                 </View>
                 {isLocked ? <Ionicons name="lock-closed" size={18} color={Colors.light.textMuted} /> : null}
               </Pressable>
-              <DownloadButton
-                itemType="lecture"
-                itemId={lecture.id}
-                downloadAllowed={lecture.download_allowed || false}
-                isEnrolled={course.isEnrolled}
-                title={lecture.title || "Lecture"}
-                fileType={lecture.pdf_url && !lecture.video_url ? "pdf" : "video"}
-              />
             </View>
           );
         })}
