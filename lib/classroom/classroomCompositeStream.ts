@@ -45,6 +45,8 @@ export type ClassroomCompositeHandle = {
   /** Full board + PiP composite for recording / teacher preview */
   stream: MediaStream;
   previewEl: HTMLVideoElement;
+  /** Resolves after the composite canvas has painted a usable first frame. */
+  ready: Promise<void>;
   stop: () => void;
 };
 
@@ -90,6 +92,48 @@ function drawBoardLayer(outCtx: CanvasRenderingContext2D, frame: CanvasImageSour
   }
 }
 
+function drawImageCover(
+  ctx: CanvasRenderingContext2D,
+  source: CanvasImageSource,
+  sourceWidth: number,
+  sourceHeight: number,
+  dx: number,
+  dy: number,
+  dw: number,
+  dh: number
+) {
+  if (sourceWidth <= 0 || sourceHeight <= 0 || dw <= 0 || dh <= 0) return;
+  const sourceAspect = sourceWidth / sourceHeight;
+  const destAspect = dw / dh;
+  let sx = 0;
+  let sy = 0;
+  let sw = sourceWidth;
+  let sh = sourceHeight;
+
+  if (sourceAspect > destAspect) {
+    sw = sourceHeight * destAspect;
+    sx = (sourceWidth - sw) / 2;
+  } else {
+    sh = sourceWidth / destAspect;
+    sy = (sourceHeight - sh) / 2;
+  }
+
+  ctx.drawImage(source, sx, sy, sw, sh, dx, dy, dw, dh);
+}
+
+function drawCameraCover(
+  ctx: CanvasRenderingContext2D,
+  source: HTMLVideoElement | HTMLCanvasElement,
+  dx: number,
+  dy: number,
+  dw: number,
+  dh: number
+) {
+  const sourceWidth = source instanceof HTMLVideoElement ? source.videoWidth : source.width;
+  const sourceHeight = source instanceof HTMLVideoElement ? source.videoHeight : source.height;
+  drawImageCover(ctx, source, sourceWidth, sourceHeight, dx, dy, dw, dh);
+}
+
 function drawPipLayer(
   outCtx: CanvasRenderingContext2D,
   cameraVideo: HTMLVideoElement,
@@ -101,19 +145,17 @@ function drawPipLayer(
 ) {
   if (cameraVideo.readyState < 2) return;
   outCtx.save();
-  roundRect(outCtx, pipX, pipY, PIP_WIDTH, PIP_HEIGHT, 10);
-  outCtx.clip();
+  if (!greenScreen) {
+    roundRect(outCtx, pipX, pipY, PIP_WIDTH, PIP_HEIGHT, 10);
+    outCtx.clip();
+  }
   if (greenScreen && chromaCanvas && chromaCtx) {
     drawVideoWithChromaKey(cameraVideo, chromaCanvas, chromaCtx);
-    outCtx.drawImage(chromaCanvas, pipX, pipY, PIP_WIDTH, PIP_HEIGHT);
+    drawCameraCover(outCtx, chromaCanvas, pipX, pipY, PIP_WIDTH, PIP_HEIGHT);
   } else {
-    outCtx.drawImage(cameraVideo, pipX, pipY, PIP_WIDTH, PIP_HEIGHT);
+    drawCameraCover(outCtx, cameraVideo, pipX, pipY, PIP_WIDTH, PIP_HEIGHT);
   }
   outCtx.restore();
-  outCtx.strokeStyle = "rgba(255,255,255,0.25)";
-  outCtx.lineWidth = 2;
-  roundRect(outCtx, pipX, pipY, PIP_WIDTH, PIP_HEIGHT, 10);
-  outCtx.stroke();
 }
 
 async function openCameraVideo(cameraId?: string): Promise<HTMLVideoElement> {
@@ -189,9 +231,9 @@ export async function startClassroomPublishBundle(
     if (cameraVideo.readyState >= 2) {
       if (opts.greenScreen && chromaCanvas && chromaCtx) {
         drawVideoWithChromaKey(cameraVideo, chromaCanvas, chromaCtx);
-        camCtx.drawImage(chromaCanvas, 0, 0, PIP_WIDTH, PIP_HEIGHT);
+        drawCameraCover(camCtx, chromaCanvas, 0, 0, PIP_WIDTH, PIP_HEIGHT);
       } else {
-        camCtx.drawImage(cameraVideo, 0, 0, PIP_WIDTH, PIP_HEIGHT);
+        drawCameraCover(camCtx, cameraVideo, 0, 0, PIP_WIDTH, PIP_HEIGHT);
       }
     }
     camRaf = requestAnimationFrame(camPaint);
@@ -214,16 +256,33 @@ export async function startClassroomPublishBundle(
   const recCtx = recCanvas.getContext("2d");
   if (!recCtx) throw new Error("Canvas not supported");
   const { pipX, pipY } = computePipOrigin(normalizePipPosition(opts.pipPosition));
+  let resolveRecordingReady: (() => void) | null = null;
+  let hasResolvedRecordingReady = false;
+  const recordingReady = new Promise<void>((resolve) => {
+    resolveRecordingReady = resolve;
+  });
   let recRaf = 0;
   const recPaint = () => {
     drawBoardLayer(recCtx, boardFrame.getFrame());
     drawPipLayer(recCtx, cameraVideo, !!opts.greenScreen, chromaCanvas, chromaCtx, pipX, pipY);
+    if (!hasResolvedRecordingReady && cameraVideo.readyState >= 2) {
+      hasResolvedRecordingReady = true;
+      resolveRecordingReady?.();
+    }
     recRaf = requestAnimationFrame(recPaint);
   };
-  recPaint();
   const recStream = recCanvas.captureStream(fps);
+  (recStream as MediaStream & { __classroomReady?: Promise<void> }).__classroomReady =
+    recordingReady;
   const recTrack = recStream.getVideoTracks()[0];
   if (!recTrack) throw new Error("Could not create composite video track");
+  recPaint();
+  setTimeout(() => {
+    if (!hasResolvedRecordingReady) {
+      hasResolvedRecordingReady = true;
+      resolveRecordingReady?.();
+    }
+  }, 1500);
 
   const recPreviewEl = document.createElement("video");
   recPreviewEl.muted = true;
@@ -248,7 +307,7 @@ export async function startClassroomPublishBundle(
   return {
     board: { stream: boardStream, stop: () => boardTrack.stop() },
     camera: { stream: camStream, previewEl: camPreviewEl, stop: () => camTrack.stop() },
-    recording: { stream: recStream, previewEl: recPreviewEl, stop: () => recTrack.stop() },
+    recording: { stream: recStream, previewEl: recPreviewEl, ready: recordingReady, stop: () => recTrack.stop() },
     stop,
   };
 }
@@ -304,9 +363,9 @@ export async function startClassroomCameraStream(opts: {
     if (cameraVideo.readyState >= 2) {
       if (opts.greenScreen && chromaCanvas && chromaCtx) {
         drawVideoWithChromaKey(cameraVideo, chromaCanvas, chromaCtx);
-        outCtx.drawImage(chromaCanvas, 0, 0, PIP_WIDTH, PIP_HEIGHT);
+        drawCameraCover(outCtx, chromaCanvas, 0, 0, PIP_WIDTH, PIP_HEIGHT);
       } else {
-        outCtx.drawImage(cameraVideo, 0, 0, PIP_WIDTH, PIP_HEIGHT);
+        drawCameraCover(outCtx, cameraVideo, 0, 0, PIP_WIDTH, PIP_HEIGHT);
       }
     }
     raf = requestAnimationFrame(paint);
@@ -344,6 +403,7 @@ export async function startClassroomRecordingComposite(
   return {
     stream: bundle.recording.stream,
     previewEl: bundle.recording.previewEl,
+    ready: bundle.recording.ready,
     stop: bundle.stop,
   };
 }

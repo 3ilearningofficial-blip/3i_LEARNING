@@ -14,9 +14,9 @@ type Props = {
 };
 
 export default function SortableItem({ id, children }: Props) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+  const { attributes, listeners, setActivatorNodeRef, setNodeRef, transform, transition, isDragging } =
     useSortable({ id });
-  const dragHandleProps = { ...attributes, ...listeners } as any;
+  const dragHandleProps = { ...attributes, ...listeners } as React.HTMLAttributes<HTMLButtonElement>;
 
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
@@ -30,23 +30,34 @@ export default function SortableItem({ id, children }: Props) {
     <div ref={setNodeRef} style={style}>
       <View style={styles.row}>
         {/* Drag handle is web-only; native keeps the existing up/down controls. */}
-        <View style={styles.handle} {...dragHandleProps}>
+        <button
+          ref={setActivatorNodeRef}
+          type="button"
+          aria-label="Drag to reorder"
+          style={handleStyle}
+          {...dragHandleProps}
+        >
           <Ionicons name="reorder-two-outline" size={20} color="#9CA3AF" />
-        </View>
+        </button>
         <View style={styles.content}>{children}</View>
       </View>
     </div>
   );
 }
 
+const handleStyle: React.CSSProperties = {
+  alignItems: "center",
+  background: "transparent",
+  border: 0,
+  cursor: "grab",
+  display: "flex",
+  justifyContent: "center",
+  padding: "8px 6px",
+  touchAction: "none",
+  userSelect: "none",
+};
+
 const styles = StyleSheet.create({
   row: { flexDirection: "row", alignItems: "center" },
-  handle: {
-    paddingHorizontal: 6,
-    paddingVertical: 8,
-    cursor: "grab" as any,
-    justifyContent: "center",
-    alignItems: "center",
-  },
   content: { flex: 1 },
 });

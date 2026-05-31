@@ -18,7 +18,7 @@ type Props = {
   onCompositeStream?: (stream: MediaStream | null) => void;
 };
 
-const videoStyle = { width: "100%", height: "100%", objectFit: "cover" as const, transform: "scaleX(-1)" };
+const videoStyle = { width: "100%", height: "100%", objectFit: "contain" as const, backgroundColor: "#000" };
 
 export default function TeacherVideoPanel({
   liveClassId,

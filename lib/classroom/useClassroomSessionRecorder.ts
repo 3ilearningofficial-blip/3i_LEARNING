@@ -24,6 +24,8 @@ function getPublicationMediaTrack(
   return pub?.track?.mediaStreamTrack ?? null;
 }
 
+type ClassroomReadyStream = MediaStream & { __classroomReady?: Promise<void> };
+
 function buildRecordingStream(compositeStream: MediaStream | null, room: Room | null): MediaStream | null {
   const tracks: MediaStreamTrack[] = [];
 
@@ -43,6 +45,7 @@ export function useClassroomSessionRecorder(enabled: boolean): ClassroomSessionR
   const compositeStreamRef = useRef<MediaStream | null>(null);
   const roomRef = useRef<Room | null>(null);
   const startedRef = useRef(false);
+  const startingRef = useRef(false);
 
   useEffect(() => {
     isRecordingRef.current = recorder.isRecording;
@@ -50,16 +53,25 @@ export function useClassroomSessionRecorder(enabled: boolean): ClassroomSessionR
 
   const startSessionRecording = useCallback(
     (compositeStream: MediaStream | null, room: Room | null) => {
-      if (!enabled || startedRef.current || isRecordingRef.current) return;
+      if (!enabled || startedRef.current || startingRef.current || isRecordingRef.current) return;
       compositeStreamRef.current = compositeStream;
       roomRef.current = room;
-      const stream = buildRecordingStream(compositeStream, room);
-      const hasLiveVideo = stream
-        ?.getVideoTracks()
-        .some((track) => track.readyState === "live");
-      if (!stream || !hasLiveVideo) return;
-      recorder.startRecording(stream);
-      startedRef.current = true;
+      startingRef.current = true;
+      const ready = (compositeStream as ClassroomReadyStream | null)?.__classroomReady;
+      void (async () => {
+        try {
+          await ready;
+          const stream = buildRecordingStream(compositeStream, room);
+          const hasLiveVideo = stream
+            ?.getVideoTracks()
+            .some((track) => track.readyState === "live");
+          if (!stream || !hasLiveVideo || startedRef.current || isRecordingRef.current) return;
+          recorder.startRecording(stream);
+          startedRef.current = true;
+        } finally {
+          startingRef.current = false;
+        }
+      })();
     },
     [enabled, recorder.startRecording]
   );
@@ -73,6 +85,7 @@ export function useClassroomSessionRecorder(enabled: boolean): ClassroomSessionR
       isRecordingRef.current = false;
       compositeStreamRef.current = null;
       roomRef.current = null;
+      startingRef.current = false;
     }
   }, [recorder.stopRecording]);
 

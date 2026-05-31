@@ -144,6 +144,7 @@ export function useLiveKitRoom(
           source: Track.Source.ScreenShare,
           simulcast: true,
         });
+        publishedTracksRef.current = { board: boardTrack };
         await localParticipant.publishTrack(cameraTrack, {
           source: Track.Source.Camera,
           simulcast: true,
@@ -174,6 +175,7 @@ export function useLiveKitRoom(
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to start composite stream");
       setCamEnabled(false);
+      await unpublishCompositeTracks().catch(() => {});
       stopComposite();
     } finally {
       publishingRef.current = false;
@@ -326,7 +328,6 @@ export function useLiveKitRoom(
       roomRef.current = null;
       setConnected(false);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, tokenPayload?.token, tokenPayload?.url, tokenPayload?.canPublish, reconnectNonce]);
 
   useEffect(() => {

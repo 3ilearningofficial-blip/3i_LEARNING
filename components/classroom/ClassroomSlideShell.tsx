@@ -51,6 +51,9 @@ const ClassroomSlideShell = forwardRef<ClassroomSlideShellHandle, Props>(functio
             background: "#0a0a0a",
             borderRadius: 6,
             border: "1px solid #1f2937",
+            overscrollBehavior: "contain",
+            touchAction: "none",
+            userSelect: "none",
           }}
         >
           {children as React.ReactNode}

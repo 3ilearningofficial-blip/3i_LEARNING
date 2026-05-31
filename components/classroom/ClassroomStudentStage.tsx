@@ -23,9 +23,7 @@ const pipBaseStyle: React.CSSProperties = {
   minWidth: 88,
   aspectRatio: "4 / 3",
   objectFit: "cover",
-  borderRadius: 10,
-  border: "2px solid rgba(255,255,255,0.28)",
-  boxShadow: "0 4px 16px rgba(0,0,0,0.45)",
+  borderRadius: 0,
   zIndex: 5,
   backgroundColor: "transparent",
 };

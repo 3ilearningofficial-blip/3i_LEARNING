@@ -106,7 +106,16 @@ function TldrawClassroomConnected({
   }
 
   return (
-    <div style={{ width: "100%", height: "100%", position: "relative", background: "#0a0a0a" }}>
+    <div
+      style={{
+        width: "100%",
+        height: "100%",
+        position: "relative",
+        background: "#0a0a0a",
+        overscrollBehavior: "contain",
+        touchAction: "none",
+      }}
+    >
       <Tldraw
         {...(TLDRAW_LICENSE_KEY ? { licenseKey: TLDRAW_LICENSE_KEY } : {})}
         store={store.store}
