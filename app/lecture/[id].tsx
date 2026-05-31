@@ -3,7 +3,7 @@ import {
   View, Text, StyleSheet, Pressable, Platform, Image,
   ActivityIndicator, Alert, ScrollView, useWindowDimensions,
 } from "react-native";
-import { router, useLocalSearchParams } from "expo-router";
+import { router, useLocalSearchParams, usePathname } from "expo-router";
 import { WebView } from "react-native-webview";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -459,6 +459,7 @@ export default function LectureScreen() {
   useVideoScreenProtection(isPlayingLocalVideo);
   
   const insets = useSafeAreaInsets();
+  const pathname = usePathname();
   const { width: windowWidth } = useWindowDimensions();
   const isWebWide = Platform.OS === "web" && windowWidth >= 960;
   const isNarrowWeb = Platform.OS === "web" && !isWebWide;
@@ -663,6 +664,29 @@ export default function LectureScreen() {
   const topPadding = Platform.OS === "web" ? 16 : insets.top;
   const bottomPadding = Platform.OS === "web" ? Math.max(34, insets.bottom) : insets.bottom;
 
+  const handleBack = useCallback(() => {
+    const fallback = () => {
+      const cid = lectureData?.course_id || (courseId ? Number(courseId) : null);
+      if (cid && Number.isFinite(cid)) {
+        router.replace({ pathname: "/course/[id]", params: { id: String(cid) } } as any);
+      } else {
+        router.replace("/(tabs)" as any);
+      }
+    };
+
+    if (router.canGoBack()) {
+      router.back();
+      if (Platform.OS === "web" && typeof window !== "undefined") {
+        const before = pathname;
+        setTimeout(() => {
+          if (window.location.pathname === before) fallback();
+        }, 350);
+      }
+      return;
+    }
+    fallback();
+  }, [courseId, lectureData?.course_id, pathname]);
+
   // Determine video type and prepare appropriate HTML
   const playbackUrl = authenticatedVideoUrl || videoUrl;
   const videoId = getYouTubeVideoId(playbackUrl);
@@ -826,7 +850,7 @@ export default function LectureScreen() {
     <View style={styles.container}>
       <View style={[styles.header, { paddingTop: topPadding + 4 }]}>
         <View style={styles.headerRow}>
-          <Pressable style={styles.backBtn} onPress={() => router.back()}>
+          <Pressable style={styles.backBtn} onPress={handleBack}>
             <Ionicons name="arrow-back" size={22} color="#fff" />
           </Pressable>
           <View style={styles.headerTitle}>
@@ -858,7 +882,7 @@ export default function LectureScreen() {
             onPress={() => {
               const msg = String((lectureError as any)?.message || "").toLowerCase();
               if (msg.includes("enroll")) {
-                router.back();
+                handleBack();
                 return;
               }
               void refetchLecture();

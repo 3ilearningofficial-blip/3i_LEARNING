@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { Platform } from "react-native";
 import type { Editor } from "tldraw";
-import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
+import { apiRequest, authFetch, getApiUrl, toHttpsMediaUrl } from "@/lib/query-client";
 import { uploadToR2, getMimeType } from "@/lib/r2-upload";
 
 const CHECKPOINT_INTERVAL_MS = 120_000;
@@ -86,7 +86,7 @@ export async function restoreClassroomBoardCheckpoint(
     const url = String(data.checkpointUrl || "").trim();
     if (!url) return false;
 
-    const snapRes = await fetch(url);
+    const snapRes = await fetch(toHttpsMediaUrl(url));
     if (!snapRes.ok) return false;
     const snapshot = await snapRes.json();
     const pages = editor.getPages();

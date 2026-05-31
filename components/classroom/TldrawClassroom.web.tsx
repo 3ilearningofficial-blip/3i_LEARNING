@@ -27,6 +27,34 @@ export type { TldrawClassroomHandle } from "./TldrawClassroom.types";
 
 const TLDRAW_LICENSE_KEY = getTldrawLicenseKey();
 const TLDRAW_LICENSE_HINT = tldrawLicenseHint(TLDRAW_LICENSE_KEY);
+let classroomTouchPatchInstalled = false;
+
+function installClassroomNonPassiveTouchPatch() {
+  if (Platform.OS !== "web" || typeof EventTarget === "undefined" || classroomTouchPatchInstalled) return;
+  classroomTouchPatchInstalled = true;
+
+  const proto = EventTarget.prototype as typeof EventTarget.prototype & {
+    __classroomAddEventListener?: EventTarget["addEventListener"];
+  };
+  if (proto.__classroomAddEventListener) return;
+
+  const original = proto.addEventListener;
+  proto.__classroomAddEventListener = original;
+  proto.addEventListener = function patchedAddEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject | null,
+    options?: boolean | AddEventListenerOptions
+  ) {
+    if ((type === "touchstart" || type === "touchmove" || type === "touchend") && options !== false) {
+      const nextOptions =
+        typeof options === "object" && options !== null
+          ? { ...options, passive: false }
+          : { capture: options === true, passive: false };
+      return original.call(this, type, listener, nextOptions);
+    }
+    return original.call(this, type, listener, options);
+  };
+}
 
 type Props = {
   liveClassId: string;
@@ -116,6 +144,16 @@ function TldrawClassroomConnected({
         touchAction: "none",
       }}
     >
+      <style>{`
+        .tl-container,
+        .tl-canvas,
+        .tl-html-layer,
+        .tl-overlays,
+        .tlui-layout {
+          overscroll-behavior: contain !important;
+          touch-action: none !important;
+        }
+      `}</style>
       <Tldraw
         {...(TLDRAW_LICENSE_KEY ? { licenseKey: TLDRAW_LICENSE_KEY } : {})}
         store={store.store}
@@ -137,6 +175,7 @@ const TldrawClassroomWeb = forwardRef<TldrawClassroomHandle, Props>(function Tld
   { liveClassId, readonly = false, preview = false, onEditorReady },
   ref
 ) {
+  installClassroomNonPassiveTouchPatch();
   const editorRef = useRef<Editor | null>(null);
   const [uri, setUri] = useState<string | null>(null);
   const [uriError, setUriError] = useState<string | null>(null);

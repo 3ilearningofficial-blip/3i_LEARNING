@@ -11,17 +11,19 @@
 // Hue centre of the green key in degrees (0-360). Pure green = 120°.
 const KEY_HUE = 120;
 // Half-width of the hue acceptance band in degrees.
-// OBS Similarity 455/1000 → roughly ±35° hue window.
-const HUE_TOLERANCE = 35;
+// OBS Similarity 455/1000 → broad acceptance around the green backdrop.
+const HUE_TOLERANCE = 58;
 // Saturation must be above this fraction (0–1) to be treated as "coloured".
 // Low-saturation pixels (white/grey/black) are never keyed out.
-const MIN_SATURATION = 0.15;
+const MIN_SATURATION = 0.08;
 // Softness: pixels near the edge of the hue band are faded out gradually
 // rather than cut hard.  OBS Smoothness 65/1000 → ~0.40 blend zone.
-const SMOOTHNESS = 0.40;
+const SMOOTHNESS = 0.58;
 // Spill reduction: green cast remaining on foreground edges is desaturated.
 // OBS Spill Reduction 87/1000 → ~0.34 correction strength.
-const SPILL_STRENGTH = 0.34;
+const SPILL_STRENGTH = 0.62;
+const MIN_GREEN_VALUE = 56;
+const GREEN_DOMINANCE = 1.08;
 
 // ── colour helpers ──────────────────────────────────────────────────────────
 function rgbToHsv(r: number, g: number, b: number): [number, number, number] {
@@ -53,22 +55,31 @@ export function applyChromaKeyToImageData(data: ImageData): void {
     const r = px[i], g = px[i + 1], b = px[i + 2];
     const [h, s] = rgbToHsv(r, g, b);
 
-    // Skip unsaturated pixels — they're never background green.
-    if (s < MIN_SATURATION) continue;
+    const greenDominant =
+      g >= MIN_GREEN_VALUE &&
+      g > r * GREEN_DOMINANCE &&
+      g > b * GREEN_DOMINANCE &&
+      g - Math.max(r, b) > 14;
+
+    // Skip unsaturated pixels unless green is clearly dominant.
+    if (s < MIN_SATURATION && !greenDominant) continue;
 
     const dist = hueDist(h, KEY_HUE);
-    if (dist > HUE_TOLERANCE) continue;
+    if (dist > HUE_TOLERANCE && !greenDominant) continue;
 
     // Within the acceptance band → compute alpha.
     // Core (dist < HUE_TOLERANCE * (1-SMOOTHNESS)) → fully transparent.
     // Edge (between core and HUE_TOLERANCE) → blend.
+    const effectiveDist = greenDominant ? Math.min(dist, HUE_TOLERANCE * 0.35) : dist;
     const coreEdge = HUE_TOLERANCE * (1 - SMOOTHNESS);
-    if (dist <= coreEdge) {
+    if (effectiveDist <= coreEdge) {
       px[i + 3] = 0;
     } else {
       // Smooth fade from opaque at HUE_TOLERANCE to transparent at coreEdge.
-      const t = (dist - coreEdge) / (HUE_TOLERANCE - coreEdge);
-      px[i + 3] = Math.round(t * 255);
+      const t = Math.max(0, Math.min(1, (effectiveDist - coreEdge) / (HUE_TOLERANCE - coreEdge)));
+      // Bias semi-transparent green edges toward transparency, closer to OBS
+      // chroma-key output for a physical green screen.
+      px[i + 3] = Math.round(Math.pow(t, 1.55) * 255);
 
       // Green-spill reduction on semi-transparent edge pixels.
       if (SPILL_STRENGTH > 0) {

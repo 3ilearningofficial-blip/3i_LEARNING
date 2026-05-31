@@ -221,6 +221,13 @@ function logApiDebug(event: string, details: Record<string, unknown>): void {
   } catch (_e) {}
 }
 
+function isLikelyPhoneWeb(): boolean {
+  if (Platform.OS !== "web" || typeof window === "undefined") return false;
+  const coarsePointer =
+    typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches;
+  return coarsePointer && Math.min(window.innerWidth || 0, window.innerHeight || 0) < 768;
+}
+
 async function doFetchWithRetry(url: string, options?: RequestInit): Promise<Response> {
   const retryable = canRetry(options);
   const method = (options?.method || "GET").toUpperCase();
@@ -473,8 +480,10 @@ export const queryClient = new QueryClient({
     queries: {
       queryFn: getQueryFn({ on401: "throw" }),
       refetchInterval: false,
-      // Native: avoid refetch on every app resume / tab focus; data stays warm from cache. Web: still refetch on tab focus for fresher dashboards.
-      refetchOnWindowFocus: Platform.OS === "web",
+      // Native and phone web: avoid refetch storms on every app resume/tab focus.
+      // Mobile browsers often pause/resume video tabs with stale cookies briefly;
+      // refetch bursts here can falsely trip auth handling while students watch.
+      refetchOnWindowFocus: Platform.OS === "web" && !isLikelyPhoneWeb(),
       // FPR-01: Use a 60-second global staleTime instead of 0 to prevent redundant
       // API calls on every navigation. staleTime: 0 means every tab switch / screen
       // push marks all queries stale and triggers refetches — at 1,000 users this

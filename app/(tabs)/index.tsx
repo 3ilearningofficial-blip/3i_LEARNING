@@ -376,7 +376,7 @@ export default function HomeScreen() {
     gcTime: 25 * 60 * 1000,
     refetchInterval: tabVisible ? 60 * 1000 : 3 * 60 * 1000,
     refetchOnMount: true,
-    refetchOnWindowFocus: true,
+    refetchOnWindowFocus: Platform.OS !== "web",
     // Always fetch — even unauthenticated users can see published courses
   });
 
@@ -470,7 +470,7 @@ export default function HomeScreen() {
     gcTime: 15 * 60 * 1000,
     refetchInterval: tabVisible ? 15 * 1000 : false,
     refetchOnMount: true,
-    refetchOnWindowFocus: true,
+    refetchOnWindowFocus: Platform.OS !== "web",
   });
 
   useEffect(() => {

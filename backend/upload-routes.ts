@@ -12,9 +12,11 @@ type RegisterUploadRoutesDeps = {
 function getPublicApiBaseUrl(req: Request): string {
   const configured = String(process.env.PUBLIC_API_BASE_URL || "").trim();
   if (configured) return configured.replace(/\/+$/, "");
-  const protocol = req.headers["x-forwarded-proto"] || req.protocol || "http";
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+  const protocol = forwardedProto || req.protocol || "https";
   const host = req.headers["x-forwarded-host"] || req.headers.host || `localhost:${process.env.PORT || 5000}`;
-  return `${protocol}://${host}`;
+  const normalizedProtocol = host && String(host).includes("3ilearning.in") ? "https" : protocol;
+  return `${normalizedProtocol}://${host}`;
 }
 
 function buildPresignedObjectKey(

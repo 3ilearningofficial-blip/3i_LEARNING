@@ -216,7 +216,7 @@ export default function CourseDetailScreen() {
     staleTime: 20 * 1000,
     gcTime: 15 * 60 * 1000,
     refetchInterval: tabVisible ? 60_000 : 5 * 60_000,
-    refetchOnWindowFocus: true,
+    refetchOnWindowFocus: Platform.OS !== "web",
     refetchOnMount: true,
   });
 

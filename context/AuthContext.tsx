@@ -18,7 +18,7 @@ import {
 import { registerPushForCurrentUser, unregisterPushForCurrentUser } from "@/lib/pushNotifications";
 import { fetch } from "expo/fetch";
 
-interface AuthUser extends StoredAuthUser {}
+type AuthUser = StoredAuthUser;
 
 interface AuthContextValue {
   user: AuthUser | null;
@@ -36,8 +36,13 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 function isProtectedPlaybackRoute(path: string): boolean {
   return (
     path.startsWith("/lecture/") ||
+    path.startsWith("/course/") ||
+    path.startsWith("/course-folder/") ||
     path.startsWith("/live-class/") ||
     path.startsWith("/material/") ||
+    path.startsWith("/material-folder/") ||
+    path.startsWith("/downloads") ||
+    path.startsWith("/(tabs)") ||
     path.startsWith("/admin")
   );
 }
@@ -206,9 +211,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           queryClient.clear();
         } else if (res.status === 401 || res.status === 403) {
           // Keep the student signed in while they are actively on a lecture/
-          // live-class/material/admin page; a real logout still happens on the
-          // next refresh from a non-playback route.
-          if (Platform.OS === "web" && onProtectedRoute && stored) {
+          // course/live-class/material/admin page; a real logout still happens
+          // for explicit server reasons handled above.
+          if (Platform.OS === "web" && stored && token) {
             setUser(stored);
             return;
           }
@@ -319,8 +324,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               return;
             }
           }
+          const meBody = await meRes.clone().json().catch(() => null);
+          const meMessage = String(meBody?.message || "");
+          if (
+            meMessage === "account_blocked" ||
+            meMessage === "account_deleted" ||
+            meMessage === "device_binding_mismatch"
+          ) {
+            setUser(null);
+            await removeStoredAuthUser();
+            queryClient.clear();
+            router.replace("/welcome");
+            return;
+          }
           const transient = meRes.status === 502 || meRes.status === 503 || meRes.status === 504;
-          if (transient && storedForMe && tokenForMe) return;
+          // Mobile browsers can resume with stale cookies or briefly failed
+          // auth/me checks while the durable bearer token is still valid. Do
+          // not clear a 7-day student session unless the server gave one of the
+          // explicit terminal reasons above.
+          if ((transient || Platform.OS === "web") && storedForMe && tokenForMe) {
+            setUser(storedForMe);
+            return;
+          }
         } catch {
           if (storedForMe && tokenForMe) return;
         }
