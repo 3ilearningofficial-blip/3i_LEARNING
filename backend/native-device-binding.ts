@@ -4,6 +4,15 @@ export type DbLike = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
 };
 
+function envFlagEnabled(name: string): boolean {
+  const raw = String(process.env[name] || "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+
+function isStudentDeviceBindingDisabled(role: string | undefined | null): boolean {
+  return String(role || "").trim().toLowerCase() !== "admin" && envFlagEnabled("DISABLE_STUDENT_DEVICE_BINDING");
+}
+
 export function getInstallationIdFromRequest(req: Request): string | null {
   const raw = (req.get("x-app-device-id") || "").trim();
   if (!raw || raw === "null" || raw === "undefined") return null;
@@ -96,12 +105,14 @@ export async function assertNativePaidPurchaseInstallation(
   const r = await db.query(
     `SELECT app_bound_device_id,
             COALESCE(web_device_id_phone, '') AS wph,
-            COALESCE(web_device_id_desktop, '') AS wdk
+            COALESCE(web_device_id_desktop, '') AS wdk,
+            role
      FROM users WHERE id = $1`,
     [userId]
   );
   if (r.rows.length === 0) return { ok: true };
   const row = r.rows[0];
+  if (isStudentDeviceBindingDisabled(row.role as string | undefined)) return { ok: true };
   const ok = studentInstallationMatchesActiveSession(
     {
       app_bound_device_id: row.app_bound_device_id,
@@ -125,6 +136,7 @@ export async function assertNativePaidPurchaseInstallation(
 /** Bind missing slots after login/purchase (students only). */
 export async function finalizeStudentWebSlotsAfterAuth(db: DbLike, userId: number, role: string | undefined, req: Request): Promise<void> {
   if (role === "admin") return;
+  if (isStudentDeviceBindingDisabled(role)) return;
   const inst = getInstallationIdFromRequest(req);
   if (!inst || inst === "web_anon") return;
   if (getClientPlatform(req) !== "web") return;
@@ -149,6 +161,7 @@ export async function finalizeInstallationBindAfterPurchase(db: DbLike, userId: 
   if (!inst || inst === "web_anon") return;
   const ur = await db.query("SELECT role FROM users WHERE id = $1", [userId]);
   const role = ur.rows[0]?.role as string | undefined;
+  if (isStudentDeviceBindingDisabled(role)) return;
   await finalizeStudentWebSlotsAfterAuth(db, userId, role, req);
   await db.query("UPDATE users SET app_bound_device_id = $1 WHERE id = $2 AND app_bound_device_id IS NULL", [inst, userId]);
 }
@@ -170,6 +183,7 @@ export async function bindDeviceForNativeFirstLogin(
   req: Request
 ): Promise<void> {
   if (role === "admin") return;
+  if (isStudentDeviceBindingDisabled(role)) return;
   const plat = getClientPlatform(req);
   if (plat !== "ios" && plat !== "android") return;
   const inst = getInstallationIdFromRequest(req);
@@ -240,6 +254,7 @@ export async function enforceInstallationBinding(
   role: string | undefined
 ): Promise<EnforceBindingResult> {
   if (role === "admin") return { ok: true };
+  if (isStudentDeviceBindingDisabled(role)) return { ok: true };
 
   const r = await db.query(
     `SELECT COALESCE(app_bound_device_id, '') AS appb,
@@ -302,6 +317,7 @@ export async function assertLoginAllowedForInstallation(
     `SELECT app_bound_device_id,
             COALESCE(web_device_id_phone, '') AS wph,
             COALESCE(web_device_id_desktop, '') AS wdk,
+            role,
             COALESCE(is_blocked,FALSE) AS blocked
      FROM users WHERE id = $1`,
     [opts.userId]
@@ -309,6 +325,7 @@ export async function assertLoginAllowedForInstallation(
   if (ur.rows.length === 0) return { ok: true };
   const row = ur.rows[0];
   if (row.blocked) return { ok: false, httpStatus: 403, message: "Your account has been blocked. Please contact support." };
+  if (isStudentDeviceBindingDisabled(opts.role ?? (row.role as string | undefined))) return { ok: true };
 
   const attemptHeader = getInstallationIdFromRequest(req);
   const bodyId = (opts.bodyDeviceId && String(opts.bodyDeviceId).trim()) || "";
@@ -418,6 +435,7 @@ export async function assertSessionNotActivelyInUse(
   if (ur.rows.length === 0) return { ok: true };
   const row = ur.rows[0];
   if (String(row.role ?? "") === "admin") return { ok: true };
+  if (isStudentDeviceBindingDisabled(row.role as string | undefined)) return { ok: true };
 
   const sessionToken = row.session_token ? String(row.session_token).trim() : "";
   if (!sessionToken) return { ok: true };
