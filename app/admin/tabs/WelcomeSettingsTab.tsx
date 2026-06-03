@@ -281,15 +281,18 @@ export function WelcomeSettingsTab() {
   return (
     <View style={{ gap: 16, padding: 4 }}>
       <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: "#E5E7EB" }}>
-        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Brand and hero (web layout)</Text>
+        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Website homepage — header and hero</Text>
+        <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", lineHeight: 17 }}>
+          These fields affect the new web welcome page: logo, brand name, support contact, and hero headline.
+        </Text>
         {imageUrlRow("Logo image (optional — overrides default asset)", "welcome_logo_url", WELCOME_LOGO_DISPLAY_ADMIN_HINT)}
         <View style={{ gap: 4 }}>
           <Text style={labelStyle}>Brand name next to logo</Text>
           <TextInput style={inputStyle} value={val("welcome_brand_text")} onChangeText={v => set("welcome_brand_text", v)} placeholder="3i Learning" />
         </View>
-        <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.text, marginTop: 6 }}>Web header — support contact</Text>
+        <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.text, marginTop: 6 }}>Website header — support contact</Text>
         <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", lineHeight: 17 }}>
-          Phone and email with icons next to the brand (laptop web) or above it (narrow web). Not shown in native Android/iOS apps. Leave both blank to hide the row.
+          Phone and email show in the top web header near the navigation/dashboard button. On phone web they appear inside the menu. Leave both blank to hide them.
         </Text>
         <View style={{ gap: 4 }}>
           <Text style={labelStyle}>Admin phone (display + tap to call)</Text>
@@ -319,11 +322,11 @@ export function WelcomeSettingsTab() {
           <TextInput style={inputStyle} value={val("welcome_tagline")} onChangeText={v => set("welcome_tagline", v)} placeholder="Master Mathematics Under Pankaj Sir Guidance" />
         </View>
         <View style={{ gap: 4 }}>
-          <Text style={labelStyle}>Navigation line</Text>
+          <Text style={labelStyle}>Navigation line (legacy/native only)</Text>
           <TextInput style={inputStyle} value={val("welcome_nav_line")} onChangeText={v => set("welcome_nav_line", v)} placeholder="Courses · Live Classes · …" />
         </View>
         <View style={{ gap: 4 }}>
-          <Text style={labelStyle}>Headline (legacy / mobile)</Text>
+          <Text style={labelStyle}>Headline (legacy/native only)</Text>
           <TextInput style={[inputStyle, { minHeight: 50, textAlignVertical: "top" }]} multiline value={val("welcome_headline")} onChangeText={v => set("welcome_headline", v)} placeholder="Multi-line headline" />
         </View>
         {toggleRow("Show navigation line", "welcome_show_nav")}
@@ -333,17 +336,20 @@ export function WelcomeSettingsTab() {
           <TextInput style={[inputStyle, { minHeight: 44, textAlignVertical: "top" }]} multiline value={val("welcome_subheadline")} onChangeText={v => set("welcome_subheadline", v)} />
         </View>
         <View style={{ gap: 4 }}>
-          <Text style={labelStyle}>Login button</Text>
+          <Text style={labelStyle}>Login button text (legacy/native only)</Text>
           <TextInput style={inputStyle} value={val("welcome_login_btn")} onChangeText={v => set("welcome_login_btn", v)} />
         </View>
         <View style={{ gap: 4 }}>
-          <Text style={labelStyle}>Sign up button</Text>
+          <Text style={labelStyle}>Sign up button text (legacy/native only)</Text>
           <TextInput style={inputStyle} value={val("welcome_signup_btn")} onChangeText={v => set("welcome_signup_btn", v)} />
         </View>
       </View>
 
       <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: "#E5E7EB" }}>
-        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>About Pankaj Sir (after Login / Sign up — and subheadline if shown)</Text>
+        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Legacy/native — About Pankaj Sir</Text>
+        <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", lineHeight: 17 }}>
+          This block is not shown on the new website-style web homepage.
+        </Text>
         {toggleRow("Show About Pankaj Sir block", "welcome_show_pankaj_sir")}
         <View style={{ gap: 4 }}>
           <Text style={labelStyle}>Section title</Text>
@@ -365,7 +371,7 @@ export function WelcomeSettingsTab() {
       </View>
 
       <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: "#E5E7EB" }}>
-        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>About section</Text>
+        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Legacy/native — About section</Text>
         {toggleRow("Show About block", "welcome_show_about")}
         <View style={{ gap: 4 }}>
           <Text style={labelStyle}>Title</Text>
@@ -382,7 +388,7 @@ export function WelcomeSettingsTab() {
       </View>
 
       <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: "#E5E7EB" }}>
-        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Our Vision (after About)</Text>
+        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Legacy/native — Our Vision</Text>
         {toggleRow("Show Our Vision block", "welcome_show_vision")}
         <View style={{ gap: 4 }}>
           <Text style={labelStyle}>Title</Text>
@@ -399,7 +405,10 @@ export function WelcomeSettingsTab() {
       </View>
 
       <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: "#E5E7EB" }}>
-        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>My courses block</Text>
+        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Legacy/native — My courses block</Text>
+        <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", lineHeight: 17 }}>
+          The new web homepage popular courses section uses actual course data from Course Management, not this JSON.
+        </Text>
         {toggleRow("Show My courses", "welcome_show_my_course")}
         <View style={{ gap: 4 }}>
           <Text style={labelStyle}>Section title</Text>
@@ -428,7 +437,7 @@ export function WelcomeSettingsTab() {
       </View>
 
       <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: "#E5E7EB" }}>
-        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Extra sections (optional)</Text>
+        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Legacy/native — Extra sections (optional)</Text>
         <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>
           JSON array: {"[{ \"title\": \"...\", \"body\": \"...\", \"imageUrl\": \"...\" }, ...]"}
         </Text>
@@ -442,7 +451,7 @@ export function WelcomeSettingsTab() {
       </View>
 
       <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: "#E5E7EB" }}>
-        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Feature grid</Text>
+        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Legacy/native — Feature grid</Text>
         {toggleRow("Show features grid", "welcome_show_features")}
         <View style={{ gap: 4 }}>
           <Text style={labelStyle}>Override features (JSON, or leave empty for defaults)</Text>
@@ -458,7 +467,7 @@ export function WelcomeSettingsTab() {
       </View>
 
       <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 4, borderWidth: 1, borderColor: "#E5E7EB" }}>
-        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text, marginBottom: 6 }}>Show / hide — Get the app</Text>
+        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text, marginBottom: 6 }}>Website homepage — App download section</Text>
         {toggleRow("Get the App (browser web only — not shown in Android/iOS app)", "welcome_show_get_app")}
         {toggleRow("Google Play card", "welcome_show_google_play")}
         {toggleRow("iOS / App Store card", "welcome_show_ios")}
@@ -467,7 +476,7 @@ export function WelcomeSettingsTab() {
       </View>
 
       <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: "#E5E7EB" }}>
-        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Store links and copy</Text>
+        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Website homepage — Store links and copy</Text>
         <View style={{ gap: 4 }}>
           <Text style={labelStyle}>Google Play URL</Text>
           <TextInput style={inputStyle} value={val("welcome_google_play_url")} onChangeText={v => set("welcome_google_play_url", v)} autoCapitalize="none" />
@@ -495,7 +504,7 @@ export function WelcomeSettingsTab() {
       </View>
 
       <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: "#E5E7EB" }}>
-        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Footer</Text>
+        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Website homepage — Footer</Text>
         <TextInput style={inputStyle} value={val("welcome_footer")} onChangeText={v => set("welcome_footer", v)} />
       </View>
 

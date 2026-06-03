@@ -581,7 +581,6 @@ export default function WelcomeScreen() {
       { label: "Courses", onPress: () => openProtectedWebRoute("/(tabs)") },
       { label: "Test Series", onPress: () => openProtectedWebRoute("/(tabs)/test-series") },
       { label: "AI Tutor", onPress: () => openProtectedWebRoute("/(tabs)/ai-tutor") },
-      ...(user?.role === "admin" ? [{ label: "Admin Dashboard", onPress: () => openWebRoute("/admin") }] : []),
     ];
 
     return (
@@ -599,6 +598,9 @@ export default function WelcomeScreen() {
                   <Text style={styles.websiteNavText}>{link.label}</Text>
                 </Pressable>
               ))}
+              {webContactShows ? (
+                <WebAdminContactsLaptopEnd phoneDisplay={webContactPhone} emailDisplay={webContactEmail} />
+              ) : null}
               {user?.id ? (
                 <Pressable onPress={() => openWebRoute(user.role === "admin" ? "/admin" : "/(tabs)")} style={styles.websiteLoginButton}>
                   <Text style={styles.websiteLoginButtonText}>{user.role === "admin" ? "Dashboard" : "Open App"}</Text>
@@ -618,6 +620,9 @@ export default function WelcomeScreen() {
 
         {!isDesktopWeb && webMenuOpen ? (
           <View style={styles.websiteMobileMenu}>
+            {webContactShows ? (
+              <WebAdminContactsAbove phoneDisplay={webContactPhone} emailDisplay={webContactEmail} />
+            ) : null}
             {headerLinks.map((link) => (
               <Pressable key={link.label} onPress={link.onPress} style={styles.websiteMobileMenuItem}>
                 <Text style={styles.websiteMobileMenuText}>{link.label}</Text>
@@ -641,11 +646,7 @@ export default function WelcomeScreen() {
               </Text>
               <View style={[styles.websiteHeroActions, !isDesktopWeb && styles.websiteHeroActionsMobile]}>
                 <Pressable
-                  onPress={() => {
-                    if (featuredWebsiteCourses[0]?.id) openCourse(featuredWebsiteCourses[0].id);
-                    else if (user?.id) openWebRoute("/(tabs)");
-                    else showAuthRequired("/(tabs)");
-                  }}
+                  onPress={() => openProtectedWebRoute("/(tabs)")}
                   style={({ pressed }) => [styles.websiteHeroPrimary, pressed && styles.pressedSoft]}
                 >
                   <Text style={styles.websiteHeroPrimaryText}>{user?.id ? "Continue Learning" : "Join Now"}</Text>

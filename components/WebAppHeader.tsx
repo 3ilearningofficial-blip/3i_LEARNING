@@ -37,6 +37,11 @@ export function WebAppHeader() {
     router.push(href as never);
   };
 
+  const navigateToWelcome = () => {
+    setMenuOpen(false);
+    router.push("/welcome" as never);
+  };
+
   const renderNavItem = (item: (typeof WEB_NAV_ITEMS)[number], compact = false) => {
     const active = item.activePaths.some((activePath) => activePath === pathname);
     return (
@@ -58,12 +63,18 @@ export function WebAppHeader() {
 
   return (
     <View style={styles.header}>
-      <Pressable onPress={() => navigateTo("/(tabs)")} style={styles.brand}>
-        <View style={styles.logoMark}>
-          <Text style={styles.logoText}>3i</Text>
-        </View>
-        <Text style={styles.brandText}>3i Learning</Text>
-      </Pressable>
+      <View style={styles.leftGroup}>
+        <Pressable onPress={navigateToWelcome} style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}>
+          <Ionicons name="arrow-back" size={18} color={Colors.light.primary} />
+          {!isPhoneWeb ? <Text style={styles.backText}>Welcome</Text> : null}
+        </Pressable>
+        <Pressable onPress={() => navigateTo("/(tabs)")} style={styles.brand}>
+          <View style={styles.logoMark}>
+            <Text style={styles.logoText}>3i</Text>
+          </View>
+          <Text style={styles.brandText}>3i Learning</Text>
+        </Pressable>
+      </View>
 
       {isPhoneWeb ? (
         <>
@@ -78,7 +89,12 @@ export function WebAppHeader() {
           <Modal transparent visible={menuOpen} animationType="fade" onRequestClose={() => setMenuOpen(false)}>
             <View style={styles.modalLayer}>
               <Pressable style={StyleSheet.absoluteFill} onPress={() => setMenuOpen(false)} />
-              <View style={styles.mobileMenu}>{WEB_NAV_ITEMS.map((item) => renderNavItem(item, true))}</View>
+              <View style={styles.mobileMenu}>
+                <Pressable onPress={navigateToWelcome} style={styles.mobileNavItem}>
+                  <Text style={styles.mobileNavText}>Back to Welcome</Text>
+                </Pressable>
+                {WEB_NAV_ITEMS.map((item) => renderNavItem(item, true))}
+              </View>
             </View>
           </Modal>
         </>
@@ -105,6 +121,28 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
+  },
+  leftGroup: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    flexShrink: 1,
+  },
+  backButton: {
+    minHeight: 38,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#BFDBFE",
+    backgroundColor: "#EEF4FF",
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  backText: {
+    color: Colors.light.primary,
+    fontFamily: "Inter_700Bold",
+    fontSize: 13,
   },
   logoMark: {
     width: 34,

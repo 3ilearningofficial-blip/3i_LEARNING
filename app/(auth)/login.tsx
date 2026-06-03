@@ -41,7 +41,7 @@ export default function LoginScreen() {
 
   const getPostAuthPath = () => {
     if (Platform.OS === "web" && typeof next === "string" && next.startsWith("/")) return next;
-    return Platform.OS === "web" ? "/welcome" : "/(tabs)";
+    return "/(tabs)";
   };
 
   const completeWebModalAuth = () => {
