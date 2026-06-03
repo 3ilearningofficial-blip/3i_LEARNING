@@ -443,11 +443,20 @@ export default function WelcomeScreen() {
 
   const extraSections = parseJsonArray<ExtraSection>(cfg.welcome_extra_sections_json, []);
   const features = getFeatures(cfg);
-  const allowLoggedInWelcome = isWeb && params.fromApp === "1";
+  const allowLoggedInWelcome =
+    isWeb &&
+    (params.fromApp === "1" ||
+      (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("fromApp") === "1"));
 
   React.useEffect(() => {
     if (!isWeb || !user?.id || allowLoggedInWelcome) return;
     router.replace(WEB_APP_HOME_PATH as any);
+    const fallbackId = window.setTimeout(() => {
+      if (window.location.pathname === "/welcome") {
+        window.location.replace(WEB_APP_HOME_PATH);
+      }
+    }, 350);
+    return () => window.clearTimeout(fallbackId);
   }, [allowLoggedInWelcome, isWeb, user?.id]);
 
   const handleLogin = () => {
@@ -693,6 +702,10 @@ export default function WelcomeScreen() {
     }
     showAuthRequired(next, "Please login/register first to buy this course.");
   };
+
+  if (isWeb && user?.id && !allowLoggedInWelcome) {
+    return null;
+  }
 
   if (isWeb) {
     const headerLinks = [
