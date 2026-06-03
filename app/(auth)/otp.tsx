@@ -23,7 +23,7 @@ import {
 
 export default function OTPScreen() {
   const insets = useSafeAreaInsets();
-  const { phone, smsSent, devOtp, next } = useLocalSearchParams<{ phone: string; smsSent?: string; devOtp?: string; next?: string }>();
+  const { phone, smsSent, devOtp, next, modal } = useLocalSearchParams<{ phone: string; smsSent?: string; devOtp?: string; next?: string; modal?: string }>();
   const [otp, setOtp] = useState(["", "", "", "", "", ""]);
   const [isLoading, setIsLoading] = useState(false);
   const [countdown, setCountdown] = useState(30);
@@ -39,6 +39,12 @@ export default function OTPScreen() {
   const getPostAuthPath = () => {
     if (Platform.OS === "web" && typeof next === "string" && next.startsWith("/")) return next;
     return Platform.OS === "web" ? "/welcome" : "/(tabs)";
+  };
+
+  const completeWebModalAuth = () => {
+    if (Platform.OS !== "web" || modal !== "1" || typeof window === "undefined" || window.parent === window) return false;
+    window.parent.postMessage({ type: "3i-auth-success", next: getPostAuthPath() }, window.location.origin);
+    return true;
   };
 
   const startLockCountdown = (until: number) => {
@@ -173,6 +179,7 @@ export default function OTPScreen() {
       if (!result.user.profileComplete) {
         navigateToProfileSetupWithNotice();
       } else {
+        if (completeWebModalAuth()) return;
         router.replace(getPostAuthPath() as any);
       }
       return;

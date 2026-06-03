@@ -18,7 +18,7 @@ import { navigateBackFromAuth } from "@/lib/navigate-auth-back";
 export default function EmailLoginScreen() {
   const insets = useSafeAreaInsets();
   const { login, user } = useAuth();
-  const { next } = useLocalSearchParams<{ next?: string }>();
+  const { next, modal } = useLocalSearchParams<{ next?: string; modal?: string }>();
 
   const goProfileSetupAllowWeb = () => {
     if (Platform.OS === "web" && typeof window !== "undefined") {
@@ -36,6 +36,12 @@ export default function EmailLoginScreen() {
   const getPostAuthPath = () => {
     if (Platform.OS === "web" && typeof next === "string" && next.startsWith("/")) return next;
     return Platform.OS === "web" ? "/welcome" : "/(tabs)";
+  };
+
+  const completeWebModalAuth = () => {
+    if (Platform.OS !== "web" || modal !== "1" || typeof window === "undefined" || window.parent === window) return false;
+    window.parent.postMessage({ type: "3i-auth-success", next: getPostAuthPath() }, window.location.origin);
+    return true;
   };
 
   const handleLogin = async () => {
@@ -59,6 +65,7 @@ export default function EmailLoginScreen() {
       if (!data.user.profileComplete) {
         navigateToProfileSetupWithNotice();
       } else {
+        if (completeWebModalAuth()) return;
         router.replace(getPostAuthPath() as any);
       }
     } catch (err: any) {
@@ -134,7 +141,7 @@ export default function EmailLoginScreen() {
                     ? "We found a phone/email but your registration was never completed. Please sign up to create your account."
                     : "We couldn't find an account with that phone or email. Please sign up first to create your account."}
                 </Text>
-                <Pressable style={styles.incompleteBannerBtn} onPress={() => router.replace("/(auth)/login" as any)}>
+                <Pressable style={styles.incompleteBannerBtn} onPress={() => router.replace({ pathname: "/(auth)/login", params: { next, modal } } as any)}>
                   <Text style={styles.incompleteBannerBtnText}>Sign Up with Phone OTP</Text>
                   <Ionicons name="arrow-forward" size={16} color="#fff" />
                 </Pressable>
@@ -211,13 +218,13 @@ export default function EmailLoginScreen() {
               </LinearGradient>
             </Pressable>
 
-            <Pressable onPress={() => router.replace("/(auth)/login")} style={styles.otpLink}>
+            <Pressable onPress={() => router.replace({ pathname: "/(auth)/login", params: { next, modal } } as any)} style={styles.otpLink}>
               <Text style={styles.otpLinkText}>Sign in with Phone OTP instead</Text>
             </Pressable>
 
             <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 4, paddingTop: 4 }}>
               <Text style={{ fontSize: 13, fontFamily: "Inter_400Regular", color: Colors.light.textMuted }}>Don't have an account?</Text>
-              <Pressable onPress={() => router.replace("/(auth)/login")}>
+              <Pressable onPress={() => router.replace({ pathname: "/(auth)/login", params: { next, modal } } as any)}>
                 <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>Sign Up</Text>
               </Pressable>
             </View>

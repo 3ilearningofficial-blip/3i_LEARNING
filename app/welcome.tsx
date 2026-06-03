@@ -1,7 +1,7 @@
 import React from "react";
 import {
   View, Text, StyleSheet, Pressable, Image, Platform,
-  ScrollView, useWindowDimensions, Linking,
+  ScrollView, useWindowDimensions, Linking, Modal,
   type StyleProp,
   type ImageStyle,
 } from "react-native";
@@ -233,7 +233,7 @@ const WEBSITE_STATS = [
   { icon: "trophy", title: "Exam Ready", desc: "NDA, CDS and AFCAT", color: "#F59E0B" },
 ] as const;
 
-const WEBSITE_FALLBACK_CATEGORIES = ["NDA", "CDS", "AFCAT", "SSB", "Test Series"];
+const WEBSITE_EXAM_CATEGORIES = ["NDA", "CDS", "AFCAT"] as const;
 
 /** Title stays fixed; body (and images) scroll when compact so long CMS copy is readable on phone web / narrow layout. */
 function SectionTitleAndScroll({
@@ -302,6 +302,15 @@ export default function WelcomeScreen() {
   const { user } = useAuth();
   const qc = useQueryClient();
   const [webMenuOpen, setWebMenuOpen] = React.useState(false);
+  const [authPrompt, setAuthPrompt] = React.useState<{ visible: boolean; next: string; message: string }>({
+    visible: false,
+    next: "/(tabs)",
+    message: "",
+  });
+  const [infoPrompt, setInfoPrompt] = React.useState<{ visible: boolean; message: string }>({
+    visible: false,
+    message: "",
+  });
 
   const { data: cfg = {} } = useQuery<Record<string, string>>({
     queryKey: ["/api/site-settings"],
@@ -456,6 +465,14 @@ export default function WelcomeScreen() {
     else router.push("/(auth)/email-login" as any);
   };
 
+  const handleWebAppInstall = () => {
+    if (Platform.OS === "web" && typeof window !== "undefined") {
+      window.open(window.location.origin, "_blank");
+      return;
+    }
+    handleOpenWebApp();
+  };
+
   const showAbout =
     on("welcome_show_about") && (!!aboutTitle.trim() || !!aboutBody || !!aboutImage);
   const showVision =
@@ -487,11 +504,7 @@ export default function WelcomeScreen() {
     <Image source={require("@/assets/images/logo.png")} style={styles.logoImg} resizeMode="cover" />
   );
 
-  const websiteCategories = React.useMemo(() => {
-    const values = websiteCourses.map((course) => String(course.category || "").trim()).filter(Boolean);
-    const unique = Array.from(new Set(values));
-    return unique.length ? unique.slice(0, 6) : WEBSITE_FALLBACK_CATEGORIES;
-  }, [websiteCourses]);
+  const websiteCategories = WEBSITE_EXAM_CATEGORIES;
   const featuredWebsiteCourses = websiteCourses.slice(0, 6);
   const isDesktopWeb = isWeb && width >= 900;
 
@@ -501,6 +514,57 @@ export default function WelcomeScreen() {
     router.push(href as any);
   };
 
+  const showAuthRequired = (next: string, message = "Please login/register first to view this.") => {
+    blurActiveElementWeb();
+    setWebMenuOpen(false);
+    setAuthPrompt({ visible: true, next, message });
+  };
+
+  const openAuthModal = (next = "/(tabs)", message = "") => {
+    blurActiveElementWeb();
+    setWebMenuOpen(false);
+    setAuthPrompt({ visible: true, next, message });
+  };
+
+  const openProtectedWebRoute = (href: string) => {
+    if (user?.id) {
+      openWebRoute(href);
+      return;
+    }
+    showAuthRequired(href);
+  };
+
+  React.useEffect(() => {
+    if (!isWeb || typeof window === "undefined") return;
+    const onMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+      const payload = event.data as { type?: string; next?: string };
+      if (payload?.type !== "3i-auth-success") return;
+      setAuthPrompt((prev) => ({ ...prev, visible: false }));
+      router.replace((payload.next || authPrompt.next || "/welcome") as any);
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [authPrompt.next, isWeb]);
+
+  const authModalSrc = React.useMemo(() => {
+    if (!isWeb || typeof window === "undefined") return "";
+    const url = new URL("/email-login", window.location.origin);
+    url.searchParams.set("next", authPrompt.next || "/(tabs)");
+    url.searchParams.set("modal", "1");
+    return url.toString();
+  }, [authPrompt.next, isWeb]);
+
+  const openCategoryCourse = (category: string) => {
+    const normalized = category.trim().toLowerCase();
+    const course = websiteCourses.find((item) => String(item.category || "").trim().toLowerCase() === normalized);
+    if (!course?.id) {
+      setInfoPrompt({ visible: true, message: `No course available for ${category}.` });
+      return;
+    }
+    openWebRoute(`/course/${course.id}`);
+  };
+
   const openCourse = (courseId: number) => {
     const next = `/course/${courseId}`;
     blurActiveElementWeb();
@@ -508,15 +572,15 @@ export default function WelcomeScreen() {
       router.push(next as any);
       return;
     }
-    router.push({ pathname: "/(auth)/email-login", params: { next } } as any);
+    showAuthRequired(next, "Please login/register first to buy this course.");
   };
 
   if (isWeb) {
     const headerLinks = [
-      { label: "Home", onPress: () => openWebRoute("/welcome") },
-      { label: "Courses", onPress: () => openWebRoute("/(tabs)") },
-      { label: "Test Series", onPress: () => openWebRoute(user?.id ? "/(tabs)/test-series" : "/(auth)/email-login") },
-      { label: "AI Tutor", onPress: () => openWebRoute(user?.id ? "/(tabs)/ai-tutor" : "/(auth)/email-login") },
+      { label: "Home", onPress: () => openProtectedWebRoute("/(tabs)") },
+      { label: "Courses", onPress: () => openProtectedWebRoute("/(tabs)") },
+      { label: "Test Series", onPress: () => openProtectedWebRoute("/(tabs)/test-series") },
+      { label: "AI Tutor", onPress: () => openProtectedWebRoute("/(tabs)/ai-tutor") },
       ...(user?.role === "admin" ? [{ label: "Admin Dashboard", onPress: () => openWebRoute("/admin") }] : []),
     ];
 
@@ -540,7 +604,7 @@ export default function WelcomeScreen() {
                   <Text style={styles.websiteLoginButtonText}>{user.role === "admin" ? "Dashboard" : "Open App"}</Text>
                 </Pressable>
               ) : (
-                <Pressable onPress={() => openWebRoute("/(auth)/email-login")} style={styles.websiteLoginButton}>
+                <Pressable onPress={() => openAuthModal("/(tabs)")} style={styles.websiteLoginButton}>
                   <Text style={styles.websiteLoginButtonText}>Login/Register</Text>
                 </Pressable>
               )}
@@ -559,7 +623,7 @@ export default function WelcomeScreen() {
                 <Text style={styles.websiteMobileMenuText}>{link.label}</Text>
               </Pressable>
             ))}
-            <Pressable onPress={() => openWebRoute(user?.id ? "/(tabs)" : "/(auth)/email-login")} style={styles.websiteMobilePrimary}>
+            <Pressable onPress={() => (user?.id ? openWebRoute("/(tabs)") : openAuthModal("/(tabs)"))} style={styles.websiteMobilePrimary}>
               <Text style={styles.websiteLoginButtonText}>{user?.id ? "Open App" : "Login/Register"}</Text>
             </Pressable>
           </View>
@@ -579,14 +643,15 @@ export default function WelcomeScreen() {
                 <Pressable
                   onPress={() => {
                     if (featuredWebsiteCourses[0]?.id) openCourse(featuredWebsiteCourses[0].id);
-                    else openWebRoute(user?.id ? "/(tabs)" : "/(auth)/email-login");
+                    else if (user?.id) openWebRoute("/(tabs)");
+                    else showAuthRequired("/(tabs)");
                   }}
                   style={({ pressed }) => [styles.websiteHeroPrimary, pressed && styles.pressedSoft]}
                 >
                   <Text style={styles.websiteHeroPrimaryText}>{user?.id ? "Continue Learning" : "Join Now"}</Text>
                   <Ionicons name="arrow-forward" size={18} color="#FFFFFF" />
                 </Pressable>
-                <Pressable onPress={() => openWebRoute(user?.id ? "/(tabs)/test-series" : "/(auth)/email-login")} style={styles.websiteHeroSecondary}>
+                <Pressable onPress={() => openProtectedWebRoute("/(tabs)/test-series")} style={styles.websiteHeroSecondary}>
                   <Text style={styles.websiteHeroSecondaryText}>Explore Tests</Text>
                 </Pressable>
               </View>
@@ -625,7 +690,7 @@ export default function WelcomeScreen() {
               {websiteCategories.map((category, index) => (
                 <Pressable
                   key={category}
-                  onPress={() => openWebRoute("/(tabs)")}
+                  onPress={() => openCategoryCourse(category)}
                   style={({ pressed }) => [
                     styles.websiteCategoryCard,
                     { backgroundColor: ["#FFF7ED", "#EEF4FF", "#F5F3FF", "#ECFDF5"][index % 4] },
@@ -663,7 +728,7 @@ export default function WelcomeScreen() {
                     <Text style={styles.websiteCourseCategory}>{course.category || "Course"}</Text>
                   </View>
                   <Pressable
-                    onPress={() => (course.id ? openCourse(course.id) : openWebRoute(user?.id ? "/(tabs)" : "/(auth)/email-login"))}
+                    onPress={() => (course.id ? openCourse(course.id) : user?.id ? openWebRoute("/(tabs)") : showAuthRequired("/(tabs)"))}
                     style={({ pressed }) => [styles.websiteBuyButton, pressed && styles.pressedSoft]}
                   >
                     <Text style={styles.websiteBuyButtonText}>{course.is_free ? "Start Free" : "Buy Now"}</Text>
@@ -673,18 +738,94 @@ export default function WelcomeScreen() {
             </View>
           </View>
 
-          <View style={[styles.websiteAppCta, !isDesktopWeb && styles.websiteAppCtaMobile]}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.websiteAppCtaTitle}>Join students on the app today!</Text>
-              <Text style={styles.websiteAppCtaText}>Live and recorded classes, progress tracking, missions and AI help in one place.</Text>
+          {on("welcome_show_get_app") ? (
+            <View style={[styles.websiteAppCta, !isDesktopWeb && styles.websiteAppCtaCompact]}>
+              <View style={styles.websiteAppCtaHeader}>
+                <Text style={styles.websiteAppCtaTitle}>{s("welcome_get_app_title", "Join students on the app today!")}</Text>
+                <Text style={styles.websiteAppCtaText}>
+                  {s("welcome_get_app_subtitle", "You can download the app from iOS, Play Store, or continue on web.")}
+                </Text>
+              </View>
+              <View style={[styles.websiteAppOptions, !isDesktopWeb && styles.websiteAppOptionsMobile]}>
+                {on("welcome_show_google_play") ? (
+                  <Pressable onPress={handleGooglePlay} style={({ pressed }) => [styles.websiteAppOptionCard, pressed && styles.pressedSoft]}>
+                    <Ionicons name="logo-google-playstore" size={28} color="#22C55E" />
+                    <View style={styles.websiteAppOptionTextCol}>
+                      <Text style={styles.websiteAppOptionTitle}>{s("welcome_card_play_title", "Google Play")}</Text>
+                      <Text style={styles.websiteAppOptionDesc}>{s("welcome_card_play_desc", "Download Android app")}</Text>
+                    </View>
+                  </Pressable>
+                ) : null}
+                {on("welcome_show_ios") ? (
+                  <Pressable onPress={handleAppStore} style={({ pressed }) => [styles.websiteAppOptionCard, pressed && styles.pressedSoft]}>
+                    <Ionicons name="logo-apple" size={30} color={Colors.light.text} />
+                    <View style={styles.websiteAppOptionTextCol}>
+                      <Text style={styles.websiteAppOptionTitle}>{s("welcome_card_ios_title", "App Store")}</Text>
+                      <Text style={styles.websiteAppOptionDesc}>{s("welcome_card_ios_desc", "Download iOS app")}</Text>
+                    </View>
+                  </Pressable>
+                ) : null}
+                {on("welcome_show_web_app") ? (
+                  <Pressable onPress={handleWebAppInstall} style={({ pressed }) => [styles.websiteAppOptionCard, pressed && styles.pressedSoft]}>
+                    <Ionicons name="desktop-outline" size={29} color={Colors.light.primary} />
+                    <View style={styles.websiteAppOptionTextCol}>
+                      <Text style={styles.websiteAppOptionTitle}>{s("welcome_card_web_title", "Web")}</Text>
+                      <Text style={styles.websiteAppOptionDesc}>{s("welcome_card_web_desc", "Open or install the web app")}</Text>
+                    </View>
+                  </Pressable>
+                ) : null}
+              </View>
             </View>
-            <Pressable onPress={() => openWebRoute(user?.id ? "/(tabs)" : "/(auth)/email-login")} style={styles.websiteHeroPrimary}>
-              <Text style={styles.websiteHeroPrimaryText}>{user?.id ? "Open Learning Home" : "Login/Register"}</Text>
-            </Pressable>
-          </View>
+          ) : null}
 
           <Text style={styles.websiteFooter}>{s("welcome_footer", "© 2026 3i Learning. All rights reserved.")}</Text>
         </ScrollView>
+        <Modal transparent visible={authPrompt.visible} animationType="fade" onRequestClose={() => setAuthPrompt((prev) => ({ ...prev, visible: false }))}>
+          <View style={styles.websiteModalLayer}>
+            <View style={styles.websiteAuthModalCard}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Close login/register"
+                onPress={() => setAuthPrompt((prev) => ({ ...prev, visible: false }))}
+                style={styles.websiteAuthModalClose}
+              >
+                <Ionicons name="close" size={22} color={Colors.light.text} />
+              </Pressable>
+              {!!authPrompt.message && (
+                <View style={styles.websiteAuthModalNotice}>
+                  <Ionicons name="lock-closed" size={18} color={Colors.light.primary} />
+                  <Text style={styles.websiteAuthModalNoticeText}>{authPrompt.message}</Text>
+                </View>
+              )}
+              {authModalSrc ? (
+                React.createElement("iframe", {
+                  src: authModalSrc,
+                  title: "Login/Register",
+                  style: {
+                    width: "100%",
+                    height: "100%",
+                    border: "0",
+                    borderRadius: 20,
+                    background: "#F8FAFC",
+                    display: "block",
+                  },
+                })
+              ) : null}
+            </View>
+          </View>
+        </Modal>
+        <Modal transparent visible={infoPrompt.visible} animationType="fade" onRequestClose={() => setInfoPrompt({ visible: false, message: "" })}>
+          <View style={styles.websiteModalLayer}>
+            <View style={styles.websiteModalCard}>
+              <Ionicons name="information-circle" size={30} color={Colors.light.primary} />
+              <Text style={styles.websiteModalTitle}>No Course Available</Text>
+              <Text style={styles.websiteModalText}>{infoPrompt.message}</Text>
+              <Pressable onPress={() => setInfoPrompt({ visible: false, message: "" })} style={[styles.websiteModalButton, styles.websiteModalButtonPrimary, { alignSelf: "stretch" }]}>
+                <Text style={styles.websiteModalButtonPrimaryText}>OK</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Modal>
       </View>
     );
   }
@@ -1354,16 +1495,13 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     backgroundColor: "#EEF4FF",
     padding: 30,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
     gap: 20,
   },
-  websiteAppCtaMobile: {
+  websiteAppCtaCompact: {
     marginHorizontal: 20,
-    flexDirection: "column",
-    alignItems: "stretch",
+    padding: 22,
   },
+  websiteAppCtaHeader: { gap: 8 },
   websiteAppCtaTitle: {
     fontFamily: "Inter_700Bold",
     fontSize: 25,
@@ -1376,12 +1514,164 @@ const styles = StyleSheet.create({
     marginTop: 8,
     lineHeight: 21,
   },
+  websiteAppOptions: {
+    flexDirection: "row",
+    gap: 14,
+    flexWrap: "wrap",
+  },
+  websiteAppOptionsMobile: {
+    flexDirection: "column",
+  },
+  websiteAppOptionCard: {
+    flex: 1,
+    minWidth: 210,
+    minHeight: 82,
+    borderRadius: 18,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+  },
+  websiteAppOptionTextCol: {
+    flex: 1,
+    minWidth: 0,
+    gap: 4,
+  },
+  websiteAppOptionTitle: {
+    fontFamily: "Inter_700Bold",
+    fontSize: 16,
+    color: Colors.light.text,
+  },
+  websiteAppOptionDesc: {
+    fontFamily: "Inter_400Regular",
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+    lineHeight: 17,
+  },
   websiteFooter: {
     fontFamily: "Inter_500Medium",
     fontSize: 13,
     color: Colors.light.textMuted,
     textAlign: "center",
     paddingHorizontal: 20,
+  },
+  websiteModalLayer: {
+    flex: 1,
+    backgroundColor: "rgba(15, 23, 42, 0.42)",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 20,
+  },
+  websiteModalCard: {
+    width: "100%",
+    maxWidth: 420,
+    borderRadius: 22,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    padding: 24,
+    alignItems: "center",
+    gap: 12,
+    ...(Platform.OS === "web" ? ({ boxShadow: "0px 24px 70px rgba(15, 23, 42, 0.22)" } as object) : {}),
+  },
+  websiteModalTitle: {
+    fontFamily: "Inter_700Bold",
+    fontSize: 20,
+    color: Colors.light.text,
+    textAlign: "center",
+  },
+  websiteModalText: {
+    fontFamily: "Inter_400Regular",
+    fontSize: 15,
+    color: Colors.light.textSecondary,
+    lineHeight: 22,
+    textAlign: "center",
+  },
+  websiteModalActions: {
+    flexDirection: "row",
+    gap: 10,
+    width: "100%",
+    paddingTop: 6,
+  },
+  websiteModalButton: {
+    flex: 1,
+    minHeight: 46,
+    borderRadius: 13,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 14,
+  },
+  websiteModalButtonPrimary: {
+    backgroundColor: Colors.light.primary,
+  },
+  websiteModalButtonSecondary: {
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  websiteModalButtonPrimaryText: {
+    fontFamily: "Inter_700Bold",
+    fontSize: 14,
+    color: "#FFFFFF",
+  },
+  websiteModalButtonSecondaryText: {
+    fontFamily: "Inter_700Bold",
+    fontSize: 14,
+    color: Colors.light.text,
+  },
+  websiteAuthModalCard: {
+    width: "100%",
+    maxWidth: 520,
+    height: "86%",
+    maxHeight: 720,
+    minHeight: 560,
+    borderRadius: 26,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    overflow: "hidden",
+    position: "relative",
+    ...(Platform.OS === "web" ? ({ boxShadow: "0px 24px 80px rgba(15, 23, 42, 0.28)" } as object) : {}),
+  },
+  websiteAuthModalClose: {
+    position: "absolute",
+    top: 12,
+    right: 12,
+    zIndex: 5,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  websiteAuthModalNotice: {
+    position: "absolute",
+    top: 14,
+    left: 14,
+    right: 60,
+    zIndex: 4,
+    minHeight: 36,
+    borderRadius: 14,
+    backgroundColor: "#EEF4FF",
+    borderWidth: 1,
+    borderColor: "#BFDBFE",
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  websiteAuthModalNoticeText: {
+    flex: 1,
+    fontFamily: "Inter_600SemiBold",
+    fontSize: 12,
+    color: Colors.light.primary,
   },
   container: { flex: 1, backgroundColor: Colors.light.background },
   containerWeb: { width: "100%", maxWidth: "100%", alignSelf: "stretch" },

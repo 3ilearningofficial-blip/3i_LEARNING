@@ -25,7 +25,7 @@ import {
 export default function LoginScreen() {
   const insets = useSafeAreaInsets();
   const { login } = useAuth();
-  const { next } = useLocalSearchParams<{ next?: string }>();
+  const { next, modal } = useLocalSearchParams<{ next?: string; modal?: string }>();
   const [phone, setPhone] = useState("");
   const [otp, setOtp] = useState("");
   const [otpSent, setOtpSent] = useState(false);
@@ -42,6 +42,12 @@ export default function LoginScreen() {
   const getPostAuthPath = () => {
     if (Platform.OS === "web" && typeof next === "string" && next.startsWith("/")) return next;
     return Platform.OS === "web" ? "/welcome" : "/(tabs)";
+  };
+
+  const completeWebModalAuth = () => {
+    if (Platform.OS !== "web" || modal !== "1" || typeof window === "undefined" || window.parent === window) return false;
+    window.parent.postMessage({ type: "3i-auth-success", next: getPostAuthPath() }, window.location.origin);
+    return true;
   };
 
   const startResendCountdownSeconds = (seconds: number) => {
@@ -179,6 +185,7 @@ export default function LoginScreen() {
       if (!result.user.profileComplete) {
         navigateToProfileSetupWithNotice();
       } else {
+        if (completeWebModalAuth()) return;
         router.replace(getPostAuthPath() as any);
       }
       return;
@@ -327,7 +334,7 @@ export default function LoginScreen() {
 
             <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 4, paddingTop: 4 }}>
               <Text style={{ fontSize: 13, fontFamily: "Inter_400Regular", color: Colors.light.textMuted }}>Already registered?</Text>
-              <Pressable onPress={() => router.replace("/(auth)/email-login" as any)}>
+              <Pressable onPress={() => router.replace({ pathname: "/(auth)/email-login", params: { next, modal } } as any)}>
                 <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>Sign In</Text>
               </Pressable>
             </View>
