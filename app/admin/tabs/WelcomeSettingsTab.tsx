@@ -10,30 +10,11 @@ import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
 import { uploadToR2 } from "@/lib/r2-upload";
 import {
   WELCOME_LOGO_DISPLAY_ADMIN_HINT,
-  WELCOME_PANKAJ_PHOTO_ADMIN_HINT,
-  WELCOME_SECTION_IMAGE_ADMIN_HINT,
 } from "@/lib/welcome-image-sizes";
 import Colors from "@/constants/colors";
 
 function validateWelcomeJsonForSave(settings: Record<string, string>): string | null {
-  const pairs: [string, string][] = [
-    ["welcome_my_course_json", "Course cards"],
-    ["welcome_extra_sections_json", "Extra sections"],
-    ["welcome_features_json", "Features override"],
-  ];
-  for (const [key, label] of pairs) {
-    const raw = settings[key];
-    if (raw == null || !String(raw).trim()) continue;
-    try {
-      const parsed = JSON.parse(String(raw));
-      if (!Array.isArray(parsed)) {
-        return `${label}: must be a JSON array — start with [ and end with ].`;
-      }
-    } catch (e: any) {
-      const msg = e?.message ? String(e.message) : String(e);
-      return `${label}: invalid JSON (${msg}). Do not paste line breaks inside "desc"; use \\n instead. Ensure the box starts with [{ and ends with }].`;
-    }
-  }
+  void settings;
   return null;
 }
 
@@ -46,40 +27,9 @@ export function WelcomeSettingsTab() {
   const [welcomeUploadProgress, setWelcomeUploadProgress] = React.useState<{ key: string; pct: number } | null>(null);
 
   const defaults: Record<string, string> = {
-    welcome_headline: "Master Mathematics\nUnder Pankaj Sir Guidance",
     welcome_tagline: "Master Mathematics Under Pankaj Sir Guidance",
     welcome_brand_text: "3i Learning",
     welcome_logo_url: "",
-    welcome_nav_line: "Courses · Live Classes · OMR Tests · Daily Missions · AI Tutor",
-    welcome_show_nav: "true",
-    welcome_show_subheadline: "false",
-    welcome_subheadline: "Courses, live classes, OMR tests, daily missions and AI tutoring — everything to ace your exams.",
-    welcome_login_btn: "Login — It's Free",
-    welcome_signup_btn: "Sign Up",
-    welcome_show_pankaj_sir: "true",
-    welcome_pankaj_title: "About Pankaj Sir",
-    welcome_pankaj_body:
-      "Pankaj Sir leads mathematics sessions with a focus on fundamentals, exam patterns, and consistent practice — mentoring students for NDA, CDS, AFCAT, and related entrances.",
-    welcome_pankaj_photo_url: "",
-    welcome_show_about: "true",
-    welcome_about_title: "About",
-    welcome_about_body:
-      "3i Learning offers expert-led mathematics coaching for defence entrance exams — with structured video courses, live classes, OMR-style tests, daily missions, and AI tutoring.",
-    welcome_about_image_url: "",
-    welcome_show_vision: "true",
-    welcome_vision_title: "Our Vision",
-    welcome_vision_body:
-      "We want every learner to study with clarity and confidence — fair access, disciplined practice, and teaching that respects your time.",
-    welcome_vision_image_url: "",
-    welcome_show_my_course: "true",
-    welcome_my_course_title: "My Courses",
-    welcome_my_course_intro: "",
-    welcome_my_course_json:
-      '[{"title":"CDS / AFCAT / NDA","desc":"Complete preparation with structured syllabus, live support, and full-length mocks."},{"title":"Test Series","desc":"OMR-style tests with analytics, negative marking, and performance tracking."}]',
-    welcome_my_course_image_url: "",
-    welcome_extra_sections_json: "[]",
-    welcome_features_json: "",
-    welcome_show_features: "true",
     welcome_show_get_app: "true",
     welcome_get_app_title: "Join students on the app today!",
     welcome_get_app_subtitle: "You can download the app from iOS, Play Store, or continue on web.",
@@ -320,149 +270,6 @@ export function WelcomeSettingsTab() {
         <View style={{ gap: 4 }}>
           <Text style={labelStyle}>Tagline (single line on web)</Text>
           <TextInput style={inputStyle} value={val("welcome_tagline")} onChangeText={v => set("welcome_tagline", v)} placeholder="Master Mathematics Under Pankaj Sir Guidance" />
-        </View>
-        <View style={{ gap: 4 }}>
-          <Text style={labelStyle}>Navigation line (legacy/native only)</Text>
-          <TextInput style={inputStyle} value={val("welcome_nav_line")} onChangeText={v => set("welcome_nav_line", v)} placeholder="Courses · Live Classes · …" />
-        </View>
-        <View style={{ gap: 4 }}>
-          <Text style={labelStyle}>Headline (legacy/native only)</Text>
-          <TextInput style={[inputStyle, { minHeight: 50, textAlignVertical: "top" }]} multiline value={val("welcome_headline")} onChangeText={v => set("welcome_headline", v)} placeholder="Multi-line headline" />
-        </View>
-        {toggleRow("Show navigation line", "welcome_show_nav")}
-        {toggleRow("Show subheadline under hero", "welcome_show_subheadline")}
-        <View style={{ gap: 4 }}>
-          <Text style={labelStyle}>Subheadline</Text>
-          <TextInput style={[inputStyle, { minHeight: 44, textAlignVertical: "top" }]} multiline value={val("welcome_subheadline")} onChangeText={v => set("welcome_subheadline", v)} />
-        </View>
-        <View style={{ gap: 4 }}>
-          <Text style={labelStyle}>Login button text (legacy/native only)</Text>
-          <TextInput style={inputStyle} value={val("welcome_login_btn")} onChangeText={v => set("welcome_login_btn", v)} />
-        </View>
-        <View style={{ gap: 4 }}>
-          <Text style={labelStyle}>Sign up button text (legacy/native only)</Text>
-          <TextInput style={inputStyle} value={val("welcome_signup_btn")} onChangeText={v => set("welcome_signup_btn", v)} />
-        </View>
-      </View>
-
-      <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: "#E5E7EB" }}>
-        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Legacy/native — About Pankaj Sir</Text>
-        <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", lineHeight: 17 }}>
-          This block is not shown on the new website-style web homepage.
-        </Text>
-        {toggleRow("Show About Pankaj Sir block", "welcome_show_pankaj_sir")}
-        <View style={{ gap: 4 }}>
-          <Text style={labelStyle}>Section title</Text>
-          <TextInput style={inputStyle} value={val("welcome_pankaj_title")} onChangeText={v => set("welcome_pankaj_title", v)} />
-        </View>
-        <View style={{ gap: 4 }}>
-          <Text style={labelStyle}>Body</Text>
-          <TextInput
-            style={[inputStyle, { minHeight: 100, textAlignVertical: "top" }]}
-            multiline
-            value={val("welcome_pankaj_body")}
-            onChangeText={v => set("welcome_pankaj_body", v)}
-          />
-        </View>
-        {imageUrlRow("Pankaj Sir photo (shown in circular frame on welcome)", "welcome_pankaj_photo_url", WELCOME_PANKAJ_PHOTO_ADMIN_HINT)}
-        <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", lineHeight: 17 }}>
-          Until you add a photo, the welcome page shows a placeholder circle.
-        </Text>
-      </View>
-
-      <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: "#E5E7EB" }}>
-        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Legacy/native — About section</Text>
-        {toggleRow("Show About block", "welcome_show_about")}
-        <View style={{ gap: 4 }}>
-          <Text style={labelStyle}>Title</Text>
-          <TextInput style={inputStyle} value={val("welcome_about_title")} onChangeText={v => set("welcome_about_title", v)} />
-        </View>
-        <View style={{ gap: 4 }}>
-          <Text style={labelStyle}>Body</Text>
-          <TextInput style={[inputStyle, { minHeight: 100, textAlignVertical: "top" }]} multiline value={val("welcome_about_body")} onChangeText={v => set("welcome_about_body", v)} />
-        </View>
-        {imageUrlRow("About image (optional)", "welcome_about_image_url", WELCOME_SECTION_IMAGE_ADMIN_HINT)}
-        <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", lineHeight: 17 }}>
-          On narrow screens under 640px wide, About text shows about six lines with an ellipsis — keep a shorter intro here or paste the full story for laptop visitors.
-        </Text>
-      </View>
-
-      <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: "#E5E7EB" }}>
-        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Legacy/native — Our Vision</Text>
-        {toggleRow("Show Our Vision block", "welcome_show_vision")}
-        <View style={{ gap: 4 }}>
-          <Text style={labelStyle}>Title</Text>
-          <TextInput style={inputStyle} value={val("welcome_vision_title")} onChangeText={v => set("welcome_vision_title", v)} />
-        </View>
-        <View style={{ gap: 4 }}>
-          <Text style={labelStyle}>Body</Text>
-          <TextInput style={[inputStyle, { minHeight: 100, textAlignVertical: "top" }]} multiline value={val("welcome_vision_body")} onChangeText={v => set("welcome_vision_body", v)} />
-        </View>
-        {imageUrlRow("Our Vision image (optional)", "welcome_vision_image_url", WELCOME_SECTION_IMAGE_ADMIN_HINT)}
-        <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", lineHeight: 17 }}>
-          Same ellipsis rule as About on narrow screens (under 640px).
-        </Text>
-      </View>
-
-      <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: "#E5E7EB" }}>
-        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Legacy/native — My courses block</Text>
-        <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", lineHeight: 17 }}>
-          The new web homepage popular courses section uses actual course data from Course Management, not this JSON.
-        </Text>
-        {toggleRow("Show My courses", "welcome_show_my_course")}
-        <View style={{ gap: 4 }}>
-          <Text style={labelStyle}>Section title</Text>
-          <TextInput style={inputStyle} value={val("welcome_my_course_title")} onChangeText={v => set("welcome_my_course_title", v)} />
-        </View>
-        <View style={{ gap: 4 }}>
-          <Text style={labelStyle}>Intro (optional)</Text>
-          <TextInput style={[inputStyle, { minHeight: 44, textAlignVertical: "top" }]} multiline value={val("welcome_my_course_intro")} onChangeText={v => set("welcome_my_course_intro", v)} />
-        </View>
-        {imageUrlRow("My courses image (optional)", "welcome_my_course_image_url", WELCOME_SECTION_IMAGE_ADMIN_HINT)}
-        <View style={{ gap: 4 }}>
-          <Text style={labelStyle}>Course cards (JSON array of title + desc)</Text>
-          <TextInput
-            style={[inputStyle, { minHeight: 120, fontFamily: Platform.OS === "web" ? "monospace" : undefined, textAlignVertical: "top" }]}
-            multiline
-            value={val("welcome_my_course_json")}
-            onChangeText={v => set("welcome_my_course_json", v)}
-            placeholder='[{"title":"...","desc":"..."}]'
-            autoCapitalize="none"
-          />
-          <Text style={{ fontSize: 12, color: "#B45309", fontFamily: "Inter_400Regular", lineHeight: 17 }}>
-            Must be valid JSON. If descriptions do not appear on the site, the usual cause is illegal line breaks inside a string — press Enter creates an error; use literal \n in the desc text instead.
-            The first character must be [ and each title/desc pair must stay inside "...". Save is blocked until JSON parses.
-          </Text>
-        </View>
-      </View>
-
-      <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: "#E5E7EB" }}>
-        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Legacy/native — Extra sections (optional)</Text>
-        <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>
-          JSON array: {"[{ \"title\": \"...\", \"body\": \"...\", \"imageUrl\": \"...\" }, ...]"}
-        </Text>
-        <TextInput
-          style={[inputStyle, { minHeight: 120, fontFamily: Platform.OS === "web" ? "monospace" : undefined, textAlignVertical: "top" }]}
-          multiline
-          value={val("welcome_extra_sections_json")}
-          onChangeText={v => set("welcome_extra_sections_json", v)}
-          autoCapitalize="none"
-        />
-      </View>
-
-      <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: "#E5E7EB" }}>
-        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Legacy/native — Feature grid</Text>
-        {toggleRow("Show features grid", "welcome_show_features")}
-        <View style={{ gap: 4 }}>
-          <Text style={labelStyle}>Override features (JSON, or leave empty for defaults)</Text>
-          <TextInput
-            style={[inputStyle, { minHeight: 140, fontFamily: Platform.OS === "web" ? "monospace" : undefined, textAlignVertical: "top" }]}
-            multiline
-            value={val("welcome_features_json")}
-            onChangeText={v => set("welcome_features_json", v)}
-            placeholder='[{"icon":"videocam","color":"#1A56DB","title":"...","desc":"..."}]'
-            autoCapitalize="none"
-          />
         </View>
       </View>
 
