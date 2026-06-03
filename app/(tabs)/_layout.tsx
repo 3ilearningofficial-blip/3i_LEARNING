@@ -64,16 +64,18 @@ export default function TabLayout() {
         tabBarActiveTintColor: Colors.light.primary,
         tabBarInactiveTintColor: Colors.light.tabIconDefault,
         tabBarLabelStyle: { fontFamily: "Inter_500Medium", fontSize: 11, marginBottom: 2 },
-        tabBarStyle: {
-          position: isWeb ? "relative" : "absolute",
-          backgroundColor: isIOS ? "transparent" : isWeb ? "#ffffff" : "#ffffff",
-          borderTopWidth: isWeb ? 1 : 0,
-          borderTopColor: Colors.light.border,
-          elevation: 0,
-          paddingBottom: tabBarBottomInset,
-          paddingTop: isWeb ? 6 : 4,
-          height: isWeb ? 84 : Platform.OS === "android" ? androidBaseTabHeight + tabBarBottomInset : undefined,
-        },
+        tabBarStyle: isWeb
+          ? { display: "none" }
+          : {
+              position: "absolute",
+              backgroundColor: isIOS ? "transparent" : "#ffffff",
+              borderTopWidth: 0,
+              borderTopColor: Colors.light.border,
+              elevation: 0,
+              paddingBottom: tabBarBottomInset,
+              paddingTop: 4,
+              height: Platform.OS === "android" ? androidBaseTabHeight + tabBarBottomInset : undefined,
+            },
         tabBarBackground: () =>
           isIOS ? (
             <BlurView intensity={90} tint="light" style={StyleSheet.absoluteFill} />

@@ -10875,6 +10875,381 @@ var init_admin_live_class_manage_routes = __esm({
   }
 });
 
+// backend/classroom-sync.ts
+import { URL as URL2 } from "node:url";
+import { createRequire as createRequire2 } from "node:module";
+import {
+  TLSocketRoom,
+  InMemorySyncStorage,
+  TLSyncErrorCloseEventCode,
+  TLSyncErrorCloseEventReason
+} from "@tldraw/sync-core";
+import { createHmac as createHmac3, timingSafeEqual as timingSafeEqual4 } from "node:crypto";
+function syncB64Url(buf) {
+  return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+function classroomSyncSecret() {
+  const s = process.env.OTP_HMAC_SECRET;
+  if (!s) throw new Error("OTP_HMAC_SECRET must be set");
+  return s;
+}
+function signClassroomSyncToken(userId, liveClassId) {
+  const body = syncB64Url(Buffer.from(JSON.stringify({ uid: userId, lc: String(liveClassId), exp: Date.now() + CLASSROOM_SYNC_TOKEN_TTL_MS }), "utf8"));
+  const sig = syncB64Url(createHmac3("sha256", classroomSyncSecret()).update(body).digest());
+  return body + "." + sig;
+}
+function verifyClassroomSyncToken(token) {
+  if (!token || typeof token !== "string") return null;
+  const dot = token.indexOf(".");
+  if (dot <= 0) return null;
+  const body = token.slice(0, dot);
+  const sig = token.slice(dot + 1);
+  const expected = syncB64Url(createHmac3("sha256", classroomSyncSecret()).update(body).digest());
+  const a = Buffer.from(sig, "utf8");
+  const b = Buffer.from(expected, "utf8");
+  if (a.length !== b.length || !timingSafeEqual4(a, b)) return null;
+  try {
+    const pad = body.length % 4 === 0 ? "" : "=".repeat(4 - body.length % 4);
+    const json = Buffer.from(body.replace(/-/g, "+").replace(/_/g, "/") + pad, "base64").toString("utf8");
+    const obj = JSON.parse(json);
+    if (typeof obj.exp !== "number" || obj.exp < Date.now()) return null;
+    if (typeof obj.uid !== "number" || !Number.isFinite(obj.uid)) return null;
+    return { uid: obj.uid, lc: String(obj.lc) };
+  } catch {
+    return null;
+  }
+}
+function sanitizeRoomId(roomId) {
+  return roomId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 120);
+}
+function parseLiveClassIdFromRoomId(roomId) {
+  return roomId.replace(/^lc-/, "").replace(/-preview$/, "");
+}
+function isPreviewRoom(roomId) {
+  return roomId.endsWith("-preview");
+}
+function isR2Configured() {
+  return !!(process.env.R2_ACCOUNT_ID && process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY && process.env.R2_BUCKET_NAME);
+}
+async function fetchSnapshotFromR2(getR2Client, objectKey) {
+  try {
+    const { GetObjectCommand } = await import("@aws-sdk/client-s3");
+    const r2 = await getR2Client();
+    const bucket = String(process.env.R2_BUCKET_NAME || "");
+    const result = await r2.send(new GetObjectCommand({ Bucket: bucket, Key: objectKey }));
+    if (!result.Body) return null;
+    const chunks = [];
+    for await (const chunk of result.Body) {
+      chunks.push(chunk instanceof Uint8Array ? chunk : Buffer.from(chunk));
+    }
+    const json = Buffer.concat(chunks).toString("utf-8");
+    return JSON.parse(json);
+  } catch (err) {
+    console.warn("[classroom-checkpoint] R2 GET failed:", err?.message || String(err));
+    return null;
+  }
+}
+async function uploadSnapshotToR2(getR2Client, objectKey, snapshot) {
+  try {
+    const { PutObjectCommand } = await import("@aws-sdk/client-s3");
+    const r2 = await getR2Client();
+    const bucket = String(process.env.R2_BUCKET_NAME || "");
+    const body = Buffer.from(JSON.stringify(snapshot), "utf-8");
+    await r2.send(
+      new PutObjectCommand({
+        Bucket: bucket,
+        Key: objectKey,
+        Body: body,
+        ContentType: "application/json"
+      })
+    );
+    return true;
+  } catch (err) {
+    console.warn("[classroom-checkpoint] R2 PUT failed:", err?.message || String(err));
+    return false;
+  }
+}
+async function loadAutoCheckpointSnapshot(db2, liveClassId, getR2Client) {
+  if (!isR2Configured()) return null;
+  try {
+    const result = await db2.query(
+      "SELECT board_sync_checkpoint_url FROM live_classes WHERE id = $1",
+      [liveClassId]
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    const storedUrl = String(row.board_sync_checkpoint_url || "");
+    if (!storedUrl.startsWith(AUTO_CHECKPOINT_KEY_PREFIX)) return null;
+    console.log(
+      `[classroom-checkpoint] Restoring class=${liveClassId} key=${storedUrl}`
+    );
+    const snapshot = await fetchSnapshotFromR2(getR2Client, storedUrl);
+    if (snapshot) {
+      console.log(
+        `[classroom-checkpoint] Restored class=${liveClassId} docs=${snapshot.documents?.length ?? 0}`
+      );
+    }
+    return snapshot;
+  } catch (err) {
+    console.warn("[classroom-checkpoint] Load error:", err?.message || String(err));
+    return null;
+  }
+}
+async function runCheckpoint(roomId, liveClassId, room, db2, getR2Client) {
+  const state = checkpointStates.get(roomId);
+  if (!state || state.saving || room.isClosed() || !isR2Configured()) return;
+  const currentClock = room.getCurrentDocumentClock();
+  if (currentClock === state.lastSavedClock) return;
+  state.saving = true;
+  try {
+    const snapshot = room.getCurrentSnapshot();
+    const timestamp = Date.now();
+    const key = `${AUTO_CHECKPOINT_KEY_PREFIX}lc-${liveClassId}-${timestamp}.json`;
+    const ok = await uploadSnapshotToR2(getR2Client, key, snapshot);
+    if (!ok) return;
+    await db2.query(
+      "UPDATE live_classes SET board_sync_checkpoint_url = $1, board_checkpoint_at = $2 WHERE id = $3",
+      [key, timestamp, liveClassId]
+    );
+    state.lastSavedClock = currentClock;
+    console.log(
+      `[classroom-checkpoint] Saved class=${liveClassId} clock=${currentClock} key=${key}`
+    );
+  } catch (err) {
+    console.warn("[classroom-checkpoint] Save error:", err?.message || String(err));
+  } finally {
+    state.saving = false;
+  }
+}
+function scheduleCheckpoint(roomId, liveClassId, room, db2, getR2Client) {
+  const state = checkpointStates.get(roomId);
+  if (!state || state.timer !== null) return;
+  if (isPreviewRoom(roomId)) return;
+  state.timer = setTimeout(() => {
+    state.timer = null;
+    void runCheckpoint(roomId, liveClassId, room, db2, getR2Client);
+  }, AUTO_CHECKPOINT_INTERVAL_MS);
+}
+async function makeOrLoadRoom(roomId, liveClassId, db2, getR2Client) {
+  const id = sanitizeRoomId(roomId);
+  const existing = rooms.get(id);
+  if (existing && !existing.isClosed()) return existing;
+  const pending = roomLoadingPromises.get(id);
+  if (pending) return pending;
+  const loadPromise = (async () => {
+    try {
+      let snapshot = null;
+      if (!isPreviewRoom(id)) {
+        snapshot = await Promise.race([
+          loadAutoCheckpointSnapshot(db2, liveClassId, getR2Client),
+          new Promise(
+            (resolve2) => setTimeout(() => resolve2(null), AUTO_CHECKPOINT_LOAD_TIMEOUT_MS)
+          )
+        ]);
+      }
+      const storage = snapshot ? new InMemorySyncStorage({ snapshot }) : new InMemorySyncStorage();
+      const cpState = {
+        timer: null,
+        lastSavedClock: storage.getClock(),
+        saving: false
+      };
+      checkpointStates.set(id, cpState);
+      const room = new TLSocketRoom({
+        storage,
+        onSessionRemoved(roomInstance, args) {
+          if (args.numSessionsRemaining === 0) {
+            void teardownRoomIfAllowed(id, liveClassId, roomInstance, db2, getR2Client);
+          }
+        }
+      });
+      if (!isPreviewRoom(id) && isR2Configured()) {
+        storage.onChange(() => {
+          scheduleCheckpoint(id, liveClassId, room, db2, getR2Client);
+        });
+      }
+      rooms.set(id, room);
+      return room;
+    } finally {
+      roomLoadingPromises.delete(id);
+    }
+  })();
+  roomLoadingPromises.set(id, loadPromise);
+  return loadPromise;
+}
+function cleanupCheckpointState(roomId) {
+  const state = checkpointStates.get(roomId);
+  if (state?.timer !== null && state?.timer !== void 0) {
+    clearTimeout(state.timer);
+  }
+  checkpointStates.delete(roomId);
+}
+async function teardownRoomIfAllowed(roomId, liveClassId, roomInstance, db2, getR2Client) {
+  if (roomId.endsWith("-preview")) {
+    roomInstance.close();
+    rooms.delete(roomId);
+    cleanupCheckpointState(roomId);
+    return;
+  }
+  try {
+    const r = await db2.query(
+      "SELECT is_live, is_completed FROM live_classes WHERE id = $1",
+      [liveClassId]
+    );
+    const lc = r.rows[0];
+    if (lc && Boolean(lc.is_live) && !Boolean(lc.is_completed)) {
+      return;
+    }
+  } catch (e) {
+    console.warn("[classroom-sync] could not check live status before teardown:", e);
+  }
+  const state = checkpointStates.get(roomId);
+  if (state) {
+    if (state.timer !== null) {
+      clearTimeout(state.timer);
+      state.timer = null;
+    }
+    try {
+      await Promise.race([
+        runCheckpoint(roomId, liveClassId, roomInstance, db2, getR2Client),
+        new Promise(
+          (resolve2) => setTimeout(resolve2, AUTO_CHECKPOINT_TEARDOWN_TIMEOUT_MS)
+        )
+      ]);
+    } catch {
+    }
+  }
+  roomInstance.close();
+  rooms.delete(roomId);
+  cleanupCheckpointState(roomId);
+}
+function parseSessionId(url) {
+  const sid = url.searchParams.get("syncClientId") || url.searchParams.get("sessionId");
+  if (sid && sid.trim()) return sid.trim().slice(0, 128);
+  return `sess-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+async function authenticateClassroomSocket(db2, req, roomId, pathToken) {
+  const url = new URL2(req.url || "", "http://localhost");
+  const liveClassId = roomId.replace(/^lc-/, "").replace(/-preview$/, "");
+  let user = null;
+  const verified = verifyClassroomSyncToken(pathToken);
+  if (verified && verified.lc === liveClassId) {
+    const r = await db2.query(
+      "SELECT id, role, COALESCE(is_blocked, FALSE) AS is_blocked FROM users WHERE id = $1",
+      [verified.uid]
+    );
+    const row = r.rows[0];
+    if (row && !row.is_blocked) user = { id: Number(row.id), role: String(row.role) };
+  }
+  if (!user) {
+    const token = url.searchParams.get("access_token") || url.searchParams.get("token") || "";
+    const fakeReq = {
+      headers: {
+        ...token ? { authorization: `Bearer ${token}` } : {},
+        cookie: req.headers.cookie
+      },
+      session: req.session ?? {}
+    };
+    const resolved = await getAuthUserFromRequest(fakeReq, db2);
+    if (resolved) user = { id: resolved.id, role: resolved.role };
+  }
+  if (!user) return { ok: false, status: 401, message: "Unauthorized" };
+  const lcResult = await db2.query(
+    "SELECT * FROM live_classes WHERE id = $1",
+    [liveClassId]
+  );
+  const lc = lcResult.rows[0];
+  if (!lc) return { ok: false, status: 404, message: "Live class not found" };
+  if (String(lc.stream_type || "").toLowerCase() !== "classroom") {
+    return { ok: false, status: 400, message: "Not a classroom stream" };
+  }
+  const canAccess = await userCanAccessLiveClassContent(db2, user, lc);
+  if (!canAccess) return { ok: false, status: 403, message: "Access denied" };
+  const isPreview = roomId.endsWith("-preview");
+  const isAdmin = user.role === "admin";
+  if (!isPreview && !isAdmin && (!lc.is_live || lc.is_completed)) {
+    return { ok: false, status: 403, message: "Class is not live" };
+  }
+  const isReadonly = user.role !== "admin";
+  return { ok: true, user: { id: user.id, role: user.role }, isReadonly };
+}
+function syncCloseReason(status) {
+  if (status === 401) return TLSyncErrorCloseEventReason.NOT_AUTHENTICATED;
+  if (status === 404) return TLSyncErrorCloseEventReason.NOT_FOUND;
+  return TLSyncErrorCloseEventReason.FORBIDDEN;
+}
+function attachClassroomSyncServer(httpServer, db2, getR2Client) {
+  const wss = new WebSocketServer({ noServer: true });
+  httpServer.on("upgrade", (req, socket, head) => {
+    const url = new URL2(req.url || "", "http://localhost");
+    const match = url.pathname.match(/^\/classroom-sync\/([^/]+)(?:\/([^/]+))?$/);
+    if (!match) return;
+    wss.handleUpgrade(req, socket, head, (socketConn) => {
+      const pathToken = match[2] ? decodeURIComponent(match[2]) : null;
+      void handleConnection(socketConn, req, match[1], db2, getR2Client, pathToken);
+    });
+  });
+}
+async function handleConnection(ws, req, rawRoomId, db2, getR2Client, pathToken = null) {
+  const caughtMessages = [];
+  const collect = (data) => {
+    caughtMessages.push(Buffer.isBuffer(data) ? data : Buffer.from(data));
+  };
+  ws.on("message", collect);
+  const auth2 = await authenticateClassroomSocket(db2, req, rawRoomId, pathToken);
+  if (!auth2.ok) {
+    ws.off("message", collect);
+    ws.close(TLSyncErrorCloseEventCode, syncCloseReason(auth2.status));
+    return;
+  }
+  const roomId = sanitizeRoomId(rawRoomId);
+  const liveClassId = parseLiveClassIdFromRoomId(roomId);
+  const url = new URL2(req.url || "", "http://localhost");
+  const sessionId = parseSessionId(url);
+  const room = await makeOrLoadRoom(roomId, liveClassId, db2, getR2Client);
+  room.handleSocketConnect({
+    sessionId,
+    socket: ws,
+    isReadonly: auth2.isReadonly
+  });
+  ws.off("message", collect);
+  for (const msg of caughtMessages) {
+    ws.emit(
+      "message",
+      msg
+    );
+  }
+}
+var require3, WebSocketServer, CLASSROOM_SYNC_TOKEN_TTL_MS, rooms, roomLoadingPromises, checkpointStates, AUTO_CHECKPOINT_INTERVAL_MS, AUTO_CHECKPOINT_KEY_PREFIX, AUTO_CHECKPOINT_LOAD_TIMEOUT_MS, AUTO_CHECKPOINT_TEARDOWN_TIMEOUT_MS, CHECKPOINT_CLEANUP_INTERVAL_MS;
+var init_classroom_sync = __esm({
+  "backend/classroom-sync.ts"() {
+    "use strict";
+    init_auth_utils();
+    init_live_class_access();
+    require3 = createRequire2(import.meta.url);
+    WebSocketServer = require3("ws").Server;
+    CLASSROOM_SYNC_TOKEN_TTL_MS = 2 * 60 * 1e3;
+    rooms = /* @__PURE__ */ new Map();
+    roomLoadingPromises = /* @__PURE__ */ new Map();
+    checkpointStates = /* @__PURE__ */ new Map();
+    AUTO_CHECKPOINT_INTERVAL_MS = Math.max(
+      6e4,
+      Number(process.env.BOARD_CHECKPOINT_INTERVAL_MS || "120000")
+    );
+    AUTO_CHECKPOINT_KEY_PREFIX = "board-checkpoints/";
+    AUTO_CHECKPOINT_LOAD_TIMEOUT_MS = 8e3;
+    AUTO_CHECKPOINT_TEARDOWN_TIMEOUT_MS = 5e3;
+    CHECKPOINT_CLEANUP_INTERVAL_MS = 10 * 60 * 1e3;
+    setInterval(() => {
+      for (const roomId of checkpointStates.keys()) {
+        const room = rooms.get(roomId);
+        if (!room || room.isClosed()) {
+          cleanupCheckpointState(roomId);
+        }
+      }
+    }, CHECKPOINT_CLEANUP_INTERVAL_MS);
+  }
+});
+
 // backend/classroom-routes.ts
 import { AccessToken } from "livekit-server-sdk";
 function getLiveKitConfig() {
@@ -10969,12 +11344,7 @@ function registerClassroomRoutes({
       if (String(lc.stream_type || "").toLowerCase() !== "classroom") {
         return res.status(400).json({ message: "Not a classroom stream" });
       }
-      const bearerRaw = (req.headers.authorization || "").replace(/^Bearer\s+/i, "").trim();
-      const token = bearerRaw || await db2.query(
-        "SELECT session_token FROM users WHERE id = $1",
-        [user.id]
-      ).then((r) => String(r.rows[0]?.session_token || ""));
-      if (!token) return res.status(401).json({ message: "No session token found" });
+      const token = signClassroomSyncToken(user.id, String(req.params.id));
       res.set("Cache-Control", "no-store");
       res.json({ token });
     } catch (err) {
@@ -11148,6 +11518,7 @@ var init_classroom_routes = __esm({
     init_recordingSection();
     init_live_class_recording_save();
     init_live_class_lecture_convert();
+    init_classroom_sync();
   }
 });
 
@@ -11590,331 +11961,6 @@ var init_live_class_poll_routes = __esm({
     "use strict";
     init_live_class_access();
     init_sse_listen_budget();
-  }
-});
-
-// backend/classroom-sync.ts
-import { URL as URL2 } from "node:url";
-import { createRequire as createRequire2 } from "node:module";
-import {
-  TLSocketRoom,
-  InMemorySyncStorage,
-  TLSyncErrorCloseEventCode,
-  TLSyncErrorCloseEventReason
-} from "@tldraw/sync-core";
-function sanitizeRoomId(roomId) {
-  return roomId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 120);
-}
-function parseLiveClassIdFromRoomId(roomId) {
-  return roomId.replace(/^lc-/, "").replace(/-preview$/, "");
-}
-function isPreviewRoom(roomId) {
-  return roomId.endsWith("-preview");
-}
-function isR2Configured() {
-  return !!(process.env.R2_ACCOUNT_ID && process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY && process.env.R2_BUCKET_NAME);
-}
-async function fetchSnapshotFromR2(getR2Client, objectKey) {
-  try {
-    const { GetObjectCommand } = await import("@aws-sdk/client-s3");
-    const r2 = await getR2Client();
-    const bucket = String(process.env.R2_BUCKET_NAME || "");
-    const result = await r2.send(new GetObjectCommand({ Bucket: bucket, Key: objectKey }));
-    if (!result.Body) return null;
-    const chunks = [];
-    for await (const chunk of result.Body) {
-      chunks.push(chunk instanceof Uint8Array ? chunk : Buffer.from(chunk));
-    }
-    const json = Buffer.concat(chunks).toString("utf-8");
-    return JSON.parse(json);
-  } catch (err) {
-    console.warn("[classroom-checkpoint] R2 GET failed:", err?.message || String(err));
-    return null;
-  }
-}
-async function uploadSnapshotToR2(getR2Client, objectKey, snapshot) {
-  try {
-    const { PutObjectCommand } = await import("@aws-sdk/client-s3");
-    const r2 = await getR2Client();
-    const bucket = String(process.env.R2_BUCKET_NAME || "");
-    const body = Buffer.from(JSON.stringify(snapshot), "utf-8");
-    await r2.send(
-      new PutObjectCommand({
-        Bucket: bucket,
-        Key: objectKey,
-        Body: body,
-        ContentType: "application/json"
-      })
-    );
-    return true;
-  } catch (err) {
-    console.warn("[classroom-checkpoint] R2 PUT failed:", err?.message || String(err));
-    return false;
-  }
-}
-async function loadAutoCheckpointSnapshot(db2, liveClassId, getR2Client) {
-  if (!isR2Configured()) return null;
-  try {
-    const result = await db2.query(
-      "SELECT board_sync_checkpoint_url FROM live_classes WHERE id = $1",
-      [liveClassId]
-    );
-    const row = result.rows[0];
-    if (!row) return null;
-    const storedUrl = String(row.board_sync_checkpoint_url || "");
-    if (!storedUrl.startsWith(AUTO_CHECKPOINT_KEY_PREFIX)) return null;
-    console.log(
-      `[classroom-checkpoint] Restoring class=${liveClassId} key=${storedUrl}`
-    );
-    const snapshot = await fetchSnapshotFromR2(getR2Client, storedUrl);
-    if (snapshot) {
-      console.log(
-        `[classroom-checkpoint] Restored class=${liveClassId} docs=${snapshot.documents?.length ?? 0}`
-      );
-    }
-    return snapshot;
-  } catch (err) {
-    console.warn("[classroom-checkpoint] Load error:", err?.message || String(err));
-    return null;
-  }
-}
-async function runCheckpoint(roomId, liveClassId, room, db2, getR2Client) {
-  const state = checkpointStates.get(roomId);
-  if (!state || state.saving || room.isClosed() || !isR2Configured()) return;
-  const currentClock = room.getCurrentDocumentClock();
-  if (currentClock === state.lastSavedClock) return;
-  state.saving = true;
-  try {
-    const snapshot = room.getCurrentSnapshot();
-    const timestamp = Date.now();
-    const key = `${AUTO_CHECKPOINT_KEY_PREFIX}lc-${liveClassId}-${timestamp}.json`;
-    const ok = await uploadSnapshotToR2(getR2Client, key, snapshot);
-    if (!ok) return;
-    await db2.query(
-      "UPDATE live_classes SET board_sync_checkpoint_url = $1, board_checkpoint_at = $2 WHERE id = $3",
-      [key, timestamp, liveClassId]
-    );
-    state.lastSavedClock = currentClock;
-    console.log(
-      `[classroom-checkpoint] Saved class=${liveClassId} clock=${currentClock} key=${key}`
-    );
-  } catch (err) {
-    console.warn("[classroom-checkpoint] Save error:", err?.message || String(err));
-  } finally {
-    state.saving = false;
-  }
-}
-function scheduleCheckpoint(roomId, liveClassId, room, db2, getR2Client) {
-  const state = checkpointStates.get(roomId);
-  if (!state || state.timer !== null) return;
-  if (isPreviewRoom(roomId)) return;
-  state.timer = setTimeout(() => {
-    state.timer = null;
-    void runCheckpoint(roomId, liveClassId, room, db2, getR2Client);
-  }, AUTO_CHECKPOINT_INTERVAL_MS);
-}
-async function makeOrLoadRoom(roomId, liveClassId, db2, getR2Client) {
-  const id = sanitizeRoomId(roomId);
-  const existing = rooms.get(id);
-  if (existing && !existing.isClosed()) return existing;
-  const pending = roomLoadingPromises.get(id);
-  if (pending) return pending;
-  const loadPromise = (async () => {
-    try {
-      let snapshot = null;
-      if (!isPreviewRoom(id)) {
-        snapshot = await Promise.race([
-          loadAutoCheckpointSnapshot(db2, liveClassId, getR2Client),
-          new Promise(
-            (resolve2) => setTimeout(() => resolve2(null), AUTO_CHECKPOINT_LOAD_TIMEOUT_MS)
-          )
-        ]);
-      }
-      const storage = snapshot ? new InMemorySyncStorage({ snapshot }) : new InMemorySyncStorage();
-      const cpState = {
-        timer: null,
-        lastSavedClock: storage.getClock(),
-        saving: false
-      };
-      checkpointStates.set(id, cpState);
-      const room = new TLSocketRoom({
-        storage,
-        onSessionRemoved(roomInstance, args) {
-          if (args.numSessionsRemaining === 0) {
-            void teardownRoomIfAllowed(id, liveClassId, roomInstance, db2, getR2Client);
-          }
-        }
-      });
-      if (!isPreviewRoom(id) && isR2Configured()) {
-        storage.onChange(() => {
-          scheduleCheckpoint(id, liveClassId, room, db2, getR2Client);
-        });
-      }
-      rooms.set(id, room);
-      return room;
-    } finally {
-      roomLoadingPromises.delete(id);
-    }
-  })();
-  roomLoadingPromises.set(id, loadPromise);
-  return loadPromise;
-}
-function cleanupCheckpointState(roomId) {
-  const state = checkpointStates.get(roomId);
-  if (state?.timer !== null && state?.timer !== void 0) {
-    clearTimeout(state.timer);
-  }
-  checkpointStates.delete(roomId);
-}
-async function teardownRoomIfAllowed(roomId, liveClassId, roomInstance, db2, getR2Client) {
-  if (roomId.endsWith("-preview")) {
-    roomInstance.close();
-    rooms.delete(roomId);
-    cleanupCheckpointState(roomId);
-    return;
-  }
-  try {
-    const r = await db2.query(
-      "SELECT is_live, is_completed FROM live_classes WHERE id = $1",
-      [liveClassId]
-    );
-    const lc = r.rows[0];
-    if (lc && Boolean(lc.is_live) && !Boolean(lc.is_completed)) {
-      return;
-    }
-  } catch (e) {
-    console.warn("[classroom-sync] could not check live status before teardown:", e);
-  }
-  const state = checkpointStates.get(roomId);
-  if (state) {
-    if (state.timer !== null) {
-      clearTimeout(state.timer);
-      state.timer = null;
-    }
-    try {
-      await Promise.race([
-        runCheckpoint(roomId, liveClassId, roomInstance, db2, getR2Client),
-        new Promise(
-          (resolve2) => setTimeout(resolve2, AUTO_CHECKPOINT_TEARDOWN_TIMEOUT_MS)
-        )
-      ]);
-    } catch {
-    }
-  }
-  roomInstance.close();
-  rooms.delete(roomId);
-  cleanupCheckpointState(roomId);
-}
-function parseSessionId(url) {
-  const sid = url.searchParams.get("syncClientId") || url.searchParams.get("sessionId");
-  if (sid && sid.trim()) return sid.trim().slice(0, 128);
-  return `sess-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-}
-async function authenticateClassroomSocket(db2, req, roomId) {
-  const url = new URL2(req.url || "", "http://localhost");
-  const token = url.searchParams.get("access_token") || url.searchParams.get("token") || "";
-  const fakeReq = {
-    headers: {
-      ...token ? { authorization: `Bearer ${token}` } : {},
-      cookie: req.headers.cookie
-    },
-    session: req.session ?? {}
-  };
-  const user = await getAuthUserFromRequest(fakeReq, db2);
-  if (!user) return { ok: false, status: 401, message: "Unauthorized" };
-  const liveClassId = roomId.replace(/^lc-/, "").replace(/-preview$/, "");
-  const lcResult = await db2.query(
-    "SELECT * FROM live_classes WHERE id = $1",
-    [liveClassId]
-  );
-  const lc = lcResult.rows[0];
-  if (!lc) return { ok: false, status: 404, message: "Live class not found" };
-  if (String(lc.stream_type || "").toLowerCase() !== "classroom") {
-    return { ok: false, status: 400, message: "Not a classroom stream" };
-  }
-  const canAccess = await userCanAccessLiveClassContent(db2, user, lc);
-  if (!canAccess) return { ok: false, status: 403, message: "Access denied" };
-  const isPreview = roomId.endsWith("-preview");
-  const isAdmin = user.role === "admin";
-  if (!isPreview && !isAdmin && (!lc.is_live || lc.is_completed)) {
-    return { ok: false, status: 403, message: "Class is not live" };
-  }
-  const isReadonly = user.role !== "admin";
-  return { ok: true, user: { id: user.id, role: user.role }, isReadonly };
-}
-function syncCloseReason(status) {
-  if (status === 401) return TLSyncErrorCloseEventReason.NOT_AUTHENTICATED;
-  if (status === 404) return TLSyncErrorCloseEventReason.NOT_FOUND;
-  return TLSyncErrorCloseEventReason.FORBIDDEN;
-}
-function attachClassroomSyncServer(httpServer, db2, getR2Client) {
-  const wss = new WebSocketServer({ noServer: true });
-  httpServer.on("upgrade", (req, socket, head) => {
-    const url = new URL2(req.url || "", "http://localhost");
-    const match = url.pathname.match(/^\/classroom-sync\/([^/]+)$/);
-    if (!match) return;
-    wss.handleUpgrade(req, socket, head, (socketConn) => {
-      void handleConnection(socketConn, req, match[1], db2, getR2Client);
-    });
-  });
-}
-async function handleConnection(ws, req, rawRoomId, db2, getR2Client) {
-  const caughtMessages = [];
-  const collect = (data) => {
-    caughtMessages.push(Buffer.isBuffer(data) ? data : Buffer.from(data));
-  };
-  ws.on("message", collect);
-  const auth2 = await authenticateClassroomSocket(db2, req, rawRoomId);
-  if (!auth2.ok) {
-    ws.off("message", collect);
-    ws.close(TLSyncErrorCloseEventCode, syncCloseReason(auth2.status));
-    return;
-  }
-  const roomId = sanitizeRoomId(rawRoomId);
-  const liveClassId = parseLiveClassIdFromRoomId(roomId);
-  const url = new URL2(req.url || "", "http://localhost");
-  const sessionId = parseSessionId(url);
-  const room = await makeOrLoadRoom(roomId, liveClassId, db2, getR2Client);
-  room.handleSocketConnect({
-    sessionId,
-    socket: ws,
-    isReadonly: auth2.isReadonly
-  });
-  ws.off("message", collect);
-  for (const msg of caughtMessages) {
-    ws.emit(
-      "message",
-      msg
-    );
-  }
-}
-var require3, WebSocketServer, rooms, roomLoadingPromises, checkpointStates, AUTO_CHECKPOINT_INTERVAL_MS, AUTO_CHECKPOINT_KEY_PREFIX, AUTO_CHECKPOINT_LOAD_TIMEOUT_MS, AUTO_CHECKPOINT_TEARDOWN_TIMEOUT_MS, CHECKPOINT_CLEANUP_INTERVAL_MS;
-var init_classroom_sync = __esm({
-  "backend/classroom-sync.ts"() {
-    "use strict";
-    init_auth_utils();
-    init_live_class_access();
-    require3 = createRequire2(import.meta.url);
-    WebSocketServer = require3("ws").Server;
-    rooms = /* @__PURE__ */ new Map();
-    roomLoadingPromises = /* @__PURE__ */ new Map();
-    checkpointStates = /* @__PURE__ */ new Map();
-    AUTO_CHECKPOINT_INTERVAL_MS = Math.max(
-      6e4,
-      Number(process.env.BOARD_CHECKPOINT_INTERVAL_MS || "120000")
-    );
-    AUTO_CHECKPOINT_KEY_PREFIX = "board-checkpoints/";
-    AUTO_CHECKPOINT_LOAD_TIMEOUT_MS = 8e3;
-    AUTO_CHECKPOINT_TEARDOWN_TIMEOUT_MS = 5e3;
-    CHECKPOINT_CLEANUP_INTERVAL_MS = 10 * 60 * 1e3;
-    setInterval(() => {
-      for (const roomId of checkpointStates.keys()) {
-        const room = rooms.get(roomId);
-        if (!room || room.isClosed()) {
-          cleanupCheckpointState(roomId);
-        }
-      }
-    }, CHECKPOINT_CLEANUP_INTERVAL_MS);
   }
 });
 
@@ -12591,10 +12637,10 @@ function registerCourseAccessRoutes({
         console.error("[download-proxy] Missing OTP_HMAC_SECRET / SESSION_SECRET");
         return res.status(503).json({ message: "Server configuration error" });
       }
-      const { createHmac: createHmac3 } = await import("crypto");
+      const { createHmac: createHmac4 } = await import("crypto");
       const timestamp = Date.now();
       const watermarkData = `${tokenData.user_id}:${timestamp}`;
-      const hmac = createHmac3("sha256", watermarkSecret).update(watermarkData).digest("hex");
+      const hmac = createHmac4("sha256", watermarkSecret).update(watermarkData).digest("hex");
       const watermarkToken = `${watermarkData}:${hmac}`;
       res.setHeader("Content-Type", r2Response.ContentType || "application/octet-stream");
       res.setHeader("Content-Disposition", "attachment");
@@ -14080,8 +14126,9 @@ var init_redis_notification_dedup = __esm({
 // backend/schedulers.ts
 function startSchedulers(db2, pool2, sendPushToUsers2) {
   const runBackgroundSchedulers = process.env.RUN_BACKGROUND_SCHEDULERS !== "false";
+  startNeonKeepalive(db2);
   if (!runBackgroundSchedulers) {
-    console.log("[Schedulers] Background schedulers disabled (RUN_BACKGROUND_SCHEDULERS=false)");
+    console.log("[Schedulers] Background schedulers disabled (RUN_BACKGROUND_SCHEDULERS=false); keepalive still active");
     return;
   }
   startLiveClassNotificationScheduler(db2, pool2, sendPushToUsers2);
@@ -14089,7 +14136,6 @@ function startSchedulers(db2, pool2, sendPushToUsers2) {
   startDownloadTokenCleanupScheduler(db2, pool2);
   startStuckLiveClassCleanupScheduler(db2, pool2);
   startLiveFinalizeQueueScheduler(db2, pool2);
-  startNeonKeepalive(db2);
   startMediaTokenCleanupScheduler(db2, pool2);
 }
 async function runWithAdvisoryLock(pool2, lockKey, job) {
@@ -15119,7 +15165,7 @@ async function registerRoutes(app2) {
   attachClassroomSyncServer(httpServer, db, getR2Client);
   return httpServer;
 }
-var databaseUrlRaw, databaseUrl, pgPoolMax, pool, listenPool, db, generateAIAnswer, updateCourseProgress2, recomputeAllEnrollmentsProgressForCourse2, updateCourseTestCounts2, deleteDownloadsForUser2, deleteDownloadsForCourse2, authUserLazyKey, requireAdmin;
+var databaseUrlRaw, databaseUrl, pgPoolMax, pgPoolMin, pgIdleTimeoutMs, pool, listenPool, db, generateAIAnswer, updateCourseProgress2, recomputeAllEnrollmentsProgressForCourse2, updateCourseTestCounts2, deleteDownloadsForUser2, deleteDownloadsForCourse2, authUserLazyKey, requireAdmin;
 var init_routes = __esm({
   "backend/routes.ts"() {
     "use strict";
@@ -15184,14 +15230,15 @@ var init_routes = __esm({
       throw new Error("DATABASE_URL must be set");
     }
     pgPoolMax = Math.min(50, Math.max(1, parseInt(process.env.PG_POOL_MAX || "10", 10) || 10));
+    pgPoolMin = Math.min(pgPoolMax, Math.max(0, parseInt(process.env.PG_POOL_MIN || "2", 10) || 0));
+    pgIdleTimeoutMs = Math.max(1e3, parseInt(process.env.PG_POOL_IDLE_MS || "60000", 10) || 6e4);
     pool = new Pool2({
       connectionString: databaseUrl,
       ssl: process.env.PGSSL_NO_VERIFY === "true" && process.env.NODE_ENV !== "production" ? { rejectUnauthorized: false } : { rejectUnauthorized: true },
       max: pgPoolMax,
-      min: 1,
+      min: pgPoolMin,
       connectionTimeoutMillis: 1e4,
-      idleTimeoutMillis: 1e4,
-      // release idle connections quickly (Neon closes them anyway)
+      idleTimeoutMillis: pgIdleTimeoutMs,
       statement_timeout: 25e3,
       // Neon / PgBouncer / long-lived sockets benefit from TCP keep-alive.
       keepAlive: true,
@@ -15199,6 +15246,8 @@ var init_routes = __esm({
     });
     console.log("[DB] Main pool configured", {
       max: pgPoolMax,
+      min: pgPoolMin,
+      idleTimeoutMs: pgIdleTimeoutMs,
       nodeEnv: process.env.NODE_ENV || "development",
       sslNoVerify: process.env.PGSSL_NO_VERIFY === "true"
     });

@@ -1,0 +1,239 @@
+diff --git a/app/admin/index.tsx b/app/admin/index.tsx
+old mode 100644
+new mode 100755
+index d8c96da..669e009
+--- a/app/admin/index.tsx
++++ b/app/admin/index.tsx
+@@ -2207,9 +2207,9 @@ export default function AdminDashboard() {
+                                         onPress={async () => {
+                                           if (endingLiveGroupKey === g.key) return;
+                                           const confirmed = Platform.OS === "web"
+-                                            ? window.confirm("End this live class?")
++                                            ? window.confirm(g.isRecordingMode ? "End this recording?" : "End this live class?")
+                                             : await new Promise<boolean>(resolve =>
+-                                                Alert.alert("End Live Class", "Are you sure?", [
++                                                Alert.alert(g.isRecordingMode ? "End Recording" : "End Live Class", "Are you sure?", [
+                                                   { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
+                                                   { text: "End Class", style: "destructive", onPress: () => resolve(true) },
+                                                 ])
+@@ -2238,7 +2238,7 @@ export default function AdminDashboard() {
+                                         }}>
+                                         <Ionicons name="stop-circle" size={14} color="#fff" />
+                                         <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#fff" }}>
+-                                          {endingLiveGroupKey === g.key ? "Ending..." : "End Live"}
++                                          {endingLiveGroupKey === g.key ? "Ending..." : (g.isRecordingMode ? "End Rec" : "End Live")}
+                                         </Text>
+                                       </Pressable>
+                                     </>
+diff --git a/backend/classroom-routes.ts b/backend/classroom-routes.ts
+old mode 100644
+new mode 100755
+index c2e4128..bf875ef
+--- a/backend/classroom-routes.ts
++++ b/backend/classroom-routes.ts
+@@ -4,6 +4,7 @@ import { userCanAccessLiveClassContent } from "./live-class-access";
+ import { buildRecordingLectureSectionTitle } from "../shared/recordingSection";
+ import { saveRecordingForClassAndPeers } from "./live-class-recording-save";
+ import { convertLiveClassTitlePeersToLectures } from "./live-class-lecture-convert";
++import { signClassroomSyncToken } from "./classroom-sync";
+ 
+ type DbClient = {
+   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
+@@ -132,13 +133,10 @@ export function registerClassroomRoutes({
+       if (String(lc.stream_type || "").toLowerCase() !== "classroom") {
+         return res.status(400).json({ message: "Not a classroom stream" });
+       }
+-      // Return the bearer token the client is already using so the WS URL can carry it.
+-      const bearerRaw = (req.headers.authorization || "").replace(/^Bearer\s+/i, "").trim();
+-      const token = bearerRaw || (await db.query(
+-        "SELECT session_token FROM users WHERE id = $1",
+-        [user.id]
+-      ).then(r => String(r.rows[0]?.session_token || "")));
+-      if (!token) return res.status(401).json({ message: "No session token found" });
++      // Issue a short-lived, single-purpose signed token (NOT the raw session
++      // token) for the tldraw WS to carry in its URL path. ~2-min TTL, bound to
++      // this user + live class, verified by the sync server on connect.
++      const token = signClassroomSyncToken(user.id, String(req.params.id));
+       res.set("Cache-Control", "no-store");
+       res.json({ token });
+     } catch (err) {
+diff --git a/backend/classroom-sync.ts b/backend/classroom-sync.ts
+old mode 100644
+new mode 100755
+index e51f173..e466b22
+--- a/backend/classroom-sync.ts
++++ b/backend/classroom-sync.ts
+@@ -42,6 +42,48 @@ import type { RoomSnapshot } from "@tldraw/sync-core";
+ import { getAuthUserFromRequest } from "./auth-utils";
+ import type { DbClient } from "./classroom-sync-types";
+ import { userCanAccessLiveClassContent } from "./live-class-access";
++import { createHmac, timingSafeEqual } from "node:crypto";
++
++// ── Short-lived classroom-sync auth token ──────────────────────────────────────
++// A browser cannot set an Authorization header on a WebSocket, and tldraw's
++// useSync discards query params — so the credential must ride in the URL PATH.
++// We issue a signed, ~2-minute token (NOT the raw session token) bound to the
++// user + live class, verified here on connect.
++const CLASSROOM_SYNC_TOKEN_TTL_MS = 2 * 60 * 1000;
++function syncB64Url(buf: Buffer): string {
++  return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
++}
++function classroomSyncSecret(): string {
++  const s = process.env.OTP_HMAC_SECRET;
++  if (!s) throw new Error("OTP_HMAC_SECRET must be set");
++  return s;
++}
++export function signClassroomSyncToken(userId: number, liveClassId: string): string {
++  const body = syncB64Url(Buffer.from(JSON.stringify({ uid: userId, lc: String(liveClassId), exp: Date.now() + CLASSROOM_SYNC_TOKEN_TTL_MS }), "utf8"));
++  const sig = syncB64Url(createHmac("sha256", classroomSyncSecret()).update(body).digest());
++  return body + "." + sig;
++}
++function verifyClassroomSyncToken(token: string | null | undefined): { uid: number; lc: string } | null {
++  if (!token || typeof token !== "string") return null;
++  const dot = token.indexOf(".");
++  if (dot <= 0) return null;
++  const body = token.slice(0, dot);
++  const sig = token.slice(dot + 1);
++  const expected = syncB64Url(createHmac("sha256", classroomSyncSecret()).update(body).digest());
++  const a = Buffer.from(sig, "utf8");
++  const b = Buffer.from(expected, "utf8");
++  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
++  try {
++    const pad = body.length % 4 === 0 ? "" : "=".repeat(4 - (body.length % 4));
++    const json = Buffer.from(body.replace(/-/g, "+").replace(/_/g, "/") + pad, "base64").toString("utf8");
++    const obj = JSON.parse(json) as { uid: number; lc: string; exp: number };
++    if (typeof obj.exp !== "number" || obj.exp < Date.now()) return null;
++    if (typeof obj.uid !== "number" || !Number.isFinite(obj.uid)) return null;
++    return { uid: obj.uid, lc: String(obj.lc) };
++  } catch {
++    return null;
++  }
++}
+ 
+ export type { DbClient };
+ 
+@@ -478,28 +520,45 @@ function parseSessionId(url: URL): string {
+ async function authenticateClassroomSocket(
+   db: DbClient,
+   req: IncomingMessage,
+-  roomId: string
++  roomId: string,
++  pathToken?: string | null
+ ): Promise<
+   | { ok: true; user: { id: number; role: string }; isReadonly: boolean }
+   | { ok: false; status: number; message: string }
+ > {
+   const url = new URL(req.url || "", "http://localhost");
+-  const token =
+-    url.searchParams.get("access_token") ||
+-    url.searchParams.get("token") ||
+-    "";
+-  const fakeReq = {
+-    headers: {
+-      ...(token ? { authorization: `Bearer ${token}` } : {}),
+-      cookie: req.headers.cookie,
+-    },
+-    session: (req as { session?: unknown }).session ?? {},
+-  } as import("express").Request;
+-
+-  const user = await getAuthUserFromRequest(fakeReq, db);
+-  if (!user) return { ok: false, status: 401, message: "Unauthorized" };
+-
+   const liveClassId = roomId.replace(/^lc-/, "").replace(/-preview$/, "");
++
++  // Primary (web): short-lived signed token carried in the URL path.
++  let user: { id: number; role: string } | null = null;
++  const verified = verifyClassroomSyncToken(pathToken);
++  if (verified && verified.lc === liveClassId) {
++    const r = await db.query(
++      "SELECT id, role, COALESCE(is_blocked, FALSE) AS is_blocked FROM users WHERE id = $1",
++      [verified.uid]
++    );
++    const row = r.rows[0];
++    if (row && !row.is_blocked) user = { id: Number(row.id), role: String(row.role) };
++  }
++
++  // Fallback: legacy query token / session cookie (native app, older clients).
++  if (!user) {
++    const token =
++      url.searchParams.get("access_token") ||
++      url.searchParams.get("token") ||
++      "";
++    const fakeReq = {
++      headers: {
++        ...(token ? { authorization: `Bearer ${token}` } : {}),
++        cookie: req.headers.cookie,
++      },
++      session: (req as { session?: unknown }).session ?? {},
++    } as import("express").Request;
++    const resolved = await getAuthUserFromRequest(fakeReq, db);
++    if (resolved) user = { id: resolved.id, role: resolved.role };
++  }
++
++  if (!user) return { ok: false, status: 401, message: "Unauthorized" };
+   const lcResult = await db.query(
+     "SELECT * FROM live_classes WHERE id = $1",
+     [liveClassId]
+@@ -511,7 +570,7 @@ async function authenticateClassroomSocket(
+     return { ok: false, status: 400, message: "Not a classroom stream" };
+   }
+ 
+-  const canAccess = await userCanAccessLiveClassContent(db, user, lc);
++  const canAccess = await userCanAccessLiveClassContent(db, user as Parameters<typeof userCanAccessLiveClassContent>[1], lc);
+   if (!canAccess) return { ok: false, status: 403, message: "Access denied" };
+ 
+   const isPreview = roomId.endsWith("-preview");
+@@ -549,11 +608,12 @@ export function attachClassroomSyncServer(
+ 
+   httpServer.on("upgrade", (req, socket, head) => {
+     const url = new URL(req.url || "", "http://localhost");
+-    const match = url.pathname.match(/^\/classroom-sync\/([^/]+)$/);
++    // Path may be /classroom-sync/<room> or /classroom-sync/<room>/<auth-token>.
++    const match = url.pathname.match(/^\/classroom-sync\/([^/]+)(?:\/([^/]+))?$/);
+     if (!match) return;
+ 
+     wss.handleUpgrade(req, socket, head, (socketConn) => {
+-      void handleConnection(socketConn, req, match[1], db, getR2Client);
++      void handleConnection(socketConn, req, match[1], db, getR2Client, match[2] || null);
+     });
+   });
+ }
+@@ -563,7 +623,8 @@ async function handleConnection(
+   req: IncomingMessage,
+   rawRoomId: string,
+   db: DbClient,
+-  getR2Client: GetR2Client
++  getR2Client: GetR2Client,
++  pathToken: string | null = null
+ ) {
+   // Buffer incoming messages during async auth + room-load so no tldraw packets
+   // are dropped while we await the DB and (potentially) R2.
+@@ -573,7 +634,7 @@ async function handleConnection(
+   };
+   ws.on("message", collect);
+ 
+-  const auth = await authenticateClassroomSocket(db, req, rawRoomId);
++  const auth = await authenticateClassroomSocket(db, req, rawRoomId, pathToken);
+   if (!auth.ok) {
+     ws.off("message", collect);
+     ws.close(TLSyncErrorCloseEventCode, syncCloseReason(auth.status));
+diff --git a/lib/classroom/syncUri.ts b/lib/classroom/syncUri.ts
+old mode 100644
+new mode 100755
+index 6b9ba44..5722bf8
+--- a/lib/classroom/syncUri.ts
++++ b/lib/classroom/syncUri.ts
+@@ -62,9 +62,8 @@ export async function buildClassroomSyncUriWithAuth(
+     }
+   }
+ 
+-  // Do not use `sessionId` — reserved by @tldraw/sync useSync for its own query param.
+-  const params = new URLSearchParams();
+-  if (token) params.set("access_token", token);
+-  const qs = params.toString();
+-  return qs ? `${uri}?${qs}` : uri;
++  // tldraw's useSync rebuilds the socket URL and DROPS query params, and a browser
++  // cannot set an Authorization header on a WebSocket — so the (short-lived, signed)
++  // token must ride in the URL PATH, which tldraw preserves.
++  return token ? `${uri}/${encodeURIComponent(token)}` : uri;
+ }

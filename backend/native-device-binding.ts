@@ -405,8 +405,8 @@ export async function assertLoginAllowedForInstallation(
   return { ok: true };
 }
 
-/** Block a new login while another device holds a recently active session. */
-export const SESSION_ACTIVITY_WINDOW_MS = 10 * 60 * 1000;
+/** Student web sessions stay locked to the same browser profile for the 7-day inactivity window. */
+export const STUDENT_WEB_SESSION_LOCK_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 type SessionActiveResult = { ok: true } | { ok: false; httpStatus: number; message: string };
 
@@ -427,7 +427,7 @@ export async function assertSessionNotActivelyInUse(
   if (opts.role === "admin") return { ok: true };
 
   const ur = await db.query(
-    `SELECT session_token, last_active_at, role, device_id,
+    `SELECT session_token, last_active_at, role, device_id, phone, email,
             app_bound_device_id, web_device_id_phone, web_device_id_desktop
      FROM users WHERE id = $1`,
     [opts.userId]
@@ -435,13 +435,14 @@ export async function assertSessionNotActivelyInUse(
   if (ur.rows.length === 0) return { ok: true };
   const row = ur.rows[0];
   if (String(row.role ?? "") === "admin") return { ok: true };
-  if (isStudentDeviceBindingDisabled(row.role as string | undefined)) return { ok: true };
 
   const sessionToken = row.session_token ? String(row.session_token).trim() : "";
   if (!sessionToken) return { ok: true };
 
   const lastActive = Number(row.last_active_at || 0);
-  if (!lastActive || Date.now() - lastActive > SESSION_ACTIVITY_WINDOW_MS) {
+  const plat = getClientPlatform(req);
+  const lockWindowMs = plat === "web" ? STUDENT_WEB_SESSION_LOCK_WINDOW_MS : 10 * 60 * 1000;
+  if (!lastActive || Date.now() - lastActive > lockWindowMs) {
     return { ok: true };
   }
 
@@ -449,17 +450,38 @@ export async function assertSessionNotActivelyInUse(
   const bodyId = (opts.bodyDeviceId && String(opts.bodyDeviceId).trim()) || "";
   const attempted = attemptHeader || bodyId || null;
 
+  const storedDeviceId = row.device_id ? String(row.device_id).trim() : "";
+  if (attempted && storedDeviceId && attempted === storedDeviceId) {
+    return { ok: true };
+  }
+
+  if (plat === "web") {
+    if (!storedDeviceId) return { ok: true };
+    await logWrongInstallationAttempt(
+      db,
+      req,
+      opts.userId,
+      storedDeviceId,
+      attempted,
+      { phone: row.phone ?? null, email: row.email ?? null },
+      "active_web_session_login_denied"
+    );
+    return {
+      ok: false,
+      httpStatus: 403,
+      message:
+        "This account is already logged in on another device. Please use the same browser or contact admin.",
+    };
+  }
+
+  if (isStudentDeviceBindingDisabled(row.role as string | undefined)) return { ok: true };
+
   const bindingRow = {
     app_bound_device_id: row.app_bound_device_id,
     web_device_id_phone: row.web_device_id_phone,
     web_device_id_desktop: row.web_device_id_desktop,
   };
   if (userRowHasDeviceBinding(bindingRow) && requestMatchesUserDeviceBinding(req, bindingRow)) {
-    return { ok: true };
-  }
-
-  const storedDeviceId = row.device_id ? String(row.device_id).trim() : "";
-  if (attempted && storedDeviceId && attempted === storedDeviceId) {
     return { ok: true };
   }
 

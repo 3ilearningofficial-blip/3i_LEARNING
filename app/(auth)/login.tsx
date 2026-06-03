@@ -4,7 +4,7 @@ import {
   ScrollView, KeyboardAvoidingView, Platform,
   ActivityIndicator, Image,
 } from "react-native";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -25,6 +25,7 @@ import {
 export default function LoginScreen() {
   const insets = useSafeAreaInsets();
   const { login } = useAuth();
+  const { next } = useLocalSearchParams<{ next?: string }>();
   const [phone, setPhone] = useState("");
   const [otp, setOtp] = useState("");
   const [otpSent, setOtpSent] = useState(false);
@@ -37,6 +38,11 @@ export default function LoginScreen() {
   const [lockRemainingMs, setLockRemainingMs] = useState(0);
   const resendTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lockTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const getPostAuthPath = () => {
+    if (Platform.OS === "web" && typeof next === "string" && next.startsWith("/")) return next;
+    return Platform.OS === "web" ? "/welcome" : "/(tabs)";
+  };
 
   const startResendCountdownSeconds = (seconds: number) => {
     if (resendTimerRef.current) clearInterval(resendTimerRef.current);
@@ -173,7 +179,7 @@ export default function LoginScreen() {
       if (!result.user.profileComplete) {
         navigateToProfileSetupWithNotice();
       } else {
-        router.replace("/(tabs)");
+        router.replace(getPostAuthPath() as any);
       }
       return;
     }

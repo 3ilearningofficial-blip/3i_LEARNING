@@ -25,6 +25,7 @@ export default function ProfileScreen() {
   const qc = useQueryClient();
   const { user, updateUser, logout } = useAuth();
   const isAdmin = user?.role === "admin";
+  const showLogout = Platform.OS !== "web" || isAdmin;
   const topPadding = Platform.OS === "web" ? 16 : insets.top;
   const bottomPadding = insets.bottom;
 
@@ -260,7 +261,7 @@ export default function ProfileScreen() {
       await apiRequest("DELETE", "/api/auth/account");
       qc.clear();
       await logout();
-      router.replace("/welcome");
+      router.replace(Platform.OS === "web" ? "/welcome" : "/(auth)/email-login");
     } catch (e: any) {
       const msg =
         typeof e?.message === "string"
@@ -295,7 +296,7 @@ export default function ProfileScreen() {
     } else {
       Alert.alert("Logout", "Are you sure?", [
         { text: "Cancel", style: "cancel" },
-        { text: "Logout", style: "destructive", onPress: () => logout().then(() => router.replace("/welcome")) },
+        { text: "Logout", style: "destructive", onPress: () => logout().then(() => router.replace("/(auth)/email-login")) },
       ]);
     }
   };
@@ -560,14 +561,16 @@ export default function ProfileScreen() {
           </Pressable>
         ) : null}
 
-        {/* Logout */}
-        <Pressable style={styles.optionRow} onPress={handleLogout}>
-          <View style={[styles.optionIcon, { backgroundColor: "#EF444418" }]}>
-            <Ionicons name="log-out-outline" size={20} color="#EF4444" />
-          </View>
-          <Text style={[styles.optionLabel, { color: "#EF4444" }]}>Logout</Text>
-          <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
-        </Pressable>
+        {/* Logout: hidden for student web to protect active-session account sharing locks. */}
+        {showLogout ? (
+          <Pressable style={styles.optionRow} onPress={handleLogout}>
+            <View style={[styles.optionIcon, { backgroundColor: "#EF444418" }]}>
+              <Ionicons name="log-out-outline" size={20} color="#EF4444" />
+            </View>
+            <Text style={[styles.optionLabel, { color: "#EF4444" }]}>Logout</Text>
+            <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
+          </Pressable>
+        ) : null}
       </ScrollView>
 
       {/* Share App Modal (web) */}

@@ -2,6 +2,15 @@ import type { Request } from "express";
 import type { DbLike } from "./native-device-binding";
 import { getActiveSessionPlatformFamily } from "./native-device-binding";
 
+function envFlagEnabled(name: string): boolean {
+  const raw = String(process.env[name] || "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+
+export function isAdminDeviceBindingDisabled(): boolean {
+  return envFlagEnabled("DISABLE_ADMIN_DEVICE_BINDING");
+}
+
 /** Admin sessions: effectively never expire from inactivity. */
 export const ADMIN_SESSION_MAX_AGE_MS = 10 * 365 * 24 * 60 * 60 * 1000;
 /** Student sessions (bound or unbound): 7-day inactivity window. */
@@ -27,11 +36,9 @@ export function isSessionLastActiveValid(row: Record<string, unknown>): boolean 
 /**
  * SEC-04: Resolve a session token to a user row.
  *
- * When `deviceId` is supplied (from the x-app-device-id request header) and
- * the admin session row in user_sessions was created with a device_id, the
- * two must match.  Sessions created before device binding was introduced
- * (device_id IS NULL) are allowed from any device to prevent breaking
- * existing admin sessions during the rollout.
+ * When `DISABLE_ADMIN_DEVICE_BINDING` is not enabled, a request device id must
+ * match the device id stored on that admin session row. Sessions with
+ * `device_id IS NULL` remain unbound for backwards compatibility.
  */
 export async function resolveUserBySessionToken(
   db: DbLike,
@@ -65,7 +72,7 @@ export async function resolveUserBySessionToken(
   // SEC-04: If the session was created with a device_id, the request must
   // come from the same device.  If boundDevice is null (old session), skip
   // the check to avoid breaking admins who logged in before this migration.
-  if (boundDevice && deviceId && boundDevice !== deviceId) {
+  if (!isAdminDeviceBindingDisabled() && boundDevice && deviceId && boundDevice !== deviceId) {
     console.warn(
       `[AdminSessionBinding] Device mismatch for user ${sessionRow.id}: ` +
       `bound=${boundDevice} attempted=${deviceId}`
@@ -117,12 +124,13 @@ export async function persistLoginSession(
   const platformFamily = !isAdmin && opts.req ? getActiveSessionPlatformFamily(opts.req) : null;
 
   if (isAdmin) {
+    const adminSessionDeviceId = isAdminDeviceBindingDisabled() ? null : deviceId ?? null;
     // SEC-04: Record the device_id in the session row so subsequent requests
-    // from a different device are rejected.  device_id may be null for web
-    // admin sessions that don't send the x-app-device-id header.
+    // from a different device are rejected unless admin binding is disabled.
+    // device_id may be null for unbound admin sessions.
     await db.query(
       "INSERT INTO user_sessions (user_id, session_token, device_id, created_at) VALUES ($1, $2, $3, $4)",
-      [user.id, token, deviceId ?? null, now]
+      [user.id, token, adminSessionDeviceId, now]
     );
     const urow = await db.query("SELECT session_token FROM users WHERE id = $1", [user.id]);
     const hasPrimary = !!urow.rows[0]?.session_token;

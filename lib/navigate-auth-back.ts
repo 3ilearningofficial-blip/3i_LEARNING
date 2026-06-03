@@ -16,9 +16,9 @@ export function blurActiveElementWeb() {
   if (el && typeof el.blur === "function") el.blur();
 }
 
-/** Prefer history back; if stack is empty (e.g. opened login via replace), go to welcome. */
+/** Prefer history back; if stack is empty, web returns home and native stays in auth. */
 export function navigateBackFromAuth() {
   blurActiveElementWeb();
   if (router.canGoBack()) router.back();
-  else router.replace("/welcome");
+  else router.replace(Platform.OS === "web" ? "/welcome" : "/(auth)/email-login");
 }

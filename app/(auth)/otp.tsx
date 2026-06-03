@@ -23,7 +23,7 @@ import {
 
 export default function OTPScreen() {
   const insets = useSafeAreaInsets();
-  const { phone, smsSent, devOtp } = useLocalSearchParams<{ phone: string; smsSent?: string; devOtp?: string }>();
+  const { phone, smsSent, devOtp, next } = useLocalSearchParams<{ phone: string; smsSent?: string; devOtp?: string; next?: string }>();
   const [otp, setOtp] = useState(["", "", "", "", "", ""]);
   const [isLoading, setIsLoading] = useState(false);
   const [countdown, setCountdown] = useState(30);
@@ -35,6 +35,11 @@ export default function OTPScreen() {
   const countdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lockTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const { login } = useAuth();
+
+  const getPostAuthPath = () => {
+    if (Platform.OS === "web" && typeof next === "string" && next.startsWith("/")) return next;
+    return Platform.OS === "web" ? "/welcome" : "/(tabs)";
+  };
 
   const startLockCountdown = (until: number) => {
     setLockedUntil(until);
@@ -168,7 +173,7 @@ export default function OTPScreen() {
       if (!result.user.profileComplete) {
         navigateToProfileSetupWithNotice();
       } else {
-        router.replace("/(tabs)");
+        router.replace(getPostAuthPath() as any);
       }
       return;
     }

@@ -21,6 +21,7 @@ import {
   bindDeviceForNativeFirstLogin,
   enforceInstallationBinding,
   finalizeStudentWebSlotsAfterAuth,
+  getClientPlatform,
 } from "./native-device-binding";
 import {
   ADMIN_SESSION_MAX_AGE_MS,
@@ -667,7 +668,15 @@ export function registerAuthRoutes({
       const resolved = await resolveUserBySessionToken(db, revokeToken).catch(() => null);
       if (resolved?.row?.id) revokeUserId = Number(resolved.row.id);
     }
-    if (revokeUserId && revokeToken) {
+    let preserveStudentWebLock = false;
+    if (revokeUserId) {
+      const roleResult = await db
+        .query("SELECT role FROM users WHERE id = $1", [revokeUserId])
+        .catch(() => ({ rows: [] }));
+      preserveStudentWebLock =
+        String(roleResult.rows[0]?.role || "").toLowerCase() !== "admin" && getClientPlatform(req) === "web";
+    }
+    if (revokeUserId && revokeToken && !preserveStudentWebLock) {
       await revokeSessionTokenForUser(db, revokeUserId, revokeToken).catch(() => {});
     }
     try {

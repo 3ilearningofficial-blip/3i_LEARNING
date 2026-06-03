@@ -168,7 +168,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setUser(null);
           await removeStoredAuthUser();
           queryClient.clear();
-          router.replace("/welcome");
+          router.replace(Platform.OS === "web" ? "/welcome" : "/(auth)/email-login");
           return;
         }
 

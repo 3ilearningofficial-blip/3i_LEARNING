@@ -155,6 +155,7 @@ export function registerAdminUsersAndContentRoutes({
   /** Distinct students with device / web login denials (for Admin Users tab). */
   app.get("/api/admin/device-denied-users", requireAdmin, async (_req: Request, res: Response) => {
     try {
+      const activeWebLockCutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
       const result = await db.query(
         `SELECT u.id AS user_id,
                 u.name AS user_name,
@@ -166,11 +167,19 @@ export function registerAdminUsersAndContentRoutes({
                 (ARRAY_AGG(e.platform ORDER BY e.created_at DESC))[1] AS latest_platform
          FROM device_block_events e
          INNER JOIN users u ON u.id = e.user_id
-         WHERE e.reason IN ('wrong_web_browser_login_denied', 'wrong_device_login_denied')
+         WHERE e.reason IN ('wrong_web_browser_login_denied', 'wrong_device_login_denied', 'active_web_session_login_denied')
+           AND (
+             e.reason <> 'active_web_session_login_denied'
+             OR (
+               u.session_token IS NOT NULL
+               AND COALESCE(u.last_active_at, 0) >= $1
+             )
+           )
            AND COALESCE(u.role, '') <> 'admin'
          GROUP BY u.id, u.name, u.phone, u.email
          ORDER BY MAX(e.created_at) DESC NULLS LAST
-         LIMIT 200`
+         LIMIT 200`,
+        [activeWebLockCutoff]
       );
       res.json(result.rows);
     } catch (err) {
@@ -184,12 +193,13 @@ export function registerAdminUsersAndContentRoutes({
       const uid = parseInt(String(req.params.id), 10);
       if (!Number.isFinite(uid)) return res.status(400).json({ message: "Invalid user id" });
       await db.query(
-        "UPDATE users SET app_bound_device_id = NULL, web_device_id_phone = NULL, web_device_id_desktop = NULL, active_session_platform = NULL WHERE id = $1",
+        "UPDATE users SET app_bound_device_id = NULL, web_device_id_phone = NULL, web_device_id_desktop = NULL, session_token = NULL, device_id = NULL, active_session_platform = NULL WHERE id = $1",
         [uid]
       );
+      await db.query("DELETE FROM user_sessions WHERE user_id = $1", [uid]).catch(() => {});
       // Clear historical denial events for this user so the auto-lock list reflects current state immediately.
       await db.query(
-        "DELETE FROM device_block_events WHERE user_id = $1 AND reason IN ('wrong_web_browser_login_denied', 'wrong_device_login_denied')",
+        "DELETE FROM device_block_events WHERE user_id = $1 AND reason IN ('wrong_web_browser_login_denied', 'wrong_device_login_denied', 'active_web_session_login_denied')",
         [uid]
       ).catch(() => {});
       res.json({ success: true });

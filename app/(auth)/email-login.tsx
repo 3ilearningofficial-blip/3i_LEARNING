@@ -3,7 +3,7 @@ import {
   View, Text, StyleSheet, TextInput, Pressable,
   ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator,
 } from "react-native";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -18,6 +18,7 @@ import { navigateBackFromAuth } from "@/lib/navigate-auth-back";
 export default function EmailLoginScreen() {
   const insets = useSafeAreaInsets();
   const { login, user } = useAuth();
+  const { next } = useLocalSearchParams<{ next?: string }>();
 
   const goProfileSetupAllowWeb = () => {
     if (Platform.OS === "web" && typeof window !== "undefined") {
@@ -31,6 +32,11 @@ export default function EmailLoginScreen() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
   const [needsSignup, setNeedsSignup] = useState<null | "not_found" | "incomplete">(null);
+
+  const getPostAuthPath = () => {
+    if (Platform.OS === "web" && typeof next === "string" && next.startsWith("/")) return next;
+    return Platform.OS === "web" ? "/welcome" : "/(tabs)";
+  };
 
   const handleLogin = async () => {
     setError("");
@@ -53,7 +59,7 @@ export default function EmailLoginScreen() {
       if (!data.user.profileComplete) {
         navigateToProfileSetupWithNotice();
       } else {
-        router.replace("/(tabs)");
+        router.replace(getPostAuthPath() as any);
       }
     } catch (err: any) {
       const msg = (err?.message || "").replace(/^\d+:\s*/, "");

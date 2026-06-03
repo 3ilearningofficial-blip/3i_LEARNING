@@ -16,6 +16,7 @@ import { authFetch, getApiUrl, queryClient } from "@/lib/query-client";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { WebDownloadJobsProvider } from "@/context/WebDownloadJobsContext";
 import { WebDownloadHud } from "@/components/WebDownloadHud";
+import { WebAppHeader } from "@/components/WebAppHeader";
 import { StatusBar } from "expo-status-bar";
 import * as ScreenOrientation from "expo-screen-orientation";
 import { Platform, AppState, AppStateStatus } from "react-native";
@@ -114,19 +115,23 @@ function RootLayoutNav() {
     if (!currentSegment) {
       if (user) {
         if (user.profileComplete) {
-          router.replace("/(tabs)");
+          router.replace(Platform.OS === "web" ? "/welcome" : "/(tabs)");
         } else {
           if (!incompleteSplashNavDoneRef.current) {
             incompleteSplashNavDoneRef.current = true;
-            // Keep /welcome in history so Back from login returns to the marketing page (web + native).
-            router.replace("/welcome");
-            setTimeout(() => {
-              router.push("/(auth)/email-login");
-            }, 0);
+            if (Platform.OS === "web") {
+              // Keep /welcome in history so Back from login returns to the website homepage.
+              router.replace("/welcome");
+              setTimeout(() => {
+                router.push("/(auth)/email-login");
+              }, 0);
+            } else {
+              router.replace("/(auth)/email-login");
+            }
           }
         }
       } else {
-        router.replace("/welcome");
+        router.replace(Platform.OS === "web" ? "/welcome" : "/(auth)/email-login");
       }
       return;
     }
@@ -158,8 +163,8 @@ function RootLayoutNav() {
 
     if (user) {
       if (user.profileComplete) {
-        if (inAuthGroup || inWelcome) {
-          router.replace("/(tabs)");
+        if (inAuthGroup || (Platform.OS !== "web" && inWelcome)) {
+          router.replace(Platform.OS === "web" ? "/welcome" : "/(tabs)");
         }
         return;
       }
@@ -198,29 +203,42 @@ function RootLayoutNav() {
       return;
     }
     if (!inAuthGroup && !inWelcome && !inProfileSetup) {
-      router.replace("/welcome");
+      router.replace(Platform.OS === "web" ? "/welcome" : "/(auth)/email-login");
     }
   }, [user?.id, user?.profileComplete, isLoading, segments.join("/")]);
 
   // Don't render anything until auth is resolved — prevents flash of wrong screen
   if (isLoading) return null;
+
+  const currentSegment = segments[0];
+  const showWebAppHeader =
+    Platform.OS === "web" &&
+    !!user?.profileComplete &&
+    currentSegment !== "admin" &&
+    currentSegment !== "(auth)" &&
+    currentSegment !== "welcome" &&
+    currentSegment !== "profile-setup";
+  const webHeaderScreenOptions = showWebAppHeader
+    ? { headerShown: true, header: () => <WebAppHeader /> }
+    : { headerShown: false };
+
   return (
-    <Stack screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+    <Stack screenOptions={webHeaderScreenOptions}>
+      <Stack.Screen name="(tabs)" options={{ headerShown: showWebAppHeader }} />
       <Stack.Screen name="(auth)" options={{ headerShown: false }} />
       <Stack.Screen name="welcome" options={{ headerShown: false }} />
       <Stack.Screen name="profile-setup" options={{ headerShown: false }} />
-      <Stack.Screen name="profile" options={{ headerShown: false }} />
-      <Stack.Screen name="store" options={{ headerShown: false }} />
-      <Stack.Screen name="notifications" options={{ headerShown: false }} />
-      <Stack.Screen name="course/[id]" options={{ headerShown: false }} />
-      <Stack.Screen name="course-folder/[id]/[type]/[name]" options={{ headerShown: false }} />
-      <Stack.Screen name="lecture/[id]" options={{ headerShown: false }} />
-      <Stack.Screen name="test/[id]" options={{ headerShown: false }} />
-      <Stack.Screen name="test-result/[id]" options={{ headerShown: false }} />
-      <Stack.Screen name="test-folder/[id]" options={{ headerShown: false }} />
-      <Stack.Screen name="mission-folder/[name]" options={{ headerShown: false }} />
-      <Stack.Screen name="live-class/[id]" options={{ headerShown: false }} />
+      <Stack.Screen name="profile" options={{ headerShown: showWebAppHeader }} />
+      <Stack.Screen name="store" options={{ headerShown: showWebAppHeader }} />
+      <Stack.Screen name="notifications" options={{ headerShown: showWebAppHeader }} />
+      <Stack.Screen name="course/[id]" options={{ headerShown: showWebAppHeader }} />
+      <Stack.Screen name="course-folder/[id]/[type]/[name]" options={{ headerShown: showWebAppHeader }} />
+      <Stack.Screen name="lecture/[id]" options={{ headerShown: showWebAppHeader }} />
+      <Stack.Screen name="test/[id]" options={{ headerShown: showWebAppHeader }} />
+      <Stack.Screen name="test-result/[id]" options={{ headerShown: showWebAppHeader }} />
+      <Stack.Screen name="test-folder/[id]" options={{ headerShown: showWebAppHeader }} />
+      <Stack.Screen name="mission-folder/[name]" options={{ headerShown: showWebAppHeader }} />
+      <Stack.Screen name="live-class/[id]" options={{ headerShown: showWebAppHeader }} />
       <Stack.Screen name="admin/index" options={{ headerShown: false }} />
       <Stack.Screen name="admin/course/[id]" options={{ headerShown: false }} />
       <Stack.Screen name="admin/course/[id]/student/[userId]" options={{ headerShown: false }} />

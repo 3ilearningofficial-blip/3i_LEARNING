@@ -1,0 +1,150 @@
+diff --git a/app/admin/course/[id].tsx b/app/admin/course/[id].tsx
+old mode 100644
+new mode 100755
+index 1d8e231..bd01e55
+--- a/app/admin/course/[id].tsx
++++ b/app/admin/course/[id].tsx
+@@ -770,7 +770,7 @@ export default function AdminCourseScreen() {
+    * so the list refreshes with the persisted order.
+    */
+   const reorderMutation = useMutation({
+-    mutationFn: async ({ itemType, items }: { itemType: "test" | "material"; items: Array<{ id: number; orderIndex: number }> }) => {
++    mutationFn: async ({ itemType, items }: { itemType: "test" | "material" | "lecture" | "folder"; items: Array<{ id: number; orderIndex: number }> }) => {
+       await apiRequest("PATCH", `/api/admin/courses/${id}/reorder`, { itemType, items });
+     },
+     onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] }); },
+@@ -784,8 +784,8 @@ export default function AdminCourseScreen() {
+    * update ALL items in the group in one request — preventing gaps.
+    */
+   const moveItem = (
+-    itemType: "test" | "material",
+-    groupItems: Array<TestItem | Material>,
++    itemType: "test" | "material" | "lecture" | "folder",
++    groupItems: Array<{ id: number }>,
+     fromIdx: number,
+     direction: "up" | "down"
+   ) => {
+@@ -801,8 +801,8 @@ export default function AdminCourseScreen() {
+ 
+   /** Called by SortableList after a drag-and-drop reorder. */
+   const reorderByDrag = (
+-    itemType: "test" | "material",
+-    groupItems: Array<TestItem | Material>,
++    itemType: "test" | "material" | "lecture" | "folder",
++    groupItems: Array<{ id: number }>,
+     activeId: string | number,
+     overId: string | number
+   ) => {
+@@ -1081,8 +1081,16 @@ export default function AdminCourseScreen() {
+               );
+             })}
+             {/* Lectures without folder */}
+-            {courseLectures.filter((l: any) => !l.section_title).map((lecture) => (
+-              <View key={lecture.id} style={styles.itemCard}>
++            {(() => {
++              const ungroupedLectures = courseLectures.filter((l: any) => !l.section_title);
++              return (
++              <SortableList
++                ids={ungroupedLectures.map((l: any) => l.id)}
++                onReorder={(a, o) => reorderByDrag("lecture", ungroupedLectures, a, o)}
++              >
++              {ungroupedLectures.map((lecture: any) => (
++                <SortableItem key={lecture.id} id={lecture.id}>
++                <View style={styles.itemCard}>
+                 {lecture.section_title && (
+                   <View style={styles.itemSectionBadge}>
+                     <Ionicons name="folder" size={12} color={Colors.light.primary} />
+@@ -1127,7 +1135,11 @@ export default function AdminCourseScreen() {
+                   </Pressable>
+                 </View>
+               </View>
+-            ))}
++                </SortableItem>
++              ))}
++              </SortableList>
++              );
++            })()}
+           </View>
+         )}
+ 
+diff --git a/backend/admin-course-management-routes.ts b/backend/admin-course-management-routes.ts
+old mode 100644
+new mode 100755
+index 468ee58..4088d4b
+--- a/backend/admin-course-management-routes.ts
++++ b/backend/admin-course-management-routes.ts
+@@ -69,7 +69,7 @@ export function registerAdminCourseManagementRoutes({
+ 
+   app.get("/api/admin/courses/:id/folders", requireAdmin, async (req: Request, res: Response) => {
+     try {
+-      const result = await db.query("SELECT * FROM course_folders WHERE course_id = $1 ORDER BY created_at ASC", [req.params.id]);
++      const result = await db.query("SELECT * FROM course_folders WHERE course_id = $1 ORDER BY order_index ASC, created_at ASC", [req.params.id]);
+       res.json(result.rows);
+     } catch {
+       res.status(500).json({ message: "Failed to fetch folders" });
+@@ -181,8 +181,18 @@ export function registerAdminCourseManagementRoutes({
+         return res.status(400).json({ message: "Invalid course id" });
+       }
+       const { itemType, items } = req.body as { itemType: string; items: Array<{ id: number; orderIndex: number }> };
+-      if (itemType !== "test" && itemType !== "material") {
+-        return res.status(400).json({ message: "itemType must be 'test' or 'material'" });
++      // Allowlist of reorderable item types -> their table. Hardcoded so user
++      // input is NEVER interpolated into SQL. All four tables share the same
++      // columns (id, order_index, course_id), so the UPDATE below is identical.
++      const TABLE_BY_TYPE: Record<string, string> = {
++        test: "tests",
++        material: "study_materials",
++        lecture: "lectures",
++        folder: "course_folders",
++      };
++      const table = TABLE_BY_TYPE[itemType];
++      if (!table) {
++        return res.status(400).json({ message: "itemType must be one of: test, material, lecture, folder" });
+       }
+       if (!Array.isArray(items) || items.length === 0) {
+         return res.status(400).json({ message: "items must be a non-empty array" });
+@@ -199,21 +209,14 @@ export function registerAdminCourseManagementRoutes({
+       }
+       if (ids.length === 0) return res.json({ success: true, updated: 0 });
+ 
+-      if (itemType === "test") {
+-        await db.query(
+-          `UPDATE tests SET order_index = v.order_index
+-           FROM (SELECT unnest($1::int[]) AS id, unnest($2::int[]) AS order_index) v
+-           WHERE tests.id = v.id AND tests.course_id = $3`,
+-          [ids, orders, courseId]
+-        );
+-      } else {
+-        await db.query(
+-          `UPDATE study_materials SET order_index = v.order_index
+-           FROM (SELECT unnest($1::int[]) AS id, unnest($2::int[]) AS order_index) v
+-           WHERE study_materials.id = v.id AND study_materials.course_id = $3`,
+-          [ids, orders, courseId]
+-        );
+-      }
++      // `table` comes from the hardcoded TABLE_BY_TYPE allowlist above - safe to
++      // interpolate (table/column names cannot be passed as query parameters).
++      await db.query(
++        `UPDATE ${table} SET order_index = v.order_index
++         FROM (SELECT unnest($1::int[]) AS id, unnest($2::int[]) AS order_index) v
++         WHERE ${table}.id = v.id AND ${table}.course_id = $3`,
++        [ids, orders, courseId]
++      );
+       res.json({ success: true, updated: ids.length });
+     } catch (err) {
+       console.error("[reorder] error:", err);
+diff --git a/backend/course-access-routes.ts b/backend/course-access-routes.ts
+old mode 100644
+new mode 100755
+index 8abb25c..445057e
+--- a/backend/course-access-routes.ts
++++ b/backend/course-access-routes.ts
+@@ -389,7 +389,7 @@ export function registerCourseAccessRoutes({
+ 
+   app.get("/api/courses/:id/folders", async (req: Request, res: Response) => {
+     try {
+-      const result = await db.query("SELECT * FROM course_folders WHERE course_id = $1 AND is_hidden = FALSE ORDER BY created_at ASC", [req.params.id]);
++      const result = await db.query("SELECT * FROM course_folders WHERE course_id = $1 AND is_hidden = FALSE ORDER BY order_index ASC, created_at ASC", [req.params.id]);
+       // BPR-03: Folder structure is the same for all users (visibility is pre-filtered by
+       // is_hidden). Cache aggressively — folders change only when an admin edits the course.
+       res.set("Cache-Control", "public, max-age=60, stale-while-revalidate=300");

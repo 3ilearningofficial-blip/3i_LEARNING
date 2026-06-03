@@ -211,6 +211,29 @@ function WebAdminContactsLaptopEnd({ phoneDisplay, emailDisplay }: { phoneDispla
 type MyCourseItem = { title: string; desc: string };
 type ExtraSection = { title?: string; body?: string; imageUrl?: string };
 type FeatureItem = { icon: string; color: string; title: string; desc: string };
+type PublicCourse = {
+  id: number;
+  title: string;
+  description?: string;
+  teacher_name?: string;
+  price?: string;
+  original_price?: string;
+  category?: string;
+  thumbnail?: string;
+  is_free?: boolean;
+  total_lectures?: number;
+  total_tests?: number;
+  level?: string;
+};
+
+const WEBSITE_STATS = [
+  { icon: "radio", title: "Daily Live", desc: "Interactive classes", color: "#EF4444" },
+  { icon: "document-text", title: "Tests + Notes", desc: "Mocks, PDFs and notes", color: "#1A56DB" },
+  { icon: "chatbubbles", title: "Doubt Support", desc: "Ask and revise faster", color: "#7C3AED" },
+  { icon: "trophy", title: "Exam Ready", desc: "NDA, CDS and AFCAT", color: "#F59E0B" },
+] as const;
+
+const WEBSITE_FALLBACK_CATEGORIES = ["NDA", "CDS", "AFCAT", "SSB", "Test Series"];
 
 /** Title stays fixed; body (and images) scroll when compact so long CMS copy is readable on phone web / narrow layout. */
 function SectionTitleAndScroll({
@@ -278,6 +301,7 @@ export default function WelcomeScreen() {
   const isWeb = Platform.OS === "web";
   const { user } = useAuth();
   const qc = useQueryClient();
+  const [webMenuOpen, setWebMenuOpen] = React.useState(false);
 
   const { data: cfg = {} } = useQuery<Record<string, string>>({
     queryKey: ["/api/site-settings"],
@@ -303,6 +327,25 @@ export default function WelcomeScreen() {
 
   const s = (key: string, fallback: string) => (cfg[key] != null && cfg[key] !== "" ? cfg[key] : fallback);
   const on = (key: string) => s(key, "true") === "true";
+
+  const { data: websiteCourses = [] } = useQuery<PublicCourse[]>({
+    queryKey: ["/api/courses", "welcome", user?.id ?? "guest"],
+    queryFn: async () => {
+      try {
+        const url = new URL("/api/courses", getApiUrl());
+        if (user?.id) url.searchParams.set("_uid", String(user.id));
+        const res = await authFetch(url.toString());
+        if (!res.ok) return [];
+        const data = await res.json().catch(() => []);
+        return Array.isArray(data) ? data : [];
+      } catch {
+        return [];
+      }
+    },
+    staleTime: 60 * 1000,
+    gcTime: 10 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
 
   const tagline = s("welcome_tagline", s("welcome_headline", "Master Mathematics Under Pankaj Sir Guidance")).replace(/\n/g, " ");
   const navLine = s("welcome_nav_line", "Courses · Live Classes · OMR Tests · Daily Missions · AI Tutor");
@@ -443,6 +486,208 @@ export default function WelcomeScreen() {
   ) : (
     <Image source={require("@/assets/images/logo.png")} style={styles.logoImg} resizeMode="cover" />
   );
+
+  const websiteCategories = React.useMemo(() => {
+    const values = websiteCourses.map((course) => String(course.category || "").trim()).filter(Boolean);
+    const unique = Array.from(new Set(values));
+    return unique.length ? unique.slice(0, 6) : WEBSITE_FALLBACK_CATEGORIES;
+  }, [websiteCourses]);
+  const featuredWebsiteCourses = websiteCourses.slice(0, 6);
+  const isDesktopWeb = isWeb && width >= 900;
+
+  const openWebRoute = (href: string) => {
+    blurActiveElementWeb();
+    setWebMenuOpen(false);
+    router.push(href as any);
+  };
+
+  const openCourse = (courseId: number) => {
+    const next = `/course/${courseId}`;
+    blurActiveElementWeb();
+    if (user?.id) {
+      router.push(next as any);
+      return;
+    }
+    router.push({ pathname: "/(auth)/email-login", params: { next } } as any);
+  };
+
+  if (isWeb) {
+    const headerLinks = [
+      { label: "Home", onPress: () => openWebRoute("/welcome") },
+      { label: "Courses", onPress: () => openWebRoute("/(tabs)") },
+      { label: "Test Series", onPress: () => openWebRoute(user?.id ? "/(tabs)/test-series" : "/(auth)/email-login") },
+      { label: "AI Tutor", onPress: () => openWebRoute(user?.id ? "/(tabs)/ai-tutor" : "/(auth)/email-login") },
+      ...(user?.role === "admin" ? [{ label: "Admin Dashboard", onPress: () => openWebRoute("/admin") }] : []),
+    ];
+
+    return (
+      <View style={styles.websitePage}>
+        <View style={styles.websiteHeader}>
+          <Pressable onPress={() => openWebRoute("/welcome")} style={styles.websiteBrand}>
+            <View style={styles.websiteLogo}>{logoImageEl}</View>
+            <Text style={styles.websiteBrandText}>{brandText}</Text>
+          </Pressable>
+
+          {isDesktopWeb ? (
+            <View style={styles.websiteNav}>
+              {headerLinks.map((link) => (
+                <Pressable key={link.label} onPress={link.onPress} style={({ pressed }) => [styles.websiteNavItem, pressed && styles.pressedSoft]}>
+                  <Text style={styles.websiteNavText}>{link.label}</Text>
+                </Pressable>
+              ))}
+              {user?.id ? (
+                <Pressable onPress={() => openWebRoute(user.role === "admin" ? "/admin" : "/(tabs)")} style={styles.websiteLoginButton}>
+                  <Text style={styles.websiteLoginButtonText}>{user.role === "admin" ? "Dashboard" : "Open App"}</Text>
+                </Pressable>
+              ) : (
+                <Pressable onPress={() => openWebRoute("/(auth)/email-login")} style={styles.websiteLoginButton}>
+                  <Text style={styles.websiteLoginButtonText}>Login/Register</Text>
+                </Pressable>
+              )}
+            </View>
+          ) : (
+            <Pressable onPress={() => setWebMenuOpen((open) => !open)} style={styles.websiteMenuButton}>
+              <Ionicons name={webMenuOpen ? "close" : "menu"} size={26} color={Colors.light.text} />
+            </Pressable>
+          )}
+        </View>
+
+        {!isDesktopWeb && webMenuOpen ? (
+          <View style={styles.websiteMobileMenu}>
+            {headerLinks.map((link) => (
+              <Pressable key={link.label} onPress={link.onPress} style={styles.websiteMobileMenuItem}>
+                <Text style={styles.websiteMobileMenuText}>{link.label}</Text>
+              </Pressable>
+            ))}
+            <Pressable onPress={() => openWebRoute(user?.id ? "/(tabs)" : "/(auth)/email-login")} style={styles.websiteMobilePrimary}>
+              <Text style={styles.websiteLoginButtonText}>{user?.id ? "Open App" : "Login/Register"}</Text>
+            </Pressable>
+          </View>
+        ) : null}
+
+        <ScrollView style={styles.websiteScroll} contentContainerStyle={styles.websiteScrollContent} showsVerticalScrollIndicator={false}>
+          <LinearGradient colors={["#F5F7FF", "#FFF7ED"]} style={[styles.websiteHero, !isDesktopWeb && styles.websiteHeroMobile]}>
+            <View style={styles.websiteHeroCopy}>
+              <Text style={styles.websiteEyebrow}>Live classes, tests, missions and AI tutoring</Text>
+              <Text style={[styles.websiteHeroTitle, !isDesktopWeb && styles.websiteHeroTitleMobile]}>
+                {tagline || "Bharat's trusted exam preparation platform"}
+              </Text>
+              <Text style={styles.websiteHeroText}>
+                Prepare for NDA, CDS and AFCAT with structured courses, interactive classes, OMR-style tests and daily practice.
+              </Text>
+              <View style={[styles.websiteHeroActions, !isDesktopWeb && styles.websiteHeroActionsMobile]}>
+                <Pressable
+                  onPress={() => {
+                    if (featuredWebsiteCourses[0]?.id) openCourse(featuredWebsiteCourses[0].id);
+                    else openWebRoute(user?.id ? "/(tabs)" : "/(auth)/email-login");
+                  }}
+                  style={({ pressed }) => [styles.websiteHeroPrimary, pressed && styles.pressedSoft]}
+                >
+                  <Text style={styles.websiteHeroPrimaryText}>{user?.id ? "Continue Learning" : "Join Now"}</Text>
+                  <Ionicons name="arrow-forward" size={18} color="#FFFFFF" />
+                </Pressable>
+                <Pressable onPress={() => openWebRoute(user?.id ? "/(tabs)/test-series" : "/(auth)/email-login")} style={styles.websiteHeroSecondary}>
+                  <Text style={styles.websiteHeroSecondaryText}>Explore Tests</Text>
+                </Pressable>
+              </View>
+            </View>
+            <View style={styles.websiteHeroVisual}>
+              <View style={styles.websiteHeroPriceCard}>
+                <Text style={styles.websitePriceSmall}>Courses from</Text>
+                <Text style={styles.websitePriceBig}>
+                  ₹{featuredWebsiteCourses[0]?.price ? parseFloat(String(featuredWebsiteCourses[0].price)).toFixed(0) : "Free"}
+                </Text>
+                <Text style={styles.websitePriceSmall}>Start today</Text>
+              </View>
+              <View style={styles.websiteTeacherBubble}>
+                <Ionicons name="school" size={54} color={Colors.light.primary} />
+                <Text style={styles.websiteTeacherText}>Pankaj Sir Guidance</Text>
+              </View>
+            </View>
+          </LinearGradient>
+
+          <View style={[styles.websiteStats, !isDesktopWeb && styles.websiteStatsMobile]}>
+            {WEBSITE_STATS.map((stat) => (
+              <View key={stat.title} style={styles.websiteStatCard}>
+                <View style={[styles.websiteStatIcon, { backgroundColor: `${stat.color}18` }]}>
+                  <Ionicons name={stat.icon as any} size={24} color={stat.color} />
+                </View>
+                <Text style={styles.websiteStatTitle}>{stat.title}</Text>
+                <Text style={styles.websiteStatDesc}>{stat.desc}</Text>
+              </View>
+            ))}
+          </View>
+
+          <View style={styles.websiteSection}>
+            <Text style={styles.websiteSectionTitle}>Exam Categories</Text>
+            <Text style={styles.websiteSectionSub}>Choose your goal and continue with the right course or test series.</Text>
+            <View style={[styles.websiteCategoryGrid, !isDesktopWeb && styles.websiteCategoryGridMobile]}>
+              {websiteCategories.map((category, index) => (
+                <Pressable
+                  key={category}
+                  onPress={() => openWebRoute("/(tabs)")}
+                  style={({ pressed }) => [
+                    styles.websiteCategoryCard,
+                    { backgroundColor: ["#FFF7ED", "#EEF4FF", "#F5F3FF", "#ECFDF5"][index % 4] },
+                    pressed && styles.pressedSoft,
+                  ]}
+                >
+                  <Text style={styles.websiteCategoryTitle}>{category}</Text>
+                  <Text style={styles.websiteCategorySub}>Explore Category</Text>
+                  <Ionicons name="arrow-forward" size={22} color={Colors.light.text} />
+                </Pressable>
+              ))}
+            </View>
+          </View>
+
+          <View style={styles.websiteSection}>
+            <Text style={styles.websiteSectionTitle}>Popular Courses</Text>
+            <Text style={styles.websiteSectionSub}>Buy once you are logged in. If you are new, we will ask you to login/register first.</Text>
+            <View style={[styles.websiteCourseGrid, !isDesktopWeb && styles.websiteCourseGridMobile]}>
+              {(featuredWebsiteCourses.length ? featuredWebsiteCourses : [
+                { id: 0, title: "NDA Complete Batch", description: "Structured lessons, live support and tests.", price: "0", is_free: true, category: "NDA" },
+                { id: 0, title: "CDS/AFCAT Test Series", description: "OMR-style mocks with analytics.", price: "0", is_free: true, category: "Test Series" },
+              ]).map((course, index) => (
+                <View key={`${course.id || "fallback"}-${index}`} style={styles.websiteCourseCard}>
+                  <View style={styles.websiteCourseThumb}>
+                    {course.thumbnail ? (
+                      <Image source={{ uri: resolveWelcomeMediaUrl(course.thumbnail, apiOrigin) }} style={StyleSheet.absoluteFillObject} resizeMode="cover" />
+                    ) : (
+                      <Ionicons name="book" size={34} color={Colors.light.primary} />
+                    )}
+                  </View>
+                  <Text style={styles.websiteCourseTitle} numberOfLines={2}>{course.title}</Text>
+                  <Text style={styles.websiteCourseDesc} numberOfLines={2}>{course.description || "Complete preparation with lectures, tests and practice."}</Text>
+                  <View style={styles.websiteCourseMeta}>
+                    <Text style={styles.websiteCoursePrice}>{course.is_free ? "Free" : `₹${parseFloat(String(course.price || "0")).toFixed(0)}`}</Text>
+                    <Text style={styles.websiteCourseCategory}>{course.category || "Course"}</Text>
+                  </View>
+                  <Pressable
+                    onPress={() => (course.id ? openCourse(course.id) : openWebRoute(user?.id ? "/(tabs)" : "/(auth)/email-login"))}
+                    style={({ pressed }) => [styles.websiteBuyButton, pressed && styles.pressedSoft]}
+                  >
+                    <Text style={styles.websiteBuyButtonText}>{course.is_free ? "Start Free" : "Buy Now"}</Text>
+                  </Pressable>
+                </View>
+              ))}
+            </View>
+          </View>
+
+          <View style={[styles.websiteAppCta, !isDesktopWeb && styles.websiteAppCtaMobile]}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.websiteAppCtaTitle}>Join students on the app today!</Text>
+              <Text style={styles.websiteAppCtaText}>Live and recorded classes, progress tracking, missions and AI help in one place.</Text>
+            </View>
+            <Pressable onPress={() => openWebRoute(user?.id ? "/(tabs)" : "/(auth)/email-login")} style={styles.websiteHeroPrimary}>
+              <Text style={styles.websiteHeroPrimaryText}>{user?.id ? "Open Learning Home" : "Login/Register"}</Text>
+            </Pressable>
+          </View>
+
+          <Text style={styles.websiteFooter}>{s("welcome_footer", "© 2026 3i Learning. All rights reserved.")}</Text>
+        </ScrollView>
+      </View>
+    );
+  }
 
   return (
     <View style={[styles.container, isWeb && styles.containerWeb]}>
@@ -718,6 +963,426 @@ export default function WelcomeScreen() {
 const LOGO_BORDER = Colors.light.primaryDark;
 
 const styles = StyleSheet.create({
+  pressedSoft: { opacity: 0.78 },
+  websitePage: {
+    flex: 1,
+    backgroundColor: "#FFFFFF",
+  },
+  websiteHeader: {
+    minHeight: 70,
+    paddingHorizontal: 28,
+    paddingVertical: 10,
+    backgroundColor: "#FFFFFF",
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    zIndex: 30,
+  },
+  websiteBrand: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  websiteLogo: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    overflow: "hidden",
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  websiteBrandText: {
+    fontFamily: "Inter_700Bold",
+    fontSize: 18,
+    color: Colors.light.text,
+  },
+  websiteNav: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  websiteNavItem: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+  websiteNavText: {
+    fontFamily: "Inter_600SemiBold",
+    fontSize: 14,
+    color: Colors.light.text,
+  },
+  websiteLoginButton: {
+    minHeight: 42,
+    paddingHorizontal: 18,
+    borderRadius: 10,
+    backgroundColor: Colors.light.primary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  websiteLoginButtonText: {
+    fontFamily: "Inter_700Bold",
+    fontSize: 14,
+    color: "#FFFFFF",
+  },
+  websiteMenuButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  websiteMobileMenu: {
+    backgroundColor: "#FFFFFF",
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+    padding: 12,
+    gap: 6,
+  },
+  websiteMobileMenuItem: {
+    paddingVertical: 13,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+  },
+  websiteMobileMenuText: {
+    fontFamily: "Inter_600SemiBold",
+    fontSize: 15,
+    color: Colors.light.text,
+  },
+  websiteMobilePrimary: {
+    marginTop: 6,
+    minHeight: 46,
+    borderRadius: 12,
+    backgroundColor: Colors.light.primary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  websiteScroll: { flex: 1 },
+  websiteScrollContent: {
+    paddingBottom: 44,
+    gap: 34,
+  },
+  websiteHero: {
+    marginHorizontal: 0,
+    paddingHorizontal: 72,
+    paddingVertical: 54,
+    minHeight: 360,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 32,
+  },
+  websiteHeroMobile: {
+    paddingHorizontal: 20,
+    paddingVertical: 32,
+    minHeight: 0,
+    flexDirection: "column",
+    alignItems: "stretch",
+  },
+  websiteHeroCopy: {
+    flex: 1.2,
+    gap: 16,
+    maxWidth: 680,
+  },
+  websiteEyebrow: {
+    fontFamily: "Inter_700Bold",
+    fontSize: 13,
+    color: Colors.light.primary,
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+  },
+  websiteHeroTitle: {
+    fontFamily: "Inter_700Bold",
+    fontSize: 46,
+    lineHeight: 55,
+    color: Colors.light.text,
+  },
+  websiteHeroTitleMobile: {
+    fontSize: 30,
+    lineHeight: 38,
+  },
+  websiteHeroText: {
+    fontFamily: "Inter_400Regular",
+    fontSize: 17,
+    lineHeight: 26,
+    color: Colors.light.textSecondary,
+    maxWidth: 620,
+  },
+  websiteHeroActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingTop: 8,
+  },
+  websiteHeroActionsMobile: {
+    flexDirection: "column",
+    alignItems: "stretch",
+  },
+  websiteHeroPrimary: {
+    minHeight: 50,
+    borderRadius: 14,
+    backgroundColor: Colors.light.primary,
+    paddingHorizontal: 22,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  websiteHeroPrimaryText: {
+    fontFamily: "Inter_700Bold",
+    fontSize: 15,
+    color: "#FFFFFF",
+  },
+  websiteHeroSecondary: {
+    minHeight: 50,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 22,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  websiteHeroSecondaryText: {
+    fontFamily: "Inter_700Bold",
+    fontSize: 15,
+    color: Colors.light.text,
+  },
+  websiteHeroVisual: {
+    flex: 0.8,
+    minHeight: 260,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 18,
+  },
+  websiteHeroPriceCard: {
+    minWidth: 220,
+    borderRadius: 24,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    padding: 24,
+    alignItems: "center",
+    ...(Platform.OS === "web" ? ({ boxShadow: "0px 20px 50px rgba(15, 23, 42, 0.12)" } as object) : {}),
+  },
+  websitePriceSmall: {
+    fontFamily: "Inter_600SemiBold",
+    fontSize: 14,
+    color: Colors.light.textSecondary,
+  },
+  websitePriceBig: {
+    fontFamily: "Inter_700Bold",
+    fontSize: 38,
+    color: Colors.light.primary,
+    marginVertical: 6,
+  },
+  websiteTeacherBubble: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    borderRadius: 999,
+    backgroundColor: "#FFFFFF",
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  websiteTeacherText: {
+    fontFamily: "Inter_700Bold",
+    color: Colors.light.text,
+    fontSize: 15,
+  },
+  websiteStats: {
+    marginHorizontal: 72,
+    marginTop: -60,
+    borderRadius: 18,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    paddingVertical: 20,
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    justifyContent: "space-around",
+    gap: 10,
+    ...(Platform.OS === "web" ? ({ boxShadow: "0px 16px 40px rgba(15, 23, 42, 0.08)" } as object) : {}),
+  },
+  websiteStatsMobile: {
+    marginHorizontal: 20,
+    marginTop: 0,
+    flexDirection: "column",
+  },
+  websiteStatCard: {
+    flex: 1,
+    alignItems: "center",
+    gap: 6,
+    paddingVertical: 8,
+  },
+  websiteStatIcon: {
+    width: 46,
+    height: 46,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  websiteStatTitle: {
+    fontFamily: "Inter_700Bold",
+    fontSize: 14,
+    color: Colors.light.text,
+    textAlign: "center",
+  },
+  websiteStatDesc: {
+    fontFamily: "Inter_400Regular",
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+    textAlign: "center",
+  },
+  websiteSection: {
+    paddingHorizontal: 72,
+    gap: 14,
+  },
+  websiteSectionTitle: {
+    fontFamily: "Inter_700Bold",
+    fontSize: 28,
+    color: Colors.light.text,
+    textAlign: "center",
+  },
+  websiteSectionSub: {
+    fontFamily: "Inter_400Regular",
+    fontSize: 15,
+    color: Colors.light.textSecondary,
+    textAlign: "center",
+    marginBottom: 8,
+  },
+  websiteCategoryGrid: {
+    flexDirection: "row",
+    gap: 16,
+    flexWrap: "wrap",
+    justifyContent: "center",
+  },
+  websiteCategoryGridMobile: {
+    flexDirection: "column",
+  },
+  websiteCategoryCard: {
+    width: 230,
+    minHeight: 150,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    padding: 18,
+    justifyContent: "space-between",
+  },
+  websiteCategoryTitle: {
+    fontFamily: "Inter_700Bold",
+    fontSize: 20,
+    color: Colors.light.text,
+  },
+  websiteCategorySub: {
+    fontFamily: "Inter_500Medium",
+    fontSize: 13,
+    color: Colors.light.textSecondary,
+  },
+  websiteCourseGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 18,
+    justifyContent: "center",
+  },
+  websiteCourseGridMobile: {
+    flexDirection: "column",
+  },
+  websiteCourseCard: {
+    width: 292,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: "#FFFFFF",
+    padding: 16,
+    gap: 10,
+  },
+  websiteCourseThumb: {
+    height: 130,
+    borderRadius: 16,
+    backgroundColor: "#EEF4FF",
+    overflow: "hidden",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  websiteCourseTitle: {
+    fontFamily: "Inter_700Bold",
+    fontSize: 17,
+    color: Colors.light.text,
+  },
+  websiteCourseDesc: {
+    fontFamily: "Inter_400Regular",
+    fontSize: 13,
+    color: Colors.light.textSecondary,
+    lineHeight: 19,
+  },
+  websiteCourseMeta: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  websiteCoursePrice: {
+    fontFamily: "Inter_700Bold",
+    color: Colors.light.primary,
+    fontSize: 17,
+  },
+  websiteCourseCategory: {
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.light.textMuted,
+    fontSize: 12,
+  },
+  websiteBuyButton: {
+    minHeight: 44,
+    borderRadius: 12,
+    backgroundColor: Colors.light.primary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  websiteBuyButtonText: {
+    fontFamily: "Inter_700Bold",
+    color: "#FFFFFF",
+    fontSize: 14,
+  },
+  websiteAppCta: {
+    marginHorizontal: 72,
+    borderRadius: 24,
+    backgroundColor: "#EEF4FF",
+    padding: 30,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 20,
+  },
+  websiteAppCtaMobile: {
+    marginHorizontal: 20,
+    flexDirection: "column",
+    alignItems: "stretch",
+  },
+  websiteAppCtaTitle: {
+    fontFamily: "Inter_700Bold",
+    fontSize: 25,
+    color: Colors.light.text,
+  },
+  websiteAppCtaText: {
+    fontFamily: "Inter_400Regular",
+    fontSize: 14,
+    color: Colors.light.textSecondary,
+    marginTop: 8,
+    lineHeight: 21,
+  },
+  websiteFooter: {
+    fontFamily: "Inter_500Medium",
+    fontSize: 13,
+    color: Colors.light.textMuted,
+    textAlign: "center",
+    paddingHorizontal: 20,
+  },
   container: { flex: 1, backgroundColor: Colors.light.background },
   containerWeb: { width: "100%", maxWidth: "100%", alignSelf: "stretch" },
   scrollViewWeb: { width: "100%", flex: 1 },
