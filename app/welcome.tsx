@@ -299,7 +299,7 @@ export default function WelcomeScreen() {
   const { width, height } = useWindowDimensions();
   const isWide = width >= 640;
   const isWeb = Platform.OS === "web";
-  const { user } = useAuth();
+  const { user, refreshUser } = useAuth();
   const qc = useQueryClient();
   const [webMenuOpen, setWebMenuOpen] = React.useState(false);
   const [authPrompt, setAuthPrompt] = React.useState<{ visible: boolean; next: string; message: string }>({
@@ -514,23 +514,42 @@ export default function WelcomeScreen() {
     router.push(href as any);
   };
 
-  const showAuthRequired = (next: string, message = "Please login/register first to view this.") => {
-    blurActiveElementWeb();
-    setWebMenuOpen(false);
-    setAuthPrompt({ visible: true, next, message });
-  };
-
-  const openAuthModal = (next = "/(tabs)", message = "") => {
-    blurActiveElementWeb();
-    setWebMenuOpen(false);
-    setAuthPrompt({ visible: true, next, message });
-  };
-
-  const openProtectedWebRoute = (href: string) => {
+  const routeIfAlreadyAuthenticated = async (next: string): Promise<boolean> => {
+    if (!isWeb) return false;
     if (user?.id) {
-      openWebRoute(href);
-      return;
+      openWebRoute(next);
+      return true;
     }
+    try {
+      await refreshUser();
+      const res = await authFetch(new URL("/api/auth/me", getApiUrl()).toString());
+      const data = await res.json().catch(() => null);
+      if (res.ok && typeof data?.id === "number") {
+        router.replace(next as any);
+        return true;
+      }
+    } catch {
+      // fall through to auth prompt/modal
+    }
+    return false;
+  };
+
+  const showAuthRequired = async (next: string, message = "Please login/register first to view this.") => {
+    blurActiveElementWeb();
+    setWebMenuOpen(false);
+    if (await routeIfAlreadyAuthenticated(next)) return;
+    setAuthPrompt({ visible: true, next, message });
+  };
+
+  const openAuthModal = async (next = "/(tabs)", message = "") => {
+    blurActiveElementWeb();
+    setWebMenuOpen(false);
+    if (await routeIfAlreadyAuthenticated(next)) return;
+    setAuthPrompt({ visible: true, next, message });
+  };
+
+  const openProtectedWebRoute = async (href: string) => {
+    if (await routeIfAlreadyAuthenticated(href)) return;
     showAuthRequired(href);
   };
 

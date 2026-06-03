@@ -164,7 +164,7 @@ function RootLayoutNav() {
     if (user) {
       if (user.profileComplete) {
         if (inAuthGroup || (Platform.OS !== "web" && inWelcome)) {
-          router.replace(Platform.OS === "web" ? "/welcome" : "/(tabs)");
+          router.replace("/(tabs)");
         }
         return;
       }
