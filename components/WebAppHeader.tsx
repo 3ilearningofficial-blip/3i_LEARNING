@@ -13,7 +13,7 @@ import {
 import Colors from "@/constants/colors";
 
 const WEB_NAV_ITEMS = [
-  { label: "Home", href: "/(tabs)", activePaths: ["/", "/index"] },
+  { label: "Home", href: "/home", activePaths: ["/home"] },
   { label: "Daily Missions", href: "/(tabs)/daily-mission", activePaths: ["/daily-mission"] },
   { label: "Test Series", href: "/(tabs)/test-series", activePaths: ["/test-series"] },
   { label: "AI Tutor", href: "/(tabs)/ai-tutor", activePaths: ["/ai-tutor"] },
@@ -68,7 +68,7 @@ export function WebAppHeader() {
           <Ionicons name="arrow-back" size={18} color={Colors.light.primary} />
           {!isPhoneWeb ? <Text style={styles.backText}>Welcome</Text> : null}
         </Pressable>
-        <Pressable onPress={() => navigateTo("/(tabs)")} style={styles.brand}>
+        <Pressable onPress={() => navigateTo("/home")} style={styles.brand}>
           <View style={styles.logoMark}>
             <Text style={styles.logoText}>3i</Text>
           </View>

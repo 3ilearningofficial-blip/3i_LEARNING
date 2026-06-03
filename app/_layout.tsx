@@ -115,7 +115,7 @@ function RootLayoutNav() {
     if (!currentSegment) {
       if (user) {
         if (user.profileComplete) {
-          router.replace(Platform.OS === "web" ? "/welcome" : "/(tabs)");
+          router.replace((Platform.OS === "web" ? "/home" : "/(tabs)") as any);
         } else {
           if (!incompleteSplashNavDoneRef.current) {
             incompleteSplashNavDoneRef.current = true;
@@ -164,7 +164,7 @@ function RootLayoutNav() {
     if (user) {
       if (user.profileComplete) {
         if (inAuthGroup || (Platform.OS !== "web" && inWelcome)) {
-          router.replace("/(tabs)");
+          router.replace((Platform.OS === "web" ? "/home" : "/(tabs)") as any);
         }
         return;
       }
@@ -225,6 +225,7 @@ function RootLayoutNav() {
   return (
     <Stack screenOptions={webHeaderScreenOptions}>
       <Stack.Screen name="(tabs)" options={{ headerShown: showWebAppHeader }} />
+      <Stack.Screen name="home" options={{ headerShown: showWebAppHeader }} />
       <Stack.Screen name="(auth)" options={{ headerShown: false }} />
       <Stack.Screen name="welcome" options={{ headerShown: false }} />
       <Stack.Screen name="profile-setup" options={{ headerShown: false }} />

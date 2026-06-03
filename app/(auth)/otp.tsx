@@ -38,7 +38,8 @@ export default function OTPScreen() {
   const { login } = useAuth();
 
   const getPostAuthPath = () => {
-    if (Platform.OS === "web" && typeof next === "string" && next.startsWith("/")) return next;
+    if (Platform.OS === "web" && typeof next === "string" && next.startsWith("/")) return next === "/(tabs)" ? "/home" : next;
+    if (Platform.OS === "web") return "/home";
     return "/(tabs)";
   };
 

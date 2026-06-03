@@ -1,7 +1,7 @@
 import React from "react";
 import {
   View, Text, StyleSheet, Pressable, Image, Platform,
-  ScrollView, useWindowDimensions, Linking, Modal,
+  ScrollView, useWindowDimensions, Linking, Modal, ActivityIndicator,
   type StyleProp,
   type ImageStyle,
 } from "react-native";
@@ -227,6 +227,12 @@ type PublicCourse = {
   level?: string;
 };
 
+function getCoursePriceNumber(course: PublicCourse): number | null {
+  if (course.is_free) return null;
+  const price = Number.parseFloat(String(course.price ?? ""));
+  return Number.isFinite(price) && price > 0 ? price : null;
+}
+
 const WEBSITE_STATS = [
   { icon: "radio", title: "Daily Live", desc: "Interactive classes", color: "#EF4444" },
   { icon: "document-text", title: "Tests + Notes", desc: "Mocks, PDFs and notes", color: "#1A56DB" },
@@ -235,6 +241,7 @@ const WEBSITE_STATS = [
 ] as const;
 
 const WEBSITE_EXAM_CATEGORIES = ["NDA", "CDS", "AFCAT"] as const;
+const WEB_APP_HOME_PATH = "/home";
 
 /** Title stays fixed; body (and images) scroll when compact so long CMS copy is readable on phone web / narrow layout. */
 function SectionTitleAndScroll({
@@ -305,7 +312,7 @@ export default function WelcomeScreen() {
   const [webMenuOpen, setWebMenuOpen] = React.useState(false);
   const [authPrompt, setAuthPrompt] = React.useState<{ visible: boolean; next: string; message: string }>({
     visible: false,
-    next: "/(tabs)",
+    next: WEB_APP_HOME_PATH,
     message: "",
   });
   const [infoPrompt, setInfoPrompt] = React.useState<{ visible: boolean; message: string }>({
@@ -338,7 +345,7 @@ export default function WelcomeScreen() {
   const s = (key: string, fallback: string) => (cfg[key] != null && cfg[key] !== "" ? cfg[key] : fallback);
   const on = (key: string) => s(key, "true") === "true";
 
-  const { data: websiteCourses = [] } = useQuery<PublicCourse[]>({
+  const { data: websiteCourses = [], isLoading: websiteCoursesLoading } = useQuery<PublicCourse[]>({
     queryKey: ["/api/courses", "welcome", user?.id ?? "guest"],
     queryFn: async () => {
       try {
@@ -438,13 +445,13 @@ export default function WelcomeScreen() {
 
   const handleLogin = () => {
     blurActiveElementWeb();
-    if (user) router.replace("/(tabs)");
+    if (user) router.replace(WEB_APP_HOME_PATH as any);
     else router.push("/(auth)/email-login" as any);
   };
 
   const handleSignup = () => {
     blurActiveElementWeb();
-    if (user) router.replace("/(tabs)");
+    if (user) router.replace(WEB_APP_HOME_PATH as any);
     else router.push("/(auth)/login" as any);
   };
 
@@ -462,7 +469,7 @@ export default function WelcomeScreen() {
 
   const handleOpenWebApp = () => {
     blurActiveElementWeb();
-    if (user) router.replace("/(tabs)");
+    if (user) router.replace(WEB_APP_HOME_PATH as any);
     else router.push("/(auth)/email-login" as any);
   };
 
@@ -507,6 +514,18 @@ export default function WelcomeScreen() {
 
   const websiteCategories = WEBSITE_EXAM_CATEGORIES;
   const featuredWebsiteCourses = websiteCourses.slice(0, 6);
+  const heroCoursePrice = React.useMemo(() => {
+    const paidPrices = websiteCourses
+      .map(getCoursePriceNumber)
+      .filter((price): price is number => price != null)
+      .sort((a, b) => a - b);
+    return paidPrices[0] ?? null;
+  }, [websiteCourses]);
+  const heroCoursePriceText = websiteCoursesLoading
+    ? "..."
+    : heroCoursePrice != null
+      ? `₹${heroCoursePrice.toFixed(0)}`
+      : "Free";
   const isDesktopWeb = isWeb && width >= 900;
 
   const openWebRoute = (href: string) => {
@@ -542,7 +561,7 @@ export default function WelcomeScreen() {
     setAuthPrompt({ visible: true, next, message });
   };
 
-  const openAuthModal = async (next = "/(tabs)", message = "") => {
+  const openAuthModal = async (next = WEB_APP_HOME_PATH, message = "") => {
     blurActiveElementWeb();
     setWebMenuOpen(false);
     if (await routeIfAlreadyAuthenticated(next)) return;
@@ -572,7 +591,8 @@ export default function WelcomeScreen() {
         /* ignore */
       }
       setAuthPrompt((prev) => ({ ...prev, visible: false }));
-      router.replace((payload.next || authPrompt.next || "/welcome") as any);
+      const nextPath = payload.next === "/(tabs)" ? WEB_APP_HOME_PATH : payload.next || authPrompt.next || WEB_APP_HOME_PATH;
+      router.replace(nextPath as any);
     };
 
     const onMessage = (event: MessageEvent) => {
@@ -610,7 +630,7 @@ export default function WelcomeScreen() {
   const authModalSrc = React.useMemo(() => {
     if (!isWeb || typeof window === "undefined") return "";
     const url = new URL("/email-login", window.location.origin);
-    url.searchParams.set("next", authPrompt.next || "/(tabs)");
+    url.searchParams.set("next", authPrompt.next || WEB_APP_HOME_PATH);
     url.searchParams.set("modal", "1");
     return url.toString();
   }, [authPrompt.next, isWeb]);
@@ -637,8 +657,8 @@ export default function WelcomeScreen() {
 
   if (isWeb) {
     const headerLinks = [
-      { label: "Home", onPress: () => openProtectedWebRoute("/(tabs)") },
-      { label: "Courses", onPress: () => openProtectedWebRoute("/(tabs)") },
+      { label: "Home", onPress: () => openProtectedWebRoute(WEB_APP_HOME_PATH) },
+      { label: "Courses", onPress: () => openProtectedWebRoute(WEB_APP_HOME_PATH) },
       { label: "Test Series", onPress: () => openProtectedWebRoute("/(tabs)/test-series") },
       { label: "AI Tutor", onPress: () => openProtectedWebRoute("/(tabs)/ai-tutor") },
     ];
@@ -662,11 +682,11 @@ export default function WelcomeScreen() {
                 <WebAdminContactsLaptopEnd phoneDisplay={webContactPhone} emailDisplay={webContactEmail} />
               ) : null}
               {user?.id ? (
-                <Pressable onPress={() => openWebRoute(user.role === "admin" ? "/admin" : "/(tabs)")} style={styles.websiteLoginButton}>
+                <Pressable onPress={() => openWebRoute(user.role === "admin" ? "/admin" : WEB_APP_HOME_PATH)} style={styles.websiteLoginButton}>
                   <Text style={styles.websiteLoginButtonText}>{user.role === "admin" ? "Dashboard" : "Open App"}</Text>
                 </Pressable>
               ) : (
-                <Pressable onPress={() => openAuthModal("/(tabs)")} style={styles.websiteLoginButton}>
+                <Pressable onPress={() => openAuthModal(WEB_APP_HOME_PATH)} style={styles.websiteLoginButton}>
                   <Text style={styles.websiteLoginButtonText}>Login/Register</Text>
                 </Pressable>
               )}
@@ -688,7 +708,7 @@ export default function WelcomeScreen() {
                 <Text style={styles.websiteMobileMenuText}>{link.label}</Text>
               </Pressable>
             ))}
-            <Pressable onPress={() => (user?.id ? openWebRoute("/(tabs)") : openAuthModal("/(tabs)"))} style={styles.websiteMobilePrimary}>
+            <Pressable onPress={() => (user?.id ? openWebRoute(WEB_APP_HOME_PATH) : openAuthModal(WEB_APP_HOME_PATH))} style={styles.websiteMobilePrimary}>
               <Text style={styles.websiteLoginButtonText}>{user?.id ? "Open App" : "Login/Register"}</Text>
             </Pressable>
           </View>
@@ -706,7 +726,7 @@ export default function WelcomeScreen() {
               </Text>
               <View style={[styles.websiteHeroActions, !isDesktopWeb && styles.websiteHeroActionsMobile]}>
                 <Pressable
-                  onPress={() => openProtectedWebRoute("/(tabs)")}
+                  onPress={() => openProtectedWebRoute(WEB_APP_HOME_PATH)}
                   style={({ pressed }) => [styles.websiteHeroPrimary, pressed && styles.pressedSoft]}
                 >
                   <Text style={styles.websiteHeroPrimaryText}>{user?.id ? "Continue Learning" : "Join Now"}</Text>
@@ -720,9 +740,7 @@ export default function WelcomeScreen() {
             <View style={styles.websiteHeroVisual}>
               <View style={styles.websiteHeroPriceCard}>
                 <Text style={styles.websitePriceSmall}>Courses from</Text>
-                <Text style={styles.websitePriceBig}>
-                  ₹{featuredWebsiteCourses[0]?.price ? parseFloat(String(featuredWebsiteCourses[0].price)).toFixed(0) : "Free"}
-                </Text>
+                <Text style={styles.websitePriceBig}>{heroCoursePriceText}</Text>
                 <Text style={styles.websitePriceSmall}>Start today</Text>
               </View>
               <View style={styles.websiteTeacherBubble}>
@@ -770,10 +788,19 @@ export default function WelcomeScreen() {
             <Text style={styles.websiteSectionTitle}>Popular Courses</Text>
             <Text style={styles.websiteSectionSub}>Buy once you are logged in. If you are new, we will ask you to login/register first.</Text>
             <View style={[styles.websiteCourseGrid, !isDesktopWeb && styles.websiteCourseGridMobile]}>
-              {(featuredWebsiteCourses.length ? featuredWebsiteCourses : [
-                { id: 0, title: "NDA Complete Batch", description: "Structured lessons, live support and tests.", price: "0", is_free: true, category: "NDA" },
-                { id: 0, title: "CDS/AFCAT Test Series", description: "OMR-style mocks with analytics.", price: "0", is_free: true, category: "Test Series" },
-              ]).map((course, index) => (
+              {websiteCoursesLoading && featuredWebsiteCourses.length === 0 ? (
+                <View style={styles.websiteEmptyCourseCard}>
+                  <ActivityIndicator color={Colors.light.primary} />
+                  <Text style={styles.websiteCourseDesc}>Loading courses...</Text>
+                </View>
+              ) : null}
+              {!websiteCoursesLoading && featuredWebsiteCourses.length === 0 ? (
+                <View style={styles.websiteEmptyCourseCard}>
+                  <Ionicons name="information-circle-outline" size={28} color={Colors.light.textMuted} />
+                  <Text style={styles.websiteCourseDesc}>No course available right now.</Text>
+                </View>
+              ) : null}
+              {featuredWebsiteCourses.map((course, index) => (
                 <View key={`${course.id || "fallback"}-${index}`} style={styles.websiteCourseCard}>
                   <View style={styles.websiteCourseThumb}>
                     {course.thumbnail ? (
@@ -789,7 +816,7 @@ export default function WelcomeScreen() {
                     <Text style={styles.websiteCourseCategory}>{course.category || "Course"}</Text>
                   </View>
                   <Pressable
-                    onPress={() => (course.id ? openCourse(course.id) : user?.id ? openWebRoute("/(tabs)") : showAuthRequired("/(tabs)"))}
+                    onPress={() => (course.id ? openCourse(course.id) : user?.id ? openWebRoute(WEB_APP_HOME_PATH) : showAuthRequired(WEB_APP_HOME_PATH))}
                     style={({ pressed }) => [styles.websiteBuyButton, pressed && styles.pressedSoft]}
                   >
                     <Text style={styles.websiteBuyButtonText}>{course.is_free ? "Start Free" : "Buy Now"}</Text>
@@ -1504,6 +1531,18 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFFFFF",
     padding: 16,
     gap: 10,
+  },
+  websiteEmptyCourseCard: {
+    width: 292,
+    minHeight: 130,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: "#FFFFFF",
+    padding: 18,
+    gap: 10,
+    alignItems: "center",
+    justifyContent: "center",
   },
   websiteCourseThumb: {
     height: 130,

@@ -35,7 +35,8 @@ export default function EmailLoginScreen() {
   const [needsSignup, setNeedsSignup] = useState<null | "not_found" | "incomplete">(null);
 
   const getPostAuthPath = () => {
-    if (Platform.OS === "web" && typeof next === "string" && next.startsWith("/")) return next;
+    if (Platform.OS === "web" && typeof next === "string" && next.startsWith("/")) return next === "/(tabs)" ? "/home" : next;
+    if (Platform.OS === "web") return "/home";
     return "/(tabs)";
   };
 
