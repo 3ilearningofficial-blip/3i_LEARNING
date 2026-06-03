@@ -374,7 +374,7 @@ export default function HomeScreen() {
     },
     staleTime: 10 * 1000,
     gcTime: 25 * 60 * 1000,
-    refetchInterval: tabVisible ? 60 * 1000 : 3 * 60 * 1000,
+    refetchInterval: Platform.OS === "web" ? false : tabVisible ? 60 * 1000 : 3 * 60 * 1000,
     refetchOnMount: true,
     refetchOnWindowFocus: Platform.OS !== "web",
     // Always fetch — even unauthenticated users can see published courses

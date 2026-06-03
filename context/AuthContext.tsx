@@ -42,6 +42,7 @@ function isProtectedPlaybackRoute(path: string): boolean {
     path.startsWith("/material/") ||
     path.startsWith("/material-folder/") ||
     path.startsWith("/downloads") ||
+    path.startsWith("/home") ||
     path.startsWith("/(tabs)") ||
     path.startsWith("/admin")
   );
