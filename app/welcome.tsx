@@ -573,26 +573,58 @@ export default function WelcomeScreen() {
     showAuthRequired(href);
   };
 
+  // Keep the latest auth helpers / pending route in refs so the listener effect
+  // below can depend only on [isWeb]. Otherwise `login` gets a new identity after
+  // it calls setUser, the effect re-runs, and its poller re-reads a not-yet-removed
+  // signal — re-invoking login() (which clears the query cache) in a tight loop and
+  // hammering the API into 429s.
+  const loginRef = React.useRef(login);
+  const refreshUserRef = React.useRef(refreshUser);
+  const authPromptNextRef = React.useRef(authPrompt.next);
+  React.useEffect(() => {
+    loginRef.current = login;
+    refreshUserRef.current = refreshUser;
+    authPromptNextRef.current = authPrompt.next;
+  });
+
   React.useEffect(() => {
     if (!isWeb || typeof window === "undefined") return;
 
-    let handled = false;
-    const handleAuthSuccess = async (payload: { type?: string; next?: string; user?: any }) => {
+    let processing = false;
+    const handleAuthSuccess = async (payload: { type?: string; next?: string; user?: any; ts?: number }) => {
       if (payload?.type !== "3i-auth-success") return;
-      if (handled) return;
-      handled = true;
-      if (payload.user && typeof payload.user.id === "number") {
-        await login(payload.user);
+      // Ignore a stale localStorage signal left over from a previous session
+      // (postMessage payloads carry no ts and are always treated as fresh).
+      if (typeof payload.ts === "number" && Date.now() - payload.ts > 60_000) {
+        try {
+          window.localStorage.removeItem(WEB_AUTH_SUCCESS_STORAGE_KEY);
+        } catch {
+          /* ignore */
+        }
+        return;
       }
-      await refreshUser();
+      if (processing) return;
+      processing = true;
+      // Consume the one-shot signal synchronously BEFORE any await so the 250ms
+      // poller / storage events can't re-trigger this while login()/refreshUser()
+      // are still in-flight.
       try {
         window.localStorage.removeItem(WEB_AUTH_SUCCESS_STORAGE_KEY);
       } catch {
         /* ignore */
       }
-      setAuthPrompt((prev) => ({ ...prev, visible: false }));
-      const nextPath = payload.next === "/(tabs)" ? WEB_APP_HOME_PATH : payload.next || authPrompt.next || WEB_APP_HOME_PATH;
-      router.replace(nextPath as any);
+      try {
+        if (payload.user && typeof payload.user.id === "number") {
+          await loginRef.current(payload.user);
+        }
+        await refreshUserRef.current();
+        setAuthPrompt((prev) => ({ ...prev, visible: false }));
+        const nextPath =
+          payload.next === "/(tabs)" ? WEB_APP_HOME_PATH : payload.next || authPromptNextRef.current || WEB_APP_HOME_PATH;
+        router.replace(nextPath as any);
+      } finally {
+        processing = false;
+      }
     };
 
     const onMessage = (event: MessageEvent) => {
@@ -625,7 +657,7 @@ export default function WelcomeScreen() {
       window.removeEventListener("storage", onStorage);
       window.clearInterval(id);
     };
-  }, [authPrompt.next, isWeb, login, refreshUser]);
+  }, [isWeb]);
 
   const authModalSrc = React.useMemo(() => {
     if (!isWeb || typeof window === "undefined") return "";
