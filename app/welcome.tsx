@@ -13,6 +13,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/context/AuthContext";
 import { getApiUrl, authFetch } from "@/lib/query-client";
 import { blurActiveElementWeb } from "@/lib/navigate-auth-back";
+import { WEB_AUTH_SUCCESS_STORAGE_KEY } from "@/lib/web-modal-auth";
 import Colors from "@/constants/colors";
 
 const DEFAULT_FEATURES = [
@@ -555,19 +556,55 @@ export default function WelcomeScreen() {
 
   React.useEffect(() => {
     if (!isWeb || typeof window === "undefined") return;
-    const onMessage = async (event: MessageEvent) => {
-      if (event.origin !== window.location.origin) return;
-      const payload = event.data as { type?: string; next?: string; user?: any };
+
+    let handled = false;
+    const handleAuthSuccess = async (payload: { type?: string; next?: string; user?: any }) => {
       if (payload?.type !== "3i-auth-success") return;
+      if (handled) return;
+      handled = true;
       if (payload.user && typeof payload.user.id === "number") {
         await login(payload.user);
       }
       await refreshUser();
+      try {
+        window.localStorage.removeItem(WEB_AUTH_SUCCESS_STORAGE_KEY);
+      } catch {
+        /* ignore */
+      }
       setAuthPrompt((prev) => ({ ...prev, visible: false }));
       router.replace((payload.next || authPrompt.next || "/welcome") as any);
     };
+
+    const onMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+      void handleAuthSuccess(event.data as { type?: string; next?: string; user?: any });
+    };
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== WEB_AUTH_SUCCESS_STORAGE_KEY || !event.newValue) return;
+      try {
+        void handleAuthSuccess(JSON.parse(event.newValue));
+      } catch {
+        /* ignore */
+      }
+    };
+    const checkPendingStorageSignal = () => {
+      try {
+        const raw = window.localStorage.getItem(WEB_AUTH_SUCCESS_STORAGE_KEY);
+        if (raw) void handleAuthSuccess(JSON.parse(raw));
+      } catch {
+        /* ignore */
+      }
+    };
+
     window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
+    window.addEventListener("storage", onStorage);
+    const id = window.setInterval(checkPendingStorageSignal, 250);
+    checkPendingStorageSignal();
+    return () => {
+      window.removeEventListener("message", onMessage);
+      window.removeEventListener("storage", onStorage);
+      window.clearInterval(id);
+    };
   }, [authPrompt.next, isWeb, login, refreshUser]);
 
   const authModalSrc = React.useMemo(() => {

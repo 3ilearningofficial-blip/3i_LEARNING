@@ -13,6 +13,7 @@ import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
 import { navigateToProfileSetupWithNotice } from "@/lib/profile-completion-ui";
 import { navigateBackFromAuth } from "@/lib/navigate-auth-back";
+import { notifyWebModalAuthSuccess } from "@/lib/web-modal-auth";
 import {
   formatLockCountdown,
   loadLockedUntil,
@@ -42,9 +43,8 @@ export default function OTPScreen() {
   };
 
   const completeWebModalAuth = (authUser: any) => {
-    if (Platform.OS !== "web" || modal !== "1" || typeof window === "undefined" || window.parent === window) return false;
-    window.parent.postMessage({ type: "3i-auth-success", next: getPostAuthPath(), user: authUser }, window.location.origin);
-    return true;
+    if (modal !== "1") return false;
+    return notifyWebModalAuthSuccess(getPostAuthPath(), authUser);
   };
 
   const startLockCountdown = (until: number) => {
