@@ -352,6 +352,12 @@ export async function assertSessionNotActivelyInUse(
   const row = ur.rows[0];
   if (String(row.role ?? "") === "admin") return { ok: true };
 
+  // When student device binding is disabled, web/native students may sign in from
+  // any browser/device. The previous session is invalidated by persistLoginSession
+  // (it deletes user_sessions and rotates session_token), so "one active session"
+  // (new login wins, old device logged out) is preserved without blocking the new login.
+  if (isStudentDeviceBindingDisabled(opts.role ?? (row.role as string | undefined))) return { ok: true };
+
   const sessionToken = row.session_token ? String(row.session_token).trim() : "";
   if (!sessionToken) return { ok: true };
 
