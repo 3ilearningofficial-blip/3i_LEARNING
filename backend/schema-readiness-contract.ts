@@ -66,8 +66,6 @@ export const REQUIRED_COLUMNS: Record<string, string[]> = {
     "password_hash",
     "session_token",
     "app_bound_device_id",
-    "web_device_id_phone",
-    "web_device_id_desktop",
     "profile_complete",
     "is_blocked",
     "last_active_at",

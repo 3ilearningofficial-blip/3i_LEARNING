@@ -93,9 +93,7 @@ export async function userHasSessionToken(
 ): Promise<boolean> {
   if (!token) return false;
   const u = await db.query(
-    `SELECT session_token, role, last_active_at,
-            app_bound_device_id, web_device_id_phone, web_device_id_desktop
-     FROM users WHERE id = $1`,
+    "SELECT session_token, role, last_active_at FROM users WHERE id = $1",
     [userId]
   );
   if (u.rows.length === 0) return false;

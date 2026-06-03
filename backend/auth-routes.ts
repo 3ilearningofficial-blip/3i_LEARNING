@@ -20,7 +20,6 @@ import {
   assertSessionNotActivelyInUse,
   bindDeviceForNativeFirstLogin,
   enforceInstallationBinding,
-  finalizeStudentWebSlotsAfterAuth,
   getClientPlatform,
 } from "./native-device-binding";
 import {
@@ -96,7 +95,6 @@ export function registerAuthRoutes({
       clearOtp,
       req,
     });
-    await finalizeStudentWebSlotsAfterAuth(db, Number(user.id), String(user.role), req);
     await bindDeviceForNativeFirstLogin(db, Number(user.id), String(user.role), req);
 
     const sessionUser = buildSessionUserFromRow(user, { sessionToken, deviceId: normalizedDeviceId });
@@ -517,7 +515,6 @@ export function registerAuthRoutes({
                 activePlatform: platBearer.activePlatform,
               });
             }
-            await finalizeStudentWebSlotsAfterAuth(db, row.id as number, row.role as string, req);
             (req.session as any).user = fresh;
             return res.json(fresh);
           }
@@ -535,7 +532,7 @@ export function registerAuthRoutes({
       const dbUser = await db.query(
         `SELECT id, name, email, phone, role, session_token, profile_complete,
                 date_of_birth, photo_url, is_blocked,
-                last_active_at, app_bound_device_id, web_device_id_phone, web_device_id_desktop
+                last_active_at, app_bound_device_id
          FROM users WHERE id = $1`,
         [sessionUser.id]
       );
@@ -589,7 +586,6 @@ export function registerAuthRoutes({
           activePlatform: platSes.activePlatform,
         });
       }
-      await finalizeStudentWebSlotsAfterAuth(db, sessionUser.id, row.role, req);
       const effectiveToken = tok || row.session_token;
       const fresh = {
         ...sessionUser,

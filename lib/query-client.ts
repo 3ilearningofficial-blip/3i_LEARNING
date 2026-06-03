@@ -1,6 +1,6 @@
 import { Platform } from "react-native";
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
-import { getInstallationId, getWebFormFactorForHeaders } from "./installation-id";
+import { getInstallationId } from "./installation-id";
 import { getStoredAuthToken } from "./auth-storage";
 
 type UnauthorizedHandler = () => void | Promise<void>;
@@ -292,17 +292,14 @@ export async function getStoredToken(): Promise<string | null> {
 }
 
 // Authenticated fetch
-/** Sent on every authenticated request so the server can bind paid access to one installation. */
+/** Sent on every authenticated request so the server can identify same browser/native install. */
 export async function attachInstallationHeaders(headers: Record<string, string>): Promise<void> {
   try {
     const id = await getInstallationId();
     headers["X-App-Device-Id"] = id;
     if (Platform.OS === "ios") headers["X-Client-Platform"] = "ios";
     else if (Platform.OS === "android") headers["X-Client-Platform"] = "android";
-    else {
-      headers["X-Client-Platform"] = "web";
-      headers["X-Web-Form-Factor"] = getWebFormFactorForHeaders();
-    }
+    else headers["X-Client-Platform"] = "web";
   } catch {
     /* ignore */
   }

@@ -33,16 +33,6 @@ export function getActiveSessionPlatformFamily(req: Request): "web" | "mobile" |
   return null;
 }
 
-export function getWebFormFactorFromRequest(req: Request): "phone" | "desktop" {
-  const raw = (req.get("x-web-form-factor") || "").trim().toLowerCase();
-  if (raw === "phone" || raw === "mobile") return "phone";
-  if (raw === "desktop" || raw === "laptop") return "desktop";
-  const ua = (req.get("user-agent") || "").toLowerCase();
-  if (/ipad/i.test(ua) && !/mobile/i.test(ua)) return "desktop";
-  if (/mobile|android|iphone|ipod|webos|blackberry|iemobile|opera mini/i.test(ua)) return "phone";
-  return "desktop";
-}
-
 export type BindPurchaseResult = { ok: true } | { ok: false; message: string };
 
 async function insertBlockEvent(
@@ -102,11 +92,9 @@ export async function assertNativePaidPurchaseInstallation(
   const inst = getInstallationIdFromRequest(req);
   if (!inst || inst === "web_anon") return { ok: true };
   const plat = getClientPlatform(req);
+  if (plat === "web") return { ok: true };
   const r = await db.query(
-    `SELECT app_bound_device_id,
-            COALESCE(web_device_id_phone, '') AS wph,
-            COALESCE(web_device_id_desktop, '') AS wdk,
-            role
+    `SELECT app_bound_device_id, role
      FROM users WHERE id = $1`,
     [userId]
   );
@@ -116,8 +104,6 @@ export async function assertNativePaidPurchaseInstallation(
   const ok = studentInstallationMatchesActiveSession(
     {
       app_bound_device_id: row.app_bound_device_id,
-      web_device_id_phone: row.wph,
-      web_device_id_desktop: row.wdk,
     },
     req,
     inst,
@@ -127,42 +113,21 @@ export async function assertNativePaidPurchaseInstallation(
     return {
       ok: false,
       message:
-        "Purchases must be completed on the same device/browser installation registered for this account.",
+        "Purchases must be completed on the same native device registered for this account.",
     };
   }
   return { ok: true };
 }
 
-/** Bind missing slots after login/purchase (students only). */
-export async function finalizeStudentWebSlotsAfterAuth(db: DbLike, userId: number, role: string | undefined, req: Request): Promise<void> {
-  if (role === "admin") return;
-  if (isStudentDeviceBindingDisabled(role)) return;
-  const inst = getInstallationIdFromRequest(req);
-  if (!inst || inst === "web_anon") return;
-  if (getClientPlatform(req) !== "web") return;
-  const factor = getWebFormFactorFromRequest(req);
-  const slot = factor === "phone" ? "phone" : "desktop";
-  await db.query(
-    `UPDATE users SET
-       web_device_id_phone = CASE
-         WHEN $1 = 'phone' AND COALESCE(NULLIF(TRIM(web_device_id_phone), ''), '') = '' THEN $2
-         ELSE web_device_id_phone END,
-       web_device_id_desktop = CASE
-         WHEN $1 = 'desktop' AND COALESCE(NULLIF(TRIM(web_device_id_desktop), ''), '') = '' THEN $2
-         ELSE web_device_id_desktop END
-     WHERE id = $3 AND COALESCE(role, '') <> 'admin'`,
-    [slot, inst, userId]
-  );
-}
-
-/** After paid purchase succeeded — binds native app id once, plus web dual slots when applicable. */
+/** After paid purchase succeeded — binds native app id once. Web uses active-session locking only. */
 export async function finalizeInstallationBindAfterPurchase(db: DbLike, userId: number, req: Request): Promise<void> {
   const inst = getInstallationIdFromRequest(req);
   if (!inst || inst === "web_anon") return;
+  const plat = getClientPlatform(req);
+  if (plat !== "ios" && plat !== "android") return;
   const ur = await db.query("SELECT role FROM users WHERE id = $1", [userId]);
   const role = ur.rows[0]?.role as string | undefined;
   if (isStudentDeviceBindingDisabled(role)) return;
-  await finalizeStudentWebSlotsAfterAuth(db, userId, role, req);
   await db.query("UPDATE users SET app_bound_device_id = $1 WHERE id = $2 AND app_bound_device_id IS NULL", [inst, userId]);
 }
 
@@ -207,29 +172,17 @@ export async function bindInstallationAfterPurchase(
 }
 
 function studentInstallationMatchesActiveSession(
-  row: { app_bound_device_id?: unknown; web_device_id_phone?: unknown; web_device_id_desktop?: unknown },
+  row: { app_bound_device_id?: unknown },
   req: Request,
   cand: string | null,
   plat: ReturnType<typeof getClientPlatform>
 ): boolean {
   if (!cand || cand === "web_anon") return false;
   const appb = String(row.app_bound_device_id ?? "").trim();
-  const wph = String(row.web_device_id_phone ?? "").trim();
-  const wdk = String(row.web_device_id_desktop ?? "").trim();
 
   if (plat === "ios" || plat === "android") {
     if (!appb) return true;
     return cand === appb;
-  }
-
-  if (plat === "web") {
-    const factor = getWebFormFactorFromRequest(req);
-    if (!wph && !wdk && !appb) return true;
-    if (cand === wph || cand === wdk) return true;
-    if (!wph && factor === "phone") return true;
-    if (!wdk && factor === "desktop") return true;
-    if (!wph && !wdk && appb && cand === appb) return true;
-    return false;
   }
 
   if (!appb) return true;
@@ -256,10 +209,11 @@ export async function enforceInstallationBinding(
   if (role === "admin") return { ok: true };
   if (isStudentDeviceBindingDisabled(role)) return { ok: true };
 
+  const plat = getClientPlatform(req);
+  if (plat === "web") return { ok: true };
+
   const r = await db.query(
-    `SELECT COALESCE(app_bound_device_id, '') AS appb,
-            COALESCE(web_device_id_phone, '') AS wph,
-            COALESCE(web_device_id_desktop, '') AS wdk
+    `SELECT COALESCE(app_bound_device_id, '') AS appb
      FROM users WHERE id = $1`,
     [userId]
   );
@@ -267,14 +221,11 @@ export async function enforceInstallationBinding(
 
   const row = r.rows[0];
   const appb = String(row.appb ?? "").trim();
-  const wph = String(row.wph ?? "").trim();
-  const wdk = String(row.wdk ?? "").trim();
 
   const cand = getInstallationIdFromRequest(req);
-  const plat = getClientPlatform(req);
 
   // No bindings at all — allow everyone through.
-  if (!wph && !wdk && !appb) return { ok: true };
+  if (!appb) return { ok: true };
 
   // Account is bound but device ID header is absent (missing header, cleared
   // storage, or stale client). Return a distinct code so the frontend can show
@@ -284,7 +235,7 @@ export async function enforceInstallationBinding(
   }
 
   const matches = studentInstallationMatchesActiveSession(
-    { app_bound_device_id: appb, web_device_id_phone: wph, web_device_id_desktop: wdk },
+    { app_bound_device_id: appb },
     req,
     cand,
     plat
@@ -298,7 +249,7 @@ type LoginDeviceResult =
 
 /**
  * Run before issuing a new session on login/sign-up flows (OTP, Firebase, email login).
- * Native apps: single app_bound_device_id. Web students: one phone browser + one desktop browser.
+ * Native apps: single app_bound_device_id. Web students use active-session locking, not binding slots.
  */
 export async function assertLoginAllowedForInstallation(
   db: DbLike,
@@ -315,8 +266,6 @@ export async function assertLoginAllowedForInstallation(
 
   const ur = await db.query(
     `SELECT app_bound_device_id,
-            COALESCE(web_device_id_phone, '') AS wph,
-            COALESCE(web_device_id_desktop, '') AS wdk,
             role,
             COALESCE(is_blocked,FALSE) AS blocked
      FROM users WHERE id = $1`,
@@ -334,8 +283,6 @@ export async function assertLoginAllowedForInstallation(
   const plat = getClientPlatform(req);
 
   const appb = row.app_bound_device_id ? String(row.app_bound_device_id).trim() : "";
-  const wph = String(row.wph ?? "").trim();
-  const wdk = String(row.wdk ?? "").trim();
 
   if (plat === "ios" || plat === "android") {
     if (!appb) return { ok: true };
@@ -348,45 +295,14 @@ export async function assertLoginAllowedForInstallation(
         ok: false,
         httpStatus: 403,
         message:
-          "Access denied: this account is linked to another device/browser installation. Use the original installation or ask admin to clear the device lock.",
+          "Access denied: this account is linked to another native device. Use the original device or ask admin to clear the device lock.",
       };
     }
     return { ok: true };
   }
 
   if (plat === "web") {
-    const factor = getWebFormFactorFromRequest(req);
-    if (!attempted || attempted === "web_anon") {
-      if (!wph && !wdk && !appb) return { ok: true };
-      return {
-        ok: false,
-        httpStatus: 403,
-        message:
-          "Enable cookies/storage for this site and retry sign-in so your browser installation can be verified.",
-      };
-    }
-
-    if (attempted === wph || attempted === wdk) return { ok: true };
-    if (!wph && factor === "phone") return { ok: true };
-    if (!wdk && factor === "desktop") return { ok: true };
-    if (!wph && !wdk && appb && attempted === appb) return { ok: true };
-    if (!wph && !wdk && !appb) return { ok: true };
-
-    await logWrongInstallationAttempt(
-      db,
-      req,
-      opts.userId,
-      factor === "phone" ? wph || null : wdk || null,
-      attempted,
-      { phone: opts.phone ?? null, email: opts.email ?? null },
-      "wrong_web_browser_login_denied"
-    );
-    return {
-      ok: false,
-      httpStatus: 403,
-      message:
-        "Access denied: this account is already signed in on another phone web and/or laptop web browser. Use those browsers or ask admin to clear the web device lock.",
-    };
+    return { ok: true };
   }
 
   if (!appb) return { ok: true };
@@ -399,7 +315,7 @@ export async function assertLoginAllowedForInstallation(
       ok: false,
       httpStatus: 403,
       message:
-        "Access denied: this account is linked to another device/browser installation. Use the original installation or ask admin to clear the device lock.",
+        "Access denied: this account is linked to another native device. Use the original device or ask admin to clear the device lock.",
     };
   }
   return { ok: true };
@@ -428,7 +344,7 @@ export async function assertSessionNotActivelyInUse(
 
   const ur = await db.query(
     `SELECT session_token, last_active_at, role, device_id, phone, email,
-            app_bound_device_id, web_device_id_phone, web_device_id_desktop
+            app_bound_device_id
      FROM users WHERE id = $1`,
     [opts.userId]
   );
@@ -478,8 +394,6 @@ export async function assertSessionNotActivelyInUse(
 
   const bindingRow = {
     app_bound_device_id: row.app_bound_device_id,
-    web_device_id_phone: row.web_device_id_phone,
-    web_device_id_desktop: row.web_device_id_desktop,
   };
   if (userRowHasDeviceBinding(bindingRow) && requestMatchesUserDeviceBinding(req, bindingRow)) {
     return { ok: true };
@@ -495,13 +409,9 @@ export async function assertSessionNotActivelyInUse(
 
 export function userRowHasDeviceBinding(row: {
   app_bound_device_id?: unknown;
-  web_device_id_phone?: unknown;
-  web_device_id_desktop?: unknown;
 }): boolean {
   const appb = String(row.app_bound_device_id ?? "").trim();
-  const wph = String(row.web_device_id_phone ?? "").trim();
-  const wdk = String(row.web_device_id_desktop ?? "").trim();
-  return !!(appb || wph || wdk);
+  return !!appb;
 }
 
 /** True when the request installation matches a bound slot on the user row. */
@@ -509,8 +419,6 @@ export function requestMatchesUserDeviceBinding(
   req: Request,
   row: {
     app_bound_device_id?: unknown;
-    web_device_id_phone?: unknown;
-    web_device_id_desktop?: unknown;
   }
 ): boolean {
   const cand = getInstallationIdFromRequest(req);
@@ -519,8 +427,6 @@ export function requestMatchesUserDeviceBinding(
   return studentInstallationMatchesActiveSession(
     {
       app_bound_device_id: row.app_bound_device_id,
-      web_device_id_phone: row.web_device_id_phone,
-      web_device_id_desktop: row.web_device_id_desktop,
     },
     req,
     cand,

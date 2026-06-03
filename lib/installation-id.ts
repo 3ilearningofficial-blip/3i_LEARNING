@@ -1,6 +1,7 @@
 /**
- * Stable per-install identifier (not per login). Used for one-installation
- * paid-content binding across web + native.
+ * Stable per-install identifier (not per login).
+ * Web uses it only to recognize the same browser profile for active-session
+ * locking; native may use it for future device binding.
  */
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
@@ -18,16 +19,6 @@ let cachedInstallationId: string | null = null;
 
 function randomId(): string {
   return `${Date.now().toString(36)}_${Crypto.randomUUID().replace(/-/g, "")}`;
-}
-
-/** Mobile-class vs desktop-class web — server stores two allowed browser installs per student. */
-export function getWebFormFactorForHeaders(): "phone" | "desktop" {
-  if (typeof navigator !== "undefined") {
-    const ua = navigator.userAgent || "";
-    if (/ipad/i.test(ua) && !/mobile/i.test(ua)) return "desktop";
-    if (/mobile|android|iphone|ipod|webos|blackberry|iemobile|opera mini/i.test(ua)) return "phone";
-  }
-  return "desktop";
 }
 
 /** All clients should send this string on every API call (see query-client headers). */
