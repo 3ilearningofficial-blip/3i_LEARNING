@@ -5,7 +5,7 @@ import {
   type StyleProp,
   type ImageStyle,
 } from "react-native";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -305,6 +305,7 @@ function getFeatures(cfg: Record<string, string>): FeatureItem[] {
 export default function WelcomeScreen() {
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
+  const params = useLocalSearchParams<{ fromApp?: string }>();
   const isWide = width >= 640;
   const isWeb = Platform.OS === "web";
   const { user, login, refreshUser } = useAuth();
@@ -339,7 +340,7 @@ export default function WelcomeScreen() {
     staleTime: 0,
     gcTime: 1000 * 60 * 5,
     refetchOnMount: true,
-    refetchOnWindowFocus: true,
+    refetchOnWindowFocus: false,
   });
 
   const s = (key: string, fallback: string) => (cfg[key] != null && cfg[key] !== "" ? cfg[key] : fallback);
@@ -442,6 +443,12 @@ export default function WelcomeScreen() {
 
   const extraSections = parseJsonArray<ExtraSection>(cfg.welcome_extra_sections_json, []);
   const features = getFeatures(cfg);
+  const allowLoggedInWelcome = isWeb && params.fromApp === "1";
+
+  React.useEffect(() => {
+    if (!isWeb || !user?.id || allowLoggedInWelcome) return;
+    router.replace(WEB_APP_HOME_PATH as any);
+  }, [allowLoggedInWelcome, isWeb, user?.id]);
 
   const handleLogin = () => {
     blurActiveElementWeb();

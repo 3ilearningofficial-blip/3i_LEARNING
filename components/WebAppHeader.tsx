@@ -39,7 +39,7 @@ export function WebAppHeader() {
 
   const navigateToWelcome = () => {
     setMenuOpen(false);
-    router.push("/welcome" as never);
+    router.push("/welcome?fromApp=1" as never);
   };
 
   const renderNavItem = (item: (typeof WEB_NAV_ITEMS)[number], compact = false) => {
