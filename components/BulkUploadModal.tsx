@@ -9,7 +9,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
-import { getApiUrl, apiRequest } from "@/lib/query-client";
+import { getApiUrl, apiRequest, prepareAuthorizedFetchHeaders } from "@/lib/query-client";
 
 interface ParsedQuestion {
   questionText: string;
@@ -136,21 +136,7 @@ export default function BulkUploadModal({ visible, testId, onClose, onSaved, bot
         const blob = new Blob([byteArray], { type: "application/pdf" });
         formData.append("pdf", blob, file.name || "questions.pdf");
       }
-      let token: string | null = null;
-      let userId: string | null = null;
-      try {
-        if (Platform.OS === "web" && typeof localStorage !== "undefined") {
-          const stored = localStorage.getItem("user");
-          if (stored) { const u = JSON.parse(stored); token = u?.sessionToken || null; userId = u?.id ? String(u.id) : null; }
-        } else {
-          const AsyncStorage = (await import("@react-native-async-storage/async-storage")).default;
-          const stored = await AsyncStorage.getItem("user");
-          if (stored) { const u = JSON.parse(stored); token = u?.sessionToken || null; userId = u?.id ? String(u.id) : null; }
-        }
-      } catch (_e) {}
-      const headers: Record<string, string> = {};
-      if (token) headers["Authorization"] = `Bearer ${token}`;
-      if (userId) headers["X-User-Id"] = userId;
+      const { headers } = await prepareAuthorizedFetchHeaders();
       // Use globalThis.fetch — do NOT set Content-Type (browser sets multipart boundary)
       const res = await globalThis.fetch(url.toString(), { method: "POST", headers, body: formData, credentials: "include" });
       const data = await res.json().catch(() => ({ message: `Server error ${res.status}` }));

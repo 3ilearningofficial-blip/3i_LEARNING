@@ -299,7 +299,7 @@ export default function WelcomeScreen() {
   const { width, height } = useWindowDimensions();
   const isWide = width >= 640;
   const isWeb = Platform.OS === "web";
-  const { user, refreshUser } = useAuth();
+  const { user, login, refreshUser } = useAuth();
   const qc = useQueryClient();
   const [webMenuOpen, setWebMenuOpen] = React.useState(false);
   const [authPrompt, setAuthPrompt] = React.useState<{ visible: boolean; next: string; message: string }>({
@@ -555,16 +555,20 @@ export default function WelcomeScreen() {
 
   React.useEffect(() => {
     if (!isWeb || typeof window === "undefined") return;
-    const onMessage = (event: MessageEvent) => {
+    const onMessage = async (event: MessageEvent) => {
       if (event.origin !== window.location.origin) return;
-      const payload = event.data as { type?: string; next?: string };
+      const payload = event.data as { type?: string; next?: string; user?: any };
       if (payload?.type !== "3i-auth-success") return;
+      if (payload.user && typeof payload.user.id === "number") {
+        await login(payload.user);
+      }
+      await refreshUser();
       setAuthPrompt((prev) => ({ ...prev, visible: false }));
       router.replace((payload.next || authPrompt.next || "/welcome") as any);
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [authPrompt.next, isWeb]);
+  }, [authPrompt.next, isWeb, login, refreshUser]);
 
   const authModalSrc = React.useMemo(() => {
     if (!isWeb || typeof window === "undefined") return "";

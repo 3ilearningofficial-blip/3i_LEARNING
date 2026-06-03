@@ -44,9 +44,9 @@ export default function LoginScreen() {
     return "/(tabs)";
   };
 
-  const completeWebModalAuth = () => {
+  const completeWebModalAuth = (authUser: any) => {
     if (Platform.OS !== "web" || modal !== "1" || typeof window === "undefined" || window.parent === window) return false;
-    window.parent.postMessage({ type: "3i-auth-success", next: getPostAuthPath() }, window.location.origin);
+    window.parent.postMessage({ type: "3i-auth-success", next: getPostAuthPath(), user: authUser }, window.location.origin);
     return true;
   };
 
@@ -185,7 +185,7 @@ export default function LoginScreen() {
       if (!result.user.profileComplete) {
         navigateToProfileSetupWithNotice();
       } else {
-        if (completeWebModalAuth()) return;
+        if (completeWebModalAuth(result.user)) return;
         router.replace(getPostAuthPath() as any);
       }
       return;

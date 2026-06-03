@@ -38,9 +38,9 @@ export default function EmailLoginScreen() {
     return "/(tabs)";
   };
 
-  const completeWebModalAuth = () => {
+  const completeWebModalAuth = (authUser: any) => {
     if (Platform.OS !== "web" || modal !== "1" || typeof window === "undefined" || window.parent === window) return false;
-    window.parent.postMessage({ type: "3i-auth-success", next: getPostAuthPath() }, window.location.origin);
+    window.parent.postMessage({ type: "3i-auth-success", next: getPostAuthPath(), user: authUser }, window.location.origin);
     return true;
   };
 
@@ -65,7 +65,7 @@ export default function EmailLoginScreen() {
       if (!data.user.profileComplete) {
         navigateToProfileSetupWithNotice();
       } else {
-        if (completeWebModalAuth()) return;
+        if (completeWebModalAuth(data.user)) return;
         router.replace(getPostAuthPath() as any);
       }
     } catch (err: any) {
