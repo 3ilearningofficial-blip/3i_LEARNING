@@ -65,6 +65,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const stored = await getStoredAuthUser();
       const token = await getStoredToken();
 
+      if (Platform.OS === "web" && stored && token) {
+        // Hydrate from the durable bearer session immediately; /api/auth/me below
+        // will still clear explicit terminal states like blocked/deleted accounts.
+        setUser(stored);
+      }
+
       // No persisted session — on web still try cookie-only /api/auth/me once.
       if (!token && !stored) {
         if (Platform.OS !== "web") {

@@ -12,7 +12,7 @@ import React, { useEffect, useRef } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { authFetch, getApiUrl, queryClient } from "@/lib/query-client";
+import { authFetch, getApiUrl, getStoredToken, queryClient } from "@/lib/query-client";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { WebDownloadJobsProvider } from "@/context/WebDownloadJobsContext";
 import { WebDownloadHud } from "@/components/WebDownloadHud";
@@ -22,6 +22,7 @@ import * as ScreenOrientation from "expo-screen-orientation";
 import { Platform, AppState, AppStateStatus } from "react-native";
 import { DownloadManagerProvider, useDownloadManager } from "@/lib/useDownloadManager";
 import { listWebOfflineKeys, removeWebOffline } from "@/lib/web-offline-store";
+import { getStoredAuthUser } from "@/lib/auth-storage";
 import { clearWebPostLoginHomeGrace, getWebPostLoginHomeGraceRemainingMs } from "@/lib/web-post-login-grace";
 
 SplashScreen.preventAutoHideAsync();
@@ -41,10 +42,12 @@ if (Platform.OS === "web" && typeof window !== "undefined" && typeof screen !== 
 }
 
 function RootLayoutNav() {
-  const { user, isLoading } = useAuth();
+  const { user, isLoading, refreshUser } = useAuth();
   const segments = useSegments();
   const { runForegroundAccessCheck } = useDownloadManager();
   const [postLoginGraceNonce, setPostLoginGraceNonce] = React.useState(0);
+  const [webHomeHasPersistedSession, setWebHomeHasPersistedSession] = React.useState<boolean | null>(null);
+  const webHomeSessionCheckRunningRef = useRef(false);
   /** Avoid stacking duplicate login routes if the splash segment effect runs twice before segments settle. */
   const incompleteSplashNavDoneRef = useRef(false);
 
@@ -55,6 +58,14 @@ function RootLayoutNav() {
   useEffect(() => {
     if (Platform.OS === "web" && user?.id) clearWebPostLoginHomeGrace();
   }, [user?.id]);
+
+  useEffect(() => {
+    const currentSegmentName = String(segments[0] || "");
+    if (Platform.OS !== "web" || user?.id || currentSegmentName !== "home") {
+      setWebHomeHasPersistedSession(null);
+      webHomeSessionCheckRunningRef.current = false;
+    }
+  }, [user?.id, segments.join("/")]);
 
   // Native: sync offline downloads with server on cold start and when returning to foreground.
   useEffect(() => {
@@ -217,11 +228,48 @@ function RootLayoutNav() {
         }, remainingMs + 50);
         return () => window.clearTimeout(timeoutId);
       }
+      if (webHomeHasPersistedSession !== false) {
+        let cancelled = false;
+        if (webHomeHasPersistedSession === null && !webHomeSessionCheckRunningRef.current) {
+          webHomeSessionCheckRunningRef.current = true;
+          Promise.all([getStoredAuthUser(), getStoredToken()])
+            .then(([stored, token]) => {
+              if (cancelled) return;
+              const hasSession = !!stored && !!token;
+              setWebHomeHasPersistedSession(hasSession);
+              if (hasSession) refreshUser().catch(() => {});
+            })
+            .catch(() => {
+              if (!cancelled) setWebHomeHasPersistedSession(false);
+            })
+            .finally(() => {
+              webHomeSessionCheckRunningRef.current = false;
+            });
+        }
+        if (webHomeHasPersistedSession === true) {
+          const recheckId = window.setTimeout(() => setWebHomeHasPersistedSession(null), 5000);
+          return () => {
+            cancelled = true;
+            window.clearTimeout(recheckId);
+          };
+        }
+        return () => {
+          cancelled = true;
+        };
+      }
     }
     if (!inAuthGroup && !inWelcome && !inProfileSetup) {
       router.replace(Platform.OS === "web" ? "/welcome" : "/(auth)/email-login");
     }
-  }, [user?.id, user?.profileComplete, isLoading, segments.join("/"), postLoginGraceNonce]);
+  }, [
+    user?.id,
+    user?.profileComplete,
+    isLoading,
+    segments.join("/"),
+    postLoginGraceNonce,
+    webHomeHasPersistedSession,
+    refreshUser,
+  ]);
 
   // Don't render anything until auth is resolved — prevents flash of wrong screen
   if (isLoading) return null;
