@@ -54,6 +54,7 @@ function RootLayoutNav() {
   const [postLoginGraceNonce, setPostLoginGraceNonce] = React.useState(0);
   const [webRouteHasPersistedSession, setWebRouteHasPersistedSession] = React.useState<boolean | null>(null);
   const webRouteSessionCheckRunningRef = useRef(false);
+  const webRouteSessionSegmentRef = useRef("");
   /** Avoid stacking duplicate login routes if the splash segment effect runs twice before segments settle. */
   const incompleteSplashNavDoneRef = useRef(false);
 
@@ -70,6 +71,13 @@ function RootLayoutNav() {
     if (Platform.OS !== "web" || user?.id || !shouldWaitForPersistedWebSession(currentSegmentName)) {
       setWebRouteHasPersistedSession(null);
       webRouteSessionCheckRunningRef.current = false;
+      webRouteSessionSegmentRef.current = "";
+      return;
+    }
+    if (webRouteSessionSegmentRef.current !== currentSegmentName) {
+      webRouteSessionSegmentRef.current = currentSegmentName;
+      webRouteSessionCheckRunningRef.current = false;
+      setWebRouteHasPersistedSession(null);
     }
   }, [user?.id, segments.join("/")]);
 
