@@ -1,4 +1,5 @@
 import { Platform } from "react-native";
+import { storeAuthUser } from "./auth-storage";
 import type { StoredAuthUser } from "./auth-storage";
 
 export const WEB_AUTH_SUCCESS_STORAGE_KEY = "__3i_web_auth_success";
@@ -9,6 +10,11 @@ export function notifyWebModalAuthSuccess(next: string, authUser: StoredAuthUser
   const nextPath = next === "/(tabs)" ? "/home" : next || "/home";
   const payload = { type: "3i-auth-success", next: nextPath, user: authUser };
   const send = () => window.parent.postMessage(payload, window.location.origin);
+
+  // Persist from inside the same-origin iframe too. If the parent misses the
+  // message and the top-window fallback below takes over, /home can still
+  // hydrate the student/admin session from the normal auth storage.
+  void storeAuthUser(authUser);
 
   send();
   window.setTimeout(send, 120);
