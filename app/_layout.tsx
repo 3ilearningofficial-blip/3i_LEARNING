@@ -27,6 +27,12 @@ import { clearWebPostLoginHomeGrace, getWebPostLoginHomeGraceRemainingMs } from 
 
 SplashScreen.preventAutoHideAsync();
 
+const WEB_PUBLIC_OR_SELF_GATED_TOP_SEGMENTS = new Set(["", "welcome", "(auth)", "profile-setup", "admin", "_sitemap"]);
+
+function shouldWaitForPersistedWebSession(currentSegmentName: string): boolean {
+  return Platform.OS === "web" && !WEB_PUBLIC_OR_SELF_GATED_TOP_SEGMENTS.has(currentSegmentName);
+}
+
 // Lock to portrait on mobile (native)
 if (Platform.OS !== "web") {
   ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
@@ -46,8 +52,8 @@ function RootLayoutNav() {
   const segments = useSegments();
   const { runForegroundAccessCheck } = useDownloadManager();
   const [postLoginGraceNonce, setPostLoginGraceNonce] = React.useState(0);
-  const [webHomeHasPersistedSession, setWebHomeHasPersistedSession] = React.useState<boolean | null>(null);
-  const webHomeSessionCheckRunningRef = useRef(false);
+  const [webRouteHasPersistedSession, setWebRouteHasPersistedSession] = React.useState<boolean | null>(null);
+  const webRouteSessionCheckRunningRef = useRef(false);
   /** Avoid stacking duplicate login routes if the splash segment effect runs twice before segments settle. */
   const incompleteSplashNavDoneRef = useRef(false);
 
@@ -61,9 +67,9 @@ function RootLayoutNav() {
 
   useEffect(() => {
     const currentSegmentName = String(segments[0] || "");
-    if (Platform.OS !== "web" || user?.id || currentSegmentName !== "home") {
-      setWebHomeHasPersistedSession(null);
-      webHomeSessionCheckRunningRef.current = false;
+    if (Platform.OS !== "web" || user?.id || !shouldWaitForPersistedWebSession(currentSegmentName)) {
+      setWebRouteHasPersistedSession(null);
+      webRouteSessionCheckRunningRef.current = false;
     }
   }, [user?.id, segments.join("/")]);
 
@@ -228,35 +234,35 @@ function RootLayoutNav() {
         }, remainingMs + 50);
         return () => window.clearTimeout(timeoutId);
       }
-      if (webHomeHasPersistedSession !== false) {
-        let cancelled = false;
-        if (webHomeHasPersistedSession === null && !webHomeSessionCheckRunningRef.current) {
-          webHomeSessionCheckRunningRef.current = true;
-          Promise.all([getStoredAuthUser(), getStoredToken()])
-            .then(([stored, token]) => {
-              if (cancelled) return;
-              const hasSession = !!stored && !!token;
-              setWebHomeHasPersistedSession(hasSession);
-              if (hasSession) refreshUser().catch(() => {});
-            })
-            .catch(() => {
-              if (!cancelled) setWebHomeHasPersistedSession(false);
-            })
-            .finally(() => {
-              webHomeSessionCheckRunningRef.current = false;
-            });
-        }
-        if (webHomeHasPersistedSession === true) {
-          const recheckId = window.setTimeout(() => setWebHomeHasPersistedSession(null), 5000);
-          return () => {
-            cancelled = true;
-            window.clearTimeout(recheckId);
-          };
-        }
+    }
+    if (shouldWaitForPersistedWebSession(currentSegmentName) && webRouteHasPersistedSession !== false) {
+      let cancelled = false;
+      if (webRouteHasPersistedSession === null && !webRouteSessionCheckRunningRef.current) {
+        webRouteSessionCheckRunningRef.current = true;
+        Promise.all([getStoredAuthUser(), getStoredToken()])
+          .then(([stored, token]) => {
+            if (cancelled) return;
+            const hasSession = !!stored && !!token;
+            setWebRouteHasPersistedSession(hasSession);
+            if (hasSession) refreshUser().catch(() => {});
+          })
+          .catch(() => {
+            if (!cancelled) setWebRouteHasPersistedSession(false);
+          })
+          .finally(() => {
+            webRouteSessionCheckRunningRef.current = false;
+          });
+      }
+      if (webRouteHasPersistedSession === true) {
+        const recheckId = window.setTimeout(() => setWebRouteHasPersistedSession(null), 5000);
         return () => {
           cancelled = true;
+          window.clearTimeout(recheckId);
         };
       }
+      return () => {
+        cancelled = true;
+      };
     }
     if (!inAuthGroup && !inWelcome && !inProfileSetup) {
       router.replace(Platform.OS === "web" ? "/welcome" : "/(auth)/email-login");
@@ -267,7 +273,7 @@ function RootLayoutNav() {
     isLoading,
     segments.join("/"),
     postLoginGraceNonce,
-    webHomeHasPersistedSession,
+    webRouteHasPersistedSession,
     refreshUser,
   ]);
 
