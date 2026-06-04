@@ -14,6 +14,7 @@ import { useAuth } from "@/context/AuthContext";
 import { getApiUrl, authFetch, apiRequest } from "@/lib/query-client";
 import { getInstallationId } from "@/lib/installation-id";
 import { blurActiveElementWeb } from "@/lib/navigate-auth-back";
+import { markWebPostLoginHomeGrace } from "@/lib/web-post-login-grace";
 import Colors from "@/constants/colors";
 
 const DEFAULT_FEATURES = [
@@ -632,6 +633,7 @@ export default function WelcomeScreen() {
       await refreshUser();
       setAuthPrompt((prev) => ({ ...prev, visible: false }));
       const nextPath = authPrompt.next === "/(tabs)" ? WEB_APP_HOME_PATH : authPrompt.next || WEB_APP_HOME_PATH;
+      if (nextPath === WEB_APP_HOME_PATH) markWebPostLoginHomeGrace();
       router.replace(nextPath as any);
     } catch (err: any) {
       const raw = String(err?.message || "Login failed. Please try again.");

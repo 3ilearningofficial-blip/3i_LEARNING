@@ -22,6 +22,7 @@ import * as ScreenOrientation from "expo-screen-orientation";
 import { Platform, AppState, AppStateStatus } from "react-native";
 import { DownloadManagerProvider, useDownloadManager } from "@/lib/useDownloadManager";
 import { listWebOfflineKeys, removeWebOffline } from "@/lib/web-offline-store";
+import { clearWebPostLoginHomeGrace, getWebPostLoginHomeGraceRemainingMs } from "@/lib/web-post-login-grace";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -43,12 +44,17 @@ function RootLayoutNav() {
   const { user, isLoading } = useAuth();
   const segments = useSegments();
   const { runForegroundAccessCheck } = useDownloadManager();
+  const [postLoginGraceNonce, setPostLoginGraceNonce] = React.useState(0);
   /** Avoid stacking duplicate login routes if the splash segment effect runs twice before segments settle. */
   const incompleteSplashNavDoneRef = useRef(false);
 
   useEffect(() => {
     if (!user || user.profileComplete) incompleteSplashNavDoneRef.current = false;
   }, [user?.id, user?.profileComplete]);
+
+  useEffect(() => {
+    if (Platform.OS === "web" && user?.id) clearWebPostLoginHomeGrace();
+  }, [user?.id]);
 
   // Native: sync offline downloads with server on cold start and when returning to foreground.
   useEffect(() => {
@@ -112,6 +118,7 @@ function RootLayoutNav() {
   useEffect(() => {
     if (isLoading) return;
     const currentSegment = segments[0];
+    const currentSegmentName = String(currentSegment || "");
     if (!currentSegment) {
       if (user) {
         if (user.profileComplete) {
@@ -202,10 +209,19 @@ function RootLayoutNav() {
     if (currentSegment === "admin") {
       return;
     }
+    if (Platform.OS === "web" && currentSegmentName === "home") {
+      const remainingMs = getWebPostLoginHomeGraceRemainingMs();
+      if (remainingMs > 0) {
+        const timeoutId = window.setTimeout(() => {
+          setPostLoginGraceNonce((value) => value + 1);
+        }, remainingMs + 50);
+        return () => window.clearTimeout(timeoutId);
+      }
+    }
     if (!inAuthGroup && !inWelcome && !inProfileSetup) {
       router.replace(Platform.OS === "web" ? "/welcome" : "/(auth)/email-login");
     }
-  }, [user?.id, user?.profileComplete, isLoading, segments.join("/")]);
+  }, [user?.id, user?.profileComplete, isLoading, segments.join("/"), postLoginGraceNonce]);
 
   // Don't render anything until auth is resolved — prevents flash of wrong screen
   if (isLoading) return null;
