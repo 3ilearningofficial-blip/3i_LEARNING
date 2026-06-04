@@ -46,8 +46,10 @@ export default function LoginScreen() {
     return "/(tabs)";
   };
 
+  const isWebModal = modal === "1";
+
   const completeWebModalAuth = (authUser: any) => {
-    if (modal !== "1") return false;
+    if (!isWebModal) return false;
     return notifyWebModalAuthSuccess(getPostAuthPath(), authUser);
   };
 
@@ -182,11 +184,11 @@ export default function LoginScreen() {
     if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
     if (result.registered) {
+      if (completeWebModalAuth(result.user)) return;
       await login(result.user);
       if (!result.user.profileComplete) {
         navigateToProfileSetupWithNotice();
       } else {
-        if (completeWebModalAuth(result.user)) return;
         router.replace(getPostAuthPath() as any);
       }
       return;
@@ -213,9 +215,11 @@ export default function LoginScreen() {
           keyboardShouldPersistTaps="handled"
           bounces={false}
         >
-          <Pressable style={{ alignSelf: "flex-start", marginBottom: 8 }} onPress={() => navigateBackFromAuth()}>
-            <Ionicons name="arrow-back" size={22} color={Colors.light.text} />
-          </Pressable>
+          {!isWebModal ? (
+            <Pressable style={{ alignSelf: "flex-start", marginBottom: 8 }} onPress={() => navigateBackFromAuth()}>
+              <Ionicons name="arrow-back" size={22} color={Colors.light.text} />
+            </Pressable>
+          ) : null}
 
           <View style={styles.logoSection}>
             <View style={styles.logoContainer}>

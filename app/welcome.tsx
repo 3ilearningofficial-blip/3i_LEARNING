@@ -675,6 +675,52 @@ export default function WelcomeScreen() {
     };
   }, [isWeb]);
 
+  React.useEffect(() => {
+    if (!isWeb || !authPrompt.visible || typeof window === "undefined") return;
+
+    let stopped = false;
+    let attempts = 0;
+    let timeoutId: ReturnType<typeof window.setTimeout> | null = null;
+    let intervalId: ReturnType<typeof window.setInterval> | null = null;
+
+    const stopPolling = () => {
+      stopped = true;
+      if (timeoutId) window.clearTimeout(timeoutId);
+      if (intervalId) window.clearInterval(intervalId);
+    };
+
+    const checkCookieSession = async () => {
+      if (stopped) return;
+      attempts += 1;
+      try {
+        const res = await authFetch(new URL("/api/auth/me", getApiUrl()).toString());
+        const data = await res.json().catch(() => null);
+        if (!stopped && res.ok && typeof data?.id === "number") {
+          stopPolling();
+          await loginRef.current(data);
+          await refreshUserRef.current();
+          setAuthPrompt((prev) => ({ ...prev, visible: false }));
+          router.replace((authPromptNextRef.current || WEB_APP_HOME_PATH) as any);
+        }
+      } catch {
+        /* keep polling briefly; the iframe may still be finalizing login */
+      }
+      if (attempts >= 20) stopPolling();
+    };
+
+    // Fallback for browsers that miss iframe postMessage/storage events: the
+    // login iframe still sets the same-origin session cookie, so /auth/me can
+    // confirm success from the parent page.
+    timeoutId = window.setTimeout(() => {
+      void checkCookieSession();
+    }, 400);
+    intervalId = window.setInterval(() => {
+      void checkCookieSession();
+    }, 800);
+
+    return stopPolling;
+  }, [authPrompt.visible, isWeb]);
+
   const authModalSrc = React.useMemo(() => {
     if (!isWeb || typeof window === "undefined") return "";
     const url = new URL("/email-login", window.location.origin);

@@ -43,8 +43,10 @@ export default function OTPScreen() {
     return "/(tabs)";
   };
 
+  const isWebModal = modal === "1";
+
   const completeWebModalAuth = (authUser: any) => {
-    if (modal !== "1") return false;
+    if (!isWebModal) return false;
     return notifyWebModalAuthSuccess(getPostAuthPath(), authUser);
   };
 
@@ -176,11 +178,11 @@ export default function OTPScreen() {
     if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
     if (result.registered) {
+      if (completeWebModalAuth(result.user)) return;
       await login(result.user);
       if (!result.user.profileComplete) {
         navigateToProfileSetupWithNotice();
       } else {
-        if (completeWebModalAuth(result.user)) return;
         router.replace(getPostAuthPath() as any);
       }
       return;
@@ -242,9 +244,11 @@ export default function OTPScreen() {
     <View style={styles.container}>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
         <View style={[styles.content, { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 20 }]}>
-          <Pressable style={styles.backBtn} onPress={navigateBackFromAuth}>
-            <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
-          </Pressable>
+          {!isWebModal ? (
+            <Pressable style={styles.backBtn} onPress={navigateBackFromAuth}>
+              <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
+            </Pressable>
+          ) : null}
 
           <View style={styles.iconContainer}>
             <Ionicons name="lock-closed" size={36} color={Colors.light.primary} />

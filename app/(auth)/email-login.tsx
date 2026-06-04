@@ -40,8 +40,10 @@ export default function EmailLoginScreen() {
     return "/(tabs)";
   };
 
+  const isWebModal = modal === "1";
+
   const completeWebModalAuth = (authUser: any) => {
-    if (modal !== "1") return false;
+    if (!isWebModal) return false;
     return notifyWebModalAuthSuccess(getPostAuthPath(), authUser);
   };
 
@@ -62,11 +64,11 @@ export default function EmailLoginScreen() {
       });
       const data = await res.json();
       if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      if (completeWebModalAuth(data.user)) return;
       await login(data.user);
       if (!data.user.profileComplete) {
         navigateToProfileSetupWithNotice();
       } else {
-        if (completeWebModalAuth(data.user)) return;
         router.replace(getPostAuthPath() as any);
       }
     } catch (err: any) {
@@ -106,9 +108,11 @@ export default function EmailLoginScreen() {
           ]}
           keyboardShouldPersistTaps="handled"
         >
-          <Pressable style={styles.backBtn} onPress={navigateBackFromAuth}>
-            <Ionicons name="arrow-back" size={22} color={Colors.light.text} />
-          </Pressable>
+          {!isWebModal ? (
+            <Pressable style={styles.backBtn} onPress={navigateBackFromAuth}>
+              <Ionicons name="arrow-back" size={22} color={Colors.light.text} />
+            </Pressable>
+          ) : null}
 
           <View style={styles.iconWrap}>
             <Ionicons name="mail" size={36} color={Colors.light.primary} />
