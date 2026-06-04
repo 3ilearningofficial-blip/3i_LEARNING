@@ -1,7 +1,7 @@
 import React from "react";
 import {
   View, Text, StyleSheet, Pressable, Image, Platform,
-  ScrollView, useWindowDimensions, Linking, Modal, ActivityIndicator,
+  ScrollView, useWindowDimensions, Linking, Modal, ActivityIndicator, TextInput,
   type StyleProp,
   type ImageStyle,
 } from "react-native";
@@ -11,9 +11,9 @@ import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/context/AuthContext";
-import { getApiUrl, authFetch } from "@/lib/query-client";
+import { getApiUrl, authFetch, apiRequest } from "@/lib/query-client";
+import { getInstallationId } from "@/lib/installation-id";
 import { blurActiveElementWeb } from "@/lib/navigate-auth-back";
-import { WEB_AUTH_SUCCESS_STORAGE_KEY } from "@/lib/web-modal-auth";
 import Colors from "@/constants/colors";
 
 const DEFAULT_FEATURES = [
@@ -316,6 +316,11 @@ export default function WelcomeScreen() {
     next: WEB_APP_HOME_PATH,
     message: "",
   });
+  const [authIdentifier, setAuthIdentifier] = React.useState("");
+  const [authPassword, setAuthPassword] = React.useState("");
+  const [authShowPassword, setAuthShowPassword] = React.useState(false);
+  const [authLoading, setAuthLoading] = React.useState(false);
+  const [authError, setAuthError] = React.useState("");
   const [infoPrompt, setInfoPrompt] = React.useState<{ visible: boolean; message: string }>({
     visible: false,
     message: "",
@@ -459,15 +464,23 @@ export default function WelcomeScreen() {
     return () => window.clearTimeout(fallbackId);
   }, [allowLoggedInWelcome, isWeb, user?.id]);
 
+  React.useEffect(() => {
+    if (authPrompt.visible) return;
+    setAuthError("");
+    setAuthLoading(false);
+  }, [authPrompt.visible]);
+
   const handleLogin = () => {
     blurActiveElementWeb();
     if (user) router.replace(WEB_APP_HOME_PATH as any);
+    else if (isWeb) setAuthPrompt({ visible: true, next: WEB_APP_HOME_PATH, message: "" });
     else router.push("/(auth)/email-login" as any);
   };
 
   const handleSignup = () => {
     blurActiveElementWeb();
     if (user) router.replace(WEB_APP_HOME_PATH as any);
+    else if (isWeb) setAuthPrompt({ visible: true, next: WEB_APP_HOME_PATH, message: "" });
     else router.push("/(auth)/login" as any);
   };
 
@@ -486,6 +499,7 @@ export default function WelcomeScreen() {
   const handleOpenWebApp = () => {
     blurActiveElementWeb();
     if (user) router.replace(WEB_APP_HOME_PATH as any);
+    else if (isWeb) setAuthPrompt({ visible: true, next: WEB_APP_HOME_PATH, message: "" });
     else router.push("/(auth)/email-login" as any);
   };
 
@@ -589,145 +603,54 @@ export default function WelcomeScreen() {
     showAuthRequired(href);
   };
 
-  // Keep the latest auth helpers / pending route in refs so the listener effect
-  // below can depend only on [isWeb]. Otherwise `login` gets a new identity after
-  // it calls setUser, the effect re-runs, and its poller re-reads a not-yet-removed
-  // signal — re-invoking login() (which clears the query cache) in a tight loop and
-  // hammering the API into 429s.
-  const loginRef = React.useRef(login);
-  const refreshUserRef = React.useRef(refreshUser);
-  const authPromptNextRef = React.useRef(authPrompt.next);
-  React.useEffect(() => {
-    loginRef.current = login;
-    refreshUserRef.current = refreshUser;
-    authPromptNextRef.current = authPrompt.next;
-  });
+  const submitWebAuth = async () => {
+    if (authLoading) return;
+    const identifier = authIdentifier.trim().toLowerCase();
+    if (!identifier) {
+      setAuthError("Please enter your phone number or email.");
+      return;
+    }
+    if (!authPassword) {
+      setAuthError("Please enter your password.");
+      return;
+    }
 
-  React.useEffect(() => {
-    if (!isWeb || typeof window === "undefined") return;
-
-    let processing = false;
-    const handleAuthSuccess = async (payload: { type?: string; next?: string; user?: any; ts?: number }) => {
-      if (payload?.type !== "3i-auth-success") return;
-      // Ignore a stale localStorage signal left over from a previous session
-      // (postMessage payloads carry no ts and are always treated as fresh).
-      if (typeof payload.ts === "number" && Date.now() - payload.ts > 60_000) {
-        try {
-          window.localStorage.removeItem(WEB_AUTH_SUCCESS_STORAGE_KEY);
-        } catch {
-          /* ignore */
-        }
-        return;
+    setAuthLoading(true);
+    setAuthError("");
+    try {
+      const deviceId = await getInstallationId();
+      const res = await apiRequest("POST", "/api/auth/email-login", {
+        email: identifier,
+        password: authPassword,
+        deviceId,
+      });
+      const data = await res.json();
+      if (!data?.user || typeof data.user.id !== "number") {
+        throw new Error("Login succeeded but user data was missing. Please try again.");
       }
-      if (processing) return;
-      processing = true;
-      // Consume the one-shot signal synchronously BEFORE any await so the 250ms
-      // poller / storage events can't re-trigger this while login()/refreshUser()
-      // are still in-flight.
-      try {
-        window.localStorage.removeItem(WEB_AUTH_SUCCESS_STORAGE_KEY);
-      } catch {
-        /* ignore */
+      await login(data.user);
+      await refreshUser();
+      setAuthPrompt((prev) => ({ ...prev, visible: false }));
+      const nextPath = authPrompt.next === "/(tabs)" ? WEB_APP_HOME_PATH : authPrompt.next || WEB_APP_HOME_PATH;
+      router.replace(nextPath as any);
+    } catch (err: any) {
+      const raw = String(err?.message || "Login failed. Please try again.");
+      const msg = raw.replace(/^(GET|POST|PUT|PATCH|DELETE)\s+.*?->\s+\d+:\s*/i, "").replace(/^\d+:\s*/, "");
+      if (msg.includes("register_first") || msg.includes("not found") || msg.includes("Not found")) {
+        setAuthError("We couldn't find this account. Please register first.");
+      } else if (msg.includes("complete_registration")) {
+        setAuthError("Please complete your registration before logging in.");
+      } else if (msg.includes("blocked") || msg.includes("Blocked")) {
+        setAuthError("This account is blocked. Contact support/admin.");
+      } else if (msg.includes("Invalid") || msg.includes("incorrect") || msg.includes("Incorrect") || msg.includes("401")) {
+        setAuthError("Incorrect phone/email or password.");
+      } else {
+        setAuthError(msg || "Login failed. Please try again.");
       }
-      try {
-        if (payload.user && typeof payload.user.id === "number") {
-          await loginRef.current(payload.user);
-        }
-        await refreshUserRef.current();
-        setAuthPrompt((prev) => ({ ...prev, visible: false }));
-        const nextPath =
-          payload.next === "/(tabs)" ? WEB_APP_HOME_PATH : payload.next || authPromptNextRef.current || WEB_APP_HOME_PATH;
-        router.replace(nextPath as any);
-      } finally {
-        processing = false;
-      }
-    };
-
-    const onMessage = (event: MessageEvent) => {
-      if (event.origin !== window.location.origin) return;
-      void handleAuthSuccess(event.data as { type?: string; next?: string; user?: any });
-    };
-    const onStorage = (event: StorageEvent) => {
-      if (event.key !== WEB_AUTH_SUCCESS_STORAGE_KEY || !event.newValue) return;
-      try {
-        void handleAuthSuccess(JSON.parse(event.newValue));
-      } catch {
-        /* ignore */
-      }
-    };
-    const checkPendingStorageSignal = () => {
-      try {
-        const raw = window.localStorage.getItem(WEB_AUTH_SUCCESS_STORAGE_KEY);
-        if (raw) void handleAuthSuccess(JSON.parse(raw));
-      } catch {
-        /* ignore */
-      }
-    };
-
-    window.addEventListener("message", onMessage);
-    window.addEventListener("storage", onStorage);
-    const id = window.setInterval(checkPendingStorageSignal, 250);
-    checkPendingStorageSignal();
-    return () => {
-      window.removeEventListener("message", onMessage);
-      window.removeEventListener("storage", onStorage);
-      window.clearInterval(id);
-    };
-  }, [isWeb]);
-
-  React.useEffect(() => {
-    if (!isWeb || !authPrompt.visible || typeof window === "undefined") return;
-
-    let stopped = false;
-    let attempts = 0;
-    let timeoutId: ReturnType<typeof window.setTimeout> | null = null;
-    let intervalId: ReturnType<typeof window.setInterval> | null = null;
-
-    const stopPolling = () => {
-      stopped = true;
-      if (timeoutId) window.clearTimeout(timeoutId);
-      if (intervalId) window.clearInterval(intervalId);
-    };
-
-    const checkCookieSession = async () => {
-      if (stopped) return;
-      attempts += 1;
-      try {
-        const res = await authFetch(new URL("/api/auth/me", getApiUrl()).toString());
-        const data = await res.json().catch(() => null);
-        if (!stopped && res.ok && typeof data?.id === "number") {
-          stopPolling();
-          await loginRef.current(data);
-          await refreshUserRef.current();
-          setAuthPrompt((prev) => ({ ...prev, visible: false }));
-          router.replace((authPromptNextRef.current || WEB_APP_HOME_PATH) as any);
-        }
-      } catch {
-        /* keep polling briefly; the iframe may still be finalizing login */
-      }
-      if (attempts >= 20) stopPolling();
-    };
-
-    // Fallback for browsers that miss iframe postMessage/storage events: the
-    // login iframe still sets the same-origin session cookie, so /auth/me can
-    // confirm success from the parent page.
-    timeoutId = window.setTimeout(() => {
-      void checkCookieSession();
-    }, 400);
-    intervalId = window.setInterval(() => {
-      void checkCookieSession();
-    }, 800);
-
-    return stopPolling;
-  }, [authPrompt.visible, isWeb]);
-
-  const authModalSrc = React.useMemo(() => {
-    if (!isWeb || typeof window === "undefined") return "";
-    const url = new URL("/email-login", window.location.origin);
-    url.searchParams.set("next", authPrompt.next || WEB_APP_HOME_PATH);
-    url.searchParams.set("modal", "1");
-    return url.toString();
-  }, [authPrompt.next, isWeb]);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
 
   const openCategoryCourse = (category: string) => {
     const normalized = category.trim().toLowerCase();
@@ -983,20 +906,95 @@ export default function WelcomeScreen() {
                   <Text style={styles.websiteAuthModalNoticeText}>{authPrompt.message}</Text>
                 </View>
               )}
-              {authModalSrc ? (
-                React.createElement("iframe", {
-                  src: authModalSrc,
-                  title: "Login/Register",
-                  style: {
-                    width: "100%",
-                    height: "100%",
-                    border: "0",
-                    borderRadius: 20,
-                    background: "#F8FAFC",
-                    display: "block",
-                  },
-                })
-              ) : null}
+              <ScrollView
+                contentContainerStyle={styles.websiteAuthFormScroll}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+              >
+                <View style={styles.websiteAuthIconWrap}>
+                  <Ionicons name="mail" size={30} color={Colors.light.primary} />
+                </View>
+                <Text style={styles.websiteAuthTitle}>Welcome Back</Text>
+                <Text style={styles.websiteAuthSubtitle}>Sign in with your phone/email and password</Text>
+
+                <View style={styles.websiteAuthFormCard}>
+                  <View style={styles.websiteAuthFieldGroup}>
+                    <Text style={styles.websiteAuthLabel}>Phone Number or Email</Text>
+                    <View style={styles.websiteAuthInputRow}>
+                      <Ionicons name="person-outline" size={18} color={Colors.light.textMuted} />
+                      <TextInput
+                        nativeID="welcome-login-username"
+                        style={styles.websiteAuthInput}
+                        placeholder="Enter phone number or email"
+                        placeholderTextColor={Colors.light.textMuted}
+                        value={authIdentifier}
+                        onChangeText={setAuthIdentifier}
+                        keyboardType="default"
+                        autoCapitalize="none"
+                        autoComplete="username"
+                        textContentType="username"
+                        returnKeyType="next"
+                      />
+                    </View>
+                  </View>
+
+                  <View style={styles.websiteAuthFieldGroup}>
+                    <Text style={styles.websiteAuthLabel}>Password</Text>
+                    <View style={styles.websiteAuthInputRow}>
+                      <Ionicons name="lock-closed-outline" size={18} color={Colors.light.textMuted} />
+                      <TextInput
+                        nativeID="welcome-login-password"
+                        style={styles.websiteAuthInput}
+                        placeholder="Enter your password"
+                        placeholderTextColor={Colors.light.textMuted}
+                        value={authPassword}
+                        onChangeText={setAuthPassword}
+                        secureTextEntry={!authShowPassword}
+                        autoCapitalize="none"
+                        autoComplete="current-password"
+                        textContentType="password"
+                        returnKeyType="done"
+                        onSubmitEditing={submitWebAuth}
+                      />
+                      <Pressable onPress={() => setAuthShowPassword((show) => !show)}>
+                        <Ionicons name={authShowPassword ? "eye-off-outline" : "eye-outline"} size={18} color={Colors.light.textMuted} />
+                      </Pressable>
+                    </View>
+                  </View>
+
+                  {!!authError && (
+                    <View style={styles.websiteAuthErrorBox}>
+                      <Ionicons name="alert-circle-outline" size={16} color="#EF4444" />
+                      <Text style={styles.websiteAuthErrorText}>{authError}</Text>
+                    </View>
+                  )}
+
+                  <Pressable
+                    onPress={submitWebAuth}
+                    disabled={authLoading}
+                    style={({ pressed }) => [styles.websiteAuthSubmitButton, pressed && !authLoading && styles.pressedSoft, authLoading && { opacity: 0.75 }]}
+                  >
+                    {authLoading ? (
+                      <ActivityIndicator color="#FFFFFF" />
+                    ) : (
+                      <>
+                        <Text style={styles.websiteAuthSubmitText}>Sign In</Text>
+                        <Ionicons name="arrow-forward" size={19} color="#FFFFFF" />
+                      </>
+                    )}
+                  </Pressable>
+
+                  <Pressable
+                    onPress={() => {
+                      setAuthPrompt((prev) => ({ ...prev, visible: false }));
+                      router.push({ pathname: "/(auth)/login", params: { next: authPrompt.next || WEB_APP_HOME_PATH } } as any);
+                    }}
+                    style={styles.websiteAuthSecondaryLink}
+                  >
+                    <Text style={styles.websiteAuthSecondaryText}>Don't have an account? Sign Up</Text>
+                  </Pressable>
+                </View>
+              </ScrollView>
             </View>
           </View>
         </Modal>
@@ -1869,6 +1867,109 @@ const styles = StyleSheet.create({
     flex: 1,
     fontFamily: "Inter_600SemiBold",
     fontSize: 12,
+    color: Colors.light.primary,
+  },
+  websiteAuthFormScroll: {
+    flexGrow: 1,
+    paddingHorizontal: 28,
+    paddingTop: 58,
+    paddingBottom: 28,
+    justifyContent: "center",
+    gap: 14,
+  },
+  websiteAuthIconWrap: {
+    width: 54,
+    height: 54,
+    borderRadius: 18,
+    backgroundColor: Colors.light.secondary,
+    alignItems: "center",
+    justifyContent: "center",
+    alignSelf: "center",
+  },
+  websiteAuthTitle: {
+    fontSize: 24,
+    fontFamily: "Inter_700Bold",
+    color: Colors.light.text,
+    textAlign: "center",
+  },
+  websiteAuthSubtitle: {
+    fontSize: 13,
+    fontFamily: "Inter_400Regular",
+    color: Colors.light.textMuted,
+    textAlign: "center",
+  },
+  websiteAuthFormCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    padding: 20,
+    gap: 14,
+    ...(Platform.OS === "web" ? ({ boxShadow: "0px 14px 42px rgba(15, 23, 42, 0.12)" } as object) : {}),
+  },
+  websiteAuthFieldGroup: { gap: 7 },
+  websiteAuthLabel: {
+    fontSize: 12,
+    fontFamily: "Inter_700Bold",
+    color: Colors.light.text,
+  },
+  websiteAuthInputRow: {
+    minHeight: 48,
+    borderRadius: 13,
+    backgroundColor: "#F1F5F9",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    paddingHorizontal: 12,
+  },
+  websiteAuthInput: {
+    flex: 1,
+    fontSize: 14,
+    fontFamily: "Inter_400Regular",
+    color: Colors.light.text,
+    outlineStyle: "none" as any,
+  },
+  websiteAuthErrorBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    borderRadius: 12,
+    backgroundColor: "#FEF2F2",
+    borderWidth: 1,
+    borderColor: "#FECACA",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  websiteAuthErrorText: {
+    flex: 1,
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
+    color: "#B91C1C",
+  },
+  websiteAuthSubmitButton: {
+    minHeight: 52,
+    borderRadius: 14,
+    backgroundColor: Colors.light.primary,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  websiteAuthSubmitText: {
+    fontSize: 15,
+    fontFamily: "Inter_700Bold",
+    color: "#FFFFFF",
+  },
+  websiteAuthSecondaryLink: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 4,
+  },
+  websiteAuthSecondaryText: {
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
     color: Colors.light.primary,
   },
   container: { flex: 1, backgroundColor: Colors.light.background },
