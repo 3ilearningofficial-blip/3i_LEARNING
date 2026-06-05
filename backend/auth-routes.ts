@@ -738,11 +738,19 @@ export function registerAuthRoutes({
         return res.status(400).json({ message: "Phone/email and password are required" });
       }
 
-      console.log("[Auth] email-login: lookup start", { identifierType: /^\d{10}$/.test(identifier) ? "phone" : "email" });
-      const isPhone = /^\d{10}$/.test(identifier);
+      // Accept a phone with formatting/country code (e.g. "+91 98765 43210"):
+      // strip non-digits and, if it's a 10-13 digit number and not an email,
+      // match on the last 10 digits. Otherwise treat the identifier as an email.
+      const digitsOnly = identifier.replace(/\D/g, "");
+      const phoneCandidate =
+        !identifier.includes("@") && digitsOnly.length >= 10 && digitsOnly.length <= 13
+          ? digitsOnly.slice(-10)
+          : "";
+      const isPhone = phoneCandidate.length === 10;
+      console.log("[Auth] email-login: lookup start", { identifierType: isPhone ? "phone" : "email" });
       let result;
       if (isPhone) {
-        result = await db.query("SELECT * FROM users WHERE phone = $1", [identifier]);
+        result = await db.query("SELECT * FROM users WHERE phone = $1", [phoneCandidate]);
       } else {
         result = await db.query("SELECT * FROM users WHERE LOWER(email) = LOWER($1)", [identifier]);
       }

@@ -119,7 +119,13 @@ export async function persistLoginSession(
 ): Promise<void> {
   const isAdmin = user.role === "admin";
   const now = Date.now();
-  const platformFamily = !isAdmin && opts.req ? getActiveSessionPlatformFamily(opts.req) : null;
+  // Option B (single active platform): a non-admin login must DURABLY claim a
+  // concrete platform, so subsequent requests from it pass
+  // assertActiveSessionPlatformMatches. Native clients always send ios/android;
+  // a browser (or any client without the header) is treated as "web". This
+  // prevents a web login from silently leaving the account stuck on "mobile".
+  const detectedPlatform = !isAdmin && opts.req ? getActiveSessionPlatformFamily(opts.req) : null;
+  const platformFamily = isAdmin ? null : (detectedPlatform || "web");
 
   if (isAdmin) {
     const adminSessionDeviceId = isAdminDeviceBindingDisabled() ? null : deviceId ?? null;
