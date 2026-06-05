@@ -626,10 +626,11 @@ export default function WelcomeScreen() {
         deviceId,
       });
       const data = await res.json();
-      if (!data?.user || typeof data.user.id !== "number") {
+      const authUser = data?.user ?? data?.data?.user;
+      if (!authUser || typeof authUser.id !== "number") {
         throw new Error("Login succeeded but user data was missing. Please try again.");
       }
-      await login(data.user);
+      await login(authUser);
       await refreshUser();
       setAuthPrompt((prev) => ({ ...prev, visible: false }));
       const nextPath = authPrompt.next === "/(tabs)" ? WEB_APP_HOME_PATH : authPrompt.next || WEB_APP_HOME_PATH;
