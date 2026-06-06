@@ -11,6 +11,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/context/AuthContext";
+import { storeAuthUser } from "@/lib/auth-storage";
 import { getApiUrl, authFetch, apiRequest } from "@/lib/query-client";
 import { getInstallationId } from "@/lib/installation-id";
 import { blurActiveElementWeb } from "@/lib/navigate-auth-back";
@@ -630,12 +631,13 @@ export default function WelcomeScreen() {
       if (!authUser || typeof authUser.id !== "number") {
         throw new Error("Login succeeded but user data was missing. Please try again.");
       }
+      await storeAuthUser(authUser);
       await login(authUser);
-      await refreshUser();
       setAuthPrompt((prev) => ({ ...prev, visible: false }));
       const nextPath = authPrompt.next === "/(tabs)" ? WEB_APP_HOME_PATH : authPrompt.next || WEB_APP_HOME_PATH;
       if (nextPath === WEB_APP_HOME_PATH) markWebPostLoginHomeGrace();
       router.replace(nextPath as any);
+      refreshUser().catch(() => {});
     } catch (err: any) {
       const raw = String(err?.message || "Login failed. Please try again.");
       const msg = raw.replace(/^(GET|POST|PUT|PATCH|DELETE)\s+.*?->\s+\d+:\s*/i, "").replace(/^\d+:\s*/, "");
