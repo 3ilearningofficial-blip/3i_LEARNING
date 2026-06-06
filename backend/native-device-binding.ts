@@ -352,12 +352,6 @@ export async function assertSessionNotActivelyInUse(
   const row = ur.rows[0];
   if (String(row.role ?? "") === "admin") return { ok: true };
 
-  // When student device binding is disabled, web/native students may sign in from
-  // any browser/device. The previous session is invalidated by persistLoginSession
-  // (it deletes user_sessions and rotates session_token), so "one active session"
-  // (new login wins, old device logged out) is preserved without blocking the new login.
-  if (isStudentDeviceBindingDisabled(opts.role ?? (row.role as string | undefined))) return { ok: true };
-
   const sessionToken = row.session_token ? String(row.session_token).trim() : "";
   if (!sessionToken) return { ok: true };
 
@@ -392,11 +386,27 @@ export async function assertSessionNotActivelyInUse(
       ok: false,
       httpStatus: 403,
       message:
-        "This account is already logged in on another device. Please use the same browser or contact admin.",
+        "This account is already logged in on another device. Ask admin to unlock it, or try again after 7 days of inactivity.",
     };
   }
 
-  if (isStudentDeviceBindingDisabled(row.role as string | undefined)) return { ok: true };
+  if (isStudentDeviceBindingDisabled(row.role as string | undefined)) {
+    await logWrongInstallationAttempt(
+      db,
+      req,
+      opts.userId,
+      storedDeviceId || null,
+      attempted,
+      { phone: row.phone ?? null, email: row.email ?? null },
+      "active_web_session_login_denied"
+    );
+    return {
+      ok: false,
+      httpStatus: 403,
+      message:
+        "This account is already logged in on another device. Ask admin to unlock it, or try again after 7 days of inactivity.",
+    };
+  }
 
   const bindingRow = {
     app_bound_device_id: row.app_bound_device_id,
