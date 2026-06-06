@@ -162,7 +162,7 @@ export default function ProfileSetupScreen() {
           updateUser({ name: trimmedName, email: trimmedEmail, profileComplete: true, date_of_birth: trimmedDob });
         }
         const goHome = () => {
-          router.replace("/(tabs)");
+          router.replace((Platform.OS === "web" ? "/home" : "/(tabs)") as any);
         };
         if (Platform.OS === "web" && typeof window !== "undefined") {
           window.alert(`${PROFILE_POST_SAVE_SUCCESS_TITLE}\n\n${PROFILE_POST_SAVE_SUCCESS_MESSAGE}`);

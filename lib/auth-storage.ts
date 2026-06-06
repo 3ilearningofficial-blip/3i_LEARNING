@@ -17,6 +17,8 @@ export interface StoredAuthUser {
 const userStorageKey = "user";
 const nativeTokenKey = "sessionToken";
 const webTokenKey = "sessionToken";
+const webStudentSessionUserBackupKey = "__3i_student_session_user";
+const webStudentSessionTokenBackupKey = "__3i_student_session_token";
 
 function removeWebAuthStorage(): void {
   if (typeof localStorage !== "undefined") {
@@ -26,6 +28,8 @@ function removeWebAuthStorage(): void {
   if (typeof sessionStorage !== "undefined") {
     sessionStorage.removeItem(userStorageKey);
     sessionStorage.removeItem(webTokenKey);
+    sessionStorage.removeItem(webStudentSessionUserBackupKey);
+    sessionStorage.removeItem(webStudentSessionTokenBackupKey);
   }
 }
 
@@ -111,6 +115,13 @@ export async function storeAuthUser(userData: StoredAuthUser) {
     }
     if (typeof sessionStorage !== "undefined") {
       sessionStorage.removeItem(userStorageKey);
+      if (sessionToken) {
+        sessionStorage.setItem(webStudentSessionUserBackupKey, JSON.stringify(rest));
+        sessionStorage.setItem(webStudentSessionTokenBackupKey, sessionToken);
+      } else {
+        sessionStorage.removeItem(webStudentSessionUserBackupKey);
+        sessionStorage.removeItem(webStudentSessionTokenBackupKey);
+      }
     }
   } else {
     const { sessionToken, ...rest } = userData;
@@ -133,15 +144,24 @@ export async function getStoredAuthUser(): Promise<StoredAuthUser | null> {
         }
       }
 
-      if (typeof localStorage === "undefined") return null;
-      const stored = localStorage.getItem(userStorageKey);
-      if (!stored) return null;
-      const parsed = JSON.parse(stored);
+      const sessionStudentBackup =
+        typeof sessionStorage !== "undefined"
+          ? sessionStorage.getItem(webStudentSessionUserBackupKey)
+          : null;
+      const stored = typeof localStorage !== "undefined" ? localStorage.getItem(userStorageKey) : null;
+      if (!stored && !sessionStudentBackup) return null;
+      const rawStored = stored || sessionStudentBackup;
+      if (!rawStored) return null;
+      const parsed = JSON.parse(rawStored);
       if (parsed?.role === "admin") {
         removeWebAuthStorage();
         return null;
       }
-      const token = getWebStoredToken("student");
+      const token =
+        getWebStoredToken("student") ||
+        (typeof sessionStorage !== "undefined"
+          ? sessionStorage.getItem(webStudentSessionTokenBackupKey)
+          : null);
       return { ...parsed, sessionToken: token || undefined };
     }
     const stored = await AsyncStorage.getItem(userStorageKey);
@@ -182,7 +202,12 @@ export async function getStoredAuthToken(): Promise<string | null> {
           }
         }
       }
-      const t = getWebStoredToken(role)?.trim();
+      const t = (
+        getWebStoredToken(role) ||
+        (role !== "admin" && typeof sessionStorage !== "undefined"
+          ? sessionStorage.getItem(webStudentSessionTokenBackupKey)
+          : null)
+      )?.trim();
       return t && t !== "null" && t !== "undefined" ? t : null;
     }
     return await getNativeStoredToken();

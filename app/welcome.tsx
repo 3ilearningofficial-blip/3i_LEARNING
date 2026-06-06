@@ -16,6 +16,7 @@ import { getApiUrl, authFetch, apiRequest } from "@/lib/query-client";
 import { getInstallationId } from "@/lib/installation-id";
 import { blurActiveElementWeb } from "@/lib/navigate-auth-back";
 import { markWebPostLoginHomeGrace } from "@/lib/web-post-login-grace";
+import { formatLockCountdown, sendOtpRequest, verifyOtpRequest } from "@/lib/otp-lockout";
 import Colors from "@/constants/colors";
 
 const DEFAULT_FEATURES = [
@@ -244,6 +245,7 @@ const WEBSITE_STATS = [
 
 const WEBSITE_EXAM_CATEGORIES = ["NDA", "CDS", "AFCAT"] as const;
 const WEB_APP_HOME_PATH = "/home";
+type WelcomeAuthMode = "signin" | "register";
 
 /** Title stays fixed; body (and images) scroll when compact so long CMS copy is readable on phone web / narrow layout. */
 function SectionTitleAndScroll({
@@ -323,6 +325,13 @@ export default function WelcomeScreen() {
   const [authShowPassword, setAuthShowPassword] = React.useState(false);
   const [authLoading, setAuthLoading] = React.useState(false);
   const [authError, setAuthError] = React.useState("");
+  const [authMode, setAuthMode] = React.useState<WelcomeAuthMode>("signin");
+  const [registerPhone, setRegisterPhone] = React.useState("");
+  const [registerOtp, setRegisterOtp] = React.useState("");
+  const [registerOtpSent, setRegisterOtpSent] = React.useState(false);
+  const [registerDevOtp, setRegisterDevOtp] = React.useState("");
+  const [registerLoading, setRegisterLoading] = React.useState(false);
+  const [registerError, setRegisterError] = React.useState("");
   const [infoPrompt, setInfoPrompt] = React.useState<{ visible: boolean; message: string }>({
     visible: false,
     message: "",
@@ -470,19 +479,26 @@ export default function WelcomeScreen() {
     if (authPrompt.visible) return;
     setAuthError("");
     setAuthLoading(false);
+    setRegisterError("");
+    setRegisterLoading(false);
   }, [authPrompt.visible]);
+
+  const openCenteredAuth = React.useCallback((next = WEB_APP_HOME_PATH, message = "", mode: WelcomeAuthMode = "signin") => {
+    setAuthMode(mode);
+    setAuthPrompt({ visible: true, next, message });
+  }, []);
 
   const handleLogin = () => {
     blurActiveElementWeb();
     if (user) router.replace(WEB_APP_HOME_PATH as any);
-    else if (isWeb) setAuthPrompt({ visible: true, next: WEB_APP_HOME_PATH, message: "" });
+    else if (isWeb) openCenteredAuth(WEB_APP_HOME_PATH, "", "signin");
     else router.push("/(auth)/email-login" as any);
   };
 
   const handleSignup = () => {
     blurActiveElementWeb();
     if (user) router.replace(WEB_APP_HOME_PATH as any);
-    else if (isWeb) setAuthPrompt({ visible: true, next: WEB_APP_HOME_PATH, message: "" });
+    else if (isWeb) openCenteredAuth(WEB_APP_HOME_PATH, "", "register");
     else router.push("/(auth)/login" as any);
   };
 
@@ -501,7 +517,7 @@ export default function WelcomeScreen() {
   const handleOpenWebApp = () => {
     blurActiveElementWeb();
     if (user) router.replace(WEB_APP_HOME_PATH as any);
-    else if (isWeb) setAuthPrompt({ visible: true, next: WEB_APP_HOME_PATH, message: "" });
+    else if (isWeb) openCenteredAuth(WEB_APP_HOME_PATH, "", "signin");
     else router.push("/(auth)/email-login" as any);
   };
 
@@ -590,14 +606,14 @@ export default function WelcomeScreen() {
     blurActiveElementWeb();
     setWebMenuOpen(false);
     if (await routeIfAlreadyAuthenticated(next)) return;
-    setAuthPrompt({ visible: true, next, message });
+    openCenteredAuth(next, message, "signin");
   };
 
   const openAuthModal = async (next = WEB_APP_HOME_PATH, message = "") => {
     blurActiveElementWeb();
     setWebMenuOpen(false);
     if (await routeIfAlreadyAuthenticated(next)) return;
-    setAuthPrompt({ visible: true, next, message });
+    openCenteredAuth(next, message, "signin");
   };
 
   const openProtectedWebRoute = async (href: string) => {
@@ -631,6 +647,18 @@ export default function WelcomeScreen() {
       if (!authUser || typeof authUser.id !== "number") {
         throw new Error("Login succeeded but user data was missing. Please try again.");
       }
+      const returnedToken =
+        authUser.sessionToken ??
+        data?.sessionToken ??
+        data?.token ??
+        data?.data?.sessionToken ??
+        data?.data?.token;
+      if (typeof returnedToken === "string" && returnedToken.trim()) {
+        authUser.sessionToken = returnedToken.trim();
+      }
+      if (!authUser.sessionToken) {
+        throw new Error("Login succeeded but session token was missing. Please try again.");
+      }
       await storeAuthUser(authUser);
       await login(authUser);
       setAuthPrompt((prev) => ({ ...prev, visible: false }));
@@ -643,6 +671,9 @@ export default function WelcomeScreen() {
       const msg = raw.replace(/^(GET|POST|PUT|PATCH|DELETE)\s+.*?->\s+\d+:\s*/i, "").replace(/^\d+:\s*/, "");
       if (msg.includes("register_first") || msg.includes("not found") || msg.includes("Not found")) {
         setAuthError("We couldn't find this account. Please register first.");
+        const digits = identifier.replace(/\D/g, "");
+        if (digits.length >= 10) setRegisterPhone(digits.slice(-10));
+        setAuthMode("register");
       } else if (msg.includes("complete_registration")) {
         setAuthError("Please complete your registration before logging in.");
       } else if (msg.includes("blocked") || msg.includes("Blocked")) {
@@ -654,6 +685,85 @@ export default function WelcomeScreen() {
       }
     } finally {
       setAuthLoading(false);
+    }
+  };
+
+  const sendRegisterOtp = async () => {
+    if (registerLoading) return;
+    const phone = registerPhone.replace(/\D/g, "").slice(-10);
+    setRegisterError("");
+    if (phone.length !== 10) {
+      setRegisterError("Enter a valid 10-digit phone number.");
+      return;
+    }
+    setRegisterPhone(phone);
+    setRegisterLoading(true);
+    try {
+      const result = await sendOtpRequest(phone, "phone");
+      if (!result.ok) {
+        if (result.lockedUntil && result.lockedUntil > Date.now()) {
+          setRegisterError(`Please wait ${formatLockCountdown(result.lockedUntil - Date.now())} before requesting another OTP.`);
+        } else {
+          setRegisterError(result.message || "Could not send OTP. Please try again.");
+        }
+        return;
+      }
+      setRegisterOtpSent(true);
+      setRegisterOtp("");
+      setRegisterDevOtp(result.devOtp || "");
+      setRegisterError("");
+    } finally {
+      setRegisterLoading(false);
+    }
+  };
+
+  const verifyRegisterOtp = async () => {
+    if (registerLoading) return;
+    const phone = registerPhone.replace(/\D/g, "").slice(-10);
+    const otp = registerOtp.trim();
+    setRegisterError("");
+    if (phone.length !== 10) {
+      setRegisterError("Enter a valid 10-digit phone number.");
+      return;
+    }
+    if (otp.length < 4) {
+      setRegisterError("Enter the OTP sent to your phone.");
+      return;
+    }
+    setRegisterLoading(true);
+    try {
+      const deviceId = await getInstallationId();
+      const result = await verifyOtpRequest(phone, "phone", otp, deviceId);
+      if (!result.ok) {
+        setRegisterError(result.message || "Invalid OTP. Please try again.");
+        return;
+      }
+      setAuthPrompt((prev) => ({ ...prev, visible: false }));
+      if (result.registered) {
+        const authUser = result.user;
+        if (!authUser?.sessionToken) {
+          setRegisterError("OTP verified but session token was missing. Please sign in again.");
+          setAuthPrompt((prev) => ({ ...prev, visible: true }));
+          setAuthMode("signin");
+          return;
+        }
+        await storeAuthUser(authUser);
+        await login(authUser);
+        markWebPostLoginHomeGrace();
+        router.replace(WEB_APP_HOME_PATH as any);
+        refreshUser().catch(() => {});
+        return;
+      }
+      router.replace({
+        pathname: "/profile-setup",
+        params: {
+          registrationToken: result.registrationToken,
+          registrationIdentifier: result.identifier,
+          registrationType: result.type,
+        },
+      } as any);
+    } finally {
+      setRegisterLoading(false);
     }
   };
 
@@ -917,87 +1027,185 @@ export default function WelcomeScreen() {
                 showsVerticalScrollIndicator={false}
               >
                 <View style={styles.websiteAuthIconWrap}>
-                  <Ionicons name="mail" size={30} color={Colors.light.primary} />
+                  <Ionicons name={authMode === "signin" ? "mail" : "call"} size={30} color={Colors.light.primary} />
                 </View>
-                <Text style={styles.websiteAuthTitle}>Welcome Back</Text>
-                <Text style={styles.websiteAuthSubtitle}>Sign in with your phone/email and password</Text>
+                <Text style={styles.websiteAuthTitle}>{authMode === "signin" ? "Welcome Back" : "Register First"}</Text>
+                <Text style={styles.websiteAuthSubtitle}>
+                  {authMode === "signin"
+                    ? "Sign in with your phone/email and password"
+                    : registerOtpSent
+                      ? `OTP sent to +91 ${registerPhone}`
+                      : "Verify your phone number to create your account"}
+                </Text>
 
                 <View style={styles.websiteAuthFormCard}>
-                  <View style={styles.websiteAuthFieldGroup}>
-                    <Text style={styles.websiteAuthLabel}>Phone Number or Email</Text>
-                    <View style={styles.websiteAuthInputRow}>
-                      <Ionicons name="person-outline" size={18} color={Colors.light.textMuted} />
-                      <TextInput
-                        nativeID="welcome-login-username"
-                        style={styles.websiteAuthInput}
-                        placeholder="Enter phone number or email"
-                        placeholderTextColor={Colors.light.textMuted}
-                        value={authIdentifier}
-                        onChangeText={setAuthIdentifier}
-                        keyboardType="default"
-                        autoCapitalize="none"
-                        autoComplete="username"
-                        textContentType="username"
-                        returnKeyType="next"
-                      />
-                    </View>
-                  </View>
+                  {authMode === "signin" ? (
+                    <>
+                      <View style={styles.websiteAuthFieldGroup}>
+                        <Text style={styles.websiteAuthLabel}>Phone Number or Email</Text>
+                        <View style={styles.websiteAuthInputRow}>
+                          <Ionicons name="person-outline" size={18} color={Colors.light.textMuted} />
+                          <TextInput
+                            nativeID="welcome-login-username"
+                            style={styles.websiteAuthInput}
+                            placeholder="Enter phone number or email"
+                            placeholderTextColor={Colors.light.textMuted}
+                            value={authIdentifier}
+                            onChangeText={setAuthIdentifier}
+                            keyboardType="default"
+                            autoCapitalize="none"
+                            autoComplete="username"
+                            textContentType="username"
+                            returnKeyType="next"
+                          />
+                        </View>
+                      </View>
 
-                  <View style={styles.websiteAuthFieldGroup}>
-                    <Text style={styles.websiteAuthLabel}>Password</Text>
-                    <View style={styles.websiteAuthInputRow}>
-                      <Ionicons name="lock-closed-outline" size={18} color={Colors.light.textMuted} />
-                      <TextInput
-                        nativeID="welcome-login-password"
-                        style={styles.websiteAuthInput}
-                        placeholder="Enter your password"
-                        placeholderTextColor={Colors.light.textMuted}
-                        value={authPassword}
-                        onChangeText={setAuthPassword}
-                        secureTextEntry={!authShowPassword}
-                        autoCapitalize="none"
-                        autoComplete="current-password"
-                        textContentType="password"
-                        returnKeyType="done"
-                        onSubmitEditing={submitWebAuth}
-                      />
-                      <Pressable onPress={() => setAuthShowPassword((show) => !show)}>
-                        <Ionicons name={authShowPassword ? "eye-off-outline" : "eye-outline"} size={18} color={Colors.light.textMuted} />
+                      <View style={styles.websiteAuthFieldGroup}>
+                        <Text style={styles.websiteAuthLabel}>Password</Text>
+                        <View style={styles.websiteAuthInputRow}>
+                          <Ionicons name="lock-closed-outline" size={18} color={Colors.light.textMuted} />
+                          <TextInput
+                            nativeID="welcome-login-password"
+                            style={styles.websiteAuthInput}
+                            placeholder="Enter your password"
+                            placeholderTextColor={Colors.light.textMuted}
+                            value={authPassword}
+                            onChangeText={setAuthPassword}
+                            secureTextEntry={!authShowPassword}
+                            autoCapitalize="none"
+                            autoComplete="current-password"
+                            textContentType="password"
+                            returnKeyType="done"
+                            onSubmitEditing={submitWebAuth}
+                          />
+                          <Pressable onPress={() => setAuthShowPassword((show) => !show)}>
+                            <Ionicons name={authShowPassword ? "eye-off-outline" : "eye-outline"} size={18} color={Colors.light.textMuted} />
+                          </Pressable>
+                        </View>
+                      </View>
+
+                      {!!authError && (
+                        <View style={styles.websiteAuthErrorBox}>
+                          <Ionicons name="alert-circle-outline" size={16} color="#EF4444" />
+                          <Text style={styles.websiteAuthErrorText}>{authError}</Text>
+                        </View>
+                      )}
+
+                      <Pressable
+                        onPress={submitWebAuth}
+                        disabled={authLoading}
+                        style={({ pressed }) => [styles.websiteAuthSubmitButton, pressed && !authLoading && styles.pressedSoft, authLoading && { opacity: 0.75 }]}
+                      >
+                        {authLoading ? (
+                          <ActivityIndicator color="#FFFFFF" />
+                        ) : (
+                          <>
+                            <Text style={styles.websiteAuthSubmitText}>Sign In</Text>
+                            <Ionicons name="arrow-forward" size={19} color="#FFFFFF" />
+                          </>
+                        )}
                       </Pressable>
-                    </View>
-                  </View>
 
-                  {!!authError && (
-                    <View style={styles.websiteAuthErrorBox}>
-                      <Ionicons name="alert-circle-outline" size={16} color="#EF4444" />
-                      <Text style={styles.websiteAuthErrorText}>{authError}</Text>
-                    </View>
+                      <Pressable
+                        onPress={() => {
+                          setAuthError("");
+                          setAuthMode("register");
+                        }}
+                        style={styles.websiteAuthSecondaryLink}
+                      >
+                        <Text style={styles.websiteAuthSecondaryText}>New user? Register with phone OTP</Text>
+                      </Pressable>
+                    </>
+                  ) : (
+                    <>
+                      <View style={styles.websiteAuthFieldGroup}>
+                        <Text style={styles.websiteAuthLabel}>Phone Number</Text>
+                        <View style={styles.websiteAuthInputRow}>
+                          <Text style={styles.websiteAuthLabel}>+91</Text>
+                          <TextInput
+                            nativeID="welcome-register-phone"
+                            style={styles.websiteAuthInput}
+                            placeholder="Enter 10-digit phone number"
+                            placeholderTextColor={Colors.light.textMuted}
+                            value={registerPhone}
+                            onChangeText={(value) => {
+                              setRegisterPhone(value.replace(/\D/g, "").slice(0, 10));
+                              if (registerOtpSent) {
+                                setRegisterOtpSent(false);
+                                setRegisterOtp("");
+                              }
+                            }}
+                            keyboardType="phone-pad"
+                            maxLength={10}
+                            editable={!registerOtpSent}
+                            returnKeyType="done"
+                          />
+                          {registerOtpSent ? (
+                            <Pressable onPress={() => { setRegisterOtpSent(false); setRegisterOtp(""); setRegisterError(""); }}>
+                              <Ionicons name="pencil" size={16} color={Colors.light.primary} />
+                            </Pressable>
+                          ) : null}
+                        </View>
+                      </View>
+
+                      {registerOtpSent ? (
+                        <View style={styles.websiteAuthFieldGroup}>
+                          <Text style={styles.websiteAuthLabel}>OTP</Text>
+                          <View style={styles.websiteAuthInputRow}>
+                            <Ionicons name="keypad-outline" size={18} color={Colors.light.textMuted} />
+                            <TextInput
+                              nativeID="welcome-register-otp"
+                              style={[styles.websiteAuthInput, { textAlign: "center", letterSpacing: 6, fontFamily: "Inter_700Bold" }]}
+                              placeholder="Enter OTP"
+                              placeholderTextColor={Colors.light.textMuted}
+                              value={registerOtp}
+                              onChangeText={(value) => setRegisterOtp(value.replace(/\D/g, "").slice(0, 6))}
+                              keyboardType="number-pad"
+                              maxLength={6}
+                              returnKeyType="done"
+                              onSubmitEditing={verifyRegisterOtp}
+                            />
+                          </View>
+                          {!!registerDevOtp && (
+                            <Text style={[styles.websiteAuthSecondaryText, { color: "#22C55E", textAlign: "center" }]}>Dev OTP: {registerDevOtp}</Text>
+                          )}
+                        </View>
+                      ) : null}
+
+                      {!!registerError && (
+                        <View style={styles.websiteAuthErrorBox}>
+                          <Ionicons name="alert-circle-outline" size={16} color="#EF4444" />
+                          <Text style={styles.websiteAuthErrorText}>{registerError}</Text>
+                        </View>
+                      )}
+
+                      <Pressable
+                        onPress={registerOtpSent ? verifyRegisterOtp : sendRegisterOtp}
+                        disabled={registerLoading}
+                        style={({ pressed }) => [styles.websiteAuthSubmitButton, pressed && !registerLoading && styles.pressedSoft, registerLoading && { opacity: 0.75 }]}
+                      >
+                        {registerLoading ? (
+                          <ActivityIndicator color="#FFFFFF" />
+                        ) : (
+                          <>
+                            <Text style={styles.websiteAuthSubmitText}>{registerOtpSent ? "Verify & Continue" : "Send OTP"}</Text>
+                            <Ionicons name="arrow-forward" size={19} color="#FFFFFF" />
+                          </>
+                        )}
+                      </Pressable>
+
+                      <Pressable
+                        onPress={() => {
+                          setRegisterError("");
+                          setAuthMode("signin");
+                        }}
+                        style={styles.websiteAuthSecondaryLink}
+                      >
+                        <Text style={styles.websiteAuthSecondaryText}>Already registered? Sign In</Text>
+                      </Pressable>
+                    </>
                   )}
-
-                  <Pressable
-                    onPress={submitWebAuth}
-                    disabled={authLoading}
-                    style={({ pressed }) => [styles.websiteAuthSubmitButton, pressed && !authLoading && styles.pressedSoft, authLoading && { opacity: 0.75 }]}
-                  >
-                    {authLoading ? (
-                      <ActivityIndicator color="#FFFFFF" />
-                    ) : (
-                      <>
-                        <Text style={styles.websiteAuthSubmitText}>Sign In</Text>
-                        <Ionicons name="arrow-forward" size={19} color="#FFFFFF" />
-                      </>
-                    )}
-                  </Pressable>
-
-                  <Pressable
-                    onPress={() => {
-                      setAuthPrompt((prev) => ({ ...prev, visible: false }));
-                      router.push({ pathname: "/(auth)/login", params: { next: authPrompt.next || WEB_APP_HOME_PATH } } as any);
-                    }}
-                    style={styles.websiteAuthSecondaryLink}
-                  >
-                    <Text style={styles.websiteAuthSecondaryText}>Don't have an account? Sign Up</Text>
-                  </Pressable>
                 </View>
               </ScrollView>
             </View>
