@@ -55,6 +55,19 @@ function isProtectedPlaybackRoute(path: string): boolean {
   );
 }
 
+function unwrapAuthPayload(payload: any): any {
+  if (
+    payload &&
+    typeof payload === "object" &&
+    payload.success === true &&
+    payload.data &&
+    typeof payload.data === "object"
+  ) {
+    return payload.data;
+  }
+  return payload;
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -117,7 +130,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       if (res.ok) {
-        const data = await res.json();
+        const data = unwrapAuthPayload(await res.json());
         if (typeof data?.id !== "number") {
           if (Platform.OS !== "web" && stored) {
             // Native safety: if secure token lookup is temporarily unavailable,
@@ -129,7 +142,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             await new Promise((r) => setTimeout(r, 400));
             const retryRes = await fetchMe();
             if (retryRes.ok) {
-              const retryData = await retryRes.json();
+              const retryData = unwrapAuthPayload(await retryRes.json());
               if (typeof retryData?.id === "number") {
                 if (retryData.sessionToken) {
                   setUser(retryData);
@@ -331,7 +344,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           await attachInstallationHeaders(headers);
           const meRes = await fetch(meUrl.toString(), { credentials: "include", headers });
           if (meRes.ok) {
-            const me = await meRes.json().catch(() => null);
+            const me = unwrapAuthPayload(await meRes.json().catch(() => null));
             if (typeof me?.id === "number") {
               setUser(me);
               await storeAuthUser(me);
