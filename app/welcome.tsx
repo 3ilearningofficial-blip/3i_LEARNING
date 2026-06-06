@@ -665,7 +665,6 @@ export default function WelcomeScreen() {
       const nextPath = authPrompt.next === "/(tabs)" ? WEB_APP_HOME_PATH : authPrompt.next || WEB_APP_HOME_PATH;
       if (nextPath === WEB_APP_HOME_PATH) markWebPostLoginHomeGrace();
       router.replace(nextPath as any);
-      refreshUser().catch(() => {});
     } catch (err: any) {
       const raw = String(err?.message || "Login failed. Please try again.");
       const msg = raw.replace(/^(GET|POST|PUT|PATCH|DELETE)\s+.*?->\s+\d+:\s*/i, "").replace(/^\d+:\s*/, "");
@@ -751,7 +750,6 @@ export default function WelcomeScreen() {
         await login(authUser);
         markWebPostLoginHomeGrace();
         router.replace(WEB_APP_HOME_PATH as any);
-        refreshUser().catch(() => {});
         return;
       }
       router.replace({

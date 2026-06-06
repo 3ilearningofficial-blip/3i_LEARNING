@@ -132,6 +132,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (res.ok) {
         const data = unwrapAuthPayload(await res.json());
         if (typeof data?.id !== "number") {
+          if (Platform.OS === "web" && stored && token) {
+            // Phone browsers can briefly return an anonymous /auth/me payload
+            // immediately after login/tab restore even while the bearer token
+            // is already stored. Keep the durable web session unless the server
+            // sends an explicit terminal error handled in the non-OK branch.
+            setUser(stored);
+            return;
+          }
           if (Platform.OS !== "web" && stored) {
             // Native safety: if secure token lookup is temporarily unavailable,
             // keep last known session instead of force-logging out.
