@@ -11,7 +11,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/query-client";
+import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
 import Colors from "@/constants/colors";
 
 const DURATION_PRESETS = [20, 30, 60, 120];
@@ -20,15 +20,18 @@ type Props = {
   liveClassId: string;
   isAdmin?: boolean;
   sessionActive?: boolean;
+  enabled?: boolean;
 };
 
 export default function ClassroomHeaderActivityTimer({
   liveClassId,
   isAdmin = false,
   sessionActive = true,
+  enabled = true,
 }: Props) {
   const qc = useQueryClient();
   const [tick, setTick] = useState(0);
+  const [authBlocked, setAuthBlocked] = useState(false);
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [popoverPos, setPopoverPos] = useState({ top: 0, left: 0 });
   const [timerLabel, setTimerLabel] = useState("Timer");
@@ -36,21 +39,29 @@ export default function ClassroomHeaderActivityTimer({
   const clockBtnRef = useRef<View>(null);
 
   useEffect(() => {
-    if (!sessionActive) return;
+    setAuthBlocked(false);
+  }, [enabled, liveClassId]);
+
+  useEffect(() => {
+    if (!sessionActive || !enabled) return;
     const id = setInterval(() => setTick((t) => t + 1), 1000);
     return () => clearInterval(id);
-  }, [sessionActive]);
+  }, [enabled, sessionActive]);
 
   const { data: activeTimer } = useQuery({
     queryKey: ["/api/live-classes", liveClassId, "activity-timer", "active"],
     queryFn: async () => {
-      const res = await apiRequest("GET", `/api/live-classes/${liveClassId}/activity-timer/active`, undefined);
+      const res = await authFetch(`${getApiUrl()}/live-classes/${encodeURIComponent(liveClassId)}/activity-timer/active`);
+      if (res.status === 401) {
+        setAuthBlocked(true);
+        return null;
+      }
       if (!res.ok) return null;
       const json = await res.json();
       return json.timer as { label?: string; ends_at?: number; remainingSeconds?: number } | null;
     },
     refetchInterval: 800,
-    enabled: !!liveClassId && sessionActive && Platform.OS === "web",
+    enabled: !!liveClassId && sessionActive && enabled && !authBlocked && Platform.OS === "web",
   });
 
   const startTimer = useMutation({

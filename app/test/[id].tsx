@@ -12,6 +12,7 @@ import * as Haptics from "expo-haptics";
 import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
 import { myAttemptsSummaryQueryKey, testQueryKey } from "@/lib/query-keys";
 import Colors from "@/constants/colors";
+import { useAppTheme } from "@/context/AppThemeContext";
 import { useAuth } from "@/context/AuthContext";
 import { useScreenProtection } from "@/lib/useScreenProtection";
 import { isAndroidWeb } from "@/lib/useAndroidWebGate";
@@ -49,6 +50,7 @@ interface TestData {
 const OPTIONS = ["A", "B", "C", "D"];
 export default function TestScreen() {
   useScreenProtection(true);
+  const { colors, isDarkMode } = useAppTheme();
   if (isAndroidWeb()) return <AndroidWebGate />;
   const { id } = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
@@ -273,8 +275,8 @@ export default function TestScreen() {
   }
   if (!hasStarted) {
     return (
-      <View style={styles.container}>
-        <LinearGradient colors={["#0A1628", "#1A2E50"]} style={[styles.startHeader, { paddingTop: topPadding + 8 }]}>
+      <View style={[styles.container, { backgroundColor: colors.background }]}>
+        <LinearGradient colors={isDarkMode ? ["#020617", "#0F172A"] : ["#0A1628", "#1A2E50"]} style={[styles.startHeader, { paddingTop: topPadding + 8 }]}>
           <Pressable style={styles.backBtn} onPress={() => router.back()}>
             <Ionicons name="arrow-back" size={22} color="#fff" />
           </Pressable>
@@ -337,8 +339,8 @@ export default function TestScreen() {
   const answeredCount = Object.keys(answers).length;
   if (showOMR) {
     return (
-      <View style={styles.container}>
-        <LinearGradient colors={["#0A1628", "#1A2E50"]} style={[styles.testHeader, { paddingTop: topPadding + 4 }]}>
+      <View style={[styles.container, { backgroundColor: colors.background }]}>
+        <LinearGradient colors={isDarkMode ? ["#020617", "#0F172A"] : ["#0A1628", "#1A2E50"]} style={[styles.testHeader, { paddingTop: topPadding + 4 }]}>
           <View style={styles.testHeaderRow}>
             <Pressable style={styles.headerBtn} onPress={() => setShowOMR(false)}>
               <Ionicons name="arrow-back" size={20} color="#fff" />
@@ -376,8 +378,8 @@ export default function TestScreen() {
     );
   }
   return (
-    <View style={styles.container}>
-      <LinearGradient colors={["#0A1628", "#1A2E50"]} style={[styles.testHeader, { paddingTop: topPadding + 4 }]}>
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      <LinearGradient colors={isDarkMode ? ["#020617", "#0F172A"] : ["#0A1628", "#1A2E50"]} style={[styles.testHeader, { paddingTop: topPadding + 4 }]}>
         <View style={styles.testHeaderRow}>
           <Pressable style={styles.headerBtn} onPress={handleExit}>
             <Ionicons name="close" size={20} color="#fff" />

@@ -43,7 +43,13 @@ function shouldNotifyUnauthorized(url: string): boolean {
       /\/api\/lectures\/[^/]+\/progress$/.test(path) ||
       /\/api\/lectures\/[^/]+\/progress\/session$/.test(path) ||
       /\/api\/live-classes\/[^/]+\/recording-progress$/.test(path) ||
-      /\/api\/live-classes\/[^/]+\/viewers\/heartbeat$/.test(path)
+      /\/api\/live-classes\/[^/]+\/viewers\/heartbeat$/.test(path) ||
+      /\/api\/live-classes\/[^/]+\/chat$/.test(path) ||
+      /\/api\/live-classes\/[^/]+\/polls\/active$/.test(path) ||
+      /\/api\/live-classes\/[^/]+\/activity-timer\/active$/.test(path) ||
+      /\/api\/live-classes\/[^/]+\/engagement\/stream$/.test(path) ||
+      /\/api\/admin\/live-classes\/[^/]+\/raised-hands$/.test(path) ||
+      /\/api\/admin\/live-classes\/[^/]+\/polls\/session$/.test(path)
     ) {
       return false;
     }
@@ -55,7 +61,13 @@ function shouldNotifyUnauthorized(url: string): boolean {
       /\/api\/lectures\/[^/]+\/progress$/.test(url) ||
       /\/api\/lectures\/[^/]+\/progress\/session$/.test(url) ||
       /\/api\/live-classes\/[^/]+\/recording-progress$/.test(url) ||
-      /\/api\/live-classes\/[^/]+\/viewers\/heartbeat$/.test(url)
+      /\/api\/live-classes\/[^/]+\/viewers\/heartbeat$/.test(url) ||
+      /\/api\/live-classes\/[^/]+\/chat$/.test(url) ||
+      /\/api\/live-classes\/[^/]+\/polls\/active$/.test(url) ||
+      /\/api\/live-classes\/[^/]+\/activity-timer\/active$/.test(url) ||
+      /\/api\/live-classes\/[^/]+\/engagement\/stream$/.test(url) ||
+      /\/api\/admin\/live-classes\/[^/]+\/raised-hands$/.test(url) ||
+      /\/api\/admin\/live-classes\/[^/]+\/polls\/session$/.test(url)
     ) {
       return false;
     }

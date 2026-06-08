@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Platform } from "react-native";
 import { useQueryClient } from "@tanstack/react-query";
-import { getBaseUrl } from "@/lib/query-client";
+import { attachInstallationHeaders, getApiUrl, getBaseUrl } from "@/lib/query-client";
 import { getStoredAuthToken } from "@/lib/auth-storage";
 
 type Options = {
@@ -11,6 +11,13 @@ type Options = {
 };
 
 const MAX_BACKOFF_MS = 30000;
+
+function unwrapAuthPayload(payload: any): any {
+  if (payload?.success === true && payload?.data && typeof payload.data === "object") {
+    return payload.data;
+  }
+  return payload;
+}
 
 /** Web SSE for poll, timer, and hand-raise updates (PostgreSQL NOTIFY). */
 export function useLiveEngagementSse({ liveClassId, enabled = true, isAdmin = false }: Options): boolean {
@@ -61,11 +68,49 @@ export function useLiveEngagementSse({ liveClassId, enabled = true, isAdmin = fa
         es = null;
       }
 
-      const base = getBaseUrl();
       const token = await getStoredAuthToken();
+      if (!token) {
+        setActive(false);
+        if (!closed) {
+          reconnectTimer = setTimeout(() => {
+            backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS);
+            connect();
+          }, backoffMs);
+        }
+        return;
+      }
+      const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+      await attachInstallationHeaders(headers);
+      const tokenRes = await fetch(
+        `${getApiUrl()}/live-classes/${encodeURIComponent(liveClassId)}/engagement/sse-token`,
+        {
+          cache: "no-store",
+          credentials: "include",
+          headers,
+        }
+      );
+      if (!tokenRes.ok) {
+        setActive(false);
+        reconnectTimer = setTimeout(() => {
+          backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS);
+          connect();
+        }, backoffMs);
+        return;
+      }
+      const tokenPayload = unwrapAuthPayload(await tokenRes.json().catch(() => null));
+      const streamToken = String(tokenPayload?.token || "").trim();
+      if (!streamToken) {
+        setActive(false);
+        reconnectTimer = setTimeout(() => {
+          backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS);
+          connect();
+        }, backoffMs);
+        return;
+      }
       const params = new URLSearchParams();
-      if (token) params.set("access_token", token);
+      params.set("sse_token", streamToken);
       const qs = params.toString();
+      const base = getBaseUrl();
       const url = `${base}/api/live-classes/${encodeURIComponent(liveClassId)}/engagement/stream${qs ? `?${qs}` : ""}`;
       es = new EventSource(url, { withCredentials: true } as EventSourceInit);
 

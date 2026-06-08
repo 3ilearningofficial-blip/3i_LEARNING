@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { createHmac, timingSafeEqual } from "crypto";
 import type { Pool, PoolClient } from "pg";
 import { userCanAccessLiveClassContent } from "./live-class-access";
 import { releaseSseListen, tryAcquireSseListen } from "./sse-listen-budget";
@@ -8,6 +9,12 @@ type DbClient = {
 };
 
 type AuthUser = { id: number; role: string } | null;
+type EngagementSseTokenPayload = {
+  userId: number;
+  role: string;
+  liveClassId: string;
+  exp: number;
+};
 
 type RegisterLiveClassPollRoutesDeps = {
   app: Express;
@@ -46,6 +53,47 @@ function nowMs() {
   return Date.now();
 }
 
+function getEngagementSseSecret(): string {
+  return (
+    process.env.SESSION_SECRET ||
+    process.env.OTP_HMAC_SECRET ||
+    "dev-engagement-sse-secret"
+  );
+}
+
+function encodeBase64Url(input: string): string {
+  return Buffer.from(input, "utf8").toString("base64url");
+}
+
+function signEngagementSsePayload(payloadBase64: string): string {
+  return createHmac("sha256", getEngagementSseSecret())
+    .update(payloadBase64)
+    .digest("base64url");
+}
+
+function issueEngagementSseToken(payload: EngagementSseTokenPayload): string {
+  const payloadBase64 = encodeBase64Url(JSON.stringify(payload));
+  return `${payloadBase64}.${signEngagementSsePayload(payloadBase64)}`;
+}
+
+function verifyEngagementSseToken(token: string, liveClassId: string): EngagementSseTokenPayload | null {
+  const [payloadBase64, sig] = token.split(".");
+  if (!payloadBase64 || !sig) return null;
+  const expected = signEngagementSsePayload(payloadBase64);
+  const expectedBuf = Buffer.from(expected);
+  const sigBuf = Buffer.from(sig);
+  if (expectedBuf.length !== sigBuf.length || !timingSafeEqual(expectedBuf, sigBuf)) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(payloadBase64, "base64url").toString("utf8")) as EngagementSseTokenPayload;
+    if (String(payload.liveClassId) !== String(liveClassId)) return null;
+    if (!Number.isFinite(Number(payload.userId)) || !String(payload.role || "").trim()) return null;
+    if (Number(payload.exp) <= nowMs()) return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
 async function loadLiveClass(db: DbClient, id: string) {
   const r = await db.query("SELECT * FROM live_classes WHERE id = $1", [id]);
   return r.rows[0] || null;
@@ -76,6 +124,31 @@ export function registerLiveClassPollRoutes({
   getAuthUser,
 }: RegisterLiveClassPollRoutesDeps): void {
   const listenPoolMax = listenPool.options.max ?? 32;
+  app.get("/api/live-classes/:id/engagement/sse-token", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const liveClassId = String(req.params.id);
+      const lc = await loadLiveClass(db, liveClassId);
+      if (!lc) return res.status(404).json({ message: "Live class not found" });
+      const user = await getAuthUser(req);
+      if (!user) return res.status(401).json({ message: "Login required" });
+      if (!(await userCanAccessLiveClassContent(db, user, lc))) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      const expiresInSeconds = 90;
+      const expiresAt = nowMs() + expiresInSeconds * 1000;
+      const token = issueEngagementSseToken({
+        userId: user.id,
+        role: user.role,
+        liveClassId,
+        exp: expiresAt,
+      });
+      res.json({ token, expiresAt, expiresInSeconds });
+    } catch (err: any) {
+      console.error("[Engagement SSE] token issue error:", err?.message || err);
+      res.status(500).json({ message: "Failed to issue stream token" });
+    }
+  });
+
   app.post("/api/admin/live-classes/:id/polls", requireAdmin, async (req: Request, res: Response) => {
     try {
       const liveClassId = String(req.params.id);
@@ -389,18 +462,32 @@ export function registerLiveClassPollRoutes({
   );
 
   /** SSE: poll / timer / hand-raise changes via PostgreSQL NOTIFY (migration 0019). */
-  // EventSource cannot set headers — promote ?access_token query param to Authorization
-  // so the requireAuth middleware can validate it the same way as Bearer tokens.
+  // EventSource cannot set Authorization headers. Prefer a scoped short-lived
+  // ?sse_token issued above; keep ?access_token as a legacy fallback.
   app.get(
     "/api/live-classes/:id/engagement/stream",
-    (req: Request, _res: Response, next: () => void) => {
+    async (req: Request, res: Response, next: () => void) => {
+      const scopedToken = String(req.query.sse_token || "").trim();
+      if (scopedToken) {
+        const payload = verifyEngagementSseToken(scopedToken, String(req.params.id));
+        if (!payload) {
+          return res.status(401).json({ message: "Stream token expired or invalid" });
+        }
+        const authUser = {
+          id: Number(payload.userId),
+          name: "",
+          role: String(payload.role),
+        };
+        (req as any).user = authUser;
+        (req as any).__auth_user_from_request_cache = authUser;
+        return next();
+      }
       const qToken = String(req.query.access_token || "").trim();
       if (qToken && !req.headers.authorization) {
         (req as any).headers = { ...req.headers, authorization: `Bearer ${qToken}` };
       }
-      next();
+      return requireAuth(req, res, next);
     },
-    requireAuth,
     async (req: Request, res: Response) => {
     const liveClassIdStr = String(req.params.id);
     const hasAccess = await checkEngagementStreamAccess(req, res, db, getAuthUser, liveClassIdStr);

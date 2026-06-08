@@ -12,6 +12,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { apiRequest, authFetch, fetchMediaToken, getApiUrl, getBaseUrl, toHttpsMediaUrl } from "@/lib/query-client";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
+import { useAppTheme } from "@/context/AppThemeContext";
 import { useScreenProtection } from "@/lib/useScreenProtection";
 import { useVideoScreenProtection } from "@/lib/useVideoScreenProtection";
 import { useAuth } from "@/context/AuthContext";
@@ -451,6 +452,7 @@ function WebDirectVideoPlayer({
 
 export default function LectureScreen() {
   useScreenProtection(true);
+  const { colors } = useAppTheme();
   // Apply enhanced video protection only for local video playback
   const { id, courseId, videoUrl: paramVideoUrl, title: paramTitle, isLocal } = useLocalSearchParams<{
     id: string; courseId: string; videoUrl: string; title: string; isLocal?: string;
@@ -1062,11 +1064,11 @@ export default function LectureScreen() {
       </View>
 
       <ScrollView
-        style={styles.infoSection}
+        style={[styles.infoSection, { backgroundColor: colors.background }]}
         contentContainerStyle={[styles.infoContent, { paddingBottom: bottomPadding + 20 }]}
         showsVerticalScrollIndicator={false}
       >
-        <Text style={styles.lectureInfoTitle}>{title || "Lecture"}</Text>
+        <Text style={[styles.lectureInfoTitle, { color: colors.text }]}>{title || "Lecture"}</Text>
 
         <View style={styles.actionRow}>
           {lectureData && (

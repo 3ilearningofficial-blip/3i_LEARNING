@@ -830,6 +830,11 @@ export default function LiveClassScreen() {
     liveClassData?.chat_mode === "private" ? "private" : "public";
   const canStudentChat = !!liveClassData?.is_live && !liveClassData?.is_completed;
   const canSendChat = !!isAdmin || canStudentChat;
+  const [engagementAuthBlocked, setEngagementAuthBlocked] = useState(false);
+
+  useEffect(() => {
+    setEngagementAuthBlocked(false);
+  }, [id, isScreenActive, liveClassData?.is_live]);
 
   const engagementSseActive = useLiveEngagementSse({
     liveClassId: id ? String(id) : undefined,
@@ -839,7 +844,16 @@ export default function LiveClassScreen() {
 
   const { data: raisedHands = [], refetch: refetchHands } = useQuery<HandRaise[]>({
     queryKey: [`/api/admin/live-classes/${id}/raised-hands`],
-    enabled: isAdmin && !!liveClassData?.is_live && isScreenActive,
+    queryFn: async () => {
+      const res = await authFetch(`${getApiUrl()}/admin/live-classes/${encodeURIComponent(String(id))}/raised-hands`);
+      if (res.status === 401) {
+        setEngagementAuthBlocked(true);
+        return [] as HandRaise[];
+      }
+      if (!res.ok) return [] as HandRaise[];
+      return (await res.json()) as HandRaise[];
+    },
+    enabled: isAdmin && !!liveClassData?.is_live && isScreenActive && !engagementAuthBlocked,
     refetchInterval:
       !isScreenActive ? false : engagementSseActive ? 30_000 : 1500,
     staleTime: 0,

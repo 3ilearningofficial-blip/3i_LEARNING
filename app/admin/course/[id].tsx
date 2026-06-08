@@ -14,6 +14,7 @@ import { apiRequest, getApiUrl, authFetch } from "@/lib/query-client";
 import { liveClassesForCourseQueryKey, liveClassesQueryKey } from "@/lib/query-keys";
 import { uploadToR2, getMimeType } from "@/lib/r2-upload";
 import Colors from "@/constants/colors";
+import { useAppTheme } from "@/context/AppThemeContext";
 import { fetch } from "expo/fetch";
 import BulkUploadModal from "@/components/BulkUploadModal";
 import { DEFAULT_LIVE_RECORDING_SECTION } from "@shared/recordingSection";
@@ -199,6 +200,7 @@ function composeLectureSectionPath(sectionTitle: unknown, subfolderTitle: unknow
 }
 
 export default function AdminCourseScreen() {
+  const { colors, isDarkMode } = useAppTheme();
   useEffect(() => {
     if (Platform.OS !== "web" || typeof MutationObserver === "undefined") return;
     const observer = new MutationObserver(() => {
@@ -1023,8 +1025,8 @@ export default function AdminCourseScreen() {
 
   if (!isValidId) {
     return (
-      <View style={styles.container}>
-        <LinearGradient colors={["#0A1628", "#1A2E50"]} style={[styles.header, { paddingTop: topPadding + 8 }]}>
+      <View style={[styles.container, { backgroundColor: colors.background }]}>
+        <LinearGradient colors={isDarkMode ? ["#020617", "#0F172A"] : ["#0A1628", "#1A2E50"]} style={[styles.header, { paddingTop: topPadding + 8 }]}>
           <Pressable style={styles.backBtn} onPress={() => { if (router.canGoBack()) router.back(); else router.replace("/admin" as any); }}>
             <Ionicons name="arrow-back" size={20} color="#fff" />
           </Pressable>
@@ -1053,7 +1055,7 @@ export default function AdminCourseScreen() {
   const effectiveTab = isTestSeries && activeTab !== "enrolled" ? "tests" : activeTab;
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
       {/* Global upload progress overlay */}
       {uploading && (
         <View style={{

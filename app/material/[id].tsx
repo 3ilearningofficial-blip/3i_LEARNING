@@ -13,6 +13,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/context/AuthContext";
 import { getBaseUrl, apiRequest, fetchMediaToken, toHttpsMediaUrl } from "@/lib/query-client";
 import Colors from "@/constants/colors";
+import { useAppTheme } from "@/context/AppThemeContext";
 import { useScreenProtection } from "@/lib/useScreenProtection";
 import { useVideoScreenProtection } from "@/lib/useVideoScreenProtection";
 import { isAndroidWeb } from "@/lib/useAndroidWebGate";
@@ -324,6 +325,7 @@ document.addEventListener('keydown', function(e) {
 
 export default function MaterialViewerScreen() {
   useScreenProtection(true);
+  const { colors } = useAppTheme();
   if (isAndroidWeb()) return <AndroidWebGate />;
   const { id, localUri } = useLocalSearchParams<{ id: string; localUri?: string }>();
   const insets = useSafeAreaInsets();
@@ -503,7 +505,7 @@ export default function MaterialViewerScreen() {
     : null;
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
       {/* For YouTube: fullscreen with floating back button only */}
       {isYouTube ? (
         <View style={{ flex: 1, backgroundColor: "#000", overflow: "hidden" as const, justifyContent: "center" }}>

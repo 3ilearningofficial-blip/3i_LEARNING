@@ -5,10 +5,12 @@ import { Ionicons } from "@expo/vector-icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
 import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
+import { useAppTheme } from "@/context/AppThemeContext";
 import type { DeviceDeniedUserRow } from "./user-types";
 
 export default function AdminDeviceLocksScreen() {
   const qc = useQueryClient();
+  const { colors } = useAppTheme();
   const { data: rows = [], isLoading, refetch } = useQuery<DeviceDeniedUserRow[]>({
     queryKey: ["/api/admin/device-denied-users", "screen"],
     queryFn: async () => {
@@ -33,15 +35,15 @@ export default function AdminDeviceLocksScreen() {
   });
 
   return (
-    <View style={{ flex: 1, backgroundColor: Colors.light.background }}>
-      <View style={{ paddingTop: Platform.OS === "web" ? 18 : 16, paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: Colors.light.border, backgroundColor: "#fff" }}>
+    <View style={{ flex: 1, backgroundColor: colors.background }}>
+      <View style={{ paddingTop: Platform.OS === "web" ? 18 : 16, paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: colors.border, backgroundColor: colors.card }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
           <Pressable onPress={() => router.back()} style={{ width: 34, height: 34, borderRadius: 10, backgroundColor: "#EEF2FF", alignItems: "center", justifyContent: "center" }}>
             <Ionicons name="arrow-back" size={18} color={Colors.light.primary} />
           </Pressable>
           <View style={{ flex: 1 }}>
-            <Text style={{ fontSize: 18, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Blocked Sign-in Attempts</Text>
-            <Text style={{ fontSize: 12, fontFamily: "Inter_400Regular", color: Colors.light.textMuted }}>
+            <Text style={{ fontSize: 18, fontFamily: "Inter_700Bold", color: colors.text }}>Blocked Sign-in Attempts</Text>
+            <Text style={{ fontSize: 12, fontFamily: "Inter_400Regular", color: colors.textMuted }}>
               Students locked due to device/browser mismatch
             </Text>
           </View>
@@ -52,18 +54,18 @@ export default function AdminDeviceLocksScreen() {
         {isLoading ? (
           <ActivityIndicator size="large" color={Colors.light.primary} />
         ) : rows.length === 0 ? (
-          <View style={{ backgroundColor: "#fff", borderRadius: 12, borderWidth: 1, borderColor: Colors.light.border, padding: 14 }}>
-            <Text style={{ fontSize: 14, fontFamily: "Inter_500Medium", color: Colors.light.textMuted }}>No blocked students.</Text>
+          <View style={{ backgroundColor: colors.card, borderRadius: 12, borderWidth: 1, borderColor: colors.border, padding: 14 }}>
+            <Text style={{ fontSize: 14, fontFamily: "Inter_500Medium", color: colors.textMuted }}>No blocked students.</Text>
           </View>
         ) : (
           rows.map((row) => (
-            <View key={row.user_id} style={{ backgroundColor: "#fff", borderRadius: 12, borderWidth: 1, borderColor: Colors.light.border, padding: 12 }}>
-              <Text style={{ fontSize: 15, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>
+            <View key={row.user_id} style={{ backgroundColor: colors.card, borderRadius: 12, borderWidth: 1, borderColor: colors.border, padding: 12 }}>
+              <Text style={{ fontSize: 15, fontFamily: "Inter_600SemiBold", color: colors.text }}>
                 {row.user_name || `User #${row.user_id}`}
               </Text>
-              {!!row.phone && <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>{row.phone}</Text>}
-              {!!row.email && <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>{row.email}</Text>}
-              <Text style={{ fontSize: 11, color: Colors.light.textMuted, marginTop: 4, fontFamily: "Inter_400Regular" }}>
+              {!!row.phone && <Text style={{ fontSize: 12, color: colors.textMuted, fontFamily: "Inter_400Regular" }}>{row.phone}</Text>}
+              {!!row.email && <Text style={{ fontSize: 12, color: colors.textMuted, fontFamily: "Inter_400Regular" }}>{row.email}</Text>}
+              <Text style={{ fontSize: 11, color: colors.textMuted, marginTop: 4, fontFamily: "Inter_400Regular" }}>
                 Last: {row.latest_at ? new Date(Number(row.latest_at)).toLocaleString() : ""} · {row.latest_platform || "?"} · {row.latest_reason || ""}
                 {Number(row.event_count) > 1 ? ` · ${row.event_count} attempts` : ""}
               </Text>

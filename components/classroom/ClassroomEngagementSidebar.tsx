@@ -13,6 +13,7 @@ type Props = {
   liveClassId: string;
   chatMode: ChatMode;
   showViewerCount?: boolean;
+  engagementEnabled?: boolean;
   parentViewers?: {
     viewers: { user_id: number; user_name: string }[];
     count: number;
@@ -23,6 +24,7 @@ export default function ClassroomEngagementSidebar({
   liveClassId,
   chatMode,
   showViewerCount = true,
+  engagementEnabled = true,
   parentViewers,
 }: Props) {
   const [activeTab, setActiveTab] = useState<SideTab>("chat");
@@ -78,7 +80,7 @@ export default function ClassroomEngagementSidebar({
           <LiveChatPanel liveClassId={liveClassId} chatMode={chatMode} isAdmin />
         ) : activeTab === "poll" ? (
           <View style={styles.tabPanelFill}>
-            <ClassroomEngagementPanel liveClassId={liveClassId} />
+            <ClassroomEngagementPanel liveClassId={liveClassId} enabled={engagementEnabled} />
           </View>
         ) : (
           <LiveStudentsPanel

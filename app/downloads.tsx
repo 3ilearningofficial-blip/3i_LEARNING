@@ -10,6 +10,7 @@ import { useQuery } from "@tanstack/react-query";
 import { authFetch, getApiUrl, prepareAuthorizedFetchHeaders } from "@/lib/query-client";
 import { myDownloadsQueryKey } from "@/lib/query-keys";
 import Colors from "@/constants/colors";
+import { useAppTheme } from "@/context/AppThemeContext";
 import { useDownloadManager } from "@/lib/useDownloadManager";
 import { useAuth } from "@/context/AuthContext";
 import { useWebDownloadJobs } from "@/context/WebDownloadJobsContext";
@@ -31,6 +32,7 @@ type DownloadItem = {
 export default function DownloadsScreen() {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
+  const { colors } = useAppTheme();
   const { startWebDownload, forgetSavedLocally } = useWebDownloadJobs();
   const [activeTab, setActiveTab] = useState<"lectures" | "pdfs">("lectures");
   type DownloadsView =
@@ -407,7 +409,7 @@ export default function DownloadsScreen() {
   }, [activeItems]);
 
   return (
-    <View style={[styles.container, { paddingTop: Platform.OS === "web" ? 16 : insets.top }]}>
+    <View style={[styles.container, { paddingTop: Platform.OS === "web" ? 16 : insets.top, backgroundColor: colors.background }]}>
       {/* Header */}
       <View style={styles.header}>
         <Pressable

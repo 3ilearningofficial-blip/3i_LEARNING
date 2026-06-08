@@ -12,6 +12,7 @@ import {
   WELCOME_LOGO_DISPLAY_ADMIN_HINT,
 } from "@/lib/welcome-image-sizes";
 import Colors from "@/constants/colors";
+import { useAppTheme } from "@/context/AppThemeContext";
 
 function validateWelcomeJsonForSave(settings: Record<string, string>): string | null {
   void settings;
@@ -20,6 +21,7 @@ function validateWelcomeJsonForSave(settings: Record<string, string>): string | 
 
 export function WelcomeSettingsTab() {
   const qc = useQueryClient();
+  const { colors } = useAppTheme();
   const [settings, setSettings] = React.useState<Record<string, string>>({});
   const [saving, setSaving] = React.useState(false);
   const [loaded, setLoaded] = React.useState(false);
@@ -175,15 +177,15 @@ export function WelcomeSettingsTab() {
 
   if (!loaded) return <ActivityIndicator color={Colors.light.primary} style={{ marginTop: 40 }} />;
 
-  const labelStyle = { fontSize: 13, fontFamily: "Inter_600SemiBold" as const, color: Colors.light.text, marginBottom: 4 };
+  const labelStyle = { fontSize: 13, fontFamily: "Inter_600SemiBold" as const, color: colors.text, marginBottom: 4 };
   const inputStyle = {
-    backgroundColor: Colors.light.background, borderRadius: 10, borderWidth: 1, borderColor: Colors.light.border,
-    paddingHorizontal: 12, paddingVertical: 10, fontSize: 14, fontFamily: "Inter_400Regular" as const, color: Colors.light.text,
+    backgroundColor: colors.input, borderRadius: 10, borderWidth: 1, borderColor: colors.border,
+    paddingHorizontal: 12, paddingVertical: 10, fontSize: 14, fontFamily: "Inter_400Regular" as const, color: colors.text,
     ...(Platform.OS === "web" ? { outlineStyle: "none" as any } : {}),
   };
   const toggleRow = (label: string, key: string) => (
-    <Pressable onPress={() => toggle(key)} style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: "#F3F4F6" }}>
-      <Text style={{ fontSize: 14, fontFamily: "Inter_500Medium", color: Colors.light.text }}>{label}</Text>
+    <Pressable onPress={() => toggle(key)} style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.border }}>
+      <Text style={{ fontSize: 14, fontFamily: "Inter_500Medium", color: colors.text }}>{label}</Text>
       <View style={{ width: 44, height: 26, borderRadius: 13, backgroundColor: val(key) === "true" ? "#22C55E" : "#D1D5DB", justifyContent: "center", paddingHorizontal: 2 }}>
         <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: "#fff", alignSelf: val(key) === "true" ? "flex-end" : "flex-start" }} />
       </View>
@@ -230,9 +232,9 @@ export function WelcomeSettingsTab() {
 
   return (
     <View style={{ gap: 16, padding: 4 }}>
-      <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: "#E5E7EB" }}>
-        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Website homepage — header and hero</Text>
-        <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", lineHeight: 17 }}>
+      <View style={{ backgroundColor: colors.card, borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: colors.border }}>
+        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: colors.text }}>Website homepage — header and hero</Text>
+        <Text style={{ fontSize: 12, color: colors.textMuted, fontFamily: "Inter_400Regular", lineHeight: 17 }}>
           These fields affect the new web welcome page: logo, brand name, support contact, and hero headline.
         </Text>
         {imageUrlRow("Logo image (optional — overrides default asset)", "welcome_logo_url", WELCOME_LOGO_DISPLAY_ADMIN_HINT)}
@@ -273,8 +275,8 @@ export function WelcomeSettingsTab() {
         </View>
       </View>
 
-      <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 4, borderWidth: 1, borderColor: "#E5E7EB" }}>
-        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text, marginBottom: 6 }}>Website homepage — App download section</Text>
+      <View style={{ backgroundColor: colors.card, borderRadius: 16, padding: 18, gap: 4, borderWidth: 1, borderColor: colors.border }}>
+        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: colors.text, marginBottom: 6 }}>Website homepage — App download section</Text>
         {toggleRow("Get the App (browser web only — not shown in Android/iOS app)", "welcome_show_get_app")}
         {toggleRow("Google Play card", "welcome_show_google_play")}
         {toggleRow("iOS / App Store card", "welcome_show_ios")}
@@ -282,8 +284,8 @@ export function WelcomeSettingsTab() {
         {toggleRow("Install / PWA card", "welcome_show_web_download")}
       </View>
 
-      <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: "#E5E7EB" }}>
-        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Website homepage — Store links and copy</Text>
+      <View style={{ backgroundColor: colors.card, borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: colors.border }}>
+        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: colors.text }}>Website homepage — Store links and copy</Text>
         <View style={{ gap: 4 }}>
           <Text style={labelStyle}>Google Play URL</Text>
           <TextInput style={inputStyle} value={val("welcome_google_play_url")} onChangeText={v => set("welcome_google_play_url", v)} autoCapitalize="none" />
@@ -310,8 +312,8 @@ export function WelcomeSettingsTab() {
         </View>
       </View>
 
-      <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: "#E5E7EB" }}>
-        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Website homepage — Footer</Text>
+      <View style={{ backgroundColor: colors.card, borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: colors.border }}>
+        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: colors.text }}>Website homepage — Footer</Text>
         <TextInput style={inputStyle} value={val("welcome_footer")} onChangeText={v => set("welcome_footer", v)} />
       </View>
 

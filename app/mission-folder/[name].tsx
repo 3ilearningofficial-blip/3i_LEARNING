@@ -11,6 +11,7 @@ import { useQuery } from "@tanstack/react-query";
 import { authFetch, getApiUrl } from "@/lib/query-client";
 import Colors from "@/constants/colors";
 import { useScreenProtection } from "@/lib/useScreenProtection";
+import { useAppTheme } from "@/context/AppThemeContext";
 
 interface MissionQuestion {
   id: number;
@@ -53,6 +54,7 @@ function normalizeMission(raw: any): DailyMission {
 export default function MissionFolderScreen() {
   useScreenProtection(true);
   const { name, type } = useLocalSearchParams<{ name: string; type?: string }>();
+  const { colors, isDarkMode } = useAppTheme();
   const folderName = decodeURIComponent(name || "");
   const missionType = type && type !== "undefined" ? type : "all";
   const insets = useSafeAreaInsets();
@@ -93,8 +95,8 @@ export default function MissionFolderScreen() {
   };
 
   return (
-    <View style={styles.container}>
-      <LinearGradient colors={["#0A1628", "#1A2E50"]} style={[styles.header, { paddingTop: topPadding + 8 }]}>
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      <LinearGradient colors={isDarkMode ? ["#020617", "#0F172A"] : ["#0A1628", "#1A2E50"]} style={[styles.header, { paddingTop: topPadding + 8 }]}>
         <View style={styles.headerRow}>
           <Pressable
             style={styles.backBtn}
@@ -121,9 +123,9 @@ export default function MissionFolderScreen() {
         <ActivityIndicator size="large" color={Colors.light.primary} style={{ marginTop: 40 }} />
       ) : missions.length === 0 ? (
         <View style={styles.empty}>
-          <Ionicons name="flame-outline" size={48} color={Colors.light.textMuted} />
-          <Text style={styles.emptyTitle}>No missions yet</Text>
-          <Text style={styles.emptySub}>Missions added to this folder will appear here</Text>
+          <Ionicons name="flame-outline" size={48} color={colors.textMuted} />
+          <Text style={[styles.emptyTitle, { color: colors.text }]}>No missions yet</Text>
+          <Text style={[styles.emptySub, { color: colors.textMuted }]}>Missions added to this folder will appear here</Text>
         </View>
       ) : (
         <ScrollView contentContainerStyle={{ padding: 16, gap: 12, paddingBottom: insets.bottom + 32 }}>
@@ -136,32 +138,32 @@ export default function MissionFolderScreen() {
             return (
               <Pressable
                 key={item.id}
-                style={[styles.card, isCompleted && styles.cardDone]}
+                style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }, isCompleted && styles.cardDone]}
                 onPress={() => openMission(item.id)}
               >
                 <View style={styles.cardTop}>
                   <View style={[styles.typeBadge, { backgroundColor: typeColor + "20" }]}>
                     <Text style={[styles.typeBadgeText, { color: typeColor }]}>{typeLabel}</Text>
                   </View>
-                  <Text style={styles.cardDate}>{formatDate(item.mission_date)}</Text>
+                  <Text style={[styles.cardDate, { color: colors.textMuted }]}>{formatDate(item.mission_date)}</Text>
                 </View>
-                <Text style={styles.cardTitle}>{item.title}</Text>
+                <Text style={[styles.cardTitle, { color: colors.text }]}>{item.title}</Text>
                 {showCourseOnCards && item.course_title ? (
                   <Text style={styles.cardCourse} numberOfLines={1}>{item.course_title}</Text>
                 ) : null}
                 {item.description ? (
-                  <Text style={styles.cardDesc} numberOfLines={2}>{item.description}</Text>
+                  <Text style={[styles.cardDesc, { color: colors.textSecondary }]} numberOfLines={2}>{item.description}</Text>
                 ) : null}
                 <View style={styles.cardMeta}>
-                  <Text style={styles.cardMetaText}>{qCount} Qs</Text>
-                  {totalMarks > 0 ? <Text style={styles.cardMetaText}> · {totalMarks} marks</Text> : null}
+                  <Text style={[styles.cardMetaText, { color: colors.textMuted }]}>{qCount} Qs</Text>
+                  {totalMarks > 0 ? <Text style={[styles.cardMetaText, { color: colors.textMuted }]}> · {totalMarks} marks</Text> : null}
                   {isCompleted ? (
                     <Text style={[styles.cardMetaText, { color: "#15803D", marginLeft: "auto" as any }]}>
                       Attempted · {item.userScore ?? 0}/{qCount}
                     </Text>
                   ) : null}
                 </View>
-                <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} style={styles.cardChevron} />
+                <Ionicons name="chevron-forward" size={18} color={colors.textMuted} style={styles.cardChevron} />
               </Pressable>
             );
           })}

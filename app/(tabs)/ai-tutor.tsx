@@ -10,6 +10,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import { apiRequest, getApiUrl, authFetch } from "@/lib/query-client";
 import Colors from "@/constants/colors";
+import { useAppTheme } from "@/context/AppThemeContext";
 
 interface Doubt {
   id: number;
@@ -31,6 +32,7 @@ const QUICK_QUESTIONS = [
 export default function AITutorScreen() {
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
+  const { colors, isDarkMode } = useAppTheme();
   const [question, setQuestion] = useState("");
   const [topic, setTopic] = useState("General");
   const [isExpanded, setIsExpanded] = useState(false);
@@ -89,11 +91,11 @@ export default function AITutorScreen() {
 
   return (
     <KeyboardAvoidingView
-      style={styles.container}
+      style={[styles.container, { backgroundColor: colors.background }]}
       behavior={Platform.OS === "ios" ? "padding" : "height"}
       keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
     >
-      <LinearGradient colors={["#0A1628", "#1A2E50"]} style={[styles.header, { paddingTop: topPadding + 20 }]}>
+      <LinearGradient colors={isDarkMode ? ["#020617", "#0F172A"] : ["#0A1628", "#1A2E50"]} style={[styles.header, { paddingTop: topPadding + 20 }]}>
         <View style={styles.headerContent}>
           <View>
             <Text style={styles.headerTitle}>AI Tutor</Text>
@@ -105,16 +107,20 @@ export default function AITutorScreen() {
         </View>
       </LinearGradient>
 
-      <View style={styles.inputSection}>
+      <View style={[styles.inputSection, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
         <View style={styles.topicRow}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.topicContent}>
             {TOPICS.map((t) => (
               <Pressable
                 key={t}
-                style={[styles.topicChip, topic === t && styles.topicChipActive]}
+                style={[
+                  styles.topicChip,
+                  { backgroundColor: colors.input, borderColor: colors.border },
+                  topic === t && styles.topicChipActive,
+                ]}
                 onPress={() => setTopic(t)}
               >
-                <Text style={[styles.topicText, topic === t && styles.topicTextActive]}>{t}</Text>
+                <Text style={[styles.topicText, { color: colors.textSecondary }, topic === t && styles.topicTextActive]}>{t}</Text>
               </Pressable>
             ))}
           </ScrollView>
@@ -122,9 +128,9 @@ export default function AITutorScreen() {
 
         <View style={styles.inputContainer}>
           <TextInput
-            style={styles.textInput}
+            style={[styles.textInput, { backgroundColor: colors.input, borderColor: colors.border, color: colors.text }]}
             placeholder="Ask your maths doubt..."
-            placeholderTextColor={Colors.light.textMuted}
+            placeholderTextColor={colors.textMuted}
             value={question}
             onChangeText={setQuestion}
             multiline
@@ -146,7 +152,7 @@ export default function AITutorScreen() {
 
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.quickQContent}>
           {QUICK_QUESTIONS.map((q) => (
-            <Pressable key={q} style={styles.quickQChip} onPress={() => handleQuickQuestion(q)}>
+            <Pressable key={q} style={[styles.quickQChip, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]} onPress={() => handleQuickQuestion(q)}>
               <Ionicons name="flash" size={12} color={Colors.light.primary} />
               <Text style={styles.quickQText}>{q}</Text>
             </Pressable>
@@ -196,13 +202,13 @@ export default function AITutorScreen() {
         {isLoading ? (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color={Colors.light.primary} />
-            <Text style={styles.loadingText}>Loading your doubts...</Text>
+            <Text style={[styles.loadingText, { color: colors.textMuted }]}>Loading your doubts...</Text>
           </View>
         ) : doubts.length === 0 ? (
           <View style={styles.emptyState}>
-            <MaterialCommunityIcons name="robot-outline" size={64} color={Colors.light.textMuted} />
-            <Text style={styles.emptyTitle}>Ask your first doubt</Text>
-            <Text style={styles.emptySubtitle}>Get instant AI-powered answers to all your maths questions. No question is too small!</Text>
+            <MaterialCommunityIcons name="robot-outline" size={64} color={colors.textMuted} />
+            <Text style={[styles.emptyTitle, { color: colors.text }]}>Ask your first doubt</Text>
+            <Text style={[styles.emptySubtitle, { color: colors.textMuted }]}>Get instant AI-powered answers to all your maths questions. No question is too small!</Text>
           </View>
         ) : (
           doubts.map((doubt) => (
@@ -211,14 +217,14 @@ export default function AITutorScreen() {
                 <View style={styles.questionIcon}>
                   <Ionicons name="person" size={14} color="#fff" />
                 </View>
-                <View style={styles.questionContent}>
+                <View style={[styles.questionContent, { backgroundColor: colors.surfaceAlt }]}>
                   <View style={styles.questionTopRow}>
                     <Text style={styles.questionLabel}>You</Text>
                     <View style={styles.topicBadge}>
                       <Text style={styles.topicBadgeText}>{doubt.topic}</Text>
                     </View>
                   </View>
-                  <Text style={styles.questionText}>{doubt.question}</Text>
+                  <Text style={[styles.questionText, { color: colors.text }]}>{doubt.question}</Text>
                 </View>
               </View>
 
@@ -226,9 +232,9 @@ export default function AITutorScreen() {
                 <View style={styles.answerIcon}>
                   <MaterialCommunityIcons name="robot" size={14} color="#fff" />
                 </View>
-                <View style={styles.answerContent}>
+                <View style={[styles.answerContent, { backgroundColor: isDarkMode ? "#1E293B" : "#FFF8F5", borderColor: isDarkMode ? colors.border : "#FDDCD4" }]}>
                   <Text style={styles.answerLabel}>AI Tutor</Text>
-                  <Text style={styles.answerText}>{doubt.answer}</Text>
+                  <Text style={[styles.answerText, { color: colors.text }]}>{doubt.answer}</Text>
                 </View>
               </View>
             </View>

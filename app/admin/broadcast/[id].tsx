@@ -200,10 +200,15 @@ export default function BroadcastPage() {
   // Recording mode: admin is making a private recording, not a live broadcast.
   // Students never see this session. Chat/poll/students panels are hidden.
   const isRecordingMode = !!liveClass?.is_recording_mode;
+  const [engagementAuthBlocked, setEngagementAuthBlocked] = useState(false);
+
+  useEffect(() => {
+    setEngagementAuthBlocked(false);
+  }, [isLive, isRecordingMode, liveClassId]);
 
   const engagementSseActive = useLiveEngagementSse({
     liveClassId: liveClassId ? String(liveClassId) : undefined,
-    enabled: isLive && tabVisible,
+    enabled: isLive && !isRecordingMode && tabVisible,
     isAdmin: true,
   });
 
@@ -211,7 +216,16 @@ export default function BroadcastPage() {
 
   const { data: raisedHandsRaw = [] } = useQuery<HandRaiseRow[]>({
     queryKey: [`/api/admin/live-classes/${liveClassId}/raised-hands`],
-    enabled: !!liveClassId && isLive && tabVisible,
+    queryFn: async () => {
+      const res = await authFetch(`${getApiUrl()}/admin/live-classes/${encodeURIComponent(String(liveClassId))}/raised-hands`);
+      if (res.status === 401) {
+        setEngagementAuthBlocked(true);
+        return [] as HandRaiseRow[];
+      }
+      if (!res.ok) return [] as HandRaiseRow[];
+      return (await res.json()) as HandRaiseRow[];
+    },
+    enabled: !!liveClassId && isLive && !isRecordingMode && tabVisible && !engagementAuthBlocked,
     refetchInterval: engagementSseActive ? 30_000 : 500,
     staleTime: 0,
   });
@@ -223,7 +237,7 @@ export default function BroadcastPage() {
     raisedAt: h.raised_at,
   }));
 
-  useHandRaiseChime(raisedHands, isLive && tabVisible);
+  useHandRaiseChime(raisedHands, isLive && !isRecordingMode && tabVisible);
 
   const resolveHandMutation = useMutation({
     mutationFn: (userId: number) =>
@@ -701,6 +715,7 @@ export default function BroadcastPage() {
               liveClassId={String(liveClassId)}
               isAdmin
               sessionActive
+              enabled={!isRecordingMode}
             />
           ) : null}
         </View>
@@ -786,7 +801,7 @@ export default function BroadcastPage() {
                   />
                 ) : activeTab === "poll" ? (
                   <View style={styles.tabPanelFill}>
-                    <ClassroomEngagementPanel liveClassId={String(liveClassId)} />
+                    <ClassroomEngagementPanel liveClassId={String(liveClassId)} enabled={!isRecordingMode} />
                   </View>
                 ) : (
                   <LiveStudentsPanel

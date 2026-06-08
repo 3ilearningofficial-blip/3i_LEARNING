@@ -8,9 +8,11 @@ import { Ionicons } from "@expo/vector-icons";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getApiUrl, authFetch } from "@/lib/query-client";
 import Colors from "@/constants/colors";
+import { useAppTheme } from "@/context/AppThemeContext";
 
 export function AnalyticsTab() {
   const qc = useQueryClient();
+  const { colors, isDarkMode } = useAppTheme();
   const [period, setPeriod] = React.useState("30days");
   const [customStart, setCustomStart] = React.useState("");
   const [customEnd, setCustomEnd] = React.useState("");
@@ -184,8 +186,8 @@ export function AnalyticsTab() {
     <View style={styles.section}>
       {/* View More Modal */}
       <Modal visible={!!viewMoreModal} animationType="slide" onRequestClose={() => setViewMoreModal(null)}>
-        <View style={{ flex: 1, backgroundColor: Colors.light.background }}>
-          <LinearGradient colors={["#0A1628", "#1A2E50"]} style={{ paddingTop: 60, paddingHorizontal: 16, paddingBottom: 14, flexDirection: "row", alignItems: "center", gap: 12 }}>
+        <View style={{ flex: 1, backgroundColor: colors.background }}>
+          <LinearGradient colors={isDarkMode ? ["#020617", "#0F172A"] : ["#0A1628", "#1A2E50"]} style={{ paddingTop: 60, paddingHorizontal: 16, paddingBottom: 14, flexDirection: "row", alignItems: "center", gap: 12 }}>
             <Pressable style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" }} onPress={() => setViewMoreModal(null)}>
               <Ionicons name="arrow-back" size={20} color="#fff" />
             </Pressable>
@@ -193,7 +195,7 @@ export function AnalyticsTab() {
             <Text style={{ fontSize: 13, color: "rgba(255,255,255,0.6)", fontFamily: "Inter_400Regular" }}>{viewMoreModal?.data.length} records</Text>
           </LinearGradient>
           <ScrollView contentContainerStyle={{ padding: 16 }}>
-            <View style={{ backgroundColor: "#fff", borderRadius: 16, borderWidth: 1, borderColor: Colors.light.border, overflow: "hidden" }}>
+            <View style={{ backgroundColor: colors.card, borderRadius: 16, borderWidth: 1, borderColor: colors.border, overflow: "hidden" }}>
               {viewMoreModal?.type === "transactions" && viewMoreModal.data.map((p, idx) => renderTransactionRow(p, idx, viewMoreModal.data.length))}
               {viewMoreModal?.type === "failed" && viewMoreModal.data.map((p, idx) => renderFailedRow(p, idx, viewMoreModal.data.length))}
               {viewMoreModal?.type === "abandoned" && viewMoreModal.data.map((p, idx) => renderAbandonedRow(p, idx, viewMoreModal.data.length))}
@@ -233,8 +235,8 @@ export function AnalyticsTab() {
       </View>
 
       {/* Filter */}
-      <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 16, marginBottom: 20, borderWidth: 1, borderColor: Colors.light.border }}>
-        <Text style={{ fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text, marginBottom: 12 }}>Filter by Period</Text>
+      <View style={{ backgroundColor: colors.card, borderRadius: 16, padding: 16, marginBottom: 20, borderWidth: 1, borderColor: colors.border }}>
+        <Text style={{ fontSize: 14, fontFamily: "Inter_600SemiBold", color: colors.text, marginBottom: 12 }}>Filter by Period</Text>
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
           {PERIODS.map((p) => (
             <Pressable key={p.key} onPress={() => { setPeriod(p.key); setShowCustom(p.key === "custom"); }}
@@ -272,7 +274,7 @@ export function AnalyticsTab() {
               { label: "Enrollments", value: String(a.totalEnrollments || 0), icon: "people-outline" as const, color: Colors.light.primary, bg: "#EEF2FF" },
               { label: "Buy Now (Abandoned)", value: String((a.abandonedCheckouts || []).length), icon: "cart-outline" as const, color: "#F59E0B", bg: "#FEF3C7" },
             ].map((stat) => (
-              <View key={stat.label} style={{ flex: 1, minWidth: 150, backgroundColor: "#fff", borderRadius: 16, padding: 18, gap: 8, borderWidth: 1, borderColor: Colors.light.border }}>
+              <View key={stat.label} style={{ flex: 1, minWidth: 150, backgroundColor: colors.card, borderRadius: 16, padding: 18, gap: 8, borderWidth: 1, borderColor: colors.border }}>
                 <View style={{ width: 42, height: 42, borderRadius: 12, backgroundColor: stat.bg, alignItems: "center", justifyContent: "center" }}>
                   <Ionicons name={stat.icon} size={20} color={stat.color} />
                 </View>

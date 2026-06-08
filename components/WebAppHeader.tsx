@@ -11,6 +11,7 @@ import {
   View,
 } from "react-native";
 import Colors from "@/constants/colors";
+import { useAppTheme } from "@/context/AppThemeContext";
 
 const WEB_NAV_ITEMS = [
   { label: "Home", href: "/home", activePaths: ["/home"] },
@@ -23,6 +24,7 @@ export function WebAppHeader() {
   const pathname = usePathname();
   const { width } = useWindowDimensions();
   const [menuOpen, setMenuOpen] = React.useState(false);
+  const { colors, isDarkMode } = useAppTheme();
 
   React.useEffect(() => {
     setMenuOpen(false);
@@ -50,11 +52,14 @@ export function WebAppHeader() {
         onPress={() => navigateTo(item.href)}
         style={({ pressed }) => [
           compact ? styles.mobileNavItem : styles.navItem,
-          active && (compact ? styles.mobileNavItemActive : styles.navItemActive),
+          active && { backgroundColor: isDarkMode ? colors.surfaceAlt : "#EEF4FF" },
           pressed && styles.pressed,
         ]}
       >
-        <Text style={[compact ? styles.mobileNavText : styles.navText, active && styles.navTextActive]}>
+        <Text style={[
+          compact ? styles.mobileNavText : styles.navText,
+          { color: active ? colors.primary : colors.textSecondary },
+        ]}>
           {item.label}
         </Text>
       </Pressable>
@@ -62,17 +67,24 @@ export function WebAppHeader() {
   };
 
   return (
-    <View style={styles.header}>
+    <View style={[styles.header, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
       <View style={styles.leftGroup}>
-        <Pressable onPress={navigateToWelcome} style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}>
-          <Ionicons name="arrow-back" size={18} color={Colors.light.primary} />
+        <Pressable
+          onPress={navigateToWelcome}
+          style={({ pressed }) => [
+            styles.backButton,
+            { backgroundColor: isDarkMode ? colors.surfaceAlt : "#EEF4FF", borderColor: isDarkMode ? colors.border : "#BFDBFE" },
+            pressed && styles.pressed,
+          ]}
+        >
+          <Ionicons name="arrow-back" size={18} color={colors.primary} />
           {!isPhoneWeb ? <Text style={styles.backText}>Welcome</Text> : null}
         </Pressable>
         <Pressable onPress={() => navigateTo("/home")} style={styles.brand}>
           <View style={styles.logoMark}>
             <Text style={styles.logoText}>3i</Text>
           </View>
-          <Text style={styles.brandText}>3i Learning</Text>
+          <Text style={[styles.brandText, { color: colors.text }]}>3i Learning</Text>
         </Pressable>
       </View>
 
@@ -82,16 +94,20 @@ export function WebAppHeader() {
             accessibilityRole="button"
             accessibilityLabel="Open navigation menu"
             onPress={() => setMenuOpen(true)}
-            style={({ pressed }) => [styles.menuButton, pressed && styles.pressed]}
+            style={({ pressed }) => [
+              styles.menuButton,
+              { backgroundColor: colors.card, borderColor: colors.border },
+              pressed && styles.pressed,
+            ]}
           >
-            <Ionicons name="menu" size={26} color={Colors.light.text} />
+            <Ionicons name="menu" size={26} color={colors.text} />
           </Pressable>
           <Modal transparent visible={menuOpen} animationType="fade" onRequestClose={() => setMenuOpen(false)}>
             <View style={styles.modalLayer}>
               <Pressable style={StyleSheet.absoluteFill} onPress={() => setMenuOpen(false)} />
-              <View style={styles.mobileMenu}>
+              <View style={[styles.mobileMenu, { backgroundColor: colors.card, borderColor: colors.border }]}>
                 <Pressable onPress={navigateToWelcome} style={styles.mobileNavItem}>
-                  <Text style={styles.mobileNavText}>Back to Welcome</Text>
+                  <Text style={[styles.mobileNavText, { color: colors.textSecondary }]}>Back to Welcome</Text>
                 </Pressable>
                 {WEB_NAV_ITEMS.map((item) => renderNavItem(item, true))}
               </View>

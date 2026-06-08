@@ -15,6 +15,7 @@ import { liveClassesQueryKey } from "@/lib/query-keys";
 import { uploadToR2, getMimeType } from "@/lib/r2-upload";
 import Colors from "@/constants/colors";
 import { useAuth } from "@/context/AuthContext";
+import { useAppTheme } from "@/context/AppThemeContext";
 import { fetch } from "expo/fetch";
 import BulkUploadModal from "@/components/BulkUploadModal";
 import SortableList from "@/components/admin/SortableList";
@@ -126,6 +127,7 @@ export default function AdminDashboard() {
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
   const { user, isAdmin, isLoading: authLoading, refreshUser, logout } = useAuth();
+  const { colors, isDarkMode } = useAppTheme();
   const [authRetryDone, setAuthRetryDone] = useState(false);
 
   useEffect(() => {
@@ -1567,7 +1569,7 @@ export default function AdminDashboard() {
     const qCount = Array.isArray(m.questions) ? m.questions.length : 0;
     const totalMarks = Array.isArray(m.questions) ? m.questions.reduce((s: number, q: any) => s + (q.marks || 0), 0) : 0;
     return (
-      <Pressable key={m.id} style={[styles.adminCard, { flexDirection: "row", alignItems: "center" }]} onPress={async () => {
+      <Pressable key={m.id} style={[styles.adminCard, { flexDirection: "row", alignItems: "center", backgroundColor: colors.card }]} onPress={async () => {
         setSelectedMission(m);
         setMissionAttemptsLoading(true);
         try {
@@ -1590,7 +1592,7 @@ export default function AdminDashboard() {
       }}>
         <View style={styles.adminCardContent}>
           <View style={styles.adminCardRow}>
-            <Text style={styles.adminCardTitle} numberOfLines={2}>{m.title}</Text>
+            <Text style={[styles.adminCardTitle, { color: colors.text }]} numberOfLines={2}>{m.title}</Text>
             <View style={{ flexDirection: "row", gap: 4, alignItems: "center" }}>
               {m.folder_name ? (
                 <View style={{ paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, backgroundColor: "#D1FAE5" }}>
@@ -1605,10 +1607,10 @@ export default function AdminDashboard() {
             </View>
           </View>
           <View style={styles.adminCardMeta}>
-            <Text style={styles.adminCardMetaText}>{qCount} questions</Text>
-            {totalMarks > 0 && <><Text style={styles.adminCardMetaText}>|</Text><Text style={styles.adminCardMetaText}>{totalMarks} marks</Text></>}
-            <Text style={styles.adminCardMetaText}>|</Text>
-            <Text style={styles.adminCardMetaText}>{m.mission_date}</Text>
+            <Text style={[styles.adminCardMetaText, { color: colors.textMuted }]}>{qCount} questions</Text>
+            {totalMarks > 0 && <><Text style={[styles.adminCardMetaText, { color: colors.textMuted }]}>|</Text><Text style={[styles.adminCardMetaText, { color: colors.textMuted }]}>{totalMarks} marks</Text></>}
+            <Text style={[styles.adminCardMetaText, { color: colors.textMuted }]}>|</Text>
+            <Text style={[styles.adminCardMetaText, { color: colors.textMuted }]}>{m.mission_date}</Text>
           </View>
         </View>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
@@ -1638,7 +1640,7 @@ export default function AdminDashboard() {
   };
 
   const tabContent = (
-    <ScrollView style={styles.content} contentContainerStyle={[styles.contentInner, { paddingBottom: bottomPadding + 80 }]}>
+    <ScrollView style={[styles.content, { backgroundColor: colors.background }]} contentContainerStyle={[styles.contentInner, { paddingBottom: bottomPadding + 80 }]}>
       {/* Folder Detail View — replaces tab content when a folder is opened */}
       {openFolderView ? (() => {
         const { folder, type } = openFolderView;
@@ -2467,7 +2469,7 @@ export default function AdminDashboard() {
                 const renderUserCard = (u: UserRecord) => {
                   const isOnline = u.last_active_at && (now - Number(u.last_active_at)) < onlineThreshold;
                   return (
-                    <View key={u.id} style={styles.userCard}>
+                    <View key={u.id} style={[styles.userCard, { backgroundColor: colors.card }]}>
                       <View style={{ position: "relative" }}>
                         <View style={[styles.userAvatar, { backgroundColor: u.role === "admin" ? Colors.light.accent : Colors.light.secondary }]}>
                           <Ionicons name={u.role === "admin" ? "shield" : "person"} size={18} color={u.role === "admin" ? "#fff" : Colors.light.primary} />
@@ -2478,11 +2480,11 @@ export default function AdminDashboard() {
                       </View>
                       <View style={styles.userInfo}>
                         <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                          <Text style={[styles.userName, u.is_blocked && { color: Colors.light.textMuted, textDecorationLine: "line-through" }]}>{u.name}</Text>
+                          <Text style={[styles.userName, { color: colors.text }, u.is_blocked && { color: colors.textMuted, textDecorationLine: "line-through" }]}>{u.name}</Text>
                           {isOnline && <View style={{ backgroundColor: "#DCFCE7", borderRadius: 6, paddingHorizontal: 6, paddingVertical: 1 }}><Text style={{ fontSize: 9, fontFamily: "Inter_700Bold", color: "#16A34A" }}>ONLINE</Text></View>}
                         </View>
-                        {u.phone && <Text style={styles.userContact}>+91 {u.phone}</Text>}
-                        {u.email && <Text style={styles.userContact}>{u.email}</Text>}
+                        {u.phone && <Text style={[styles.userContact, { color: colors.textMuted }]}>+91 {u.phone}</Text>}
+                        {u.email && <Text style={[styles.userContact, { color: colors.textMuted }]}>{u.email}</Text>}
                         {u.is_blocked && (
                           <View style={{ backgroundColor: "#FEE2E2", paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, alignSelf: "flex-start", marginTop: 2 }}>
                             <Text style={{ fontSize: 10, fontFamily: "Inter_700Bold", color: "#DC2626" }}>BLOCKED</Text>
@@ -2497,7 +2499,7 @@ export default function AdminDashboard() {
                           style={styles.menuBtn}
                           onPress={() => setUserActionUser(u)}
                         >
-                          <Ionicons name="ellipsis-vertical" size={18} color={Colors.light.textMuted} />
+                          <Ionicons name="ellipsis-vertical" size={18} color={colors.textMuted} />
                         </Pressable>
                       )}
                     </View>
@@ -2508,12 +2510,12 @@ export default function AdminDashboard() {
                   <>
                     {/* Header row: All Users count + Inactive count */}
                     <View style={{ flexDirection: "row", gap: 12, marginBottom: 16 }}>
-                      <View style={[styles.statCard, { flex: 1 }]}>
-                        <Text style={styles.statLabel}>All Users</Text>
-                        <Text style={styles.statValue}>{users.length}</Text>
+                      <View style={[styles.statCard, { flex: 1, backgroundColor: colors.card }]}>
+                        <Text style={[styles.statLabel, { color: colors.textMuted }]}>All Users</Text>
+                        <Text style={[styles.statValue, { color: colors.text }]}>{users.length}</Text>
                       </View>
-                      <View style={[styles.statCard, { flex: 1 }]}>
-                        <Text style={styles.statLabel}>Inactive (180d+)</Text>
+                      <View style={[styles.statCard, { flex: 1, backgroundColor: colors.card }]}>
+                        <Text style={[styles.statLabel, { color: colors.textMuted }]}>Inactive (180d+)</Text>
                         <Text style={[styles.statValue, { color: "#9CA3AF" }]}>{inactiveUsers.length}</Text>
                       </View>
                     </View>
@@ -3659,7 +3661,7 @@ export default function AdminDashboard() {
   );
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
       {/* Upload progress overlay — shown when any file is uploading */}
       {lessonUploading && (
         <View style={{
@@ -3682,15 +3684,15 @@ export default function AdminDashboard() {
       {isWideSidebar ? (
         <View style={{ flex: 1, flexDirection: "row" }}>
           {/* Sidebar */}
-          <View style={{ width: 260, backgroundColor: "#fff", paddingTop: topPadding + 20, paddingBottom: 24, flexDirection: "column", borderRightWidth: 1, borderRightColor: "#E5E7EB" }}>
+          <View style={{ width: 260, backgroundColor: colors.card, paddingTop: topPadding + 20, paddingBottom: 24, flexDirection: "column", borderRightWidth: 1, borderRightColor: colors.border }}>
             <View style={{ paddingHorizontal: 24, marginBottom: 32 }}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
                 <View style={{ width: 44, height: 44, borderRadius: 12, backgroundColor: Colors.light.primary, alignItems: "center", justifyContent: "center" }}>
                   <Ionicons name="school" size={24} color="#fff" />
                 </View>
                 <View>
-                  <Text style={{ fontSize: 17, fontFamily: "Inter_700Bold", color: "#111827" }}>3i Learning</Text>
-                  <Text style={{ fontSize: 13, color: "#6B7280", fontFamily: "Inter_400Regular" }}>Admin Panel</Text>
+                  <Text style={{ fontSize: 17, fontFamily: "Inter_700Bold", color: colors.text }}>3i Learning</Text>
+                  <Text style={{ fontSize: 13, color: colors.textMuted, fontFamily: "Inter_400Regular" }}>Admin Panel</Text>
                 </View>
               </View>
             </View>
@@ -3699,45 +3701,45 @@ export default function AdminDashboard() {
                 const isActive = activeTab === tab.key;
                 return (
                   <Pressable key={tab.key} onPress={() => { setActiveTab(tab.key); setOpenFolderView(null); }}
-                    style={{ flexDirection: "row", alignItems: "center", gap: 14, paddingHorizontal: 14, paddingVertical: 13, marginHorizontal: 10, borderRadius: 12, marginBottom: 4, backgroundColor: isActive ? "#fff" : "transparent", borderLeftWidth: isActive ? 4 : 0, borderLeftColor: Colors.light.primary, shadowColor: isActive ? "#000" : "transparent", shadowOffset: { width: 0, height: 1 }, shadowOpacity: isActive ? 0.08 : 0, shadowRadius: 3, elevation: isActive ? 2 : 0 }}>
-                    <View style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: isActive ? Colors.light.primary + "18" : "#F3F4F6", alignItems: "center", justifyContent: "center" }}>
-                      <Ionicons name={tab.icon} size={20} color={isActive ? Colors.light.primary : "#6B7280"} />
+                    style={{ flexDirection: "row", alignItems: "center", gap: 14, paddingHorizontal: 14, paddingVertical: 13, marginHorizontal: 10, borderRadius: 12, marginBottom: 4, backgroundColor: isActive ? colors.surfaceAlt : "transparent", borderLeftWidth: isActive ? 4 : 0, borderLeftColor: Colors.light.primary, shadowColor: isActive ? colors.shadow : "transparent", shadowOffset: { width: 0, height: 1 }, shadowOpacity: isActive ? 0.08 : 0, shadowRadius: 3, elevation: isActive ? 2 : 0 }}>
+                    <View style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: isActive ? Colors.light.primary + "18" : colors.surfaceAlt, alignItems: "center", justifyContent: "center" }}>
+                      <Ionicons name={tab.icon} size={20} color={isActive ? Colors.light.primary : colors.textMuted} />
                     </View>
-                    <Text style={{ fontSize: 16, fontFamily: isActive ? "Inter_700Bold" : "Inter_500Medium", color: isActive ? Colors.light.primary : "#374151" }}>{tab.label}</Text>
+                    <Text style={{ fontSize: 16, fontFamily: isActive ? "Inter_700Bold" : "Inter_500Medium", color: isActive ? Colors.light.primary : colors.textSecondary }}>{tab.label}</Text>
                   </Pressable>
                 );
               })}
             </ScrollView>
-            <View style={{ paddingHorizontal: 18, paddingTop: 18, borderTopWidth: 1, borderTopColor: "#E5E7EB" }}>
+            <View style={{ paddingHorizontal: 18, paddingTop: 18, borderTopWidth: 1, borderTopColor: colors.border }}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 14 }}>
                 <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: Colors.light.primary, alignItems: "center", justifyContent: "center" }}>
                   <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: "#fff" }}>{(user?.name || "A")[0].toUpperCase()}</Text>
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={{ fontSize: 15, fontFamily: "Inter_600SemiBold", color: "#111827" }} numberOfLines={1}>{user?.name}</Text>
-                  <Text style={{ fontSize: 12, color: "#6B7280", fontFamily: "Inter_400Regular" }}>Admin</Text>
+                  <Text style={{ fontSize: 15, fontFamily: "Inter_600SemiBold", color: colors.text }} numberOfLines={1}>{user?.name}</Text>
+                  <Text style={{ fontSize: 12, color: colors.textMuted, fontFamily: "Inter_400Regular" }}>Admin</Text>
                 </View>
               </View>
               <Pressable onPress={() => { if (router.canGoBack()) router.back(); else router.replace("/(tabs)"); }}
-                style={{ flexDirection: "row", alignItems: "center", gap: 10, padding: 12, borderRadius: 10, backgroundColor: "#F3F4F6" }}>
-                <Ionicons name="arrow-back" size={18} color="#6B7280" />
-                <Text style={{ fontSize: 15, fontFamily: "Inter_500Medium", color: "#374151" }}>Back to App</Text>
+                style={{ flexDirection: "row", alignItems: "center", gap: 10, padding: 12, borderRadius: 10, backgroundColor: colors.surfaceAlt }}>
+                <Ionicons name="arrow-back" size={18} color={colors.textMuted} />
+                <Text style={{ fontSize: 15, fontFamily: "Inter_500Medium", color: colors.textSecondary }}>Back to App</Text>
               </Pressable>
             </View>
           </View>
           {/* Main content */}
-          <View style={{ flex: 1, backgroundColor: "#F4F6FA" }}>
+          <View style={{ flex: 1, backgroundColor: colors.background }}>
             {/* Section header */}
-            <View style={{ backgroundColor: "#EEF2FF", paddingHorizontal: 32, paddingVertical: 20, flexDirection: "row", alignItems: "center", justifyContent: "space-between", borderBottomWidth: 1, borderBottomColor: "#C7D2FE" }}>
+            <View style={{ backgroundColor: isDarkMode ? colors.surfaceAlt : "#EEF2FF", paddingHorizontal: 32, paddingVertical: 20, flexDirection: "row", alignItems: "center", justifyContent: "space-between", borderBottomWidth: 1, borderBottomColor: colors.border }}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 14 }}>
                 <View style={{ width: 46, height: 46, borderRadius: 12, backgroundColor: Colors.light.primary + "18", alignItems: "center", justifyContent: "center" }}>
                   <Ionicons name={ADMIN_TABS.find(t => t.key === activeTab)?.icon || "grid"} size={24} color={Colors.light.primary} />
                 </View>
                 <View>
-                  <Text style={{ fontSize: 24, fontFamily: "Inter_700Bold", color: "#111827" }}>
+                  <Text style={{ fontSize: 24, fontFamily: "Inter_700Bold", color: colors.text }}>
                     {ADMIN_TABS.find(t => t.key === activeTab)?.label || "Dashboard"}
                   </Text>
-                  <Text style={{ fontSize: 14, color: "#6B7280", fontFamily: "Inter_400Regular" }}>
+                  <Text style={{ fontSize: 14, color: colors.textMuted, fontFamily: "Inter_400Regular" }}>
                     Hi {user?.name?.split(" ")[0]}, welcome back 👋
                   </Text>
                 </View>
@@ -3752,7 +3754,7 @@ export default function AdminDashboard() {
         </View>
       ) : (
         <>
-          <LinearGradient colors={["#0A1628", "#1A2E50"]} style={[styles.header, { paddingTop: topPadding + 8 }]}>
+          <LinearGradient colors={isDarkMode ? ["#020617", "#0F172A"] : ["#0A1628", "#1A2E50"]} style={[styles.header, { paddingTop: topPadding + 8 }]}>
             <View style={styles.headerRow}>
               {Platform.OS !== "web" && (
                 <Pressable style={styles.backBtn} onPress={() => { if (router.canGoBack()) router.back(); else router.replace("/(tabs)"); }}>
@@ -3783,22 +3785,22 @@ export default function AdminDashboard() {
       )}
       <Modal visible={!!userActionUser} animationType="slide" transparent onRequestClose={() => setUserActionUser(null)}>
         <Pressable style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)" }} onPress={() => setUserActionUser(null)}>
-          <View style={{ position: "absolute", bottom: 0, left: 0, right: 0, backgroundColor: "#fff", borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, gap: 12 }}>
-            <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>{userActionUser?.name}</Text>
-            <Text style={{ fontSize: 13, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", marginTop: -8 }}>
+          <View style={{ position: "absolute", bottom: 0, left: 0, right: 0, backgroundColor: colors.card, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, gap: 12 }}>
+            <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: colors.text }}>{userActionUser?.name}</Text>
+            <Text style={{ fontSize: 13, color: colors.textMuted, fontFamily: "Inter_400Regular", marginTop: -8 }}>
               {userActionUser?.phone ? `+91 ${userActionUser.phone}` : userActionUser?.email}
             </Text>
 
             {/* Block/Unblock */}
             <Pressable
-              style={{ flexDirection: "row", alignItems: "center", gap: 12, padding: 14, backgroundColor: Colors.light.secondary, borderRadius: 12 }}
+              style={{ flexDirection: "row", alignItems: "center", gap: 12, padding: 14, backgroundColor: colors.surfaceAlt, borderRadius: 12 }}
               onPress={() => {
                 if (userActionUser) blockUserMutation.mutate({ userId: userActionUser.id, blocked: !userActionUser.is_blocked });
                 setUserActionUser(null);
               }}
             >
               <Ionicons name={userActionUser?.is_blocked ? "lock-open-outline" : "ban-outline"} size={22} color={userActionUser?.is_blocked ? "#22C55E" : "#F59E0B"} />
-              <Text style={{ fontSize: 15, fontFamily: "Inter_500Medium", color: Colors.light.text }}>
+              <Text style={{ fontSize: 15, fontFamily: "Inter_500Medium", color: colors.text }}>
                 {userActionUser?.is_blocked ? "Unblock User" : "Block User"}
               </Text>
             </Pressable>
@@ -3851,9 +3853,9 @@ export default function AdminDashboard() {
       {/* Course Access Modal */}
       <Modal visible={showCourseAccess} animationType="slide" transparent onRequestClose={() => setShowCourseAccess(false)}>
         <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end" }}>
-          <View style={{ backgroundColor: "#fff", borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, maxHeight: "70%", display: "flex", flexDirection: "column" }}>
+          <View style={{ backgroundColor: colors.card, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, maxHeight: "70%", display: "flex", flexDirection: "column" }}>
             <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-              <Text style={{ fontSize: 18, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Grant Course Access</Text>
+              <Text style={{ fontSize: 18, fontFamily: "Inter_700Bold", color: colors.text }}>Grant Course Access</Text>
               <Pressable onPress={() => setShowCourseAccess(false)}>
                 <Ionicons name="close" size={24} color={Colors.light.text} />
               </Pressable>
@@ -4343,9 +4345,9 @@ export default function AdminDashboard() {
       {/* Live Class Action Sheet (3-dot menu) */}
       <Modal visible={!!liveActionSheet} animationType="fade" transparent onRequestClose={() => setLiveActionSheet(null)}>
         <Pressable style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end" }} onPress={() => setLiveActionSheet(null)}>
-          <View style={{ backgroundColor: "#fff", borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, paddingBottom: bottomPadding + 20, gap: 10 }}>
+          <View style={{ backgroundColor: colors.card, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, paddingBottom: bottomPadding + 20, gap: 10 }}>
             <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-              <Text style={{ fontSize: 17, fontFamily: "Inter_700Bold", color: Colors.light.text }} numberOfLines={1}>{liveActionSheet?.title}</Text>
+              <Text style={{ fontSize: 17, fontFamily: "Inter_700Bold", color: colors.text }} numberOfLines={1}>{liveActionSheet?.title}</Text>
               <Pressable onPress={() => setLiveActionSheet(null)}><Ionicons name="close" size={24} color={Colors.light.text} /></Pressable>
             </View>
             <Pressable style={{ flexDirection: "row", alignItems: "center", gap: 12, padding: 14, borderRadius: 12, backgroundColor: "#EEF2FF" }}
@@ -6303,7 +6305,7 @@ const styles = StyleSheet.create({
   sectionTitle: { fontSize: 18, fontFamily: "Inter_700Bold", color: Colors.light.text },
   addBtn: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: Colors.light.primary, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8 },
   addBtnText: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: "#fff" },
-  adminCard: { backgroundColor: "#fff", borderRadius: 14, padding: 14, flexDirection: "row", alignItems: "center", gap: 12 },
+  adminCard: { backgroundColor: Colors.light.card, borderRadius: 14, padding: 14, flexDirection: "row", alignItems: "center", gap: 12 },
   adminCardContent: { flex: 1, gap: 4 },
   adminCardRow: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
   adminCardTitle: { flex: 1, fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
@@ -6314,7 +6316,7 @@ const styles = StyleSheet.create({
   editBtn: { width: 36, height: 36, borderRadius: 10, backgroundColor: Colors.light.secondary, alignItems: "center", justifyContent: "center" },
   deleteBtn: { width: 36, height: 36, borderRadius: 10, backgroundColor: "#FEE2E2", alignItems: "center", justifyContent: "center" },
   menuBtn: { width: 36, height: 36, borderRadius: 10, backgroundColor: Colors.light.secondary, alignItems: "center", justifyContent: "center" },
-  userCard: { backgroundColor: "#fff", borderRadius: 14, padding: 14, flexDirection: "row", alignItems: "center", gap: 12 },
+  userCard: { backgroundColor: Colors.light.card, borderRadius: 14, padding: 14, flexDirection: "row", alignItems: "center", gap: 12 },
   userAvatar: { width: 40, height: 40, borderRadius: 12, alignItems: "center", justifyContent: "center" },
   userInfo: { flex: 1 },
   userName: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text },

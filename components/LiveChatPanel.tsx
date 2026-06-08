@@ -5,7 +5,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/query-client";
+import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
 import { useAuth } from "@/context/AuthContext";
 import { filterChatMessages, ChatMessage } from "@/lib/chat-utils";
 import { useHandRaiseChime } from "@/lib/useHandRaiseChime";
@@ -77,12 +77,27 @@ export default function LiveChatPanel({
   const qc = useQueryClient();
   const [chatMsg, setChatMsg] = useState("");
   const [handRaised, setHandRaised] = useState(false);
+  const [authBlocked, setAuthBlocked] = useState(false);
   const chatListRef = useRef<FlatList>(null);
   const lastMsgTimeRef = useRef<number>(0);
+
+  useEffect(() => {
+    setAuthBlocked(false);
+  }, [liveClassId]);
 
   // Poll chat messages every 3 seconds
   const { data: rawMessages = [], refetch: refetchChat } = useQuery<ChatMessage[]>({
     queryKey: [`/api/live-classes/${liveClassId}/chat`],
+    queryFn: async () => {
+      const res = await authFetch(`${getApiUrl()}/live-classes/${encodeURIComponent(liveClassId)}/chat`);
+      if (res.status === 401) {
+        setAuthBlocked(true);
+        return [] as ChatMessage[];
+      }
+      if (!res.ok) return [] as ChatMessage[];
+      return (await res.json()) as ChatMessage[];
+    },
+    enabled: !authBlocked,
     refetchInterval: 3000,
   });
 
@@ -97,7 +112,11 @@ export default function LiveChatPanel({
   const { data: raisedHandsLocal = [], refetch: refetchHands } = useQuery<HandRaise[]>({
     queryKey: [`/api/admin/live-classes/${liveClassId}/raised-hands`],
     queryFn: async () => {
-      const res = await apiRequest("GET", `/api/admin/live-classes/${liveClassId}/raised-hands`, undefined);
+      const res = await authFetch(`${getApiUrl()}/admin/live-classes/${encodeURIComponent(liveClassId)}/raised-hands`);
+      if (res.status === 401) {
+        setAuthBlocked(true);
+        return [] as HandRaise[];
+      }
       if (!res.ok) return [];
       const rows = (await res.json()) as Record<string, unknown>[];
       return rows.map((h) => ({
@@ -107,7 +126,7 @@ export default function LiveChatPanel({
         raisedAt: Number(h.raisedAt ?? h.raised_at ?? 0),
       }));
     },
-    enabled: isAdmin && raisedHandsProp === undefined,
+    enabled: isAdmin && raisedHandsProp === undefined && !authBlocked,
     refetchInterval: 500,
   });
   const raisedHands = raisedHandsProp ?? raisedHandsLocal;

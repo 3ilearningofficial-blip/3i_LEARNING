@@ -9,6 +9,7 @@ import Colors from "@/constants/colors";
 import { authFetch, getApiUrl } from "@/lib/query-client";
 import { supportMessagesQueryKey } from "@/lib/query-keys";
 import { useAuth } from "@/context/AuthContext";
+import { useAppTheme } from "@/context/AppThemeContext";
 
 function ChatTabIcon({ color, focused }: { color: string; focused: boolean }) {
   const { user } = useAuth();
@@ -54,6 +55,7 @@ export default function TabLayout() {
   const isWeb = Platform.OS === "web";
   const isIOS = Platform.OS === "ios";
   const insets = useSafeAreaInsets();
+  const { colors, isDarkMode } = useAppTheme();
   const androidBaseTabHeight = 60;
   const tabBarBottomInset = isWeb ? 0 : Math.max(insets.bottom, Platform.OS === "android" ? 10 : 6);
 
@@ -61,16 +63,16 @@ export default function TabLayout() {
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: Colors.light.primary,
-        tabBarInactiveTintColor: Colors.light.tabIconDefault,
+        tabBarActiveTintColor: colors.primary,
+        tabBarInactiveTintColor: colors.tabIconDefault,
         tabBarLabelStyle: { fontFamily: "Inter_500Medium", fontSize: 11, marginBottom: 2 },
         tabBarStyle: isWeb
           ? { display: "none" }
           : {
               position: "absolute",
-              backgroundColor: isIOS ? "transparent" : "#ffffff",
+              backgroundColor: isIOS ? "transparent" : colors.card,
               borderTopWidth: 0,
-              borderTopColor: Colors.light.border,
+              borderTopColor: colors.border,
               elevation: 0,
               paddingBottom: tabBarBottomInset,
               paddingTop: 4,
@@ -78,9 +80,9 @@ export default function TabLayout() {
             },
         tabBarBackground: () =>
           isIOS ? (
-            <BlurView intensity={90} tint="light" style={StyleSheet.absoluteFill} />
+            <BlurView intensity={90} tint={isDarkMode ? "dark" : "light"} style={StyleSheet.absoluteFill} />
           ) : (
-            <View style={[StyleSheet.absoluteFill, { backgroundColor: "#fff", borderTopWidth: 1, borderTopColor: Colors.light.border }]} />
+            <View style={[StyleSheet.absoluteFill, { backgroundColor: colors.card, borderTopWidth: 1, borderTopColor: colors.border }]} />
           ),
       }}
     >

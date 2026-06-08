@@ -10,6 +10,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
+import { useAppTheme } from "@/context/AppThemeContext";
 import { getApiUrl, authFetch, apiRequest, getBaseUrl } from "@/lib/query-client";
 import { useAuth } from "@/context/AuthContext";
 import { WebView } from "react-native-webview";
@@ -17,6 +18,7 @@ import { WebView } from "react-native-webview";
 export default function TestFolderDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
+  const { colors } = useAppTheme();
   const { user } = useAuth();
   const qc = useQueryClient();
   const [enrolling, setEnrolling] = React.useState(false);
@@ -190,7 +192,7 @@ setTimeout(function(){var rzp=new Razorpay(options);rzp.on("payment.failed",func
   const topPad = Platform.OS === "web" ? 16 : insets.top;
 
   if (isLoading) return (
-    <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: Colors.light.background }}>
+    <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.background }}>
       <ActivityIndicator size="large" color={Colors.light.primary} />
     </View>
   );
@@ -199,7 +201,7 @@ setTimeout(function(){var rzp=new Razorpay(options);rzp.on("payment.failed",func
     ? Math.round((1 - parseFloat(folder.price) / parseFloat(folder.original_price)) * 100) : 0;
 
   return (
-    <View style={{ flex: 1, backgroundColor: Colors.light.background }}>
+    <View style={{ flex: 1, backgroundColor: colors.background }}>
       {/* Header */}
       <LinearGradient colors={["#1E1B4B", "#4C1D95"]} style={{ paddingTop: topPad + 12, paddingBottom: 20, paddingHorizontal: 20, gap: 12 }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
@@ -241,7 +243,7 @@ setTimeout(function(){var rzp=new Razorpay(options);rzp.on("payment.failed",func
           const attempt = attempts[test.id];
           const locked = !isPurchased;
           return (
-            <Pressable key={test.id} style={{ backgroundColor: "#fff", borderRadius: 14, overflow: "hidden", flexDirection: "row", borderWidth: 1, borderColor: "#E5E7EB", opacity: locked ? 0.7 : 1 }}
+            <Pressable key={test.id} style={{ backgroundColor: colors.card, borderRadius: 14, overflow: "hidden", flexDirection: "row", borderWidth: 1, borderColor: colors.border, opacity: locked ? 0.7 : 1 }}
               onPress={() => handleStartTest(test)}>
               <View style={{ width: 5, backgroundColor: attempt ? "#22C55E" : locked ? "#9CA3AF" : Colors.light.primary }} />
               <View style={{ flex: 1, padding: 14, gap: 6 }}>
@@ -276,7 +278,7 @@ setTimeout(function(){var rzp=new Razorpay(options);rzp.on("payment.failed",func
 
       {/* Bottom CTA */}
       {!isPurchased && (
-        <View style={{ position: "absolute", bottom: 0, left: 0, right: 0, backgroundColor: "#fff", borderTopWidth: 1, borderTopColor: "#E5E7EB", paddingHorizontal: 16, paddingTop: 12, paddingBottom: insets.bottom + 12 }}>
+        <View style={{ position: "absolute", bottom: 0, left: 0, right: 0, backgroundColor: colors.card, borderTopWidth: 1, borderTopColor: colors.border, paddingHorizontal: 16, paddingTop: 12, paddingBottom: insets.bottom + 12 }}>
           {folder.is_free ? (
             <Pressable onPress={handleEnroll} disabled={enrolling} style={{ backgroundColor: "#22C55E", borderRadius: 14, paddingVertical: 16, alignItems: "center", opacity: enrolling ? 0.6 : 1 }}>
               {enrolling ? <ActivityIndicator color="#fff" /> : <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: "#fff" }}>Enroll for Free</Text>}

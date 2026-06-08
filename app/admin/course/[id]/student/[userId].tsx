@@ -13,6 +13,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useQuery } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
+import { useAppTheme } from "@/context/AppThemeContext";
 import { getApiUrl, authFetch } from "@/lib/query-client";
 
 type StudentRow = {
@@ -75,6 +76,7 @@ type ReportTab = "lecturesLive" | "tests";
 export default function AdminEnrollmentStudentDetailScreen() {
   const { id: courseId, userId } = useLocalSearchParams<{ id: string; userId: string }>();
   const insets = useSafeAreaInsets();
+  const { colors } = useAppTheme();
   const [reportTab, setReportTab] = useState<ReportTab>("lecturesLive");
 
   const { data, isLoading, error } = useQuery({
@@ -259,7 +261,7 @@ export default function AdminEnrollmentStudentDetailScreen() {
   );
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top + 8 }]}>
+    <View style={[styles.container, { paddingTop: insets.top + 8, backgroundColor: colors.background }]}>
       <View style={styles.topBar}>
         <Pressable style={styles.backBtn} onPress={() => router.back()} hitSlop={10}>
           <Ionicons name="arrow-back" size={22} color={Colors.light.text} />

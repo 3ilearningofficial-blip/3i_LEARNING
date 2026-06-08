@@ -15,6 +15,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { authFetch, getApiUrl, getStoredToken, queryClient } from "@/lib/query-client";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { WebDownloadJobsProvider } from "@/context/WebDownloadJobsContext";
+import { AppThemeProvider, useAppTheme } from "@/context/AppThemeContext";
 import { WebDownloadHud } from "@/components/WebDownloadHud";
 import { WebAppHeader } from "@/components/WebAppHeader";
 import { StatusBar } from "expo-status-bar";
@@ -325,6 +326,11 @@ function RootLayoutNav() {
   );
 }
 
+function ThemedStatusBar() {
+  const { isDarkMode } = useAppTheme();
+  return <StatusBar style={isDarkMode ? "light" : "dark"} />;
+}
+
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
     Inter_400Regular,
@@ -362,15 +368,17 @@ export default function RootLayout() {
       <QueryClientProvider client={queryClient}>
         <GestureHandlerRootView style={{ flex: 1 }}>
           <KeyboardProvider>
-            <AuthProvider>
-              <DownloadManagerProvider>
-                <WebDownloadJobsProvider>
-                  <StatusBar style="light" />
-                  <RootLayoutNav />
-                  <WebDownloadHud />
-                </WebDownloadJobsProvider>
-              </DownloadManagerProvider>
-            </AuthProvider>
+            <AppThemeProvider>
+              <AuthProvider>
+                <DownloadManagerProvider>
+                  <WebDownloadJobsProvider>
+                    <ThemedStatusBar />
+                    <RootLayoutNav />
+                    <WebDownloadHud />
+                  </WebDownloadJobsProvider>
+                </DownloadManagerProvider>
+              </AuthProvider>
+            </AppThemeProvider>
           </KeyboardProvider>
         </GestureHandlerRootView>
       </QueryClientProvider>

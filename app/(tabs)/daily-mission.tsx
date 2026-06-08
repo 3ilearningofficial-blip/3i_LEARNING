@@ -10,6 +10,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import { apiRequest, getApiUrl, authFetch } from "@/lib/query-client";
 import Colors from "@/constants/colors";
+import { useAppTheme } from "@/context/AppThemeContext";
 import { useScreenProtection } from "@/lib/useScreenProtection";
 import { isAndroidWeb } from "@/lib/useAndroidWebGate";
 import AndroidWebGate from "@/components/AndroidWebGate";
@@ -167,6 +168,7 @@ type Screen = "list" | "start" | "quiz" | "result" | "review";
 
 export default function DailyMissionScreen() {
   useScreenProtection(true);
+  const { colors, isDarkMode } = useAppTheme();
   if (isAndroidWeb()) return <AndroidWebGate />;
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
@@ -533,8 +535,8 @@ export default function DailyMissionScreen() {
     const isCorrect = userAns === q.correct;
     const qTime = questionTimes[q.id] || 0;
     return (
-      <View style={styles.container}>
-        <LinearGradient colors={["#0A1628", "#1A2E50"]} style={[styles.quizHeader, { paddingTop: topPadding + 8 }]}>
+      <View style={[styles.container, { backgroundColor: colors.background }]}>
+        <LinearGradient colors={isDarkMode ? ["#020617", "#0F172A"] : ["#0A1628", "#1A2E50"]} style={[styles.quizHeader, { paddingTop: topPadding + 8 }]}>
           <View style={styles.quizHeaderTop}>
             <Pressable onPress={() => setScreen("result")} hitSlop={10}>
               <Ionicons name="arrow-back" size={22} color="#fff" />
@@ -659,7 +661,7 @@ export default function DailyMissionScreen() {
       return ans === q.correct ? s + (q.marks || 0) : s;
     }, 0) : 0;
     return (
-      <ScrollView style={styles.container} contentContainerStyle={[styles.resultContent, { paddingTop: topPadding + 20, paddingBottom: bottomPadding + 100 }]}>
+      <ScrollView style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={[styles.resultContent, { paddingTop: topPadding + 20, paddingBottom: bottomPadding + 100 }]}>
         <Pressable onPress={resetMission} style={styles.backRow}>
           <Ionicons name="arrow-back" size={20} color={Colors.light.primary} />
           <Text style={styles.backText}>Back to Missions</Text>
@@ -763,8 +765,8 @@ export default function DailyMissionScreen() {
     const OPTIONS = ["A", "B", "C", "D"];
     const totalMarks = questions.reduce((s, qq) => s + (qq.marks || 0), 0);
     return (
-      <View style={styles.container}>
-        <LinearGradient colors={["#0A1628", "#1A2E50"]} style={[styles.quizHeader, { paddingTop: topPadding + 8 }]}>
+      <View style={[styles.container, { backgroundColor: colors.background }]}>
+        <LinearGradient colors={isDarkMode ? ["#020617", "#0F172A"] : ["#0A1628", "#1A2E50"]} style={[styles.quizHeader, { paddingTop: topPadding + 8 }]}>
           <View style={styles.quizHeaderTop}>
             <Pressable onPress={() => {
               if (Platform.OS === "web") {
@@ -875,7 +877,7 @@ export default function DailyMissionScreen() {
     const typeLabel = activeMission.mission_type === "free_practice" ? "Free Practice" : "Daily Drill";
     const typeColor = activeMission.mission_type === "free_practice" ? "#22C55E" : "#F59E0B";
     return (
-      <ScrollView style={styles.container} contentContainerStyle={[styles.startContent, { paddingTop: topPadding + 20, paddingBottom: bottomPadding + 100 }]}>
+      <ScrollView style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={[styles.startContent, { paddingTop: topPadding + 20, paddingBottom: bottomPadding + 100 }]}>
         <Pressable onPress={resetMission} style={styles.backRow}>
           <Ionicons name="arrow-back" size={20} color={Colors.light.primary} />
           <Text style={styles.backText}>Back to Missions</Text>
@@ -957,7 +959,7 @@ export default function DailyMissionScreen() {
     return (
       <Pressable
         key={item.id}
-        style={[styles.missionListCard, isLocked && styles.missionLocked, isCompleted && styles.missionDone]}
+        style={[styles.missionListCard, { backgroundColor: colors.card, borderColor: colors.border }, isLocked && styles.missionLocked, isCompleted && styles.missionDone]}
         onPress={() => startMission(item)}
       >
         {isCompleted &&
@@ -987,32 +989,32 @@ export default function DailyMissionScreen() {
             <Text style={[styles.typeBadgeText, { color: typeColor }]}>{typeLabel}</Text>
           </View>
           {isLocked && (
-            <Ionicons name="lock-closed" size={16} color={Colors.light.textMuted} style={{ marginLeft: "auto" as any }} />
+            <Ionicons name="lock-closed" size={16} color={colors.textMuted} style={{ marginLeft: "auto" as any }} />
           )}
-          <Text style={styles.missionDate}>{formatDate(item.mission_date)}</Text>
+          <Text style={[styles.missionDate, { color: colors.textMuted }]}>{formatDate(item.mission_date)}</Text>
         </View>
-        <Text style={styles.missionListTitle}>{item.title}</Text>
+        <Text style={[styles.missionListTitle, { color: colors.text }]}>{item.title}</Text>
         {item.description ? (
-          <Text style={styles.missionListDesc} numberOfLines={2}>
+          <Text style={[styles.missionListDesc, { color: colors.textMuted }]} numberOfLines={2}>
             {item.description}
           </Text>
         ) : null}
         {!isCompleted && (
           <View style={styles.missionListFooter}>
             <View style={styles.missionListStat}>
-              <Ionicons name="help-circle-outline" size={13} color={Colors.light.textMuted} />
-              <Text style={styles.missionListStatText}>{qCount} Qs</Text>
+              <Ionicons name="help-circle-outline" size={13} color={colors.textMuted} />
+              <Text style={[styles.missionListStatText, { color: colors.textMuted }]}>{qCount} Qs</Text>
             </View>
             {totalMarks > 0 && (
               <View style={styles.missionListStat}>
                 <Ionicons name="star-outline" size={13} color="#F59E0B" />
-                <Text style={styles.missionListStatText}>{totalMarks} marks</Text>
+                <Text style={[styles.missionListStatText, { color: colors.textMuted }]}>{totalMarks} marks</Text>
               </View>
             )}
             {totalTimeSecs > 0 && (
               <View style={styles.missionListStat}>
-                <Ionicons name="time-outline" size={13} color={Colors.light.textMuted} />
-                <Text style={styles.missionListStatText}>{Math.ceil(totalTimeSecs / 60)} min</Text>
+                <Ionicons name="time-outline" size={13} color={colors.textMuted} />
+                <Text style={[styles.missionListStatText, { color: colors.textMuted }]}>{Math.ceil(totalTimeSecs / 60)} min</Text>
               </View>
             )}
           </View>
@@ -1046,8 +1048,8 @@ export default function DailyMissionScreen() {
 
   // ─── MISSION LIST ───────────────────────────────────────────────────────────
   return (
-    <View style={[styles.container, { paddingTop: topPadding }]}>
-      <LinearGradient colors={["#0A1628", "#1A2E50"]} style={styles.headerGradient}>
+    <View style={[styles.container, { paddingTop: topPadding, backgroundColor: colors.background }]}>
+      <LinearGradient colors={isDarkMode ? ["#020617", "#0F172A"] : ["#0A1628", "#1A2E50"]} style={styles.headerGradient}>
         <Text style={styles.headerTitle}>Daily Missions</Text>
         <Text style={styles.headerSub}>Practice every day · attempt once</Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsRow}>
@@ -1063,9 +1065,9 @@ export default function DailyMissionScreen() {
         <View style={styles.centered}><ActivityIndicator size="large" color={Colors.light.primary} /></View>
       ) : !hasAnyMissions ? (
         <View style={styles.emptyState}>
-          <Ionicons name="flame-outline" size={60} color={Colors.light.textMuted} />
-          <Text style={styles.emptyTitle}>No Missions Available</Text>
-          <Text style={styles.emptySubtitle}>Check back later for new practice missions!</Text>
+          <Ionicons name="flame-outline" size={60} color={colors.textMuted} />
+          <Text style={[styles.emptyTitle, { color: colors.text }]}>No Missions Available</Text>
+          <Text style={[styles.emptySubtitle, { color: colors.textMuted }]}>Check back later for new practice missions!</Text>
         </View>
       ) : (
         <ScrollView

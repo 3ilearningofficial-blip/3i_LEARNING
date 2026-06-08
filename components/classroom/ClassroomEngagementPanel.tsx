@@ -10,7 +10,7 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/query-client";
+import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
 import Colors from "@/constants/colors";
 
 const DURATION_PRESETS = [20, 30, 60, 120];
@@ -27,10 +27,12 @@ type SessionPoll = {
 
 type Props = {
   liveClassId: string;
+  enabled?: boolean;
 };
 
-export default function ClassroomEngagementPanel({ liveClassId }: Props) {
+export default function ClassroomEngagementPanel({ liveClassId, enabled = true }: Props) {
   const qc = useQueryClient();
+  const [authBlocked, setAuthBlocked] = useState(false);
   const [pollKind, setPollKind] = useState<"poll" | "quiz">("poll");
   const [question, setQuestion] = useState("");
   const [options, setOptions] = useState(["", ""]);
@@ -39,32 +41,40 @@ export default function ClassroomEngagementPanel({ liveClassId }: Props) {
   const [viewPollId, setViewPollId] = useState<number | null>(null);
   const prevActivePollIdRef = useRef<number | null>(null);
 
+  useEffect(() => {
+    setAuthBlocked(false);
+  }, [enabled, liveClassId]);
+
   const { data: sessionPolls } = useQuery({
     queryKey: ["/api/admin/live-classes", liveClassId, "polls", "session"],
     queryFn: async () => {
-      const res = await apiRequest(
-        "GET",
-        `/api/admin/live-classes/${liveClassId}/polls/session`,
-        undefined
-      );
+      const res = await authFetch(`${getApiUrl()}/admin/live-classes/${encodeURIComponent(liveClassId)}/polls/session`);
+      if (res.status === 401) {
+        setAuthBlocked(true);
+        return [] as SessionPoll[];
+      }
       if (!res.ok) return [] as SessionPoll[];
       const json = await res.json();
       return (json.polls || []) as SessionPoll[];
     },
     refetchInterval: 2000,
-    enabled: !!liveClassId,
+    enabled: !!liveClassId && enabled && !authBlocked,
   });
 
   const { data: activePoll } = useQuery({
     queryKey: ["/api/live-classes", liveClassId, "polls", "active"],
     queryFn: async () => {
-      const res = await apiRequest("GET", `/api/live-classes/${liveClassId}/polls/active`, undefined);
+      const res = await authFetch(`${getApiUrl()}/live-classes/${encodeURIComponent(liveClassId)}/polls/active`);
+      if (res.status === 401) {
+        setAuthBlocked(true);
+        return null;
+      }
       if (!res.ok) return null;
       const json = await res.json();
       return json.poll as any;
     },
     refetchInterval: 800,
-    enabled: !!liveClassId,
+    enabled: !!liveClassId && enabled && !authBlocked,
   });
 
   const { data: pollResults, isLoading: resultsLoading } = useQuery({
@@ -78,7 +88,7 @@ export default function ClassroomEngagementPanel({ liveClassId }: Props) {
       if (!res.ok) throw new Error("Failed to load results");
       return res.json();
     },
-    enabled: !!viewPollId,
+    enabled: !!viewPollId && enabled && !authBlocked,
   });
 
   const createPoll = useMutation({

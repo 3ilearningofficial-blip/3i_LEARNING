@@ -20,6 +20,7 @@ import {
   testQueryKey,
 } from "@/lib/query-keys";
 import Colors from "@/constants/colors";
+import { useAppTheme } from "@/context/AppThemeContext";
 import { useScreenProtection } from "@/lib/useScreenProtection";
 import { fetch } from "expo/fetch";
 import { useAuth } from "@/context/AuthContext";
@@ -137,6 +138,7 @@ export default function CourseDetailScreen() {
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
   const { user, isAdmin } = useAuth();
+  const { colors, isDarkMode } = useAppTheme();
   const tabVisible = useDocumentVisibility();
   const [activeTab, setActiveTab] = useState("About");
   const [expandedSection, setExpandedSection] = useState<string | null>(null);
@@ -675,7 +677,7 @@ setTimeout(function() {
 
   if (isLoading) {
     return (
-      <View style={[styles.centered, { paddingTop: topPadding }]}>
+      <View style={[styles.centered, { paddingTop: topPadding, backgroundColor: colors.background }]}>
         <ActivityIndicator size="large" color={Colors.light.primary} />
       </View>
     );
@@ -683,8 +685,8 @@ setTimeout(function() {
 
   if (!course) {
     return (
-      <View style={[styles.centered, { paddingTop: topPadding }]}>
-        <Text style={styles.errorText}>Course not found</Text>
+      <View style={[styles.centered, { paddingTop: topPadding, backgroundColor: colors.background }]}>
+        <Text style={[styles.errorText, { color: colors.textMuted }]}>Course not found</Text>
       </View>
     );
   }
@@ -723,7 +725,12 @@ setTimeout(function() {
     return (
       <Pressable
         key={test.id}
-        style={({ pressed }) => [styles.testCard, isLocked && { opacity: 0.6 }, pressed && !isLocked && { opacity: 0.85 }]}
+        style={({ pressed }) => [
+          styles.testCard,
+          { backgroundColor: colors.card, borderBottomColor: colors.border },
+          isLocked && { opacity: 0.6 },
+          pressed && !isLocked && { opacity: 0.85 },
+        ]}
         onPress={handlePress}
       >
         <View style={[styles.testColorBar, { backgroundColor: color }]} />
@@ -772,12 +779,12 @@ setTimeout(function() {
   const currentActiveTab = TABS.includes(activeTab) ? activeTab : firstTab;
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
       {(() => {
         const c1 = course.cover_color || "#1A56DB";
         const c2 = c1 + "CC";
         return (
-          <LinearGradient colors={["#0A1628", c1, c2]} style={[styles.header, { paddingTop: topPadding + 4 }]}>
+          <LinearGradient colors={isDarkMode ? ["#020617", c1, "#0F172A"] : ["#0A1628", c1, c2]} style={[styles.header, { paddingTop: topPadding + 4 }]}>
             {/* Thumbnail overlay if set */}
             {course.thumbnail ? (
               <View style={StyleSheet.absoluteFillObject} pointerEvents="none">
@@ -885,7 +892,7 @@ setTimeout(function() {
 
       <ScrollView
         horizontal showsHorizontalScrollIndicator={false}
-        style={styles.tabBarScroll}
+        style={[styles.tabBarScroll, { backgroundColor: colors.card, borderBottomColor: colors.border }]}
         contentContainerStyle={styles.tabBarContent}
       >
         {TABS.map((tab) => (
@@ -894,7 +901,7 @@ setTimeout(function() {
             style={[styles.tabItem, currentActiveTab === tab && styles.tabItemActive]}
             onPress={() => setActiveTab(tab)}
           >
-            <Text style={[styles.tabText, currentActiveTab === tab && styles.tabTextActive]}>{tab}</Text>
+            <Text style={[styles.tabText, { color: colors.textSecondary }, currentActiveTab === tab && styles.tabTextActive]}>{tab}</Text>
           </Pressable>
         ))}
       </ScrollView>
@@ -910,16 +917,16 @@ setTimeout(function() {
           <View style={{ padding: 20, gap: 20 }}>
             {/* Description — icon list style */}
             {course.description ? (
-              <View style={styles.aboutSection}>
+              <View style={[styles.aboutSection, { backgroundColor: colors.card, shadowColor: colors.shadow }]}>
                 <View style={styles.aboutSectionHeader}>
                   <Ionicons name="information-circle" size={20} color={Colors.light.primary} />
-                  <Text style={styles.aboutSectionTitle}>About this Course</Text>
+                  <Text style={[styles.aboutSectionTitle, { color: colors.text }]}>About this Course</Text>
                 </View>
                 <View style={{ gap: 10 }}>
                   {course.description.split("\n").filter((l) => l.trim()).map((line, i) => (
                     <View key={i} style={styles.aboutIncludeItem}>
                       <Ionicons name="checkmark-circle" size={18} color={Colors.light.primary} />
-                      <Text style={styles.aboutIncludeText}>{line.trim()}</Text>
+                      <Text style={[styles.aboutIncludeText, { color: colors.text }]}>{line.trim()}</Text>
                     </View>
                   ))}
                 </View>
@@ -927,32 +934,32 @@ setTimeout(function() {
             ) : null}
 
             {/* Key Details */}
-            <View style={styles.aboutSection}>
+            <View style={[styles.aboutSection, { backgroundColor: colors.card, shadowColor: colors.shadow }]}>
               <View style={styles.aboutSectionHeader}>
                 <Ionicons name="list" size={20} color={Colors.light.primary} />
-                <Text style={styles.aboutSectionTitle}>Course Details</Text>
+                <Text style={[styles.aboutSectionTitle, { color: colors.text }]}>Course Details</Text>
               </View>
               <View style={styles.aboutDetailGrid}>
                 <View style={styles.aboutDetailItem}>
                   <Ionicons name="person" size={16} color={Colors.light.textMuted} />
                   <View>
-                    <Text style={styles.aboutDetailLabel}>Instructor</Text>
-                    <Text style={styles.aboutDetailValue}>{course.teacher_name}</Text>
+                    <Text style={[styles.aboutDetailLabel, { color: colors.textMuted }]}>Instructor</Text>
+                    <Text style={[styles.aboutDetailValue, { color: colors.text }]}>{course.teacher_name}</Text>
                   </View>
                 </View>
                 <View style={styles.aboutDetailItem}>
                   <Ionicons name="bar-chart" size={16} color={Colors.light.textMuted} />
                   <View>
-                    <Text style={styles.aboutDetailLabel}>Level</Text>
-                    <Text style={styles.aboutDetailValue}>{course.level}</Text>
+                    <Text style={[styles.aboutDetailLabel, { color: colors.textMuted }]}>Level</Text>
+                    <Text style={[styles.aboutDetailValue, { color: colors.text }]}>{course.level}</Text>
                   </View>
                 </View>
                 {!isTestSeriesCourse && (
                   <View style={styles.aboutDetailItem}>
                     <Ionicons name="time" size={16} color={Colors.light.textMuted} />
                     <View>
-                      <Text style={styles.aboutDetailLabel}>Duration</Text>
-                      <Text style={styles.aboutDetailValue}>{course.duration_hours}h total</Text>
+                      <Text style={[styles.aboutDetailLabel, { color: colors.textMuted }]}>Duration</Text>
+                      <Text style={[styles.aboutDetailValue, { color: colors.text }]}>{course.duration_hours}h total</Text>
                     </View>
                   </View>
                 )}
@@ -982,10 +989,10 @@ setTimeout(function() {
             </View>
 
             {/* What's Included */}
-            <View style={styles.aboutSection}>
+            <View style={[styles.aboutSection, { backgroundColor: colors.card, shadowColor: colors.shadow }]}>
               <View style={styles.aboutSectionHeader}>
                 <Ionicons name="checkmark-circle" size={20} color="#22C55E" />
-                <Text style={styles.aboutSectionTitle}>What's Included</Text>
+                <Text style={[styles.aboutSectionTitle, { color: colors.text }]}>What's Included</Text>
               </View>
               <View style={{ gap: 10 }}>
                 {!isTestSeriesCourse && course.total_lectures > 0 && (
@@ -1122,7 +1129,7 @@ setTimeout(function() {
                         const isLocked = !isAdmin && !course.isEnrolled;
                         return (
                           <Pressable key={folderKey}
-                            style={[styles.testSectionCard, { borderLeftColor: folderColor }]}
+                            style={[styles.testSectionCard, { backgroundColor: colors.card, shadowColor: colors.shadow, borderLeftColor: folderColor }]}
                             onPress={() => {
                               openFolderView({ name: folderName, type: "lectures", color: folderColor });
                             }}
@@ -1142,7 +1149,7 @@ setTimeout(function() {
                       {unfolderedLectures.map((lec) => {
                         const canAccess = isAdmin || course.isEnrolled;
                         return (
-                          <View key={lec.id} style={[styles.testCard, { flexDirection: "row", alignItems: "center" }]}>
+                          <View key={lec.id} style={[styles.testCard, { backgroundColor: colors.card, borderBottomColor: colors.border, flexDirection: "row", alignItems: "center" }]}>
                             <Pressable style={{ flex: 1, flexDirection: "row", alignItems: "center" }}
                               onPress={() => {
                                 if (!canAccess) {
@@ -1201,7 +1208,7 @@ setTimeout(function() {
                     const testFolderColor = "#16A34A";
                     return (
                       <Pressable key={`folder_${folderName}`}
-                        style={[styles.testSectionCard, { borderLeftColor: testFolderColor }]}
+                        style={[styles.testSectionCard, { backgroundColor: colors.card, shadowColor: colors.shadow, borderLeftColor: testFolderColor }]}
                         onPress={() => {
                           openFolderView({ name: folderName, type: "tests", color: testFolderColor });
                         }}
@@ -1225,7 +1232,7 @@ setTimeout(function() {
                   if (sectionTests.length === 0) return null;
                   return (
                     <Pressable key={section.key}
-                      style={[styles.testSectionCard, { borderLeftColor: section.color }]}
+                      style={[styles.testSectionCard, { backgroundColor: colors.card, shadowColor: colors.shadow, borderLeftColor: section.color }]}
                       onPress={() => {
                         openFolderView({ name: section.label, type: "tests", color: section.color });
                       }}
@@ -1261,7 +1268,7 @@ setTimeout(function() {
                     }
                   };
                   return (
-                    <Pressable key={test.id} style={[styles.testCard, !canAccess && { opacity: 0.6 }]} onPress={handlePress}>
+                    <Pressable key={test.id} style={[styles.testCard, { backgroundColor: colors.card, borderBottomColor: colors.border }, !canAccess && { opacity: 0.6 }]} onPress={handlePress}>
                       <View style={[styles.testColorBar, { backgroundColor: color }]} />
                       <View style={styles.testItemIcon}><Ionicons name="document-text" size={22} color={color} /></View>
                       <View style={styles.testItemInfo}>
@@ -1320,7 +1327,7 @@ setTimeout(function() {
                         const isLocked = !isAdmin && !course.isEnrolled;
                         return (
                           <Pressable key={folderKey}
-                            style={[styles.testSectionCard, { borderLeftColor: folderColor }]}
+                            style={[styles.testSectionCard, { backgroundColor: colors.card, shadowColor: colors.shadow, borderLeftColor: folderColor }]}
                             onPress={() => {
                               openFolderView({ name: folderName, type: "materials", color: folderColor });
                             }}
@@ -1340,7 +1347,7 @@ setTimeout(function() {
                       {unfolderedMaterials.map((mat) => {
                         const canAccess = isAdmin || course.isEnrolled;
                         return (
-                          <View key={mat.id} style={[styles.testCard, { flexDirection: "row", alignItems: "center" }]}>
+                          <View key={mat.id} style={[styles.testCard, { backgroundColor: colors.card, borderBottomColor: colors.border, flexDirection: "row", alignItems: "center" }]}>
                             <Pressable style={{ flex: 1, flexDirection: "row", alignItems: "center" }}
                               onPress={() => {
                                 if (!canAccess) {

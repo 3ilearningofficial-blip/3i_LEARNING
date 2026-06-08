@@ -15,6 +15,7 @@ import {
   myAttemptsSummaryQueryKey,
 } from "@/lib/query-keys";
 import Colors from "@/constants/colors";
+import { useAppTheme } from "@/context/AppThemeContext";
 import { useScreenProtection } from "@/lib/useScreenProtection";
 import { useAuth } from "@/context/AuthContext";
 import { DownloadButton } from "@/components/DownloadButton";
@@ -98,6 +99,7 @@ const TEST_SECTIONS = [
 
 export default function CourseFolderScreen() {
   useScreenProtection(true);
+  const { colors, isDarkMode } = useAppTheme();
   const params = useLocalSearchParams<{
     id: string;
     type: string;
@@ -340,8 +342,8 @@ export default function CourseFolderScreen() {
 
   if (isLoading || !course) {
     return (
-      <View style={styles.container}>
-        <LinearGradient colors={["#0A1628", "#1A2E50"]} style={[styles.header, { paddingTop: topPadding + 8 }]}>
+      <View style={[styles.container, { backgroundColor: colors.background }]}>
+        <LinearGradient colors={isDarkMode ? ["#020617", "#0F172A"] : ["#0A1628", "#1A2E50"]} style={[styles.header, { paddingTop: topPadding + 8 }]}>
           <Pressable style={styles.backBtn} onPress={goBack}>
             <Ionicons name="arrow-back" size={20} color="#fff" />
           </Pressable>
@@ -375,8 +377,8 @@ export default function CourseFolderScreen() {
     : items;
 
   return (
-    <View style={styles.container}>
-      <LinearGradient colors={["#0A1628", "#1A2E50"]} style={[styles.header, { paddingTop: topPadding + 8 }]}>
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      <LinearGradient colors={isDarkMode ? ["#020617", "#0F172A"] : ["#0A1628", "#1A2E50"]} style={[styles.header, { paddingTop: topPadding + 8 }]}>
         <Pressable style={styles.backBtn} onPress={goBack}>
           <Ionicons name="arrow-back" size={20} color="#fff" />
         </Pressable>

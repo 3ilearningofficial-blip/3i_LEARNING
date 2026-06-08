@@ -2,13 +2,14 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { View, Text, StyleSheet, Pressable, Platform } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/query-client";
+import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
 import Colors from "@/constants/colors";
 
 type Props = {
   liveClassId: string;
   isAdmin?: boolean;
   sessionActive?: boolean;
+  enabled?: boolean;
 };
 
 type ActiveTimer = {
@@ -33,9 +34,11 @@ export default function ClassroomLiveOverlays({
   liveClassId,
   isAdmin = false,
   sessionActive = true,
+  enabled = true,
 }: Props) {
   const qc = useQueryClient();
   const [tick, setTick] = useState(0);
+  const [authBlocked, setAuthBlocked] = useState(false);
   const [dragPos, setDragPos] = useState<{ x: number; y: number } | null>(null);
   const dragPosRef = useRef<{ x: number; y: number } | null>(null);
   const layerRef = useRef<View>(null);
@@ -50,6 +53,10 @@ export default function ClassroomLiveOverlays({
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
+    setAuthBlocked(false);
+  }, [enabled, liveClassId]);
+
+  useEffect(() => {
     const id = setInterval(() => setTick((t) => t + 1), 1000);
     return () => clearInterval(id);
   }, []);
@@ -57,25 +64,33 @@ export default function ClassroomLiveOverlays({
   const { data: activePoll } = useQuery({
     queryKey: ["/api/live-classes", liveClassId, "polls", "active"],
     queryFn: async () => {
-      const res = await apiRequest("GET", `/api/live-classes/${liveClassId}/polls/active`, undefined);
+      const res = await authFetch(`${getApiUrl()}/live-classes/${encodeURIComponent(liveClassId)}/polls/active`);
+      if (res.status === 401) {
+        setAuthBlocked(true);
+        return null;
+      }
       if (!res.ok) return null;
       const json = await res.json();
       return json.poll as any;
     },
     refetchInterval: 800,
-    enabled: !!liveClassId && sessionActive && Platform.OS === "web",
+    enabled: !!liveClassId && sessionActive && enabled && !authBlocked && Platform.OS === "web",
   });
 
   const { data: activeTimer } = useQuery({
     queryKey: ["/api/live-classes", liveClassId, "activity-timer", "active"],
     queryFn: async () => {
-      const res = await apiRequest("GET", `/api/live-classes/${liveClassId}/activity-timer/active`, undefined);
+      const res = await authFetch(`${getApiUrl()}/live-classes/${encodeURIComponent(liveClassId)}/activity-timer/active`);
+      if (res.status === 401) {
+        setAuthBlocked(true);
+        return null;
+      }
       if (!res.ok) return null;
       const json = await res.json();
       return json.timer as ActiveTimer | null;
     },
     refetchInterval: 800,
-    enabled: !!liveClassId && sessionActive && Platform.OS === "web",
+    enabled: !!liveClassId && sessionActive && enabled && !authBlocked && Platform.OS === "web",
   });
 
   const vote = useMutation({

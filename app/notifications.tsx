@@ -8,6 +8,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { authFetch, apiRequest, getApiUrl } from "@/lib/query-client";
 import { notificationsQueryKey } from "@/lib/query-keys";
 import Colors from "@/constants/colors";
+import { useAppTheme } from "@/context/AppThemeContext";
 import { useAuth } from "@/context/AuthContext";
 
 interface Notification {
@@ -23,6 +24,7 @@ interface Notification {
 export default function NotificationsScreen() {
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
+  const { colors, isDarkMode } = useAppTheme();
   const { user } = useAuth();
 
   const { data: notifications = [], isLoading } = useQuery<Notification[]>({
@@ -51,8 +53,8 @@ export default function NotificationsScreen() {
   const unread = notifications.filter((n) => !n.is_read).length;
 
   return (
-    <View style={styles.container}>
-      <LinearGradient colors={["#0A1628", "#1A2E50"]} style={[styles.header, { paddingTop: (Platform.OS === "web" ? 16 : insets.top) + 12 }]}>
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      <LinearGradient colors={isDarkMode ? ["#020617", "#0F172A"] : ["#0A1628", "#1A2E50"]} style={[styles.header, { paddingTop: (Platform.OS === "web" ? 16 : insets.top) + 12 }]}>
         <View style={styles.headerRow}>
           <Pressable style={styles.backBtn} onPress={() => {
             if (router.canGoBack()) router.back();
@@ -75,15 +77,15 @@ export default function NotificationsScreen() {
           <ActivityIndicator size="large" color={Colors.light.primary} style={{ marginTop: 40 }} />
         ) : notifications.length === 0 ? (
           <View style={styles.empty}>
-            <Ionicons name="notifications-off-outline" size={48} color={Colors.light.textMuted} />
-            <Text style={styles.emptyTitle}>No notifications yet</Text>
-            <Text style={styles.emptySub}>You'll see updates from your courses here</Text>
+            <Ionicons name="notifications-off-outline" size={48} color={colors.textMuted} />
+            <Text style={[styles.emptyTitle, { color: colors.text }]}>No notifications yet</Text>
+            <Text style={[styles.emptySub, { color: colors.textMuted }]}>You'll see updates from your courses here</Text>
           </View>
         ) : (
           notifications.map((n) => (
             <Pressable
               key={n.id}
-              style={[styles.notifCard, !n.is_read && styles.notifCardUnread]}
+              style={[styles.notifCard, { backgroundColor: colors.card, shadowColor: colors.shadow }, !n.is_read && styles.notifCardUnread]}
               onPress={() => { if (!n.is_read) markReadMutation.mutate(n.id); }}
             >
               <View style={[styles.notifIcon, { backgroundColor: n.type === "info" ? "#EFF6FF" : "#FEF3C7" }]}>
@@ -100,15 +102,15 @@ export default function NotificationsScreen() {
                   </View>
                 ) : null}
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                  <Text style={styles.notifTitle}>{n.title}</Text>
+                  <Text style={[styles.notifTitle, { color: colors.text }]}>{n.title}</Text>
                   {!n.is_read && (
                     <View style={{ backgroundColor: "#EF4444", borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1 }}>
                       <Text style={{ fontSize: 8, fontFamily: "Inter_700Bold", color: "#fff" }}>NEW</Text>
                     </View>
                   )}
                 </View>
-                <Text style={styles.notifMsg}>{n.message}</Text>
-                <Text style={styles.notifTime}>
+                <Text style={[styles.notifMsg, { color: colors.textSecondary }]}>{n.message}</Text>
+                <Text style={[styles.notifTime, { color: colors.textMuted }]}>
                   {new Date(Number(n.created_at)).toLocaleDateString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
                 </Text>
               </View>

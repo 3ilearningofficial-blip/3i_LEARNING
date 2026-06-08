@@ -12,6 +12,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import { useAuth } from "@/context/AuthContext";
 import Colors from "@/constants/colors";
+import { useAppTheme } from "@/context/AppThemeContext";
 import { getApiUrl, authFetch } from "@/lib/query-client";
 import { liveClassQueryKey, notificationsQueryKey } from "@/lib/query-keys";
 import { useDocumentVisibility } from "@/lib/useDocumentVisibility";
@@ -74,6 +75,7 @@ const DEFAULT_CATEGORIES = ["All", "NDA", "CDS", "AFCAT"];
 const COURSE_COLORS = ["#1A56DB", "#7C3AED", "#DC2626", "#059669", "#D97706", "#0891B2"];
 
 function ScheduledLiveCard({ lc, nowMs }: { lc: any; nowMs: number }) {
+  const { colors, isDarkMode } = useAppTheme();
   const scheduledMs = Number(lc.scheduled_at);
   const diff = scheduledMs - nowMs;
   const status: "countdown" | "waiting" = diff <= 0 ? "waiting" : "countdown";
@@ -91,13 +93,13 @@ function ScheduledLiveCard({ lc, nowMs }: { lc: any; nowMs: number }) {
   const timeStr = scheduleDate.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
 
   return (
-    <View style={{ backgroundColor: status === "waiting" ? "#FFFBEB" : "#F8FAFC", borderRadius: 12, padding: 12, marginBottom: 8, borderWidth: 1, borderColor: status === "waiting" ? "#FDE68A" : "#F1F5F9" }}>
+    <View style={{ backgroundColor: isDarkMode ? colors.surfaceAlt : status === "waiting" ? "#FFFBEB" : "#F8FAFC", borderRadius: 12, padding: 12, marginBottom: 8, borderWidth: 1, borderColor: isDarkMode ? colors.border : status === "waiting" ? "#FDE68A" : "#F1F5F9" }}>
       <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
         <View style={{ width: 42, height: 42, borderRadius: 12, backgroundColor: status === "waiting" ? "#FEF3C7" : "#FEE2E2", alignItems: "center", justifyContent: "center" }}>
           <Ionicons name={status === "waiting" ? "hourglass" : "calendar"} size={20} color={status === "waiting" ? "#D97706" : "#DC2626"} />
         </View>
         <View style={{ flex: 1, gap: 3 }}>
-          <Text style={{ fontSize: 14, fontFamily: "Inter_700Bold", color: Colors.light.text }} numberOfLines={1}>{lc.title}</Text>
+          <Text style={{ fontSize: 14, fontFamily: "Inter_700Bold", color: colors.text }} numberOfLines={1}>{lc.title}</Text>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
             {lc.course_title ? (
               <View style={{ backgroundColor: "#EEF2FF", borderRadius: 4, paddingHorizontal: 6, paddingVertical: 1 }}>
@@ -110,7 +112,7 @@ function ScheduledLiveCard({ lc, nowMs }: { lc: any; nowMs: number }) {
                 <Text style={{ fontSize: 9, fontFamily: "Inter_600SemiBold", color: Colors.light.textMuted }}>Enroll to join</Text>
               </View>
             )}
-            <Text style={{ fontSize: 11, fontFamily: "Inter_400Regular", color: Colors.light.textMuted }}>{dateStr} at {timeStr}</Text>
+            <Text style={{ fontSize: 11, fontFamily: "Inter_400Regular", color: colors.textMuted }}>{dateStr} at {timeStr}</Text>
           </View>
         </View>
         <View style={{ alignItems: "center", gap: 2 }}>
@@ -137,6 +139,7 @@ function ScheduledLiveCard({ lc, nowMs }: { lc: any; nowMs: number }) {
 }
 
 function EnrolledCourseCard({ course, index }: { course: Course; index: number }) {
+  const { colors } = useAppTheme();
   const color = COURSE_COLORS[index % COURSE_COLORS.length];
   const progress = course.progress || 0;
 
@@ -167,40 +170,40 @@ function EnrolledCourseCard({ course, index }: { course: Course; index: number }
       </LinearGradient>
 
       {/* White body */}
-      <View style={{ padding: 12, gap: 8, backgroundColor: "#fff" }}>
+      <View style={{ padding: 12, gap: 8, backgroundColor: colors.card }}>
         {/* Title */}
-        <Text style={{ fontSize: 14, fontFamily: "Inter_700Bold", color: Colors.light.text, lineHeight: 20 }} numberOfLines={2}>{course.title}</Text>
+        <Text style={{ fontSize: 14, fontFamily: "Inter_700Bold", color: colors.text, lineHeight: 20 }} numberOfLines={2}>{course.title}</Text>
 
         {/* Teacher */}
         <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
-          <Ionicons name="person-outline" size={12} color={Colors.light.textMuted} />
-          <Text style={{ fontSize: 12, fontFamily: "Inter_400Regular", color: Colors.light.textMuted }} numberOfLines={1}>{course.teacher_name}</Text>
+          <Ionicons name="person-outline" size={12} color={colors.textMuted} />
+          <Text style={{ fontSize: 12, fontFamily: "Inter_400Regular", color: colors.textMuted }} numberOfLines={1}>{course.teacher_name}</Text>
         </View>
 
         {/* Stats — compact */}
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 3 }}>
             <Ionicons name="videocam" size={12} color={color} />
-            <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary }}>{course.total_lectures} Lectures</Text>
+            <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: colors.textSecondary }}>{course.total_lectures} Lectures</Text>
           </View>
-          <View style={{ width: 2, height: 2, borderRadius: 1, backgroundColor: Colors.light.textMuted }} />
+          <View style={{ width: 2, height: 2, borderRadius: 1, backgroundColor: colors.textMuted }} />
           <View style={{ flexDirection: "row", alignItems: "center", gap: 3 }}>
             <Ionicons name="document-text" size={12} color={color} />
-            <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary }}>{course.total_tests} Tests</Text>
+            <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: colors.textSecondary }}>{course.total_tests} Tests</Text>
           </View>
-          <View style={{ width: 2, height: 2, borderRadius: 1, backgroundColor: Colors.light.textMuted }} />
+          <View style={{ width: 2, height: 2, borderRadius: 1, backgroundColor: colors.textMuted }} />
           <View style={{ flexDirection: "row", alignItems: "center", gap: 3 }}>
             <Ionicons name="folder" size={12} color={color} />
-            <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary }}>{course.total_materials || 0} Materials</Text>
+            <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: colors.textSecondary }}>{course.total_materials || 0} Materials</Text>
           </View>
         </View>
 
         {/* Progress */}
         <View style={{ gap: 4 }}>
-          <View style={{ height: 4, backgroundColor: "#F1F5F9", borderRadius: 2, overflow: "hidden" }}>
+          <View style={{ height: 4, backgroundColor: colors.surfaceAlt, borderRadius: 2, overflow: "hidden" }}>
             <View style={{ height: 4, backgroundColor: color, borderRadius: 2, width: `${progress}%` as any, minWidth: progress > 0 ? 4 : 0 }} />
           </View>
-          <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: Colors.light.textMuted }}>{progress}% complete</Text>
+          <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: colors.textMuted }}>{progress}% complete</Text>
         </View>
       </View>
     </Pressable>
@@ -208,6 +211,7 @@ function EnrolledCourseCard({ course, index }: { course: Course; index: number }
 }
 
 function CourseCard({ course, index }: { course: Course; index: number }) {
+  const { colors } = useAppTheme();
   const color = COURSE_COLORS[index % COURSE_COLORS.length];
   const discount = course.original_price && parseFloat(course.original_price) > 0
     ? Math.round((1 - parseFloat(course.price) / parseFloat(course.original_price)) * 100)
@@ -244,66 +248,66 @@ function CourseCard({ course, index }: { course: Course; index: number }) {
           <View style={styles.enrolledBadge}><Ionicons name="checkmark-circle" size={14} color="#22C55E" /><Text style={styles.enrolledBadgeText}>Enrolled</Text></View>
         ) : null}
       </LinearGradient>
-      <View style={styles.courseCardBody}>
-        <Text style={styles.courseTitle} numberOfLines={2}>{course.title}</Text>
-        <Text style={styles.courseTeacher}>
-          <Ionicons name="person" size={12} color={Colors.light.textSecondary} /> {course.teacher_name}
+      <View style={[styles.courseCardBody, { backgroundColor: colors.card }]}>
+        <Text style={[styles.courseTitle, { color: colors.text }]} numberOfLines={2}>{course.title}</Text>
+        <Text style={[styles.courseTeacher, { color: colors.textSecondary }]}>
+          <Ionicons name="person" size={12} color={colors.textSecondary} /> {course.teacher_name}
         </Text>
         <View style={styles.courseStats}>
           {course.course_type === "test_series" ? (
             <>
               <View style={styles.courseStat}>
-                <Ionicons name="document-text" size={13} color={Colors.light.textMuted} />
-                <Text style={styles.courseStatText}>{course.total_tests || 0} Tests</Text>
+                <Ionicons name="document-text" size={13} color={colors.textMuted} />
+                <Text style={[styles.courseStatText, { color: colors.textMuted }]}>{course.total_tests || 0} Tests</Text>
               </View>
               <View style={styles.courseStatDot} />
               <View style={styles.courseStat}>
-                <Ionicons name="clipboard" size={13} color={Colors.light.textMuted} />
-                <Text style={styles.courseStatText}>{course.mock_count || 0} Mock</Text>
+                <Ionicons name="clipboard" size={13} color={colors.textMuted} />
+                <Text style={[styles.courseStatText, { color: colors.textMuted }]}>{course.mock_count || 0} Mock</Text>
               </View>
               <View style={styles.courseStatDot} />
               <View style={styles.courseStat}>
-                <Ionicons name="create" size={13} color={Colors.light.textMuted} />
-                <Text style={styles.courseStatText}>{course.practice_count || 0} Practice</Text>
+                <Ionicons name="create" size={13} color={colors.textMuted} />
+                <Text style={[styles.courseStatText, { color: colors.textMuted }]}>{course.practice_count || 0} Practice</Text>
               </View>
             </>
           ) : (
             <>
               <View style={styles.courseStat}>
-                <Ionicons name="videocam" size={13} color={Colors.light.textMuted} />
-                <Text style={styles.courseStatText}>{course.total_lectures} lectures</Text>
+                <Ionicons name="videocam" size={13} color={colors.textMuted} />
+                <Text style={[styles.courseStatText, { color: colors.textMuted }]}>{course.total_lectures} lectures</Text>
               </View>
               <View style={styles.courseStatDot} />
               <View style={styles.courseStat}>
-                <Ionicons name="document-text" size={13} color={Colors.light.textMuted} />
-                <Text style={styles.courseStatText}>{course.total_tests} tests</Text>
+                <Ionicons name="document-text" size={13} color={colors.textMuted} />
+                <Text style={[styles.courseStatText, { color: colors.textMuted }]}>{course.total_tests} tests</Text>
               </View>
               <View style={styles.courseStatDot} />
               <View style={styles.courseStat}>
-                <Ionicons name="folder" size={13} color={Colors.light.textMuted} />
-                <Text style={styles.courseStatText}>{course.total_materials || 0} materials</Text>
+                <Ionicons name="folder" size={13} color={colors.textMuted} />
+                <Text style={[styles.courseStatText, { color: colors.textMuted }]}>{course.total_materials || 0} materials</Text>
               </View>
             </>
           )}
         </View>
         {(course.course_type || "live") === "live" && (course.start_date || course.end_date) && (
           <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-            <Ionicons name="calendar-outline" size={12} color={Colors.light.textMuted} />
-            <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: Colors.light.textMuted }}>
+            <Ionicons name="calendar-outline" size={12} color={colors.textMuted} />
+            <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: colors.textMuted }}>
               {course.start_date || "TBD"} → {course.end_date || "TBD"}
             </Text>
           </View>
         )}
         {course.isEnrolled && (
           <View style={styles.progressContainer}>
-            <View style={styles.progressBar}>
+            <View style={[styles.progressBar, { backgroundColor: colors.surfaceAlt }]}>
               <View style={[styles.progressFill, {
                 width: `${course.progress || 0}%` as any,
                 backgroundColor: color,
                 minWidth: (course.progress || 0) > 0 ? 2 : 0,
               }]} />
             </View>
-            <Text style={styles.progressText}>{course.progress || 0}%</Text>
+            <Text style={[styles.progressText, { color: colors.textSecondary }]}>{course.progress || 0}%</Text>
           </View>
         )}
         <View style={styles.coursePriceRow}>
@@ -313,7 +317,7 @@ function CourseCard({ course, index }: { course: Course; index: number }) {
             <>
               <Text style={styles.coursePrice}>₹{parseFloat(course.price).toFixed(0)}</Text>
               {parseFloat(course.original_price) > 0 && (
-                <Text style={styles.courseOriginalPrice}>₹{parseFloat(course.original_price).toFixed(0)}</Text>
+                <Text style={[styles.courseOriginalPrice, { color: colors.textMuted }]}>₹{parseFloat(course.original_price).toFixed(0)}</Text>
               )}
             </>
           )}
@@ -331,6 +335,7 @@ export default function HomeScreen() {
   const { width: screenWidth } = useWindowDimensions();
   const isWideScreen = screenWidth >= 768;
   const { user, isAdmin, logout } = useAuth();
+  const { colors, isDarkMode } = useAppTheme();
   const qc = useQueryClient();
   const tabVisible = useDocumentVisibility();
   const [search, setSearch] = useState("");
@@ -527,8 +532,8 @@ export default function HomeScreen() {
   const liveClass = liveClasses.find((lc) => lc.is_live);
 
   return (
-    <View style={styles.container}>
-      <LinearGradient colors={["#0A1628", "#1A2E50"]} style={[styles.header, { paddingTop: topPadding + 12 }]}>
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      <LinearGradient colors={isDarkMode ? ["#020617", "#0F172A"] : ["#0A1628", "#1A2E50"]} style={[styles.header, { paddingTop: topPadding + 12 }]}>
         <View style={styles.headerTop}>
           <View style={styles.headerLeft}>
             <Pressable style={styles.headerAvatar} onPress={() => router.push("/profile")}>
@@ -571,19 +576,19 @@ export default function HomeScreen() {
           </View>
         </View>
 
-        <View style={styles.searchBar}>
-          <Ionicons name="search-outline" size={20} color={Colors.light.textMuted} />
+        <View style={[styles.searchBar, { backgroundColor: colors.card }]}>
+          <Ionicons name="search-outline" size={20} color={colors.textMuted} />
           <TextInput
-            style={styles.searchInput}
+            style={[styles.searchInput, { color: colors.text }]}
             placeholder="Search courses, topics..."
-            placeholderTextColor={Colors.light.textMuted}
+            placeholderTextColor={colors.textMuted}
             value={search}
             onChangeText={setSearch}
             returnKeyType="search"
           />
           {search ? (
             <Pressable onPress={() => setSearch("")}>
-              <Ionicons name="close-circle" size={20} color={Colors.light.textMuted} />
+              <Ionicons name="close-circle" size={20} color={colors.textMuted} />
             </Pressable>
           ) : null}
         </View>
@@ -615,8 +620,16 @@ export default function HomeScreen() {
 
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.categoryScroll} contentContainerStyle={styles.categoryContent}>
           {dynamicCategories.map((cat) => (
-            <Pressable key={cat} style={[styles.categoryChip, selectedCategory === cat && styles.categoryChipActive]} onPress={() => setSelectedCategory(cat)}>
-              <Text style={[styles.categoryChipText, selectedCategory === cat && styles.categoryChipTextActive]}>{cat}</Text>
+            <Pressable
+              key={cat}
+              style={[
+                styles.categoryChip,
+                { backgroundColor: colors.card, borderColor: colors.border },
+                selectedCategory === cat && styles.categoryChipActive,
+              ]}
+              onPress={() => setSelectedCategory(cat)}
+            >
+              <Text style={[styles.categoryChipText, { color: colors.textSecondary }, selectedCategory === cat && styles.categoryChipTextActive]}>{cat}</Text>
             </Pressable>
           ))}
         </ScrollView>
@@ -624,46 +637,46 @@ export default function HomeScreen() {
         {isLoading ? (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color={Colors.light.primary} />
-            <Text style={styles.loadingText}>Loading courses...</Text>
+            <Text style={[styles.loadingText, { color: colors.textMuted }]}>Loading courses...</Text>
           </View>
         ) : (
           <>
             {(freeMaterials.length > 0 || materialFolders.length > 0) && (
               <View style={styles.section}>
                 <View style={styles.sectionHeader}>
-                  <Text style={styles.sectionTitle}>Free Study Material</Text>
+                  <Text style={[styles.sectionTitle, { color: colors.text }]}>Free Study Material</Text>
                   <Ionicons name="book-outline" size={18} color={Colors.light.primary} />
                 </View>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.materialsList}>
                   {/* Folder cards first */}
                   {materialFolders.map((folder) => (
-                    <Pressable key={`folder-${folder.id}`} style={styles.materialCard} onPress={() => router.push(`/material-folder/${encodeURIComponent(folder.name)}` as any)}>
+                    <Pressable key={`folder-${folder.id}`} style={[styles.materialCard, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={() => router.push(`/material-folder/${encodeURIComponent(folder.name)}` as any)}>
                       <View style={[styles.materialIconBg, { backgroundColor: "#FEF3C7" }]}>
                         <Ionicons name="folder" size={22} color="#D97706" />
                       </View>
                       <View style={styles.materialInfo}>
-                        <Text style={styles.materialTitle} numberOfLines={2}>{folder.name}</Text>
+                        <Text style={[styles.materialTitle, { color: colors.text }]} numberOfLines={2}>{folder.name}</Text>
                         <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
                           <View style={styles.freePill}><Text style={styles.freePillText}>FREE</Text></View>
-                          <Text style={{ fontSize: 10, fontFamily: "Inter_500Medium", color: Colors.light.textMuted }}>FOLDER</Text>
+                          <Text style={{ fontSize: 10, fontFamily: "Inter_500Medium", color: colors.textMuted }}>FOLDER</Text>
                         </View>
                       </View>
                       <View style={{ position: "absolute", right: 10, top: "50%", marginTop: -10 }}>
-                        <Ionicons name="chevron-forward" size={20} color={Colors.light.textMuted} />
+                        <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
                       </View>
                     </Pressable>
                   ))}
                   {/* Individual material cards */}
                   {freeMaterials.filter((m) => !m.section_title).map((mat) => (
-                    <Pressable key={mat.id} style={styles.materialCard} onPress={() => router.push(`/material/${mat.id}`)}>
+                    <Pressable key={mat.id} style={[styles.materialCard, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={() => router.push(`/material/${mat.id}`)}>
                       <View style={styles.materialIconBg}>
                         <Ionicons name={mat.file_type === "pdf" ? "document-text" : mat.file_type === "video" ? "videocam" : mat.file_type === "doc" ? "document" : "link"} size={22} color={Colors.light.primary} />
                       </View>
                       <View style={styles.materialInfo}>
-                        <Text style={styles.materialTitle} numberOfLines={2}>{mat.title}</Text>
+                        <Text style={[styles.materialTitle, { color: colors.text }]} numberOfLines={2}>{mat.title}</Text>
                         <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
                           <View style={styles.freePill}><Text style={styles.freePillText}>FREE</Text></View>
-                          <Text style={{ fontSize: 10, fontFamily: "Inter_500Medium", color: Colors.light.textMuted }}>{(mat.file_type || "file").toUpperCase()}</Text>
+                          <Text style={{ fontSize: 10, fontFamily: "Inter_500Medium", color: colors.textMuted }}>{(mat.file_type || "file").toUpperCase()}</Text>
                         </View>
                       </View>
                     </Pressable>
@@ -682,9 +695,9 @@ export default function HomeScreen() {
               const visible = showAllScheduled ? scheduled : scheduled.slice(0, 2);
               return (
                 <View style={styles.section}>
-                  <View style={{ backgroundColor: "#fff", borderRadius: 16, borderWidth: 1, borderColor: "#E5E7EB", padding: 14, gap: 4 }}>
+                  <View style={{ backgroundColor: colors.card, borderRadius: 16, borderWidth: 1, borderColor: colors.border, padding: 14, gap: 4 }}>
                     <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-                      <Text style={{ fontSize: 15, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Upcoming Live Classes</Text>
+                      <Text style={{ fontSize: 15, fontFamily: "Inter_700Bold", color: colors.text }}>Upcoming Live Classes</Text>
                       <View style={{ backgroundColor: "#FEE2E2", borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3, flexDirection: "row", alignItems: "center", gap: 4 }}>
                         <Ionicons name="radio" size={12} color="#DC2626" />
                         <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: "#DC2626" }}>{scheduled.length}</Text>
@@ -695,7 +708,7 @@ export default function HomeScreen() {
                     ))}
                     {scheduled.length > 2 && (
                       <Pressable onPress={() => setShowAllScheduled(!showAllScheduled)}
-                        style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 10, borderTopWidth: 1, borderTopColor: "#F1F5F9", marginTop: 4 }}>
+                        style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 10, borderTopWidth: 1, borderTopColor: colors.border, marginTop: 4 }}>
                         <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>
                           {showAllScheduled ? "Show Less" : `View All ${scheduled.length} Classes`}
                         </Text>
@@ -710,7 +723,7 @@ export default function HomeScreen() {
             {myCourses.length > 0 && (
               <View style={styles.section}>
                 <View style={styles.sectionHeader}>
-                  <Text style={styles.sectionTitle}>My Courses</Text>
+                  <Text style={[styles.sectionTitle, { color: colors.text }]}>My Courses</Text>
                 </View>
                 <FlatList
                   data={myCourses}
@@ -731,7 +744,7 @@ export default function HomeScreen() {
             {freeCourses.length > 0 && (
               <View style={[styles.section, !isWideScreen && { paddingHorizontal: 10 }]}>
                 <View style={styles.sectionHeader}>
-                  <Text style={styles.sectionTitle}>Free Courses</Text>
+                  <Text style={[styles.sectionTitle, { color: colors.text }]}>Free Courses</Text>
                   <Ionicons name="gift-outline" size={18} color={Colors.light.success} />
                 </View>
                 <View style={isWideScreen ? styles.courseGrid : { paddingHorizontal: 10, gap: 14 }}>
@@ -747,7 +760,7 @@ export default function HomeScreen() {
             {allOtherCourses.length > 0 && (
               <View style={[styles.section, !isWideScreen && { paddingHorizontal: 10 }]}>
                 <View style={styles.sectionHeader}>
-                  <Text style={styles.sectionTitle}>All Courses</Text>
+                  <Text style={[styles.sectionTitle, { color: colors.text }]}>All Courses</Text>
                 </View>
                 <View style={isWideScreen ? styles.courseGrid : { paddingHorizontal: 10, gap: 14 }}>
                   {allOtherCourses.map((course, index) => (
@@ -761,9 +774,9 @@ export default function HomeScreen() {
 
             {courses.length === 0 && !isLoading && (
               <View style={styles.emptyState}>
-                <Ionicons name="search" size={48} color={Colors.light.textMuted} />
-                <Text style={styles.emptyTitle}>No courses found</Text>
-                <Text style={styles.emptySubtitle}>Try a different search or category</Text>
+                <Ionicons name="search" size={48} color={colors.textMuted} />
+                <Text style={[styles.emptyTitle, { color: colors.text }]}>No courses found</Text>
+                <Text style={[styles.emptySubtitle, { color: colors.textMuted }]}>Try a different search or category</Text>
               </View>
             )}
           </>

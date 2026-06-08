@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable, TextInput,
-  Platform, ActivityIndicator, Alert, Image, Linking, Modal, Share,
+  Platform, ActivityIndicator, Alert, Image, Linking, Modal, Share, Switch,
 } from "react-native";
 import { router } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
@@ -16,6 +16,7 @@ import { getInstallationId } from "@/lib/installation-id";
 import { sendOtpRequest, verifyOtpRequest, formatLockCountdown } from "@/lib/otp-lockout";
 import { useAuth } from "@/context/AuthContext";
 import Colors from "@/constants/colors";
+import { useAppTheme, type AppThemeColors } from "@/context/AppThemeContext";
 
 const ADMIN_EMAIL = "3ilearningofficial@gmail.com";
 const ADMIN_WHATSAPP = "9997198068";
@@ -24,6 +25,7 @@ export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
   const { user, updateUser, logout } = useAuth();
+  const { colors: theme, isDarkMode, setDarkMode } = useAppTheme();
   const isAdmin = user?.role === "admin";
   const showLogout = Platform.OS !== "web" || isAdmin;
   const topPadding = Platform.OS === "web" ? 16 : insets.top;
@@ -304,9 +306,12 @@ export default function ProfileScreen() {
   const displayPhoto = photoUri || profile?.photo_url;
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: theme.background }]}>
       {/* Header — compact, avatar only */}
-      <LinearGradient colors={["#0A1628", "#1A2E50"]} style={[styles.header, { paddingTop: topPadding + 12 }]}>
+      <LinearGradient
+        colors={theme.isDark ? ["#020617", "#0F172A"] : ["#0A1628", "#1A2E50"]}
+        style={[styles.header, { paddingTop: topPadding + 12 }]}
+      >
         <View style={styles.headerRow}>
           <Pressable style={styles.iconBtn} onPress={() => {
             if (router.canGoBack()) router.back();
@@ -338,9 +343,9 @@ export default function ProfileScreen() {
       <ScrollView contentContainerStyle={[styles.scroll, { paddingBottom: bottomPadding + 32 }]}>
 
         {/* Personal Details card */}
-        <View style={styles.card}>
+        <View style={[styles.card, { backgroundColor: theme.card, shadowColor: theme.shadow }]}>
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-            <Text style={styles.cardTitle}>Personal Details</Text>
+            <Text style={[styles.cardTitle, { color: theme.text }]}>Personal Details</Text>
             {isAdmin && !isEditing && (
               <Pressable onPress={() => { setIsEditing(true); setEditName(profile?.name || ""); setEditEmail(profile?.email || ""); setEditError(""); }}>
                 <Ionicons name="create-outline" size={20} color={Colors.light.primary} />
@@ -351,31 +356,31 @@ export default function ProfileScreen() {
           {isAdmin && isEditing ? (
             <>
               <View style={styles.fieldGroup}>
-                <Text style={styles.detailLabel}>FULL NAME</Text>
-                <View style={styles.inputRow}>
-                  <Ionicons name="person-outline" size={16} color={Colors.light.textMuted} />
+                <Text style={[styles.detailLabel, { color: theme.textMuted }]}>FULL NAME</Text>
+                <View style={[styles.inputRow, { backgroundColor: theme.input, borderColor: theme.border }]}>
+                  <Ionicons name="person-outline" size={16} color={theme.textMuted} />
                   <TextInput
-                    style={styles.input}
+                    style={[styles.input, { color: theme.text }]}
                     value={editName}
                     onChangeText={setEditName}
                     autoCapitalize="words"
                     placeholder="Your name"
-                    placeholderTextColor={Colors.light.textMuted}
+                    placeholderTextColor={theme.textMuted}
                   />
                 </View>
               </View>
               <View style={styles.fieldGroup}>
-                <Text style={styles.detailLabel}>EMAIL</Text>
-                <View style={styles.inputRow}>
-                  <Ionicons name="mail-outline" size={16} color={Colors.light.textMuted} />
+                <Text style={[styles.detailLabel, { color: theme.textMuted }]}>EMAIL</Text>
+                <View style={[styles.inputRow, { backgroundColor: theme.input, borderColor: theme.border }]}>
+                  <Ionicons name="mail-outline" size={16} color={theme.textMuted} />
                   <TextInput
-                    style={styles.input}
+                    style={[styles.input, { color: theme.text }]}
                     value={editEmail}
                     onChangeText={setEditEmail}
                     keyboardType="email-address"
                     autoCapitalize="none"
                     placeholder="Your email"
-                    placeholderTextColor={Colors.light.textMuted}
+                    placeholderTextColor={theme.textMuted}
                   />
                 </View>
               </View>
@@ -393,34 +398,50 @@ export default function ProfileScreen() {
                 </Pressable>
                 <Pressable style={[styles.saveBtn, { flex: 1, borderWidth: 1, borderColor: Colors.light.border, borderRadius: 12, overflow: "hidden" }]} onPress={() => setIsEditing(false)}>
                   <View style={{ paddingVertical: 13, alignItems: "center" }}>
-                    <Text style={{ fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Cancel</Text>
+                    <Text style={{ fontSize: 14, fontFamily: "Inter_600SemiBold", color: theme.text }}>Cancel</Text>
                   </View>
                 </Pressable>
               </View>
             </>
           ) : (
             <>
-              <DetailRow icon="person-outline" label="Full Name" value={profile?.name} />
-              <DetailRow icon="call-outline" label="Phone" value={profile?.phone ? `+91 ${profile.phone}` : undefined} locked />
-              <DetailRow icon="mail-outline" label="Email" value={profile?.email} locked={!isAdmin} />
-              <DetailRow icon="calendar-outline" label="Date of Birth" value={profile?.date_of_birth || user?.date_of_birth || "Not set"} locked />
+              <DetailRow theme={theme} icon="person-outline" label="Full Name" value={profile?.name} />
+              <DetailRow theme={theme} icon="call-outline" label="Phone" value={profile?.phone ? `+91 ${profile.phone}` : undefined} locked />
+              <DetailRow theme={theme} icon="mail-outline" label="Email" value={profile?.email} locked={!isAdmin} />
+              <DetailRow theme={theme} icon="calendar-outline" label="Date of Birth" value={profile?.date_of_birth || user?.date_of_birth || "Not set"} locked />
             </>
           )}
         </View>
 
+        <View style={[styles.card, styles.themeCard, { backgroundColor: theme.card, borderColor: theme.border, shadowColor: theme.shadow }]}>
+          <View style={[styles.themeIcon, { backgroundColor: isDarkMode ? "#1E3A8A44" : "#EEF2FF" }]}>
+            <Ionicons name={isDarkMode ? "moon" : "sunny-outline"} size={20} color={Colors.light.primary} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.themeTitle, { color: theme.text }]}>Dark Mode</Text>
+            <Text style={[styles.themeSub, { color: theme.textMuted }]}>Use a darker profile screen for comfortable viewing.</Text>
+          </View>
+          <Switch
+            value={isDarkMode}
+            onValueChange={setDarkMode}
+            trackColor={{ false: "#CBD5E1", true: "#1A56DB66" }}
+            thumbColor={isDarkMode ? Colors.light.primary : "#F8FAFC"}
+          />
+        </View>
+
         {/* Downloads */}
         <Pressable
-          style={styles.menuItem}
+          style={[styles.menuItem, { backgroundColor: theme.card, borderColor: theme.border, shadowColor: theme.shadow }]}
           onPress={() => router.push("/downloads")}
         >
           <View style={[styles.menuIcon, { backgroundColor: "#EEF2FF" }]}>
             <Ionicons name="download-outline" size={20} color="#1A56DB" />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.menuTitle}>My Downloads</Text>
-            <Text style={styles.menuSub}>Lectures & study materials</Text>
+            <Text style={[styles.menuTitle, { color: theme.text }]}>My Downloads</Text>
+            <Text style={[styles.menuSub, { color: theme.textMuted }]}>Lectures & study materials</Text>
           </View>
-          <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
+          <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
         </Pressable>
 
         {/* Payments / Invoice */}
@@ -431,16 +452,17 @@ export default function ProfileScreen() {
           subtitle="Your course purchase history"
           expanded={activeSection === "payments"}
           onToggle={() => setActiveSection(s => s === "payments" ? null : "payments")}
+          theme={theme}
         >
           {payLoading ? <ActivityIndicator color={Colors.light.primary} style={{ marginVertical: 12 }} /> :
             payments.length === 0 ? (
-              <Text style={styles.emptyText}>No invoices yet. Enroll in a paid course to see your purchase history.</Text>
+              <Text style={[styles.emptyText, { color: theme.textMuted }]}>No invoices yet. Enroll in a paid course to see your purchase history.</Text>
             ) : payments.map((p) => (
-              <View key={p.id} style={styles.listItem}>
+              <View key={p.id} style={[styles.listItem, { borderBottomColor: theme.border }]}>
                 <Ionicons name="checkmark-circle" size={18} color="#059669" />
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.listItemTitle}>{p.course_title}</Text>
-                  <Text style={styles.listItemSub}>
+                  <Text style={[styles.listItemTitle, { color: theme.text }]}>{p.course_title}</Text>
+                  <Text style={[styles.listItemSub, { color: theme.textMuted }]}>
                     ₹{(p.amount / 100).toFixed(0)} · {new Date(Number(p.created_at)).toLocaleDateString()}
                   </Text>
                 </View>
@@ -458,6 +480,7 @@ export default function ProfileScreen() {
           subtitle="Reach out to us"
           expanded={activeSection === "contact"}
           onToggle={() => setActiveSection(s => s === "contact" ? null : "contact")}
+          theme={theme}
         >
           <View style={{ flexDirection: "row", gap: 8 }}>
             <Pressable
@@ -497,36 +520,36 @@ export default function ProfileScreen() {
               <Text style={styles.contactOptionText}>WhatsApp</Text>
             </Pressable>
           </View>
-          <Text style={styles.contactNote}>We typically respond within 24 hours</Text>
+          <Text style={[styles.contactNote, { color: theme.textMuted }]}>We typically respond within 24 hours</Text>
         </SectionCard>
 
         {/* Book Store */}
         <Pressable
-          style={styles.optionRow}
+          style={[styles.optionRow, { backgroundColor: theme.card, shadowColor: theme.shadow }]}
           onPress={() => router.push("/store")}
         >
           <View style={[styles.optionIcon, { backgroundColor: "#8B5CF618" }]}>
             <Ionicons name="storefront-outline" size={20} color="#8B5CF6" />
           </View>
-          <Text style={styles.optionLabel}>Book Store</Text>
-          <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
+          <Text style={[styles.optionLabel, { color: theme.text }]}>Book Store</Text>
+          <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
         </Pressable>
 
         {/* Change Password */}
         <Pressable
-          style={styles.optionRow}
+          style={[styles.optionRow, { backgroundColor: theme.card, shadowColor: theme.shadow }]}
           onPress={() => { setShowChangePwd(true); setPwdError(""); setOldPwd(""); setNewPwd(""); setConfirmPwd(""); }}
         >
           <View style={[styles.optionIcon, { backgroundColor: "#8B5CF618" }]}>
             <Ionicons name="key-outline" size={20} color="#8B5CF6" />
           </View>
-          <Text style={styles.optionLabel}>Change Password</Text>
-          <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
+          <Text style={[styles.optionLabel, { color: theme.text }]}>Change Password</Text>
+          <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
         </Pressable>
 
         {/* Share App */}
         <Pressable
-          style={styles.optionRow}
+          style={[styles.optionRow, { backgroundColor: theme.card, shadowColor: theme.shadow }]}
           onPress={() => {
             if (Platform.OS !== "web") {
               // Mobile: use native share sheet
@@ -540,14 +563,14 @@ export default function ProfileScreen() {
           <View style={[styles.optionIcon, { backgroundColor: "#1A56DB18" }]}>
             <Ionicons name="share-social-outline" size={20} color="#1A56DB" />
           </View>
-          <Text style={styles.optionLabel}>Share App</Text>
-          <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
+          <Text style={[styles.optionLabel, { color: theme.text }]}>Share App</Text>
+          <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
         </Pressable>
 
         {/* Delete account — students only */}
         {!isAdmin ? (
           <Pressable
-            style={[styles.optionRow, deleteAccountBusy && { opacity: 0.6 }]}
+            style={[styles.optionRow, { backgroundColor: theme.card, shadowColor: theme.shadow }, deleteAccountBusy && { opacity: 0.6 }]}
             onPress={handleDeleteAccount}
             disabled={deleteAccountBusy}
           >
@@ -557,18 +580,18 @@ export default function ProfileScreen() {
             <Text style={[styles.optionLabel, { color: "#B91C1C" }]}>
               {deleteAccountBusy ? "Deleting…" : "Delete Account"}
             </Text>
-            <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
+            <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
           </Pressable>
         ) : null}
 
         {/* Logout: hidden for student web to protect active-session account sharing locks. */}
         {showLogout ? (
-          <Pressable style={styles.optionRow} onPress={handleLogout}>
+          <Pressable style={[styles.optionRow, { backgroundColor: theme.card, shadowColor: theme.shadow }]} onPress={handleLogout}>
             <View style={[styles.optionIcon, { backgroundColor: "#EF444418" }]}>
               <Ionicons name="log-out-outline" size={20} color="#EF4444" />
             </View>
             <Text style={[styles.optionLabel, { color: "#EF4444" }]}>Logout</Text>
-            <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
+            <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
           </Pressable>
         ) : null}
       </ScrollView>
@@ -753,36 +776,36 @@ export default function ProfileScreen() {
   );
 }
 
-function DetailRow({ icon, label, value, locked }: { icon: any; label: string; value?: string; locked?: boolean }) {
+function DetailRow({ theme, icon, label, value, locked }: { theme: AppThemeColors; icon: any; label: string; value?: string; locked?: boolean }) {
   return (
-    <View style={styles.detailRow}>
-      <View style={styles.detailIconWrap}>
+    <View style={[styles.detailRow, { borderBottomColor: theme.border }]}>
+      <View style={[styles.detailIconWrap, { backgroundColor: theme.surfaceAlt }]}>
         <Ionicons name={icon} size={16} color={Colors.light.primary} />
       </View>
       <View style={{ flex: 1 }}>
-        <Text style={styles.detailLabel}>{label}</Text>
-        <Text style={styles.detailValue}>{value || "—"}</Text>
+        <Text style={[styles.detailLabel, { color: theme.textMuted }]}>{label}</Text>
+        <Text style={[styles.detailValue, { color: theme.text }]}>{value || "—"}</Text>
       </View>
-      {locked && <Ionicons name="lock-closed-outline" size={14} color={Colors.light.textMuted} />}
+      {locked && <Ionicons name="lock-closed-outline" size={14} color={theme.textMuted} />}
     </View>
   );
 }
 
-function SectionCard({ icon, color, title, subtitle, expanded, onToggle, children }: {
+function SectionCard({ icon, color, title, subtitle, expanded, onToggle, children, theme }: {
   icon: any; color: string; title: string; subtitle: string;
-  expanded: boolean; onToggle: () => void; children: React.ReactNode;
+  expanded: boolean; onToggle: () => void; children: React.ReactNode; theme: AppThemeColors;
 }) {
   return (
-    <View style={styles.card}>
+    <View style={[styles.card, { backgroundColor: theme.card, shadowColor: theme.shadow }]}>
       <Pressable style={styles.sectionHeader} onPress={onToggle}>
         <View style={[styles.optionIcon, { backgroundColor: color + "18" }]}>
           <Ionicons name={icon} size={20} color={color} />
         </View>
         <View style={{ flex: 1 }}>
-          <Text style={styles.sectionTitle}>{title}</Text>
-          <Text style={styles.sectionSub}>{subtitle}</Text>
+          <Text style={[styles.sectionTitle, { color: theme.text }]}>{title}</Text>
+          <Text style={[styles.sectionSub, { color: theme.textMuted }]}>{subtitle}</Text>
         </View>
-        <Ionicons name={expanded ? "chevron-up" : "chevron-down"} size={18} color={Colors.light.textMuted} />
+        <Ionicons name={expanded ? "chevron-up" : "chevron-down"} size={18} color={theme.textMuted} />
       </Pressable>
       {expanded && <View style={styles.sectionContent}>{children}</View>}
     </View>
@@ -839,6 +862,15 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff", borderRadius: 18, padding: 16,
     shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 3,
   },
+  themeCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    borderWidth: 1,
+  },
+  themeIcon: { width: 40, height: 40, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  themeTitle: { fontSize: 14, fontFamily: "Inter_700Bold" },
+  themeSub: { fontSize: 12, fontFamily: "Inter_400Regular", marginTop: 2, lineHeight: 17 },
   cardTitle: { fontSize: 14, fontFamily: "Inter_700Bold", color: Colors.light.text, marginBottom: 8 },
   detailRow: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: Colors.light.border },
   detailIconWrap: { width: 32, height: 32, borderRadius: 8, backgroundColor: Colors.light.secondary, alignItems: "center", justifyContent: "center" },

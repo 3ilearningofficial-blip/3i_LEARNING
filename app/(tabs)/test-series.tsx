@@ -10,6 +10,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import Colors from "@/constants/colors";
+import { useAppTheme } from "@/context/AppThemeContext";
 import { getApiUrl, getBaseUrl, authFetch, apiRequest } from "@/lib/query-client";
 import { myAttemptsSummaryQueryKey, testQueryKey } from "@/lib/query-keys";
 import { useAuth } from "@/context/AuthContext";
@@ -43,6 +44,7 @@ const TEST_TYPE_COLORS: Record<string, string> = {
 };
 
 function ScheduledTestCard({ test, onStart, now }: { test: Test; onStart: () => void; now: number }) {
+  const { colors, isDarkMode } = useAppTheme();
   const scheduledMs = Number(test.scheduled_at);
   const durationMs = (test.duration_minutes || 60) * 60 * 1000;
   const endMs = scheduledMs + durationMs;
@@ -66,7 +68,7 @@ function ScheduledTestCard({ test, onStart, now }: { test: Test; onStart: () => 
   if (isOver) return null;
 
   return (
-    <View style={{ backgroundColor: "#F3E8FF", borderRadius: 14, padding: 14, marginBottom: 10, borderLeftWidth: 4, borderLeftColor: "#7C3AED" }}>
+    <View style={{ backgroundColor: isDarkMode ? colors.surfaceAlt : "#F3E8FF", borderRadius: 14, padding: 14, marginBottom: 10, borderLeftWidth: 4, borderLeftColor: "#7C3AED" }}>
       {/* Top row: badges + live badge + calendar icon */}
       <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
@@ -96,7 +98,7 @@ function ScheduledTestCard({ test, onStart, now }: { test: Test; onStart: () => 
       </View>
 
       {/* Title */}
-      <Text style={{ fontSize: 15, fontFamily: "Inter_700Bold", color: Colors.light.text, marginBottom: 4 }}>{test.title}</Text>
+      <Text style={{ fontSize: 15, fontFamily: "Inter_700Bold", color: colors.text, marginBottom: 4 }}>{test.title}</Text>
 
       {/* Meta: questions + duration */}
       <View style={{ flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 6 }}>
@@ -135,6 +137,7 @@ function ScheduledTestCard({ test, onStart, now }: { test: Test; onStart: () => 
 }
 
 function TestCard({ test, attempt, onPress, paymentLoading, now }: { test: Test; attempt?: any; onPress: () => void; paymentLoading?: boolean; now: number }) {
+  const { colors, isDarkMode } = useAppTheme();
   const color = TEST_TYPE_COLORS[test.test_type] || Colors.light.primary;
   const hours = Math.floor(test.duration_minutes / 60);
   const mins = test.duration_minutes % 60;
@@ -155,7 +158,12 @@ function TestCard({ test, attempt, onPress, paymentLoading, now }: { test: Test;
 
   return (
     <Pressable
-      style={({ pressed }) => [styles.testCard, (isLocked || isPaid) && styles.testCardLocked, pressed && { opacity: 0.92, transform: [{ scale: 0.98 }] }]}
+      style={({ pressed }) => [
+        styles.testCard,
+        { backgroundColor: colors.card, shadowColor: colors.shadow },
+        (isLocked || isPaid) && [styles.testCardLocked, isDarkMode && { backgroundColor: colors.surfaceAlt }],
+        pressed && { opacity: 0.92, transform: [{ scale: 0.98 }] },
+      ]}
       onPress={isLocked ? () => {
         if (Platform.OS === "web") {
           window.alert(test.course_title
@@ -199,25 +207,25 @@ function TestCard({ test, attempt, onPress, paymentLoading, now }: { test: Test;
               </View>
             )}
             <View style={styles.testDuration}>
-              <Ionicons name="time-outline" size={13} color={Colors.light.textMuted} />
-              <Text style={styles.testDurationText}>{durationStr}</Text>
+              <Ionicons name="time-outline" size={13} color={colors.textMuted} />
+              <Text style={[styles.testDurationText, { color: colors.textMuted }]}>{durationStr}</Text>
             </View>
           </View>
         </View>
-        <Text style={[styles.testTitle, isLocked && { color: Colors.light.textSecondary }]}>{test.title}</Text>
+        <Text style={[styles.testTitle, { color: isLocked ? colors.textSecondary : colors.text }]}>{test.title}</Text>
         {isLocked && test.course_title && (
           <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-            <Ionicons name="book-outline" size={12} color={Colors.light.textMuted} />
-            <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: Colors.light.textMuted }} numberOfLines={1}>
+            <Ionicons name="book-outline" size={12} color={colors.textMuted} />
+            <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: colors.textMuted }} numberOfLines={1}>
               {test.course_title}
             </Text>
           </View>
         )}
-        {test.description && !isLocked ? <Text style={styles.testDesc} numberOfLines={2}>{test.description}</Text> : null}
+        {test.description && !isLocked ? <Text style={[styles.testDesc, { color: colors.textMuted }]} numberOfLines={2}>{test.description}</Text> : null}
         {scheduledMs && !isLocked && (
           <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-            <Ionicons name="calendar-outline" size={13} color={isUpcoming ? "#7C3AED" : Colors.light.textMuted} />
-            <Text style={{ fontSize: 12, fontFamily: "Inter_500Medium", color: isUpcoming ? "#7C3AED" : Colors.light.textMuted }}>
+            <Ionicons name="calendar-outline" size={13} color={isUpcoming ? "#7C3AED" : colors.textMuted} />
+            <Text style={{ fontSize: 12, fontFamily: "Inter_500Medium", color: isUpcoming ? "#7C3AED" : colors.textMuted }}>
               {isUpcoming ? `Scheduled: ${new Date(scheduledMs).toLocaleString()}` : `Was scheduled: ${new Date(scheduledMs).toLocaleDateString()}`}
             </Text>
           </View>
@@ -225,13 +233,13 @@ function TestCard({ test, attempt, onPress, paymentLoading, now }: { test: Test;
         {!isLocked && (
           <View style={styles.testStats}>
             <View style={styles.testStat}>
-              <Ionicons name="help-circle-outline" size={14} color={Colors.light.textSecondary} />
-              <Text style={styles.testStatText}>{test.total_questions} Questions</Text>
+              <Ionicons name="help-circle-outline" size={14} color={colors.textSecondary} />
+              <Text style={[styles.testStatText, { color: colors.textSecondary }]}>{test.total_questions} Questions</Text>
             </View>
             <View style={styles.testStatDot} />
             <View style={styles.testStat}>
-              <Ionicons name="trophy-outline" size={14} color={Colors.light.textSecondary} />
-              <Text style={styles.testStatText}>{test.total_marks} Marks</Text>
+              <Ionicons name="trophy-outline" size={14} color={colors.textSecondary} />
+              <Text style={[styles.testStatText, { color: colors.textSecondary }]}>{test.total_marks} Marks</Text>
             </View>
             {attempt && (
               <>
@@ -300,6 +308,7 @@ export default function TestSeriesScreen() {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const qc = useQueryClient();
+  const { colors, isDarkMode } = useAppTheme();
   const [selectedType, setSelectedType] = useState("All");
   const [paymentWebViewHtml, setPaymentWebViewHtml] = useState<string | null>(null);
   const [paymentPending, setPaymentPending] = useState(false);
@@ -553,8 +562,8 @@ export default function TestSeriesScreen() {
   }, [allTestSeries, regularTests, qc]);
 
   return (
-    <View style={styles.container}>
-      <LinearGradient colors={["#0A1628", "#1A2E50"]} style={[styles.header, { paddingTop: topPadding + 8 }]}>
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      <LinearGradient colors={isDarkMode ? ["#020617", "#0F172A"] : ["#0A1628", "#1A2E50"]} style={[styles.header, { paddingTop: topPadding + 8 }]}>
         <Text style={styles.headerTitle}>Test Series</Text>
         <Text style={styles.headerSub}>Practice, Improve, Excel</Text>
 
@@ -583,7 +592,7 @@ export default function TestSeriesScreen() {
             <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
                 <View style={{ width: 4, height: 20, backgroundColor: Colors.light.primary, borderRadius: 2 }} />
-                <Text style={styles.sectionTitle}>Enrolled Test Series</Text>
+                <Text style={[styles.sectionTitle, { color: colors.text }]}>Enrolled Test Series</Text>
               </View>
             </View>
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 14, marginTop: 4 }}>
@@ -633,14 +642,14 @@ export default function TestSeriesScreen() {
           <View style={[styles.section, { marginTop: myTestSeries.length > 0 ? 20 : 0 }]}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
               <View style={{ width: 4, height: 20, backgroundColor: "#F59E0B", borderRadius: 2 }} />
-              <Text style={styles.sectionTitle}>Test Series</Text>
+              <Text style={[styles.sectionTitle, { color: colors.text }]}>Test Series</Text>
             </View>
             <View style={{ gap: 10 }}>
               {allTestSeries.map((course: any) => {
                 const discount = course.original_price && parseFloat(course.original_price) > 0
                   ? Math.round((1 - parseFloat(course.price) / parseFloat(course.original_price)) * 100) : 0;
                 return (
-                  <Pressable key={course.id} style={styles.testCard}
+                  <Pressable key={course.id} style={[styles.testCard, { backgroundColor: colors.card, shadowColor: colors.shadow }]}
                     onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push(`/course/${course.id}`); }}>
                     <View style={{ width: 6, backgroundColor: course.isEnrolled ? "#22C55E" : "#F59E0B", borderTopLeftRadius: 16, borderBottomLeftRadius: 16 }} />
                     <View style={{ flex: 1, padding: 14, gap: 8 }}>
@@ -688,9 +697,9 @@ export default function TestSeriesScreen() {
           </View>
         )}
         <View style={[styles.section, { marginTop: myTestSeries.length > 0 ? 20 : 0 }]}>
-          <Text style={styles.sectionTitle}>
+          <Text style={[styles.sectionTitle, { color: colors.text }]}>
             {selectedType === "All" ? "All Tests" : TEST_TYPE_LABELS[selectedType]}
-            <Text style={styles.testCount}> ({regularTests.length})</Text>
+            <Text style={[styles.testCount, { color: colors.textMuted }]}> ({regularTests.length})</Text>
           </Text>
 
           {isLoading ? (
@@ -704,7 +713,7 @@ export default function TestSeriesScreen() {
                 <View style={{ marginBottom: 16 }}>
                   <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 10 }}>
                     <View style={{ width: 4, height: 20, backgroundColor: "#7C3AED", borderRadius: 2 }} />
-                    <Text style={[styles.sectionTitle, { fontSize: 16 }]}>Scheduled Tests</Text>
+                    <Text style={[styles.sectionTitle, { fontSize: 16, color: colors.text }]}>Scheduled Tests</Text>
                   </View>
                   {scheduledActiveTests.map((test) => (
                     <ScheduledTestCard key={test.id} test={test} now={now} onStart={() => handleStartTest(test)} />
@@ -714,9 +723,9 @@ export default function TestSeriesScreen() {
               {/* Regular tests */}
               {regularTests.length === 0 ? (
                 <View style={styles.emptyState}>
-                  <Ionicons name="document-text-outline" size={48} color={Colors.light.textMuted} />
-                  <Text style={styles.emptyTitle}>No tests available</Text>
-                  <Text style={styles.emptySubtitle}>Check back soon for new tests</Text>
+                  <Ionicons name="document-text-outline" size={48} color={colors.textMuted} />
+                  <Text style={[styles.emptyTitle, { color: colors.text }]}>No tests available</Text>
+                  <Text style={[styles.emptySubtitle, { color: colors.textMuted }]}>Check back soon for new tests</Text>
                 </View>
               ) : (
                 regularTests.map((test) => (

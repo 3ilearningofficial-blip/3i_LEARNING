@@ -11,6 +11,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
 import { supportMessagesQueryKey } from "@/lib/query-keys";
 import Colors from "@/constants/colors";
+import { useAppTheme } from "@/context/AppThemeContext";
 import { useAuth } from "@/context/AuthContext";
 import { useDocumentVisibility } from "@/lib/useDocumentVisibility";
 
@@ -25,6 +26,7 @@ type Message = {
 export default function SupportChatTab() {
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
+  const { colors } = useAppTheme();
   const { user, isAdmin } = useAuth();
   const isFocused = useIsFocused();
   const tabVisible = useDocumentVisibility();
@@ -201,7 +203,7 @@ export default function SupportChatTab() {
 
   if (isAdmin) {
     return (
-      <View style={[styles.container, { paddingTop: Platform.OS === "web" ? 16 : insets.top }]}>
+      <View style={[styles.container, { paddingTop: Platform.OS === "web" ? 16 : insets.top, backgroundColor: colors.background }]}>
         {/* Header */}
         <View style={styles.header}>
           <View style={styles.headerAvatar}>
