@@ -4,11 +4,13 @@
  */
 export type CfHlsPlayerOptions = {
   liveStream?: boolean;
+  startAt?: number;
 };
 
 export function buildCfHlsPlayerHtml(hlsUrl: string, opts?: CfHlsPlayerOptions): string {
   const live = !!opts?.liveStream;
   const safeUrl = JSON.stringify(hlsUrl);
+  const startAt = Math.max(0, Math.floor(Number(opts?.startAt) || 0));
   const menuCss = `
 #menu { position: absolute; right: 52px; bottom: 8px; z-index: 80; font-family: system-ui, sans-serif; }
 #menuBtn { width: 28px; height: 28px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.24); background: rgba(0,0,0,0.48); color: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 16px; line-height: 1; }
@@ -309,7 +311,35 @@ var ssel = document.getElementById('ssel');
 var hlsRef = null;
 var retryCount = 0;
 var maxRetries = 3;
+var startAt = ${startAt > 5 ? startAt - 2 : startAt};
+var didSeekToStart = false;
+var lastSavedTime = 0;
 ${menuJs}
+function postHost(payload) {
+  try {
+    var msg = typeof payload === 'string' ? payload : JSON.stringify(payload);
+    if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(msg);
+    if (window.parent && window.parent !== window) window.parent.postMessage(msg, '*');
+  } catch (_) {}
+}
+function seekToStart() {
+  if (didSeekToStart || !(startAt > 0)) return;
+  try {
+    if (!isFinite(video.duration) || startAt >= video.duration) return;
+    didSeekToStart = true;
+    video.currentTime = startAt;
+  } catch (_) {}
+}
+function reportPosition() {
+  var ct = Math.floor(video.currentTime || 0);
+  if (!(ct > 0) || Math.abs(ct - lastSavedTime) < 10) return;
+  lastSavedTime = ct;
+  postHost({ event: 'timeupdate', currentTime: ct, duration: Math.floor(video.duration || 0) });
+}
+video.addEventListener('loadedmetadata', seekToStart);
+video.addEventListener('canplay', seekToStart);
+video.addEventListener('timeupdate', reportPosition);
+video.addEventListener('ended', function() { postHost({ event: 'ended' }); });
 if (ssel) {
   ssel.onchange = function() {
     var r = parseFloat(ssel.value || '1');
@@ -349,9 +379,10 @@ function tryLoad() {
     hls.attachMedia(video);
     hls.on(Hls.Events.MANIFEST_PARSED, function() {
       fillQuality(hls);
+      seekToStart();
       video.muted = true;
       video.play().catch(function() {});
-      if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({ event: 'play' }));
+      postHost({ event: 'play' });
     });
     hls.on(Hls.Events.LEVEL_SWITCHED, function() {
       if (qsel && hls.currentLevel >= 0) qsel.value = String(hls.currentLevel);
@@ -365,7 +396,7 @@ function tryLoad() {
           return;
         }
         var reason = (d && d.details) || 'hls-fatal';
-        if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({ event: 'error', reason: reason }));
+        postHost({ event: 'error', reason: reason });
       }
     });
   } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
@@ -376,7 +407,7 @@ function tryLoad() {
       video.removeEventListener('loadedmetadata', once);
       video.muted = true;
       video.play().catch(function() {});
-      if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({ event: 'play' }));
+      postHost({ event: 'play' });
     });
     video.addEventListener('error', function() {
       retryCount += 1;
@@ -384,7 +415,7 @@ function tryLoad() {
         setTimeout(tryLoad, retryCount * 1000);
         return;
       }
-      if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({ event: 'error', reason: 'native-hls-error' }));
+      postHost({ event: 'error', reason: 'native-hls-error' });
     });
   }
 }

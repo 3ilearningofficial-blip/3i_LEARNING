@@ -125,6 +125,13 @@ document.addEventListener('selectstart', function(e) { e.preventDefault(); retur
 
 var cfStartAt = ${startAt > 5 ? startAt - 2 : startAt};
 var cfLastSaved = 0;
+function postHost(payload) {
+  try {
+    var msg = typeof payload === 'string' ? payload : JSON.stringify(payload);
+    if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(msg);
+    if (window.parent && window.parent !== window) window.parent.postMessage(msg, '*');
+  } catch (_) {}
+}
 // Get player instance
 const player = document.getElementById('player');
 var media = document.querySelector('video');
@@ -141,34 +148,26 @@ if (media) {
 if (player) {
   player.addEventListener('loadstart', function() {
     if (cfStartAt > 0) { try { player.currentTime = cfStartAt; } catch(e) {} }
-    if (window.ReactNativeWebView) {
-      window.ReactNativeWebView.postMessage('ready');
-    }
+    postHost('ready');
   });
   player.addEventListener('timeupdate', function() {
     var ct = Math.floor(player.currentTime || 0);
-    if (Math.abs(ct - cfLastSaved) >= 10 && window.ReactNativeWebView) {
-      cfLastSaved = ct; window.ReactNativeWebView.postMessage(JSON.stringify({ event: 'timeupdate', currentTime: ct, duration: Math.floor(player.duration || 0) }));
+    if (Math.abs(ct - cfLastSaved) >= 10) {
+      cfLastSaved = ct; postHost({ event: 'timeupdate', currentTime: ct, duration: Math.floor(player.duration || 0) });
     }
   });
   
   // Track playback for analytics
   player.addEventListener('play', function() {
-    if (window.ReactNativeWebView) {
-      window.ReactNativeWebView.postMessage(JSON.stringify({ event: 'play' }));
-    }
+    postHost({ event: 'play' });
   });
   
   player.addEventListener('pause', function() {
-    if (window.ReactNativeWebView) {
-      window.ReactNativeWebView.postMessage(JSON.stringify({ event: 'pause' }));
-    }
+    postHost({ event: 'pause' });
   });
   
   player.addEventListener('ended', function() {
-    if (window.ReactNativeWebView) {
-      window.ReactNativeWebView.postMessage(JSON.stringify({ event: 'ended' }));
-    }
+    postHost({ event: 'ended' });
   });
 }
 
@@ -229,7 +228,7 @@ if (v0) v0.addEventListener('contextmenu', function(e) { e.preventDefault(); ret
 }
 
 /** Phone-web lecture YouTube — same shell fullscreen + bars as live class narrow web. */
-function buildYouTubeHtml(videoId: string): string {
+function buildYouTubeHtml(videoId: string, startAt = 0): string {
   const q = new URLSearchParams({
     autoplay: "1",
     mute: "1",
@@ -242,6 +241,7 @@ function buildYouTubeHtml(videoId: string): string {
     disablekb: "0",
     controls: "1",
   });
+  if (startAt > 5) q.set("start", String(Math.max(0, Math.floor(startAt - 2))));
   return buildYouTubePhoneWebSrcDoc({ videoId, embedQueryWithoutFs: q.toString() });
 }
 
@@ -335,10 +335,10 @@ document.addEventListener('contextmenu',function(e){e.preventDefault();});
 </html>`;
 }
 
-function WebYouTubePlayer({ videoId, onReady }: { videoId: string; onReady: () => void }) {
+function WebYouTubePlayer({ videoId, resumeAt = 0, onReady }: { videoId: string; resumeAt?: number; onReady: () => void }) {
   return (
     <iframe
-      srcDoc={buildYouTubeHtml(videoId)}
+      srcDoc={buildYouTubeHtml(videoId, resumeAt)}
       style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" } as any}
       allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
       onLoad={onReady}
@@ -474,6 +474,7 @@ export default function LectureScreen() {
   const autoCompleteSentRef = useRef(false);
   const autoPlaybackRetryRef = useRef(false);
   const lastSavedPositionRef = useRef(0);
+  const latestPlaybackPositionRef = useRef(0);
   const [mediaTokenError, setMediaTokenError] = useState<string | null>(null);
   const [mediaTokenRetryTick, setMediaTokenRetryTick] = useState(0);
 
@@ -513,7 +514,7 @@ export default function LectureScreen() {
     },
   });
 
-  const { data: progressData } = useQuery<{ is_completed: boolean; watch_percent?: number; playback_sessions?: number; last_position_seconds?: number }>({
+  const { data: progressData, refetch: refetchProgress } = useQuery<{ is_completed: boolean; watch_percent?: number; playback_sessions?: number; last_position_seconds?: number }>({
     queryKey: [`/api/lectures/${id}/progress`],
     queryFn: async () => {
       const baseUrl = getApiUrl();
@@ -524,6 +525,13 @@ export default function LectureScreen() {
     },
     enabled: !!id,
   });
+
+  useEffect(() => {
+    const savedPos = Math.floor(Number(progressData?.last_position_seconds) || 0);
+    if (savedPos > latestPlaybackPositionRef.current) {
+      latestPlaybackPositionRef.current = savedPos;
+    }
+  }, [progressData?.last_position_seconds]);
 
   // Debounced "opened player" for admin replay stats (~8 min server-side debounce between bumps).
   useEffect(() => {
@@ -619,7 +627,15 @@ export default function LectureScreen() {
     let cancelled = false;
     setMediaTokenError(null);
     void (async () => {
-      const r = await fetchMediaToken(fileKey);
+      let r = await fetchMediaToken(fileKey);
+      if (!r.ok && (r.status === 401 || r.status === 500 || r.status === 504)) {
+        await new Promise((resolve) => setTimeout(resolve, 900));
+        r = await fetchMediaToken(fileKey);
+      }
+      if (!r.ok && r.status === 401) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        r = await fetchMediaToken(fileKey);
+      }
       if (cancelled) return;
       if (r.ok) {
         setMediaToken(r.token);
@@ -634,7 +650,7 @@ export default function LectureScreen() {
       setMediaReadUrl(null);
       const msg =
         r.status === 401
-          ? "Sign in again to play this video (session expired)."
+          ? "Secure playback could not refresh. Tap Retry; if it still fails, sign in again."
           : r.status === 403
             ? "You do not have access to this file. If you are enrolled, pull to refresh the course page and retry."
             : r.message || `Could not unlock playback (${r.status}).`;
@@ -698,7 +714,10 @@ export default function LectureScreen() {
   const isDirect = !videoId && !isStreamId && !isBoardImage && isDirectVideoUrl(playbackUrl);
   
   const youtubeHtml = videoId ? buildYouTubeHtml(videoId) : "";
-  const resumeAt = Number(progressData?.last_position_seconds) || 0;
+  const resumeAt = Math.max(
+    Math.floor(Number(progressData?.last_position_seconds) || 0),
+    latestPlaybackPositionRef.current,
+  );
   const nativeYouTubeHtml = videoId ? buildNativeYouTubeHtml(videoId, resumeAt) : "";
   const streamHtml = isStreamId ? buildCloudflareStreamHtml(playbackUrl, undefined, resumeAt) : "";
   const directVideoHtml = isDirect ? buildDirectVideoHtml(playbackUrl, resumeAt) : "";
@@ -745,17 +764,28 @@ export default function LectureScreen() {
   // Persist resume position + a real watch percent (never marks complete here).
   const persistPlaybackPosition = useCallback(
     (pos: number, duration: number) => {
-      if (!(pos > 0) || Math.abs(pos - lastSavedPositionRef.current) < 5) return;
-      lastSavedPositionRef.current = pos;
+      if (!(pos > 0)) return;
+      const normalizedPos = Math.floor(pos);
+      if (normalizedPos > latestPlaybackPositionRef.current) {
+        latestPlaybackPositionRef.current = normalizedPos;
+      }
+      if (Math.abs(normalizedPos - lastSavedPositionRef.current) < 5) return;
+      lastSavedPositionRef.current = normalizedPos;
       const watchPercent =
-        duration > 0 ? Math.max(0, Math.min(100, Math.round((pos / duration) * 100))) : 0;
+        duration > 0 ? Math.max(0, Math.min(100, Math.round((normalizedPos / duration) * 100))) : 0;
+      qc.setQueryData([`/api/lectures/${id}/progress`], (old: any) => ({
+        ...(old || {}),
+        is_completed: old?.is_completed || false,
+        watch_percent: Math.max(Number(old?.watch_percent) || 0, watchPercent),
+        last_position_seconds: Math.max(Number(old?.last_position_seconds) || 0, normalizedPos),
+      }));
       apiRequest("POST", `/api/lectures/${id}/progress`, {
         watchPercent,
         isCompleted: false,
-        lastPositionSeconds: pos,
+        lastPositionSeconds: normalizedPos,
       }).catch(() => {});
     },
-    [id],
+    [id, qc],
   );
 
   const triggerPlayerRetry = useCallback((auto = false) => {
@@ -765,9 +795,11 @@ export default function LectureScreen() {
       setMediaTokenError(null);
       setMediaTokenRetryTick((t) => t + 1);
     }
-    setPlayerRetryTick((t) => t + 1);
+    void refetchProgress().finally(() => {
+      setPlayerRetryTick((t) => t + 1);
+    });
     if (!auto) autoPlaybackRetryRef.current = false;
-  }, [fileKey]);
+  }, [fileKey, refetchProgress]);
 
   const handlePlaybackError = useCallback(() => {
     if (!autoPlaybackRetryRef.current) {
@@ -801,9 +833,10 @@ export default function LectureScreen() {
     true;
   `;
 
-  const handleWebViewMessage = (event: any) => {
+  const handlePlaybackHostMessage = useCallback((rawData: unknown) => {
     try {
-      const data = JSON.parse(event.nativeEvent.data);
+      const data: any = typeof rawData === "string" ? JSON.parse(rawData) : rawData;
+      if (!data || typeof data !== "object") return;
       if (data.event === 'play') {
         autoPlaybackRetryRef.current = false;
         setIsLoading(false);
@@ -816,15 +849,8 @@ export default function LectureScreen() {
         handlePlaybackError();
       } else if (data.event === 'timeupdate' && typeof data.currentTime === 'number') {
         const pos = Math.floor(data.currentTime);
-        if (pos > 0 && Math.abs(pos - lastSavedPositionRef.current) >= 10) {
-          lastSavedPositionRef.current = pos;
-          const duration = Math.floor(Number(data.duration) || 0);
-          const watchPercent =
-            duration > 0 ? Math.max(0, Math.min(100, Math.round((pos / duration) * 100))) : 0;
-          apiRequest("POST", `/api/lectures/${id}/progress`, {
-            watchPercent, isCompleted: false, lastPositionSeconds: pos,
-          }).catch(() => {});
-        }
+        const duration = Math.floor(Number(data.duration) || 0);
+        persistPlaybackPosition(pos, duration);
       } else if (data.event === 'pause' || data.event === 'ended') {
         setIsVideoPlaying(false);
         if (data.event === 'ended') {
@@ -833,13 +859,26 @@ export default function LectureScreen() {
       }
     } catch (e) {
       // Ignore non-JSON messages
-      if (event.nativeEvent.data === 'ready') {
+      if (rawData === 'ready') {
         autoPlaybackRetryRef.current = false;
         setIsLoading(false);
         setIsVideoPlaying(true); // Assume playing when ready
       }
     }
+  }, [handlePlaybackError, persistPlaybackPosition, triggerAutoComplete]);
+
+  const handleWebViewMessage = (event: any) => {
+    handlePlaybackHostMessage(event.nativeEvent.data);
   };
+
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof window === "undefined") return;
+    const onMessage = (event: MessageEvent) => {
+      handlePlaybackHostMessage(event.data);
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [handlePlaybackHostMessage]);
 
   useEffect(() => {
     if (Platform.OS !== "web") return;
@@ -942,13 +981,13 @@ export default function LectureScreen() {
           </View>
         )}
         {!hasError && canMountPlayer && videoId && Platform.OS === "web" ? (
-          <WebYouTubePlayer key={`yt-web-${playerRetryTick}`} videoId={videoId} onReady={() => setIsLoading(false)} />
+          <WebYouTubePlayer key={`yt-web-${playerRetryTick}`} videoId={videoId} resumeAt={resumeAt} onReady={() => setIsLoading(false)} />
         ) : !hasError && canMountPlayer && isStreamId && Platform.OS === "web" ? (
           <WebCloudflareStreamPlayer key={`cf-web-${playerRetryTick}`} videoId={playbackUrl} resumeAt={resumeAt} onReady={() => setIsLoading(false)} />
         ) : !hasError && canMountPlayer && isCfHls && Platform.OS === "web" ? (
           <iframe
             key={`hls-web-${playerRetryTick}`}
-            srcDoc={buildCfHlsPlayerHtml(playbackUrl)}
+            srcDoc={buildCfHlsPlayerHtml(playbackUrl, { startAt: resumeAt })}
             style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" } as any}
             allow="autoplay; fullscreen"
             onLoad={() => { setIsLoading(false); }}
@@ -993,7 +1032,7 @@ export default function LectureScreen() {
         ) : !hasError && canMountPlayer && isCfHls && Platform.OS !== "web" ? (
           <WebView
             key={`hls-native-${playerRetryTick}`}
-            source={{ html: buildCfHlsPlayerHtml(playbackUrl) }}
+            source={{ html: buildCfHlsPlayerHtml(playbackUrl, { startAt: resumeAt }) }}
             style={styles.webView}
             onLoad={() => { setIsLoading(false); setIsVideoPlaying(true); }}
             onError={handlePlaybackError}

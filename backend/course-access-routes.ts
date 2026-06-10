@@ -301,7 +301,7 @@ export function registerCourseAccessRoutes({
         return res.status(403).json({ message: "You do not have access to this media file" });
       }
       const token = generateSecureToken();
-      const expiresAt = Date.now() + 5 * 60 * 1000;
+      const expiresAt = Date.now() + 30 * 60 * 1000;
       const storedKey = canonicalMediaKey(fileKey);
       if (!storedKey) return res.status(400).json({ message: "Invalid media file key" });
       await db.query("INSERT INTO media_tokens (token, user_id, file_key, expires_at) VALUES ($1, $2, $3, $4)", [token, user.id, storedKey, expiresAt]);
