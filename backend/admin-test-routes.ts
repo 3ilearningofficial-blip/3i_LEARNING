@@ -34,6 +34,90 @@ export function registerAdminTestRoutes({
     }
   });
 
+  app.get("/api/admin/tests/:id/attempts", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const testId = Number(req.params.id);
+      if (!Number.isFinite(testId) || testId <= 0) {
+        return res.status(400).json({ message: "Invalid test id" });
+      }
+
+      const [testResult, questionsResult, attemptsResult] = await Promise.all([
+        db.query(
+          `SELECT t.*, c.title AS course_title, sf.name AS mini_course_title
+           FROM tests t
+           LEFT JOIN courses c ON c.id = t.course_id
+           LEFT JOIN standalone_folders sf ON sf.id = t.mini_course_id
+           WHERE t.id = $1`,
+          [testId]
+        ),
+        db.query(
+          `SELECT id, question_text, option_a, option_b, option_c, option_d,
+                  correct_option, explanation, topic, difficulty, marks,
+                  negative_marks, image_url, solution_image_url, order_index
+           FROM questions
+           WHERE test_id = $1
+           ORDER BY order_index ASC, id ASC`,
+          [testId]
+        ),
+        db.query(
+          `SELECT DISTINCT ON (ta.user_id)
+                  ta.id AS attempt_id,
+                  ta.user_id,
+                  ta.score,
+                  ta.total_marks,
+                  ta.percentage,
+                  ta.correct,
+                  ta.incorrect,
+                  ta.attempted,
+                  ta.time_taken_seconds,
+                  ta.completed_at,
+                  ta.answers,
+                  ta.question_times,
+                  u.name,
+                  u.phone,
+                  u.email
+           FROM test_attempts ta
+           JOIN users u ON u.id = ta.user_id
+           WHERE ta.test_id = $1 AND ta.status = 'completed'
+           ORDER BY ta.user_id, ta.completed_at DESC`,
+          [testId]
+        ),
+      ]);
+
+      if (testResult.rows.length === 0) {
+        return res.status(404).json({ message: "Test not found" });
+      }
+
+      const attempts = attemptsResult.rows
+        .map((row: any) => ({
+          ...row,
+          score: Number(row.score || 0),
+          total_marks: Number(row.total_marks || 0),
+          percentage: Number(row.percentage || 0),
+          correct: Number(row.correct || 0),
+          incorrect: Number(row.incorrect || 0),
+          attempted: Number(row.attempted || 0),
+          time_taken_seconds: Number(row.time_taken_seconds || 0),
+          answers: typeof row.answers === "string" ? JSON.parse(row.answers || "{}") : row.answers || {},
+          question_times: typeof row.question_times === "string" ? JSON.parse(row.question_times || "{}") : row.question_times || {},
+        }))
+        .sort((a: any, b: any) => {
+          const scoreDiff = Number(b.score || 0) - Number(a.score || 0);
+          if (scoreDiff !== 0) return scoreDiff;
+          return Number(a.time_taken_seconds || 0) - Number(b.time_taken_seconds || 0);
+        });
+
+      res.json({
+        test: testResult.rows[0],
+        questions: questionsResult.rows,
+        attempts,
+      });
+    } catch (err) {
+      console.error("[AdminTests] Failed to fetch test attempts:", err);
+      res.status(500).json({ message: "Failed to fetch test attempts" });
+    }
+  });
+
   app.post("/api/admin/tests", requireAdmin, async (req: Request, res: Response) => {
     try {
       const { title, description, courseId, durationMinutes, totalMarks, passingMarks, testType, folderName, difficulty, scheduledAt, miniCourseId, price } =

@@ -255,6 +255,11 @@ export default function AdminDashboard() {
   const [missionAttempts, setMissionAttempts] = useState<any[]>([]);
   const [missionAttemptsLoading, setMissionAttemptsLoading] = useState(false);
   const [selectedAttempt, setSelectedAttempt] = useState<any | null>(null);
+  const [selectedAdminTest, setSelectedAdminTest] = useState<any | null>(null);
+  const [adminTestQuestions, setAdminTestQuestions] = useState<any[]>([]);
+  const [adminTestAttempts, setAdminTestAttempts] = useState<any[]>([]);
+  const [adminTestAttemptsLoading, setAdminTestAttemptsLoading] = useState(false);
+  const [selectedTestAttempt, setSelectedTestAttempt] = useState<any | null>(null);
   // Edit mission
   const [editMission, setEditMission] = useState<any | null>(null);
   // Edit test (admin tests tab)
@@ -1565,6 +1570,35 @@ export default function AdminDashboard() {
     }
   };
 
+  const openAdminTestAttempts = async (test: any) => {
+    setSelectedAdminTest(test);
+    setSelectedTestAttempt(null);
+    setAdminTestAttempts([]);
+    setAdminTestQuestions([]);
+    setAdminTestAttemptsLoading(true);
+    try {
+      const baseUrl = getApiUrl();
+      const res = await authFetch(new URL(`/api/admin/tests/${test.id}/attempts`, baseUrl).toString());
+      if (!res.ok) {
+        const errText = await res.text();
+        console.error("Test attempts fetch failed:", res.status, errText);
+        setAdminTestAttempts([]);
+        setAdminTestQuestions([]);
+        return;
+      }
+      const data = await res.json();
+      setSelectedAdminTest(data.test || test);
+      setAdminTestQuestions(Array.isArray(data.questions) ? data.questions : []);
+      setAdminTestAttempts(Array.isArray(data.attempts) ? data.attempts : []);
+    } catch (e) {
+      console.error("Test attempts fetch error:", e);
+      setAdminTestAttempts([]);
+      setAdminTestQuestions([]);
+    } finally {
+      setAdminTestAttemptsLoading(false);
+    }
+  };
+
   const renderAdminMissionCard = (m: any) => {
     const qCount = Array.isArray(m.questions) ? m.questions.length : 0;
     const totalMarks = Array.isArray(m.questions) ? m.questions.reduce((s: number, q: any) => s + (q.marks || 0), 0) : 0;
@@ -1654,12 +1688,12 @@ export default function AdminDashboard() {
           : freeMaterials.filter((m: any) => m.section_title === folder.name);
 
         const renderTestCard = (test: any) => (
-          <View key={test.id} style={styles.adminCard}>
+          <Pressable key={test.id} style={styles.adminCard} onPress={() => openAdminTestAttempts(test)}>
             <View style={styles.adminCardContent}>
               <View style={styles.adminCardRow}>
                 <Text style={styles.adminCardTitle} numberOfLines={2}>{test.title}</Text>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                  <Pressable style={[styles.testActionBtn, { backgroundColor: "#EEF2FF" }]} onPress={() => setEditAdminTest({ ...test, durationMinutes: String(test.duration_minutes), totalMarks: String(test.total_marks), passingMarks: String(test.passing_marks || 35), ts_course_id: tsCourses.some((c: any) => c.id === test.course_id) ? test.course_id : null })}>
+                  <Pressable style={[styles.testActionBtn, { backgroundColor: "#EEF2FF" }]} onPress={(e) => { e.stopPropagation?.(); setEditAdminTest({ ...test, durationMinutes: String(test.duration_minutes), totalMarks: String(test.total_marks), passingMarks: String(test.passing_marks || 35), ts_course_id: tsCourses.some((c: any) => c.id === test.course_id) ? test.course_id : null }); }}>
                     <Ionicons name="pencil-outline" size={14} color={Colors.light.primary} />
                     <Text style={[styles.testActionBtnText, { color: Colors.light.primary }]}>Edit Test</Text>
                   </Pressable>
@@ -1673,19 +1707,20 @@ export default function AdminDashboard() {
                 {test.course_title && <Text style={[styles.adminCardMetaText, { color: Colors.light.primary }]}> · {test.course_title}</Text>}
               </View>
               <View style={styles.testActionRow}>
-                <Pressable style={styles.testActionBtn} onPress={() => { setShowTestQuestions(test.id); setShowAddQ(true); setShowBulkQ(false); setShowViewQuestions(false); setBulkQResult(null); setBulkQText(""); }}>
+                <Pressable style={styles.testActionBtn} onPress={(e) => { e.stopPropagation?.(); setShowTestQuestions(test.id); setShowAddQ(true); setShowBulkQ(false); setShowViewQuestions(false); setBulkQResult(null); setBulkQText(""); }}>
                   <Ionicons name="create-outline" size={14} color={Colors.light.primary} />
                   <Text style={styles.testActionBtnText}>Add Questions</Text>
                 </Pressable>
-                <Pressable style={[styles.testActionBtn, { backgroundColor: "#FFF3E0" }]} onPress={() => setShowBulkUploadModal(test.id)}>
+                <Pressable style={[styles.testActionBtn, { backgroundColor: "#FFF3E0" }]} onPress={(e) => { e.stopPropagation?.(); setShowBulkUploadModal(test.id); }}>
                   <Ionicons name="cloud-upload" size={14} color="#FF6B35" />
                   <Text style={[styles.testActionBtnText, { color: "#FF6B35" }]}>Bulk Upload</Text>
                 </Pressable>
-                <Pressable style={[styles.testActionBtn, { backgroundColor: "#DCFCE7" }]} onPress={() => { setShowTestQuestions(test.id); setShowViewQuestions(true); setShowAddQ(false); setShowBulkQ(false); loadTestQuestions(test.id); }}>
+                <Pressable style={[styles.testActionBtn, { backgroundColor: "#DCFCE7" }]} onPress={(e) => { e.stopPropagation?.(); setShowTestQuestions(test.id); setShowViewQuestions(true); setShowAddQ(false); setShowBulkQ(false); loadTestQuestions(test.id); }}>
                   <Ionicons name="list" size={14} color="#16A34A" />
                   <Text style={[styles.testActionBtnText, { color: "#16A34A" }]}>Edit Questions</Text>
                 </Pressable>
-                <Pressable style={[styles.testActionBtn, { backgroundColor: "#FEE2E2" }]} onPress={() => {
+                <Pressable style={[styles.testActionBtn, { backgroundColor: "#FEE2E2" }]} onPress={(e) => {
+                  e.stopPropagation?.();
                   if (Platform.OS === "web") { if (window.confirm(`Delete "${test.title}" and all its questions?`)) deleteTestMutation.mutate(test.id); }
                   else Alert.alert("Delete Test", `Delete "${test.title}"?`, [{ text: "Cancel", style: "cancel" }, { text: "Delete", style: "destructive", onPress: () => deleteTestMutation.mutate(test.id) }]);
                 }}>
@@ -1693,7 +1728,7 @@ export default function AdminDashboard() {
                 </Pressable>
               </View>
             </View>
-          </View>
+          </Pressable>
         );
 
         const renderMatCard = (mat: any) => (
@@ -3127,12 +3162,12 @@ export default function AdminDashboard() {
               <ActivityIndicator size="large" color={Colors.light.primary} style={{ marginTop: 20 }} />
             ) : (() => {
               const renderTestCard = (test: any) => (
-                <View key={test.id} style={styles.adminCard}>
+                <Pressable key={test.id} style={styles.adminCard} onPress={() => openAdminTestAttempts(test)}>
                   <View style={styles.adminCardContent}>
                     <View style={styles.adminCardRow}>
                       <Text style={styles.adminCardTitle} numberOfLines={2}>{test.title}</Text>
                       <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                        <Pressable style={[styles.testActionBtn, { backgroundColor: "#EEF2FF" }]} onPress={() => setEditAdminTest({ ...test, durationMinutes: String(test.duration_minutes), totalMarks: String(test.total_marks), passingMarks: String(test.passing_marks || 35), ts_course_id: tsCourses.some((c: any) => c.id === test.course_id) ? test.course_id : null })}>
+                        <Pressable style={[styles.testActionBtn, { backgroundColor: "#EEF2FF" }]} onPress={(e) => { e.stopPropagation?.(); setEditAdminTest({ ...test, durationMinutes: String(test.duration_minutes), totalMarks: String(test.total_marks), passingMarks: String(test.passing_marks || 35), ts_course_id: tsCourses.some((c: any) => c.id === test.course_id) ? test.course_id : null }); }}>
                           <Ionicons name="pencil-outline" size={14} color={Colors.light.primary} />
                           <Text style={[styles.testActionBtnText, { color: Colors.light.primary }]}>Edit Test</Text>
                         </Pressable>
@@ -3146,19 +3181,20 @@ export default function AdminDashboard() {
                       {test.course_title && <Text style={[styles.adminCardMetaText, { color: Colors.light.primary }]}> · {test.course_title}</Text>}
                     </View>
                     <View style={styles.testActionRow}>
-                      <Pressable style={styles.testActionBtn} onPress={() => { setShowTestQuestions(test.id); setShowAddQ(true); setShowBulkQ(false); setShowViewQuestions(false); setBulkQResult(null); setBulkQText(""); }}>
+                      <Pressable style={styles.testActionBtn} onPress={(e) => { e.stopPropagation?.(); setShowTestQuestions(test.id); setShowAddQ(true); setShowBulkQ(false); setShowViewQuestions(false); setBulkQResult(null); setBulkQText(""); }}>
                         <Ionicons name="create-outline" size={14} color={Colors.light.primary} />
                         <Text style={styles.testActionBtnText}>Add Questions</Text>
                       </Pressable>
-                      <Pressable style={[styles.testActionBtn, { backgroundColor: "#FFF3E0" }]} onPress={() => setShowBulkUploadModal(test.id)}>
+                      <Pressable style={[styles.testActionBtn, { backgroundColor: "#FFF3E0" }]} onPress={(e) => { e.stopPropagation?.(); setShowBulkUploadModal(test.id); }}>
                         <Ionicons name="cloud-upload" size={14} color="#FF6B35" />
                         <Text style={[styles.testActionBtnText, { color: "#FF6B35" }]}>Bulk Upload</Text>
                       </Pressable>
-                      <Pressable style={[styles.testActionBtn, { backgroundColor: "#DCFCE7" }]} onPress={() => { setShowTestQuestions(test.id); setShowViewQuestions(true); setShowAddQ(false); setShowBulkQ(false); loadTestQuestions(test.id); }}>
+                      <Pressable style={[styles.testActionBtn, { backgroundColor: "#DCFCE7" }]} onPress={(e) => { e.stopPropagation?.(); setShowTestQuestions(test.id); setShowViewQuestions(true); setShowAddQ(false); setShowBulkQ(false); loadTestQuestions(test.id); }}>
                         <Ionicons name="list" size={14} color="#16A34A" />
                         <Text style={[styles.testActionBtnText, { color: "#16A34A" }]}>Edit Questions</Text>
                       </Pressable>
-                      <Pressable style={[styles.testActionBtn, { backgroundColor: "#FEE2E2" }]} onPress={() => {
+                      <Pressable style={[styles.testActionBtn, { backgroundColor: "#FEE2E2" }]} onPress={(e) => {
+                        e.stopPropagation?.();
                         if (Platform.OS === "web") { if (window.confirm(`Delete "${test.title}" and all its questions?`)) deleteTestMutation.mutate(test.id); }
                         else Alert.alert("Delete Test", `Delete "${test.title}"?`, [{ text: "Cancel", style: "cancel" }, { text: "Delete", style: "destructive", onPress: () => deleteTestMutation.mutate(test.id) }]);
                       }}>
@@ -3166,7 +3202,7 @@ export default function AdminDashboard() {
                       </Pressable>
                     </View>
                   </View>
-                </View>
+                </Pressable>
               );
               const folderNames = new Set(testFolders.map((f: any) => f.name));
               const noFolder = adminTests.filter((t: any) => !t.folder_name || !folderNames.has(t.folder_name));
@@ -5680,6 +5716,155 @@ export default function AdminDashboard() {
                       <Text style={{ fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.text }}>{q.question}</Text>
                       <Text style={{ fontSize: 12, color: "#22C55E", fontFamily: "Inter_600SemiBold" }}>✓ {q.options?.[q.correct?.charCodeAt(0) - 65]}</Text>
                       {!isCorrect && !isSkipped && <Text style={{ fontSize: 12, color: "#EF4444", fontFamily: "Inter_400Regular" }}>✗ {q.options?.[ans?.charCodeAt(0) - 65]}</Text>}
+                      {isSkipped && <Text style={{ fontSize: 12, color: "#9CA3AF", fontFamily: "Inter_400Regular" }}>Not answered</Text>}
+                    </View>
+                  );
+                })}
+              </ScrollView>
+            );
+          })()}
+        </View>
+      </Modal>
+
+      {/* Test Attempts Modal */}
+      <Modal
+        visible={!!selectedAdminTest && !selectedTestAttempt}
+        animationType="slide"
+        onRequestClose={() => {
+          setSelectedAdminTest(null);
+          setAdminTestAttempts([]);
+          setAdminTestQuestions([]);
+        }}
+      >
+        <View style={{ flex: 1, backgroundColor: Colors.light.background }}>
+          <LinearGradient colors={["#0A1628", "#1A2E50"]} style={{ paddingTop: topPadding + 8, paddingHorizontal: 16, paddingBottom: 14, flexDirection: "row", alignItems: "center", gap: 12 }}>
+            <Pressable
+              style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" }}
+              onPress={() => {
+                setSelectedAdminTest(null);
+                setAdminTestAttempts([]);
+                setAdminTestQuestions([]);
+              }}
+            >
+              <Ionicons name="arrow-back" size={20} color="#fff" />
+            </Pressable>
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: "#fff" }} numberOfLines={1}>{selectedAdminTest?.title}</Text>
+              <Text style={{ fontSize: 12, color: "rgba(255,255,255,0.6)", fontFamily: "Inter_400Regular" }}>
+                {adminTestAttempts.length} student{adminTestAttempts.length !== 1 ? "s" : ""} attempted
+              </Text>
+            </View>
+          </LinearGradient>
+          {adminTestAttemptsLoading ? (
+            <ActivityIndicator color={Colors.light.primary} style={{ marginTop: 40 }} />
+          ) : adminTestAttempts.length === 0 ? (
+            <View style={{ flex: 1, alignItems: "center", justifyContent: "center", gap: 12, padding: 24 }}>
+              <Ionicons name="people-outline" size={52} color={Colors.light.textMuted} />
+              <Text style={{ fontSize: 16, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>No attempts yet</Text>
+              <Text style={{ fontSize: 13, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", textAlign: "center" }}>No students have attempted this test.</Text>
+            </View>
+          ) : (
+            <ScrollView contentContainerStyle={{ padding: 16, gap: 10 }}>
+              {adminTestAttempts.map((attempt: any, idx: number) => {
+                const timeTaken = Number(attempt.time_taken_seconds || 0);
+                const timeMins = Math.floor(timeTaken / 60);
+                const timeSecs = timeTaken % 60;
+                const rankColors = ["#F59E0B", "#9CA3AF", "#CD7C2F"];
+                return (
+                  <Pressable
+                    key={`${attempt.user_id}-${attempt.attempt_id}`}
+                    style={[styles.adminCard, { flexDirection: "row", alignItems: "center", gap: 12 }]}
+                    onPress={() => setSelectedTestAttempt({ ...attempt, test: selectedAdminTest, questions: adminTestQuestions })}
+                  >
+                    <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: idx < 3 ? rankColors[idx] : Colors.light.secondary, alignItems: "center", justifyContent: "center" }}>
+                      <Text style={{ fontSize: 14, fontFamily: "Inter_700Bold", color: idx < 3 ? "#fff" : Colors.light.text }}>#{idx + 1}</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>{attempt.name || attempt.phone || attempt.email || "Student"}</Text>
+                      <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>
+                        {Number(attempt.score || 0)}/{Number(attempt.total_marks || selectedAdminTest?.total_marks || 0)} marks · {timeMins}m {timeSecs}s
+                      </Text>
+                    </View>
+                    <View style={{ backgroundColor: "#EEF2FF", borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 }}>
+                      <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>
+                        {Math.round(Number(attempt.percentage || 0))}%
+                      </Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={16} color={Colors.light.textMuted} />
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          )}
+        </View>
+      </Modal>
+
+      {/* Student Test Report Modal */}
+      <Modal visible={!!selectedTestAttempt} animationType="slide" onRequestClose={() => setSelectedTestAttempt(null)}>
+        <View style={{ flex: 1, backgroundColor: Colors.light.background }}>
+          <LinearGradient colors={["#0A1628", "#1A2E50"]} style={{ paddingTop: topPadding + 8, paddingHorizontal: 16, paddingBottom: 14, flexDirection: "row", alignItems: "center", gap: 12 }}>
+            <Pressable style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" }} onPress={() => setSelectedTestAttempt(null)}>
+              <Ionicons name="arrow-back" size={20} color="#fff" />
+            </Pressable>
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: "#fff" }}>{selectedTestAttempt?.name || selectedTestAttempt?.phone || "Student"}</Text>
+              <Text style={{ fontSize: 12, color: "rgba(255,255,255,0.6)", fontFamily: "Inter_400Regular" }}>Test Result</Text>
+            </View>
+          </LinearGradient>
+          {selectedTestAttempt && (() => {
+            const questions = Array.isArray(selectedTestAttempt.questions) ? selectedTestAttempt.questions : [];
+            const answers = selectedTestAttempt.answers || {};
+            const score = Number(selectedTestAttempt.score || 0);
+            const totalMarks = Number(selectedTestAttempt.total_marks || selectedTestAttempt.test?.total_marks || 0);
+            const correct = Number(selectedTestAttempt.correct || 0);
+            const incorrect = Number(selectedTestAttempt.incorrect || 0);
+            const attempted = Number(selectedTestAttempt.attempted || 0);
+            const skipped = Math.max(0, questions.length - attempted);
+            const pct = Math.round(Number(selectedTestAttempt.percentage || 0));
+            const timeTaken = Number(selectedTestAttempt.time_taken_seconds || 0);
+            const timeMins = Math.floor(timeTaken / 60);
+            const timeSecs = timeTaken % 60;
+            return (
+              <ScrollView contentContainerStyle={{ padding: 20, gap: 16 }}>
+                <LinearGradient colors={pct >= 60 ? ["#22C55E", "#16A34A"] : ["#F59E0B", "#D97706"]} style={{ borderRadius: 20, padding: 24, alignItems: "center", gap: 8 }}>
+                  <Ionicons name="trophy" size={48} color="#fff" />
+                  <Text style={{ fontSize: 20, fontFamily: "Inter_700Bold", color: "#fff", textAlign: "center" }}>{selectedTestAttempt.test?.title}</Text>
+                  <Text style={{ fontSize: 40, fontFamily: "Inter_700Bold", color: "#fff" }}>{score}/{totalMarks}</Text>
+                  <Text style={{ fontSize: 16, color: "rgba(255,255,255,0.85)", fontFamily: "Inter_400Regular" }}>{pct}% score</Text>
+                </LinearGradient>
+                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
+                  {[
+                    { label: "Time Taken", value: `${timeMins}m ${timeSecs}s`, icon: "time-outline", color: Colors.light.primary },
+                    { label: "Correct", value: String(correct), icon: "checkmark-circle-outline", color: "#22C55E" },
+                    { label: "Incorrect", value: String(incorrect), icon: "close-circle-outline", color: "#EF4444" },
+                    { label: "Skipped", value: String(skipped), icon: "remove-circle-outline", color: "#9CA3AF" },
+                    { label: "Attempted", value: String(attempted), icon: "radio-button-on-outline", color: "#F59E0B" },
+                  ].map((stat) => (
+                    <View key={stat.label} style={{ flex: 1, minWidth: 100, backgroundColor: "#fff", borderRadius: 14, padding: 14, alignItems: "center", gap: 4, borderWidth: 1, borderColor: Colors.light.border }}>
+                      <Ionicons name={stat.icon as any} size={22} color={stat.color} />
+                      <Text style={{ fontSize: 20, fontFamily: "Inter_700Bold", color: Colors.light.text }}>{stat.value}</Text>
+                      <Text style={{ fontSize: 11, fontFamily: "Inter_400Regular", color: Colors.light.textMuted }}>{stat.label}</Text>
+                    </View>
+                  ))}
+                </View>
+                <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Question Breakdown</Text>
+                {questions.map((q: any, idx: number) => {
+                  const ans = answers[q.id] ?? answers[String(q.id)];
+                  const isCorrect = ans === q.correct_option;
+                  const isSkipped = !ans;
+                  const options = [q.option_a, q.option_b, q.option_c, q.option_d];
+                  const correctText = options[String(q.correct_option || "A").charCodeAt(0) - 65] || q.correct_option;
+                  const userText = ans ? options[String(ans).charCodeAt(0) - 65] || ans : "";
+                  return (
+                    <View key={q.id} style={{ backgroundColor: "#fff", borderRadius: 12, padding: 14, borderLeftWidth: 4, borderLeftColor: isCorrect ? "#22C55E" : isSkipped ? "#9CA3AF" : "#EF4444", gap: 6 }}>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                        <Ionicons name={isCorrect ? "checkmark-circle" : isSkipped ? "remove-circle" : "close-circle"} size={18} color={isCorrect ? "#22C55E" : isSkipped ? "#9CA3AF" : "#EF4444"} />
+                        <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: Colors.light.textMuted }}>Q{idx + 1}</Text>
+                        {q.topic ? <Text style={{ fontSize: 11, color: Colors.light.primary, fontFamily: "Inter_500Medium" }}>{q.topic}</Text> : null}
+                      </View>
+                      <Text style={{ fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.text }}>{q.question_text}</Text>
+                      <Text style={{ fontSize: 12, color: "#22C55E", fontFamily: "Inter_600SemiBold" }}>Correct: {correctText}</Text>
+                      {!isCorrect && !isSkipped && <Text style={{ fontSize: 12, color: "#EF4444", fontFamily: "Inter_400Regular" }}>Student: {userText}</Text>}
                       {isSkipped && <Text style={{ fontSize: 12, color: "#9CA3AF", fontFamily: "Inter_400Regular" }}>Not answered</Text>}
                     </View>
                   );

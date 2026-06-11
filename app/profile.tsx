@@ -20,6 +20,9 @@ import { useAppTheme, type AppThemeColors } from "@/context/AppThemeContext";
 
 const ADMIN_EMAIL = "3ilearningofficial@gmail.com";
 const ADMIN_WHATSAPP = "9997198068";
+const DEFAULT_PRIVACY_POLICY_TITLE = "Privacy Policy";
+const DEFAULT_PRIVACY_POLICY_CONTENT =
+  "3i Learning respects your privacy. We collect only the information needed to provide learning services, manage your account, process purchases, improve app performance, and support students. We do not sell your personal information. For any privacy questions, contact us at 3ilearningofficial@gmail.com.";
 
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
@@ -57,6 +60,7 @@ export default function ProfileScreen() {
   const [otpCode, setOtpCode] = useState("");
   const [otpLoading, setOtpLoading] = useState(false);
   const [deleteAccountBusy, setDeleteAccountBusy] = useState(false);
+  const [showPrivacyPolicy, setShowPrivacyPolicy] = useState(false);
 
   // Fetch fresh profile data from server (ensures date_of_birth, photo_url are current)
   const { data: freshProfile } = useQuery<any>({
@@ -68,6 +72,18 @@ export default function ProfileScreen() {
       const data = await res.json();
       if (typeof data?.id !== "number") return null;
       return data;
+    },
+    staleTime: 60 * 1000,
+    gcTime: 5 * 60 * 1000,
+  });
+
+  const { data: siteSettings = {} } = useQuery<Record<string, string>>({
+    queryKey: ["/api/site-settings"],
+    queryFn: async () => {
+      const baseUrl = getApiUrl();
+      const res = await authFetch(new URL("/api/site-settings", baseUrl).toString());
+      if (!res.ok) return {};
+      return res.json();
     },
     staleTime: 60 * 1000,
     gcTime: 5 * 60 * 1000,
@@ -304,6 +320,21 @@ export default function ProfileScreen() {
   };
 
   const displayPhoto = photoUri || profile?.photo_url;
+  const privacyPolicyTitle = (siteSettings.privacy_policy_title || DEFAULT_PRIVACY_POLICY_TITLE).trim() || DEFAULT_PRIVACY_POLICY_TITLE;
+  const privacyPolicyUrl = (siteSettings.privacy_policy_url || "").trim();
+  const privacyPolicyContent = (siteSettings.privacy_policy_content || DEFAULT_PRIVACY_POLICY_CONTENT).trim() || DEFAULT_PRIVACY_POLICY_CONTENT;
+
+  const handlePrivacyPolicyPress = () => {
+    if (privacyPolicyUrl) {
+      if (Platform.OS === "web") {
+        window.open(privacyPolicyUrl, "_blank");
+      } else {
+        Linking.openURL(privacyPolicyUrl).catch(() => setShowPrivacyPolicy(true));
+      }
+      return;
+    }
+    setShowPrivacyPolicy(true);
+  };
 
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
@@ -567,6 +598,18 @@ export default function ProfileScreen() {
           <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
         </Pressable>
 
+        {/* Privacy Policy */}
+        <Pressable
+          style={[styles.optionRow, { backgroundColor: theme.card, shadowColor: theme.shadow }]}
+          onPress={handlePrivacyPolicyPress}
+        >
+          <View style={[styles.optionIcon, { backgroundColor: "#0F766E18" }]}>
+            <Ionicons name="shield-checkmark-outline" size={20} color="#0F766E" />
+          </View>
+          <Text style={[styles.optionLabel, { color: theme.text }]}>{privacyPolicyTitle}</Text>
+          <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
+        </Pressable>
+
         {/* Delete account — students only */}
         {!isAdmin ? (
           <Pressable
@@ -772,6 +815,25 @@ export default function ProfileScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Privacy Policy Modal */}
+      <Modal visible={showPrivacyPolicy} animationType="slide" transparent onRequestClose={() => setShowPrivacyPolicy(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalSheet, { paddingBottom: insets.bottom + 16, backgroundColor: theme.card }]}>
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitle, { color: theme.text }]}>{privacyPolicyTitle}</Text>
+              <Pressable onPress={() => setShowPrivacyPolicy(false)}>
+                <Ionicons name="close" size={24} color={theme.text} />
+              </Pressable>
+            </View>
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <Text style={[styles.privacyPolicyText, { color: theme.textSecondary }]}>
+                {privacyPolicyContent}
+              </Text>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -939,6 +1001,7 @@ const styles = StyleSheet.create({
   modalSheet: { backgroundColor: "#fff", borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, maxHeight: "85%" },
   modalHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 20 },
   modalTitle: { fontSize: 18, fontFamily: "Inter_700Bold", color: Colors.light.text },
+  privacyPolicyText: { fontSize: 14, fontFamily: "Inter_400Regular", lineHeight: 22 },
   dividerRow: { flexDirection: "row", alignItems: "center", gap: 10, marginVertical: 16 },
   dividerLine: { flex: 1, height: 1, backgroundColor: Colors.light.border },
   dividerText: { fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.textMuted },

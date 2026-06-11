@@ -53,6 +53,9 @@ export function WelcomeSettingsTab() {
     /** Shown on web welcome header only (phone + mail icons); not shown in Android/iOS apps. */
     welcome_web_contact_phone: "9997198068",
     welcome_web_contact_email: "3ilearningofficial@gmail.com",
+    privacy_policy_title: "Privacy Policy",
+    privacy_policy_url: "",
+    privacy_policy_content: "3i Learning respects your privacy. We collect only the information needed to provide learning services, manage your account, process purchases, improve app performance, and support students. We do not sell your personal information. For any privacy questions, contact us at 3ilearningofficial@gmail.com.",
   };
 
   React.useEffect(() => {
@@ -315,6 +318,39 @@ export function WelcomeSettingsTab() {
       <View style={{ backgroundColor: colors.card, borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: colors.border }}>
         <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: colors.text }}>Website homepage — Footer</Text>
         <TextInput style={inputStyle} value={val("welcome_footer")} onChangeText={v => set("welcome_footer", v)} />
+      </View>
+
+      <View style={{ backgroundColor: colors.card, borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: colors.border }}>
+        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: colors.text }}>Legal — Privacy Policy</Text>
+        <Text style={{ fontSize: 12, color: colors.textMuted, fontFamily: "Inter_400Regular", lineHeight: 17 }}>
+          This appears from the Privacy Policy button at the bottom of the student/admin profile screen. If you add a URL, the app opens that page; otherwise it shows the text below inside the app.
+        </Text>
+        <View style={{ gap: 4 }}>
+          <Text style={labelStyle}>Button / page title</Text>
+          <TextInput style={inputStyle} value={val("privacy_policy_title")} onChangeText={v => set("privacy_policy_title", v)} placeholder="Privacy Policy" />
+        </View>
+        <View style={{ gap: 4 }}>
+          <Text style={labelStyle}>Privacy policy URL (optional)</Text>
+          <TextInput
+            style={inputStyle}
+            value={val("privacy_policy_url")}
+            onChangeText={v => set("privacy_policy_url", v)}
+            placeholder="https://3ilearning.in/privacy-policy"
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+        </View>
+        <View style={{ gap: 4 }}>
+          <Text style={labelStyle}>Privacy policy text</Text>
+          <TextInput
+            style={[inputStyle, { minHeight: 180, textAlignVertical: "top" }]}
+            value={val("privacy_policy_content")}
+            onChangeText={v => set("privacy_policy_content", v)}
+            placeholder="Write your privacy policy here..."
+            multiline
+            numberOfLines={8}
+          />
+        </View>
       </View>
 
       <Pressable onPress={handleSave} disabled={saving} style={{ backgroundColor: Colors.light.primary, borderRadius: 12, paddingVertical: 14, alignItems: "center", opacity: saving ? 0.6 : 1 }}>
