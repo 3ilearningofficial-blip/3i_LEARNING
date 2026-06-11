@@ -28,7 +28,7 @@ import { clearWebPostLoginHomeGrace, getWebPostLoginHomeGraceRemainingMs } from 
 
 SplashScreen.preventAutoHideAsync();
 
-const WEB_PUBLIC_OR_SELF_GATED_TOP_SEGMENTS = new Set(["", "welcome", "(auth)", "profile-setup", "admin", "_sitemap"]);
+const WEB_PUBLIC_OR_SELF_GATED_TOP_SEGMENTS = new Set(["", "welcome", "privacy-policy", "(auth)", "profile-setup", "admin", "_sitemap"]);
 
 function shouldWaitForPersistedWebSession(currentSegmentName: string): boolean {
   return Platform.OS === "web" && !WEB_PUBLIC_OR_SELF_GATED_TOP_SEGMENTS.has(currentSegmentName);
