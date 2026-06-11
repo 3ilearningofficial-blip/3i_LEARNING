@@ -6,7 +6,7 @@
 - Apply SQL migrations before deploy: `npm run db:apply-sql` (includes `0027`–`0033`).
 - CI runs `db:apply-sql` + `db:check` on Postgres 16 for every PR to `main`.
 - Regenerate Drizzle schema after DB changes: `npm run db:push` (review `shared/schema.ts` in PRs).
-- Redis (`REDIS_URL`): shared OTP/global rate limits, live-class notification dedup, and `/api/download-url` throttling. Falls back to PostgreSQL when unset.
+- Redis (`REDIS_URL`): optional live-class notification dedup. Express rate limits default to PostgreSQL (`RATE_LIMIT_STORE=pg`) so auth is not blocked by Redis quota exhaustion.
 - Large uploads: use presigned R2 client upload only; `POST /api/upload/to-r2` returns 410.
 
 ## Frontend (Expo)

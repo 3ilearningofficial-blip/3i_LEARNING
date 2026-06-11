@@ -74,7 +74,8 @@ export default function TestScreen() {
   const startTimeRef = useRef<number>(Date.now());
   const submitCalledRef = useRef(false);
   const topPadding = Platform.OS === "web" ? 16 : insets.top;
-  const bottomPadding = Platform.OS === "web" ? 34 : insets.bottom;
+  const bottomPadding = Platform.OS === "web" ? 0 : insets.bottom;
+  const footerBottomPadding = Platform.OS === "web" ? 12 : Math.max(insets.bottom, 8) + 12;
   const { data: test, isLoading, error: testError } = useQuery<TestData>({
     queryKey: testQueryKey(String(id)),
     queryFn: async () => {
@@ -349,7 +350,7 @@ export default function TestScreen() {
             <Text style={[styles.timerText, { color: timeColor }]}>{formatTime(timeLeft)}</Text>
           </View>
         </LinearGradient>
-        <ScrollView contentContainerStyle={[styles.omrContent, { paddingBottom: bottomPadding + 100 }]}>
+        <ScrollView contentContainerStyle={[styles.omrContent, { paddingBottom: footerBottomPadding + 88 }]}>
           <Text style={styles.omrNote}>{answeredCount}/{test.questions.length} answered · Tap to navigate</Text>
           <View style={styles.omrGrid}>
             {test.questions.map((question, idx) => {
@@ -367,7 +368,7 @@ export default function TestScreen() {
             })}
           </View>
         </ScrollView>
-        <View style={[styles.testFooter, { paddingBottom: bottomPadding + 12 }]}>
+        <View style={[styles.testFooter, { paddingBottom: footerBottomPadding }]}>
           <Pressable style={styles.submitBtnFull} onPress={() => handleSubmit()} disabled={isSubmitting}>
             <LinearGradient colors={["#22C55E", "#16A34A"]} style={styles.submitBtnGradient}>
               {isSubmitting ? <ActivityIndicator color="#fff" /> : <><Text style={styles.submitBtnText}>Submit Test</Text><Ionicons name="checkmark-circle" size={20} color="#fff" /></>}
@@ -460,7 +461,7 @@ export default function TestScreen() {
           })}
         </View>
       </ScrollView>
-      <View style={[styles.testFooter, { paddingBottom: bottomPadding + 12 }]}>
+      <View style={[styles.testFooter, { paddingBottom: footerBottomPadding }]}>
         <Pressable style={[styles.navBtn, currentQ === 0 && styles.navBtnDisabled]} onPress={() => { recordCurrentQTime(q.id); setCurrentQ((p) => Math.max(0, p - 1)); }} disabled={currentQ === 0}>
           <Ionicons name="chevron-back" size={20} color={currentQ === 0 ? Colors.light.textMuted : Colors.light.primary} />
         </Pressable>

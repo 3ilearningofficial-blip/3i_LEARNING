@@ -522,6 +522,15 @@ function normalizeOtpIdentifier(input: unknown): string {
   return `id:${raw || "global"}`;
 }
 
+type RateLimitStoreKind = "pg" | "redis" | "memory";
+
+function normalizeRateLimitStoreKind(value: unknown, fallback: RateLimitStoreKind): RateLimitStoreKind {
+  const raw = String(value || "").trim().toLowerCase();
+  if (raw === "postgres" || raw === "postgresql") return "pg";
+  if (raw === "pg" || raw === "redis" || raw === "memory") return raw;
+  return fallback;
+}
+
 (async () => {
   // Import routes only after dotenv has initialized env vars.
   const { registerRoutes } = await import("./routes");
@@ -687,20 +696,47 @@ function normalizeOtpIdentifier(input: unknown): string {
   const redisClient = await getRedisClient();
   const failClosedAuthRateLimit = getEnvFlag("FF_FAIL_CLOSED_AUTH_RATE_LIMIT", true);
   const failClosedMediaRateLimit = getEnvFlag("FF_FAIL_CLOSED_MEDIA_RATE_LIMIT", true);
-  const makeRateLimitStore = (prefix: string, options?: { failClosed?: boolean }) =>
-    redisClient
-      ? new RedisRateLimitStore(redisClient, prefix, options)
-      : rateLimitPool
-        ? new PgRateLimitStore(rateLimitPool, options)
-        : undefined;
-  const otpSendStore = makeRateLimitStore("otp-send", { failClosed: failClosedAuthRateLimit });
-  const otpVerifyStore = makeRateLimitStore("otp-verify", { failClosed: failClosedAuthRateLimit });
-  const authLoginStore = makeRateLimitStore("auth-login", { failClosed: failClosedAuthRateLimit });
-  const mediaTokenStore = makeRateLimitStore("media-token", { failClosed: failClosedMediaRateLimit });
-  const globalApiStore = makeRateLimitStore("global-api");
+  // Rate-limit counters are intentionally PostgreSQL-backed by default. Upstash
+  // free-tier Redis can exhaust its monthly command quota; auth must not become
+  // unavailable just because Redis refuses increments. Redis can still be chosen
+  // explicitly for a category after provisioning enough quota.
+  const defaultRateLimitStoreKind = normalizeRateLimitStoreKind(process.env.RATE_LIMIT_STORE, "pg");
+  const authRateLimitStoreKind = normalizeRateLimitStoreKind(process.env.AUTH_RATE_LIMIT_STORE, defaultRateLimitStoreKind);
+  const mediaRateLimitStoreKind = normalizeRateLimitStoreKind(process.env.MEDIA_RATE_LIMIT_STORE, defaultRateLimitStoreKind);
+  const globalRateLimitStoreKind = normalizeRateLimitStoreKind(process.env.GLOBAL_RATE_LIMIT_STORE, defaultRateLimitStoreKind);
+  const makeRateLimitStore = (
+    prefix: string,
+    options?: { failClosed?: boolean },
+    storeKind: RateLimitStoreKind = defaultRateLimitStoreKind
+  ) => {
+    if (storeKind === "pg") {
+      if (rateLimitPool) return new PgRateLimitStore(rateLimitPool, options);
+      if (redisClient) return new RedisRateLimitStore(redisClient, prefix, options);
+      return undefined;
+    }
+    if (storeKind === "redis") {
+      if (redisClient) return new RedisRateLimitStore(redisClient, prefix, options);
+      if (rateLimitPool) return new PgRateLimitStore(rateLimitPool, options);
+      return undefined;
+    }
+    return undefined;
+  };
+  const otpSendStore = makeRateLimitStore("otp-send", { failClosed: failClosedAuthRateLimit }, authRateLimitStoreKind);
+  const otpVerifyStore = makeRateLimitStore("otp-verify", { failClosed: failClosedAuthRateLimit }, authRateLimitStoreKind);
+  const authLoginStore = makeRateLimitStore("auth-login", { failClosed: failClosedAuthRateLimit }, authRateLimitStoreKind);
+  const mediaTokenStore = makeRateLimitStore("media-token", { failClosed: failClosedMediaRateLimit }, mediaRateLimitStoreKind);
+  const globalApiStore = makeRateLimitStore("global-api", undefined, globalRateLimitStoreKind);
   if (redisClient) {
-    console.log("[Redis] Rate limit stores using Redis");
+    console.log("[Redis] Client configured for optional shared features");
   }
+  console.log("[RateLimit] Store selection", {
+    default: defaultRateLimitStoreKind,
+    auth: authRateLimitStoreKind,
+    media: mediaRateLimitStoreKind,
+    global: globalRateLimitStoreKind,
+    pgAvailable: !!rateLimitPool,
+    redisAvailable: !!redisClient,
+  });
 
   const otpSendLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
