@@ -29,9 +29,15 @@ import { clearWebPostLoginHomeGrace, getWebPostLoginHomeGraceRemainingMs } from 
 SplashScreen.preventAutoHideAsync();
 
 const WEB_PUBLIC_OR_SELF_GATED_TOP_SEGMENTS = new Set(["", "welcome", "privacy-policy", "delete-account", "(auth)", "profile-setup", "admin", "_sitemap"]);
+const WEB_PUBLIC_LEGAL_TOP_SEGMENTS = new Set(["privacy-policy", "delete-account"]);
 
 function shouldWaitForPersistedWebSession(currentSegmentName: string): boolean {
   return Platform.OS === "web" && !WEB_PUBLIC_OR_SELF_GATED_TOP_SEGMENTS.has(currentSegmentName);
+}
+
+function getCurrentWebTopSegment(): string {
+  if (Platform.OS !== "web" || typeof window === "undefined") return "";
+  return window.location.pathname.split("/").filter(Boolean)[0] || "";
 }
 
 // Lock to portrait on mobile (native)
@@ -145,6 +151,10 @@ function RootLayoutNav() {
     if (isLoading) return;
     const currentSegment = segments[0];
     const currentSegmentName = String(currentSegment || "");
+    const currentWebTopSegment = getCurrentWebTopSegment();
+    if (Platform.OS === "web" && WEB_PUBLIC_LEGAL_TOP_SEGMENTS.has(currentWebTopSegment)) {
+      return;
+    }
     if (!currentSegment) {
       if (user) {
         if (user.profileComplete) {
@@ -172,6 +182,7 @@ function RootLayoutNav() {
     const inAuthGroup = currentSegment === "(auth)";
     const inProfileSetup = currentSegment === "profile-setup";
     const inWelcome = currentSegment === "welcome";
+    const inPublicLegalRoute = Platform.OS === "web" && WEB_PUBLIC_LEGAL_TOP_SEGMENTS.has(currentSegmentName);
     // useSegments() is typed as a length-1 tuple; avoid segments[1] (TS tuple index error in CI)
     const authChild = (segments as readonly string[]).at(1);
     // Allow all auth sub-routes (password login, phone OTP, OTP verify) without forcing a jump.
@@ -193,6 +204,10 @@ function RootLayoutNav() {
       "notifications",
       "downloads",
     ]);
+
+    if (inPublicLegalRoute) {
+      return;
+    }
 
     if (user) {
       if (user.profileComplete) {
@@ -290,9 +305,11 @@ function RootLayoutNav() {
   if (isLoading) return null;
 
   const currentSegment = segments[0];
+  const inPublicLegalRoute = Platform.OS === "web" && WEB_PUBLIC_LEGAL_TOP_SEGMENTS.has(String(currentSegment || ""));
   const showWebAppHeader =
     Platform.OS === "web" &&
     !!user?.profileComplete &&
+    !inPublicLegalRoute &&
     currentSegment !== "admin" &&
     currentSegment !== "(auth)" &&
     currentSegment !== "welcome" &&
@@ -307,6 +324,8 @@ function RootLayoutNav() {
       <Stack.Screen name="home" options={{ headerShown: showWebAppHeader }} />
       <Stack.Screen name="(auth)" options={{ headerShown: false }} />
       <Stack.Screen name="welcome" options={{ headerShown: false }} />
+      <Stack.Screen name="privacy-policy" options={{ headerShown: false }} />
+      <Stack.Screen name="delete-account" options={{ headerShown: false }} />
       <Stack.Screen name="profile-setup" options={{ headerShown: false }} />
       <Stack.Screen name="profile" options={{ headerShown: showWebAppHeader }} />
       <Stack.Screen name="store" options={{ headerShown: showWebAppHeader }} />
