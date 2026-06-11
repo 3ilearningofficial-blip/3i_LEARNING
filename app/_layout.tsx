@@ -217,7 +217,12 @@ function RootLayoutNav() {
         return;
       }
 
-      // Incomplete profile: allow /welcome (e.g. user tapped Back from login); initial load stacks welcome→login from !currentSegment above.
+      if (Platform.OS !== "web" && inWelcome) {
+        router.replace("/profile-setup");
+        return;
+      }
+
+      // Incomplete profile: allow /welcome on web (e.g. user tapped Back from login); initial load stacks welcome→login from !currentSegment above.
       if (inWelcome) {
         return;
       }
@@ -287,6 +292,10 @@ function RootLayoutNav() {
       return () => {
         cancelled = true;
       };
+    }
+    if (Platform.OS !== "web" && inWelcome) {
+      router.replace("/(auth)/email-login");
+      return;
     }
     if (!inAuthGroup && !inWelcome && !inProfileSetup) {
       router.replace(Platform.OS === "web" ? "/welcome" : "/(auth)/email-login");
