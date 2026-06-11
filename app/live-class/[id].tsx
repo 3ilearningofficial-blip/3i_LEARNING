@@ -637,7 +637,15 @@ export default function LiveClassScreen() {
     setRecordingReadUrl(null);
     setRecordingTokenError(null);
     void (async () => {
-      const result = await fetchMediaToken(recordingFileKey);
+      let result = await fetchMediaToken(recordingFileKey);
+      if (!result.ok && (result.status === 401 || result.status === 500 || result.status === 504)) {
+        await new Promise((resolve) => setTimeout(resolve, 900));
+        result = await fetchMediaToken(recordingFileKey);
+      }
+      if (!result.ok && result.status === 401) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        result = await fetchMediaToken(recordingFileKey);
+      }
       if (cancelled) return;
       if (result.ok && result.token) {
         setRecordingToken(result.token);
@@ -664,6 +672,15 @@ export default function LiveClassScreen() {
     };
   }, [recordingFileKey, userScopedRecordingKey, recordingTokenRetryTick]);
 
+  useEffect(() => {
+    if (!recordingFileKey || !userScopedRecordingKey || !recordingToken) return;
+    const cached = mediaTokenCache.get(userScopedRecordingKey);
+    if (!cached?.expiresAt) return;
+    const msUntilRefresh = Math.max(0, cached.expiresAt - Date.now() - 60_000);
+    const tid = setTimeout(() => setRecordingTokenRetryTick((t) => t + 1), msUntilRefresh);
+    return () => clearTimeout(tid);
+  }, [recordingFileKey, recordingToken, userScopedRecordingKey]);
+
   const authenticatedVideoUrl = (() => {
     if (!recordingFileKey) return toHttpsMediaUrl(videoUrl);
     if (!recordingToken) return toHttpsMediaUrl(videoUrl);
@@ -671,6 +688,7 @@ export default function LiveClassScreen() {
       recordingReadUrl || `${getBaseUrl()}/api/media/${recordingFileKey}?token=${recordingToken}`,
     );
   })();
+  const canMountRecordingPlayer = !recordingFileKey || !!recordingToken;
   useEffect(() => {
     didAutoplayDirectRecording.current = false;
     setHasPlayedOnce(false);
@@ -712,6 +730,36 @@ export default function LiveClassScreen() {
   });
   const recordingResumeAt = Number(recordingProgressData?.last_position_seconds) || 0;
   const recordingLastSavedRef = useRef(0);
+  const recordingLatestPositionRef = useRef(0);
+
+  useEffect(() => {
+    const savedPos = Math.floor(Number(recordingProgressData?.last_position_seconds) || 0);
+    if (savedPos > recordingLatestPositionRef.current) {
+      recordingLatestPositionRef.current = savedPos;
+    }
+  }, [recordingProgressData?.last_position_seconds]);
+
+  const persistRecordingPosition = useCallback((pos: number, duration = 0) => {
+    if (!id || !liveClassData?.is_completed || !(pos > 0)) return;
+    const normalizedPos = Math.floor(pos);
+    if (normalizedPos > recordingLatestPositionRef.current) {
+      recordingLatestPositionRef.current = normalizedPos;
+    }
+    if (Math.abs(normalizedPos - recordingLastSavedRef.current) < 5) return;
+    recordingLastSavedRef.current = normalizedPos;
+    const watchPercent =
+      duration > 0 ? Math.max(0, Math.min(100, Math.round((normalizedPos / duration) * 100))) : 0;
+    qc.setQueryData([`/api/live-classes/${id}/recording-progress`], (old: any) => ({
+      ...(old || {}),
+      watch_percent: Math.max(Number(old?.watch_percent) || 0, watchPercent),
+      last_position_seconds: Math.max(Number(old?.last_position_seconds) || 0, normalizedPos),
+    }));
+    void authFetch(`${getApiUrl()}/live-classes/${encodeURIComponent(String(id))}/recording-progress`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ watchPercent, lastPositionSeconds: normalizedPos }),
+    }).catch(() => {});
+  }, [id, liveClassData?.is_completed, qc]);
 
   useEffect(() => {
     if (!id || !isScreenActive || !liveClassData?.is_completed || !recordingUrl.trim()) return;
@@ -945,13 +993,14 @@ export default function LiveClassScreen() {
         markPlayed();
       } else if (data.event === 'timeupdate' && typeof data.currentTime === 'number' && liveClassData?.is_completed) {
         const pos = Math.floor(data.currentTime);
-        if (pos > 0 && Math.abs(pos - recordingLastSavedRef.current) >= 10) {
-          recordingLastSavedRef.current = pos;
-          apiRequest("POST", `/api/live-classes/${id}/recording-progress`, {
-            watchPercent: 0, lastPositionSeconds: pos,
-          }).catch(() => {});
+        const duration = Math.floor(Number(data.duration) || 0);
+        persistRecordingPosition(pos, duration);
+      } else if (data.event === 'pause' || data.event === 'ended' || data.event === 'waiting' || data.event === 'stalled' || data.event === 'error') {
+        if (typeof data.currentTime === 'number') {
+          const pos = Math.floor(data.currentTime);
+          const duration = Math.floor(Number(data.duration) || 0);
+          persistRecordingPosition(pos, duration);
         }
-      } else if (data.event === 'pause' || data.event === 'ended') {
         setIsVideoPlaying(false);
       }
     } catch (e) {
@@ -960,7 +1009,16 @@ export default function LiveClassScreen() {
         markPlayed();
       }
     }
-  }, [markPlayed]);
+  }, [liveClassData?.is_completed, markPlayed, persistRecordingPosition]);
+
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof window === "undefined") return;
+    const onMessage = (event: MessageEvent) => {
+      handleWebViewMessage({ nativeEvent: { data: event.data } });
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [handleWebViewMessage]);
 
   const preventScreenCapture = `
     (function() {
@@ -1128,14 +1186,17 @@ export default function LiveClassScreen() {
             ) : /* Web: do not use RN WebView for YouTube before go-live — it often collapses; show black stage + waiting overlay. */
             Platform.OS === "web" && videoId && !showAsLiveUI && !liveClassData?.is_completed ? (
               <View style={styles.webScheduledVideoSlot} />
-            ) : isCfHls && Platform.OS === "web" ? (
+            ) : isCfHls && canMountRecordingPlayer && Platform.OS === "web" ? (
               <iframe
-                srcDoc={buildCfHlsPlayerHtml(cfHlsUrl, { liveStream: true })}
+                srcDoc={buildCfHlsPlayerHtml(
+                  isCfHlsLive ? cfHlsUrl : authenticatedVideoUrl,
+                  isCfHlsLive ? { liveStream: true } : { startAt: recordingResumeAt },
+                )}
                 style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" } as any}
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                 onLoad={markPlayed}
               />
-            ) : !videoId && !isCfHls && !isStreamId && authenticatedVideoUrl && Platform.OS === "web" ? (
+            ) : !videoId && !isCfHls && !isStreamId && authenticatedVideoUrl && canMountRecordingPlayer && Platform.OS === "web" ? (
               // Direct recording / upload — programmatic play for browser autoplay policies
               <video
                 src={authenticatedVideoUrl}
@@ -1162,13 +1223,33 @@ export default function LiveClassScreen() {
                     });
                 }}
                 onPlay={() => setIsVideoPlaying(true)}
-                onPause={() => setIsVideoPlaying(false)}
+                onPause={(e) => {
+                  const v = e.currentTarget;
+                  persistRecordingPosition(Math.floor(v.currentTime || 0), Math.floor(v.duration || 0));
+                  setIsVideoPlaying(false);
+                }}
+                onWaiting={(e) => {
+                  const v = e.currentTarget;
+                  persistRecordingPosition(Math.floor(v.currentTime || 0), Math.floor(v.duration || 0));
+                }}
+                onStalled={(e) => {
+                  const v = e.currentTarget;
+                  persistRecordingPosition(Math.floor(v.currentTime || 0), Math.floor(v.duration || 0));
+                }}
+                onTimeUpdate={(e) => {
+                  const v = e.currentTarget;
+                  if (v.paused || v.ended) return;
+                  persistRecordingPosition(Math.floor(v.currentTime || 0), Math.floor(v.duration || 0));
+                }}
                 onContextMenu={(ev: any) => ev.preventDefault()}
               />
-            ) : isCfHls && Platform.OS !== "web" ? (
+            ) : isCfHls && canMountRecordingPlayer && Platform.OS !== "web" ? (
               <WebView
                 ref={cfHlsWebViewRef}
-                source={{ html: buildCfHlsPlayerHtml(cfHlsUrl, { liveStream: !!isCfHlsLive }) }}
+                source={{ html: buildCfHlsPlayerHtml(
+                  isCfHlsLive ? cfHlsUrl : authenticatedVideoUrl,
+                  isCfHlsLive ? { liveStream: true } : { startAt: recordingResumeAt },
+                ) }}
                 style={{ flex: 1, backgroundColor: "#000" }}
                 onLoad={markPlayed}
                 onMessage={handleWebViewMessage}
@@ -1188,10 +1269,10 @@ export default function LiveClassScreen() {
                 javaScriptEnabled domStorageEnabled mixedContentMode="compatibility"
                 originWhitelist={["*"]}
               />
-            ) : !videoId && !isCfHls && !isStreamId && videoUrl && Platform.OS !== "web" ? (
+            ) : !videoId && !isCfHls && !isStreamId && authenticatedVideoUrl && canMountRecordingPlayer && Platform.OS !== "web" ? (
               // Direct video file on native
               <WebView
-                source={{ uri: videoUrl }}
+                source={{ uri: authenticatedVideoUrl }}
                 style={{ flex: 1, backgroundColor: "#000" }}
                 onLoad={markPlayed}
                 onMessage={handleWebViewMessage}
@@ -1407,14 +1488,17 @@ export default function LiveClassScreen() {
               />
             ) : Platform.OS === "web" && videoId && !showAsLiveUI && !liveClassData?.is_completed ? (
               <View style={styles.webScheduledVideoSlot} />
-            ) : isCfHls && Platform.OS === "web" ? (
+            ) : isCfHls && canMountRecordingPlayer && Platform.OS === "web" ? (
               <iframe
-                srcDoc={buildCfHlsPlayerHtml(cfHlsUrl, { liveStream: true })}
+                srcDoc={buildCfHlsPlayerHtml(
+                  isCfHlsLive ? cfHlsUrl : authenticatedVideoUrl,
+                  isCfHlsLive ? { liveStream: true } : { startAt: recordingResumeAt },
+                )}
                 style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" } as any}
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                 onLoad={markPlayed}
               />
-            ) : !videoId && !isCfHls && !isStreamId && authenticatedVideoUrl && Platform.OS === "web" ? (
+            ) : !videoId && !isCfHls && !isStreamId && authenticatedVideoUrl && canMountRecordingPlayer && Platform.OS === "web" ? (
               <video
                 src={authenticatedVideoUrl}
                 controls
@@ -1440,13 +1524,33 @@ export default function LiveClassScreen() {
                     });
                 }}
                 onPlay={() => setIsVideoPlaying(true)}
-                onPause={() => setIsVideoPlaying(false)}
+                onPause={(e) => {
+                  const v = e.currentTarget;
+                  persistRecordingPosition(Math.floor(v.currentTime || 0), Math.floor(v.duration || 0));
+                  setIsVideoPlaying(false);
+                }}
+                onWaiting={(e) => {
+                  const v = e.currentTarget;
+                  persistRecordingPosition(Math.floor(v.currentTime || 0), Math.floor(v.duration || 0));
+                }}
+                onStalled={(e) => {
+                  const v = e.currentTarget;
+                  persistRecordingPosition(Math.floor(v.currentTime || 0), Math.floor(v.duration || 0));
+                }}
+                onTimeUpdate={(e) => {
+                  const v = e.currentTarget;
+                  if (v.paused || v.ended) return;
+                  persistRecordingPosition(Math.floor(v.currentTime || 0), Math.floor(v.duration || 0));
+                }}
                 onContextMenu={(ev: any) => ev.preventDefault()}
               />
-            ) : isCfHls && Platform.OS !== "web" ? (
+            ) : isCfHls && canMountRecordingPlayer && Platform.OS !== "web" ? (
               <WebView
                 ref={cfHlsWebViewRef}
-                source={{ html: buildCfHlsPlayerHtml(cfHlsUrl, { liveStream: !!isCfHlsLive }) }}
+                source={{ html: buildCfHlsPlayerHtml(
+                  isCfHlsLive ? cfHlsUrl : authenticatedVideoUrl,
+                  isCfHlsLive ? { liveStream: true } : { startAt: recordingResumeAt },
+                ) }}
                 style={{ flex: 1, backgroundColor: "#000" }}
                 onLoad={markPlayed}
                 onMessage={handleWebViewMessage}
@@ -1466,9 +1570,9 @@ export default function LiveClassScreen() {
                 javaScriptEnabled domStorageEnabled mixedContentMode="compatibility"
                 originWhitelist={["*"]}
               />
-            ) : !videoId && !isCfHls && !isStreamId && videoUrl && Platform.OS !== "web" ? (
+            ) : !videoId && !isCfHls && !isStreamId && authenticatedVideoUrl && canMountRecordingPlayer && Platform.OS !== "web" ? (
               <WebView
-                source={{ uri: videoUrl }}
+                source={{ uri: authenticatedVideoUrl }}
                 style={{ flex: 1, backgroundColor: "#000" }}
                 onLoad={markPlayed}
                 onMessage={handleWebViewMessage}

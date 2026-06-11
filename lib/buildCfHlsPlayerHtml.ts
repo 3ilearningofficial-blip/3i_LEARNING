@@ -310,7 +310,7 @@ var qsel = document.getElementById('qsel');
 var ssel = document.getElementById('ssel');
 var hlsRef = null;
 var retryCount = 0;
-var maxRetries = 3;
+var maxRetries = 5;
 var startAt = ${startAt > 5 ? startAt - 2 : startAt};
 var didSeekToStart = false;
 var lastSavedTime = 0;
@@ -330,16 +330,30 @@ function seekToStart() {
     video.currentTime = startAt;
   } catch (_) {}
 }
-function reportPosition() {
+function reportPosition(force) {
   var ct = Math.floor(video.currentTime || 0);
-  if (!(ct > 0) || Math.abs(ct - lastSavedTime) < 10) return;
+  if (!(ct > 0)) return;
+  if (!force && Math.abs(ct - lastSavedTime) < 5) return;
   lastSavedTime = ct;
   postHost({ event: 'timeupdate', currentTime: ct, duration: Math.floor(video.duration || 0) });
 }
+function postPlaybackEvent(eventName) {
+  reportPosition(true);
+  postHost({ event: eventName, currentTime: Math.floor(video.currentTime || 0), duration: Math.floor(video.duration || 0) });
+}
+function destroyHls() {
+  if (!hlsRef) return;
+  try { hlsRef.destroy(); } catch (_) {}
+  hlsRef = null;
+}
 video.addEventListener('loadedmetadata', seekToStart);
 video.addEventListener('canplay', seekToStart);
-video.addEventListener('timeupdate', reportPosition);
-video.addEventListener('ended', function() { postHost({ event: 'ended' }); });
+video.addEventListener('timeupdate', function() { reportPosition(false); });
+video.addEventListener('play', function() { postHost({ event: 'play' }); });
+video.addEventListener('pause', function() { postPlaybackEvent('pause'); });
+video.addEventListener('waiting', function() { reportPosition(true); });
+video.addEventListener('stalled', function() { reportPosition(true); });
+video.addEventListener('ended', function() { postPlaybackEvent('ended'); });
 if (ssel) {
   ssel.onchange = function() {
     var r = parseFloat(ssel.value || '1');
@@ -374,7 +388,14 @@ function fillQuality(hls) {
 }
 function tryLoad() {
   if (typeof Hls !== 'undefined' && Hls.isSupported()) {
-    var hls = new Hls({ enableWorker: true });
+    destroyHls();
+    var hls = new Hls({
+      enableWorker: true,
+      manifestLoadingMaxRetry: 4,
+      levelLoadingMaxRetry: 4,
+      fragLoadingMaxRetry: 4
+    });
+    hlsRef = hls;
     hls.loadSource(hlsUrl);
     hls.attachMedia(video);
     hls.on(Hls.Events.MANIFEST_PARSED, function() {
@@ -389,9 +410,15 @@ function tryLoad() {
     });
     hls.on(Hls.Events.ERROR, function(e, d) {
       var fatal = !!(d && d.fatal);
+      reportPosition(true);
       if (fatal) {
+        try {
+          if (d.type === Hls.ErrorTypes.NETWORK_ERROR) { hls.startLoad(); return; }
+          if (d.type === Hls.ErrorTypes.MEDIA_ERROR) { hls.recoverMediaError(); return; }
+        } catch (_) {}
         retryCount += 1;
         if (retryCount <= maxRetries) {
+          destroyHls();
           setTimeout(tryLoad, retryCount * 1000);
           return;
         }
@@ -410,8 +437,10 @@ function tryLoad() {
       postHost({ event: 'play' });
     });
     video.addEventListener('error', function() {
+      reportPosition(true);
       retryCount += 1;
       if (retryCount <= maxRetries) {
+        try { video.load(); } catch (_) {}
         setTimeout(tryLoad, retryCount * 1000);
         return;
       }
@@ -419,6 +448,25 @@ function tryLoad() {
     });
   }
 }
+function softResume() {
+  reportPosition(true);
+  if (hlsRef) { try { hlsRef.startLoad(); } catch (_) {} }
+  if (video.paused) {
+    video.play().catch(function() {
+      video.muted = true;
+      video.play().catch(function() {});
+    });
+  }
+}
+window.softResume = softResume;
+document.addEventListener('visibilitychange', function() {
+  if (document.hidden) reportPosition(true);
+  else softResume();
+});
+window.addEventListener('pagehide', function() { reportPosition(true); });
+window.addEventListener('blur', function() { reportPosition(true); });
+window.addEventListener('focus', softResume);
+window.addEventListener('online', softResume);
 tryLoad();
 document.addEventListener('contextmenu', function(e) { e.preventDefault(); });
 </script>

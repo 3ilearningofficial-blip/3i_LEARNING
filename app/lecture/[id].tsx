@@ -182,6 +182,7 @@ if (navigator.userAgent.includes('Android')) {
 }
 
 function buildDirectVideoHtml(url: string, startAt = 0): string {
+  const safeUrl = JSON.stringify(url);
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -193,32 +194,128 @@ video { width: 100%; height: 100%; object-fit: contain; background: #000; }
 </style>
 </head>
 <body>
-<video controls playsinline controlsList="nodownload noremoteplayback nopictureinpicture" disablePictureInPicture disableRemotePlayback x-webkit-airplay="deny">
-  <source src="${url}" type="video/mp4">
-</video>
+<video id="v" controls autoplay muted playsinline preload="auto" controlsList="nodownload noremoteplayback nopictureinpicture" disablePictureInPicture disableRemotePlayback x-webkit-airplay="deny"></video>
 <script>
 document.addEventListener('contextmenu', function(e) { e.preventDefault(); });
 // Disable long-press save on mobile
-var v0 = document.querySelector('video');
-if (v0) v0.addEventListener('contextmenu', function(e) { e.preventDefault(); return false; });
 (function(){
-  var v = document.querySelector('video');
+  var v = document.getElementById('v');
   if (!v) return;
+  var sourceUrl = ${safeUrl};
   var startAt = ${startAt > 5 ? startAt - 2 : startAt};
   var lastSaved = 0;
-  if (startAt > 0) {
-    v.addEventListener('canplay', function oncp() { v.currentTime = startAt; v.removeEventListener('canplay', oncp); }, { once: true });
+  var didSeek = false;
+  var lastGoodTime = startAt || 0;
+  var stallTimer = null;
+  var retryCount = 0;
+  var maxRetries = 4;
+  var lastBufferAhead = 0;
+  v.src = sourceUrl;
+  v.preload = 'auto';
+  v.addEventListener('contextmenu', function(e) { e.preventDefault(); return false; });
+  function postHost(payload) {
+    try {
+      var msg = typeof payload === 'string' ? payload : JSON.stringify(payload);
+      if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(msg);
+      if (window.parent && window.parent !== window) window.parent.postMessage(msg, '*');
+    } catch (_) {}
+  }
+  function seekToResume() {
+    if (didSeek || !(startAt > 0)) return;
+    try {
+      if (isFinite(v.duration) && startAt >= v.duration) return;
+      didSeek = true;
+      v.currentTime = startAt;
+      lastGoodTime = startAt;
+    } catch (_) {}
+  }
+  function bufferAhead() {
+    try {
+      var b = v.buffered;
+      if (!b || !b.length) return 0;
+      for (var i = b.length - 1; i >= 0; i--) {
+        if (b.start(i) <= v.currentTime && b.end(i) >= v.currentTime) {
+          return Math.max(0, b.end(i) - v.currentTime);
+        }
+      }
+      return 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+  function rememberGoodTime() {
+    var ct = Math.floor(v.currentTime || 0);
+    if (ct > 0) lastGoodTime = ct;
+    lastBufferAhead = bufferAhead();
+  }
+  function clearStallTimer() {
+    if (stallTimer) clearTimeout(stallTimer);
+    stallTimer = null;
+  }
+  function retryAfterStall(reason) {
+    rememberGoodTime();
+    reportNow(reason || 'stalled');
+    if (retryCount >= maxRetries) {
+      postHost({ event: 'error', reason: reason || 'direct-video-stalled', currentTime: Math.floor(lastGoodTime || 0), duration: Math.floor(v.duration || 0) });
+      return;
+    }
+    retryCount += 1;
+    var resumeAt = Math.max(0, Math.floor(lastGoodTime || v.currentTime || 0) - 1);
+    try {
+      v.pause();
+      v.load();
+      if (resumeAt > 0) {
+        v.addEventListener('loadedmetadata', function once() {
+          v.removeEventListener('loadedmetadata', once);
+          try { v.currentTime = resumeAt; } catch (_) {}
+        });
+      }
+      v.play().catch(function() {
+        v.muted = true;
+        v.play().catch(function() {});
+      });
+    } catch (_) {}
+  }
+  function scheduleStallRetry(reason) {
+    clearStallTimer();
+    stallTimer = setTimeout(function() {
+      if (!v.paused && !v.ended && v.readyState < 3 && bufferAhead() < 1.5) {
+        retryAfterStall(reason);
+      }
+    }, 6500);
   }
   setInterval(function() {
     if (!v.paused && !v.ended) {
+      rememberGoodTime();
       var ct = Math.floor(v.currentTime);
-      if (Math.abs(ct - lastSaved) >= 10 && window.ReactNativeWebView) {
-        lastSaved = ct; window.ReactNativeWebView.postMessage(JSON.stringify({ event: 'timeupdate', currentTime: ct, duration: Math.floor(v.duration || 0) }));
+      if (Math.abs(ct - lastSaved) >= 5) {
+        lastSaved = ct;
+        postHost({ event: 'timeupdate', currentTime: ct, duration: Math.floor(v.duration || 0), bufferAhead: Math.floor(lastBufferAhead || 0) });
       }
     }
   }, 5000);
+  function reportNow(eventName) {
+    var ct = Math.floor(v.currentTime || 0);
+    if (ct > 0) {
+      lastSaved = ct;
+      postHost({ event: eventName, currentTime: ct, duration: Math.floor(v.duration || 0), bufferAhead: Math.floor(bufferAhead() || 0) });
+    }
+  }
+  v.addEventListener('loadedmetadata', seekToResume);
+  v.addEventListener('canplay', function() { clearStallTimer(); seekToResume(); });
+  v.addEventListener('playing', function() { clearStallTimer(); retryCount = 0; rememberGoodTime(); postHost({ event: 'play' }); });
+  v.addEventListener('progress', rememberGoodTime);
+  v.addEventListener('pause', function() { clearStallTimer(); reportNow('pause'); });
+  v.addEventListener('waiting', function() { reportNow('waiting'); scheduleStallRetry('waiting'); });
+  v.addEventListener('stalled', function() { reportNow('stalled'); scheduleStallRetry('stalled'); });
+  v.addEventListener('suspend', function() {
+    if (!v.paused && !v.ended && bufferAhead() < 2) scheduleStallRetry('suspend');
+  });
+  v.addEventListener('error', function() { reportNow('error'); retryAfterStall('direct-video-error'); });
+  v.addEventListener('ended', function() { reportNow('ended'); postHost({ event: 'ended', currentTime: Math.floor(v.currentTime || 0), duration: Math.floor(v.duration || 0) }); });
   v.muted = true;
   var tryUnmute = function() { v.muted = false; };
+  try { v.load(); } catch (_) {}
   var p = v.play();
   if (p && p.then) p.then(tryUnmute).catch(function() { v.muted = true; v.play().catch(function() {}); });
 })();
@@ -789,6 +886,10 @@ export default function LectureScreen() {
   );
 
   const triggerPlayerRetry = useCallback((auto = false) => {
+    const latestPos = latestPlaybackPositionRef.current;
+    if (latestPos > 0) {
+      persistPlaybackPosition(latestPos, 0);
+    }
     setHasError(false);
     setIsLoading(true);
     if (fileKey) {
@@ -799,7 +900,7 @@ export default function LectureScreen() {
       setPlayerRetryTick((t) => t + 1);
     });
     if (!auto) autoPlaybackRetryRef.current = false;
-  }, [fileKey, refetchProgress]);
+  }, [fileKey, persistPlaybackPosition, refetchProgress]);
 
   const handlePlaybackError = useCallback(() => {
     if (!autoPlaybackRetryRef.current) {
@@ -846,12 +947,22 @@ export default function LectureScreen() {
         setIsLoading(false);
         setIsVideoPlaying(true);
       } else if (data.event === 'error') {
+        if (typeof data.currentTime === 'number') {
+          const pos = Math.floor(data.currentTime);
+          const duration = Math.floor(Number(data.duration) || 0);
+          persistPlaybackPosition(pos, duration);
+        }
         handlePlaybackError();
       } else if (data.event === 'timeupdate' && typeof data.currentTime === 'number') {
         const pos = Math.floor(data.currentTime);
         const duration = Math.floor(Number(data.duration) || 0);
         persistPlaybackPosition(pos, duration);
-      } else if (data.event === 'pause' || data.event === 'ended') {
+      } else if (data.event === 'pause' || data.event === 'ended' || data.event === 'waiting' || data.event === 'stalled') {
+        if (typeof data.currentTime === 'number') {
+          const pos = Math.floor(data.currentTime);
+          const duration = Math.floor(Number(data.duration) || 0);
+          persistPlaybackPosition(pos, duration);
+        }
         setIsVideoPlaying(false);
         if (data.event === 'ended') {
           triggerAutoComplete();
