@@ -29,7 +29,7 @@ ALTER TABLE course_folders
 DROP INDEX IF EXISTS uq_course_folders_sibling_name;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_course_folders_sibling_name
-  ON course_folders (course_id, type, COALESCE(subject_key, ''), COALESCE(parent_id, 0), LOWER(name));
+  ON course_folders (course_id, type, (COALESCE(subject_key, '')), (COALESCE(parent_id, 0)), LOWER(name));
 
 CREATE INDEX IF NOT EXISTS idx_lectures_course_subject
   ON lectures (course_id, subject_key, order_index);

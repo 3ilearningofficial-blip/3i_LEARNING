@@ -31,10 +31,10 @@ BEGIN
 END $$;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_course_folders_sibling_name
-  ON course_folders (course_id, type, COALESCE(parent_id, 0), LOWER(name));
+  ON course_folders (course_id, type, (COALESCE(parent_id, 0)), LOWER(name));
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_standalone_folders_sibling_name
-  ON standalone_folders (type, COALESCE(parent_id, 0), LOWER(name));
+  ON standalone_folders (type, (COALESCE(parent_id, 0)), LOWER(name));
 
 CREATE INDEX IF NOT EXISTS idx_course_folders_parent
   ON course_folders (course_id, type, parent_id, order_index);
