@@ -28,6 +28,7 @@ import { useLiveEngagementSse } from "@/lib/useLiveEngagementSse";
 import { useHandRaiseChime } from "@/lib/useHandRaiseChime";
 
 const mediaTokenCache = new Map<string, { token: string; expiresAt: number; readUrl?: string }>();
+const MEDIA_READ_URL_MIN_TTL_MS = 15 * 1000;
 
 function getYouTubeVideoId(url: string): string {
   if (!url) return "";
@@ -405,7 +406,7 @@ document.addEventListener('contextmenu', function(e) { e.preventDefault(); });
       if (!v.paused && !v.ended && v.readyState < 3 && bufferAhead() < 1.5) {
         retryAfterStall(reason);
       }
-    }, 6500);
+    }, 20000);
   }
   setInterval(function() {
     if (!v.paused && !v.ended) {
@@ -766,9 +767,8 @@ export default function LiveClassScreen() {
     const cached = mediaTokenCache.get(userScopedRecordingKey);
     if (cached && cached.expiresAt > Date.now()) {
       setRecordingToken(cached.token);
-      // Only use presigned readUrl if it has >90 s of life remaining.
-      // Within the last 90 s fall back to the /api/media/* proxy (token still valid).
-      const readUrlSafe = cached.readUrl && cached.expiresAt > Date.now() + 90_000
+      // Prefer direct R2 reads; fall back to the API proxy only when the URL is about to expire.
+      const readUrlSafe = cached.readUrl && cached.expiresAt > Date.now() + MEDIA_READ_URL_MIN_TTL_MS
         ? cached.readUrl
         : null;
       setRecordingReadUrl(readUrlSafe);
