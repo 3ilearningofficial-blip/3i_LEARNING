@@ -329,7 +329,7 @@ document.addEventListener('contextmenu', function(e) { e.preventDefault(); });
   var lastGoodTime = startAt || 0;
   var stallTimer = null;
   var retryCount = 0;
-  var maxRetries = 4;
+  var maxRetries = 8;
   v.src = sourceUrl;
   v.preload = 'auto';
   v.addEventListener('contextmenu', function(e) { e.preventDefault(); return false; });
@@ -380,7 +380,7 @@ document.addEventListener('contextmenu', function(e) { e.preventDefault(); });
     rememberGoodTime();
     reportNow(reason || 'stalled');
     if (retryCount >= maxRetries) {
-      postHost({ event: 'error', reason: reason || 'direct-recording-stalled', currentTime: Math.floor(lastGoodTime || 0), duration: Math.floor(v.duration || 0) });
+      postHost({ event: reason || 'buffering', currentTime: Math.floor(lastGoodTime || 0), duration: Math.floor(v.duration || 0), bufferAhead: Math.floor(bufferAhead() || 0) });
       return;
     }
     retryCount += 1;
@@ -404,9 +404,9 @@ document.addEventListener('contextmenu', function(e) { e.preventDefault(); });
     clearStallTimer();
     stallTimer = setTimeout(function() {
       if (!v.paused && !v.ended && v.readyState < 3 && bufferAhead() < 1.5) {
-        retryAfterStall(reason);
+        reportNow(reason || 'buffering');
       }
-    }, 20000);
+    }, 45000);
   }
   setInterval(function() {
     if (!v.paused && !v.ended) {

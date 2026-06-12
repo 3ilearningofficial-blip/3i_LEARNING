@@ -96,6 +96,13 @@ interface CourseDetail {
   duration_hours?: number;
   course_type?: string;
   multi_subject_config?: any[];
+  teacher_details_json?: any;
+  teacher_bio?: string | null;
+  teacher_image_url?: string | null;
+  thumbnail?: string | null;
+  course_language?: string | null;
+  batch_status?: string | null;
+  total_students?: number;
   validity_months?: number | null;
   total_lectures: number;
   total_tests: number;
@@ -123,6 +130,18 @@ interface EditCourseForm {
   courseLanguage: string;
   batchStatus: string;
 }
+
+type AboutTeacher = {
+  name: string;
+  imageUrl: string;
+  bio: string;
+};
+
+type CourseAboutForm = {
+  description: string;
+  features: string;
+  teachers: AboutTeacher[];
+};
 
 interface NewLecture {
   title: string; description: string; videoUrl: string;
@@ -158,13 +177,16 @@ interface NewLiveClass {
   subjectKey: string;
 }
 
-type AdminCourseTab = "lectures" | "tests" | "materials" | "live" | "enrolled";
+type AdminCourseTab = "about" | "lectures" | "tests" | "pyqs" | "mocks" | "materials" | "live" | "enrolled";
 
 const ADMIN_COURSE_TABS: { key: AdminCourseTab; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
+  { key: "about", label: "About", icon: "information-circle" },
+  { key: "live", label: "Live", icon: "radio" },
   { key: "lectures", label: "Lectures", icon: "videocam" },
   { key: "tests", label: "Tests", icon: "document-text" },
+  { key: "pyqs", label: "PYQs", icon: "school" },
+  { key: "mocks", label: "Mock", icon: "clipboard" },
   { key: "materials", label: "Materials", icon: "folder" },
-  { key: "live", label: "Live", icon: "radio" },
   { key: "enrolled", label: "Students", icon: "people" },
 ];
 
@@ -174,6 +196,12 @@ const emptyTest: NewTestForm = { title: "", description: "", durationMinutes: "6
 const emptyQuestion: NewQuestion = { questionText: "", optionA: "", optionB: "", optionC: "", optionD: "", correctOption: "A", explanation: "", topic: "", marks: "4", negativeMarks: "1", imageUrl: "", solutionImageUrl: "", difficulty: "moderate" };
 const emptyMaterial: NewMaterial = { title: "", description: "", fileUrl: "", fileType: "pdf", isFree: false, sectionTitle: "", downloadAllowed: false, subjectKey: "" };
 const emptyLiveClass: NewLiveClass = { title: "", description: "", youtubeUrl: "", scheduledAt: "", isLive: false, isPublic: false, lectureSectionTitle: "Live Class Recordings", lectureSubfolderTitle: "", subjectKey: "" };
+const COURSE_TABS = new Set<AdminCourseTab>(["about", "lectures", "tests", "pyqs", "mocks", "materials", "live", "enrolled"]);
+
+function normalizeBatchStatus(value: unknown): "live" | "recorded" {
+  const status = String(value || "").toLowerCase();
+  return status === "recorded" || status === "completed" ? "recorded" : "live";
+}
 
 const MULTI_SUBJECTS = [
   { key: "maths", label: "Maths", icon: "calculator" },
@@ -181,6 +209,33 @@ const MULTI_SUBJECTS = [
   { key: "science", label: "Science", icon: "flask" },
   { key: "gk", label: "G.K", icon: "earth" },
 ] as const;
+
+function parseCourseAboutMeta(value: any): { features: string[]; teachers: AboutTeacher[] } {
+  const raw = typeof value === "string" ? (() => { try { return JSON.parse(value); } catch { return value; } })() : value;
+  if (Array.isArray(raw)) {
+    return {
+      features: [],
+      teachers: raw.map((t: any) => ({
+        name: String(t?.name || "").trim(),
+        imageUrl: String(t?.imageUrl || t?.image_url || "").trim(),
+        bio: String(t?.bio || t?.description || "").trim(),
+      })).filter((t: AboutTeacher) => t.name || t.imageUrl || t.bio),
+    };
+  }
+  if (raw && typeof raw === "object") {
+    const teachers = Array.isArray(raw.teachers) ? raw.teachers : [];
+    const features = Array.isArray(raw.features) ? raw.features : [];
+    return {
+      features: features.map((f: any) => String(f || "").trim()).filter(Boolean),
+      teachers: teachers.map((t: any) => ({
+        name: String(t?.name || "").trim(),
+        imageUrl: String(t?.imageUrl || t?.image_url || "").trim(),
+        bio: String(t?.bio || t?.description || "").trim(),
+      })).filter((t: AboutTeacher) => t.name || t.imageUrl || t.bio),
+    };
+  }
+  return { features: [], teachers: [] };
+}
 
 const LIVE_RECORDING_ROOT = DEFAULT_LIVE_RECORDING_SECTION;
 
@@ -236,7 +291,7 @@ export default function AdminCourseScreen() {
   const qc = useQueryClient();
   const [activeTab, setActiveTab] = useState<AdminCourseTab>(() => {
     const fromUrl = String(tabParam || "").toLowerCase();
-    if (fromUrl === "live" || fromUrl === "tests" || fromUrl === "materials" || fromUrl === "enrolled") {
+    if (COURSE_TABS.has(fromUrl as AdminCourseTab)) {
       return fromUrl as AdminCourseTab;
     }
     return "lectures";
@@ -244,7 +299,7 @@ export default function AdminCourseScreen() {
 
   useEffect(() => {
     const fromUrl = String(tabParam || "").toLowerCase();
-    if (fromUrl === "live" || fromUrl === "tests" || fromUrl === "materials" || fromUrl === "enrolled") {
+    if (COURSE_TABS.has(fromUrl as AdminCourseTab)) {
       setActiveTab(fromUrl as AdminCourseTab);
     }
   }, [tabParam]);
@@ -273,7 +328,12 @@ export default function AdminCourseScreen() {
   const [editForm, setEditForm] = useState<EditCourseForm>({
     title: "", description: "", teacherName: "", price: "0", originalPrice: "0",
     category: "", subject: "", isFree: false, isPublished: true, level: "beginner", durationHours: "0", startDate: "", endDate: "", validityMonths: "",
-    thumbnail: "", courseLanguage: "HINGLISH", batchStatus: "ongoing",
+    thumbnail: "", courseLanguage: "HINGLISH", batchStatus: "live",
+  });
+  const [aboutForm, setAboutForm] = useState<CourseAboutForm>({
+    description: "",
+    features: "",
+    teachers: [{ name: "", imageUrl: "", bio: "" }],
   });
   const [showBulkUpload, setShowBulkUpload] = useState<number | null>(null);
   const [bulkUploadMode, setBulkUploadMode] = useState<"text" | "pdf">("text");
@@ -470,9 +530,30 @@ export default function AdminCourseScreen() {
   const subjectMatches = (row: { subject_key?: string | null }) =>
     !isMultiSubjectCourse || String(row.subject_key || "").toLowerCase() === activeSubjectKey;
   const courseLectures = allCourseLectures.filter(subjectMatches);
-  const courseTests = allCourseTests.filter(subjectMatches);
+  const subjectTests = allCourseTests.filter(subjectMatches);
+  const activeTestType = activeTab === "pyqs" ? "pyq" : activeTab === "mocks" ? "mock" : "";
+  const courseTests = activeTestType
+    ? subjectTests.filter((test: any) => String(test.test_type || "").toLowerCase() === activeTestType)
+    : subjectTests.filter((test: any) => !["pyq", "mock"].includes(String(test.test_type || "").toLowerCase()));
+  const pyqTests = subjectTests.filter((test: any) => String(test.test_type || "").toLowerCase() === "pyq");
+  const mockTests = subjectTests.filter((test: any) => String(test.test_type || "").toLowerCase() === "mock");
   const courseMaterials = allCourseMaterials.filter(subjectMatches);
   const scopedCourseLiveClasses = courseLiveClasses.filter(subjectMatches);
+
+  useEffect(() => {
+    if (!course || !isMultiSubjectCourse) return;
+    const meta = parseCourseAboutMeta((course as any).teacher_details_json);
+    const teachers = meta.teachers.length > 0 ? meta.teachers : [{
+      name: course.teacher_name || "",
+      imageUrl: course.teacher_image_url || "",
+      bio: course.teacher_bio || "",
+    }];
+    setAboutForm({
+      description: course.description || "",
+      features: meta.features.join("\n"),
+      teachers,
+    });
+  }, [course?.id, isMultiSubjectCourse]);
   const applyDeleteOptimisticUpdate = (entity: "lecture" | "test" | "material", itemId: number) => {
     qc.setQueryData<CourseDetail | undefined>(["/api/courses", String(id)], (prev) => {
       if (!prev) return prev;
@@ -1109,6 +1190,45 @@ export default function AdminCourseScreen() {
     onError: () => Alert.alert("Error", "Failed to update course"),
   });
 
+  const saveAboutMutation = useMutation({
+    mutationFn: async (data: CourseAboutForm) => {
+      const teachers = data.teachers
+        .map((teacher) => ({
+          name: teacher.name.trim(),
+          imageUrl: teacher.imageUrl.trim(),
+          bio: teacher.bio.trim(),
+        }))
+        .filter((teacher) => teacher.name || teacher.imageUrl || teacher.bio);
+      const features = data.features
+        .split(/\r?\n/)
+        .map((feature) => feature.trim())
+        .filter(Boolean);
+      const primaryTeacher = teachers[0] || { name: "", imageUrl: "", bio: "" };
+      await apiRequest("PUT", `/api/admin/courses/${id}`, {
+        title: course?.title || editForm.title,
+        description: data.description,
+        teacherName: primaryTeacher.name || course?.teacher_name || "3i Learning",
+        price: editForm.price || course?.price || 0,
+        originalPrice: editForm.originalPrice || course?.original_price || 0,
+        category: editForm.category || course?.category || "Course",
+        isFree: editForm.isFree ?? course?.is_free,
+        level: editForm.level || course?.level || "Beginner",
+        durationHours: editForm.durationHours || course?.duration_hours || 0,
+        isPublished: editForm.isPublished ?? course?.is_published,
+        teacherBio: primaryTeacher.bio || null,
+        teacherImageUrl: primaryTeacher.imageUrl || null,
+        teacherDetailsJson: { features, teachers },
+      });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] });
+      qc.invalidateQueries({ queryKey: ["/api/courses"] });
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Alert.alert("Saved", "Course about section updated.");
+    },
+    onError: () => Alert.alert("Error", "Failed to save course about section"),
+  });
+
   const openEditCourse = () => {
     if (course) {
       setEditForm({
@@ -1128,7 +1248,7 @@ export default function AdminCourseScreen() {
         validityMonths: String((course as any).validity_months ?? ""),
         thumbnail: (course as any).thumbnail || "",
         courseLanguage: (course as any).course_language || "HINGLISH",
-        batchStatus: (course as any).batch_status || "ongoing",
+        batchStatus: normalizeBatchStatus((course as any).batch_status),
       });
       setShowEditCourse(true);
     }
@@ -1163,7 +1283,8 @@ export default function AdminCourseScreen() {
   }
 
   const isTestSeries = course.course_type === "test_series";
-  const effectiveTab = isTestSeries && activeTab !== "enrolled" ? "tests" : activeTab;
+  const effectiveTab = isTestSeries && activeTab !== "enrolled" ? "tests" : (activeTab === "pyqs" || activeTab === "mocks" ? "tests" : activeTab);
+  const testSectionLabel = activeTab === "pyqs" ? "PYQs" : activeTab === "mocks" ? "Mock Tests" : "Tests";
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -1194,7 +1315,7 @@ export default function AdminCourseScreen() {
           <View style={styles.headerContent}>
             <Text style={styles.headerTitle} numberOfLines={1}>{course.title}</Text>
             <Text style={styles.headerSub}>
-              {isTestSeries ? "Test Series" : `${Number(course.total_lectures) || courseLectures.length} lectures`} · {Number(course.total_tests) || courseTests.length} tests
+              {isTestSeries ? "Test Series" : `${Number(course.total_lectures) || courseLectures.length} lectures`} · {subjectTests.length} tests · {enrolledStudents.length} students
             </Text>
           </View>
           <Pressable style={styles.editCourseBtn} onPress={openEditCourse}>
@@ -1221,7 +1342,11 @@ export default function AdminCourseScreen() {
         )}
 
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsRow}>
-          {ADMIN_COURSE_TABS.filter(t => !isTestSeries || t.key === "tests" || t.key === "enrolled").map((tab) => (
+          {ADMIN_COURSE_TABS.filter(t => {
+            if (isTestSeries) return t.key === "tests" || t.key === "enrolled";
+            if (!isMultiSubjectCourse && (t.key === "about" || t.key === "pyqs" || t.key === "mocks")) return false;
+            return true;
+          }).map((tab) => (
             <Pressable
               key={tab.key}
               style={[styles.tab, activeTab === tab.key && styles.tabActive]}
@@ -1235,6 +1360,106 @@ export default function AdminCourseScreen() {
       </LinearGradient>
 
       <ScrollView contentContainerStyle={[styles.content, { paddingBottom: bottomPadding + 80 }]}>
+        {effectiveTab === "about" && isMultiSubjectCourse && (
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>About Course</Text>
+              <Pressable
+                style={[styles.addBtn, { opacity: saveAboutMutation.isPending ? 0.6 : 1 }]}
+                disabled={saveAboutMutation.isPending}
+                onPress={() => saveAboutMutation.mutate(aboutForm)}
+              >
+                {saveAboutMutation.isPending ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="save-outline" size={16} color="#fff" />}
+                <Text style={styles.addBtnText}>Save About</Text>
+              </Pressable>
+            </View>
+            <View style={styles.infoCard}>
+              <Ionicons name="information-circle" size={16} color={Colors.light.primary} />
+              <Text style={styles.infoText}>This section appears on the student about page. Add a course description, key features, and multiple teachers.</Text>
+            </View>
+
+            <View style={styles.itemCard}>
+              <FormField
+                label="Course Description"
+                placeholder="Write what students will learn, batch goals, and course promise..."
+                value={aboutForm.description}
+                onChangeText={(v) => setAboutForm((p) => ({ ...p, description: v }))}
+                multiline
+              />
+              <FormField
+                label="Course Features"
+                placeholder={"One feature per line\ne.g., Live doubt support\ne.g., Chapter-wise PYQs"}
+                value={aboutForm.features}
+                onChangeText={(v) => setAboutForm((p) => ({ ...p, features: v }))}
+                multiline
+              />
+            </View>
+
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Teachers ({aboutForm.teachers.length})</Text>
+              <Pressable
+                style={[styles.addBtn, { backgroundColor: "#7C3AED" }]}
+                onPress={() => setAboutForm((p) => ({ ...p, teachers: [...p.teachers, { name: "", imageUrl: "", bio: "" }] }))}
+              >
+                <Ionicons name="person-add-outline" size={16} color="#fff" />
+                <Text style={styles.addBtnText}>Teacher</Text>
+              </Pressable>
+            </View>
+            {aboutForm.teachers.map((teacher, index) => (
+              <View key={`teacher-${index}`} style={styles.itemCard}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 12 }}>
+                  {teacher.imageUrl ? (
+                    <Image source={{ uri: teacher.imageUrl }} style={{ width: 72, height: 72, borderRadius: 18, backgroundColor: "#F8FAFC" }} />
+                  ) : (
+                    <View style={{ width: 72, height: 72, borderRadius: 18, backgroundColor: "#EEF2FF", alignItems: "center", justifyContent: "center" }}>
+                      <Ionicons name="person" size={30} color={Colors.light.primary} />
+                    </View>
+                  )}
+                  <View style={{ flex: 1, gap: 8 }}>
+                    <FormField
+                      label={`Teacher ${index + 1} Name`}
+                      placeholder="Teacher name"
+                      value={teacher.name}
+                      onChangeText={(v) => setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, name: v } : t) }))}
+                    />
+                  </View>
+                  {aboutForm.teachers.length > 1 ? (
+                    <Pressable
+                      style={styles.deleteItemBtn}
+                      onPress={() => setAboutForm((p) => ({ ...p, teachers: p.teachers.filter((_, i) => i !== index) }))}
+                    >
+                      <Ionicons name="trash-outline" size={16} color="#EF4444" />
+                    </Pressable>
+                  ) : null}
+                </View>
+                <FormField
+                  label="Teacher Photo URL"
+                  placeholder="Paste URL or upload to R2"
+                  value={teacher.imageUrl}
+                  onChangeText={(v) => setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, imageUrl: v } : t) }))}
+                />
+                <Pressable
+                  style={{ borderWidth: 1.5, borderColor: Colors.light.primary, borderStyle: "dashed" as any, borderRadius: 10, paddingVertical: 11, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8, backgroundColor: "#EEF2FF", marginBottom: 12, opacity: uploading ? 0.6 : 1 }}
+                  disabled={uploading}
+                  onPress={() => pickFileAndUpload("images", "image/*", (url) => {
+                    setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, imageUrl: url } : t) }));
+                  })}
+                >
+                  {uploading ? <ActivityIndicator size="small" color={Colors.light.primary} /> : <Ionicons name="cloud-upload-outline" size={17} color={Colors.light.primary} />}
+                  <Text style={{ fontSize: 13, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>{uploading ? "Uploading..." : "Upload Teacher Photo to R2"}</Text>
+                </Pressable>
+                <FormField
+                  label="Teacher Description"
+                  placeholder="Experience, achievements, teaching style..."
+                  value={teacher.bio}
+                  onChangeText={(v) => setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, bio: v } : t) }))}
+                  multiline
+                />
+              </View>
+            ))}
+          </View>
+        )}
+
         {effectiveTab === "lectures" && !isTestSeries && (
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
@@ -1368,15 +1593,19 @@ export default function AdminCourseScreen() {
         {effectiveTab === "tests" && (
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Tests ({courseTests.length})</Text>
+              <Text style={styles.sectionTitle}>{testSectionLabel} ({courseTests.length})</Text>
               <View style={{ flexDirection: "row", gap: 8 }}>
                 <Pressable style={[styles.addBtn, { backgroundColor: "#7C3AED" }]} onPress={() => { setNewFolderParentId(null); setShowFolderPicker("test"); }}>
                   <Ionicons name="folder-open" size={16} color="#fff" />
                   <Text style={styles.addBtnText}>Folder</Text>
                 </Pressable>
-                <Pressable style={styles.addBtn} onPress={() => setShowAddTest(true)}>
+                <Pressable style={styles.addBtn} onPress={() => {
+                  const preset = activeTab === "pyqs" ? "pyq" : activeTab === "mocks" ? "mock" : "practice";
+                  setNewTest((p) => ({ ...p, testType: preset, subjectKey: isMultiSubjectCourse ? activeSubjectKey : p.subjectKey }));
+                  setShowAddTest(true);
+                }}>
                   <Ionicons name="add" size={16} color="#fff" />
-                  <Text style={styles.addBtnText}>Add Test</Text>
+                  <Text style={styles.addBtnText}>Add {activeTab === "pyqs" ? "PYQ" : activeTab === "mocks" ? "Mock" : "Test"}</Text>
                 </Pressable>
               </View>
             </View>
@@ -2549,13 +2778,28 @@ export default function AdminCourseScreen() {
             </View>
             <ScrollView style={{ maxHeight: 480 }} showsVerticalScrollIndicator={false}>
               <FormField label="Course Title *" placeholder="e.g., NDA Mathematics" value={editForm.title} onChangeText={(v) => setEditForm(p => ({ ...p, title: v }))} />
-              <FormField label="Description" placeholder="Course description" value={editForm.description} onChangeText={(v) => setEditForm(p => ({ ...p, description: v }))} multiline />
+              {!isMultiSubjectCourse && (
+                <FormField label="Description" placeholder="Course description" value={editForm.description} onChangeText={(v) => setEditForm(p => ({ ...p, description: v }))} multiline />
+              )}
               <FormField label="Category *" placeholder="e.g., NDA, CDS, AFCAT" value={editForm.category} onChangeText={(v) => setEditForm(p => ({ ...p, category: v }))} />
               <FormField label="Subject" placeholder="e.g., Mathematics, English, GK" value={editForm.subject} onChangeText={(v) => setEditForm(p => ({ ...p, subject: v }))} />
-              <FormField label="Teacher Name" placeholder="e.g., Pankaj Sir" value={editForm.teacherName} onChangeText={(v) => setEditForm(p => ({ ...p, teacherName: v }))} />
+              {!isMultiSubjectCourse && (
+                <FormField label="Teacher Name" placeholder="e.g., Pankaj Sir" value={editForm.teacherName} onChangeText={(v) => setEditForm(p => ({ ...p, teacherName: v }))} />
+              )}
               {isMultiSubjectCourse && (
                 <>
                   <FormField label="Course Card Banner Image URL" placeholder="https://... (shown at top of multi-subject card)" value={editForm.thumbnail} onChangeText={(v) => setEditForm(p => ({ ...p, thumbnail: v }))} />
+                  {editForm.thumbnail ? (
+                    <Image source={{ uri: editForm.thumbnail }} style={{ width: "100%", height: 120, borderRadius: 12, marginBottom: 8, backgroundColor: "#F8FAFC" }} resizeMode="cover" />
+                  ) : null}
+                  <Pressable
+                    style={{ borderWidth: 1.5, borderColor: Colors.light.primary, borderStyle: "dashed" as any, borderRadius: 10, paddingVertical: 11, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8, backgroundColor: "#EEF2FF", marginBottom: 10, opacity: uploading ? 0.6 : 1 }}
+                    disabled={uploading}
+                    onPress={() => pickFileAndUpload("images", "image/*", (url) => setEditForm((p) => ({ ...p, thumbnail: url })))}
+                  >
+                    {uploading ? <ActivityIndicator size="small" color={Colors.light.primary} /> : <Ionicons name="cloud-upload-outline" size={17} color={Colors.light.primary} />}
+                    <Text style={{ fontSize: 13, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>{uploading ? "Uploading..." : "Upload Banner to R2"}</Text>
+                  </Pressable>
                   <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: Colors.light.textMuted, marginTop: -8, marginBottom: 10 }}>
                     Recommended banner size: 1200 × 450 px (8:3 ratio). This image appears at the top of the vertical multi-subject course card.
                   </Text>
@@ -2563,7 +2807,7 @@ export default function AdminCourseScreen() {
                   <View style={styles.formField}>
                     <Text style={styles.formLabel}>Batch Status</Text>
                     <View style={{ flexDirection: "row", gap: 8 }}>
-                      {(["ongoing", "recorded", "completed"] as const).map((status) => (
+                      {(["live", "recorded"] as const).map((status) => (
                         <Pressable
                           key={status}
                           onPress={() => setEditForm((p) => ({ ...p, batchStatus: status }))}
@@ -2577,7 +2821,7 @@ export default function AdminCourseScreen() {
                 </>
               )}
               <FormField label="Level" placeholder="beginner / intermediate / advanced" value={editForm.level} onChangeText={(v) => setEditForm(p => ({ ...p, level: v }))} />
-              {!isTestSeries && (
+              {!isTestSeries && !isMultiSubjectCourse && (
                 <>
                   <FormField label="Duration (hours)" placeholder="10" value={editForm.durationHours} onChangeText={(v) => setEditForm(p => ({ ...p, durationHours: v }))} numeric />
                   <FormField label="Start Date" placeholder="e.g., 15 Mar 2026" value={editForm.startDate} onChangeText={(v) => setEditForm(p => ({ ...p, startDate: v }))} />

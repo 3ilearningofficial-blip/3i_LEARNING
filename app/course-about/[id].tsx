@@ -27,7 +27,36 @@ type Course = {
   lectures?: any[];
   tests?: any[];
   materials?: any[];
+  teacher_details_json?: any;
+  course_language?: string;
+  level?: string;
 };
+
+type AboutTeacher = { name: string; imageUrl: string; bio: string };
+
+function parseAboutMeta(value: any, course: Course): { features: string[]; teachers: AboutTeacher[] } {
+  const raw = typeof value === "string" ? (() => { try { return JSON.parse(value); } catch { return value; } })() : value;
+  const normalizeTeacher = (t: any): AboutTeacher => ({
+    name: String(t?.name || "").trim(),
+    imageUrl: String(t?.imageUrl || t?.image_url || "").trim(),
+    bio: String(t?.bio || t?.description || "").trim(),
+  });
+  if (Array.isArray(raw)) {
+    const teachers = raw.map(normalizeTeacher).filter((t) => t.name || t.imageUrl || t.bio);
+    return { features: [], teachers };
+  }
+  if (raw && typeof raw === "object") {
+    const features = Array.isArray(raw.features) ? raw.features.map((f: any) => String(f || "").trim()).filter(Boolean) : [];
+    const teachers = Array.isArray(raw.teachers) ? raw.teachers.map(normalizeTeacher).filter((t: AboutTeacher) => t.name || t.imageUrl || t.bio) : [];
+    return { features, teachers };
+  }
+  return {
+    features: [],
+    teachers: course.teacher_name || course.teacher_bio || course.teacher_image_url
+      ? [{ name: course.teacher_name || "3i Learning", imageUrl: course.teacher_image_url || "", bio: course.teacher_bio || "" }]
+      : [],
+  };
+}
 
 async function fetchCourse(id: string): Promise<Course | null> {
   const res = await authFetch(new URL(`/api/courses/${id}`, getApiUrl()).toString());
@@ -62,6 +91,8 @@ export default function MultiSubjectCourseAbout() {
   const pyqCount = tests.filter((t) => String(t.test_type || "").toLowerCase() === "pyq").length;
   const mockCount = tests.filter((t) => String(t.test_type || "").toLowerCase() === "mock").length;
   const testCount = tests.filter((t) => !["pyq", "mock"].includes(String(t.test_type || "").toLowerCase())).length;
+  const aboutMeta = parseAboutMeta(course.teacher_details_json, course);
+  const teachers = aboutMeta.teachers.length > 0 ? aboutMeta.teachers : [{ name: course.teacher_name || "3i Learning", imageUrl: course.teacher_image_url || "", bio: course.teacher_bio || "Teacher details can be managed from the admin dashboard." }];
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -79,7 +110,7 @@ export default function MultiSubjectCourseAbout() {
           <View style={styles.heroText}>
             <Text style={styles.badge}>MULTI SUBJECT COURSE</Text>
             <Text style={styles.title}>{course.title}</Text>
-            <Text style={styles.meta}>{course.category || "Course"} · Maths · English · Science · G.K</Text>
+            <Text style={styles.meta}>{course.category || "Course"} · {course.level || "Beginner"} · {course.course_language || "HINGLISH"}</Text>
           </View>
         </LinearGradient>
 
@@ -112,19 +143,31 @@ export default function MultiSubjectCourseAbout() {
           <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <Text style={[styles.sectionTitle, { color: colors.text }]}>About Course</Text>
             <Text style={[styles.bodyText, { color: colors.textSecondary }]}>{course.description || "Course details will be added soon."}</Text>
+            {aboutMeta.features.length > 0 ? (
+              <View style={styles.featuresList}>
+                {aboutMeta.features.map((feature) => (
+                  <View key={feature} style={styles.featureRow}>
+                    <Ionicons name="checkmark-circle" size={17} color="#16A34A" />
+                    <Text style={[styles.featureText, { color: colors.text }]}>{feature}</Text>
+                  </View>
+                ))}
+              </View>
+            ) : null}
           </View>
 
           <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Text style={[styles.sectionTitle, { color: colors.text }]}>About Teacher</Text>
-            <View style={styles.teacherRow}>
-              {course.teacher_image_url ? <Image source={{ uri: course.teacher_image_url }} style={styles.teacherImage} /> : (
-                <View style={[styles.teacherImage, styles.teacherFallback]}><Ionicons name="person" size={30} color={Colors.light.primary} /></View>
-              )}
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.teacherName, { color: colors.text }]}>{course.teacher_name || "3i Learning"}</Text>
-                <Text style={[styles.bodyText, { color: colors.textSecondary }]}>{course.teacher_bio || "Teacher details can be managed from the admin dashboard."}</Text>
+            <Text style={[styles.sectionTitle, { color: colors.text }]}>Teachers</Text>
+            {teachers.map((teacher, index) => (
+              <View key={`${teacher.name}-${index}`} style={[styles.teacherCard, { borderColor: colors.border }]}>
+                {teacher.imageUrl ? <Image source={{ uri: teacher.imageUrl }} style={styles.teacherImage} /> : (
+                  <View style={[styles.teacherImage, styles.teacherFallback]}><Ionicons name="person" size={30} color={Colors.light.primary} /></View>
+                )}
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.teacherName, { color: colors.text }]}>{teacher.name || "3i Learning"}</Text>
+                  <Text style={[styles.bodyText, { color: colors.textSecondary }]}>{teacher.bio || "Teacher details will be added soon."}</Text>
+                </View>
               </View>
-            </View>
+            ))}
           </View>
         </View>
       </ScrollView>
@@ -160,7 +203,10 @@ const styles = StyleSheet.create({
   countValue: { fontSize: 13, fontFamily: "Inter_800ExtraBold", color: Colors.light.primary },
   countLabel: { fontSize: 12, fontFamily: "Inter_700Bold", color: "#334155" },
   bodyText: { fontSize: 14, lineHeight: 21, fontFamily: "Inter_500Medium" },
-  teacherRow: { flexDirection: "row", gap: 14 },
+  featuresList: { gap: 9, marginTop: 4 },
+  featureRow: { flexDirection: "row", alignItems: "center", gap: 9 },
+  featureText: { flex: 1, fontSize: 14, lineHeight: 20, fontFamily: "Inter_700Bold" },
+  teacherCard: { flexDirection: "row", gap: 14, borderWidth: 1, borderRadius: 16, padding: 12, marginTop: 8 },
   teacherImage: { width: 68, height: 68, borderRadius: 18 },
   teacherFallback: { backgroundColor: "#EEF2FF", alignItems: "center", justifyContent: "center" },
   teacherName: { fontSize: 16, fontFamily: "Inter_800ExtraBold", marginBottom: 4 },

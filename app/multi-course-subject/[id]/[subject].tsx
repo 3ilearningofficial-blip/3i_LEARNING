@@ -9,7 +9,7 @@ import { useAppTheme } from "@/context/AppThemeContext";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const SUBJECT_LABELS: Record<string, string> = { maths: "Maths", english: "English", science: "Science", gk: "G.K" };
-const SECTIONS = ["Lecture", "Study Material", "Test", "PYQs", "Mock"] as const;
+const SECTIONS = ["Live", "Lecture", "Study Material", "Test", "PYQs", "Mock"] as const;
 
 async function fetchCourse(id: string) {
   const res = await authFetch(new URL(`/api/courses/${id}`, getApiUrl()).toString());
@@ -33,6 +33,16 @@ export default function MultiCourseSubjectScreen() {
     queryKey: ["/api/courses", String(id), "folders", subjectKey],
     queryFn: async () => {
       const res = await authFetch(new URL(`/api/courses/${id}/folders`, getApiUrl()).toString());
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!id,
+    staleTime: 30_000,
+  });
+  const { data: liveClasses = [] } = useQuery<any[]>({
+    queryKey: ["/api/live-classes", id, subjectKey],
+    queryFn: async () => {
+      const res = await authFetch(new URL(`/api/live-classes?courseId=${id}`, getApiUrl()).toString());
       if (!res.ok) return [];
       return res.json();
     },
@@ -74,6 +84,7 @@ export default function MultiCourseSubjectScreen() {
     .filter((folder: any) => !folder.parent_id);
 
   const allRows =
+    section === "Live" ? liveClasses.filter((lc: any) => String(lc.subject_key || "").toLowerCase() === subjectKey) :
     section === "Lecture" ? subjectContent.lectures :
     section === "Study Material" ? subjectContent.materials :
     section === "PYQs" ? subjectContent.pyqs :
@@ -127,6 +138,29 @@ export default function MultiCourseSubjectScreen() {
   const visibleRootFolders = rootFolders.filter((folder: any) => folderItemCount(folder) > 0);
 
   const renderRow = (item: any) => {
+    if (section === "Live") {
+      const isLive = !!item.is_live;
+      const time = item.scheduled_at ? new Date(Number(item.scheduled_at)).toLocaleString() : "Not scheduled";
+      return (
+        <Pressable
+          key={`live-${item.id}`}
+          style={[styles.rowCard, { backgroundColor: colors.card, borderColor: colors.border }, locked && { opacity: 0.65 }]}
+          onPress={() => {
+            if (!requireAccess()) return;
+            router.push(`/live-class/${item.id}` as any);
+          }}
+        >
+          <View style={[styles.rowIcon, { backgroundColor: isLive ? "#FEE2E2" : "#EEF2FF" }]}>
+            <Ionicons name={isLive ? "radio" : "calendar"} size={22} color={isLive ? "#DC2626" : Colors.light.primary} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.rowTitle, { color: colors.text }]} numberOfLines={2}>{item.title}</Text>
+            <Text style={[styles.rowMeta, { color: colors.textSecondary }]}>{isLive ? "Live now" : time}</Text>
+          </View>
+          <Ionicons name={locked ? "lock-closed" : "chevron-forward"} size={18} color={colors.textMuted} />
+        </Pressable>
+      );
+    }
     const isLecture = section === "Lecture";
     const isMaterial = section === "Study Material";
     return (
@@ -168,17 +202,17 @@ export default function MultiCourseSubjectScreen() {
         </View>
       </View>
 
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabs}>
+      <View style={[styles.sectionSelector, { borderBottomColor: colors.border }]}>
         {SECTIONS.map((name) => (
           <Pressable key={name} style={[styles.tab, section === name && styles.tabActive]} onPress={() => setSection(name)}>
             <Text style={[styles.tabText, section === name && styles.tabTextActive]}>{name}</Text>
           </Pressable>
         ))}
-      </ScrollView>
+      </View>
 
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 24 }}>
         <Text style={[styles.sectionTitle, { color: colors.text }]}>{section}</Text>
-        {visibleRootFolders.map(renderFolder)}
+        {section !== "Live" ? visibleRootFolders.map(renderFolder) : null}
         {rows.length > 0 ? rows.map(renderRow) : visibleRootFolders.length === 0 ? (
           <View style={[styles.emptyCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <Ionicons name="folder-open-outline" size={32} color={colors.textMuted} />
@@ -197,8 +231,8 @@ const styles = StyleSheet.create({
   backBtn: { width: 42, height: 42, borderRadius: 21, alignItems: "center", justifyContent: "center" },
   title: { fontSize: 22, fontFamily: "Inter_800ExtraBold" },
   subtitle: { fontSize: 12, fontFamily: "Inter_600SemiBold", marginTop: 2 },
-  tabs: { paddingHorizontal: 16, paddingVertical: 12, gap: 8 },
-  tab: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 999, backgroundColor: "#EEF2FF" },
+  sectionSelector: { flexDirection: "row", flexWrap: "wrap", gap: 8, paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1 },
+  tab: { paddingHorizontal: 13, paddingVertical: 9, borderRadius: 999, backgroundColor: "#EEF2FF", minWidth: 74, alignItems: "center" },
   tabActive: { backgroundColor: Colors.light.primary },
   tabText: { color: Colors.light.primary, fontSize: 12, fontFamily: "Inter_800ExtraBold" },
   tabTextActive: { color: "#fff" },

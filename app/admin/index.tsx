@@ -85,8 +85,99 @@ const defaultNewCourse = (courseType = "live"): NewCourse => ({
   price: "0", originalPrice: "0", category: "Mathematics",
   subject: "", isFree: false, level: "Beginner", durationHours: "0",
   courseType, startDate: "", endDate: "", validityMonths: "", thumbnail: "", coverColor: "",
-  teacherBio: "", teacherImageUrl: "", courseLanguage: "HINGLISH", batchStatus: "ongoing",
+  teacherBio: "", teacherImageUrl: "", courseLanguage: "HINGLISH", batchStatus: "live",
 });
+
+function AdminR2ImagePicker({
+  label,
+  value,
+  onChange,
+  folder = "images",
+  hint,
+}: {
+  label: string;
+  value: string;
+  onChange: (url: string) => void;
+  folder?: "images" | "books" | "lectures" | "materials";
+  hint?: string;
+}) {
+  const [uploading, setUploading] = useState(false);
+  const pickImage = async () => {
+    try {
+      if (Platform.OS === "web") {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.accept = "image/*";
+        input.onchange = async (event: any) => {
+          const file = event.target?.files?.[0];
+          if (!file) return;
+          setUploading(true);
+          try {
+            const blobUrl = URL.createObjectURL(file);
+            const { publicUrl } = await uploadToR2(blobUrl, file.name, file.type || "image/jpeg", folder);
+            URL.revokeObjectURL(blobUrl);
+            onChange(publicUrl);
+          } catch (err: any) {
+            Alert.alert("Upload Failed", err?.message || "Could not upload image.");
+          } finally {
+            setUploading(false);
+          }
+        };
+        input.click();
+        return;
+      }
+
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert("Permission needed", "Allow photo library access to pick an image.");
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        quality: 0.82,
+      });
+      if (!result.canceled && result.assets?.[0]) {
+        const asset = result.assets[0];
+        setUploading(true);
+        const { publicUrl } = await uploadToR2(asset.uri, asset.fileName || `course-${Date.now()}.jpg`, asset.mimeType || "image/jpeg", folder);
+        onChange(publicUrl);
+      }
+    } catch (err: any) {
+      Alert.alert("Upload Failed", err?.message || "Could not upload image.");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <View style={styles.formField}>
+      <Text style={styles.formLabel}>{label}</Text>
+      {value ? (
+        <View style={{ borderRadius: 12, overflow: "hidden", borderWidth: 1, borderColor: Colors.light.border, marginBottom: 8 }}>
+          <Image source={{ uri: value }} style={{ width: "100%", height: 130, backgroundColor: "#F8FAFC" }} resizeMode="cover" />
+        </View>
+      ) : null}
+      <TextInput
+        style={styles.formInput}
+        placeholder="Paste image URL or upload from device"
+        placeholderTextColor={Colors.light.textMuted}
+        value={value}
+        onChangeText={onChange}
+        autoCapitalize="none"
+      />
+      <Pressable
+        onPress={pickImage}
+        disabled={uploading}
+        style={{ marginTop: 8, borderWidth: 1.5, borderColor: Colors.light.primary, borderStyle: "dashed" as any, borderRadius: 10, paddingVertical: 11, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8, backgroundColor: "#EEF2FF", opacity: uploading ? 0.6 : 1 }}
+      >
+        {uploading ? <ActivityIndicator size="small" color={Colors.light.primary} /> : <Ionicons name="cloud-upload-outline" size={17} color={Colors.light.primary} />}
+        <Text style={{ fontSize: 13, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>{uploading ? "Uploading..." : "Upload to R2"}</Text>
+      </Pressable>
+      {hint ? <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: Colors.light.textMuted, marginTop: 6 }}>{hint}</Text> : null}
+    </View>
+  );
+}
 
 interface FreeMaterial {
   id: number;
@@ -1241,7 +1332,7 @@ export default function AdminDashboard() {
         ...courseData,
         multiSubjectConfig: courseData.courseType === "multi_subject" ? MULTI_SUBJECTS : [],
         teacherDetailsJson: courseData.courseType === "multi_subject"
-          ? [{ name: courseData.teacherName || "3i Learning", bio: courseData.teacherBio, imageUrl: courseData.teacherImageUrl }]
+          ? []
           : [],
       };
       const res = await apiRequest("POST", "/api/admin/courses", payload);
@@ -4654,11 +4745,11 @@ export default function AdminDashboard() {
             <ScrollView style={styles.modalScroll}>
               {[
                 { label: "Course Title *", key: "title", placeholder: "e.g., Class 10 Mathematics" },
-                { label: "Description", key: "description", placeholder: "Course description..." },
-                { label: "Teacher Name", key: "teacherName", placeholder: "3i Learning" },
+                ...(newCourse.courseType !== "multi_subject" ? [
+                  { label: "Description", key: "description", placeholder: "Course description..." },
+                  { label: "Teacher Name", key: "teacherName", placeholder: "3i Learning" },
+                ] : []),
                 ...(newCourse.courseType === "multi_subject" ? [
-                  { label: "Teacher/About Description", key: "teacherBio", placeholder: "Teacher profile, achievements, and teaching style..." },
-                  { label: "Teacher Image URL", key: "teacherImageUrl", placeholder: "https://... (optional)" },
                   { label: "Language", key: "courseLanguage", placeholder: "e.g., HINGLISH, Hindi, English" },
                 ] : []),
                 { label: "Category", key: "category", placeholder: "e.g., NDA, CDS, AFCAT" },
@@ -4666,7 +4757,7 @@ export default function AdminDashboard() {
                 { label: "Level", key: "level", placeholder: "Beginner / Intermediate / Advanced" },
                 { label: "Price (₹)", key: "price", placeholder: "0 for free" },
                 { label: "Original Price (₹)", key: "originalPrice", placeholder: "For discount display" },
-                ...(newCourse.courseType !== "test_series" ? [{ label: "Duration (hours)", key: "durationHours", placeholder: "e.g., 40" }] : []),
+                ...(newCourse.courseType !== "test_series" && newCourse.courseType !== "multi_subject" ? [{ label: "Duration (hours)", key: "durationHours", placeholder: "e.g., 40" }] : []),
               ].map((field) => (
                 <View key={field.key} style={styles.formField}>
                   <Text style={styles.formLabel}>{field.label}</Text>
@@ -4683,10 +4774,18 @@ export default function AdminDashboard() {
                 </View>
               ))}
               {newCourse.courseType === "multi_subject" && (
+                <AdminR2ImagePicker
+                  label="Course Card Banner Image"
+                  value={newCourse.thumbnail}
+                  onChange={(url) => setNewCourse((prev) => ({ ...prev, thumbnail: url }))}
+                  hint="Recommended banner size: 1200 × 450 px. Used on the vertical multi-subject card and course hero."
+                />
+              )}
+              {newCourse.courseType === "multi_subject" && (
                 <View style={styles.formField}>
                   <Text style={styles.formLabel}>Batch Status</Text>
                   <View style={{ flexDirection: "row", gap: 8, marginBottom: 14 }}>
-                    {(["ongoing", "recorded", "completed"] as const).map((status) => (
+                    {(["live", "recorded"] as const).map((status) => (
                       <Pressable
                         key={status}
                         onPress={() => setNewCourse((prev) => ({ ...prev, batchStatus: status }))}

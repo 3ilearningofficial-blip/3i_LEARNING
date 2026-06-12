@@ -10,11 +10,16 @@ import { useAppTheme } from "@/context/AppThemeContext";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const SUBJECTS = [
-  { key: "maths", label: "Maths", icon: "calculator", colors: ["#4F46E5", "#7C3AED"] },
-  { key: "english", label: "English", icon: "book", colors: ["#0891B2", "#06B6D4"] },
-  { key: "science", label: "Science", icon: "flask", colors: ["#059669", "#22C55E"] },
-  { key: "gk", label: "G.K", icon: "earth", colors: ["#D97706", "#F59E0B"] },
+  { key: "maths", label: "Maths", icon: "calculator", color: "#EF4444", bg: "#FEF2F2" },
+  { key: "english", label: "English", icon: "book", color: "#2563EB", bg: "#EFF6FF" },
+  { key: "science", label: "Science", icon: "flask", color: "#16A34A", bg: "#F0FDF4" },
+  { key: "gk", label: "G.K", icon: "earth", color: "#0891B2", bg: "#ECFEFF" },
 ] as const;
+
+function countBySubject(rows: any[] | undefined, subjectKey: string, predicate?: (row: any) => boolean): number {
+  if (!Array.isArray(rows)) return 0;
+  return rows.filter((row) => String(row?.subject_key || "").toLowerCase() === subjectKey && (!predicate || predicate(row))).length;
+}
 
 async function fetchJson(path: string) {
   const res = await authFetch(new URL(path, getApiUrl()).toString());
@@ -55,15 +60,26 @@ export default function MultiCourseLayout() {
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 24 }}>
         <Text style={[styles.sectionTitle, { color: colors.text }]}>Subjects</Text>
         <View style={styles.grid}>
-          {SUBJECTS.map((subject) => (
-            <Pressable key={subject.key} style={styles.subjectCard} onPress={() => router.push(`/multi-course-subject/${id}/${subject.key}` as any)}>
-              <LinearGradient colors={subject.colors as any} style={styles.subjectGradient}>
-                <Ionicons name={subject.icon as keyof typeof Ionicons.glyphMap} size={32} color="#fff" />
-                <Text style={styles.subjectTitle}>{subject.label}</Text>
-                <Ionicons name="arrow-forward-circle" size={22} color="rgba(255,255,255,0.9)" />
-              </LinearGradient>
+          {SUBJECTS.map((subject) => {
+            const lectures = countBySubject(course?.lectures, subject.key);
+            const materials = countBySubject(course?.materials, subject.key);
+            const tests = countBySubject(course?.tests, subject.key, (t) => !["pyq", "mock"].includes(String(t.test_type || "").toLowerCase()));
+            const live = Array.isArray(liveClasses) ? liveClasses.filter((lc: any) => String(lc.subject_key || "").toLowerCase() === subject.key).length : 0;
+            const totalItems = live + lectures + materials + tests;
+            return (
+            <Pressable
+              key={subject.key}
+              style={[styles.subjectBox, { backgroundColor: colors.card, borderColor: colors.border }]}
+              onPress={() => router.push(`/multi-course-subject/${id}/${subject.key}` as any)}
+            >
+              <View style={[styles.subjectIconBox, { backgroundColor: subject.bg }]}>
+                <Ionicons name={subject.icon as keyof typeof Ionicons.glyphMap} size={29} color={subject.color} />
+              </View>
+              <Text style={[styles.subjectBoxTitle, { color: colors.text }]} numberOfLines={1}>{subject.label}</Text>
+              <Text style={[styles.subjectBoxMeta, { color: colors.textSecondary }]}>{totalItems} items</Text>
             </Pressable>
-          ))}
+            );
+          })}
         </View>
 
         <Text style={[styles.sectionTitle, { color: colors.text, marginTop: 20 }]}>Live / Scheduled Classes</Text>
@@ -96,10 +112,25 @@ const styles = StyleSheet.create({
   title: { color: "#fff", fontSize: 21, fontFamily: "Inter_800ExtraBold" },
   subtitle: { color: "rgba(255,255,255,0.72)", fontSize: 12, fontFamily: "Inter_600SemiBold", marginTop: 2 },
   sectionTitle: { fontSize: 18, fontFamily: "Inter_800ExtraBold", marginBottom: 12 },
-  grid: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
-  subjectCard: { width: "48%", minHeight: 132, borderRadius: 20, overflow: "hidden" },
-  subjectGradient: { flex: 1, padding: 16, justifyContent: "space-between" },
-  subjectTitle: { color: "#fff", fontSize: 20, fontFamily: "Inter_800ExtraBold" },
+  grid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
+  subjectBox: {
+    width: "48%",
+    minHeight: 104,
+    borderRadius: 14,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 14,
+    paddingHorizontal: 8,
+    shadowColor: "#0F172A",
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 2,
+  },
+  subjectIconBox: { width: 42, height: 42, borderRadius: 12, alignItems: "center", justifyContent: "center", marginBottom: 8 },
+  subjectBoxTitle: { fontSize: 13, fontFamily: "Inter_800ExtraBold", textAlign: "center" },
+  subjectBoxMeta: { fontSize: 10, fontFamily: "Inter_600SemiBold", marginTop: 3, textAlign: "center" },
   liveCard: { flexDirection: "row", alignItems: "center", gap: 12, borderWidth: 1, borderRadius: 16, padding: 12, marginBottom: 10 },
   liveIcon: { width: 38, height: 38, borderRadius: 13, backgroundColor: "#FEE2E2", alignItems: "center", justifyContent: "center" },
   liveTitle: { fontSize: 14, fontFamily: "Inter_800ExtraBold" },
