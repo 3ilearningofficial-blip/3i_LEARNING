@@ -237,6 +237,15 @@ function isCloudflareStreamId(str: string): boolean {
   return /^[a-f0-9]{32}$/i.test(str.trim());
 }
 
+function cloudflareStreamHlsUrl(videoId: string): string {
+  const id = String(videoId || "").trim();
+  if (!isCloudflareStreamId(id)) return "";
+  const playbackBase = String(process.env.EXPO_PUBLIC_CF_STREAM_DOWNLOAD_BASE_URL || "").trim().replace(/\/+$/, "");
+  if (playbackBase) return `${playbackBase}/${id}/manifest/video.m3u8`;
+  const accountId = String(process.env.EXPO_PUBLIC_CLOUDFLARE_ACCOUNT_ID || "").trim();
+  return accountId ? `https://customer-${accountId}.cloudflarestream.com/${id}/manifest/video.m3u8` : "";
+}
+
 function buildCloudflareStreamHtml(videoId: string, _signedUrl?: string, startAt = 0): string {
   return `<!DOCTYPE html>
 <html>
@@ -288,6 +297,140 @@ if (player) {
     }
   });
 }
+</script>
+</body>
+</html>`;
+}
+
+function buildDirectRecordingHtml(url: string, startAt = 0): string {
+  const safeUrl = JSON.stringify(url);
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
+video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+</style>
+</head>
+<body>
+<video id="v" controls autoplay muted playsinline preload="auto" controlsList="nodownload noplaybackrate noremoteplayback nopictureinpicture" disablePictureInPicture disableRemotePlayback x-webkit-airplay="deny"></video>
+<script>
+document.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+(function(){
+  var v = document.getElementById('v');
+  if (!v) return;
+  var sourceUrl = ${safeUrl};
+  var startAt = ${startAt > 5 ? startAt - 2 : startAt};
+  var lastSaved = 0;
+  var didSeek = false;
+  var lastGoodTime = startAt || 0;
+  var stallTimer = null;
+  var retryCount = 0;
+  var maxRetries = 4;
+  v.src = sourceUrl;
+  v.preload = 'auto';
+  v.addEventListener('contextmenu', function(e) { e.preventDefault(); return false; });
+  function postHost(payload) {
+    try {
+      var msg = typeof payload === 'string' ? payload : JSON.stringify(payload);
+      if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(msg);
+      if (window.parent && window.parent !== window) window.parent.postMessage(msg, '*');
+    } catch (_) {}
+  }
+  function seekToResume() {
+    if (didSeek || !(startAt > 0)) return;
+    try {
+      if (isFinite(v.duration) && startAt >= v.duration) return;
+      didSeek = true;
+      v.currentTime = startAt;
+      lastGoodTime = startAt;
+    } catch (_) {}
+  }
+  function bufferAhead() {
+    try {
+      var b = v.buffered;
+      if (!b || !b.length) return 0;
+      for (var i = b.length - 1; i >= 0; i--) {
+        if (b.start(i) <= v.currentTime && b.end(i) >= v.currentTime) {
+          return Math.max(0, b.end(i) - v.currentTime);
+        }
+      }
+      return 0;
+    } catch (_) { return 0; }
+  }
+  function rememberGoodTime() {
+    var ct = Math.floor(v.currentTime || 0);
+    if (ct > 0) lastGoodTime = ct;
+  }
+  function clearStallTimer() {
+    if (stallTimer) clearTimeout(stallTimer);
+    stallTimer = null;
+  }
+  function reportNow(eventName) {
+    var ct = Math.floor(v.currentTime || 0);
+    if (ct > 0) {
+      lastSaved = ct;
+      postHost({ event: eventName, currentTime: ct, duration: Math.floor(v.duration || 0), bufferAhead: Math.floor(bufferAhead() || 0) });
+    }
+  }
+  function retryAfterStall(reason) {
+    rememberGoodTime();
+    reportNow(reason || 'stalled');
+    if (retryCount >= maxRetries) {
+      postHost({ event: 'error', reason: reason || 'direct-recording-stalled', currentTime: Math.floor(lastGoodTime || 0), duration: Math.floor(v.duration || 0) });
+      return;
+    }
+    retryCount += 1;
+    var resumeAt = Math.max(0, Math.floor(lastGoodTime || v.currentTime || 0) - 1);
+    try {
+      v.pause();
+      v.load();
+      if (resumeAt > 0) {
+        v.addEventListener('loadedmetadata', function once() {
+          v.removeEventListener('loadedmetadata', once);
+          try { v.currentTime = resumeAt; } catch (_) {}
+        });
+      }
+      v.play().catch(function() {
+        v.muted = true;
+        v.play().catch(function() {});
+      });
+    } catch (_) {}
+  }
+  function scheduleStallRetry(reason) {
+    clearStallTimer();
+    stallTimer = setTimeout(function() {
+      if (!v.paused && !v.ended && v.readyState < 3 && bufferAhead() < 1.5) {
+        retryAfterStall(reason);
+      }
+    }, 6500);
+  }
+  setInterval(function() {
+    if (!v.paused && !v.ended) {
+      rememberGoodTime();
+      var ct = Math.floor(v.currentTime || 0);
+      if (ct > 0 && Math.abs(ct - lastSaved) >= 5) {
+        lastSaved = ct;
+        postHost({ event: 'timeupdate', currentTime: ct, duration: Math.floor(v.duration || 0), bufferAhead: Math.floor(bufferAhead() || 0) });
+      }
+    }
+  }, 5000);
+  v.addEventListener('loadedmetadata', seekToResume);
+  v.addEventListener('canplay', function() { clearStallTimer(); seekToResume(); });
+  v.addEventListener('playing', function() { clearStallTimer(); retryCount = 0; rememberGoodTime(); postHost({ event: 'play' }); });
+  v.addEventListener('progress', rememberGoodTime);
+  v.addEventListener('pause', function() { clearStallTimer(); reportNow('pause'); });
+  v.addEventListener('waiting', function() { reportNow('waiting'); scheduleStallRetry('waiting'); });
+  v.addEventListener('stalled', function() { reportNow('stalled'); scheduleStallRetry('stalled'); });
+  v.addEventListener('suspend', function() { if (!v.paused && !v.ended && bufferAhead() < 2) scheduleStallRetry('suspend'); });
+  v.addEventListener('error', function() { reportNow('error'); retryAfterStall('direct-recording-error'); });
+  v.addEventListener('ended', function() { reportNow('ended'); postHost({ event: 'ended', currentTime: Math.floor(v.currentTime || 0), duration: Math.floor(v.duration || 0) }); });
+  try { v.load(); } catch (_) {}
+  var p = v.play();
+  if (p && p.then) p.then(function(){ v.muted = false; }).catch(function() { v.muted = true; v.play().catch(function() {}); });
+})();
 </script>
 </body>
 </html>`;
@@ -792,7 +935,11 @@ export default function LiveClassScreen() {
     setNativeYoutubeFallback(false);
   }, [videoUrl]);
   const hasYouTubeId = Boolean(videoId);
+  const nativeStreamHlsUrl = isStreamId ? cloudflareStreamHlsUrl(videoUrl) : "";
   const streamHtml = isStreamId ? buildCloudflareStreamHtml(videoUrl, undefined, recordingResumeAt) : "";
+  const directRecordingHtml = authenticatedVideoUrl
+    ? buildDirectRecordingHtml(authenticatedVideoUrl, recordingResumeAt)
+    : "";
 
   const { data: viewerData } = useQuery<{ count: number; viewers: any[]; visible: boolean }>({
     queryKey: [`/api/live-classes/${id}/viewers`],
@@ -1258,6 +1405,17 @@ export default function LiveClassScreen() {
                 javaScriptEnabled domStorageEnabled mixedContentMode="compatibility"
                 originWhitelist={["*"]}
               />
+            ) : isStreamId && nativeStreamHlsUrl && Platform.OS !== "web" ? (
+              <WebView
+                source={{ html: buildCfHlsPlayerHtml(nativeStreamHlsUrl, { startAt: recordingResumeAt }) }}
+                style={{ flex: 1, backgroundColor: "#000" }}
+                onLoad={markPlayed}
+                onMessage={handleWebViewMessage}
+                allowsFullscreenVideo mediaPlaybackRequiresUserAction={false}
+                allowsInlineMediaPlayback scrollEnabled={false}
+                javaScriptEnabled domStorageEnabled mixedContentMode="compatibility"
+                originWhitelist={["*"]}
+              />
             ) : isStreamId && streamHtml ? (
               <WebView
                 source={{ html: streamHtml, baseUrl: "https://cloudflarestream.com" }}
@@ -1269,12 +1427,13 @@ export default function LiveClassScreen() {
                 javaScriptEnabled domStorageEnabled mixedContentMode="compatibility"
                 originWhitelist={["*"]}
               />
-            ) : !videoId && !isCfHls && !isStreamId && authenticatedVideoUrl && canMountRecordingPlayer && Platform.OS !== "web" ? (
+            ) : !videoId && !isCfHls && !isStreamId && directRecordingHtml && canMountRecordingPlayer && Platform.OS !== "web" ? (
               // Direct video file on native
               <WebView
-                source={{ uri: authenticatedVideoUrl }}
+                source={{ html: directRecordingHtml }}
                 style={{ flex: 1, backgroundColor: "#000" }}
                 onLoad={markPlayed}
+                onError={() => handleWebViewMessage({ nativeEvent: { data: JSON.stringify({ event: 'error', reason: 'webview-direct-recording-error' }) } })}
                 onMessage={handleWebViewMessage}
                 allowsFullscreenVideo mediaPlaybackRequiresUserAction={false}
                 allowsInlineMediaPlayback scrollEnabled={false}
@@ -1559,6 +1718,17 @@ export default function LiveClassScreen() {
                 javaScriptEnabled domStorageEnabled mixedContentMode="compatibility"
                 originWhitelist={["*"]}
               />
+            ) : isStreamId && nativeStreamHlsUrl && Platform.OS !== "web" ? (
+              <WebView
+                source={{ html: buildCfHlsPlayerHtml(nativeStreamHlsUrl, { startAt: recordingResumeAt }) }}
+                style={{ flex: 1, backgroundColor: "#000" }}
+                onLoad={markPlayed}
+                onMessage={handleWebViewMessage}
+                allowsFullscreenVideo mediaPlaybackRequiresUserAction={false}
+                allowsInlineMediaPlayback scrollEnabled={false}
+                javaScriptEnabled domStorageEnabled mixedContentMode="compatibility"
+                originWhitelist={["*"]}
+              />
             ) : isStreamId && streamHtml ? (
               <WebView
                 source={{ html: streamHtml, baseUrl: "https://cloudflarestream.com" }}
@@ -1570,11 +1740,12 @@ export default function LiveClassScreen() {
                 javaScriptEnabled domStorageEnabled mixedContentMode="compatibility"
                 originWhitelist={["*"]}
               />
-            ) : !videoId && !isCfHls && !isStreamId && authenticatedVideoUrl && canMountRecordingPlayer && Platform.OS !== "web" ? (
+            ) : !videoId && !isCfHls && !isStreamId && directRecordingHtml && canMountRecordingPlayer && Platform.OS !== "web" ? (
               <WebView
-                source={{ uri: authenticatedVideoUrl }}
+                source={{ html: directRecordingHtml }}
                 style={{ flex: 1, backgroundColor: "#000" }}
                 onLoad={markPlayed}
+                onError={() => handleWebViewMessage({ nativeEvent: { data: JSON.stringify({ event: 'error', reason: 'webview-direct-recording-error' }) } })}
                 onMessage={handleWebViewMessage}
                 allowsFullscreenVideo mediaPlaybackRequiresUserAction={false}
                 allowsInlineMediaPlayback scrollEnabled={false}

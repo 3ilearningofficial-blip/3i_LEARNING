@@ -91,6 +91,15 @@ function isHlsManifestUrl(url: string): boolean {
   return false;
 }
 
+function cloudflareStreamHlsUrl(videoId: string): string {
+  const id = String(videoId || "").trim();
+  if (!isCloudflareStreamId(id)) return "";
+  const playbackBase = String(process.env.EXPO_PUBLIC_CF_STREAM_DOWNLOAD_BASE_URL || "").trim().replace(/\/+$/, "");
+  if (playbackBase) return `${playbackBase}/${id}/manifest/video.m3u8`;
+  const accountId = String(process.env.EXPO_PUBLIC_CLOUDFLARE_ACCOUNT_ID || "").trim();
+  return accountId ? `https://customer-${accountId}.cloudflarestream.com/${id}/manifest/video.m3u8` : "";
+}
+
 function buildCloudflareStreamHtml(videoId: string, signedUrl?: string, startAt = 0): string {
   const streamUrl = signedUrl || `https://customer-${process.env.EXPO_PUBLIC_CLOUDFLARE_ACCOUNT_ID || ''}.cloudflarestream.com/${videoId}/manifest/video.m3u8`;
   
@@ -816,6 +825,7 @@ export default function LectureScreen() {
     latestPlaybackPositionRef.current,
   );
   const nativeYouTubeHtml = videoId ? buildNativeYouTubeHtml(videoId, resumeAt) : "";
+  const nativeStreamHlsUrl = isStreamId ? cloudflareStreamHlsUrl(playbackUrl) : "";
   const streamHtml = isStreamId ? buildCloudflareStreamHtml(playbackUrl, undefined, resumeAt) : "";
   const directVideoHtml = isDirect ? buildDirectVideoHtml(playbackUrl, resumeAt) : "";
 
@@ -1120,6 +1130,24 @@ export default function LectureScreen() {
             domStorageEnabled
             mixedContentMode="compatibility"
             setSupportMultipleWindows={false}
+            originWhitelist={["*"]}
+          />
+        ) : !hasError && canMountPlayer && isStreamId && nativeStreamHlsUrl && Platform.OS !== "web" ? (
+          <WebView
+            key={`cf-hls-native-${playerRetryTick}`}
+            source={{ html: buildCfHlsPlayerHtml(nativeStreamHlsUrl, { startAt: resumeAt }) }}
+            style={styles.webView}
+            onLoad={() => { setIsLoading(false); setIsVideoPlaying(true); }}
+            onError={handlePlaybackError}
+            onMessage={handleWebViewMessage}
+            allowsFullscreenVideo
+            mediaPlaybackRequiresUserAction={false}
+            injectedJavaScript={preventScreenCapture}
+            allowsInlineMediaPlayback
+            scrollEnabled={false}
+            javaScriptEnabled
+            domStorageEnabled
+            mixedContentMode="compatibility"
             originWhitelist={["*"]}
           />
         ) : !hasError && canMountPlayer && isStreamId && streamHtml ? (
