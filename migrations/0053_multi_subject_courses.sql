@@ -18,7 +18,8 @@ ALTER TABLE study_materials
   ADD COLUMN IF NOT EXISTS subject_key TEXT;
 
 ALTER TABLE tests
-  ADD COLUMN IF NOT EXISTS subject_key TEXT;
+  ADD COLUMN IF NOT EXISTS subject_key TEXT,
+  ADD COLUMN IF NOT EXISTS test_type TEXT DEFAULT 'practice';
 
 ALTER TABLE live_classes
   ADD COLUMN IF NOT EXISTS subject_key TEXT;
