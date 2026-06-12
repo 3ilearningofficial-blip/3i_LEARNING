@@ -56,6 +56,7 @@ export default function TestFolderDetailScreen() {
 
   const folder = data || {};
   const tests: any[] = folder.tests || [];
+  const childFolders: any[] = folder.child_folders || [];
   const attempts: Record<number, any> = folder.attempts || {};
   const isPurchased = folder.is_purchased;
   const totalTests = tests.length;
@@ -239,6 +240,23 @@ setTimeout(function(){var rzp=new Razorpay(options);rzp.on("payment.failed",func
       </LinearGradient>
 
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 100, gap: 10 }}>
+        {childFolders.map((child: any) => (
+          <Pressable
+            key={`folder-${child.id}`}
+            style={{ backgroundColor: colors.card, borderRadius: 14, overflow: "hidden", flexDirection: "row", borderWidth: 1, borderColor: colors.border }}
+            onPress={() => router.push(`/test-folder/${child.id}` as any)}
+          >
+            <View style={{ width: 5, backgroundColor: Colors.light.primary }} />
+            <View style={{ flex: 1, padding: 14, gap: 6, flexDirection: "row", alignItems: "center" }}>
+              <Ionicons name="folder" size={24} color={Colors.light.primary} />
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 14, fontFamily: "Inter_700Bold", color: Colors.light.text }} numberOfLines={2}>{child.name}</Text>
+                <Text style={{ fontSize: 11, fontFamily: "Inter_400Regular", color: Colors.light.textMuted }}>{child.total_tests || 0} tests</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
+            </View>
+          </Pressable>
+        ))}
         {tests.map((test: any) => {
           const attempt = attempts[test.id];
           const locked = !isPurchased;
@@ -268,7 +286,7 @@ setTimeout(function(){var rzp=new Razorpay(options);rzp.on("payment.failed",func
             </Pressable>
           );
         })}
-        {tests.length === 0 && (
+        {tests.length === 0 && childFolders.length === 0 && (
           <View style={{ alignItems: "center", paddingVertical: 40, gap: 8 }}>
             <Ionicons name="document-text-outline" size={40} color={Colors.light.textMuted} />
             <Text style={{ fontSize: 14, fontFamily: "Inter_500Medium", color: Colors.light.textMuted }}>No tests in this pack yet</Text>

@@ -43,6 +43,11 @@ interface Course {
   pyq_count?: number;
   mock_count?: number;
   practice_count?: number;
+  cover_color?: string;
+  course_language?: string;
+  batch_status?: string;
+  validity_months?: number | string | null;
+  enrollmentValidUntil?: number | null;
 }
 
 interface StudyMaterial {
@@ -59,6 +64,8 @@ interface MaterialFolder {
   id: number;
   name: string;
   type: string;
+  parent_id?: number | null;
+  full_name?: string;
 }
 
 interface LiveClass {
@@ -73,6 +80,92 @@ interface LiveClass {
 const DEFAULT_CATEGORIES = ["All", "NDA", "CDS", "AFCAT"];
 
 const COURSE_COLORS = ["#1A56DB", "#7C3AED", "#DC2626", "#059669", "#D97706", "#0891B2"];
+
+function formatCourseDate(value?: string | number | null): string {
+  if (value == null || value === "") return "";
+  const date = typeof value === "number" ? new Date(value) : new Date(String(value));
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "2-digit" });
+}
+
+function multiStatusLabel(course: Course): string {
+  const status = String(course.batch_status || "ongoing").toLowerCase();
+  if (status === "completed") return "COMPLETED";
+  if (status === "recorded") return "RECORDED";
+  if (course.end_date) {
+    const end = new Date(String(course.end_date)).getTime();
+    if (Number.isFinite(end) && end < Date.now()) return "COMPLETED";
+  }
+  return "LIVE";
+}
+
+function MultiSubjectCourseCard({ course, enrolled = false }: { course: Course; enrolled?: boolean }) {
+  const { colors } = useAppTheme();
+  const discount = course.original_price && parseFloat(course.original_price) > 0 && parseFloat(course.price || "0") > 0
+    ? Math.round((1 - parseFloat(course.price) / parseFloat(course.original_price)) * 100)
+    : 0;
+  const cover = course.cover_color || "#B7F2D5";
+  const language = (course.course_language || "HINGLISH").toUpperCase();
+  const validityText = course.enrollmentValidUntil
+    ? `Valid till ${formatCourseDate(course.enrollmentValidUntil)}`
+    : course.end_date
+      ? `Ends ${formatCourseDate(course.end_date)}`
+      : course.validity_months
+        ? `${course.validity_months} months validity`
+        : "";
+
+  return (
+    <Pressable
+      style={({ pressed }) => [styles.multiCourseCard, { backgroundColor: colors.card, borderColor: colors.border }, pressed && { opacity: 0.94, transform: [{ scale: 0.985 }] }]}
+      onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push(`/course-about/${course.id}` as any); }}
+    >
+      <LinearGradient colors={[cover, `${cover}CC`]} style={styles.multiCourseBanner}>
+        {course.thumbnail ? (
+          <Image source={{ uri: course.thumbnail }} style={StyleSheet.absoluteFillObject} resizeMode="cover" />
+        ) : (
+          <View style={styles.multiBannerFallback}>
+            <Text style={styles.multiBannerTitle}>{course.title}</Text>
+          </View>
+        )}
+      </LinearGradient>
+      <View style={styles.multiCourseBody}>
+        <View style={styles.multiTopRow}>
+          <Text style={styles.multiCategory}>{course.category || "Course"}</Text>
+          <View style={styles.multiLanguagePill}><Text style={styles.multiLanguageText}>{language}</Text></View>
+        </View>
+        <Text style={[styles.multiTitle, { color: colors.text }]} numberOfLines={2}>{course.title}</Text>
+        {!enrolled && (
+          <View style={styles.multiMetaRow}>
+            <Ionicons name="ellipse" size={10} color={multiStatusLabel(course) === "COMPLETED" ? "#64748B" : multiStatusLabel(course) === "RECORDED" ? "#7C3AED" : "#DC2626"} />
+            <Text style={[styles.multiMetaText, { color: colors.textSecondary }]}>{multiStatusLabel(course)}</Text>
+            {validityText ? <Text style={[styles.multiMetaText, { color: colors.textSecondary }]}>| {validityText}</Text> : null}
+          </View>
+        )}
+        {enrolled ? null : (
+          <View style={styles.multiPriceRow}>
+            {course.is_free || parseFloat(course.price || "0") <= 0 ? (
+              <Text style={styles.multiPrice}>Free</Text>
+            ) : (
+              <View style={{ flexDirection: "row", alignItems: "baseline", gap: 6 }}>
+                <Text style={styles.multiPrice}>₹{parseFloat(course.price).toFixed(0)}</Text>
+                {parseFloat(course.original_price || "0") > 0 ? <Text style={styles.multiOriginalPrice}>₹{parseFloat(course.original_price).toFixed(0)}</Text> : null}
+              </View>
+            )}
+            {discount > 0 ? <Text style={styles.multiDiscount}>{discount}% OFF</Text> : null}
+            <View style={{ flex: 1 }} />
+            <Pressable style={styles.multiBuyBtn} onPress={() => router.push(`/course-about/${course.id}` as any)}>
+              <Text style={styles.multiBuyText}>{course.is_free || parseFloat(course.price || "0") <= 0 ? "Start Free" : "Buy Now"}</Text>
+            </Pressable>
+            <Pressable style={styles.multiArrowBtn} onPress={() => router.push(`/course-about/${course.id}` as any)}>
+              <Ionicons name="chevron-forward" size={24} color="#0F172A" />
+            </Pressable>
+          </View>
+        )}
+        {enrolled && validityText ? <Text style={[styles.multiEnrolledValidity, { color: colors.textSecondary }]}>{validityText}</Text> : null}
+      </View>
+    </Pressable>
+  );
+}
 
 function ScheduledLiveCard({ lc, nowMs }: { lc: any; nowMs: number }) {
   const { colors, isDarkMode } = useAppTheme();
@@ -143,10 +236,14 @@ function EnrolledCourseCard({ course, index }: { course: Course; index: number }
   const color = COURSE_COLORS[index % COURSE_COLORS.length];
   const progress = course.progress || 0;
 
+  if (course.course_type === "multi_subject") {
+    return <MultiSubjectCourseCard course={course} enrolled />;
+  }
+
   return (
     <Pressable
       style={({ pressed }) => [styles.courseCard, { overflow: "hidden" }, pressed && { opacity: 0.93, transform: [{ scale: 0.98 }] }]}
-      onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push(`/course/${course.id}`); }}
+      onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push((course.course_type === "multi_subject" ? `/course-about/${course.id}` : `/course/${course.id}`) as any); }}
     >
       {/* Dark gradient header with category/type/subject badges */}
       <LinearGradient colors={[color, `${color}DD`]} style={{ paddingHorizontal: 12, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
@@ -217,17 +314,21 @@ function CourseCard({ course, index }: { course: Course; index: number }) {
     ? Math.round((1 - parseFloat(course.price) / parseFloat(course.original_price)) * 100)
     : 0;
 
+  if (course.course_type === "multi_subject") {
+    return <MultiSubjectCourseCard course={course} />;
+  }
+
   return (
     <Pressable
       style={({ pressed }) => [styles.courseCard, pressed && { opacity: 0.92, transform: [{ scale: 0.98 }] }]}
-      onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push(`/course/${course.id}`); }}
+      onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push((course.course_type === "multi_subject" ? `/course-about/${course.id}` : `/course/${course.id}`) as any); }}
     >
       <LinearGradient colors={[color, `${color}CC`]} style={styles.courseCardHeader}>
         <View style={styles.courseCardBadgeRow}>
           <View style={styles.categoryBadge}><Text style={styles.categoryBadgeText}>{course.category}</Text></View>
           <View style={{ backgroundColor: (course.course_type || "live") === "live" ? "#EF4444" : (course.course_type === "test_series" ? "#F59E0B" : "#8B5CF6"), paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 }}>
             <Text style={{ fontSize: 10, fontFamily: "Inter_700Bold", color: "#fff" }}>
-              {(course.course_type || "live") === "live" ? "LIVE" : (course.course_type === "test_series" ? "TEST SERIES" : "RECORDED")}
+              {course.course_type === "multi_subject" ? "MULTI SUBJECT" : (course.course_type || "live") === "live" ? "LIVE" : (course.course_type === "test_series" ? "TEST SERIES" : "RECORDED")}
             </Text>
           </View>
           <View style={{ flex: 1 }} />
@@ -649,8 +750,8 @@ export default function HomeScreen() {
                 </View>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.materialsList}>
                   {/* Folder cards first */}
-                  {materialFolders.map((folder) => (
-                    <Pressable key={`folder-${folder.id}`} style={[styles.materialCard, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={() => router.push(`/material-folder/${encodeURIComponent(folder.name)}` as any)}>
+                  {materialFolders.filter((folder) => !folder.parent_id).map((folder) => (
+                    <Pressable key={`folder-${folder.id}`} style={[styles.materialCard, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={() => router.push(`/material-folder/${encodeURIComponent(folder.full_name || folder.name)}` as any)}>
                       <View style={[styles.materialIconBg, { backgroundColor: "#FEF3C7" }]}>
                         <Ionicons name="folder" size={22} color="#D97706" />
                       </View>
@@ -854,6 +955,29 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff", borderRadius: 20, overflow: "hidden",
     marginBottom: 14, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 12, elevation: 4,
   },
+  multiCourseCard: {
+    borderRadius: 20, overflow: "hidden", borderWidth: 1, marginBottom: 16,
+    shadowColor: "#000", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.08, shadowRadius: 14, elevation: 4,
+  },
+  multiCourseBanner: { height: 180, overflow: "hidden", justifyContent: "center" },
+  multiBannerFallback: { flex: 1, alignItems: "center", justifyContent: "center", padding: 18 },
+  multiBannerTitle: { color: "#065F46", fontSize: 22, lineHeight: 28, fontFamily: "Inter_800ExtraBold", textAlign: "center" },
+  multiCourseBody: { paddingHorizontal: 18, paddingVertical: 16, gap: 10 },
+  multiTopRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
+  multiCategory: { fontSize: 15, fontFamily: "Inter_700Bold", color: "#F97316" },
+  multiLanguagePill: { borderWidth: 1, borderColor: "#CBD5E1", borderRadius: 6, paddingHorizontal: 12, paddingVertical: 6, backgroundColor: "#fff" },
+  multiLanguageText: { fontSize: 12, fontFamily: "Inter_800ExtraBold", color: "#0F172A" },
+  multiTitle: { fontSize: 20, lineHeight: 25, fontFamily: "Inter_800ExtraBold" },
+  multiMetaRow: { flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" },
+  multiMetaText: { fontSize: 14, fontFamily: "Inter_600SemiBold" },
+  multiPriceRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 2 },
+  multiPrice: { fontSize: 20, fontFamily: "Inter_800ExtraBold", color: "#0F172A" },
+  multiOriginalPrice: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: "#64748B", textDecorationLine: "line-through" },
+  multiDiscount: { fontSize: 14, fontFamily: "Inter_800ExtraBold", color: "#16A34A" },
+  multiBuyBtn: { backgroundColor: "#111827", borderRadius: 8, paddingHorizontal: 18, paddingVertical: 13 },
+  multiBuyText: { color: "#fff", fontSize: 15, fontFamily: "Inter_800ExtraBold" },
+  multiArrowBtn: { width: 46, height: 46, borderRadius: 8, borderWidth: 1, borderColor: "#CBD5E1", alignItems: "center", justifyContent: "center", backgroundColor: "#fff" },
+  multiEnrolledValidity: { fontSize: 13, fontFamily: "Inter_700Bold" },
   courseCardHeader: { height: 100, padding: 12, justifyContent: "space-between" },
   courseCardBadgeRow: { flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" },
   categoryBadge: { backgroundColor: "rgba(0,0,0,0.35)", borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },

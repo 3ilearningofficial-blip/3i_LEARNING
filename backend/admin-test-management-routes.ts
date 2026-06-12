@@ -55,22 +55,23 @@ export function registerAdminTestManagementRoutes({
 
   app.put("/api/admin/tests/:id", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { title, description, durationMinutes, totalMarks, testType, folderName, difficulty, scheduledAt, passingMarks, courseId, price } = req.body;
+      const { title, description, durationMinutes, totalMarks, testType, folderName, difficulty, scheduledAt, passingMarks, courseId, price, subjectKey } = req.body;
       const priceVal = price !== undefined ? parseFloat(price) || 0 : null;
+      const normalizedSubjectKey = typeof subjectKey === "string" && subjectKey.trim() ? subjectKey.trim().toLowerCase() : null;
       if (courseId !== undefined) {
         await db.query(
-          `UPDATE tests SET title=$1, description=$2, duration_minutes=$3, total_marks=$4, test_type=$5, folder_name=$6, difficulty=$7, scheduled_at=$8, passing_marks=$9, course_id=$10${priceVal !== null ? ", price=$12" : ""} WHERE id=$11`,
+          `UPDATE tests SET title=$1, description=$2, duration_minutes=$3, total_marks=$4, test_type=$5, folder_name=$6, difficulty=$7, scheduled_at=$8, passing_marks=$9, course_id=$10, subject_key=$12${priceVal !== null ? ", price=$13" : ""} WHERE id=$11`,
           priceVal !== null
-            ? [title, description || "", parseInt(durationMinutes) || 60, parseInt(totalMarks) || 100, testType, folderName || null, difficulty || "moderate", scheduledAt || null, parseInt(passingMarks) || 35, courseId || null, req.params.id, priceVal]
-            : [title, description || "", parseInt(durationMinutes) || 60, parseInt(totalMarks) || 100, testType, folderName || null, difficulty || "moderate", scheduledAt || null, parseInt(passingMarks) || 35, courseId || null, req.params.id]
+            ? [title, description || "", parseInt(durationMinutes) || 60, parseInt(totalMarks) || 100, testType, folderName || null, difficulty || "moderate", scheduledAt || null, parseInt(passingMarks) || 35, courseId || null, req.params.id, normalizedSubjectKey, priceVal]
+            : [title, description || "", parseInt(durationMinutes) || 60, parseInt(totalMarks) || 100, testType, folderName || null, difficulty || "moderate", scheduledAt || null, parseInt(passingMarks) || 35, courseId || null, req.params.id, normalizedSubjectKey]
         );
         if (courseId) await updateCourseTestCounts(courseId);
       } else {
         await db.query(
-          `UPDATE tests SET title=$1, description=$2, duration_minutes=$3, total_marks=$4, test_type=$5, folder_name=$6, difficulty=$7, scheduled_at=$8, passing_marks=$9${priceVal !== null ? ", price=$11" : ""} WHERE id=$10`,
+          `UPDATE tests SET title=$1, description=$2, duration_minutes=$3, total_marks=$4, test_type=$5, folder_name=$6, difficulty=$7, scheduled_at=$8, passing_marks=$9, subject_key=$11${priceVal !== null ? ", price=$12" : ""} WHERE id=$10`,
           priceVal !== null
-            ? [title, description || "", parseInt(durationMinutes) || 60, parseInt(totalMarks) || 100, testType, folderName || null, difficulty || "moderate", scheduledAt || null, parseInt(passingMarks) || 35, req.params.id, priceVal]
-            : [title, description || "", parseInt(durationMinutes) || 60, parseInt(totalMarks) || 100, testType, folderName || null, difficulty || "moderate", scheduledAt || null, parseInt(passingMarks) || 35, req.params.id]
+            ? [title, description || "", parseInt(durationMinutes) || 60, parseInt(totalMarks) || 100, testType, folderName || null, difficulty || "moderate", scheduledAt || null, parseInt(passingMarks) || 35, req.params.id, normalizedSubjectKey, priceVal]
+            : [title, description || "", parseInt(durationMinutes) || 60, parseInt(totalMarks) || 100, testType, folderName || null, difficulty || "moderate", scheduledAt || null, parseInt(passingMarks) || 35, req.params.id, normalizedSubjectKey]
         );
         const existing = await db.query("SELECT course_id FROM tests WHERE id = $1", [req.params.id]);
         if (existing.rows[0]?.course_id) await updateCourseTestCounts(existing.rows[0].course_id);

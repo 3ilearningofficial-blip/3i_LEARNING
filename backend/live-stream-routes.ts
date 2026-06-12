@@ -474,7 +474,7 @@ export function registerLiveStreamRoutes({
     isArchiveSweepRunning = true;
     try {
       const pending = await db.query(
-        `SELECT id, title, description, course_id, started_at, lecture_section_title, lecture_subfolder_title, recording_url, cf_stream_uid, recording_deleted_at
+        `SELECT id, title, description, course_id, started_at, lecture_section_title, lecture_subfolder_title, recording_url, cf_stream_uid, recording_deleted_at, subject_key
          FROM live_classes
          WHERE stream_type = 'cloudflare'
            AND is_completed = TRUE
@@ -543,15 +543,17 @@ export function registerLiveStreamRoutes({
                  section_title,
                  live_class_id,
                  live_class_finalized,
+                 subject_key,
                  created_at
                )
-               VALUES ($1, $2, $3, $4, 'r2', $5, $6, FALSE, $7, $8, TRUE, $9)
+               VALUES ($1, $2, $3, $4, 'r2', $5, $6, FALSE, $7, $8, TRUE, $9, $10)
                ON CONFLICT (live_class_id) WHERE live_class_id IS NOT NULL
                DO UPDATE SET
                  video_url = EXCLUDED.video_url,
                  video_type = EXCLUDED.video_type,
                  duration_minutes = EXCLUDED.duration_minutes,
                  section_title = EXCLUDED.section_title,
+                 subject_key = EXCLUDED.subject_key,
                  live_class_finalized = TRUE`,
               [
                 row.course_id,
@@ -562,6 +564,7 @@ export function registerLiveStreamRoutes({
                 maxOrder.rows[0].next_order,
                 sectionTitle,
                 row.id,
+                row.subject_key || null,
                 Date.now(),
               ]
             );

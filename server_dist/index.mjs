@@ -1393,6 +1393,180 @@ var init_require_admin = __esm({
   }
 });
 
+// backend/push-notifications.ts
+import webpush from "web-push";
+function chunkArray(arr, size) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+function configureWebPush() {
+  const publicKey = process.env.VAPID_PUBLIC_KEY;
+  const privateKey = process.env.VAPID_PRIVATE_KEY;
+  const subject = process.env.VAPID_SUBJECT || "mailto:support@3ilearning.com";
+  if (!publicKey || !privateKey) return false;
+  webpush.setVapidDetails(subject, publicKey, privateKey);
+  return true;
+}
+async function registerPushToken(db2, userId, token, platform) {
+  const now = Date.now();
+  await db2.query(
+    `INSERT INTO user_push_tokens (user_id, expo_push_token, platform, is_active, created_at, last_seen_at)
+     VALUES ($1, $2, $3, TRUE, $4, $4)
+     ON CONFLICT (expo_push_token)
+     DO UPDATE SET
+       user_id = EXCLUDED.user_id,
+       platform = EXCLUDED.platform,
+       is_active = TRUE,
+       last_seen_at = EXCLUDED.last_seen_at`,
+    [userId, token, platform || "unknown", now]
+  );
+}
+async function unregisterPushToken(db2, userId, token) {
+  await db2.query(
+    "UPDATE user_push_tokens SET is_active = FALSE, last_seen_at = $1 WHERE user_id = $2 AND expo_push_token = $3",
+    [Date.now(), userId, token]
+  );
+}
+async function unregisterAllPushTokens(db2, userId) {
+  await db2.query("UPDATE user_push_tokens SET is_active = FALSE, last_seen_at = $1 WHERE user_id = $2", [
+    Date.now(),
+    userId
+  ]);
+}
+async function registerWebPushSubscription(db2, userId, subscription, userAgent) {
+  const endpoint = String(subscription?.endpoint || "").trim();
+  const p256dh = String(subscription?.keys?.p256dh || "").trim();
+  const auth2 = String(subscription?.keys?.auth || "").trim();
+  if (!endpoint || !p256dh || !auth2) throw new Error("Invalid web push subscription");
+  const now = Date.now();
+  await db2.query(
+    `INSERT INTO web_push_subscriptions (user_id, endpoint, p256dh, auth, user_agent, is_active, created_at, last_seen_at)
+     VALUES ($1, $2, $3, $4, $5, TRUE, $6, $6)
+     ON CONFLICT (endpoint)
+     DO UPDATE SET
+       user_id = EXCLUDED.user_id,
+       p256dh = EXCLUDED.p256dh,
+       auth = EXCLUDED.auth,
+       user_agent = EXCLUDED.user_agent,
+       is_active = TRUE,
+       last_seen_at = EXCLUDED.last_seen_at`,
+    [userId, endpoint, p256dh, auth2, userAgent || null, now]
+  );
+}
+async function unregisterWebPushSubscription(db2, userId, endpoint) {
+  await db2.query(
+    "UPDATE web_push_subscriptions SET is_active = FALSE, last_seen_at = $1 WHERE user_id = $2 AND endpoint = $3",
+    [Date.now(), userId, endpoint]
+  );
+}
+async function sendWebPushToUsers(db2, userIds, payload) {
+  if (!configureWebPush()) return { sent: 0, subscriptions: 0 };
+  const uniqueUserIds = [...new Set(userIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0))];
+  if (!uniqueUserIds.length) return { sent: 0, subscriptions: 0 };
+  const result = await db2.query(
+    "SELECT id, endpoint, p256dh, auth FROM web_push_subscriptions WHERE is_active = TRUE AND user_id = ANY($1::int[])",
+    [uniqueUserIds]
+  );
+  let sent = 0;
+  const inactiveIds = [];
+  const body = JSON.stringify({
+    title: payload.title,
+    body: payload.body,
+    data: payload.data || {}
+  });
+  for (const row of result.rows) {
+    try {
+      await webpush.sendNotification(
+        {
+          endpoint: row.endpoint,
+          keys: { p256dh: row.p256dh, auth: row.auth }
+        },
+        body
+      );
+      sent += 1;
+    } catch (err) {
+      if (err?.statusCode === 404 || err?.statusCode === 410) inactiveIds.push(Number(row.id));
+      else console.error("[WebPush] send failed:", err?.statusCode || err?.message || err);
+    }
+  }
+  if (inactiveIds.length > 0) {
+    await db2.query("UPDATE web_push_subscriptions SET is_active = FALSE, last_seen_at = $1 WHERE id = ANY($2::int[])", [
+      Date.now(),
+      inactiveIds
+    ]).catch(() => {
+    });
+  }
+  return { sent, subscriptions: result.rows.length };
+}
+async function sendPushToUsers(db2, userIds, payload) {
+  const uniqueUserIds = [...new Set(userIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0))];
+  if (!uniqueUserIds.length) return { sent: 0, tokens: 0, webSent: 0, webSubscriptions: 0 };
+  const webResultPromise = sendWebPushToUsers(db2, uniqueUserIds, payload).catch(() => ({ sent: 0, subscriptions: 0 }));
+  const tokenResult = await db2.query(
+    "SELECT expo_push_token FROM user_push_tokens WHERE is_active = TRUE AND user_id = ANY($1::int[])",
+    [uniqueUserIds]
+  );
+  const tokens = [...new Set(tokenResult.rows.map((r) => String(r.expo_push_token || "").trim()).filter(Boolean))];
+  if (!tokens.length) {
+    const webResult2 = await webResultPromise;
+    return { sent: 0, tokens: 0, webSent: webResult2.sent, webSubscriptions: webResult2.subscriptions };
+  }
+  const messages = tokens.map((to) => ({
+    to,
+    sound: "default",
+    title: payload.title,
+    body: payload.body,
+    data: payload.data || {},
+    priority: "high"
+  }));
+  const chunks = chunkArray(messages, 100);
+  let sent = 0;
+  const invalidTokens = [];
+  for (const chunk of chunks) {
+    try {
+      const res = await fetch("https://exp.host/--/api/v2/push/send", {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Accept-encoding": "gzip, deflate",
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(chunk)
+      });
+      const json = await res.json().catch(() => null);
+      const results = Array.isArray(json?.data) ? json.data : [];
+      sent += results.filter((r) => r?.status === "ok").length;
+      results.forEach((r, idx) => {
+        if (r?.status === "error" && r?.details?.error === "DeviceNotRegistered" && chunk[idx]?.to) {
+          invalidTokens.push(chunk[idx].to);
+        }
+      });
+    } catch (err) {
+      console.error("[Push] send chunk failed:", err);
+    }
+  }
+  if (invalidTokens.length > 0) {
+    await db2.query("UPDATE user_push_tokens SET is_active = FALSE, last_seen_at = $1 WHERE expo_push_token = ANY($2::text[])", [
+      Date.now(),
+      [...new Set(invalidTokens)]
+    ]).catch(() => {
+    });
+  }
+  const webResult = await webResultPromise;
+  return { sent, tokens: tokens.length, webSent: webResult.sent, webSubscriptions: webResult.subscriptions };
+}
+async function sendPushToAdmins(db2, payload) {
+  const result = await db2.query("SELECT id FROM users WHERE role = 'admin'");
+  const adminIds = result.rows.map((row) => Number(row.id)).filter((id) => Number.isFinite(id));
+  return sendPushToUsers(db2, adminIds, payload);
+}
+var init_push_notifications = __esm({
+  "backend/push-notifications.ts"() {
+    "use strict";
+  }
+});
+
 // backend/password-utils.ts
 import { randomBytes as randomBytes2, pbkdf2 as pbkdf2Cb, timingSafeEqual as timingSafeEqual2, createHash } from "crypto";
 import { promisify } from "util";
@@ -2334,6 +2508,11 @@ function registerAuthRoutes({
         [normalizedName, finalEmail, phone, dob, photo, passwordHash, now]
       );
       const user = inserted.rows[0];
+      await sendPushToAdmins(db2, {
+        title: "\u{1F464} New User Registered",
+        body: `${user.name || "A student"} just created an account.`,
+        data: { type: "new_user_registration", userId: Number(user.id) }
+      }).catch((err) => console.error("[Auth] admin registration push failed:", err));
       await db2.query("DELETE FROM otp_challenges WHERE identifier = $1", [payload.identifier]).catch(() => {
       });
       const gate = await assertLoginAllowedForInstallation(db2, req, {
@@ -2482,6 +2661,7 @@ function registerAuthRoutes({
 var init_auth_routes = __esm({
   "backend/auth-routes.ts"() {
     "use strict";
+    init_push_notifications();
     init_password_utils();
     init_auth_service();
     init_native_device_binding();
@@ -3327,6 +3507,17 @@ function registerPaymentRoutes({
             expectedCourseId: courseId
           });
           await finalizeInstallationBindAfterPurchase(db2, result.userId, req);
+          const [courseInfo, userInfo] = await Promise.all([
+            db2.query("SELECT title, price FROM courses WHERE id = $1", [result.courseId]).catch(() => ({ rows: [] })),
+            db2.query("SELECT name, phone, email FROM users WHERE id = $1", [result.userId]).catch(() => ({ rows: [] }))
+          ]);
+          const courseTitle = String(courseInfo.rows[0]?.title || "a course");
+          const buyerName = String(userInfo.rows[0]?.name || userInfo.rows[0]?.phone || userInfo.rows[0]?.email || "A student");
+          await sendPushToAdmins(db2, {
+            title: "\u{1F4B0} New Course Purchase",
+            body: `${buyerName} purchased ${courseTitle}.`,
+            data: { type: "new_purchase", userId: result.userId, courseId: result.courseId }
+          }).catch((err) => console.error("[Payment] admin purchase push failed:", err));
           console.log("[Payments] verify success");
           return { statusCode: 200, body: { success: true, message: "Payment verified and enrolled successfully" } };
         });
@@ -3595,6 +3786,7 @@ var init_payment_routes = __esm({
   "backend/payment-routes.ts"() {
     "use strict";
     init_course_access_utils();
+    init_push_notifications();
     init_native_device_binding();
     init_idempotency();
     init_validation();
@@ -3777,6 +3969,11 @@ data: ${JSON.stringify({ message: "Realtime unavailable" })}
         "INSERT INTO support_messages (user_id, sender, message, created_at) VALUES ($1, 'user', $2, $3) RETURNING *",
         [user.id, message.trim().slice(0, 1e3), Date.now()]
       );
+      await sendPushToAdmins(db2, {
+        title: "\u{1F4AC} New Support Message",
+        body: `Student #${user.id}: ${message.trim().slice(0, 80)}`,
+        data: { type: "support_message", userId: Number(user.id), messageId: result.rows[0]?.id }
+      }).catch((err) => console.error("[Support] admin push failed:", err));
       res.json(result.rows[0]);
     } catch {
       res.status(500).json({ message: "Failed to send message" });
@@ -3944,6 +4141,7 @@ var init_support_routes = __esm({
   "backend/support-routes.ts"() {
     "use strict";
     init_pg_rate_limit_store();
+    init_push_notifications();
     init_sse_listen_budget();
     SUPPORT_POST_WINDOW_MS = 10 * 60 * 1e3;
     SUPPORT_POST_MAX = 20;
@@ -4491,9 +4689,9 @@ async function saveRecordingForClassAndPeers(db2, liveClassId, recordingUrl, opt
       `INSERT INTO lectures (
          course_id, title, description, video_url, video_type, duration_minutes,
          order_index, is_free_preview, section_title, live_class_id, live_class_finalized,
-         visible_after_at, created_at
+         visible_after_at, subject_key, created_at
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE, $11, $12)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE, $11, $12, $13)
        ON CONFLICT (live_class_id) WHERE live_class_id IS NOT NULL
        DO UPDATE SET
          course_id = EXCLUDED.course_id,
@@ -4514,6 +4712,7 @@ async function saveRecordingForClassAndPeers(db2, liveClassId, recordingUrl, opt
          duration_minutes = EXCLUDED.duration_minutes,
          section_title = EXCLUDED.section_title,
          visible_after_at = EXCLUDED.visible_after_at,
+        subject_key = EXCLUDED.subject_key,
          live_class_finalized = TRUE
        RETURNING id`,
       [
@@ -4528,6 +4727,7 @@ async function saveRecordingForClassAndPeers(db2, liveClassId, recordingUrl, opt
         recordSection,
         row.id,
         visibleAfterAt,
+        row.subject_key || null,
         Date.now()
       ]
     );
@@ -5127,7 +5327,7 @@ function registerLiveStreamRoutes({
     isArchiveSweepRunning = true;
     try {
       const pending = await db2.query(
-        `SELECT id, title, description, course_id, started_at, lecture_section_title, lecture_subfolder_title, recording_url, cf_stream_uid, recording_deleted_at
+        `SELECT id, title, description, course_id, started_at, lecture_section_title, lecture_subfolder_title, recording_url, cf_stream_uid, recording_deleted_at, subject_key
          FROM live_classes
          WHERE stream_type = 'cloudflare'
            AND is_completed = TRUE
@@ -5194,15 +5394,17 @@ function registerLiveStreamRoutes({
                  section_title,
                  live_class_id,
                  live_class_finalized,
+                 subject_key,
                  created_at
                )
-               VALUES ($1, $2, $3, $4, 'r2', $5, $6, FALSE, $7, $8, TRUE, $9)
+               VALUES ($1, $2, $3, $4, 'r2', $5, $6, FALSE, $7, $8, TRUE, $9, $10)
                ON CONFLICT (live_class_id) WHERE live_class_id IS NOT NULL
                DO UPDATE SET
                  video_url = EXCLUDED.video_url,
                  video_type = EXCLUDED.video_type,
                  duration_minutes = EXCLUDED.duration_minutes,
                  section_title = EXCLUDED.section_title,
+                 subject_key = EXCLUDED.subject_key,
                  live_class_finalized = TRUE`,
               [
                 row.course_id,
@@ -5213,6 +5415,7 @@ function registerLiveStreamRoutes({
                 maxOrder.rows[0].next_order,
                 sectionTitle,
                 row.id,
+                row.subject_key || null,
                 Date.now()
               ]
             );
@@ -5788,6 +5991,57 @@ function normalizeFolderName(value) {
   if (typeof value !== "string") return "";
   return value.trim().replace(/\s+/g, " ");
 }
+function parseParentId(value) {
+  if (value == null || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null;
+}
+async function resolveCourseFolderFullName(db2, folderId, courseId) {
+  const result = await db2.query(
+    `${COURSE_FOLDER_SELECT}
+     SELECT full_name
+     FROM folder_tree
+     WHERE id = $1 AND course_id = $2
+     LIMIT 1`,
+    [folderId, courseId]
+  );
+  return result.rows[0]?.full_name || null;
+}
+async function createCourseFolderPath(db2, courseId, type, rawName, rawParentId, rawSubjectKey) {
+  const parts = rawName.split(/\s+\/\s+/).map((p) => normalizeFolderName(p)).filter(Boolean);
+  const names = parts.length > 0 ? parts : [rawName];
+  let parentId = parseParentId(rawParentId);
+  const subjectKey = typeof rawSubjectKey === "string" && rawSubjectKey.trim() ? rawSubjectKey.trim().toLowerCase() : null;
+  let current = null;
+  for (const namePart of names) {
+    const existing = await db2.query(
+      `SELECT *
+       FROM course_folders
+       WHERE course_id = $1
+         AND type = $2
+         AND COALESCE(subject_key, '') = COALESCE($5::text, '')
+         AND COALESCE(parent_id, 0) = COALESCE($3::int, 0)
+         AND LOWER(name) = LOWER($4)
+       LIMIT 1`,
+      [courseId, type, parentId, namePart, subjectKey]
+    );
+    if (existing.rows.length > 0) {
+      current = existing.rows[0];
+      if (current.is_hidden) {
+        const revived = await db2.query("UPDATE course_folders SET is_hidden = FALSE WHERE id = $1 RETURNING *", [current.id]);
+        current = revived.rows[0];
+      }
+    } else {
+      const inserted = await db2.query(
+        "INSERT INTO course_folders (course_id, name, type, parent_id, subject_key) VALUES ($1, $2, $3, $4, $5) RETURNING *",
+        [courseId, namePart, type, parentId, subjectKey]
+      );
+      current = inserted.rows[0];
+    }
+    parentId = Number(current.id);
+  }
+  return current;
+}
 function registerAdminCourseManagementRoutes({
   app: app2,
   db: db2,
@@ -5835,7 +6089,14 @@ function registerAdminCourseManagementRoutes({
   });
   app2.get("/api/admin/courses/:id/folders", requireAdmin2, async (req, res) => {
     try {
-      const result = await db2.query("SELECT * FROM course_folders WHERE course_id = $1 ORDER BY order_index ASC, created_at ASC", [req.params.id]);
+      const result = await db2.query(
+        `${COURSE_FOLDER_SELECT}
+         SELECT *
+         FROM folder_tree
+         WHERE course_id = $1
+         ORDER BY COALESCE(parent_id, 0) ASC, order_index ASC, created_at ASC`,
+        [req.params.id]
+      );
       res.json(result.rows);
     } catch {
       res.status(500).json({ message: "Failed to fetch folders" });
@@ -5843,28 +6104,22 @@ function registerAdminCourseManagementRoutes({
   });
   app2.post("/api/admin/courses/:id/folders", requireAdmin2, async (req, res) => {
     try {
-      const { name, type } = req.body;
+      const { name, type, parentId, subjectKey } = req.body;
       const normalizedName = normalizeFolderName(name);
       const normalizedType = typeof type === "string" ? type.trim().toLowerCase() : "";
       if (!normalizedName) return res.status(400).json({ message: "Folder name is required" });
       if (normalizedName.length > MAX_FOLDER_NAME_LENGTH) return res.status(400).json({ message: "Folder name is too long" });
       if (!COURSE_FOLDER_TYPES.has(normalizedType)) return res.status(400).json({ message: "Invalid folder type" });
-      const existing = await db2.query(
-        "SELECT * FROM course_folders WHERE course_id = $1 AND type = $2 AND LOWER(name) = LOWER($3) LIMIT 1",
-        [req.params.id, normalizedType, normalizedName]
-      );
-      if (existing.rows.length > 0) {
-        const revived = await db2.query(
-          "UPDATE course_folders SET is_hidden = FALSE WHERE id = $1 RETURNING *",
-          [existing.rows[0].id]
+      const normalizedParentId = parseParentId(parentId);
+      if (normalizedParentId) {
+        const parent = await db2.query(
+          "SELECT id FROM course_folders WHERE id = $1 AND course_id = $2 AND type = $3 AND COALESCE(subject_key, '') = COALESCE($4::text, '') LIMIT 1",
+          [normalizedParentId, req.params.id, normalizedType, typeof subjectKey === "string" && subjectKey.trim() ? subjectKey.trim().toLowerCase() : null]
         );
-        return res.json(revived.rows[0]);
+        if (parent.rows.length === 0) return res.status(400).json({ message: "Parent folder not found" });
       }
-      const result = await db2.query(
-        "INSERT INTO course_folders (course_id, name, type) VALUES ($1, $2, $3) RETURNING *",
-        [req.params.id, normalizedName, normalizedType]
-      );
-      res.json(result.rows[0]);
+      const folder = await createCourseFolderPath(db2, req.params.id, normalizedType, normalizedName, normalizedParentId, subjectKey);
+      res.json(folder);
     } catch {
       res.status(500).json({ message: "Failed to create folder" });
     }
@@ -5876,48 +6131,70 @@ function registerAdminCourseManagementRoutes({
         const normalizedName = normalizeFolderName(name);
         if (!normalizedName) return res.status(400).json({ message: "Folder name is required" });
         if (normalizedName.length > MAX_FOLDER_NAME_LENGTH) return res.status(400).json({ message: "Folder name is too long" });
+        const oldFullName = await resolveCourseFolderFullName(db2, req.params.folderId, req.params.id);
+        if (!oldFullName) return res.status(404).json({ message: "Folder not found" });
         const dup = await db2.query(
-          "SELECT id FROM course_folders WHERE course_id = $1 AND type = (SELECT type FROM course_folders WHERE id = $2 AND course_id = $1) AND LOWER(name) = LOWER($3) AND id <> $2 LIMIT 1",
+          `SELECT id
+           FROM course_folders
+           WHERE course_id = $1
+             AND type = (SELECT type FROM course_folders WHERE id = $2 AND course_id = $1)
+             AND COALESCE(subject_key, '') = COALESCE((SELECT subject_key FROM course_folders WHERE id = $2 AND course_id = $1), '')
+             AND COALESCE(parent_id, 0) = COALESCE((SELECT parent_id FROM course_folders WHERE id = $2 AND course_id = $1), 0)
+             AND LOWER(name) = LOWER($3)
+             AND id <> $2
+           LIMIT 1`,
           [req.params.id, req.params.folderId, normalizedName]
         );
         if (dup.rows.length > 0) {
-          return res.status(409).json({ message: "A folder with this name already exists for this type" });
+          return res.status(409).json({ message: "A folder with this name already exists in this parent" });
         }
-        await db2.query(
-          `WITH target AS (
-             SELECT id, name, type
-             FROM course_folders
-             WHERE id = $1 AND course_id = $2
-           ),
-           renamed AS (
-             UPDATE course_folders cf
-             SET name = $3
+        await db2.query("UPDATE course_folders SET name = $1 WHERE id = $2 AND course_id = $3", [normalizedName, req.params.folderId, req.params.id]);
+        const newFullName = await resolveCourseFolderFullName(db2, req.params.folderId, req.params.id);
+        if (newFullName) {
+          await db2.query(
+            `WITH target AS (
+               SELECT type AS folder_type FROM course_folders WHERE id = $1 AND course_id = $2
+             ),
+             upd_lectures AS (
+               UPDATE lectures l
+               SET section_title = CASE
+                 WHEN l.section_title = $3 THEN $4
+                 ELSE $4 || substring(l.section_title from length($3) + 1)
+               END
+               FROM target t
+               WHERE t.folder_type = 'lecture' AND l.course_id = $2 AND (l.section_title = $3 OR l.section_title LIKE $3 || ' / %')
+               RETURNING l.id
+             ),
+             upd_materials AS (
+               UPDATE study_materials sm
+               SET section_title = CASE
+                 WHEN sm.section_title = $3 THEN $4
+                 ELSE $4 || substring(sm.section_title from length($3) + 1)
+               END
+               FROM target t
+               WHERE t.folder_type = 'material' AND sm.course_id = $2 AND (sm.section_title = $3 OR sm.section_title LIKE $3 || ' / %')
+               RETURNING sm.id
+             )
+             UPDATE tests tt
+             SET folder_name = CASE
+               WHEN tt.folder_name = $3 THEN $4
+               ELSE $4 || substring(tt.folder_name from length($3) + 1)
+             END
              FROM target t
-             WHERE cf.id = t.id
-             RETURNING t.name AS old_name, t.type AS folder_type
-           ),
-           upd_lectures AS (
-             UPDATE lectures l
-             SET section_title = $3
-             FROM renamed r
-             WHERE r.folder_type = 'lecture' AND l.course_id = $2 AND l.section_title = r.old_name
-             RETURNING l.id
-           ),
-           upd_materials AS (
-             UPDATE study_materials sm
-             SET section_title = $3
-             FROM renamed r
-             WHERE r.folder_type = 'material' AND sm.course_id = $2 AND sm.section_title = r.old_name
-             RETURNING sm.id
-           )
-           UPDATE tests t
-           SET folder_name = $3
-           FROM renamed r
-           WHERE r.folder_type = 'test' AND t.course_id = $2 AND t.folder_name = r.old_name`,
-          [req.params.folderId, req.params.id, normalizedName]
-        );
+             WHERE t.folder_type = 'test' AND tt.course_id = $2 AND (tt.folder_name = $3 OR tt.folder_name LIKE $3 || ' / %')`,
+            [req.params.folderId, req.params.id, oldFullName, newFullName]
+          );
+        }
       } else if (isHidden !== void 0) {
-        await db2.query("UPDATE course_folders SET is_hidden = $1 WHERE id = $2 AND course_id = $3", [isHidden, req.params.folderId, req.params.id]);
+        await db2.query(
+          `WITH RECURSIVE descendants AS (
+             SELECT id FROM course_folders WHERE id = $1 AND course_id = $2
+             UNION ALL
+             SELECT cf.id FROM course_folders cf JOIN descendants d ON cf.parent_id = d.id
+           )
+           UPDATE course_folders SET is_hidden = $3 WHERE id IN (SELECT id FROM descendants)`,
+          [req.params.folderId, req.params.id, isHidden]
+        );
       }
       res.json({ success: true });
     } catch {
@@ -5968,34 +6245,40 @@ function registerAdminCourseManagementRoutes({
   });
   app2.delete("/api/admin/courses/:id/folders/:folderId", requireAdmin2, async (req, res) => {
     try {
+      const fullName = await resolveCourseFolderFullName(db2, req.params.folderId, req.params.id);
+      if (!fullName) return res.status(404).json({ message: "Folder not found" });
       await db2.query(
-        `WITH target AS (
+        `WITH RECURSIVE target AS (
            SELECT id, name, type
            FROM course_folders
            WHERE id = $1 AND course_id = $2
+           UNION ALL
+           SELECT cf.id, cf.name, cf.type
+           FROM course_folders cf
+           JOIN target t ON cf.parent_id = t.id
          ),
          del_lectures AS (
            DELETE FROM lectures l
            USING target t
-           WHERE t.type = 'lecture' AND l.course_id = $2 AND l.section_title = t.name
+           WHERE t.type = 'lecture' AND l.course_id = $2 AND (l.section_title = $3 OR l.section_title LIKE $3 || ' / %')
            RETURNING l.id
          ),
          del_tests AS (
            DELETE FROM tests tt
            USING target t
-           WHERE t.type = 'test' AND tt.course_id = $2 AND tt.folder_name = t.name
+           WHERE t.type = 'test' AND tt.course_id = $2 AND (tt.folder_name = $3 OR tt.folder_name LIKE $3 || ' / %')
            RETURNING tt.id
          ),
          del_materials AS (
            DELETE FROM study_materials sm
            USING target t
-           WHERE t.type = 'material' AND sm.course_id = $2 AND sm.section_title = t.name
+           WHERE t.type = 'material' AND sm.course_id = $2 AND (sm.section_title = $3 OR sm.section_title LIKE $3 || ' / %')
            RETURNING sm.id
          )
          DELETE FROM course_folders cf
          USING target t
          WHERE cf.id = t.id`,
-        [req.params.folderId, req.params.id]
+        [req.params.folderId, req.params.id, fullName]
       );
       await updateCourseTestCounts3(String(req.params.id));
       res.json({ success: true });
@@ -6004,12 +6287,30 @@ function registerAdminCourseManagementRoutes({
     }
   });
 }
-var COURSE_FOLDER_TYPES, MAX_FOLDER_NAME_LENGTH;
+var COURSE_FOLDER_TYPES, MAX_FOLDER_NAME_LENGTH, COURSE_FOLDER_SELECT;
 var init_admin_course_management_routes = __esm({
   "backend/admin-course-management-routes.ts"() {
     "use strict";
     COURSE_FOLDER_TYPES = /* @__PURE__ */ new Set(["lecture", "material", "test"]);
     MAX_FOLDER_NAME_LENGTH = 120;
+    COURSE_FOLDER_SELECT = `
+  WITH RECURSIVE folder_tree AS (
+    SELECT
+      cf.*,
+      cf.name::text AS full_name,
+      ARRAY[cf.id] AS path_ids
+    FROM course_folders cf
+    WHERE cf.parent_id IS NULL
+    UNION ALL
+    SELECT
+      child.*,
+      (folder_tree.full_name || ' / ' || child.name)::text AS full_name,
+      folder_tree.path_ids || child.id AS path_ids
+    FROM course_folders child
+    JOIN folder_tree ON child.parent_id = folder_tree.id
+    WHERE NOT child.id = ANY(folder_tree.path_ids)
+  )
+`;
   }
 });
 
@@ -6690,7 +6991,7 @@ function registerAdminLectureRoutes({
   };
   app2.post("/api/admin/lectures", requireAdmin2, async (req, res) => {
     try {
-      const { courseId, title, description, transcript, videoUrl, fileUrl, videoType, pdfUrl, durationMinutes: durationMinutes2, orderIndex, isFreePreview, sectionTitle, lectureSubfolderTitle, downloadAllowed } = req.body;
+      const { courseId, title, description, transcript, videoUrl, fileUrl, videoType, pdfUrl, durationMinutes: durationMinutes2, orderIndex, isFreePreview, sectionTitle, lectureSubfolderTitle, downloadAllowed, subjectKey } = req.body;
       const parsedCourseId = Number(courseId);
       if (!Number.isFinite(parsedCourseId) || parsedCourseId <= 0) {
         return res.status(400).json({ message: "Invalid courseId" });
@@ -6713,9 +7014,10 @@ function registerAdminLectureRoutes({
         lectureSubfolderTitle
       );
       const transcriptText = transcript != null ? String(transcript) : "";
+      const normalizedSubjectKey = typeof subjectKey === "string" && subjectKey.trim() ? subjectKey.trim().toLowerCase() : null;
       const result = await db2.query(
-        `INSERT INTO lectures (course_id, title, description, transcript, video_url, video_type, pdf_url, duration_minutes, order_index, is_free_preview, section_title, download_allowed, created_at) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
+        `INSERT INTO lectures (course_id, title, description, transcript, video_url, video_type, pdf_url, duration_minutes, order_index, is_free_preview, section_title, download_allowed, subject_key, created_at) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *`,
         [
           parsedCourseId,
           String(title).trim(),
@@ -6729,6 +7031,7 @@ function registerAdminLectureRoutes({
           isFreePreview || false,
           normalizedSectionTitle,
           downloadAllowed || false,
+          normalizedSubjectKey,
           Date.now()
         ]
       );
@@ -6751,15 +7054,16 @@ function registerAdminLectureRoutes({
   });
   app2.put("/api/admin/lectures/:id", requireAdmin2, async (req, res) => {
     try {
-      const { title, description, transcript, videoUrl, videoType, durationMinutes: durationMinutes2, orderIndex, isFreePreview, sectionTitle, lectureSubfolderTitle, downloadAllowed } = req.body;
+      const { title, description, transcript, videoUrl, videoType, durationMinutes: durationMinutes2, orderIndex, isFreePreview, sectionTitle, lectureSubfolderTitle, downloadAllowed, subjectKey } = req.body;
       const normalizedSectionTitle = resolveLectureSectionTitle(
         sectionTitle,
         lectureSubfolderTitle
       );
       const patchTranscript = Object.prototype.hasOwnProperty.call(req.body, "transcript");
       const transcriptVal = patchTranscript ? String(transcript ?? "") : "";
+      const normalizedSubjectKey = typeof subjectKey === "string" && subjectKey.trim() ? subjectKey.trim().toLowerCase() : null;
       await db2.query(
-        `UPDATE lectures SET title=$1, description=$2, transcript = CASE WHEN $11::boolean THEN $3::text ELSE transcript END, video_url=$4, video_type=$5, duration_minutes=$6, order_index=$7, is_free_preview=$8, section_title=$9, download_allowed=$10 WHERE id=$12`,
+        `UPDATE lectures SET title=$1, description=$2, transcript = CASE WHEN $11::boolean THEN $3::text ELSE transcript END, video_url=$4, video_type=$5, duration_minutes=$6, order_index=$7, is_free_preview=$8, section_title=$9, download_allowed=$10, subject_key=$13 WHERE id=$12`,
         [
           title,
           description || "",
@@ -6772,7 +7076,8 @@ function registerAdminLectureRoutes({
           normalizedSectionTitle,
           downloadAllowed || false,
           patchTranscript,
-          req.params.id
+          req.params.id,
+          normalizedSubjectKey
         ]
       );
       if (downloadAllowed === false) {
@@ -6864,96 +7169,6 @@ var init_admin_lecture_routes = __esm({
   }
 });
 
-// backend/push-notifications.ts
-function chunkArray(arr, size) {
-  const out = [];
-  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
-  return out;
-}
-async function registerPushToken(db2, userId, token, platform) {
-  const now = Date.now();
-  await db2.query(
-    `INSERT INTO user_push_tokens (user_id, expo_push_token, platform, is_active, created_at, last_seen_at)
-     VALUES ($1, $2, $3, TRUE, $4, $4)
-     ON CONFLICT (expo_push_token)
-     DO UPDATE SET
-       user_id = EXCLUDED.user_id,
-       platform = EXCLUDED.platform,
-       is_active = TRUE,
-       last_seen_at = EXCLUDED.last_seen_at`,
-    [userId, token, platform || "unknown", now]
-  );
-}
-async function unregisterPushToken(db2, userId, token) {
-  await db2.query(
-    "UPDATE user_push_tokens SET is_active = FALSE, last_seen_at = $1 WHERE user_id = $2 AND expo_push_token = $3",
-    [Date.now(), userId, token]
-  );
-}
-async function unregisterAllPushTokens(db2, userId) {
-  await db2.query("UPDATE user_push_tokens SET is_active = FALSE, last_seen_at = $1 WHERE user_id = $2", [
-    Date.now(),
-    userId
-  ]);
-}
-async function sendPushToUsers(db2, userIds, payload) {
-  const uniqueUserIds = [...new Set(userIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0))];
-  if (!uniqueUserIds.length) return { sent: 0, tokens: 0 };
-  const tokenResult = await db2.query(
-    "SELECT expo_push_token FROM user_push_tokens WHERE is_active = TRUE AND user_id = ANY($1::int[])",
-    [uniqueUserIds]
-  );
-  const tokens = [...new Set(tokenResult.rows.map((r) => String(r.expo_push_token || "").trim()).filter(Boolean))];
-  if (!tokens.length) return { sent: 0, tokens: 0 };
-  const messages = tokens.map((to) => ({
-    to,
-    sound: "default",
-    title: payload.title,
-    body: payload.body,
-    data: payload.data || {},
-    priority: "high"
-  }));
-  const chunks = chunkArray(messages, 100);
-  let sent = 0;
-  const invalidTokens = [];
-  for (const chunk of chunks) {
-    try {
-      const res = await fetch("https://exp.host/--/api/v2/push/send", {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Accept-encoding": "gzip, deflate",
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(chunk)
-      });
-      const json = await res.json().catch(() => null);
-      const results = Array.isArray(json?.data) ? json.data : [];
-      sent += results.filter((r) => r?.status === "ok").length;
-      results.forEach((r, idx) => {
-        if (r?.status === "error" && r?.details?.error === "DeviceNotRegistered" && chunk[idx]?.to) {
-          invalidTokens.push(chunk[idx].to);
-        }
-      });
-    } catch (err) {
-      console.error("[Push] send chunk failed:", err);
-    }
-  }
-  if (invalidTokens.length > 0) {
-    await db2.query("UPDATE user_push_tokens SET is_active = FALSE, last_seen_at = $1 WHERE expo_push_token = ANY($2::text[])", [
-      Date.now(),
-      [...new Set(invalidTokens)]
-    ]).catch(() => {
-    });
-  }
-  return { sent, tokens: tokens.length };
-}
-var init_push_notifications = __esm({
-  "backend/push-notifications.ts"() {
-    "use strict";
-  }
-});
-
 // backend/admin-test-routes.ts
 function registerAdminTestRoutes({
   app: app2,
@@ -6976,12 +7191,90 @@ function registerAdminTestRoutes({
       res.status(500).json({ message: "Failed to fetch tests" });
     }
   });
+  app2.get("/api/admin/tests/:id/attempts", requireAdmin2, async (req, res) => {
+    try {
+      const testId = Number(req.params.id);
+      if (!Number.isFinite(testId) || testId <= 0) {
+        return res.status(400).json({ message: "Invalid test id" });
+      }
+      const [testResult, questionsResult, attemptsResult] = await Promise.all([
+        db2.query(
+          `SELECT t.*, c.title AS course_title, sf.name AS mini_course_title
+           FROM tests t
+           LEFT JOIN courses c ON c.id = t.course_id
+           LEFT JOIN standalone_folders sf ON sf.id = t.mini_course_id
+           WHERE t.id = $1`,
+          [testId]
+        ),
+        db2.query(
+          `SELECT id, question_text, option_a, option_b, option_c, option_d,
+                  correct_option, explanation, topic, difficulty, marks,
+                  negative_marks, image_url, solution_image_url, order_index
+           FROM questions
+           WHERE test_id = $1
+           ORDER BY order_index ASC, id ASC`,
+          [testId]
+        ),
+        db2.query(
+          `SELECT DISTINCT ON (ta.user_id)
+                  ta.id AS attempt_id,
+                  ta.user_id,
+                  ta.score,
+                  ta.total_marks,
+                  ta.percentage,
+                  ta.correct,
+                  ta.incorrect,
+                  ta.attempted,
+                  ta.time_taken_seconds,
+                  ta.completed_at,
+                  ta.answers,
+                  ta.question_times,
+                  u.name,
+                  u.phone,
+                  u.email
+           FROM test_attempts ta
+           JOIN users u ON u.id = ta.user_id
+           WHERE ta.test_id = $1 AND ta.status = 'completed'
+           ORDER BY ta.user_id, ta.completed_at DESC`,
+          [testId]
+        )
+      ]);
+      if (testResult.rows.length === 0) {
+        return res.status(404).json({ message: "Test not found" });
+      }
+      const attempts = attemptsResult.rows.map((row) => ({
+        ...row,
+        score: Number(row.score || 0),
+        total_marks: Number(row.total_marks || 0),
+        percentage: Number(row.percentage || 0),
+        correct: Number(row.correct || 0),
+        incorrect: Number(row.incorrect || 0),
+        attempted: Number(row.attempted || 0),
+        time_taken_seconds: Number(row.time_taken_seconds || 0),
+        answers: typeof row.answers === "string" ? JSON.parse(row.answers || "{}") : row.answers || {},
+        question_times: typeof row.question_times === "string" ? JSON.parse(row.question_times || "{}") : row.question_times || {}
+      })).sort((a, b) => {
+        const scoreDiff = Number(b.score || 0) - Number(a.score || 0);
+        if (scoreDiff !== 0) return scoreDiff;
+        return Number(a.time_taken_seconds || 0) - Number(b.time_taken_seconds || 0);
+      });
+      res.json({
+        test: testResult.rows[0],
+        questions: questionsResult.rows,
+        attempts
+      });
+    } catch (err) {
+      console.error("[AdminTests] Failed to fetch test attempts:", err);
+      res.status(500).json({ message: "Failed to fetch test attempts" });
+    }
+  });
   app2.post("/api/admin/tests", requireAdmin2, async (req, res) => {
     try {
-      const { title, description, courseId, durationMinutes: durationMinutes2, totalMarks, passingMarks, testType, folderName, difficulty, scheduledAt, miniCourseId, price } = req.body;
+      const { title, description, courseId, durationMinutes: durationMinutes2, totalMarks, passingMarks, testType, folderName, difficulty, scheduledAt, miniCourseId, price, subjectKey } = req.body;
+      const normalizedSubjectKey = typeof subjectKey === "string" && subjectKey.trim() ? subjectKey.trim().toLowerCase() : null;
       const result = await db2.query(
-        `INSERT INTO tests (title, description, course_id, duration_minutes, total_marks, passing_marks, test_type, folder_name, difficulty, scheduled_at, mini_course_id, price, is_published, created_at) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, TRUE, $13) RETURNING *`,
+        `INSERT INTO tests (title, description, course_id, duration_minutes, total_marks, passing_marks, test_type, folder_name, difficulty, scheduled_at, mini_course_id, price, subject_key, is_published, created_at) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, TRUE, $14) RETURNING *`,
         [
           title,
           description,
@@ -6995,6 +7288,7 @@ function registerAdminTestRoutes({
           scheduledAt ? new Date(scheduledAt).getTime() : null,
           miniCourseId || null,
           parseFloat(price) || 0,
+          normalizedSubjectKey,
           Date.now()
         ]
       );
@@ -7323,7 +7617,7 @@ function registerAdminUsersAndContentRoutes({
 }) {
   app2.post("/api/admin/study-materials", requireAdmin2, async (req, res) => {
     try {
-      const { title, description, fileUrl, fileType, courseId, isFree, sectionTitle, downloadAllowed } = req.body;
+      const { title, description, fileUrl, fileType, courseId, isFree, sectionTitle, downloadAllowed, subjectKey } = req.body;
       const normalizedTitle = typeof title === "string" ? title.trim() : "";
       const normalizedFileUrl = typeof fileUrl === "string" ? fileUrl.trim() : "";
       const parsedCourseId = courseId == null ? null : Number(courseId);
@@ -7336,9 +7630,10 @@ function registerAdminUsersAndContentRoutes({
         const courseCheck = await db2.query("SELECT id FROM courses WHERE id = $1 LIMIT 1", [parsedCourseId]);
         if (courseCheck.rows.length === 0) return res.status(404).json({ message: "Course not found" });
       }
+      const normalizedSubjectKey = typeof subjectKey === "string" && subjectKey.trim() ? subjectKey.trim().toLowerCase() : null;
       const result = await db2.query(
-        `INSERT INTO study_materials (title, description, file_url, file_type, course_id, is_free, section_title, download_allowed, created_at) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+        `INSERT INTO study_materials (title, description, file_url, file_type, course_id, is_free, section_title, download_allowed, subject_key, created_at) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
         [
           normalizedTitle,
           description || "",
@@ -7348,6 +7643,7 @@ function registerAdminUsersAndContentRoutes({
           parsedCourseId ? false : isFree !== false,
           sectionTitle || null,
           downloadAllowed || false,
+          normalizedSubjectKey,
           Date.now()
         ]
       );
@@ -7392,14 +7688,15 @@ function registerAdminUsersAndContentRoutes({
   });
   app2.post("/api/admin/live-classes", requireAdmin2, async (req, res) => {
     try {
-      const { title, description, courseId, youtubeUrl, scheduledAt, isLive, isPublic, notifyEmail, notifyBell, isFreePreview, streamType, chatMode, showViewerCount, lectureSectionTitle, lectureSubfolderTitle, isRecordingMode, visibleAfterAt } = req.body;
+      const { title, description, courseId, youtubeUrl, scheduledAt, isLive, isPublic, notifyEmail, notifyBell, isFreePreview, streamType, chatMode, showViewerCount, lectureSectionTitle, lectureSubfolderTitle, isRecordingMode, visibleAfterAt, subjectKey } = req.body;
       const mainSec = typeof lectureSectionTitle === "string" && lectureSectionTitle.trim() !== "" ? lectureSectionTitle.trim() : null;
       const subSec = typeof lectureSubfolderTitle === "string" && lectureSubfolderTitle.trim() !== "" ? lectureSubfolderTitle.trim() : null;
       const recMode = isRecordingMode === true;
       const visAfter = recMode && visibleAfterAt && Number.isFinite(Number(visibleAfterAt)) ? Number(visibleAfterAt) : null;
+      const normalizedSubjectKey = typeof subjectKey === "string" && subjectKey.trim() ? subjectKey.trim().toLowerCase() : null;
       const result = await db2.query(
-        `INSERT INTO live_classes (title, description, course_id, youtube_url, scheduled_at, is_live, is_public, notify_email, notify_bell, is_free_preview, stream_type, chat_mode, show_viewer_count, lecture_section_title, lecture_subfolder_title, is_recording_mode, visible_after_at, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) RETURNING *`,
+        `INSERT INTO live_classes (title, description, course_id, youtube_url, scheduled_at, is_live, is_public, notify_email, notify_bell, is_free_preview, stream_type, chat_mode, show_viewer_count, lecture_section_title, lecture_subfolder_title, is_recording_mode, visible_after_at, subject_key, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) RETURNING *`,
         [
           title,
           description,
@@ -7419,6 +7716,7 @@ function registerAdminUsersAndContentRoutes({
           subSec,
           recMode,
           visAfter,
+          normalizedSubjectKey,
           Date.now()
         ]
       );
@@ -7705,18 +8003,19 @@ function registerAdminTestManagementRoutes({
   });
   app2.put("/api/admin/tests/:id", requireAdmin2, async (req, res) => {
     try {
-      const { title, description, durationMinutes: durationMinutes2, totalMarks, testType, folderName, difficulty, scheduledAt, passingMarks, courseId, price } = req.body;
+      const { title, description, durationMinutes: durationMinutes2, totalMarks, testType, folderName, difficulty, scheduledAt, passingMarks, courseId, price, subjectKey } = req.body;
       const priceVal = price !== void 0 ? parseFloat(price) || 0 : null;
+      const normalizedSubjectKey = typeof subjectKey === "string" && subjectKey.trim() ? subjectKey.trim().toLowerCase() : null;
       if (courseId !== void 0) {
         await db2.query(
-          `UPDATE tests SET title=$1, description=$2, duration_minutes=$3, total_marks=$4, test_type=$5, folder_name=$6, difficulty=$7, scheduled_at=$8, passing_marks=$9, course_id=$10${priceVal !== null ? ", price=$12" : ""} WHERE id=$11`,
-          priceVal !== null ? [title, description || "", parseInt(durationMinutes2) || 60, parseInt(totalMarks) || 100, testType, folderName || null, difficulty || "moderate", scheduledAt || null, parseInt(passingMarks) || 35, courseId || null, req.params.id, priceVal] : [title, description || "", parseInt(durationMinutes2) || 60, parseInt(totalMarks) || 100, testType, folderName || null, difficulty || "moderate", scheduledAt || null, parseInt(passingMarks) || 35, courseId || null, req.params.id]
+          `UPDATE tests SET title=$1, description=$2, duration_minutes=$3, total_marks=$4, test_type=$5, folder_name=$6, difficulty=$7, scheduled_at=$8, passing_marks=$9, course_id=$10, subject_key=$12${priceVal !== null ? ", price=$13" : ""} WHERE id=$11`,
+          priceVal !== null ? [title, description || "", parseInt(durationMinutes2) || 60, parseInt(totalMarks) || 100, testType, folderName || null, difficulty || "moderate", scheduledAt || null, parseInt(passingMarks) || 35, courseId || null, req.params.id, normalizedSubjectKey, priceVal] : [title, description || "", parseInt(durationMinutes2) || 60, parseInt(totalMarks) || 100, testType, folderName || null, difficulty || "moderate", scheduledAt || null, parseInt(passingMarks) || 35, courseId || null, req.params.id, normalizedSubjectKey]
         );
         if (courseId) await updateCourseTestCounts3(courseId);
       } else {
         await db2.query(
-          `UPDATE tests SET title=$1, description=$2, duration_minutes=$3, total_marks=$4, test_type=$5, folder_name=$6, difficulty=$7, scheduled_at=$8, passing_marks=$9${priceVal !== null ? ", price=$11" : ""} WHERE id=$10`,
-          priceVal !== null ? [title, description || "", parseInt(durationMinutes2) || 60, parseInt(totalMarks) || 100, testType, folderName || null, difficulty || "moderate", scheduledAt || null, parseInt(passingMarks) || 35, req.params.id, priceVal] : [title, description || "", parseInt(durationMinutes2) || 60, parseInt(totalMarks) || 100, testType, folderName || null, difficulty || "moderate", scheduledAt || null, parseInt(passingMarks) || 35, req.params.id]
+          `UPDATE tests SET title=$1, description=$2, duration_minutes=$3, total_marks=$4, test_type=$5, folder_name=$6, difficulty=$7, scheduled_at=$8, passing_marks=$9, subject_key=$11${priceVal !== null ? ", price=$12" : ""} WHERE id=$10`,
+          priceVal !== null ? [title, description || "", parseInt(durationMinutes2) || 60, parseInt(totalMarks) || 100, testType, folderName || null, difficulty || "moderate", scheduledAt || null, parseInt(passingMarks) || 35, req.params.id, normalizedSubjectKey, priceVal] : [title, description || "", parseInt(durationMinutes2) || 60, parseInt(totalMarks) || 100, testType, folderName || null, difficulty || "moderate", scheduledAt || null, parseInt(passingMarks) || 35, req.params.id, normalizedSubjectKey]
         );
         const existing = await db2.query("SELECT course_id FROM tests WHERE id = $1", [req.params.id]);
         if (existing.rows[0]?.course_id) await updateCourseTestCounts3(existing.rows[0].course_id);
@@ -7966,6 +8265,18 @@ var init_admin_notification_routes = __esm({
 });
 
 // backend/admin-course-crud-routes.ts
+function normalizeJsonArray(value, fallback = []) {
+  if (Array.isArray(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : fallback;
+    } catch {
+      return fallback;
+    }
+  }
+  return fallback;
+}
 function registerAdminCourseCrudRoutes({
   app: app2,
   db: db2,
@@ -7973,15 +8284,44 @@ function registerAdminCourseCrudRoutes({
 }) {
   app2.post("/api/admin/courses", requireAdmin2, async (req, res) => {
     try {
-      const { title, description, teacherName, price, originalPrice, category, isFree, level, durationHours, courseType, subject, startDate, endDate, validityMonths, thumbnail, coverColor } = req.body;
+      const { title, description, teacherName, price, originalPrice, category, isFree, level, durationHours, courseType, subject, startDate, endDate, validityMonths, thumbnail, coverColor, teacherBio, teacherImageUrl, teacherDetailsJson, multiSubjectConfig, courseLanguage, batchStatus } = req.body;
       const COVER_COLORS = ["#1A56DB", "#7C3AED", "#DC2626", "#059669", "#D97706", "#0891B2", "#DB2777", "#EA580C"];
       const autoColor = COVER_COLORS[Math.floor(Math.random() * COVER_COLORS.length)];
       const vm = validityMonths != null && String(validityMonths).trim() !== "" ? Math.max(0, parseFloat(String(validityMonths)) || 0) || null : null;
+      const normalizedCourseType = courseType || "live";
+      const subjects = normalizeJsonArray(multiSubjectConfig, [
+        { key: "maths", label: "Maths", icon: "calculator" },
+        { key: "english", label: "English", icon: "book" },
+        { key: "science", label: "Science", icon: "flask" },
+        { key: "gk", label: "G.K", icon: "earth" }
+      ]);
+      const teacherDetails = normalizeJsonArray(teacherDetailsJson);
       const result = await db2.query(
-        `INSERT INTO courses (title, description, teacher_name, price, original_price, category, is_free, level, duration_hours, course_type, subject, start_date, end_date, validity_months, thumbnail, cover_color, is_published, created_at) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, TRUE, $17) RETURNING *`,
-        [title, description, teacherName || "3i Learning", price || 0, originalPrice || 0, category || "Mathematics", isFree || false, level || "Beginner", durationHours || 0, courseType || "live", subject || "", startDate || null, endDate || null, vm, thumbnail || null, coverColor || autoColor, Date.now()]
+        `INSERT INTO courses (title, description, teacher_name, price, original_price, category, is_free, level, duration_hours, course_type, subject, start_date, end_date, validity_months, thumbnail, cover_color, teacher_bio, teacher_image_url, teacher_details_json, multi_subject_config, course_language, batch_status, is_published, created_at) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19::jsonb, $20::jsonb, $21, $22, TRUE, $23) RETURNING *`,
+        [title, description, teacherName || "3i Learning", price || 0, originalPrice || 0, category || "Mathematics", isFree || false, level || "Beginner", durationHours || 0, normalizedCourseType, subject || "", startDate || null, endDate || null, vm, thumbnail || null, coverColor || autoColor, teacherBio || null, teacherImageUrl || null, JSON.stringify(teacherDetails), JSON.stringify(normalizedCourseType === "multi_subject" ? subjects : normalizeJsonArray(multiSubjectConfig)), normalizedCourseType === "multi_subject" ? courseLanguage || "HINGLISH" : null, normalizedCourseType === "multi_subject" ? batchStatus || "ongoing" : null, Date.now()]
       );
+      if (normalizedCourseType !== "test_series") {
+        const course = result.rows[0];
+        const students = await db2.query("SELECT id FROM users WHERE role = 'student'").catch(() => ({ rows: [] }));
+        const studentIds = students.rows.map((row) => Number(row.id)).filter((id) => Number.isFinite(id));
+        const notifTitle = "\u{1F4DA} New Course Added";
+        const notifMessage = `"${course.title}" is now available.`;
+        if (studentIds.length > 0) {
+          await db2.query(
+            `INSERT INTO notifications (user_id, title, message, type, created_at)
+             SELECT u, $2::text, $3::text, 'info', $4::bigint
+             FROM unnest($1::int[]) AS u`,
+            [studentIds, notifTitle, notifMessage, Date.now()]
+          ).catch(() => {
+          });
+        }
+        await sendPushToUsers(db2, studentIds, {
+          title: notifTitle,
+          body: notifMessage,
+          data: { type: "new_course_added", courseId: Number(course.id) }
+        }).catch((err) => console.error("[CourseNotify] new course push failed:", err));
+      }
       res.json(result.rows[0]);
     } catch (err) {
       console.error("Create course error:", err?.message || err);
@@ -7990,11 +8330,13 @@ function registerAdminCourseCrudRoutes({
   });
   app2.put("/api/admin/courses/:id", requireAdmin2, async (req, res) => {
     try {
-      const { title, description, teacherName, price, originalPrice, category, isFree, level, durationHours, isPublished, totalTests, subject, courseType, startDate, endDate, validityMonths, thumbnail, coverColor } = req.body;
+      const { title, description, teacherName, price, originalPrice, category, isFree, level, durationHours, isPublished, totalTests, subject, courseType, startDate, endDate, validityMonths, thumbnail, coverColor, teacherBio, teacherImageUrl, teacherDetailsJson, multiSubjectConfig, courseLanguage, batchStatus } = req.body;
       const vm = validityMonths != null && String(validityMonths).trim() !== "" ? Math.max(0, parseFloat(String(validityMonths)) || 0) || null : null;
+      const teacherDetails = normalizeJsonArray(teacherDetailsJson);
+      const subjects = normalizeJsonArray(multiSubjectConfig);
       await db2.query(
-        `UPDATE courses SET title=$1, description=$2, teacher_name=$3, price=$4, original_price=$5, category=$6, is_free=$7, level=$8, duration_hours=$9, is_published=$10, total_tests=COALESCE($11, total_tests), subject=COALESCE($12, subject), course_type=COALESCE($13, course_type), start_date=COALESCE($14, start_date), end_date=COALESCE($15, end_date), validity_months=COALESCE($16, validity_months), thumbnail=COALESCE($17, thumbnail), cover_color=COALESCE($18, cover_color) WHERE id=$19`,
-        [title, description, teacherName, price, originalPrice, category, isFree, level, durationHours, isPublished, totalTests, subject, courseType, startDate, endDate, vm, thumbnail ?? null, coverColor ?? null, req.params.id]
+        `UPDATE courses SET title=$1, description=$2, teacher_name=$3, price=$4, original_price=$5, category=$6, is_free=$7, level=$8, duration_hours=$9, is_published=$10, total_tests=COALESCE($11, total_tests), subject=COALESCE($12, subject), course_type=COALESCE($13, course_type), start_date=COALESCE($14, start_date), end_date=COALESCE($15, end_date), validity_months=COALESCE($16, validity_months), thumbnail=COALESCE($17, thumbnail), cover_color=COALESCE($18, cover_color), teacher_bio=COALESCE($19, teacher_bio), teacher_image_url=COALESCE($20, teacher_image_url), teacher_details_json=COALESCE($21::jsonb, teacher_details_json), multi_subject_config=COALESCE($22::jsonb, multi_subject_config), course_language=COALESCE($23, course_language), batch_status=COALESCE($24, batch_status) WHERE id=$25`,
+        [title, description, teacherName, price, originalPrice, category, isFree, level, durationHours, isPublished, totalTests, subject, courseType, startDate, endDate, vm, thumbnail ?? null, coverColor ?? null, teacherBio ?? null, teacherImageUrl ?? null, teacherDetailsJson !== void 0 ? JSON.stringify(teacherDetails) : null, multiSubjectConfig !== void 0 ? JSON.stringify(subjects) : null, courseLanguage ?? null, batchStatus ?? null, req.params.id]
       );
       res.json({ success: true });
     } catch {
@@ -8005,6 +8347,7 @@ function registerAdminCourseCrudRoutes({
 var init_admin_course_crud_routes = __esm({
   "backend/admin-course-crud-routes.ts"() {
     "use strict";
+    init_push_notifications();
   }
 });
 
@@ -8249,6 +8592,62 @@ function normalizeStandaloneFolderName(value) {
   if (typeof value !== "string") return "";
   return value.trim().replace(/\s+/g, " ");
 }
+function parseParentId2(value) {
+  if (value == null || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null;
+}
+async function resolveStandaloneFolderFullName(db2, folderId) {
+  const result = await db2.query(
+    `${STANDALONE_FOLDER_SELECT}
+     SELECT full_name
+     FROM folder_tree
+     WHERE id = $1
+     LIMIT 1`,
+    [folderId]
+  );
+  return result.rows[0]?.full_name || null;
+}
+async function createStandaloneFolderPath(db2, type, rawName, rawParentId, extras) {
+  const parts = rawName.split(/\s+\/\s+/).map((p) => normalizeStandaloneFolderName(p)).filter(Boolean);
+  const names = parts.length > 0 ? parts : [rawName];
+  let parentId = parseParentId2(rawParentId);
+  let current = null;
+  for (let index = 0; index < names.length; index++) {
+    const namePart = names[index];
+    const existing = await db2.query(
+      `SELECT *
+       FROM standalone_folders
+       WHERE type = $1
+         AND COALESCE(parent_id, 0) = COALESCE($2::int, 0)
+         AND LOWER(name) = LOWER($3)
+       LIMIT 1`,
+      [type, parentId, namePart]
+    );
+    if (existing.rows.length > 0) {
+      current = existing.rows[0];
+      if (current.is_hidden) {
+        const revived = await db2.query("UPDATE standalone_folders SET is_hidden = FALSE WHERE id = $1 RETURNING *", [current.id]);
+        current = revived.rows[0];
+      }
+    } else if (type === "test" && index === names.length - 1) {
+      const vm = extras.validityMonths != null && String(extras.validityMonths).trim() !== "" ? Math.max(0, parseFloat(String(extras.validityMonths)) || 0) || null : null;
+      const inserted = await db2.query(
+        "INSERT INTO standalone_folders (name, type, parent_id, category, price, original_price, is_free, description, validity_months) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *",
+        [namePart, type, parentId, extras.category || null, parseFloat(String(extras.price)) || 0, parseFloat(String(extras.originalPrice)) || 0, extras.isFree !== false, extras.description || null, vm]
+      );
+      current = inserted.rows[0];
+    } else {
+      const inserted = await db2.query(
+        "INSERT INTO standalone_folders (name, type, parent_id) VALUES ($1, $2, $3) RETURNING *",
+        [namePart, type, parentId]
+      );
+      current = inserted.rows[0];
+    }
+    parentId = Number(current.id);
+  }
+  return current;
+}
 function registerStandaloneFolderRoutes({
   app: app2,
   db: db2,
@@ -8257,13 +8656,13 @@ function registerStandaloneFolderRoutes({
   app2.get("/api/admin/standalone-folders", requireAdmin2, async (req, res) => {
     try {
       const { type } = req.query;
-      let q = "SELECT * FROM standalone_folders";
+      let q = `${STANDALONE_FOLDER_SELECT} SELECT * FROM folder_tree`;
       const params = [];
       if (type) {
         params.push(type);
         q += ` WHERE type = $1`;
       }
-      q += " ORDER BY order_index ASC, created_at ASC";
+      q += " ORDER BY COALESCE(parent_id, 0) ASC, order_index ASC, created_at ASC";
       const result = await db2.query(q, params);
       res.json(result.rows);
     } catch {
@@ -8311,36 +8710,29 @@ function registerStandaloneFolderRoutes({
   });
   app2.post("/api/admin/standalone-folders", requireAdmin2, async (req, res) => {
     try {
-      const { name, type, category, price, originalPrice, isFree, description, validityMonths } = req.body;
+      const { name, type, parentId, category, price, originalPrice, isFree, description, validityMonths } = req.body;
       const normalizedName = normalizeStandaloneFolderName(name);
       const normalizedType = typeof type === "string" ? type.trim().toLowerCase() : "";
       if (!normalizedName) return res.status(400).json({ message: "Folder name is required" });
       if (normalizedName.length > MAX_STANDALONE_FOLDER_NAME_LENGTH) return res.status(400).json({ message: "Folder name is too long" });
       if (!STANDALONE_FOLDER_TYPES.has(normalizedType)) return res.status(400).json({ message: "Invalid folder type" });
-      const existing = await db2.query(
-        "SELECT * FROM standalone_folders WHERE type = $1 AND LOWER(name) = LOWER($2) LIMIT 1",
-        [normalizedType, normalizedName]
-      );
-      if (existing.rows.length > 0) {
-        const revived = await db2.query(
-          "UPDATE standalone_folders SET is_hidden = FALSE WHERE id = $1 RETURNING *",
-          [existing.rows[0].id]
+      const normalizedParentId = parseParentId2(parentId);
+      if (normalizedParentId) {
+        const parent = await db2.query(
+          "SELECT id FROM standalone_folders WHERE id = $1 AND type = $2 LIMIT 1",
+          [normalizedParentId, normalizedType]
         );
-        return res.json(revived.rows[0]);
+        if (parent.rows.length === 0) return res.status(400).json({ message: "Parent folder not found" });
       }
-      if (normalizedType === "test") {
-        const vm = validityMonths != null && String(validityMonths).trim() !== "" ? Math.max(0, parseFloat(String(validityMonths)) || 0) || null : null;
-        const result2 = await db2.query(
-          "INSERT INTO standalone_folders (name, type, category, price, original_price, is_free, description, validity_months) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *",
-          [normalizedName, normalizedType, category || null, parseFloat(price) || 0, parseFloat(originalPrice) || 0, isFree !== false, description || null, vm]
-        );
-        return res.json(result2.rows[0]);
-      }
-      const result = await db2.query(
-        "INSERT INTO standalone_folders (name, type) VALUES ($1, $2) RETURNING *",
-        [normalizedName, normalizedType]
-      );
-      res.json(result.rows[0]);
+      const folder = await createStandaloneFolderPath(db2, normalizedType, normalizedName, normalizedParentId, {
+        category,
+        price,
+        originalPrice,
+        isFree,
+        description,
+        validityMonths
+      });
+      res.json(folder);
     } catch {
       res.status(500).json({ message: "Failed to create folder" });
     }
@@ -8352,52 +8744,72 @@ function registerStandaloneFolderRoutes({
         const normalizedName = normalizeStandaloneFolderName(name);
         if (!normalizedName) return res.status(400).json({ message: "Folder name is required" });
         if (normalizedName.length > MAX_STANDALONE_FOLDER_NAME_LENGTH) return res.status(400).json({ message: "Folder name is too long" });
+        const oldFullName = await resolveStandaloneFolderFullName(db2, req.params.id);
         const current = await db2.query("SELECT id, type FROM standalone_folders WHERE id = $1", [req.params.id]);
         if (current.rows.length > 0) {
           const folderType = current.rows[0].type;
           const dup = await db2.query(
-            "SELECT id FROM standalone_folders WHERE type = $1 AND LOWER(name) = LOWER($2) AND id <> $3 LIMIT 1",
+            `SELECT id
+             FROM standalone_folders
+             WHERE type = $1
+               AND COALESCE(parent_id, 0) = COALESCE((SELECT parent_id FROM standalone_folders WHERE id = $3), 0)
+               AND LOWER(name) = LOWER($2)
+               AND id <> $3
+             LIMIT 1`,
             [folderType, normalizedName, req.params.id]
           );
           if (dup.rows.length > 0) {
             return res.status(409).json({ message: "A folder with this name already exists for this type" });
           }
         }
-        await db2.query(
-          `WITH target AS (
-             SELECT id, name, type
-             FROM standalone_folders
-             WHERE id = $1
-           ),
-           renamed AS (
-             UPDATE standalone_folders sf
-             SET name = $2
+        if (!oldFullName) return res.status(404).json({ message: "Folder not found" });
+        await db2.query("UPDATE standalone_folders SET name = $1 WHERE id = $2", [normalizedName, req.params.id]);
+        const newFullName = await resolveStandaloneFolderFullName(db2, req.params.id);
+        if (newFullName) {
+          await db2.query(
+            `WITH target AS (
+               SELECT type AS folder_type FROM standalone_folders WHERE id = $1
+             ),
+             upd_tests AS (
+               UPDATE tests tt
+               SET folder_name = CASE
+                 WHEN tt.folder_name = $2 THEN $3
+                 ELSE $3 || substring(tt.folder_name from length($2) + 1)
+               END
+               FROM target t
+               WHERE t.folder_type = 'test' AND tt.course_id IS NULL AND (tt.folder_name = $2 OR tt.folder_name LIKE $2 || ' / %')
+               RETURNING tt.id
+             ),
+             upd_missions AS (
+               UPDATE daily_missions dm
+               SET folder_name = CASE
+                 WHEN dm.folder_name = $2 THEN $3
+                 ELSE $3 || substring(dm.folder_name from length($2) + 1)
+               END
+               FROM target t
+               WHERE t.folder_type = 'mission' AND (dm.folder_name = $2 OR dm.folder_name LIKE $2 || ' / %')
+               RETURNING dm.id
+             )
+             UPDATE study_materials sm
+             SET section_title = CASE
+               WHEN sm.section_title = $2 THEN $3
+               ELSE $3 || substring(sm.section_title from length($2) + 1)
+             END
              FROM target t
-             WHERE sf.id = t.id
-             RETURNING t.name AS old_name, t.type AS folder_type
-           ),
-           upd_tests AS (
-             UPDATE tests tt
-             SET folder_name = $2
-             FROM renamed r
-             WHERE r.folder_type = 'test' AND tt.folder_name = r.old_name AND tt.course_id IS NULL
-             RETURNING tt.id
-           ),
-           upd_missions AS (
-             UPDATE daily_missions dm
-             SET folder_name = $2
-             FROM renamed r
-             WHERE r.folder_type = 'mission' AND dm.folder_name = r.old_name
-             RETURNING dm.id
-           )
-           UPDATE study_materials sm
-           SET section_title = $2
-           FROM renamed r
-           WHERE r.folder_type = 'material' AND sm.section_title = r.old_name AND sm.course_id IS NULL`,
-          [req.params.id, normalizedName]
-        );
+             WHERE t.folder_type = 'material' AND sm.course_id IS NULL AND (sm.section_title = $2 OR sm.section_title LIKE $2 || ' / %')`,
+            [req.params.id, oldFullName, newFullName]
+          );
+        }
       } else if (isHidden !== void 0) {
-        await db2.query("UPDATE standalone_folders SET is_hidden = $1 WHERE id = $2", [isHidden, req.params.id]);
+        await db2.query(
+          `WITH RECURSIVE descendants AS (
+             SELECT id FROM standalone_folders WHERE id = $1
+             UNION ALL
+             SELECT sf.id FROM standalone_folders sf JOIN descendants d ON sf.parent_id = d.id
+           )
+           UPDATE standalone_folders SET is_hidden = $2 WHERE id IN (SELECT id FROM descendants)`,
+          [req.params.id, isHidden]
+        );
       }
       if (category !== void 0) await db2.query("UPDATE standalone_folders SET category = $1 WHERE id = $2", [category, req.params.id]);
       if (price !== void 0) await db2.query("UPDATE standalone_folders SET price = $1 WHERE id = $2", [parseFloat(price) || 0, req.params.id]);
@@ -8415,34 +8827,40 @@ function registerStandaloneFolderRoutes({
   });
   app2.delete("/api/admin/standalone-folders/:id", requireAdmin2, async (req, res) => {
     try {
+      const fullName = await resolveStandaloneFolderFullName(db2, req.params.id);
+      if (!fullName) return res.status(404).json({ message: "Folder not found" });
       await db2.query(
-        `WITH target AS (
+        `WITH RECURSIVE target AS (
            SELECT id, name, type
            FROM standalone_folders
            WHERE id = $1
+           UNION ALL
+           SELECT sf.id, sf.name, sf.type
+           FROM standalone_folders sf
+           JOIN target t ON sf.parent_id = t.id
          ),
          del_tests AS (
            DELETE FROM tests tt
            USING target t
-           WHERE t.type = 'test' AND tt.folder_name = t.name AND tt.course_id IS NULL
+           WHERE t.type = 'test' AND tt.course_id IS NULL AND (tt.folder_name = $2 OR tt.folder_name LIKE $2 || ' / %')
            RETURNING tt.id
          ),
          del_materials AS (
            DELETE FROM study_materials sm
            USING target t
-           WHERE t.type = 'material' AND sm.section_title = t.name AND sm.course_id IS NULL
+           WHERE t.type = 'material' AND sm.course_id IS NULL AND (sm.section_title = $2 OR sm.section_title LIKE $2 || ' / %')
            RETURNING sm.id
          ),
          del_missions AS (
            DELETE FROM daily_missions dm
            USING target t
-           WHERE t.type = 'mission' AND dm.folder_name = t.name
+           WHERE t.type = 'mission' AND (dm.folder_name = $2 OR dm.folder_name LIKE $2 || ' / %')
            RETURNING dm.id
          )
          DELETE FROM standalone_folders sf
          USING target t
          WHERE sf.id = t.id`,
-        [req.params.id]
+        [req.params.id, fullName]
       );
       res.json({ success: true });
     } catch {
@@ -8450,12 +8868,30 @@ function registerStandaloneFolderRoutes({
     }
   });
 }
-var STANDALONE_FOLDER_TYPES, MAX_STANDALONE_FOLDER_NAME_LENGTH;
+var STANDALONE_FOLDER_TYPES, MAX_STANDALONE_FOLDER_NAME_LENGTH, STANDALONE_FOLDER_SELECT;
 var init_standalone_folder_routes = __esm({
   "backend/standalone-folder-routes.ts"() {
     "use strict";
     STANDALONE_FOLDER_TYPES = /* @__PURE__ */ new Set(["test", "material", "mini_course", "mission"]);
     MAX_STANDALONE_FOLDER_NAME_LENGTH = 120;
+    STANDALONE_FOLDER_SELECT = `
+  WITH RECURSIVE folder_tree AS (
+    SELECT
+      sf.*,
+      sf.name::text AS full_name,
+      ARRAY[sf.id] AS path_ids
+    FROM standalone_folders sf
+    WHERE sf.parent_id IS NULL
+    UNION ALL
+    SELECT
+      child.*,
+      (folder_tree.full_name || ' / ' || child.name)::text AS full_name,
+      folder_tree.path_ids || child.id AS path_ids
+    FROM standalone_folders child
+    JOIN folder_tree ON child.parent_id = folder_tree.id
+    WHERE NOT child.id = ANY(folder_tree.path_ids)
+  )
+`;
   }
 });
 
@@ -9089,11 +9525,13 @@ function registerStudentMissionMaterialRoutes({
         ];
         if (folderNamesInResult.length > 0) {
           const freeRows = await db2.query(
-            `SELECT name FROM standalone_folders
-             WHERE type = 'mission' AND is_free = TRUE AND name = ANY($1::text[])`,
+            `${STANDALONE_FOLDER_SELECT2}
+             SELECT full_name
+             FROM folder_tree
+             WHERE type = 'mission' AND is_free = TRUE AND full_name = ANY($1::text[])`,
             [folderNamesInResult]
           );
-          for (const row of freeRows.rows) freeFolderNames.add(String(row.name));
+          for (const row of freeRows.rows) freeFolderNames.add(String(row.full_name));
         }
       }
       const missionAccessible = (mission) => {
@@ -9156,18 +9594,21 @@ function registerStudentMissionMaterialRoutes({
       const user = await getAuthUser2(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const result = await db2.query(
-        `SELECT
+        `${STANDALONE_FOLDER_SELECT2}
+         SELECT
            id,
            name,
+           parent_id,
+           full_name,
            category,
            validity_months,
            is_free,
            description,
            created_at
-         FROM standalone_folders
+         FROM folder_tree
          WHERE type = 'mission'
            AND (is_hidden = FALSE OR is_hidden IS NULL)
-         ORDER BY order_index ASC, created_at ASC`
+         ORDER BY COALESCE(parent_id, 0) ASC, order_index ASC, created_at ASC`
       );
       res.set("Cache-Control", "private, no-store");
       res.json(result.rows);
@@ -9226,7 +9667,11 @@ function registerStudentMissionMaterialRoutes({
       const loadFolders = async () => {
         if (free !== "true") return [];
         const foldersResult = await db2.query(
-          "SELECT * FROM standalone_folders WHERE type = 'material' AND (is_hidden = FALSE OR is_hidden IS NULL) ORDER BY order_index ASC, created_at ASC"
+          `${STANDALONE_FOLDER_SELECT2}
+           SELECT *
+           FROM folder_tree
+           WHERE type = 'material' AND (is_hidden = FALSE OR is_hidden IS NULL)
+           ORDER BY COALESCE(parent_id, 0) ASC, order_index ASC, created_at ASC`
         );
         return foldersResult.rows;
       };
@@ -9280,9 +9725,15 @@ function registerStudentMissionMaterialRoutes({
   app2.get("/api/study-materials/folder/:folderName", async (req, res) => {
     try {
       const user = await getAuthUser2(req);
-      const result = await db2.query("SELECT * FROM study_materials WHERE section_title = $1 AND course_id IS NULL ORDER BY COALESCE(order_index, 0) ASC, created_at DESC", [
-        decodeURIComponent(String(req.params.folderName))
-      ]);
+      const folderName = decodeURIComponent(String(req.params.folderName));
+      const result = await db2.query(
+        `SELECT *
+         FROM study_materials
+         WHERE course_id IS NULL
+           AND (section_title = $1 OR section_title LIKE $1 || ' / %')
+         ORDER BY COALESCE(order_index, 0) ASC, created_at DESC`,
+        [folderName]
+      );
       const safeRows = [];
       for (const row of result.rows) {
         if (await canAccessStandaloneMaterial(user, row)) safeRows.push(row);
@@ -9320,11 +9771,30 @@ function registerStudentMissionMaterialRoutes({
     }
   });
 }
+var STANDALONE_FOLDER_SELECT2;
 var init_student_mission_material_routes = __esm({
   "backend/student-mission-material-routes.ts"() {
     "use strict";
     init_course_access_utils();
     init_standalone_entitlement_service();
+    STANDALONE_FOLDER_SELECT2 = `
+  WITH RECURSIVE folder_tree AS (
+    SELECT
+      sf.*,
+      sf.name::text AS full_name,
+      ARRAY[sf.id] AS path_ids
+    FROM standalone_folders sf
+    WHERE sf.parent_id IS NULL
+    UNION ALL
+    SELECT
+      child.*,
+      (folder_tree.full_name || ' / ' || child.name)::text AS full_name,
+      folder_tree.path_ids || child.id AS path_ids
+    FROM standalone_folders child
+    JOIN folder_tree ON child.parent_id = folder_tree.id
+    WHERE NOT child.id = ANY(folder_tree.path_ids)
+  )
+`;
   }
 });
 
@@ -9512,7 +9982,15 @@ function registerTestFolderRoutes({
     try {
       const user = await getAuthUser2(req);
       const result = await db2.query(
-        "SELECT sf.*, (SELECT COUNT(*) FROM tests t WHERE t.mini_course_id = sf.id) as total_tests FROM standalone_folders sf WHERE sf.type = 'mini_course' AND (sf.is_hidden = FALSE OR sf.is_hidden IS NULL) ORDER BY sf.created_at DESC"
+        `${STANDALONE_FOLDER_SELECT3}
+         SELECT
+           folder_tree.*,
+           (SELECT COUNT(*) FROM tests t WHERE t.mini_course_id = folder_tree.id) as total_tests
+         FROM folder_tree
+         WHERE type = 'mini_course'
+           AND parent_id IS NULL
+           AND (is_hidden = FALSE OR is_hidden IS NULL)
+         ORDER BY created_at DESC`
       );
       const folders = result.rows.map((f) => ({ ...f, is_purchased: false }));
       if (user) {
@@ -9531,10 +10009,28 @@ function registerTestFolderRoutes({
   app2.get("/api/test-folders/:id", async (req, res) => {
     try {
       const user = await getAuthUser2(req);
-      const folder = await db2.query("SELECT * FROM standalone_folders WHERE id = $1 AND type = 'mini_course'", [req.params.id]);
+      const folder = await db2.query(
+        `${STANDALONE_FOLDER_SELECT3}
+         SELECT *
+         FROM folder_tree
+         WHERE id = $1 AND type = 'mini_course'`,
+        [req.params.id]
+      );
       if (folder.rows.length === 0) return res.status(404).json({ message: "Folder not found" });
       const f = folder.rows[0];
       const tests = await db2.query("SELECT t.*, t.folder_name as sub_folder FROM tests t WHERE t.mini_course_id = $1 ORDER BY t.folder_name ASC NULLS LAST, t.created_at ASC", [f.id]);
+      const childFolders = await db2.query(
+        `${STANDALONE_FOLDER_SELECT3}
+         SELECT
+           folder_tree.*,
+           (SELECT COUNT(*) FROM tests t WHERE t.mini_course_id = folder_tree.id) as total_tests
+         FROM folder_tree
+         WHERE type = 'mini_course'
+           AND parent_id = $1
+           AND (is_hidden = FALSE OR is_hidden IS NULL)
+         ORDER BY order_index ASC, created_at ASC`,
+        [f.id]
+      );
       let isPurchased = f.is_free;
       const attempts = {};
       if (user) {
@@ -9550,7 +10046,7 @@ function registerTestFolderRoutes({
           }
         }
       }
-      res.json({ ...f, is_purchased: isPurchased, tests: tests.rows, attempts });
+      res.json({ ...f, is_purchased: isPurchased, child_folders: childFolders.rows, tests: tests.rows, attempts });
     } catch (err) {
       console.error("Test folder detail error:", err);
       res.status(500).json({ message: "Failed to fetch folder" });
@@ -9672,10 +10168,29 @@ function registerTestFolderRoutes({
     }
   });
 }
+var STANDALONE_FOLDER_SELECT3;
 var init_test_folder_routes = __esm({
   "backend/test-folder-routes.ts"() {
     "use strict";
     init_native_device_binding();
+    STANDALONE_FOLDER_SELECT3 = `
+  WITH RECURSIVE folder_tree AS (
+    SELECT
+      sf.*,
+      sf.name::text AS full_name,
+      ARRAY[sf.id] AS path_ids
+    FROM standalone_folders sf
+    WHERE sf.parent_id IS NULL
+    UNION ALL
+    SELECT
+      child.*,
+      (folder_tree.full_name || ' / ' || child.name)::text AS full_name,
+      folder_tree.path_ids || child.id AS path_ids
+    FROM standalone_folders child
+    JOIN folder_tree ON child.parent_id = folder_tree.id
+    WHERE NOT child.id = ANY(folder_tree.path_ids)
+  )
+`;
   }
 });
 
@@ -10455,8 +10970,8 @@ async function convertLiveClassTitlePeersToLectures(db2, anchor, opts = {}) {
     const lectureResult = await db2.query(
       `INSERT INTO lectures (
          course_id, title, description, video_url, video_type, duration_minutes,
-         order_index, is_free_preview, section_title, live_class_id, live_class_finalized, created_at
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE, $11)
+         order_index, is_free_preview, section_title, live_class_id, subject_key, live_class_finalized, created_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, TRUE, $12)
        ON CONFLICT (live_class_id) WHERE live_class_id IS NOT NULL
        DO UPDATE SET
          title = EXCLUDED.title,
@@ -10468,6 +10983,7 @@ async function convertLiveClassTitlePeersToLectures(db2, anchor, opts = {}) {
          video_type = EXCLUDED.video_type,
          duration_minutes = EXCLUDED.duration_minutes,
          section_title = EXCLUDED.section_title,
+        subject_key = EXCLUDED.subject_key,
          live_class_finalized = TRUE
        RETURNING id`,
       [
@@ -10481,6 +10997,7 @@ async function convertLiveClassTitlePeersToLectures(db2, anchor, opts = {}) {
         false,
         targetSection,
         peer.id,
+        peer.subject_key || null,
         Date.now()
       ]
     );
@@ -10544,7 +11061,7 @@ function registerAdminLiveClassManageRoutes({
   });
   app2.put("/api/admin/live-classes/:id", requireAdmin2, async (req, res) => {
     try {
-      const { isLive, isCompleted, youtubeUrl, title, description, convertToLecture, sectionTitle, scheduledAt, notifyEmail, notifyBell, isFreePreview, streamType, chatMode, showViewerCount, recordingUrl, cfStreamUid, lectureSectionTitle, lectureSubfolderTitle, pipPosition } = req.body;
+      const { isLive, isCompleted, youtubeUrl, title, description, convertToLecture, sectionTitle, scheduledAt, notifyEmail, notifyBell, isFreePreview, streamType, chatMode, showViewerCount, recordingUrl, cfStreamUid, lectureSectionTitle, lectureSubfolderTitle, pipPosition, subjectKey } = req.body;
       const normalizedPipPosition = pipPosition === void 0 ? void 0 : pipPosition === "bottom-right" ? "bottom-right" : "top-right";
       const updates = [];
       const params = [];
@@ -10571,6 +11088,7 @@ function registerAdminLiveClassManageRoutes({
       if (cfStreamUid !== void 0) add("cf_stream_uid", cfStreamUid);
       if (lectureSectionTitle !== void 0) add("lecture_section_title", typeof lectureSectionTitle === "string" && lectureSectionTitle.trim() === "" ? null : lectureSectionTitle);
       if (lectureSubfolderTitle !== void 0) add("lecture_subfolder_title", typeof lectureSubfolderTitle === "string" && lectureSubfolderTitle.trim() === "" ? null : lectureSubfolderTitle);
+      if (subjectKey !== void 0) add("subject_key", typeof subjectKey === "string" && subjectKey.trim() ? subjectKey.trim().toLowerCase() : null);
       const { isPublic: isPublicVal } = req.body;
       if (isPublicVal !== void 0) add("is_public", isPublicVal);
       if (updates.length === 0) {
@@ -10799,9 +11317,10 @@ function registerAdminLiveClassManageRoutes({
   });
   app2.put("/api/admin/study-materials/:id", requireAdmin2, async (req, res) => {
     try {
-      const { title, description, fileUrl, fileType, isFree, sectionTitle, downloadAllowed } = req.body;
+      const { title, description, fileUrl, fileType, isFree, sectionTitle, downloadAllowed, subjectKey } = req.body;
+      const normalizedSubjectKey = typeof subjectKey === "string" && subjectKey.trim() ? subjectKey.trim().toLowerCase() : null;
       const existing = await db2.query("SELECT course_id FROM study_materials WHERE id = $1 LIMIT 1", [req.params.id]);
-      await db2.query(`UPDATE study_materials SET title=$1, description=$2, file_url=$3, file_type=$4, is_free=$5, section_title=$6, download_allowed=$7 WHERE id=$8`, [
+      await db2.query(`UPDATE study_materials SET title=$1, description=$2, file_url=$3, file_type=$4, is_free=$5, section_title=$6, download_allowed=$7, subject_key=$8 WHERE id=$9`, [
         title,
         description || "",
         fileUrl,
@@ -10809,6 +11328,7 @@ function registerAdminLiveClassManageRoutes({
         isFree || false,
         sectionTitle || null,
         downloadAllowed || false,
+        normalizedSubjectKey,
         req.params.id
       ]);
       if (downloadAllowed === false) {
@@ -11518,6 +12038,7 @@ var init_classroom_routes = __esm({
 });
 
 // backend/live-class-poll-routes.ts
+import { createHmac as createHmac4, timingSafeEqual as timingSafeEqual5 } from "crypto";
 async function checkEngagementStreamAccess(req, res, db2, getAuthUser2, liveClassId) {
   const lc = await loadLiveClass2(db2, liveClassId);
   if (!lc) {
@@ -11537,6 +12058,36 @@ async function checkEngagementStreamAccess(req, res, db2, getAuthUser2, liveClas
 }
 function nowMs() {
   return Date.now();
+}
+function getEngagementSseSecret() {
+  return process.env.SESSION_SECRET || process.env.OTP_HMAC_SECRET || "dev-engagement-sse-secret";
+}
+function encodeBase64Url(input) {
+  return Buffer.from(input, "utf8").toString("base64url");
+}
+function signEngagementSsePayload(payloadBase64) {
+  return createHmac4("sha256", getEngagementSseSecret()).update(payloadBase64).digest("base64url");
+}
+function issueEngagementSseToken(payload) {
+  const payloadBase64 = encodeBase64Url(JSON.stringify(payload));
+  return `${payloadBase64}.${signEngagementSsePayload(payloadBase64)}`;
+}
+function verifyEngagementSseToken(token, liveClassId) {
+  const [payloadBase64, sig] = token.split(".");
+  if (!payloadBase64 || !sig) return null;
+  const expected = signEngagementSsePayload(payloadBase64);
+  const expectedBuf = Buffer.from(expected);
+  const sigBuf = Buffer.from(sig);
+  if (expectedBuf.length !== sigBuf.length || !timingSafeEqual5(expectedBuf, sigBuf)) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(payloadBase64, "base64url").toString("utf8"));
+    if (String(payload.liveClassId) !== String(liveClassId)) return null;
+    if (!Number.isFinite(Number(payload.userId)) || !String(payload.role || "").trim()) return null;
+    if (Number(payload.exp) <= nowMs()) return null;
+    return payload;
+  } catch {
+    return null;
+  }
 }
 async function loadLiveClass2(db2, id) {
   const r = await db2.query("SELECT * FROM live_classes WHERE id = $1", [id]);
@@ -11565,6 +12116,30 @@ function registerLiveClassPollRoutes({
   getAuthUser: getAuthUser2
 }) {
   const listenPoolMax = listenPool2.options.max ?? 32;
+  app2.get("/api/live-classes/:id/engagement/sse-token", requireAuth, async (req, res) => {
+    try {
+      const liveClassId = String(req.params.id);
+      const lc = await loadLiveClass2(db2, liveClassId);
+      if (!lc) return res.status(404).json({ message: "Live class not found" });
+      const user = await getAuthUser2(req);
+      if (!user) return res.status(401).json({ message: "Login required" });
+      if (!await userCanAccessLiveClassContent(db2, user, lc)) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      const expiresInSeconds = 90;
+      const expiresAt = nowMs() + expiresInSeconds * 1e3;
+      const token = issueEngagementSseToken({
+        userId: user.id,
+        role: user.role,
+        liveClassId,
+        exp: expiresAt
+      });
+      res.json({ token, expiresAt, expiresInSeconds });
+    } catch (err) {
+      console.error("[Engagement SSE] token issue error:", err?.message || err);
+      res.status(500).json({ message: "Failed to issue stream token" });
+    }
+  });
   app2.post("/api/admin/live-classes/:id/polls", requireAdmin2, async (req, res) => {
     try {
       const liveClassId = String(req.params.id);
@@ -11851,14 +12426,28 @@ function registerLiveClassPollRoutes({
   );
   app2.get(
     "/api/live-classes/:id/engagement/stream",
-    (req, _res, next) => {
+    async (req, res, next) => {
+      const scopedToken = String(req.query.sse_token || "").trim();
+      if (scopedToken) {
+        const payload = verifyEngagementSseToken(scopedToken, String(req.params.id));
+        if (!payload) {
+          return res.status(401).json({ message: "Stream token expired or invalid" });
+        }
+        const authUser = {
+          id: Number(payload.userId),
+          name: "",
+          role: String(payload.role)
+        };
+        req.user = authUser;
+        req.__auth_user_from_request_cache = authUser;
+        return next();
+      }
       const qToken = String(req.query.access_token || "").trim();
       if (qToken && !req.headers.authorization) {
         req.headers = { ...req.headers, authorization: `Bearer ${qToken}` };
       }
-      next();
+      return requireAuth(req, res, next);
     },
-    requireAuth,
     async (req, res) => {
       const liveClassIdStr = String(req.params.id);
       const hasAccess = await checkEngagementStreamAccess(req, res, db2, getAuthUser2, liveClassIdStr);
@@ -12197,7 +12786,7 @@ function registerCourseAccessRoutes({
         return res.status(403).json({ message: "You do not have access to this media file" });
       }
       const token = generateSecureToken2();
-      const expiresAt = Date.now() + 5 * 60 * 1e3;
+      const expiresAt = Date.now() + 30 * 60 * 1e3;
       const storedKey = canonicalMediaKey(fileKey);
       if (!storedKey) return res.status(400).json({ message: "Invalid media file key" });
       await db2.query("INSERT INTO media_tokens (token, user_id, file_key, expires_at) VALUES ($1, $2, $3, $4)", [token, user.id, storedKey, expiresAt]);
@@ -12242,17 +12831,21 @@ function registerCourseAccessRoutes({
       let courses = result.rows;
       if (user) {
         const enrollResult = await db2.query(
-          "SELECT course_id, progress_percent FROM enrollments WHERE user_id = $1 AND (status = 'active' OR status IS NULL) AND (valid_until IS NULL OR valid_until > $2)",
+          "SELECT course_id, progress_percent, valid_until FROM enrollments WHERE user_id = $1 AND (status = 'active' OR status IS NULL) AND (valid_until IS NULL OR valid_until > $2)",
           [user.id, Date.now()]
         );
         const enrollMap = /* @__PURE__ */ new Map();
         enrollResult.rows.forEach((e) => {
-          enrollMap.set(Number(e.course_id), Number(e.progress_percent) || 0);
+          enrollMap.set(Number(e.course_id), {
+            progress: Number(e.progress_percent) || 0,
+            validUntil: e.valid_until != null ? Number(e.valid_until) : null
+          });
         });
         courses = courses.map((c) => ({
           ...c,
           isEnrolled: enrollMap.has(Number(c.id)),
-          progress: enrollMap.get(Number(c.id)) ?? 0
+          progress: enrollMap.get(Number(c.id))?.progress ?? 0,
+          enrollmentValidUntil: enrollMap.get(Number(c.id))?.validUntil ?? null
         }));
       }
       if (user) {
@@ -12268,7 +12861,29 @@ function registerCourseAccessRoutes({
   });
   app2.get("/api/courses/:id/folders", async (req, res) => {
     try {
-      const result = await db2.query("SELECT * FROM course_folders WHERE course_id = $1 AND is_hidden = FALSE ORDER BY order_index ASC, created_at ASC", [req.params.id]);
+      const result = await db2.query(
+        `WITH RECURSIVE folder_tree AS (
+           SELECT
+             cf.*,
+             cf.name::text AS full_name,
+             ARRAY[cf.id] AS path_ids
+           FROM course_folders cf
+           WHERE cf.parent_id IS NULL
+           UNION ALL
+           SELECT
+             child.*,
+             (folder_tree.full_name || ' / ' || child.name)::text AS full_name,
+             folder_tree.path_ids || child.id AS path_ids
+           FROM course_folders child
+           JOIN folder_tree ON child.parent_id = folder_tree.id
+           WHERE NOT child.id = ANY(folder_tree.path_ids)
+         )
+         SELECT *
+         FROM folder_tree
+         WHERE course_id = $1 AND is_hidden = FALSE
+         ORDER BY COALESCE(parent_id, 0) ASC, order_index ASC, created_at ASC`,
+        [req.params.id]
+      );
       res.set("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
       res.json(result.rows);
     } catch {
@@ -12643,10 +13258,10 @@ function registerCourseAccessRoutes({
         console.error("[download-proxy] Missing OTP_HMAC_SECRET / SESSION_SECRET");
         return res.status(503).json({ message: "Server configuration error" });
       }
-      const { createHmac: createHmac4 } = await import("crypto");
+      const { createHmac: createHmac5 } = await import("crypto");
       const timestamp = Date.now();
       const watermarkData = `${tokenData.user_id}:${timestamp}`;
-      const hmac = createHmac4("sha256", watermarkSecret).update(watermarkData).digest("hex");
+      const hmac = createHmac5("sha256", watermarkSecret).update(watermarkData).digest("hex");
       const watermarkToken = `${watermarkData}:${hmac}`;
       res.setHeader("Content-Type", r2Response.ContentType || "application/octet-stream");
       res.setHeader("Content-Disposition", "attachment");
@@ -13668,6 +14283,7 @@ var init_schema_readiness_contract = __esm({
       "user_sessions",
       "live_class_recording_progress",
       "user_push_tokens",
+      "web_push_subscriptions",
       "session",
       "express_rate_limit",
       "otp_challenges",
@@ -13739,7 +14355,8 @@ var init_schema_readiness_contract = __esm({
         "recording_url_normalized"
       ],
       notifications: ["source", "expires_at", "is_hidden", "admin_notif_id", "image_url"],
-      courses: ["subject", "cover_color", "pyq_count", "mock_count", "practice_count"],
+      web_push_subscriptions: ["endpoint", "p256dh", "auth", "is_active", "last_seen_at"],
+      courses: ["subject", "cover_color", "pyq_count", "mock_count", "practice_count", "teacher_bio", "teacher_image_url", "teacher_details_json", "multi_subject_config", "course_language", "batch_status"],
       lectures: [
         "download_allowed",
         "section_title",
@@ -13747,13 +14364,15 @@ var init_schema_readiness_contract = __esm({
         "live_class_finalized",
         "transcript",
         "video_url_normalized",
-        "pdf_url_normalized"
+        "pdf_url_normalized",
+        "subject_key"
       ],
-      study_materials: ["download_allowed", "section_title", "file_url_normalized"],
-      tests: ["difficulty", "scheduled_at", "price", "mini_course_id"],
+      study_materials: ["download_allowed", "section_title", "file_url_normalized", "subject_key"],
+      tests: ["difficulty", "scheduled_at", "price", "mini_course_id", "subject_key"],
       questions: ["image_url", "solution_image_url"],
       lecture_progress: ["playback_sessions", "last_session_ping_at"],
-      standalone_folders: ["category", "price", "original_price", "is_free", "description", "validity_months"],
+      course_folders: ["parent_id", "subject_key"],
+      standalone_folders: ["parent_id", "category", "price", "original_price", "is_free", "description", "validity_months"],
       // Migration 0042 - admin session device binding
       user_sessions: ["device_id"]
     };
@@ -13772,6 +14391,7 @@ var init_schema_readiness_contract = __esm({
       { table: "book_click_tracking", columns: ["user_id", "book_id"] },
       { table: "site_settings", columns: ["key"] },
       { table: "user_push_tokens", columns: ["expo_push_token"] },
+      { table: "web_push_subscriptions", columns: ["endpoint"] },
       { table: "users", columns: ["phone"] },
       { table: "users", columns: ["email"] },
       { table: "notifications_sent", columns: ["class_id", "user_id", "type"] },
@@ -14905,6 +15525,33 @@ async function registerRoutes(app2) {
       return res.status(500).json({ message: "Failed to register push token" });
     }
   });
+  app2.get("/api/push/web-public-key", async (_req, res) => {
+    const publicKey = process.env.VAPID_PUBLIC_KEY || "";
+    if (!publicKey) return res.status(503).json({ message: "Web push is not configured" });
+    res.json({ publicKey });
+  });
+  app2.post("/api/push/web/register", requireAuth, async (req, res) => {
+    try {
+      const user = req.user;
+      await registerWebPushSubscription(db, Number(user.id), req.body?.subscription, String(req.headers["user-agent"] || ""));
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("[WebPush] register error:", err);
+      return res.status(500).json({ message: "Failed to register web push subscription" });
+    }
+  });
+  app2.post("/api/push/web/unregister", requireAuth, async (req, res) => {
+    try {
+      const user = req.user;
+      const endpoint = String(req.body?.endpoint || "").trim();
+      if (!endpoint) return res.status(400).json({ message: "Endpoint is required" });
+      await unregisterWebPushSubscription(db, Number(user.id), endpoint);
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("[WebPush] unregister error:", err);
+      return res.status(500).json({ message: "Failed to unregister web push subscription" });
+    }
+  });
   app2.post("/api/push/unregister", requireAuth, async (req, res) => {
     try {
       const user = req.user;
@@ -15719,6 +16366,12 @@ function normalizeOtpIdentifier(input) {
   if (digits.length >= 10) return `phone:${digits.slice(-10)}`;
   return `id:${raw || "global"}`;
 }
+function normalizeRateLimitStoreKind(value, fallback) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (raw === "postgres" || raw === "postgresql") return "pg";
+  if (raw === "pg" || raw === "redis" || raw === "memory") return raw;
+  return fallback;
+}
 (async () => {
   const { registerRoutes: registerRoutes2 } = await Promise.resolve().then(() => (init_routes(), routes_exports));
   setupCors(app);
@@ -15837,15 +16490,39 @@ function normalizeOtpIdentifier(input) {
   const redisClient = await getRedisClient();
   const failClosedAuthRateLimit = getEnvFlag("FF_FAIL_CLOSED_AUTH_RATE_LIMIT", true);
   const failClosedMediaRateLimit = getEnvFlag("FF_FAIL_CLOSED_MEDIA_RATE_LIMIT", true);
-  const makeRateLimitStore = (prefix, options) => redisClient ? new RedisRateLimitStore(redisClient, prefix, options) : rateLimitPool ? new PgRateLimitStore(rateLimitPool, options) : void 0;
-  const otpSendStore = makeRateLimitStore("otp-send", { failClosed: failClosedAuthRateLimit });
-  const otpVerifyStore = makeRateLimitStore("otp-verify", { failClosed: failClosedAuthRateLimit });
-  const authLoginStore = makeRateLimitStore("auth-login", { failClosed: failClosedAuthRateLimit });
-  const mediaTokenStore = makeRateLimitStore("media-token", { failClosed: failClosedMediaRateLimit });
-  const globalApiStore = makeRateLimitStore("global-api");
+  const defaultRateLimitStoreKind = normalizeRateLimitStoreKind(process.env.RATE_LIMIT_STORE, "pg");
+  const authRateLimitStoreKind = normalizeRateLimitStoreKind(process.env.AUTH_RATE_LIMIT_STORE, defaultRateLimitStoreKind);
+  const mediaRateLimitStoreKind = normalizeRateLimitStoreKind(process.env.MEDIA_RATE_LIMIT_STORE, defaultRateLimitStoreKind);
+  const globalRateLimitStoreKind = normalizeRateLimitStoreKind(process.env.GLOBAL_RATE_LIMIT_STORE, defaultRateLimitStoreKind);
+  const makeRateLimitStore = (prefix, options, storeKind = defaultRateLimitStoreKind) => {
+    if (storeKind === "pg") {
+      if (rateLimitPool) return new PgRateLimitStore(rateLimitPool, options);
+      if (redisClient) return new RedisRateLimitStore(redisClient, prefix, options);
+      return void 0;
+    }
+    if (storeKind === "redis") {
+      if (redisClient) return new RedisRateLimitStore(redisClient, prefix, options);
+      if (rateLimitPool) return new PgRateLimitStore(rateLimitPool, options);
+      return void 0;
+    }
+    return void 0;
+  };
+  const otpSendStore = makeRateLimitStore("otp-send", { failClosed: failClosedAuthRateLimit }, authRateLimitStoreKind);
+  const otpVerifyStore = makeRateLimitStore("otp-verify", { failClosed: failClosedAuthRateLimit }, authRateLimitStoreKind);
+  const authLoginStore = makeRateLimitStore("auth-login", { failClosed: failClosedAuthRateLimit }, authRateLimitStoreKind);
+  const mediaTokenStore = makeRateLimitStore("media-token", { failClosed: failClosedMediaRateLimit }, mediaRateLimitStoreKind);
+  const globalApiStore = makeRateLimitStore("global-api", void 0, globalRateLimitStoreKind);
   if (redisClient) {
-    console.log("[Redis] Rate limit stores using Redis");
+    console.log("[Redis] Client configured for optional shared features");
   }
+  console.log("[RateLimit] Store selection", {
+    default: defaultRateLimitStoreKind,
+    auth: authRateLimitStoreKind,
+    media: mediaRateLimitStoreKind,
+    global: globalRateLimitStoreKind,
+    pgAvailable: !!rateLimitPool,
+    redisAvailable: !!redisClient
+  });
   const otpSendLimiter = rateLimit({
     windowMs: 15 * 60 * 1e3,
     max: 20,

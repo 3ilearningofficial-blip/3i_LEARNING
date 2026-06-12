@@ -120,11 +120,12 @@ export function registerAdminTestRoutes({
 
   app.post("/api/admin/tests", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { title, description, courseId, durationMinutes, totalMarks, passingMarks, testType, folderName, difficulty, scheduledAt, miniCourseId, price } =
+      const { title, description, courseId, durationMinutes, totalMarks, passingMarks, testType, folderName, difficulty, scheduledAt, miniCourseId, price, subjectKey } =
         req.body;
+      const normalizedSubjectKey = typeof subjectKey === "string" && subjectKey.trim() ? subjectKey.trim().toLowerCase() : null;
       const result = await db.query(
-        `INSERT INTO tests (title, description, course_id, duration_minutes, total_marks, passing_marks, test_type, folder_name, difficulty, scheduled_at, mini_course_id, price, is_published, created_at) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, TRUE, $13) RETURNING *`,
+        `INSERT INTO tests (title, description, course_id, duration_minutes, total_marks, passing_marks, test_type, folder_name, difficulty, scheduled_at, mini_course_id, price, subject_key, is_published, created_at) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, TRUE, $14) RETURNING *`,
         [
           title,
           description,
@@ -138,6 +139,7 @@ export function registerAdminTestRoutes({
           scheduledAt ? new Date(scheduledAt).getTime() : null,
           miniCourseId || null,
           parseFloat(price) || 0,
+          normalizedSubjectKey,
           Date.now(),
         ]
       );

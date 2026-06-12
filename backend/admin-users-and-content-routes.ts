@@ -25,7 +25,7 @@ export function registerAdminUsersAndContentRoutes({
 }: RegisterAdminUsersAndContentRoutesDeps): void {
   app.post("/api/admin/study-materials", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { title, description, fileUrl, fileType, courseId, isFree, sectionTitle, downloadAllowed } = req.body;
+      const { title, description, fileUrl, fileType, courseId, isFree, sectionTitle, downloadAllowed, subjectKey } = req.body;
       const normalizedTitle = typeof title === "string" ? title.trim() : "";
       const normalizedFileUrl = typeof fileUrl === "string" ? fileUrl.trim() : "";
       const parsedCourseId = courseId == null ? null : Number(courseId);
@@ -38,9 +38,10 @@ export function registerAdminUsersAndContentRoutes({
         const courseCheck = await db.query("SELECT id FROM courses WHERE id = $1 LIMIT 1", [parsedCourseId]);
         if (courseCheck.rows.length === 0) return res.status(404).json({ message: "Course not found" });
       }
+      const normalizedSubjectKey = typeof subjectKey === "string" && subjectKey.trim() ? subjectKey.trim().toLowerCase() : null;
       const result = await db.query(
-        `INSERT INTO study_materials (title, description, file_url, file_type, course_id, is_free, section_title, download_allowed, created_at) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+        `INSERT INTO study_materials (title, description, file_url, file_type, course_id, is_free, section_title, download_allowed, subject_key, created_at) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
         [
           normalizedTitle,
           description || "",
@@ -50,6 +51,7 @@ export function registerAdminUsersAndContentRoutes({
           parsedCourseId ? false : isFree !== false,
           sectionTitle || null,
           downloadAllowed || false,
+          normalizedSubjectKey,
           Date.now(),
         ]
       );
@@ -96,16 +98,17 @@ export function registerAdminUsersAndContentRoutes({
 
   app.post("/api/admin/live-classes", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { title, description, courseId, youtubeUrl, scheduledAt, isLive, isPublic, notifyEmail, notifyBell, isFreePreview, streamType, chatMode, showViewerCount, lectureSectionTitle, lectureSubfolderTitle, isRecordingMode, visibleAfterAt } = req.body;
+      const { title, description, courseId, youtubeUrl, scheduledAt, isLive, isPublic, notifyEmail, notifyBell, isFreePreview, streamType, chatMode, showViewerCount, lectureSectionTitle, lectureSubfolderTitle, isRecordingMode, visibleAfterAt, subjectKey } = req.body;
       const mainSec =
         typeof lectureSectionTitle === "string" && lectureSectionTitle.trim() !== "" ? lectureSectionTitle.trim() : null;
       const subSec =
         typeof lectureSubfolderTitle === "string" && lectureSubfolderTitle.trim() !== "" ? lectureSubfolderTitle.trim() : null;
       const recMode = isRecordingMode === true;
       const visAfter = (recMode && visibleAfterAt && Number.isFinite(Number(visibleAfterAt))) ? Number(visibleAfterAt) : null;
+      const normalizedSubjectKey = typeof subjectKey === "string" && subjectKey.trim() ? subjectKey.trim().toLowerCase() : null;
       const result = await db.query(
-        `INSERT INTO live_classes (title, description, course_id, youtube_url, scheduled_at, is_live, is_public, notify_email, notify_bell, is_free_preview, stream_type, chat_mode, show_viewer_count, lecture_section_title, lecture_subfolder_title, is_recording_mode, visible_after_at, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) RETURNING *`,
+        `INSERT INTO live_classes (title, description, course_id, youtube_url, scheduled_at, is_live, is_public, notify_email, notify_bell, is_free_preview, stream_type, chat_mode, show_viewer_count, lecture_section_title, lecture_subfolder_title, is_recording_mode, visible_after_at, subject_key, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) RETURNING *`,
         [
           title,
           description,
@@ -124,6 +127,7 @@ export function registerAdminUsersAndContentRoutes({
           subSec,
           recMode,
           visAfter,
+          normalizedSubjectKey,
           Date.now(),
         ]
       );

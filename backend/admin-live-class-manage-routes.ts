@@ -66,7 +66,7 @@ export function registerAdminLiveClassManageRoutes({
 
   app.put("/api/admin/live-classes/:id", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { isLive, isCompleted, youtubeUrl, title, description, convertToLecture, sectionTitle, scheduledAt, notifyEmail, notifyBell, isFreePreview, streamType, chatMode, showViewerCount, recordingUrl, cfStreamUid, lectureSectionTitle, lectureSubfolderTitle, pipPosition } = req.body;
+      const { isLive, isCompleted, youtubeUrl, title, description, convertToLecture, sectionTitle, scheduledAt, notifyEmail, notifyBell, isFreePreview, streamType, chatMode, showViewerCount, recordingUrl, cfStreamUid, lectureSectionTitle, lectureSubfolderTitle, pipPosition, subjectKey } = req.body;
       const normalizedPipPosition =
         pipPosition === undefined ? undefined : pipPosition === "bottom-right" ? "bottom-right" : "top-right";
       const updates: string[] = [];
@@ -94,6 +94,7 @@ export function registerAdminLiveClassManageRoutes({
       if (cfStreamUid !== undefined) add("cf_stream_uid", cfStreamUid);
       if (lectureSectionTitle !== undefined) add("lecture_section_title", typeof lectureSectionTitle === "string" && lectureSectionTitle.trim() === "" ? null : lectureSectionTitle);
       if (lectureSubfolderTitle !== undefined) add("lecture_subfolder_title", typeof lectureSubfolderTitle === "string" && lectureSubfolderTitle.trim() === "" ? null : lectureSubfolderTitle);
+      if (subjectKey !== undefined) add("subject_key", typeof subjectKey === "string" && subjectKey.trim() ? subjectKey.trim().toLowerCase() : null);
       const { isPublic: isPublicVal } = req.body;
       if (isPublicVal !== undefined) add("is_public", isPublicVal);
       if (updates.length === 0) {
@@ -383,9 +384,10 @@ export function registerAdminLiveClassManageRoutes({
 
   app.put("/api/admin/study-materials/:id", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { title, description, fileUrl, fileType, isFree, sectionTitle, downloadAllowed } = req.body;
+      const { title, description, fileUrl, fileType, isFree, sectionTitle, downloadAllowed, subjectKey } = req.body;
+      const normalizedSubjectKey = typeof subjectKey === "string" && subjectKey.trim() ? subjectKey.trim().toLowerCase() : null;
       const existing = await db.query("SELECT course_id FROM study_materials WHERE id = $1 LIMIT 1", [req.params.id]);
-      await db.query(`UPDATE study_materials SET title=$1, description=$2, file_url=$3, file_type=$4, is_free=$5, section_title=$6, download_allowed=$7 WHERE id=$8`, [
+      await db.query(`UPDATE study_materials SET title=$1, description=$2, file_url=$3, file_type=$4, is_free=$5, section_title=$6, download_allowed=$7, subject_key=$8 WHERE id=$9`, [
         title,
         description || "",
         fileUrl,
@@ -393,6 +395,7 @@ export function registerAdminLiveClassManageRoutes({
         isFree || false,
         sectionTitle || null,
         downloadAllowed || false,
+        normalizedSubjectKey,
         req.params.id,
       ]);
       if (downloadAllowed === false) {

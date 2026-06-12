@@ -71,9 +71,9 @@ export async function saveRecordingForClassAndPeers(
       `INSERT INTO lectures (
          course_id, title, description, video_url, video_type, duration_minutes,
          order_index, is_free_preview, section_title, live_class_id, live_class_finalized,
-         visible_after_at, created_at
+         visible_after_at, subject_key, created_at
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE, $11, $12)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE, $11, $12, $13)
        ON CONFLICT (live_class_id) WHERE live_class_id IS NOT NULL
        DO UPDATE SET
          course_id = EXCLUDED.course_id,
@@ -94,6 +94,7 @@ export async function saveRecordingForClassAndPeers(
          duration_minutes = EXCLUDED.duration_minutes,
          section_title = EXCLUDED.section_title,
          visible_after_at = EXCLUDED.visible_after_at,
+        subject_key = EXCLUDED.subject_key,
          live_class_finalized = TRUE
        RETURNING id`,
       [
@@ -108,6 +109,7 @@ export async function saveRecordingForClassAndPeers(
         recordSection,
         row.id,
         visibleAfterAt,
+        row.subject_key || null,
         Date.now(),
       ]
     );

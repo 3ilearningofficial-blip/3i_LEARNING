@@ -305,7 +305,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [refreshUser]);
 
   useEffect(() => {
-    if (!user || Platform.OS === "web") return;
+    if (!user) return;
     registerPushForCurrentUser().catch((err) => {
       console.warn("[Push] register failed:", err);
     });

@@ -69,8 +69,24 @@ interface NewCourse {
   title: string; description: string; teacherName: string; price: string;
   originalPrice: string; category: string; subject: string; isFree: boolean; level: string; durationHours: string;
   courseType: string; startDate: string; endDate: string; validityMonths: string;
-  thumbnail: string; coverColor: string;
+  thumbnail: string; coverColor: string; teacherBio: string; teacherImageUrl: string;
+  courseLanguage: string; batchStatus: string;
 }
+
+const MULTI_SUBJECTS = [
+  { key: "maths", label: "Maths", icon: "calculator" },
+  { key: "english", label: "English", icon: "book" },
+  { key: "science", label: "Science", icon: "flask" },
+  { key: "gk", label: "G.K", icon: "earth" },
+] as const;
+
+const defaultNewCourse = (courseType = "live"): NewCourse => ({
+  title: "", description: "", teacherName: "3i Learning",
+  price: "0", originalPrice: "0", category: "Mathematics",
+  subject: "", isFree: false, level: "Beginner", durationHours: "0",
+  courseType, startDate: "", endDate: "", validityMonths: "", thumbnail: "", coverColor: "",
+  teacherBio: "", teacherImageUrl: "", courseLanguage: "HINGLISH", batchStatus: "ongoing",
+});
 
 interface FreeMaterial {
   id: number;
@@ -276,6 +292,7 @@ export default function AdminDashboard() {
   const [openFolderView, setOpenFolderView] = useState<{ folder: any; type: "test" | "material" | "mission" } | null>(null);
   const [showCreateFolderModal, setShowCreateFolderModal] = useState<"test" | "material" | "mission" | null>(null);
   const [newFolderNameInput, setNewFolderNameInput] = useState("");
+  const [newStandaloneFolderParentId, setNewStandaloneFolderParentId] = useState<number | null>(null);
   const [newFolderValidityMonths, setNewFolderValidityMonths] = useState("");
   // Folder action sheet (same as course admin)
   const [standalonefolderActionSheet, setStandaloneFolderActionSheet] = useState<any>(null);
@@ -304,12 +321,16 @@ export default function AdminDashboard() {
   /** Main section + optional subfolder — combined when saving the recording (see `buildRecordingLectureSectionTitle`). */
   const [liveLectureMain, setLiveLectureMain] = useState("");
   const [liveLectureSubfolder, setLiveLectureSubfolder] = useState("");
+  const [liveSubjectKey, setLiveSubjectKey] = useState("maths");
+  const [liveFoldersByCourse, setLiveFoldersByCourse] = useState<Record<number, any[]>>({});
   // Record a Class modal state
   const [showRecordClassModal, setShowRecordClassModal] = useState(false);
   const [recTitle, setRecTitle] = useState("");
   const [recSelectedCourses, setRecSelectedCourses] = useState<number[]>([]);
   const [recLectureMain, setRecLectureMain] = useState("");
   const [recLectureSubfolder, setRecLectureSubfolder] = useState("");
+  const [recSubjectKey, setRecSubjectKey] = useState("maths");
+  const [recFoldersByCourse, setRecFoldersByCourse] = useState<Record<number, any[]>>({});
   const [recVisibility, setRecVisibility] = useState<"immediate" | "scheduled">("immediate");
   const [recVisibleDate, setRecVisibleDate] = useState("");
   const [recVisibleTime, setRecVisibleTime] = useState("");
@@ -328,12 +349,7 @@ export default function AdminDashboard() {
   const [lessonSubmitting, setLessonSubmitting] = useState(false);
   const [lessonNewFolderCourseId, setLessonNewFolderCourseId] = useState<number | null>(null);
   const [lessonNewFolderName, setLessonNewFolderName] = useState("");
-  const [newCourse, setNewCourse] = useState<NewCourse>({
-    title: "", description: "", teacherName: "3i Learning",
-    price: "0", originalPrice: "0", category: "Mathematics",
-    subject: "", isFree: false, level: "Beginner", durationHours: "0",
-    courseType: "live", startDate: "", endDate: "", validityMonths: "", thumbnail: "", coverColor: "",
-  });
+  const [newCourse, setNewCourse] = useState<NewCourse>(defaultNewCourse());
   const [showAddFreeMaterial, setShowAddFreeMaterial] = useState(false);
   const [freMatTitle, setFreMatTitle] = useState("");
   const [freMatUrl, setFreMatUrl] = useState("");
@@ -965,7 +981,7 @@ export default function AdminDashboard() {
   });
 
   const createStandaloneFolderMutation = useMutation({
-    mutationFn: async (data: { name: string; type: string; category?: string; price?: string; originalPrice?: string; isFree?: boolean; description?: string; validityMonths?: string }) => {
+    mutationFn: async (data: { name: string; type: string; parentId?: number | null; category?: string; price?: string; originalPrice?: string; isFree?: boolean; description?: string; validityMonths?: string }) => {
       const res = await apiRequest("POST", "/api/admin/standalone-folders", data);
       return res.json();
     },
@@ -975,6 +991,9 @@ export default function AdminDashboard() {
       else refetchMaterialFolders();
     },
   });
+
+  const standaloneFolderFullName = (folder: any): string => String(folder?.full_name || folder?.name || "").trim();
+  const standaloneFolderLocalName = (folder: any): string => String(folder?.name || folder?.full_name || "").trim();
 
   const updateStandaloneFolderMutation = useMutation({
     mutationFn: async (data: any) => {
@@ -1218,13 +1237,20 @@ export default function AdminDashboard() {
 
   const addCourseMutation = useMutation({
     mutationFn: async (courseData: NewCourse) => {
-      const res = await apiRequest("POST", "/api/admin/courses", courseData);
+      const payload = {
+        ...courseData,
+        multiSubjectConfig: courseData.courseType === "multi_subject" ? MULTI_SUBJECTS : [],
+        teacherDetailsJson: courseData.courseType === "multi_subject"
+          ? [{ name: courseData.teacherName || "3i Learning", bio: courseData.teacherBio, imageUrl: courseData.teacherImageUrl }]
+          : [],
+      };
+      const res = await apiRequest("POST", "/api/admin/courses", payload);
       return res.json();
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/courses"] });
       setShowAddCourse(false);
-      setNewCourse({ title: "", description: "", teacherName: "3i Learning", price: "0", originalPrice: "0", category: "Mathematics", subject: "", isFree: false, level: "Beginner", durationHours: "0", courseType: "live", startDate: "", endDate: "", validityMonths: "", thumbnail: "", coverColor: "" });
+      setNewCourse(defaultNewCourse());
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       if (Platform.OS === "web") window.alert("Course created successfully!");
       else Alert.alert("Success", "Course created successfully!");
@@ -1290,6 +1316,50 @@ export default function AdminDashboard() {
     } catch (_e) {}
   };
 
+  const fetchLiveRecordingFolders = async (courseId: number, mode: "live" | "record") => {
+    try {
+      const baseUrl = getApiUrl();
+      const res = await authFetch(new URL(`/api/courses/${courseId}/folders`, baseUrl).toString());
+      if (!res.ok) return;
+      const folders = await res.json();
+      const lectureFolders = Array.isArray(folders) ? folders.filter((f: any) => f.type === "lecture") : [];
+      if (mode === "live") setLiveFoldersByCourse((prev) => ({ ...prev, [courseId]: lectureFolders }));
+      else setRecFoldersByCourse((prev) => ({ ...prev, [courseId]: lectureFolders }));
+    } catch (_e) {}
+  };
+
+  const folderFullName = (folder: any): string => String(folder?.full_name || folder?.name || "").trim();
+  const selectedMultiCourseIds = (ids: number[]) =>
+    ids.filter((courseId) => courses.some((course) => Number(course.id) === Number(courseId) && course.course_type === "multi_subject"));
+  const selectedMultiCourseFolders = (ids: number[], folderMap: Record<number, any[]>, subjectKey: string) => {
+    const rows = selectedMultiCourseIds(ids).flatMap((courseId) => folderMap[courseId] || []);
+    const map = new Map<string, any>();
+    rows
+      .filter((folder: any) => String(folder.subject_key || "").toLowerCase() === subjectKey)
+      .forEach((folder: any) => {
+        const key = folderFullName(folder);
+        if (key && !map.has(key)) map.set(key, folder);
+      });
+    return [...map.values()];
+  };
+  const directChildFolders = (folders: any[], parentName: string) => {
+    const parent = folders.find((folder: any) => folderFullName(folder) === parentName);
+    const byParent = parent?.id ? folders.filter((folder: any) => Number(folder.parent_id || 0) === Number(parent.id)) : [];
+    const prefix = `${parentName} / `;
+    const byPath = folders.filter((folder: any) => {
+      const fullName = folderFullName(folder);
+      if (!fullName.startsWith(prefix)) return false;
+      const rest = fullName.slice(prefix.length);
+      return rest && !rest.includes(" / ");
+    });
+    const map = new Map<string, any>();
+    [...byParent, ...byPath].forEach((folder) => {
+      const key = folderFullName(folder);
+      if (key) map.set(key, folder);
+    });
+    return [...map.values()];
+  };
+
   // Upcoming classes query
   const { data: upcomingClasses = [], refetch: refetchUpcoming } = useQuery<any[]>({
     queryKey: ["/api/upcoming-classes"],
@@ -1328,6 +1398,7 @@ export default function AdminDashboard() {
             showViewerCount: liveShowViewerCount,
             lectureSectionTitle: liveLectureMain.trim() || null,
             lectureSubfolderTitle: liveLectureSubfolder.trim() || null,
+            subjectKey: editingLiveClass?.subject_key ? liveSubjectKey : undefined,
           }).catch(() => {});
         }
       } else {
@@ -1340,6 +1411,7 @@ export default function AdminDashboard() {
             await apiRequest("POST", `/api/admin/courses/${courseId}/folders`, {
               name: autoFolderName,
               type: "lecture",
+              subjectKey: courses.some((course) => Number(course.id) === Number(courseId) && course.course_type === "multi_subject") ? liveSubjectKey : null,
             }).catch(() => {});
           }
           const res = await apiRequest("POST", "/api/admin/live-classes", {
@@ -1356,6 +1428,7 @@ export default function AdminDashboard() {
             showViewerCount: liveShowViewerCount,
             lectureSectionTitle: liveLectureMain.trim() || null,
             lectureSubfolderTitle: liveLectureSubfolder.trim() || null,
+            subjectKey: courses.some((course) => Number(course.id) === Number(courseId) && course.course_type === "multi_subject") ? liveSubjectKey : null,
           });
           if (!createdId) {
             const body = await res.json();
@@ -1376,6 +1449,8 @@ export default function AdminDashboard() {
           setLiveNotifyBell(false); setLiveFreePreview(false); setLiveIsNow(true);
           setLiveLectureMain("");
           setLiveLectureSubfolder("");
+          setLiveSubjectKey("maths");
+          setLiveFoldersByCourse({});
           setLiveSubmitting(false);
           router.push(`/admin/live/${createdId}/choose-stream` as any);
           return;
@@ -1393,6 +1468,8 @@ export default function AdminDashboard() {
       setLiveNotifyBell(false); setLiveFreePreview(false); setLiveIsNow(true);
       setLiveLectureMain("");
       setLiveLectureSubfolder("");
+      setLiveSubjectKey("maths");
+      setLiveFoldersByCourse({});
       Alert.alert("Success", editingLiveClass ? "Live class updated!" : "Live class scheduled!");
     } catch (err: any) {
       Alert.alert("Error", "Failed to schedule live class.");
@@ -1413,6 +1490,15 @@ export default function AdminDashboard() {
       }
       let createdId: number | null = null;
       for (const courseId of recSelectedCourses) {
+        const isMultiSubjectTarget = courses.some((course) => Number(course.id) === Number(courseId) && course.course_type === "multi_subject");
+        const autoFolderName = buildRecordingLectureSectionTitle(recLectureMain, recLectureSubfolder, null).trim();
+        if (autoFolderName) {
+          await apiRequest("POST", `/api/admin/courses/${courseId}/folders`, {
+            name: autoFolderName,
+            type: "lecture",
+            subjectKey: isMultiSubjectTarget ? recSubjectKey : null,
+          }).catch(() => {});
+        }
         const res = await apiRequest("POST", "/api/admin/live-classes", {
           title: recTitle.trim(),
           courseId,
@@ -1423,6 +1509,7 @@ export default function AdminDashboard() {
           visibleAfterAt,
           lectureSectionTitle: recLectureMain.trim() || null,
           lectureSubfolderTitle: recLectureSubfolder.trim() || null,
+          subjectKey: isMultiSubjectTarget ? recSubjectKey : null,
         });
         if (!createdId) {
           const body = await res.json();
@@ -1436,6 +1523,8 @@ export default function AdminDashboard() {
         setRecSelectedCourses([]);
         setRecLectureMain("");
         setRecLectureSubfolder("");
+        setRecSubjectKey("maths");
+        setRecFoldersByCourse({});
         setRecVisibility("immediate");
         setRecVisibleDate("");
         setRecVisibleTime("");
@@ -1681,11 +1770,14 @@ export default function AdminDashboard() {
         const isTest = type === "test";
         const isMission = type === "mission";
         const accentColor = isMission ? "#0F766E" : isTest ? Colors.light.primary : "#DC2626";
+        const folderPath = standaloneFolderFullName(folder);
+        const folderList = isMission ? missionFolders : isTest ? testFolders : materialFolders;
+        const childFolders = folderList.filter((f: any) => Number(f.parent_id || 0) === Number(folder.id || 0));
         const items = isMission
-          ? adminMissions.filter((m: any) => m.folder_name === folder.name)
+          ? adminMissions.filter((m: any) => m.folder_name === folderPath)
           : isTest
-          ? adminTests.filter((t: any) => t.folder_name === folder.name && !t.course_id)
-          : freeMaterials.filter((m: any) => m.section_title === folder.name);
+          ? adminTests.filter((t: any) => t.folder_name === folderPath && !t.course_id)
+          : freeMaterials.filter((m: any) => m.section_title === folderPath);
 
         const renderTestCard = (test: any) => (
           <Pressable key={test.id} style={styles.adminCard} onPress={() => openAdminTestAttempts(test)}>
@@ -1763,14 +1855,18 @@ export default function AdminDashboard() {
           <View style={{ gap: 12 }}>
             {/* Header with back button */}
             <View style={{ flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 4 }}>
-              <Pressable onPress={() => setOpenFolderView(null)} style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: "#F3F4F6", alignItems: "center", justifyContent: "center" }}>
+              <Pressable onPress={() => {
+                const parent = folder.parent_id ? folderList.find((f: any) => Number(f.id) === Number(folder.parent_id)) : null;
+                if (parent) setOpenFolderView({ folder: parent, type });
+                else setOpenFolderView(null);
+              }} style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: "#F3F4F6", alignItems: "center", justifyContent: "center" }}>
                 <Ionicons name="arrow-back" size={18} color={Colors.light.text} />
               </Pressable>
               <Ionicons name="folder" size={24} color={accentColor} />
               <View style={{ flex: 1 }}>
-                <Text style={{ fontSize: 18, fontFamily: "Inter_700Bold", color: Colors.light.text }}>{folder.name}</Text>
+                <Text style={{ fontSize: 18, fontFamily: "Inter_700Bold", color: Colors.light.text }}>{standaloneFolderLocalName(folder)}</Text>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                  <Text style={{ fontSize: 12, fontFamily: "Inter_400Regular", color: Colors.light.textMuted }}>{items.length} {isMission ? "mission" : isTest ? "test" : "file"}{items.length !== 1 ? "s" : ""}</Text>
+                  <Text style={{ fontSize: 12, fontFamily: "Inter_400Regular", color: Colors.light.textMuted }}>{items.length} {isMission ? "mission" : isTest ? "test" : "file"}{items.length !== 1 ? "s" : ""} · {folderPath}</Text>
                 </View>
               </View>
               <Pressable style={{ padding: 6 }} onPress={() => setStandaloneFolderActionSheet(folder)}>
@@ -1782,16 +1878,46 @@ export default function AdminDashboard() {
             <Pressable
               style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: accentColor, borderRadius: 12, paddingVertical: 12 }}
               onPress={() => {
-                if (isMission) { setMissionFolder(folder.name); setShowAddMission(true); }
-                else if (isTest) { setTestFolderName(folder.name); setShowCreateTest(true); }
-                else { setFreMatSection(folder.name); setShowAddFreeMaterial(true); }
+                if (isMission) { setMissionFolder(folderPath); setShowAddMission(true); }
+                else if (isTest) { setTestFolderName(folderPath); setShowCreateTest(true); }
+                else { setFreMatSection(folderPath); setShowAddFreeMaterial(true); }
               }}>
               <Ionicons name="add-circle-outline" size={18} color="#fff" />
               <Text style={{ fontSize: 14, fontFamily: "Inter_600SemiBold", color: "#fff" }}>{isMission ? "Add Mission" : isTest ? "Create Test" : "Add Material"}</Text>
             </Pressable>
 
+            <Pressable
+              style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: "#F0FDF4", borderRadius: 12, paddingVertical: 12, borderWidth: 1, borderColor: "#BBF7D0" }}
+              onPress={() => {
+                setNewFolderNameInput("");
+                setNewStandaloneFolderParentId(folder.id);
+                setShowCreateFolderModal(type);
+              }}>
+              <Ionicons name="folder-open-outline" size={18} color="#16A34A" />
+              <Text style={{ fontSize: 14, fontFamily: "Inter_600SemiBold", color: "#16A34A" }}>Create Subfolder</Text>
+            </Pressable>
+
+            {childFolders.length > 0 && (
+              <View style={{ gap: 8 }}>
+                {childFolders.map((child: any) => (
+                  <Pressable
+                    key={child.id}
+                    style={[styles.adminCard, { flexDirection: "row", alignItems: "center", gap: 12 }]}
+                    onPress={() => setOpenFolderView({ folder: child, type })}
+                  >
+                    <Ionicons name="folder" size={24} color={accentColor} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.adminCardTitle}>{standaloneFolderLocalName(child)}</Text>
+                      <Text style={styles.adminCardMetaText}>{standaloneFolderFullName(child)}</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
+                  </Pressable>
+                ))}
+              </View>
+            )}
+
             {/* Items list */}
-            {items.length === 0 ? (
+            {items.length === 0 && childFolders.length === 0 ? (
               <View style={{ alignItems: "center", paddingVertical: 32, gap: 8 }}>
                 <Ionicons name={isMission ? "flame-outline" : isTest ? "document-text-outline" : "folder-open-outline"} size={40} color={Colors.light.textMuted} />
                 <Text style={{ fontSize: 14, fontFamily: "Inter_500Medium", color: Colors.light.textMuted }}>No {isMission ? "missions" : isTest ? "tests" : "materials"} in this folder yet</Text>
@@ -1835,8 +1961,7 @@ export default function AdminDashboard() {
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>Courses ({courses.filter(c => c.course_type !== "test_series").length})</Text>
               <Pressable style={styles.addBtn} onPress={() => {
-                setNewCourse(prev => ({ ...prev, courseType: "live" }));
-                setShowAddCourse(true);
+                setShowCourseTypeChoice(true);
               }}>
                 <Ionicons name="add" size={18} color="#fff" />
                 <Text style={styles.addBtnText}>Add Course</Text>
@@ -2127,7 +2252,11 @@ export default function AdminDashboard() {
                       <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Add to Course *</Text>
                       <ScrollView style={{ maxHeight: 140, borderWidth: 1, borderColor: Colors.light.border, borderRadius: 10 }} nestedScrollEnabled>
                         {courses.filter(c => c.course_type !== "test_series").map((c) => (
-                          <Pressable key={c.id} onPress={() => setLiveSelectedCourses(prev => prev.includes(c.id) ? prev.filter(id => id !== c.id) : [...prev, c.id])}
+                          <Pressable key={c.id} onPress={() => setLiveSelectedCourses(prev => {
+                            if (prev.includes(c.id)) return prev.filter(id => id !== c.id);
+                            if (c.course_type === "multi_subject") fetchLiveRecordingFolders(c.id, "live");
+                            return [...prev, c.id];
+                          })}
                             style={{ flexDirection: "row", alignItems: "center", gap: 8, padding: 10, borderBottomWidth: 1, borderBottomColor: Colors.light.border, backgroundColor: liveSelectedCourses.includes(c.id) ? "#FEE2E2" : "#fff" }}>
                             <Ionicons name={liveSelectedCourses.includes(c.id) ? "checkbox" : "square-outline"} size={20} color={liveSelectedCourses.includes(c.id) ? "#DC2626" : Colors.light.textMuted} />
                             <Text style={{ fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.text, flex: 1 }} numberOfLines={1}>{c.title}</Text>
@@ -2135,6 +2264,74 @@ export default function AdminDashboard() {
                         ))}
                       </ScrollView>
                     </View>
+                    {selectedMultiCourseIds(liveSelectedCourses).length > 0 && (
+                      <View style={{ gap: 8, padding: 10, borderRadius: 12, backgroundColor: "#F8FAFC", borderWidth: 1, borderColor: Colors.light.border }}>
+                        <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Multi-subject placement</Text>
+                        <Text style={{ fontSize: 10, fontFamily: "Inter_400Regular", color: Colors.light.textMuted }}>
+                          Select subject, folder and optional subfolder before starting or scheduling.
+                        </Text>
+                        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                          {MULTI_SUBJECTS.map((subject) => (
+                            <Pressable
+                              key={subject.key}
+                              onPress={() => {
+                                setLiveSubjectKey(subject.key);
+                                setLiveLectureMain("");
+                                setLiveLectureSubfolder("");
+                              }}
+                              style={{ flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 999, backgroundColor: liveSubjectKey === subject.key ? Colors.light.primary : "#EEF2FF" }}
+                            >
+                              <Ionicons name={subject.icon as keyof typeof Ionicons.glyphMap} size={14} color={liveSubjectKey === subject.key ? "#fff" : Colors.light.primary} />
+                              <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: liveSubjectKey === subject.key ? "#fff" : Colors.light.primary }}>{subject.label}</Text>
+                            </Pressable>
+                          ))}
+                        </View>
+                        {(() => {
+                          const folders = selectedMultiCourseFolders(liveSelectedCourses, liveFoldersByCourse, liveSubjectKey);
+                          const roots = folders.filter((folder: any) => !folder.parent_id);
+                          const children = liveLectureMain ? directChildFolders(folders, liveLectureMain) : [];
+                          return (
+                            <>
+                              <View style={{ gap: 6 }}>
+                                <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Folder</Text>
+                                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                                  <Pressable onPress={() => { setLiveLectureMain(""); setLiveLectureSubfolder(""); }} style={{ paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8, backgroundColor: !liveLectureMain ? Colors.light.primary : "#E5E7EB" }}>
+                                    <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: !liveLectureMain ? "#fff" : Colors.light.text }}>Default</Text>
+                                  </Pressable>
+                                  {roots.map((folder: any) => {
+                                    const name = folderFullName(folder);
+                                    return (
+                                      <Pressable key={folder.id || name} onPress={() => { setLiveLectureMain(name); setLiveLectureSubfolder(""); }} style={{ paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8, backgroundColor: liveLectureMain === name ? Colors.light.primary : "#E5E7EB" }}>
+                                        <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: liveLectureMain === name ? "#fff" : Colors.light.text }}>{folder.name || name}</Text>
+                                      </Pressable>
+                                    );
+                                  })}
+                                </ScrollView>
+                              </View>
+                              {liveLectureMain ? (
+                                <View style={{ gap: 6 }}>
+                                  <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Subfolder</Text>
+                                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                                    <Pressable onPress={() => setLiveLectureSubfolder("")} style={{ paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8, backgroundColor: !liveLectureSubfolder ? Colors.light.primary : "#E5E7EB" }}>
+                                      <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: !liveLectureSubfolder ? "#fff" : Colors.light.text }}>No Subfolder</Text>
+                                    </Pressable>
+                                    {children.map((folder: any) => {
+                                      const fullName = folderFullName(folder);
+                                      const localName = String(folder.name || fullName.replace(`${liveLectureMain} / `, ""));
+                                      return (
+                                        <Pressable key={folder.id || fullName} onPress={() => setLiveLectureSubfolder(localName)} style={{ paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8, backgroundColor: liveLectureSubfolder === localName ? Colors.light.primary : "#E5E7EB" }}>
+                                          <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: liveLectureSubfolder === localName ? "#fff" : Colors.light.text }}>{localName}</Text>
+                                        </Pressable>
+                                      );
+                                    })}
+                                  </ScrollView>
+                                </View>
+                              ) : null}
+                            </>
+                          );
+                        })()}
+                      </View>
+                    )}
                     <View style={{ gap: 4 }}>
                       <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Recording section (optional)</Text>
                       <Text style={{ fontSize: 10, fontFamily: "Inter_400Regular", color: Colors.light.textMuted }}>Main folder name — default is &quot;Live Class Recordings&quot; if left empty when saving.</Text>
@@ -2250,7 +2447,7 @@ export default function AdminDashboard() {
                   <View style={{ gap: 10 }}>
                     {(() => {
                       // Group by title + scheduled_at to merge multi-course schedules into one card
-                      const groups: { key: string; title: string; scheduledAt: string; isLive: boolean; isRecordingMode: boolean; ids: number[]; courseNames: string[]; streamType?: string; lecture_section_title?: string | null; lecture_subfolder_title?: string | null }[] = [];
+                      const groups: { key: string; title: string; scheduledAt: string; isLive: boolean; isRecordingMode: boolean; ids: number[]; courseNames: string[]; streamType?: string; lecture_section_title?: string | null; lecture_subfolder_title?: string | null; subject_key?: string | null }[] = [];
                       for (const lc of upcomingClasses) {
                         const key = `${lc.title}_${lc.scheduled_at}`;
                         const existing = groups.find(g => g.key === key);
@@ -2261,8 +2458,9 @@ export default function AdminDashboard() {
                           if (lc.stream_type) existing.streamType = lc.stream_type;
                           if (!existing.lecture_section_title && lc.lecture_section_title) existing.lecture_section_title = lc.lecture_section_title;
                           if (!existing.lecture_subfolder_title && lc.lecture_subfolder_title) existing.lecture_subfolder_title = lc.lecture_subfolder_title;
+                          if (!existing.subject_key && lc.subject_key) existing.subject_key = lc.subject_key;
                         } else {
-                          groups.push({ key, title: lc.title, scheduledAt: lc.scheduled_at, isLive: !!lc.is_live, isRecordingMode: !!lc.is_recording_mode, ids: [lc.id], courseNames: lc.course_title ? [lc.course_title] : [], streamType: lc.stream_type, lecture_section_title: lc.lecture_section_title || null, lecture_subfolder_title: lc.lecture_subfolder_title || null });
+                          groups.push({ key, title: lc.title, scheduledAt: lc.scheduled_at, isLive: !!lc.is_live, isRecordingMode: !!lc.is_recording_mode, ids: [lc.id], courseNames: lc.course_title ? [lc.course_title] : [], streamType: lc.stream_type, lecture_section_title: lc.lecture_section_title || null, lecture_subfolder_title: lc.lecture_subfolder_title || null, subject_key: lc.subject_key || null });
                         }
                       }
                       if (groups.length === 0) {
@@ -2400,7 +2598,7 @@ export default function AdminDashboard() {
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>Free Study Materials ({freeMaterials.length})</Text>
               <View style={{ flexDirection: "row", gap: 8 }}>
-                <Pressable style={[styles.addBtn, { backgroundColor: "#DC2626" }]} onPress={() => { setNewFolderNameInput(""); setNewFolderValidityMonths(""); setShowCreateFolderModal("material"); }}>
+                <Pressable style={[styles.addBtn, { backgroundColor: "#DC2626" }]} onPress={() => { setNewFolderNameInput(""); setNewFolderValidityMonths(""); setNewStandaloneFolderParentId(null); setShowCreateFolderModal("material"); }}>
                   <Ionicons name="folder-open" size={16} color="#fff" />
                   <Text style={styles.addBtnText}>Folder</Text>
                 </Pressable>
@@ -2441,16 +2639,18 @@ export default function AdminDashboard() {
                   </View>
                 </View>
               );
-              const folderNames = new Set(materialFolders.map((f: any) => f.name));
+              const rootMaterialFolders = materialFolders.filter((f: any) => !f.parent_id);
+              const folderNames = new Set(materialFolders.map(standaloneFolderFullName));
               const noFolder = freeMaterials.filter((m: any) => !m.section_title || !folderNames.has(m.section_title));
               return (
                 <>
                   <SortableList
-                    ids={materialFolders.map((f: any) => f.id)}
-                    onReorder={(a, o) => reorderStandaloneByDrag("folder", materialFolders, a, o)}
+                    ids={rootMaterialFolders.map((f: any) => f.id)}
+                    onReorder={(a, o) => reorderStandaloneByDrag("folder", rootMaterialFolders, a, o)}
                   >
-                  {materialFolders.map((folder: any) => {
-                    const folderMats = freeMaterials.filter((m: any) => m.section_title === folder.name);
+                  {rootMaterialFolders.map((folder: any) => {
+                    const folderPath = standaloneFolderFullName(folder);
+                    const folderMats = freeMaterials.filter((m: any) => m.section_title === folderPath || String(m.section_title || "").startsWith(`${folderPath} /`));
                     return (
                       <SortableItem key={folder.id} id={folder.id}>
                       <View style={{ marginBottom: 8 }}>
@@ -2458,7 +2658,7 @@ export default function AdminDashboard() {
                           onPress={() => setOpenFolderView({ folder, type: "material" })}>
                           <Ionicons name={folder.is_hidden ? "folder-outline" : "folder"} size={22} color={folder.is_hidden ? Colors.light.textMuted : "#DC2626"} />
                           <View style={{ flex: 1 }}>
-                            <Text style={{ fontSize: 14, fontFamily: "Inter_700Bold", color: folder.is_hidden ? Colors.light.textMuted : Colors.light.text }}>{folder.name}{folder.is_hidden ? " (Hidden)" : ""}</Text>
+                            <Text style={{ fontSize: 14, fontFamily: "Inter_700Bold", color: folder.is_hidden ? Colors.light.textMuted : Colors.light.text }}>{standaloneFolderLocalName(folder)}{folder.is_hidden ? " (Hidden)" : ""}</Text>
                             <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>{folderMats.length} file{folderMats.length !== 1 ? "s" : ""}</Text>
                           </View>
                           <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
@@ -3107,13 +3307,13 @@ export default function AdminDashboard() {
               <Text style={styles.sectionTitle}>All Tests ({adminTests.length})</Text>
               <View style={{ flexDirection: "row", gap: 8 }}>
                 <Pressable style={[styles.addBtn, { backgroundColor: "#059669" }]} onPress={() => {
-                  setNewCourse({ title: "", description: "", teacherName: "3i Learning", price: "0", originalPrice: "0", category: "Mathematics", subject: "", isFree: false, level: "Beginner", durationHours: "0", courseType: "test_series", startDate: "", endDate: "", validityMonths: "", thumbnail: "", coverColor: "" });
+                  setNewCourse(defaultNewCourse("test_series"));
                   setShowAddCourse(true);
                 }}>
                   <Ionicons name="albums" size={16} color="#fff" />
                   <Text style={styles.addBtnText}>Test Series</Text>
                 </Pressable>
-                <Pressable style={[styles.addBtn, { backgroundColor: "#7C3AED" }]} onPress={() => { setNewFolderNameInput(""); setNewFolderValidityMonths(""); setShowCreateFolderModal("test"); }}>
+                <Pressable style={[styles.addBtn, { backgroundColor: "#7C3AED" }]} onPress={() => { setNewFolderNameInput(""); setNewFolderValidityMonths(""); setNewStandaloneFolderParentId(null); setShowCreateFolderModal("test"); }}>
                   <Ionicons name="folder-open" size={16} color="#fff" />
                   <Text style={styles.addBtnText}>Folder</Text>
                 </Pressable>
@@ -3204,16 +3404,18 @@ export default function AdminDashboard() {
                   </View>
                 </Pressable>
               );
-              const folderNames = new Set(testFolders.map((f: any) => f.name));
+              const rootTestFolders = testFolders.filter((f: any) => !f.parent_id);
+              const folderNames = new Set(testFolders.map(standaloneFolderFullName));
               const noFolder = adminTests.filter((t: any) => !t.folder_name || !folderNames.has(t.folder_name));
               return (
                 <>
                   <SortableList
-                    ids={testFolders.map((f: any) => f.id)}
-                    onReorder={(a, o) => reorderStandaloneByDrag("folder", testFolders, a, o)}
+                    ids={rootTestFolders.map((f: any) => f.id)}
+                    onReorder={(a, o) => reorderStandaloneByDrag("folder", rootTestFolders, a, o)}
                   >
-                  {testFolders.map((folder: any) => {
-                    const folderTests = adminTests.filter((t: any) => t.folder_name === folder.name);
+                  {rootTestFolders.map((folder: any) => {
+                    const folderPath = standaloneFolderFullName(folder);
+                    const folderTests = adminTests.filter((t: any) => t.folder_name === folderPath || String(t.folder_name || "").startsWith(`${folderPath} /`));
                     return (
                       <SortableItem key={folder.id} id={folder.id}>
                       <View style={{ marginBottom: 8 }}>
@@ -3221,7 +3423,7 @@ export default function AdminDashboard() {
                           onPress={() => setOpenFolderView({ folder, type: "test" })}>
                           <Ionicons name={folder.is_hidden ? "folder-outline" : "folder"} size={22} color={folder.is_hidden ? Colors.light.textMuted : Colors.light.primary} />
                           <View style={{ flex: 1 }}>
-                            <Text style={{ fontSize: 14, fontFamily: "Inter_700Bold", color: folder.is_hidden ? Colors.light.textMuted : Colors.light.text }}>{folder.name}{folder.is_hidden ? " (Hidden)" : ""}</Text>
+                            <Text style={{ fontSize: 14, fontFamily: "Inter_700Bold", color: folder.is_hidden ? Colors.light.textMuted : Colors.light.text }}>{standaloneFolderLocalName(folder)}{folder.is_hidden ? " (Hidden)" : ""}</Text>
                             <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>{folderTests.length} test{folderTests.length !== 1 ? "s" : ""}</Text>
                           </View>
                           <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
@@ -3626,7 +3828,7 @@ export default function AdminDashboard() {
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>Daily Missions ({adminMissions.length})</Text>
               <View style={{ flexDirection: "row", gap: 8 }}>
-                <Pressable style={[styles.addBtn, { backgroundColor: "#0F766E" }]} onPress={() => setShowCreateFolderModal("mission")}>
+                <Pressable style={[styles.addBtn, { backgroundColor: "#0F766E" }]} onPress={() => { setNewFolderNameInput(""); setNewStandaloneFolderParentId(null); setShowCreateFolderModal("mission"); }}>
                   <Ionicons name="folder-open-outline" size={16} color="#fff" />
                   <Text style={styles.addBtnText}>Folder</Text>
                 </Pressable>
@@ -3645,16 +3847,18 @@ export default function AdminDashboard() {
               </View>
             ) : (
               (() => {
-                const folderNames = new Set(missionFolders.map((f: any) => f.name));
+                const rootMissionFolders = missionFolders.filter((f: any) => !f.parent_id);
+                const folderNames = new Set(missionFolders.map(standaloneFolderFullName));
                 const noFolder = adminMissions.filter((m: any) => !m.folder_name || !folderNames.has(m.folder_name));
                 return (
                   <>
                     <SortableList
-                      ids={missionFolders.map((f: any) => f.id)}
-                      onReorder={(a, o) => reorderStandaloneByDrag("folder", missionFolders, a, o)}
+                      ids={rootMissionFolders.map((f: any) => f.id)}
+                      onReorder={(a, o) => reorderStandaloneByDrag("folder", rootMissionFolders, a, o)}
                     >
-                    {missionFolders.map((folder: any) => {
-                      const folderMissions = adminMissions.filter((m: any) => m.folder_name === folder.name);
+                    {rootMissionFolders.map((folder: any) => {
+                      const folderPath = standaloneFolderFullName(folder);
+                      const folderMissions = adminMissions.filter((m: any) => m.folder_name === folderPath || String(m.folder_name || "").startsWith(`${folderPath} /`));
                       return (
                         <SortableItem key={folder.id} id={folder.id}>
                         <View style={{ marginBottom: 8 }}>
@@ -3664,7 +3868,7 @@ export default function AdminDashboard() {
                           >
                             <Ionicons name={folder.is_hidden ? "folder-outline" : "folder"} size={22} color={folder.is_hidden ? Colors.light.textMuted : "#0F766E"} />
                             <View style={{ flex: 1 }}>
-                              <Text style={{ fontSize: 14, fontFamily: "Inter_700Bold", color: folder.is_hidden ? Colors.light.textMuted : Colors.light.text }}>{folder.name}{folder.is_hidden ? " (Hidden)" : ""}</Text>
+                              <Text style={{ fontSize: 14, fontFamily: "Inter_700Bold", color: folder.is_hidden ? Colors.light.textMuted : Colors.light.text }}>{standaloneFolderLocalName(folder)}{folder.is_hidden ? " (Hidden)" : ""}</Text>
                               <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>{folderMissions.length} mission{folderMissions.length !== 1 ? "s" : ""}</Text>
                             </View>
                             <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
@@ -4362,15 +4566,30 @@ export default function AdminDashboard() {
                 style={{ padding: 16, borderRadius: 14, borderWidth: 2, borderColor: Colors.light.primary, backgroundColor: `${Colors.light.primary}08` }}
                 onPress={() => {
                   setShowCourseTypeChoice(false);
-                  setNewCourse(prev => ({ ...prev, courseType: "live" }));
+                  setNewCourse(defaultNewCourse("live"));
                   setShowAddCourse(true);
                 }}>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 6 }}>
                   <Ionicons name="book" size={24} color={Colors.light.primary} />
-                  <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Course</Text>
+                  <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Single Subject Course</Text>
                 </View>
                 <Text style={{ fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.textMuted }}>
-                  Full course with lectures, tests, study materials, and live classes
+                  Current course logic with lectures, tests, study materials, folders, and live classes
+                </Text>
+              </Pressable>
+              <Pressable
+                style={{ padding: 16, borderRadius: 14, borderWidth: 2, borderColor: "#7C3AED", backgroundColor: "#7C3AED08" }}
+                onPress={() => {
+                  setShowCourseTypeChoice(false);
+                  setNewCourse({ ...defaultNewCourse("multi_subject"), subject: "Maths, English, Science, G.K" });
+                  setShowAddCourse(true);
+                }}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 6 }}>
+                  <Ionicons name="grid" size={24} color="#7C3AED" />
+                  <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Multiple Subject Course</Text>
+                </View>
+                <Text style={{ fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.textMuted }}>
+                  Dedicated about page plus fixed Maths, English, Science, and G.K subject layout
                 </Text>
               </Pressable>
             </View>
@@ -4398,6 +4617,7 @@ export default function AdminDashboard() {
                 const pf = prefillLiveRecordingFormFields(g.lecture_section_title, g.lecture_subfolder_title);
                 setLiveLectureMain(pf.main);
                 setLiveLectureSubfolder(pf.sub);
+                setLiveSubjectKey(String(g.subject_key || "maths").toLowerCase());
                 setShowScheduleLiveClass(true);
                 setEditingLiveClass(g);
               }}>
@@ -4426,7 +4646,7 @@ export default function AdminDashboard() {
         <View style={styles.modalOverlay}>
           <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>{newCourse.courseType === "test_series" ? "Add Test Series" : "Add New Course"}</Text>
+              <Text style={styles.modalTitle}>{newCourse.courseType === "test_series" ? "Add Test Series" : newCourse.courseType === "multi_subject" ? "Add Multiple Subject Course" : "Add Single Subject Course"}</Text>
               <Pressable onPress={() => setShowAddCourse(false)}>
                 <Ionicons name="close" size={24} color={Colors.light.text} />
               </Pressable>
@@ -4436,6 +4656,11 @@ export default function AdminDashboard() {
                 { label: "Course Title *", key: "title", placeholder: "e.g., Class 10 Mathematics" },
                 { label: "Description", key: "description", placeholder: "Course description..." },
                 { label: "Teacher Name", key: "teacherName", placeholder: "3i Learning" },
+                ...(newCourse.courseType === "multi_subject" ? [
+                  { label: "Teacher/About Description", key: "teacherBio", placeholder: "Teacher profile, achievements, and teaching style..." },
+                  { label: "Teacher Image URL", key: "teacherImageUrl", placeholder: "https://... (optional)" },
+                  { label: "Language", key: "courseLanguage", placeholder: "e.g., HINGLISH, Hindi, English" },
+                ] : []),
                 { label: "Category", key: "category", placeholder: "e.g., NDA, CDS, AFCAT" },
                 { label: "Subject", key: "subject", placeholder: "e.g., Mathematics, English, GK" },
                 { label: "Level", key: "level", placeholder: "Beginner / Intermediate / Advanced" },
@@ -4446,18 +4671,46 @@ export default function AdminDashboard() {
                 <View key={field.key} style={styles.formField}>
                   <Text style={styles.formLabel}>{field.label}</Text>
                   <TextInput
-                    style={[styles.formInput, field.key === "description" && styles.formInputMulti]}
+                    style={[styles.formInput, (field.key === "description" || field.key === "teacherBio") && styles.formInputMulti]}
                     placeholder={field.placeholder}
                     placeholderTextColor={Colors.light.textMuted}
                     value={String(newCourse[field.key as keyof NewCourse])}
                     onChangeText={(val) => setNewCourse((prev) => ({ ...prev, [field.key]: val }))}
-                    multiline={field.key === "description"}
-                    numberOfLines={field.key === "description" ? 3 : 1}
+                    multiline={field.key === "description" || field.key === "teacherBio"}
+                    numberOfLines={field.key === "description" || field.key === "teacherBio" ? 3 : 1}
                     keyboardType={["price", "originalPrice", "durationHours"].includes(field.key) ? "numeric" : "default"}
                   />
                 </View>
               ))}
-              {newCourse.courseType !== "test_series" && (
+              {newCourse.courseType === "multi_subject" && (
+                <View style={styles.formField}>
+                  <Text style={styles.formLabel}>Batch Status</Text>
+                  <View style={{ flexDirection: "row", gap: 8, marginBottom: 14 }}>
+                    {(["ongoing", "recorded", "completed"] as const).map((status) => (
+                      <Pressable
+                        key={status}
+                        onPress={() => setNewCourse((prev) => ({ ...prev, batchStatus: status }))}
+                        style={{ flex: 1, paddingVertical: 9, borderRadius: 10, borderWidth: 1.5, borderColor: newCourse.batchStatus === status ? Colors.light.primary : Colors.light.border, backgroundColor: newCourse.batchStatus === status ? "#EEF2FF" : "transparent", alignItems: "center" }}
+                      >
+                        <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: newCourse.batchStatus === status ? Colors.light.primary : Colors.light.textMuted }}>{status.toUpperCase()}</Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                  <Text style={styles.formLabel}>Included Subjects</Text>
+                  <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                    {MULTI_SUBJECTS.map((subject) => (
+                      <View key={subject.key} style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 12, backgroundColor: "#EEF2FF" }}>
+                        <Ionicons name={subject.icon as keyof typeof Ionicons.glyphMap} size={16} color="#4F46E5" />
+                        <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: "#3730A3" }}>{subject.label}</Text>
+                      </View>
+                    ))}
+                  </View>
+                  <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: Colors.light.textMuted, marginTop: 6 }}>
+                    These fixed subjects will appear on the student course layout screen.
+                  </Text>
+                </View>
+              )}
+              {newCourse.courseType !== "test_series" && newCourse.courseType !== "multi_subject" && (
                 <View style={styles.formField}>
                   <Text style={styles.formLabel}>Course Type</Text>
                   <View style={{ flexDirection: "row", gap: 10 }}>
@@ -4472,7 +4725,7 @@ export default function AdminDashboard() {
                   </View>
                 </View>
               )}
-              {newCourse.courseType === "live" && (
+              {(newCourse.courseType === "live" || newCourse.courseType === "multi_subject") && (
                 <>
                   <View style={styles.formField}>
                     <Text style={styles.formLabel}>Start Date</Text>
@@ -4509,7 +4762,7 @@ export default function AdminDashboard() {
               </View>
               {/* Cover Image URL */}
               <View style={styles.formField}>
-                <Text style={styles.formLabel}>Cover Image URL (optional)</Text>
+                <Text style={styles.formLabel}>{newCourse.courseType === "multi_subject" ? "Course Banner Image URL (optional)" : "Cover Image URL (optional)"}</Text>
                 <TextInput
                   style={styles.formInput}
                   placeholder="https://... (image URL for course banner)"
@@ -4519,7 +4772,9 @@ export default function AdminDashboard() {
                   autoCapitalize="none"
                 />
                 <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: Colors.light.textMuted, marginTop: 4 }}>
-                  Recommended size: 1200 × 400 px (3:1 ratio)
+                  {newCourse.courseType === "multi_subject"
+                    ? "Recommended multi-subject banner size: 1200 × 450 px (8:3 ratio). This image appears at the top of the vertical course card."
+                    : "Recommended size: 1200 × 400 px (3:1 ratio)"}
                 </Text>
               </View>
               {/* Cover Color */}
@@ -4546,7 +4801,7 @@ export default function AdminDashboard() {
             >
               <LinearGradient colors={[Colors.light.primary, Colors.light.primaryDark]} style={styles.createBtnGrad}>
                 {addCourseMutation.isPending ? <ActivityIndicator color="#fff" /> : (
-                  <Text style={styles.createBtnText}>{newCourse.courseType === "test_series" ? "Create Test Series" : "Create Course"}</Text>
+                  <Text style={styles.createBtnText}>{newCourse.courseType === "test_series" ? "Create Test Series" : newCourse.courseType === "multi_subject" ? "Create Multiple Subject Course" : "Create Course"}</Text>
                 )}
               </LinearGradient>
             </Pressable>
@@ -5488,7 +5743,11 @@ export default function AdminDashboard() {
                     {courses.filter(c => c.course_type !== "test_series").map((c) => (
                       <Pressable
                         key={c.id}
-                        onPress={() => setRecSelectedCourses(prev => prev.includes(c.id) ? prev.filter(id => id !== c.id) : [...prev, c.id])}
+                        onPress={() => setRecSelectedCourses(prev => {
+                          if (prev.includes(c.id)) return prev.filter(id => id !== c.id);
+                          if (c.course_type === "multi_subject") fetchLiveRecordingFolders(c.id, "record");
+                          return [...prev, c.id];
+                        })}
                         style={{ flexDirection: "row", alignItems: "center", gap: 8, padding: 10, borderBottomWidth: 1, borderBottomColor: Colors.light.border, backgroundColor: recSelectedCourses.includes(c.id) ? "#FEE2E2" : "#fff" }}
                         disabled={recSubmitting}
                       >
@@ -5498,6 +5757,76 @@ export default function AdminDashboard() {
                     ))}
                   </ScrollView>
                 </View>
+
+                {selectedMultiCourseIds(recSelectedCourses).length > 0 && (
+                  <View style={{ gap: 8, padding: 10, borderRadius: 12, backgroundColor: "#F8FAFC", borderWidth: 1, borderColor: Colors.light.border, marginBottom: 12 }}>
+                    <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Multi-subject placement</Text>
+                    <Text style={{ fontSize: 10, fontFamily: "Inter_400Regular", color: Colors.light.textMuted }}>
+                      Select subject, folder and optional subfolder before recording.
+                    </Text>
+                    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                      {MULTI_SUBJECTS.map((subject) => (
+                        <Pressable
+                          key={subject.key}
+                          onPress={() => {
+                            setRecSubjectKey(subject.key);
+                            setRecLectureMain("");
+                            setRecLectureSubfolder("");
+                          }}
+                          style={{ flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 999, backgroundColor: recSubjectKey === subject.key ? Colors.light.primary : "#EEF2FF" }}
+                          disabled={recSubmitting}
+                        >
+                          <Ionicons name={subject.icon as keyof typeof Ionicons.glyphMap} size={14} color={recSubjectKey === subject.key ? "#fff" : Colors.light.primary} />
+                          <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: recSubjectKey === subject.key ? "#fff" : Colors.light.primary }}>{subject.label}</Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                    {(() => {
+                      const folders = selectedMultiCourseFolders(recSelectedCourses, recFoldersByCourse, recSubjectKey);
+                      const roots = folders.filter((folder: any) => !folder.parent_id);
+                      const children = recLectureMain ? directChildFolders(folders, recLectureMain) : [];
+                      return (
+                        <>
+                          <View style={{ gap: 6 }}>
+                            <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Folder</Text>
+                            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                              <Pressable onPress={() => { setRecLectureMain(""); setRecLectureSubfolder(""); }} style={{ paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8, backgroundColor: !recLectureMain ? Colors.light.primary : "#E5E7EB" }} disabled={recSubmitting}>
+                                <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: !recLectureMain ? "#fff" : Colors.light.text }}>Default</Text>
+                              </Pressable>
+                              {roots.map((folder: any) => {
+                                const name = folderFullName(folder);
+                                return (
+                                  <Pressable key={folder.id || name} onPress={() => { setRecLectureMain(name); setRecLectureSubfolder(""); }} style={{ paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8, backgroundColor: recLectureMain === name ? Colors.light.primary : "#E5E7EB" }} disabled={recSubmitting}>
+                                    <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: recLectureMain === name ? "#fff" : Colors.light.text }}>{folder.name || name}</Text>
+                                  </Pressable>
+                                );
+                              })}
+                            </ScrollView>
+                          </View>
+                          {recLectureMain ? (
+                            <View style={{ gap: 6 }}>
+                              <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Subfolder</Text>
+                              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                                <Pressable onPress={() => setRecLectureSubfolder("")} style={{ paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8, backgroundColor: !recLectureSubfolder ? Colors.light.primary : "#E5E7EB" }} disabled={recSubmitting}>
+                                  <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: !recLectureSubfolder ? "#fff" : Colors.light.text }}>No Subfolder</Text>
+                                </Pressable>
+                                {children.map((folder: any) => {
+                                  const fullName = folderFullName(folder);
+                                  const localName = String(folder.name || fullName.replace(`${recLectureMain} / `, ""));
+                                  return (
+                                    <Pressable key={folder.id || fullName} onPress={() => setRecLectureSubfolder(localName)} style={{ paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8, backgroundColor: recLectureSubfolder === localName ? Colors.light.primary : "#E5E7EB" }} disabled={recSubmitting}>
+                                      <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: recLectureSubfolder === localName ? "#fff" : Colors.light.text }}>{localName}</Text>
+                                    </Pressable>
+                                  );
+                                })}
+                              </ScrollView>
+                            </View>
+                          ) : null}
+                        </>
+                      );
+                    })()}
+                  </View>
+                )}
 
                 {/* Recording section */}
                 <View style={{ gap: 4, marginBottom: 8 }}>
@@ -5881,11 +6210,16 @@ export default function AdminDashboard() {
           <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16, maxHeight: 320 }]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Create Folder</Text>
-              <Pressable onPress={() => setShowCreateFolderModal(null)}><Ionicons name="close" size={24} color={Colors.light.text} /></Pressable>
+              <Pressable onPress={() => { setShowCreateFolderModal(null); setNewStandaloneFolderParentId(null); }}><Ionicons name="close" size={24} color={Colors.light.text} /></Pressable>
             </View>
             <ScrollView showsVerticalScrollIndicator={false}>
             <View style={styles.formField}>
-              <Text style={styles.formLabel}>Folder Name *</Text>
+              <Text style={styles.formLabel}>{newStandaloneFolderParentId ? "Subfolder Name *" : "Folder Name *"}</Text>
+              {newStandaloneFolderParentId ? (
+                <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: Colors.light.textMuted, marginBottom: 6 }}>
+                  Parent: {openFolderView?.folder ? standaloneFolderFullName(openFolderView.folder) : standaloneFolderFullName(standalonefolderActionSheet)}
+                </Text>
+              ) : null}
               <TextInput style={styles.formInput} placeholder="e.g., Chapter 1, Algebra" placeholderTextColor={Colors.light.textMuted} value={newFolderNameInput} onChangeText={setNewFolderNameInput} autoFocus />
             </View>
             {showCreateFolderModal === "test" && (
@@ -5910,10 +6244,12 @@ export default function AdminDashboard() {
                 await createStandaloneFolderMutation.mutateAsync({
                   name: newFolderNameInput.trim(),
                   type: showCreateFolderModal,
+                  parentId: newStandaloneFolderParentId,
                   validityMonths: showCreateFolderModal === "test" ? newFolderValidityMonths : undefined,
                 });
                 setShowCreateFolderModal(null);
                 setNewFolderNameInput("");
+                setNewStandaloneFolderParentId(null);
                 setNewFolderValidityMonths("");
               }}
             >
@@ -5958,6 +6294,20 @@ export default function AdminDashboard() {
                     <View style={{ flex: 1 }}>
                       <Text style={{ fontSize: 15, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Edit Folder</Text>
                       <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>Rename this folder</Text>
+                    </View>
+                  </Pressable>
+                  <Pressable style={{ flexDirection: "row", alignItems: "center", gap: 12, padding: 16, borderRadius: 12, backgroundColor: "#F0FDF4", marginBottom: 8 }}
+                    onPress={() => {
+                      if (!standalonefolderActionSheet) return;
+                      setNewFolderNameInput("");
+                      setNewStandaloneFolderParentId(standalonefolderActionSheet.id);
+                      setShowCreateFolderModal(standalonefolderActionSheet.type);
+                      setStandaloneFolderActionSheet(null);
+                    }}>
+                    <Ionicons name="folder-open" size={20} color="#16A34A" />
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 15, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Create Subfolder</Text>
+                      <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>Add a folder inside this folder</Text>
                     </View>
                   </Pressable>
                   {/* Hide/Show */}

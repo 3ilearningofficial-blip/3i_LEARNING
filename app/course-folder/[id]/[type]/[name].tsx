@@ -41,6 +41,7 @@ interface Lecture {
   created_at?: number;
   watch_percent?: number;
   last_position_seconds?: number;
+  subject_key?: string | null;
 }
 
 interface CourseTest {
@@ -51,6 +52,7 @@ interface CourseTest {
   total_marks: number;
   test_type: string;
   folder_name?: string;
+  subject_key?: string | null;
 }
 
 interface Material {
@@ -61,6 +63,7 @@ interface Material {
   file_type: string;
   section_title?: string;
   download_allowed?: boolean;
+  subject_key?: string | null;
 }
 
 interface LiveClass {
@@ -105,11 +108,15 @@ export default function CourseFolderScreen() {
     type: string;
     name: string;
     color?: string;
+    subjectKey?: string;
+    testType?: string;
   }>();
   const id = String(params.id || "");
   const type = String(params.type || "") as FolderType;
   const folderName = decodeURIComponent(String(params.name || ""));
   const color = String(params.color || Colors.light.primary);
+  const subjectKey = String(params.subjectKey || "").trim().toLowerCase();
+  const routeTestType = String(params.testType || "").trim().toLowerCase();
 
   const insets = useSafeAreaInsets();
   const topPadding = Platform.OS === "web" ? 16 : insets.top;
@@ -171,8 +178,12 @@ export default function CourseFolderScreen() {
       if (!res.ok) return [];
       return res.json();
     },
-    enabled: !!id && id !== "undefined" && type === "lectures",
+    enabled: !!id && id !== "undefined" && type !== "live",
   });
+
+  const subjectMatches = (row: { subject_key?: string | null }) =>
+    !subjectKey || String(row.subject_key || "").toLowerCase() === subjectKey;
+  const scopedCourseFolders = (courseFolders || []).filter((f: any) => subjectMatches(f));
 
   const liveClassesForTab = useMemo(() => {
     return (liveClasses || []).filter((lc) => {
@@ -193,7 +204,7 @@ export default function CourseFolderScreen() {
         return head ? `${parentName} / ${head}` : "";
       })
       .filter(Boolean);
-    const fromFolders = (courseFolders || [])
+    const fromFolders = scopedCourseFolders
       .filter((f: any) => f.type === "lecture")
       .map((f: any) => f.name)
       .filter((n: any) => typeof n === "string" && n.startsWith(prefix))
@@ -204,6 +215,33 @@ export default function CourseFolderScreen() {
       })
       .filter(Boolean);
     return [...new Set([...fromLectures, ...fromFolders])];
+  };
+
+  const folderFullName = (folder: any): string => String(folder?.full_name || folder?.name || "").trim();
+  const folderLocalName = (folder: any): string => String(folder?.name || folder?.full_name || "").trim();
+  const activeFolderType = type === "lectures" ? "lecture" : type === "materials" ? "material" : type === "tests" ? "test" : "";
+  const currentFolder = activeFolderType
+    ? scopedCourseFolders.find((f: any) => f.type === activeFolderType && folderFullName(f) === folderName)
+    : null;
+
+  const getDirectSubfolders = (parentName: string): any[] => {
+    const typeKey = activeFolderType;
+    if (!typeKey) return [];
+    const parent = currentFolder || scopedCourseFolders.find((f: any) => f.type === typeKey && folderFullName(f) === parentName);
+    const byParentId = parent?.id
+      ? scopedCourseFolders.filter((f: any) => f.type === typeKey && Number(f.parent_id || 0) === Number(parent.id))
+      : [];
+    const prefix = `${parentName} / `;
+    const pathChildren = scopedCourseFolders
+      .filter((f: any) => f.type === typeKey)
+      .filter((f: any) => folderFullName(f).startsWith(prefix))
+      .filter((f: any) => {
+        const rest = folderFullName(f).slice(prefix.length);
+        return rest && !rest.includes(" / ");
+      });
+    const map = new Map<number | string, any>();
+    [...byParentId, ...pathChildren].forEach((f: any) => map.set(f.id || folderFullName(f), f));
+    return [...map.values()];
   };
 
   const goToCourse = () => {
@@ -236,7 +274,7 @@ export default function CourseFolderScreen() {
   const openSubfolder = (childName: string) => {
     router.push({
       pathname: "/course-folder/[id]/[type]/[name]",
-      params: { id, type: "lectures", name: encodeURIComponent(childName), color },
+      params: { id, type, name: encodeURIComponent(childName), color, subjectKey, testType: routeTestType },
     } as any);
   };
 
@@ -251,26 +289,32 @@ export default function CourseFolderScreen() {
   const items: any[] = useMemo(() => {
     if (!course) return [];
     if (type === "lectures") {
-      return (course.lectures || []).filter((l: any) => {
+      return (course.lectures || []).filter((l: any) => subjectMatches(l)).filter((l: any) => {
         const sec = String(l.section_title || "");
         return sec === folderName || sec.startsWith(`${folderName} /`);
       });
     }
     if (type === "materials") {
-      return (course.materials || []).filter((m: any) => String(m.section_title || "") === folderName);
+      return (course.materials || []).filter((m: any) => subjectMatches(m)).filter((m: any) => String(m.section_title || "") === folderName);
     }
     if (type === "live") {
       return (liveClassesForTab || []).filter((lc: any) => String((lc as any).section_title || "") === folderName);
     }
     if (type === "tests") {
-      const tests = course.tests || [];
+      const tests = (course.tests || []).filter((t: any) => subjectMatches(t)).filter((t: any) => {
+        const testType = String(t.test_type || "").toLowerCase();
+        if (routeTestType === "pyq") return testType === "pyq";
+        if (routeTestType === "mock") return testType === "mock";
+        if (routeTestType === "regular") return !["pyq", "mock"].includes(testType);
+        return true;
+      });
       const byFolder = tests.filter((t: any) => String(t.folder_name || "") === folderName);
       if (byFolder.length > 0) return byFolder;
       const sectionKey = TEST_SECTIONS.find((s) => s.label === folderName)?.key;
       return sectionKey ? tests.filter((t: any) => t.test_type === sectionKey && !t.folder_name) : [];
     }
     return [];
-  }, [course, liveClassesForTab, type, folderName]);
+  }, [course, liveClassesForTab, type, folderName, subjectKey]);
 
   const renderTestItem = (test: CourseTest) => {
     const tColor = TEST_TYPE_COLORS[test.test_type] || Colors.light.primary;
@@ -365,8 +409,10 @@ export default function CourseFolderScreen() {
       : type === "tests" ? (items.length === 1 ? "test" : "tests")
       : (items.length === 1 ? "class" : "classes");
 
-  // For lectures, separate subfolders and leaf items at this folder level
-  const subfolders = type === "lectures" ? getDirectLectureSubfolders(folderName) : [];
+  // Show direct child folders first, then leaf items at the current folder level.
+  const subfolders = type === "lectures"
+    ? getDirectSubfolders(folderName).map(folderFullName)
+    : getDirectSubfolders(folderName).map(folderFullName);
   const leafLectures = type === "lectures"
     ? items.filter((l: any) => l.section_title === folderName)
     : [];
@@ -402,12 +448,28 @@ export default function CourseFolderScreen() {
       )}
 
       <ScrollView contentContainerStyle={{ paddingBottom: bottomPadding + 20 }}>
-        {/* Lecture subfolders */}
-        {type === "lectures" && subfolders.map((childName) => {
-          const childItems = (course.lectures || []).filter((l: any) => {
-            const sec = String(l.section_title || "");
-            return sec === childName || sec.startsWith(`${childName} /`);
-          });
+        {/* Child folders */}
+        {subfolders.map((childName) => {
+          const childItems = type === "lectures"
+            ? (course.lectures || []).filter((l: any) => subjectMatches(l)).filter((l: any) => {
+                const sec = String(l.section_title || "");
+                return sec === childName || sec.startsWith(`${childName} /`);
+              })
+            : type === "materials"
+              ? (course.materials || []).filter((m: any) => subjectMatches(m)).filter((m: any) => {
+                  const sec = String(m.section_title || "");
+                  return sec === childName || sec.startsWith(`${childName} /`);
+                })
+              : (course.tests || []).filter((t: any) => subjectMatches(t)).filter((t: any) => {
+                  const testType = String(t.test_type || "").toLowerCase();
+                  if (routeTestType === "pyq") return testType === "pyq";
+                  if (routeTestType === "mock") return testType === "mock";
+                  if (routeTestType === "regular") return !["pyq", "mock"].includes(testType);
+                  return true;
+                }).filter((t: any) => {
+                  const sec = String(t.folder_name || "");
+                  return sec === childName || sec.startsWith(`${childName} /`);
+                });
           return (
             <Pressable
               key={childName}
@@ -419,7 +481,7 @@ export default function CourseFolderScreen() {
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.testSectionTitle}>{childName.replace(`${folderName} / `, "")}</Text>
-                <Text style={styles.testSectionCount}>{childItems.length} {childItems.length === 1 ? "video" : "videos"}</Text>
+                <Text style={styles.testSectionCount}>{childItems.length} {type === "lectures" ? (childItems.length === 1 ? "video" : "videos") : type === "materials" ? (childItems.length === 1 ? "file" : "files") : (childItems.length === 1 ? "test" : "tests")}</Text>
               </View>
               <Ionicons name="chevron-forward" size={20} color={Colors.light.textMuted} />
             </Pressable>

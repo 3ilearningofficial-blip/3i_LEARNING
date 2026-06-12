@@ -1,6 +1,7 @@
 import type { Express, Request, Response } from "express";
 import type { Pool, PoolClient } from "pg";
 import { takeSupportPostSlotPg } from "./pg-rate-limit-store";
+import { sendPushToAdmins } from "./push-notifications";
 import { releaseSseListen, tryAcquireSseListen } from "./sse-listen-budget";
 
 const SUPPORT_POST_WINDOW_MS = 10 * 60 * 1000;
@@ -186,6 +187,11 @@ export function registerSupportRoutes({
         "INSERT INTO support_messages (user_id, sender, message, created_at) VALUES ($1, 'user', $2, $3) RETURNING *",
         [user.id, message.trim().slice(0, 1000), Date.now()]
       );
+      await sendPushToAdmins(db, {
+        title: "💬 New Support Message",
+        body: `Student #${user.id}: ${message.trim().slice(0, 80)}`,
+        data: { type: "support_message", userId: Number(user.id), messageId: result.rows[0]?.id },
+      }).catch((err) => console.error("[Support] admin push failed:", err));
       res.json(result.rows[0]);
     } catch {
       res.status(500).json({ message: "Failed to send message" });

@@ -309,6 +309,9 @@ export default function CourseDetailScreen() {
     enabled: !!id && id !== "undefined",
   });
 
+  const folderFullName = (folder: any): string => String(folder?.full_name || folder?.name || "").trim();
+  const folderLocalName = (folder: any): string => String(folder?.name || folder?.full_name || "").trim();
+
   // Warm likely next screens so tab/screen transitions feel instant for students.
   useEffect(() => {
     if (!user || !course || !id || id === "undefined") return;
@@ -1114,8 +1117,8 @@ setTimeout(function() {
                     }
                   }
                   // Also include empty DB folders
-                  for (const f of courseFolders.filter((f: any) => f.type === "lecture")) {
-                    const rootName = getLectureRootName(f.name);
+                  for (const f of courseFolders.filter((f: any) => f.type === "lecture" && !f.parent_id)) {
+                    const rootName = getLectureRootName(folderFullName(f));
                     if (!folderMap.has(rootName)) folderMap.set(rootName, []);
                   }
                   const folders = Array.from(folderMap.entries());
@@ -1199,11 +1202,11 @@ setTimeout(function() {
                 {/* Test folders from DB (including empty ones) */}
                 {(() => {
                   const testFolderNames = new Set([
-                    ...(course.tests || []).map((t: any) => t.folder_name).filter(Boolean),
-                    ...courseFolders.filter((f: any) => f.type === "test").map((f: any) => f.name),
+                    ...(course.tests || []).map((t: any) => String(t.folder_name || "").split(" / ")[0]).filter(Boolean),
+                    ...courseFolders.filter((f: any) => f.type === "test" && !f.parent_id).map(folderFullName),
                   ]);
                   return Array.from(testFolderNames).map((folderName: any) => {
-                    const folderTests = (course.tests || []).filter((t: any) => t.folder_name === folderName);
+                    const folderTests = (course.tests || []).filter((t: any) => t.folder_name === folderName || String(t.folder_name || "").startsWith(`${folderName} /`));
                     const isLocked = !isAdmin && !course.isEnrolled;
                     const testFolderColor = "#16A34A";
                     return (
@@ -1308,15 +1311,17 @@ setTimeout(function() {
                   const unfolderedMaterials: Material[] = [];
                   for (const mat of sorted) {
                     if (mat.section_title) {
-                      if (!folderMap.has(mat.section_title)) folderMap.set(mat.section_title, []);
-                      folderMap.get(mat.section_title)!.push(mat);
+                      const rootName = String(mat.section_title).split(" / ")[0];
+                      if (!folderMap.has(rootName)) folderMap.set(rootName, []);
+                      folderMap.get(rootName)!.push(mat);
                     } else {
                       unfolderedMaterials.push(mat);
                     }
                   }
                   // Also include empty DB folders
-                  for (const f of courseFolders.filter((f: any) => f.type === "material")) {
-                    if (!folderMap.has(f.name)) folderMap.set(f.name, []);
+                  for (const f of courseFolders.filter((f: any) => f.type === "material" && !f.parent_id)) {
+                    const rootName = folderFullName(f);
+                    if (!folderMap.has(rootName)) folderMap.set(rootName, []);
                   }
                   const folders = Array.from(folderMap.entries());
                   return (

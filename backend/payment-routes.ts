@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { computeEnrollmentValidUntil, isEnrollmentExpired } from "./course-access-utils";
+import { sendPushToAdmins } from "./push-notifications";
 import {
   assertNativePaidPurchaseInstallation,
   finalizeInstallationBindAfterPurchase,
@@ -400,6 +401,17 @@ export function registerPaymentRoutes({
           expectedCourseId: courseId,
         });
         await finalizeInstallationBindAfterPurchase(db, result.userId, req);
+        const [courseInfo, userInfo] = await Promise.all([
+          db.query("SELECT title, price FROM courses WHERE id = $1", [result.courseId]).catch(() => ({ rows: [] as any[] })),
+          db.query("SELECT name, phone, email FROM users WHERE id = $1", [result.userId]).catch(() => ({ rows: [] as any[] })),
+        ]);
+        const courseTitle = String(courseInfo.rows[0]?.title || "a course");
+        const buyerName = String(userInfo.rows[0]?.name || userInfo.rows[0]?.phone || userInfo.rows[0]?.email || "A student");
+        await sendPushToAdmins(db, {
+          title: "💰 New Course Purchase",
+          body: `${buyerName} purchased ${courseTitle}.`,
+          data: { type: "new_purchase", userId: result.userId, courseId: result.courseId },
+        }).catch((err) => console.error("[Payment] admin purchase push failed:", err));
         console.log("[Payments] verify success");
         return { statusCode: 200, body: { success: true, message: "Payment verified and enrolled successfully" } as any };
       });

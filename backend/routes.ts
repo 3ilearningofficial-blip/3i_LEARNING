@@ -66,10 +66,12 @@ import {
   deleteDownloadsForCourse as _deleteDownloadsForCourse,
 } from "./download-utils";
 import {
+  registerWebPushSubscription,
   registerPushToken,
   sendPushToUsers,
   unregisterAllPushTokens,
   unregisterPushToken,
+  unregisterWebPushSubscription,
 } from "./push-notifications";
 
 function isTransientPgError(err: any): boolean {
@@ -503,6 +505,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (err) {
       console.error("[Push] register error:", err);
       return res.status(500).json({ message: "Failed to register push token" });
+    }
+  });
+
+  app.get("/api/push/web-public-key", async (_req: Request, res: Response) => {
+    const publicKey = process.env.VAPID_PUBLIC_KEY || "";
+    if (!publicKey) return res.status(503).json({ message: "Web push is not configured" });
+    res.json({ publicKey });
+  });
+
+  app.post("/api/push/web/register", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user;
+      await registerWebPushSubscription(db, Number(user.id), req.body?.subscription, String(req.headers["user-agent"] || ""));
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("[WebPush] register error:", err);
+      return res.status(500).json({ message: "Failed to register web push subscription" });
+    }
+  });
+
+  app.post("/api/push/web/unregister", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user;
+      const endpoint = String(req.body?.endpoint || "").trim();
+      if (!endpoint) return res.status(400).json({ message: "Endpoint is required" });
+      await unregisterWebPushSubscription(db, Number(user.id), endpoint);
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("[WebPush] unregister error:", err);
+      return res.status(500).json({ message: "Failed to unregister web push subscription" });
     }
   });
 

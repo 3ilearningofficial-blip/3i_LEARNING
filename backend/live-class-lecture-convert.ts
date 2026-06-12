@@ -65,8 +65,8 @@ export async function convertLiveClassTitlePeersToLectures(
     const lectureResult = await db.query(
       `INSERT INTO lectures (
          course_id, title, description, video_url, video_type, duration_minutes,
-         order_index, is_free_preview, section_title, live_class_id, live_class_finalized, created_at
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TRUE, $11)
+         order_index, is_free_preview, section_title, live_class_id, subject_key, live_class_finalized, created_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, TRUE, $12)
        ON CONFLICT (live_class_id) WHERE live_class_id IS NOT NULL
        DO UPDATE SET
          title = EXCLUDED.title,
@@ -78,6 +78,7 @@ export async function convertLiveClassTitlePeersToLectures(
          video_type = EXCLUDED.video_type,
          duration_minutes = EXCLUDED.duration_minutes,
          section_title = EXCLUDED.section_title,
+        subject_key = EXCLUDED.subject_key,
          live_class_finalized = TRUE
        RETURNING id`,
       [
@@ -91,6 +92,7 @@ export async function convertLiveClassTitlePeersToLectures(
         false,
         targetSection,
         peer.id,
+        peer.subject_key || null,
         Date.now(),
       ]
     );

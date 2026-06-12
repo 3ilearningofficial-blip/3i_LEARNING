@@ -77,6 +77,22 @@ export default function MissionFolderScreen() {
     staleTime: 5 * 60 * 1000,
   });
 
+  const { data: folders = [] } = useQuery<any[]>({
+    queryKey: ["/api/mission-folders"],
+    queryFn: async () => {
+      const baseUrl = getApiUrl();
+      const res = await authFetch(new URL("/api/mission-folders", baseUrl).toString());
+      if (!res.ok) return [];
+      return res.json();
+    },
+    staleTime: 60_000,
+  });
+  const currentFolder = folders.find((f: any) => String(f.full_name || f.name) === folderName);
+  const childFolders = currentFolder?.id
+    ? folders.filter((f: any) => Number(f.parent_id || 0) === Number(currentFolder.id))
+    : folders.filter((f: any) => String(f.full_name || f.name).startsWith(`${folderName} /`) && !String(f.full_name || f.name).slice(folderName.length + 3).includes(" / "));
+  const directMissions = missions.filter((m) => String(m.folder_name || "") === folderName);
+
   const showCourseOnCards = useMemo(() => {
     const courseIds = new Set<number>();
     for (const m of missions) {
@@ -110,7 +126,7 @@ export default function MissionFolderScreen() {
           <View style={{ flex: 1, gap: 2 }}>
             <Text style={styles.headerTitle} numberOfLines={2}>{folderName}</Text>
             <Text style={styles.headerSub}>
-              {isLoading ? "Loading..." : `${missions.length} mission${missions.length === 1 ? "" : "s"}`}
+              {isLoading ? "Loading..." : `${directMissions.length} mission${directMissions.length === 1 ? "" : "s"}`}
             </Text>
           </View>
           <View style={styles.folderIconWrap}>
@@ -121,7 +137,7 @@ export default function MissionFolderScreen() {
 
       {isLoading ? (
         <ActivityIndicator size="large" color={Colors.light.primary} style={{ marginTop: 40 }} />
-      ) : missions.length === 0 ? (
+      ) : directMissions.length === 0 && childFolders.length === 0 ? (
         <View style={styles.empty}>
           <Ionicons name="flame-outline" size={48} color={colors.textMuted} />
           <Text style={[styles.emptyTitle, { color: colors.text }]}>No missions yet</Text>
@@ -129,7 +145,23 @@ export default function MissionFolderScreen() {
         </View>
       ) : (
         <ScrollView contentContainerStyle={{ padding: 16, gap: 12, paddingBottom: insets.bottom + 32 }}>
-          {missions.map((item) => {
+          {childFolders.map((folder: any) => (
+            <Pressable
+              key={`folder-${folder.id || folder.full_name}`}
+              style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}
+              onPress={() => router.push({ pathname: "/mission-folder/[name]", params: { name: encodeURIComponent(String(folder.full_name || folder.name)), type: missionType } } as any)}
+            >
+              <View style={styles.cardTop}>
+                <View style={[styles.typeBadge, { backgroundColor: "#DB277720" }]}>
+                  <Text style={[styles.typeBadgeText, { color: "#DB2777" }]}>Folder</Text>
+                </View>
+              </View>
+              <Text style={[styles.cardTitle, { color: colors.text }]}>{folder.name}</Text>
+              <Text style={[styles.cardDesc, { color: colors.textSecondary }]} numberOfLines={1}>{folder.full_name}</Text>
+              <Ionicons name="chevron-forward" size={18} color={colors.textMuted} style={styles.cardChevron} />
+            </Pressable>
+          ))}
+          {directMissions.map((item) => {
             const qCount = item.questions?.length || 0;
             const isCompleted = item.isCompleted || (item.userScore !== undefined && item.userScore > 0);
             const typeLabel = item.mission_type === "free_practice" ? "Free" : "Paid";

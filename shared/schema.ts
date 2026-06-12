@@ -34,6 +34,12 @@ export const courses = pgTable("courses", {
   durationHours: decimal("duration_hours", { precision: 5, scale: 1 }).default("0"),
   isPublished: boolean("is_published").default(true),
   courseType: text("course_type").default("standard"),
+  teacherBio: text("teacher_bio"),
+  teacherImageUrl: text("teacher_image_url"),
+  teacherDetailsJson: jsonb("teacher_details_json").default([]),
+  multiSubjectConfig: jsonb("multi_subject_config").default([]),
+  courseLanguage: text("course_language"),
+  batchStatus: text("batch_status"),
   createdAt: bigint("created_at", { mode: "number" }),
 });
 
@@ -49,6 +55,7 @@ export const lectures = pgTable("lectures", {
   orderIndex: integer("order_index").default(0),
   isFreePreview: boolean("is_free_preview").default(false),
   sectionTitle: text("section_title"),
+  subjectKey: text("subject_key"),
   // Column exists in DB via migration 0003. Raw SQL queries already use it.
   downloadAllowed: boolean("download_allowed").default(false),
   // Live-class linkage: a recording lecture is tied 1:1 to its live class so the
@@ -92,6 +99,7 @@ export const studyMaterials = pgTable("study_materials", {
   courseId: integer("course_id"),
   isFree: boolean("is_free").default(true),
   sectionTitle: text("section_title"),
+  subjectKey: text("subject_key"),
   downloadAllowed: boolean("download_allowed").default(false),
   // Added via migration 0025 — controls display order in the course content list.
   orderIndex: integer("order_index").default(0),
@@ -109,6 +117,7 @@ export const tests = pgTable("tests", {
   passingMarks: integer("passing_marks").default(35),
   testType: text("test_type").default("practice"),
   folderName: text("folder_name"),
+  subjectKey: text("subject_key"),
   isPublished: boolean("is_published").default(true),
   // Added via migration 0025 — controls display order in the course content list.
   orderIndex: integer("order_index").default(0),
@@ -144,6 +153,43 @@ export const testAttempts = pgTable("test_attempts", {
   status: text("status").default("in_progress"),
   startedAt: bigint("started_at", { mode: "number" }),
   completedAt: bigint("completed_at", { mode: "number" }),
+});
+
+export const courseFolders = pgTable("course_folders", {
+  id: serial("id").primaryKey(),
+  courseId: integer("course_id"),
+  parentId: integer("parent_id"),
+  name: text("name").notNull(),
+  type: text("type").notNull(),
+  subjectKey: text("subject_key"),
+  isHidden: boolean("is_hidden").default(false),
+  orderIndex: integer("order_index").default(0),
+  createdAt: bigint("created_at", { mode: "number" }),
+});
+
+export const standaloneFolders = pgTable("standalone_folders", {
+  id: serial("id").primaryKey(),
+  parentId: integer("parent_id"),
+  name: text("name").notNull(),
+  type: text("type").notNull(),
+  isHidden: boolean("is_hidden").default(false),
+  category: text("category"),
+  price: decimal("price", { precision: 10, scale: 2 }).default("0"),
+  originalPrice: decimal("original_price", { precision: 10, scale: 2 }).default("0"),
+  isFree: boolean("is_free").default(true),
+  description: text("description"),
+  validityMonths: decimal("validity_months", { precision: 8, scale: 2 }),
+  orderIndex: integer("order_index").default(0),
+  createdAt: bigint("created_at", { mode: "number" }),
+});
+
+export const folderPurchases = pgTable("folder_purchases", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id"),
+  folderId: integer("folder_id"),
+  amount: decimal("amount", { precision: 10, scale: 2 }),
+  paymentId: text("payment_id"),
+  createdAt: bigint("created_at", { mode: "number" }),
 });
 
 export const dailyMissions = pgTable("daily_missions", {

@@ -48,6 +48,23 @@ export default function MaterialFolderScreen() {
     enabled: !!folderName,
   });
 
+  const { data: materialPayload } = useQuery<any>({
+    queryKey: ["/api/study-materials", "free-folders"],
+    queryFn: async () => {
+      const baseUrl = getApiUrl();
+      const res = await authFetch(new URL("/api/study-materials?free=true", baseUrl).toString());
+      if (!res.ok) return { folders: [] };
+      return res.json();
+    },
+    staleTime: 60_000,
+  });
+  const folders = Array.isArray(materialPayload?.folders) ? materialPayload.folders : [];
+  const currentFolder = folders.find((f: any) => String(f.full_name || f.name) === folderName);
+  const childFolders = currentFolder?.id
+    ? folders.filter((f: any) => Number(f.parent_id || 0) === Number(currentFolder.id))
+    : folders.filter((f: any) => String(f.full_name || f.name).startsWith(`${folderName} /`) && !String(f.full_name || f.name).slice(folderName.length + 3).includes(" / "));
+  const directMaterials = materials.filter((m) => String(m.section_title || "") === folderName);
+
   const openMaterial = (mat: Material) => {
     router.push(`/material/${mat.id}`);
   };
@@ -65,7 +82,7 @@ export default function MaterialFolderScreen() {
           <View style={{ flex: 1, gap: 2 }}>
             <Text style={styles.headerTitle} numberOfLines={1}>{folderName}</Text>
             <Text style={{ fontSize: 12, fontFamily: "Inter_400Regular", color: "rgba(255,255,255,0.5)" }}>
-              {isLoading ? "Loading..." : `${materials.length} ${materials.length === 1 ? "item" : "items"}`}
+              {isLoading ? "Loading..." : `${directMaterials.length} ${directMaterials.length === 1 ? "item" : "items"}`}
             </Text>
           </View>
           <View style={{ width: 44, height: 44, borderRadius: 14, backgroundColor: "rgba(255,255,255,0.1)", alignItems: "center", justifyContent: "center" }}>
@@ -76,7 +93,7 @@ export default function MaterialFolderScreen() {
 
       {isLoading ? (
         <ActivityIndicator size="large" color={Colors.light.primary} style={{ marginTop: 40 }} />
-      ) : materials.length === 0 ? (
+      ) : directMaterials.length === 0 && childFolders.length === 0 ? (
         <View style={styles.empty}>
           <Ionicons name="folder-open-outline" size={48} color={Colors.light.textMuted} />
           <Text style={styles.emptyTitle}>No materials yet</Text>
@@ -84,7 +101,23 @@ export default function MaterialFolderScreen() {
         </View>
       ) : (
         <ScrollView contentContainerStyle={{ padding: 16, gap: 10, paddingBottom: insets.bottom + 32 }}>
-          {materials.map((mat) => {
+          {childFolders.map((folder: any) => (
+            <Pressable
+              key={`folder-${folder.id || folder.full_name}`}
+              style={({ pressed }) => [styles.card, pressed && { opacity: 0.85 }]}
+              onPress={() => router.push({ pathname: "/material-folder/[name]", params: { name: encodeURIComponent(String(folder.full_name || folder.name)) } } as any)}
+            >
+              <View style={[styles.iconBg, { backgroundColor: "#FEF3C7" }]}>
+                <Ionicons name="folder" size={24} color="#F59E0B" />
+              </View>
+              <View style={styles.cardInfo}>
+                <Text style={styles.cardTitle} numberOfLines={2}>{folder.name}</Text>
+                <Text style={styles.cardDesc} numberOfLines={1}>{folder.full_name}</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color={Colors.light.textMuted} />
+            </Pressable>
+          ))}
+          {directMaterials.map((mat) => {
             const ft = FILE_ICONS[mat.file_type] || FILE_ICONS.link;
             return (
               <Pressable

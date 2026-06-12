@@ -356,17 +356,21 @@ export function registerCourseAccessRoutes({
 
       if (user) {
         const enrollResult = await db.query(
-          "SELECT course_id, progress_percent FROM enrollments WHERE user_id = $1 AND (status = 'active' OR status IS NULL) AND (valid_until IS NULL OR valid_until > $2)",
+          "SELECT course_id, progress_percent, valid_until FROM enrollments WHERE user_id = $1 AND (status = 'active' OR status IS NULL) AND (valid_until IS NULL OR valid_until > $2)",
           [user.id, Date.now()]
         );
-        const enrollMap = new Map<number, number>();
-        enrollResult.rows.forEach((e: { course_id: number; progress_percent: number }) => {
-          enrollMap.set(Number(e.course_id), Number(e.progress_percent) || 0);
+        const enrollMap = new Map<number, { progress: number; validUntil: number | null }>();
+        enrollResult.rows.forEach((e: { course_id: number; progress_percent: number; valid_until?: number | null }) => {
+          enrollMap.set(Number(e.course_id), {
+            progress: Number(e.progress_percent) || 0,
+            validUntil: e.valid_until != null ? Number(e.valid_until) : null,
+          });
         });
         courses = courses.map((c: Record<string, unknown>) => ({
           ...c,
           isEnrolled: enrollMap.has(Number(c.id)),
-          progress: enrollMap.get(Number(c.id)) ?? 0,
+          progress: enrollMap.get(Number(c.id))?.progress ?? 0,
+          enrollmentValidUntil: enrollMap.get(Number(c.id))?.validUntil ?? null,
         }));
       }
 
@@ -389,7 +393,29 @@ export function registerCourseAccessRoutes({
 
   app.get("/api/courses/:id/folders", async (req: Request, res: Response) => {
     try {
-      const result = await db.query("SELECT * FROM course_folders WHERE course_id = $1 AND is_hidden = FALSE ORDER BY order_index ASC, created_at ASC", [req.params.id]);
+      const result = await db.query(
+        `WITH RECURSIVE folder_tree AS (
+           SELECT
+             cf.*,
+             cf.name::text AS full_name,
+             ARRAY[cf.id] AS path_ids
+           FROM course_folders cf
+           WHERE cf.parent_id IS NULL
+           UNION ALL
+           SELECT
+             child.*,
+             (folder_tree.full_name || ' / ' || child.name)::text AS full_name,
+             folder_tree.path_ids || child.id AS path_ids
+           FROM course_folders child
+           JOIN folder_tree ON child.parent_id = folder_tree.id
+           WHERE NOT child.id = ANY(folder_tree.path_ids)
+         )
+         SELECT *
+         FROM folder_tree
+         WHERE course_id = $1 AND is_hidden = FALSE
+         ORDER BY COALESCE(parent_id, 0) ASC, order_index ASC, created_at ASC`,
+        [req.params.id]
+      );
       // BPR-03: Folder structure is the same for all users (visibility is pre-filtered by
       // is_hidden). Cache aggressively — folders change only when an admin edits the course.
       res.set("Cache-Control", "public, max-age=60, stale-while-revalidate=300");

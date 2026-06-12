@@ -16,6 +16,25 @@ type RegisterTestFolderRoutesDeps = {
   verifyPaymentSignature: (orderId: string, paymentId: string, signature: string) => boolean;
 };
 
+const STANDALONE_FOLDER_SELECT = `
+  WITH RECURSIVE folder_tree AS (
+    SELECT
+      sf.*,
+      sf.name::text AS full_name,
+      ARRAY[sf.id] AS path_ids
+    FROM standalone_folders sf
+    WHERE sf.parent_id IS NULL
+    UNION ALL
+    SELECT
+      child.*,
+      (folder_tree.full_name || ' / ' || child.name)::text AS full_name,
+      folder_tree.path_ids || child.id AS path_ids
+    FROM standalone_folders child
+    JOIN folder_tree ON child.parent_id = folder_tree.id
+    WHERE NOT child.id = ANY(folder_tree.path_ids)
+  )
+`;
+
 export function registerTestFolderRoutes({
   app,
   db,
@@ -51,7 +70,15 @@ export function registerTestFolderRoutes({
     try {
       const user = await getAuthUser(req);
       const result = await db.query(
-        "SELECT sf.*, (SELECT COUNT(*) FROM tests t WHERE t.mini_course_id = sf.id) as total_tests FROM standalone_folders sf WHERE sf.type = 'mini_course' AND (sf.is_hidden = FALSE OR sf.is_hidden IS NULL) ORDER BY sf.created_at DESC"
+        `${STANDALONE_FOLDER_SELECT}
+         SELECT
+           folder_tree.*,
+           (SELECT COUNT(*) FROM tests t WHERE t.mini_course_id = folder_tree.id) as total_tests
+         FROM folder_tree
+         WHERE type = 'mini_course'
+           AND parent_id IS NULL
+           AND (is_hidden = FALSE OR is_hidden IS NULL)
+         ORDER BY created_at DESC`
       );
       const folders = result.rows.map((f: any) => ({ ...f, is_purchased: false }));
       if (user) {
@@ -71,10 +98,28 @@ export function registerTestFolderRoutes({
   app.get("/api/test-folders/:id", async (req: Request, res: Response) => {
     try {
       const user = await getAuthUser(req);
-      const folder = await db.query("SELECT * FROM standalone_folders WHERE id = $1 AND type = 'mini_course'", [req.params.id]);
+      const folder = await db.query(
+        `${STANDALONE_FOLDER_SELECT}
+         SELECT *
+         FROM folder_tree
+         WHERE id = $1 AND type = 'mini_course'`,
+        [req.params.id]
+      );
       if (folder.rows.length === 0) return res.status(404).json({ message: "Folder not found" });
       const f = folder.rows[0];
       const tests = await db.query("SELECT t.*, t.folder_name as sub_folder FROM tests t WHERE t.mini_course_id = $1 ORDER BY t.folder_name ASC NULLS LAST, t.created_at ASC", [f.id]);
+      const childFolders = await db.query(
+        `${STANDALONE_FOLDER_SELECT}
+         SELECT
+           folder_tree.*,
+           (SELECT COUNT(*) FROM tests t WHERE t.mini_course_id = folder_tree.id) as total_tests
+         FROM folder_tree
+         WHERE type = 'mini_course'
+           AND parent_id = $1
+           AND (is_hidden = FALSE OR is_hidden IS NULL)
+         ORDER BY order_index ASC, created_at ASC`,
+        [f.id]
+      );
       let isPurchased = f.is_free;
       const attempts: Record<number, any> = {};
       if (user) {
@@ -90,7 +135,7 @@ export function registerTestFolderRoutes({
           }
         }
       }
-      res.json({ ...f, is_purchased: isPurchased, tests: tests.rows, attempts });
+      res.json({ ...f, is_purchased: isPurchased, child_folders: childFolders.rows, tests: tests.rows, attempts });
     } catch (err) {
       console.error("Test folder detail error:", err);
       res.status(500).json({ message: "Failed to fetch folder" });

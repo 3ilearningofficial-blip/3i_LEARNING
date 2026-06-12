@@ -228,7 +228,7 @@ export default function DailyMissionScreen() {
 
   const openMissionHandledRef = useRef<string | null>(null);
 
-  const { data: missionFolders = [] } = useQuery<{ id: number; name: string }[]>({
+  const { data: missionFolders = [] } = useQuery<any[]>({
     queryKey: ["/api/mission-folders"],
     queryFn: async () => {
       const baseUrl = getApiUrl();
@@ -244,7 +244,8 @@ export default function DailyMissionScreen() {
   });
 
   const { visibleFolders, ungroupedMissions, enrolledCourseCount } = useMemo(() => {
-    const folderNames = new Set(missionFolders.map((f) => f.name));
+    const folderFullName = (folder: any) => String(folder.full_name || folder.name || "");
+    const folderNames = new Set(missionFolders.map(folderFullName));
     const ungrouped = missions.filter((m) => !m.folder_name || !folderNames.has(m.folder_name));
     const courseIds = new Set<number>();
     for (const m of missions) {
@@ -253,8 +254,10 @@ export default function DailyMissionScreen() {
       }
     }
     const folders = missionFolders
+      .filter((folder) => !folder.parent_id)
       .map((folder) => {
-        const folderMissions = missions.filter((m) => m.folder_name === folder.name);
+        const fullName = folderFullName(folder);
+        const folderMissions = missions.filter((m) => m.folder_name === fullName || String(m.folder_name || "").startsWith(`${fullName} /`));
         return { folder, folderMissions };
       })
       .filter(({ folderMissions }) => folderMissions.length > 0);
@@ -1086,7 +1089,7 @@ export default function DailyMissionScreen() {
               <Pressable
                 key={folder.id}
                 style={[styles.folderCard, { borderLeftColor: MISSION_FOLDER_COLOR }]}
-                onPress={() => openMissionFolder(folder.name)}
+                onPress={() => openMissionFolder(String(folder.full_name || folder.name))}
               >
                 <View style={[styles.folderIconWrap, { backgroundColor: MISSION_FOLDER_COLOR + "18" }]}>
                   <Ionicons name="folder" size={22} color={MISSION_FOLDER_COLOR} />

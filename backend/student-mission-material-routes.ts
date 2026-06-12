@@ -12,6 +12,25 @@ type RegisterStudentMissionMaterialRoutesDeps = {
   getAuthUser: (req: Request) => Promise<any>;
 };
 
+const STANDALONE_FOLDER_SELECT = `
+  WITH RECURSIVE folder_tree AS (
+    SELECT
+      sf.*,
+      sf.name::text AS full_name,
+      ARRAY[sf.id] AS path_ids
+    FROM standalone_folders sf
+    WHERE sf.parent_id IS NULL
+    UNION ALL
+    SELECT
+      child.*,
+      (folder_tree.full_name || ' / ' || child.name)::text AS full_name,
+      folder_tree.path_ids || child.id AS path_ids
+    FROM standalone_folders child
+    JOIN folder_tree ON child.parent_id = folder_tree.id
+    WHERE NOT child.id = ANY(folder_tree.path_ids)
+  )
+`;
+
 export function registerStudentMissionMaterialRoutes({
   app,
   db,
@@ -116,11 +135,13 @@ export function registerStudentMissionMaterialRoutes({
         ] as string[];
         if (folderNamesInResult.length > 0) {
           const freeRows = await db.query(
-            `SELECT name FROM standalone_folders
-             WHERE type = 'mission' AND is_free = TRUE AND name = ANY($1::text[])`,
+            `${STANDALONE_FOLDER_SELECT}
+             SELECT full_name
+             FROM folder_tree
+             WHERE type = 'mission' AND is_free = TRUE AND full_name = ANY($1::text[])`,
             [folderNamesInResult],
           );
-          for (const row of freeRows.rows) freeFolderNames.add(String(row.name));
+          for (const row of freeRows.rows) freeFolderNames.add(String(row.full_name));
         }
       }
 
@@ -193,18 +214,21 @@ export function registerStudentMissionMaterialRoutes({
       if (!user) return res.status(401).json({ message: "Not authenticated" });
 
       const result = await db.query(
-        `SELECT
+        `${STANDALONE_FOLDER_SELECT}
+         SELECT
            id,
            name,
+           parent_id,
+           full_name,
            category,
            validity_months,
            is_free,
            description,
            created_at
-         FROM standalone_folders
+         FROM folder_tree
          WHERE type = 'mission'
            AND (is_hidden = FALSE OR is_hidden IS NULL)
-         ORDER BY order_index ASC, created_at ASC`
+         ORDER BY COALESCE(parent_id, 0) ASC, order_index ASC, created_at ASC`
       );
 
       res.set("Cache-Control", "private, no-store");
@@ -268,7 +292,11 @@ export function registerStudentMissionMaterialRoutes({
       const loadFolders = async () => {
         if (free !== "true") return [];
         const foldersResult = await db.query(
-          "SELECT * FROM standalone_folders WHERE type = 'material' AND (is_hidden = FALSE OR is_hidden IS NULL) ORDER BY order_index ASC, created_at ASC"
+          `${STANDALONE_FOLDER_SELECT}
+           SELECT *
+           FROM folder_tree
+           WHERE type = 'material' AND (is_hidden = FALSE OR is_hidden IS NULL)
+           ORDER BY COALESCE(parent_id, 0) ASC, order_index ASC, created_at ASC`
         );
         return foldersResult.rows;
       };
@@ -326,9 +354,15 @@ export function registerStudentMissionMaterialRoutes({
   app.get("/api/study-materials/folder/:folderName", async (req: Request, res: Response) => {
     try {
       const user = await getAuthUser(req);
-      const result = await db.query("SELECT * FROM study_materials WHERE section_title = $1 AND course_id IS NULL ORDER BY COALESCE(order_index, 0) ASC, created_at DESC", [
-        decodeURIComponent(String(req.params.folderName)),
-      ]);
+      const folderName = decodeURIComponent(String(req.params.folderName));
+      const result = await db.query(
+        `SELECT *
+         FROM study_materials
+         WHERE course_id IS NULL
+           AND (section_title = $1 OR section_title LIKE $1 || ' / %')
+         ORDER BY COALESCE(order_index, 0) ASC, created_at DESC`,
+        [folderName]
+      );
       const safeRows: any[] = [];
       for (const row of result.rows) {
         if (await canAccessStandaloneMaterial(user, row)) safeRows.push(row);

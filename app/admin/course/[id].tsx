@@ -17,7 +17,7 @@ import Colors from "@/constants/colors";
 import { useAppTheme } from "@/context/AppThemeContext";
 import { fetch } from "expo/fetch";
 import BulkUploadModal from "@/components/BulkUploadModal";
-import { DEFAULT_LIVE_RECORDING_SECTION } from "@shared/recordingSection";
+import { buildRecordingLectureSectionTitle, DEFAULT_LIVE_RECORDING_SECTION } from "@shared/recordingSection";
 import { useDocumentVisibility } from "@/lib/useDocumentVisibility";
 import SortableList from "@/components/admin/SortableList";
 import SortableItem from "@/components/admin/SortableItem";
@@ -30,6 +30,7 @@ interface Lecture {
   order_index: number;
   is_free_preview: boolean;
   section_title?: string;
+  subject_key?: string | null;
 }
 
 interface TestItem {
@@ -39,6 +40,7 @@ interface TestItem {
   duration_minutes: number;
   test_type: string;
   folder_name?: string;
+  subject_key?: string | null;
   difficulty?: string;
   order_index?: number;
 }
@@ -50,6 +52,7 @@ interface Material {
   file_url: string;
   file_type: string;
   section_title?: string;
+  subject_key?: string | null;
   download_allowed?: boolean;
   order_index?: number;
 }
@@ -66,6 +69,7 @@ interface LiveClassItem {
   is_completed: boolean;
   is_public: boolean;
   scheduled_at: number;
+  subject_key?: string | null;
 }
 
 interface EnrolledStudent {
@@ -91,6 +95,7 @@ interface CourseDetail {
   level?: string;
   duration_hours?: number;
   course_type?: string;
+  multi_subject_config?: any[];
   validity_months?: number | null;
   total_lectures: number;
   total_tests: number;
@@ -114,17 +119,20 @@ interface EditCourseForm {
   startDate: string;
   endDate: string;
   validityMonths: string;
+  thumbnail: string;
+  courseLanguage: string;
+  batchStatus: string;
 }
 
 interface NewLecture {
   title: string; description: string; videoUrl: string;
   videoType: string; durationMinutes: string; orderIndex: string;
-  isFreePreview: boolean; sectionTitle: string;
+  isFreePreview: boolean; sectionTitle: string; subjectKey: string;
 }
 
 interface NewTestForm {
   title: string; description: string; durationMinutes: string;
-  totalMarks: string; testType: string; folderName: string; difficulty: string; scheduledAt: string;
+  totalMarks: string; testType: string; folderName: string; difficulty: string; scheduledAt: string; subjectKey: string;
 }
 
 interface NewQuestion {
@@ -137,7 +145,7 @@ interface NewQuestion {
 interface NewMaterial {
   title: string; description: string; fileUrl: string;
   fileType: string; isFree: boolean; sectionTitle: string;
-  downloadAllowed: boolean;
+  downloadAllowed: boolean; subjectKey: string;
 }
 
 interface NewLiveClass {
@@ -147,6 +155,7 @@ interface NewLiveClass {
   lectureSectionTitle: string;
   /** Optional subfolder segment (e.g. "Chapter 1") — full path = main + " / " + sub */
   lectureSubfolderTitle: string;
+  subjectKey: string;
 }
 
 type AdminCourseTab = "lectures" | "tests" | "materials" | "live" | "enrolled";
@@ -159,12 +168,19 @@ const ADMIN_COURSE_TABS: { key: AdminCourseTab; label: string; icon: keyof typeo
   { key: "enrolled", label: "Students", icon: "people" },
 ];
 
-const emptyLecture: NewLecture = { title: "", description: "", videoUrl: "", videoType: "youtube", durationMinutes: "0", orderIndex: "0", isFreePreview: false, sectionTitle: "" };
+const emptyLecture: NewLecture = { title: "", description: "", videoUrl: "", videoType: "youtube", durationMinutes: "0", orderIndex: "0", isFreePreview: false, sectionTitle: "", subjectKey: "" };
 const TEST_TYPES = ["practice", "test", "pyq", "mock"];
-const emptyTest: NewTestForm = { title: "", description: "", durationMinutes: "60", totalMarks: "100", testType: "practice", folderName: "", difficulty: "moderate", scheduledAt: "" };
+const emptyTest: NewTestForm = { title: "", description: "", durationMinutes: "60", totalMarks: "100", testType: "practice", folderName: "", difficulty: "moderate", scheduledAt: "", subjectKey: "" };
 const emptyQuestion: NewQuestion = { questionText: "", optionA: "", optionB: "", optionC: "", optionD: "", correctOption: "A", explanation: "", topic: "", marks: "4", negativeMarks: "1", imageUrl: "", solutionImageUrl: "", difficulty: "moderate" };
-const emptyMaterial: NewMaterial = { title: "", description: "", fileUrl: "", fileType: "pdf", isFree: false, sectionTitle: "", downloadAllowed: false };
-const emptyLiveClass: NewLiveClass = { title: "", description: "", youtubeUrl: "", scheduledAt: "", isLive: false, isPublic: false, lectureSectionTitle: "Live Class Recordings", lectureSubfolderTitle: "" };
+const emptyMaterial: NewMaterial = { title: "", description: "", fileUrl: "", fileType: "pdf", isFree: false, sectionTitle: "", downloadAllowed: false, subjectKey: "" };
+const emptyLiveClass: NewLiveClass = { title: "", description: "", youtubeUrl: "", scheduledAt: "", isLive: false, isPublic: false, lectureSectionTitle: "Live Class Recordings", lectureSubfolderTitle: "", subjectKey: "" };
+
+const MULTI_SUBJECTS = [
+  { key: "maths", label: "Maths", icon: "calculator" },
+  { key: "english", label: "English", icon: "book" },
+  { key: "science", label: "Science", icon: "flask" },
+  { key: "gk", label: "G.K", icon: "earth" },
+] as const;
 
 const LIVE_RECORDING_ROOT = DEFAULT_LIVE_RECORDING_SECTION;
 
@@ -257,6 +273,7 @@ export default function AdminCourseScreen() {
   const [editForm, setEditForm] = useState<EditCourseForm>({
     title: "", description: "", teacherName: "", price: "0", originalPrice: "0",
     category: "", subject: "", isFree: false, isPublished: true, level: "beginner", durationHours: "0", startDate: "", endDate: "", validityMonths: "",
+    thumbnail: "", courseLanguage: "HINGLISH", batchStatus: "ongoing",
   });
   const [showBulkUpload, setShowBulkUpload] = useState<number | null>(null);
   const [bulkUploadMode, setBulkUploadMode] = useState<"text" | "pdf">("text");
@@ -269,7 +286,8 @@ export default function AdminCourseScreen() {
   // Folder state
   const [showFolderPicker, setShowFolderPicker] = useState<"lecture" | "test" | "material" | null>(null);
   const [newFolderName, setNewFolderName] = useState("");
-  const [openAdminFolder, setOpenAdminFolder] = useState<{ name: string; type: "lecture" | "test" | "material" } | null>(null);
+  const [newFolderParentId, setNewFolderParentId] = useState<number | null>(null);
+  const [openAdminFolder, setOpenAdminFolder] = useState<{ id?: number; name: string; type: "lecture" | "test" | "material" } | null>(null);
   /** Create "parent / child" lecture folder name (matches lecture section_title for recordings) */
   const [showLectureSubfolderModal, setShowLectureSubfolderModal] = useState(false);
   const [lectureSubfolderLeafName, setLectureSubfolderLeafName] = useState("");
@@ -297,6 +315,7 @@ export default function AdminCourseScreen() {
   const [folderEditMaterial, setFolderEditMaterial] = useState<any>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [activeSubjectKey, setActiveSubjectKey] = useState("maths");
   const courseIdNum = Number(id);
   const tabVisible = useDocumentVisibility();
 
@@ -444,9 +463,16 @@ export default function AdminCourseScreen() {
     gcTime: 15 * 60 * 1000,
   });
 
-  const courseLectures = Array.isArray(course?.lectures) ? course.lectures : [];
-  const courseTests = Array.isArray(course?.tests) ? course.tests : [];
-  const courseMaterials = Array.isArray(course?.materials) ? course.materials : [];
+  const allCourseLectures = Array.isArray(course?.lectures) ? course.lectures : [];
+  const allCourseTests = Array.isArray(course?.tests) ? course.tests : [];
+  const allCourseMaterials = Array.isArray(course?.materials) ? course.materials : [];
+  const isMultiSubjectCourse = course?.course_type === "multi_subject";
+  const subjectMatches = (row: { subject_key?: string | null }) =>
+    !isMultiSubjectCourse || String(row.subject_key || "").toLowerCase() === activeSubjectKey;
+  const courseLectures = allCourseLectures.filter(subjectMatches);
+  const courseTests = allCourseTests.filter(subjectMatches);
+  const courseMaterials = allCourseMaterials.filter(subjectMatches);
+  const scopedCourseLiveClasses = courseLiveClasses.filter(subjectMatches);
   const applyDeleteOptimisticUpdate = (entity: "lecture" | "test" | "material", itemId: number) => {
     qc.setQueryData<CourseDetail | undefined>(["/api/courses", String(id)], (prev) => {
       if (!prev) return prev;
@@ -491,8 +517,42 @@ export default function AdminCourseScreen() {
       });
     });
   };
-  const safeFolders = Array.isArray(dbFolders) ? dbFolders : [];
+  const safeFolders = (Array.isArray(dbFolders) ? dbFolders : []).filter((folder: any) => {
+    if (!isMultiSubjectCourse) return true;
+    return String(folder?.subject_key || "").toLowerCase() === activeSubjectKey;
+  });
+  const folderFullName = (folder: any): string => String(folder?.full_name || folder?.name || "").trim();
+  const folderLocalName = (folder: any): string => String(folder?.name || folder?.full_name || "").trim();
+  const findFolderByPath = (name: string, type: "lecture" | "test" | "material") =>
+    safeFolders.find((f: any) => f.type === type && folderFullName(f) === name);
+  const openFolder = (folderName: string, type: "lecture" | "test" | "material") => {
+    const folder = findFolderByPath(folderName, type);
+    setFolderAddMode(false);
+    setOpenAdminFolder({ id: folder?.id, name: folderName, type });
+  };
   const LIVE_ROOT = DEFAULT_LIVE_RECORDING_SECTION;
+  const livePlacementSubjectKey = isMultiSubjectCourse ? (newLiveClass.subjectKey || activeSubjectKey) : "";
+  const livePlacementFolders = (Array.isArray(dbFolders) ? dbFolders : [])
+    .filter((folder: any) => folder.type === "lecture")
+    .filter((folder: any) => !isMultiSubjectCourse || String(folder.subject_key || "").toLowerCase() === livePlacementSubjectKey);
+  const livePlacementRootFolders = livePlacementFolders.filter((folder: any) => !folder.parent_id);
+  const livePlacementChildFolders = (parentName: string) => {
+    const parent = livePlacementFolders.find((folder: any) => folderFullName(folder) === parentName);
+    const byParent = parent?.id ? livePlacementFolders.filter((folder: any) => Number(folder.parent_id || 0) === Number(parent.id)) : [];
+    const prefix = `${parentName} / `;
+    const byPath = livePlacementFolders.filter((folder: any) => {
+      const fullName = folderFullName(folder);
+      if (!fullName.startsWith(prefix)) return false;
+      const rest = fullName.slice(prefix.length);
+      return rest && !rest.includes(" / ");
+    });
+    const map = new Map<string, any>();
+    [...byParent, ...byPath].forEach((folder) => {
+      const fullName = folderFullName(folder);
+      if (fullName) map.set(fullName, folder);
+    });
+    return [...map.values()];
+  };
   const getLectureRootName = (name: string) =>
     name.startsWith(`${LIVE_ROOT} /`) ? LIVE_ROOT : name;
   const getDirectLectureSubfolders = (parentName: string): string[] => {
@@ -508,7 +568,7 @@ export default function AdminCourseScreen() {
       .filter(Boolean);
     const fromFolders = safeFolders
       .filter((f: any) => f.type === "lecture")
-      .map((f: any) => f.name)
+      .map(folderFullName)
       .filter((n: any) => typeof n === "string" && n.startsWith(prefix))
       .map((n: string) => {
         const rest = n.slice(prefix.length);
@@ -521,8 +581,8 @@ export default function AdminCourseScreen() {
 
   const MAX_FOLDER_NAME_LEN = 120;
   const createFolderMutation = useMutation({
-    mutationFn: async ({ name, type }: { name: string; type: string }) => {
-      const res = await apiRequest("POST", `/api/admin/courses/${id}/folders`, { name, type });
+    mutationFn: async ({ name, type, parentId }: { name: string; type: string; parentId?: number | null }) => {
+      const res = await apiRequest("POST", `/api/admin/courses/${id}/folders`, { name, type, parentId: parentId || null, subjectKey: isMultiSubjectCourse ? activeSubjectKey : null });
       return res.json();
     },
     onSuccess: () => {
@@ -575,6 +635,7 @@ export default function AdminCourseScreen() {
         durationMinutes: parseInt(data.durationMinutes) || 0,
         orderIndex: parseInt(data.orderIndex) || 0,
         sectionTitle: data.sectionTitle || null,
+        subjectKey: isMultiSubjectCourse ? activeSubjectKey : (data.subjectKey || null),
       });
     },
     onSuccess: () => {
@@ -626,6 +687,7 @@ export default function AdminCourseScreen() {
         folderName: data.folderName || null,
         difficulty: data.difficulty || "moderate",
         scheduledAt: data.scheduledAt || null,
+        subjectKey: isMultiSubjectCourse ? activeSubjectKey : (data.subjectKey || null),
       });
     },
     onSuccess: () => {
@@ -729,6 +791,7 @@ export default function AdminCourseScreen() {
         title,
         fileUrl,
         sectionTitle: data.sectionTitle || null,
+        subjectKey: isMultiSubjectCourse ? activeSubjectKey : (data.subjectKey || null),
       });
     },
     onSuccess: () => {
@@ -965,12 +1028,21 @@ export default function AdminCourseScreen() {
 
   const addLiveClassMutation = useMutation({
     mutationFn: async (data: NewLiveClass) => {
+      const autoFolderName = buildRecordingLectureSectionTitle(data.lectureSectionTitle, data.lectureSubfolderTitle, null).trim();
+      if (autoFolderName) {
+        await apiRequest("POST", `/api/admin/courses/${id}/folders`, {
+          name: autoFolderName,
+          type: "lecture",
+          subjectKey: isMultiSubjectCourse ? (data.subjectKey || activeSubjectKey) : null,
+        }).catch(() => {});
+      }
       await apiRequest("POST", "/api/admin/live-classes", {
         ...data,
         courseId: parseInt(id),
         scheduledAt: data.scheduledAt ? new Date(data.scheduledAt).getTime() : Date.now(),
         lectureSectionTitle: (data.lectureSectionTitle || "").trim() || undefined,
         lectureSubfolderTitle: (data.lectureSubfolderTitle || "").trim() || undefined,
+        subjectKey: isMultiSubjectCourse ? (data.subjectKey || activeSubjectKey) : null,
       });
     },
     onSuccess: () => {
@@ -1022,6 +1094,9 @@ export default function AdminCourseScreen() {
         startDate: data.startDate || null,
         endDate: data.endDate || null,
         validityMonths: data.validityMonths || null,
+        thumbnail: isMultiSubjectCourse ? data.thumbnail || null : undefined,
+        courseLanguage: isMultiSubjectCourse ? data.courseLanguage || null : undefined,
+        batchStatus: isMultiSubjectCourse ? data.batchStatus || null : undefined,
       });
     },
     onSuccess: () => {
@@ -1051,6 +1126,9 @@ export default function AdminCourseScreen() {
         startDate: (course as any).start_date || "",
         endDate: (course as any).end_date || "",
         validityMonths: String((course as any).validity_months ?? ""),
+        thumbnail: (course as any).thumbnail || "",
+        courseLanguage: (course as any).course_language || "HINGLISH",
+        batchStatus: (course as any).batch_status || "ongoing",
       });
       setShowEditCourse(true);
     }
@@ -1124,6 +1202,24 @@ export default function AdminCourseScreen() {
           </Pressable>
         </View>
 
+        {isMultiSubjectCourse && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 12, gap: 8 }}>
+            {MULTI_SUBJECTS.map((subject) => {
+              const selected = activeSubjectKey === subject.key;
+              return (
+                <Pressable
+                  key={subject.key}
+                  onPress={() => setActiveSubjectKey(subject.key)}
+                  style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, backgroundColor: selected ? "#fff" : "rgba(255,255,255,0.12)" }}
+                >
+                  <Ionicons name={subject.icon as keyof typeof Ionicons.glyphMap} size={15} color={selected ? Colors.light.primary : "#fff"} />
+                  <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: selected ? Colors.light.primary : "#fff" }}>{subject.label}</Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        )}
+
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsRow}>
           {ADMIN_COURSE_TABS.filter(t => !isTestSeries || t.key === "tests" || t.key === "enrolled").map((tab) => (
             <Pressable
@@ -1144,7 +1240,7 @@ export default function AdminCourseScreen() {
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>Lectures ({courseLectures.length})</Text>
               <View style={{ flexDirection: "row", gap: 8 }}>
-                <Pressable style={[styles.addBtn, { backgroundColor: "#7C3AED" }]} onPress={() => setShowFolderPicker("lecture")}>
+                <Pressable style={[styles.addBtn, { backgroundColor: "#7C3AED" }]} onPress={() => { setNewFolderParentId(null); setShowFolderPicker("lecture"); }}>
                   <Ionicons name="folder-open" size={16} color="#fff" />
                   <Text style={styles.addBtnText}>Folder</Text>
                 </Pressable>
@@ -1163,7 +1259,7 @@ export default function AdminCourseScreen() {
               const lectureFolderNames = sortFolderNamesByOrder(
                 [...new Set([
                   ...courseLectures.map((l: any) => l.section_title).filter(Boolean),
-                  ...safeFolders.filter((f: any) => f.type === "lecture").map((f: any) => f.name),
+                  ...safeFolders.filter((f: any) => f.type === "lecture" && !f.parent_id).map(folderFullName),
                 ].map((n: string) => getLectureRootName(n)))],
                 "lecture"
               );
@@ -1177,12 +1273,12 @@ export default function AdminCourseScreen() {
                 const sec = typeof l.section_title === "string" ? l.section_title : "";
                 return sec === folderName || sec.startsWith(`${folderName} /`);
               }).length;
-              const folder = safeFolders.find((f: any) => f.name === folderName && f.type === "lecture");
+              const folder = findFolderByPath(folderName, "lecture");
               return (
                 <SortableItem key={folderName} id={folderName}>
                 <View style={[styles.itemCard, { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: folder?.is_hidden ? "#F3F4F6" : "#EEF2FF" }]}>
                   <Pressable style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 12 }}
-                    onPress={() => { setFolderAddMode(false); setOpenAdminFolder({ name: folderName, type: "lecture" }); }}>
+                    onPress={() => openFolder(folderName, "lecture")}>
                     <View style={{ width: 40, height: 40, borderRadius: 10, backgroundColor: Colors.light.primary + "20", alignItems: "center", justifyContent: "center" }}>
                       <Ionicons name={folder?.is_hidden ? "folder-outline" : "folder"} size={22} color={folder?.is_hidden ? Colors.light.textMuted : Colors.light.primary} />
                     </View>
@@ -1193,7 +1289,7 @@ export default function AdminCourseScreen() {
                     <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
                   </Pressable>
                   <Pressable style={{ padding: 8 }} onPress={async () => {
-                    let f = safeFolders.find((df: any) => df.name === folderName && df.type === "lecture");
+                    let f = findFolderByPath(folderName, "lecture");
                     if (!f) { const r = await apiRequest("POST", `/api/admin/courses/${id}/folders`, { name: folderName, type: "lecture" }); f = await r.json(); refetchFolders(); }
                     setFolderActionSheet(f);
                   }}>
@@ -1274,7 +1370,7 @@ export default function AdminCourseScreen() {
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>Tests ({courseTests.length})</Text>
               <View style={{ flexDirection: "row", gap: 8 }}>
-                <Pressable style={[styles.addBtn, { backgroundColor: "#7C3AED" }]} onPress={() => setShowFolderPicker("test")}>
+                <Pressable style={[styles.addBtn, { backgroundColor: "#7C3AED" }]} onPress={() => { setNewFolderParentId(null); setShowFolderPicker("test"); }}>
                   <Ionicons name="folder-open" size={16} color="#fff" />
                   <Text style={styles.addBtnText}>Folder</Text>
                 </Pressable>
@@ -1288,8 +1384,8 @@ export default function AdminCourseScreen() {
             {(() => {
               const testFolderNames = sortFolderNamesByOrder(
                 [...new Set([
-                  ...courseTests.map((t: any) => t.folder_name).filter(Boolean),
-                  ...safeFolders.filter((f: any) => f.type === "test").map((f: any) => f.name),
+                  ...courseTests.map((t: any) => String(t.folder_name || "").split(" / ")[0]).filter(Boolean),
+                  ...safeFolders.filter((f: any) => f.type === "test" && !f.parent_id).map(folderFullName),
                 ])],
                 "test"
               );
@@ -1299,13 +1395,13 @@ export default function AdminCourseScreen() {
                 onReorder={(a, o) => reorderFoldersByDrag("test", testFolderNames, a, o)}
               >
               {testFolderNames.map((folderName: any) => {
-              const count = courseTests.filter((t: any) => t.folder_name === folderName).length;
-              const folder = safeFolders.find((f: any) => f.name === folderName && f.type === "test");
+              const count = courseTests.filter((t: any) => t.folder_name === folderName || String(t.folder_name || "").startsWith(`${folderName} /`)).length;
+              const folder = findFolderByPath(folderName, "test");
               return (
                 <SortableItem key={folderName} id={folderName}>
                 <View style={[styles.itemCard, { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: folder?.is_hidden ? "#F3F4F6" : "#EEF2FF" }]}>
                   <Pressable style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 12 }}
-                    onPress={() => { setFolderAddMode(false); setOpenAdminFolder({ name: folderName, type: "test" }); }}>
+                    onPress={() => openFolder(folderName, "test")}>
                     <View style={{ width: 40, height: 40, borderRadius: 10, backgroundColor: Colors.light.primary + "20", alignItems: "center", justifyContent: "center" }}>
                       <Ionicons name={folder?.is_hidden ? "folder-outline" : "folder"} size={22} color={folder?.is_hidden ? Colors.light.textMuted : Colors.light.primary} />
                     </View>
@@ -1316,7 +1412,7 @@ export default function AdminCourseScreen() {
                     <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
                   </Pressable>
                   <Pressable style={{ padding: 8 }} onPress={async () => {
-                    let f = safeFolders.find((df: any) => df.name === folderName && df.type === "test");
+                    let f = findFolderByPath(folderName, "test");
                     if (!f) { const r = await apiRequest("POST", `/api/admin/courses/${id}/folders`, { name: folderName, type: "test" }); f = await r.json(); refetchFolders(); }
                     setFolderActionSheet(f);
                   }}>
@@ -1408,7 +1504,7 @@ export default function AdminCourseScreen() {
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>Materials ({courseMaterials.length})</Text>
               <View style={{ flexDirection: "row", gap: 8 }}>
-                <Pressable style={[styles.addBtn, { backgroundColor: "#7C3AED" }]} onPress={() => setShowFolderPicker("material")}>
+                <Pressable style={[styles.addBtn, { backgroundColor: "#7C3AED" }]} onPress={() => { setNewFolderParentId(null); setShowFolderPicker("material"); }}>
                   <Ionicons name="folder-open" size={16} color="#fff" />
                   <Text style={styles.addBtnText}>Folder</Text>
                 </Pressable>
@@ -1426,8 +1522,8 @@ export default function AdminCourseScreen() {
             {(() => {
               const materialFolderNames = sortFolderNamesByOrder(
                 [...new Set([
-                  ...courseMaterials.map((m: any) => m.section_title).filter(Boolean),
-                  ...safeFolders.filter((f: any) => f.type === "material").map((f: any) => f.name),
+                  ...courseMaterials.map((m: any) => String(m.section_title || "").split(" / ")[0]).filter(Boolean),
+                  ...safeFolders.filter((f: any) => f.type === "material" && !f.parent_id).map(folderFullName),
                 ])],
                 "material"
               );
@@ -1437,13 +1533,13 @@ export default function AdminCourseScreen() {
                 onReorder={(a, o) => reorderFoldersByDrag("material", materialFolderNames, a, o)}
               >
               {materialFolderNames.map((folderName: any) => {
-              const count = courseMaterials.filter((m: any) => m.section_title === folderName).length;
-              const folder = safeFolders.find((f: any) => f.name === folderName && f.type === "material");
+              const count = courseMaterials.filter((m: any) => m.section_title === folderName || String(m.section_title || "").startsWith(`${folderName} /`)).length;
+              const folder = findFolderByPath(folderName, "material");
               return (
                 <SortableItem key={folderName} id={folderName}>
                 <View style={[styles.itemCard, { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: folder?.is_hidden ? "#F3F4F6" : "#FFF1F2" }]}>
                   <Pressable style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 12 }}
-                    onPress={() => { setFolderAddMode(false); setOpenAdminFolder({ name: folderName, type: "material" }); }}>
+                    onPress={() => openFolder(folderName, "material")}>
                     <View style={{ width: 40, height: 40, borderRadius: 10, backgroundColor: "#DC262620", alignItems: "center", justifyContent: "center" }}>
                       <Ionicons name={folder?.is_hidden ? "folder-outline" : "folder"} size={22} color={folder?.is_hidden ? Colors.light.textMuted : "#DC2626"} />
                     </View>
@@ -1454,7 +1550,7 @@ export default function AdminCourseScreen() {
                     <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
                   </Pressable>
                   <Pressable style={{ padding: 8 }} onPress={async () => {
-                    let f = safeFolders.find((df: any) => df.name === folderName && df.type === "material");
+                    let f = findFolderByPath(folderName, "material");
                     if (!f) { const r = await apiRequest("POST", `/api/admin/courses/${id}/folders`, { name: folderName, type: "material" }); f = await r.json(); refetchFolders(); }
                     setFolderActionSheet(f);
                   }}>
@@ -1537,21 +1633,21 @@ export default function AdminCourseScreen() {
         {effectiveTab === "live" && (
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Live Classes ({courseLiveClasses.length})</Text>
+              <Text style={styles.sectionTitle}>Live Classes ({scopedCourseLiveClasses.length})</Text>
             </View>
-            {courseLivePending && courseLiveClasses.length === 0 ? (
+            {courseLivePending && scopedCourseLiveClasses.length === 0 ? (
               <View style={{ alignItems: "center", justifyContent: "center", paddingVertical: 48, gap: 10 }}>
                 <ActivityIndicator size="large" color={Colors.light.primary} />
                 <Text style={{ fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.textMuted }}>Loading schedule…</Text>
               </View>
             ) : null}
-            {!courseLivePending && courseLiveClasses.length === 0 && (
+            {!courseLivePending && scopedCourseLiveClasses.length === 0 && (
               <View style={styles.infoCard}>
                 <Ionicons name="information-circle" size={16} color={Colors.light.primary} />
                 <Text style={styles.infoText}>Schedule live classes from the Courses tab → Upcoming Class panel in the admin dashboard.</Text>
               </View>
             )}
-            {courseLiveClasses.map((lc) => (
+            {scopedCourseLiveClasses.map((lc) => (
               <View key={lc.id} style={[styles.itemCard, { gap: 6 }]}>
                 <View style={styles.itemRow}>
                   <View style={[styles.itemIcon, { backgroundColor: lc.is_live ? "#FEE2E2" : lc.is_completed ? "#F3F4F6" : Colors.light.secondary }]}>
@@ -1914,6 +2010,22 @@ export default function AdminCourseScreen() {
               <View style={{ flex: 1 }}>
                 <Text style={{ fontSize: 15, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Edit Folder</Text>
                 <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>Rename this folder</Text>
+              </View>
+            </Pressable>
+            <Pressable
+              style={{ flexDirection: "row", alignItems: "center", gap: 12, padding: 16, borderRadius: 12, backgroundColor: "#F0FDF4", marginBottom: 8 }}
+              onPress={() => {
+                if (!folderActionSheet) return;
+                setNewFolderName("");
+                setNewFolderParentId(folderActionSheet.id);
+                setShowFolderPicker(folderActionSheet.type);
+                setFolderActionSheet(null);
+              }}
+            >
+              <Ionicons name="folder-open" size={20} color="#16A34A" />
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 15, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>Create Subfolder</Text>
+                <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>Add a folder inside this folder</Text>
               </View>
             </Pressable>
             <Pressable
@@ -2341,6 +2453,58 @@ export default function AdminCourseScreen() {
               <FormField label="YouTube Live/Stream URL *" placeholder="Paste YouTube live stream share link here" value={newLiveClass.youtubeUrl} onChangeText={(v) => setNewLiveClass(p => ({ ...p, youtubeUrl: v }))} />
               <FormField label="Description" placeholder="What will be covered" value={newLiveClass.description} onChangeText={(v) => setNewLiveClass(p => ({ ...p, description: v }))} />
               <FormField label="Scheduled Date & Time" placeholder="2026-03-15 18:00" value={newLiveClass.scheduledAt} onChangeText={(v) => setNewLiveClass(p => ({ ...p, scheduledAt: v }))} />
+              {isMultiSubjectCourse && (
+                <View style={{ gap: 8, padding: 10, borderRadius: 12, backgroundColor: "#F8FAFC", borderWidth: 1, borderColor: Colors.light.border, marginBottom: 10 }}>
+                  <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Subject, folder and subfolder</Text>
+                  <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                    {MULTI_SUBJECTS.map((subject) => (
+                      <Pressable
+                        key={subject.key}
+                        onPress={() => setNewLiveClass((p) => ({ ...p, subjectKey: subject.key, lectureSectionTitle: "Live Class Recordings", lectureSubfolderTitle: "" }))}
+                        style={{ flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 999, backgroundColor: (newLiveClass.subjectKey || activeSubjectKey) === subject.key ? Colors.light.primary : "#EEF2FF" }}
+                      >
+                        <Ionicons name={subject.icon as keyof typeof Ionicons.glyphMap} size={14} color={(newLiveClass.subjectKey || activeSubjectKey) === subject.key ? "#fff" : Colors.light.primary} />
+                        <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: (newLiveClass.subjectKey || activeSubjectKey) === subject.key ? "#fff" : Colors.light.primary }}>{subject.label}</Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                  <View style={{ gap: 6 }}>
+                    <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Folder</Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                      <Pressable onPress={() => setNewLiveClass((p) => ({ ...p, lectureSectionTitle: "", lectureSubfolderTitle: "" }))} style={{ paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8, backgroundColor: !newLiveClass.lectureSectionTitle ? Colors.light.primary : "#E5E7EB" }}>
+                        <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: !newLiveClass.lectureSectionTitle ? "#fff" : Colors.light.text }}>Default</Text>
+                      </Pressable>
+                      {livePlacementRootFolders.map((folder: any) => {
+                        const name = folderFullName(folder);
+                        return (
+                          <Pressable key={folder.id || name} onPress={() => setNewLiveClass((p) => ({ ...p, lectureSectionTitle: name, lectureSubfolderTitle: "" }))} style={{ paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8, backgroundColor: newLiveClass.lectureSectionTitle === name ? Colors.light.primary : "#E5E7EB" }}>
+                            <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: newLiveClass.lectureSectionTitle === name ? "#fff" : Colors.light.text }}>{folder.name || name}</Text>
+                          </Pressable>
+                        );
+                      })}
+                    </ScrollView>
+                  </View>
+                  {newLiveClass.lectureSectionTitle ? (
+                    <View style={{ gap: 6 }}>
+                      <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Subfolder</Text>
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                        <Pressable onPress={() => setNewLiveClass((p) => ({ ...p, lectureSubfolderTitle: "" }))} style={{ paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8, backgroundColor: !newLiveClass.lectureSubfolderTitle ? Colors.light.primary : "#E5E7EB" }}>
+                          <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: !newLiveClass.lectureSubfolderTitle ? "#fff" : Colors.light.text }}>No Subfolder</Text>
+                        </Pressable>
+                        {livePlacementChildFolders(newLiveClass.lectureSectionTitle).map((folder: any) => {
+                          const fullName = folderFullName(folder);
+                          const localName = String(folder.name || fullName.replace(`${newLiveClass.lectureSectionTitle} / `, ""));
+                          return (
+                            <Pressable key={folder.id || fullName} onPress={() => setNewLiveClass((p) => ({ ...p, lectureSubfolderTitle: localName }))} style={{ paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8, backgroundColor: newLiveClass.lectureSubfolderTitle === localName ? Colors.light.primary : "#E5E7EB" }}>
+                              <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: newLiveClass.lectureSubfolderTitle === localName ? "#fff" : Colors.light.text }}>{localName}</Text>
+                            </Pressable>
+                          );
+                        })}
+                      </ScrollView>
+                    </View>
+                  ) : null}
+                </View>
+              )}
               <FormField
                 label="Main recording section"
                 placeholder="Default: Live Class Recordings"
@@ -2389,6 +2553,29 @@ export default function AdminCourseScreen() {
               <FormField label="Category *" placeholder="e.g., NDA, CDS, AFCAT" value={editForm.category} onChangeText={(v) => setEditForm(p => ({ ...p, category: v }))} />
               <FormField label="Subject" placeholder="e.g., Mathematics, English, GK" value={editForm.subject} onChangeText={(v) => setEditForm(p => ({ ...p, subject: v }))} />
               <FormField label="Teacher Name" placeholder="e.g., Pankaj Sir" value={editForm.teacherName} onChangeText={(v) => setEditForm(p => ({ ...p, teacherName: v }))} />
+              {isMultiSubjectCourse && (
+                <>
+                  <FormField label="Course Card Banner Image URL" placeholder="https://... (shown at top of multi-subject card)" value={editForm.thumbnail} onChangeText={(v) => setEditForm(p => ({ ...p, thumbnail: v }))} />
+                  <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: Colors.light.textMuted, marginTop: -8, marginBottom: 10 }}>
+                    Recommended banner size: 1200 × 450 px (8:3 ratio). This image appears at the top of the vertical multi-subject course card.
+                  </Text>
+                  <FormField label="Language" placeholder="e.g., HINGLISH, Hindi, English" value={editForm.courseLanguage} onChangeText={(v) => setEditForm(p => ({ ...p, courseLanguage: v }))} />
+                  <View style={styles.formField}>
+                    <Text style={styles.formLabel}>Batch Status</Text>
+                    <View style={{ flexDirection: "row", gap: 8 }}>
+                      {(["ongoing", "recorded", "completed"] as const).map((status) => (
+                        <Pressable
+                          key={status}
+                          onPress={() => setEditForm((p) => ({ ...p, batchStatus: status }))}
+                          style={{ flex: 1, paddingVertical: 9, borderRadius: 10, borderWidth: 1.5, borderColor: editForm.batchStatus === status ? Colors.light.primary : Colors.light.border, backgroundColor: editForm.batchStatus === status ? "#EEF2FF" : "transparent", alignItems: "center" }}
+                        >
+                          <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: editForm.batchStatus === status ? Colors.light.primary : Colors.light.textMuted }}>{status.toUpperCase()}</Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  </View>
+                </>
+              )}
               <FormField label="Level" placeholder="beginner / intermediate / advanced" value={editForm.level} onChangeText={(v) => setEditForm(p => ({ ...p, level: v }))} />
               {!isTestSeries && (
                 <>
@@ -2429,7 +2616,7 @@ export default function AdminCourseScreen() {
           <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Manage Folders</Text>
-              <Pressable onPress={() => { setShowFolderPicker(null); setNewFolderName(""); }}>
+              <Pressable onPress={() => { setShowFolderPicker(null); setNewFolderName(""); setNewFolderParentId(null); }}>
                 <Ionicons name="close" size={24} color={Colors.light.text} />
               </Pressable>
             </View>
@@ -2439,18 +2626,24 @@ export default function AdminCourseScreen() {
                   key={folder.id}
                   style={[styles.itemCard, { flexDirection: "row", alignItems: "center", padding: 12, gap: 10, marginBottom: 8 }]}
                   onPress={() => {
-                    setOpenAdminFolder({ name: folder.name, type: showFolderPicker! });
+                    setOpenAdminFolder({ id: folder.id, name: folderFullName(folder), type: showFolderPicker! });
                     setShowFolderPicker(null);
                     setNewFolderName("");
+                    setNewFolderParentId(null);
                   }}
                 >
                   <Ionicons name="folder" size={20} color={Colors.light.primary} />
-                  <Text style={{ flex: 1, fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>{folder.name}</Text>
+                  <Text style={{ flex: 1, fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>{folderFullName(folder)}</Text>
                   <Ionicons name="chevron-forward" size={16} color={Colors.light.textMuted} />
                 </Pressable>
               ))}
               <View style={styles.formField}>
-                <Text style={styles.formLabel}>New Folder Name</Text>
+                <Text style={styles.formLabel}>{newFolderParentId ? "New Subfolder Name" : "New Folder Name"}</Text>
+                {newFolderParentId ? (
+                  <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: Colors.light.textMuted, marginBottom: 6 }}>
+                    Parent: {openAdminFolder?.name || folderFullName(folderActionSheet)}
+                  </Text>
+                ) : null}
                 <TextInput
                   style={styles.formInput}
                   placeholder="e.g., Chapter 1, Algebra"
@@ -2466,10 +2659,11 @@ export default function AdminCourseScreen() {
                 const name = newFolderName.trim();
                 const folderType = showFolderPicker!;
                 if (!name) return;
-                await createFolderMutation.mutateAsync({ name, type: folderType });
-                setOpenAdminFolder({ name, type: folderType });
+                const created = await createFolderMutation.mutateAsync({ name, type: folderType, parentId: newFolderParentId });
+                setOpenAdminFolder({ id: created?.id, name: created?.full_name || (newFolderParentId && openAdminFolder ? `${openAdminFolder.name} / ${name}` : name), type: folderType });
                 setShowFolderPicker(null);
                 setNewFolderName("");
+                setNewFolderParentId(null);
               }}
               disabled={!newFolderName.trim()}
               loading={createFolderMutation.isPending}
@@ -2485,9 +2679,19 @@ export default function AdminCourseScreen() {
             <Pressable
               style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" }}
               onPress={() => {
+                const current = openAdminFolder ? findFolderByPath(openAdminFolder.name, openAdminFolder.type) : null;
+                if (current?.parent_id) {
+                  const parent = safeFolders.find((f: any) => Number(f.id) === Number(current.parent_id));
+                  if (parent) {
+                    setOpenAdminFolder({ id: parent.id, name: folderFullName(parent), type: openAdminFolder!.type });
+                    setFolderAddModal(false);
+                    return;
+                  }
+                }
                 if (openAdminFolder?.type === "lecture" && openAdminFolder.name.includes(" / ")) {
                   const parent = openAdminFolder.name.split(" / ").slice(0, -1).join(" / ");
-                  setOpenAdminFolder({ name: parent, type: "lecture" });
+                  const parentFolder = findFolderByPath(parent, "lecture");
+                  setOpenAdminFolder({ id: parentFolder?.id, name: parent, type: "lecture" });
                   setFolderAddModal(false);
                   return;
                 }
@@ -2519,6 +2723,17 @@ export default function AdminCourseScreen() {
                 </Pressable>
               )}
               <Pressable
+                style={{ flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "rgba(255,255,255,0.12)", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7, borderWidth: 1, borderColor: "rgba(255,255,255,0.25)" }}
+                onPress={() => {
+                  setNewFolderName("");
+                  setNewFolderParentId(openAdminFolder?.id || findFolderByPath(openAdminFolder?.name || "", openAdminFolder?.type || "lecture")?.id || null);
+                  setShowFolderPicker(openAdminFolder?.type || null);
+                }}
+              >
+                <Ionicons name="folder-open" size={16} color="#fff" />
+                <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#fff" }}>Subfolder</Text>
+              </Pressable>
+              <Pressable
                 style={{ flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "rgba(255,255,255,0.15)", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 }}
                 onPress={() => {
                   if (openAdminFolder?.type === "test") setNewTest({ ...emptyTest, folderName: openAdminFolder!.name });
@@ -2535,6 +2750,31 @@ export default function AdminCourseScreen() {
             </View>
           </LinearGradient>
           <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: bottomPadding + 40 }}>
+              {openAdminFolder && (() => {
+                const parentId = openAdminFolder.id || findFolderByPath(openAdminFolder.name, openAdminFolder.type)?.id;
+                const childFolders = safeFolders.filter((f: any) => f.type === openAdminFolder.type && Number(f.parent_id || 0) === Number(parentId || 0));
+                if (!parentId || childFolders.length === 0) return null;
+                return (
+                  <View style={{ marginBottom: 12 }}>
+                    {childFolders.map((child: any) => (
+                      <Pressable
+                        key={child.id}
+                        style={[styles.itemCard, { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: child?.is_hidden ? "#F3F4F6" : "#EEF2FF" }]}
+                        onPress={() => setOpenAdminFolder({ id: child.id, name: folderFullName(child), type: openAdminFolder.type })}
+                      >
+                        <View style={{ width: 40, height: 40, borderRadius: 10, backgroundColor: Colors.light.primary + "20", alignItems: "center", justifyContent: "center" }}>
+                          <Ionicons name={child?.is_hidden ? "folder-outline" : "folder"} size={22} color={child?.is_hidden ? Colors.light.textMuted : Colors.light.primary} />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ fontSize: 14, fontFamily: "Inter_700Bold", color: child?.is_hidden ? Colors.light.textMuted : Colors.light.text }}>{folderLocalName(child)}{child?.is_hidden ? " (Hidden)" : ""}</Text>
+                          <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>{folderFullName(child)}</Text>
+                        </View>
+                        <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
+                      </Pressable>
+                    ))}
+                  </View>
+                );
+              })()}
               {openAdminFolder?.type === "test" && (
                 <>
                   {course?.tests?.filter((test: any) => test.folder_name === openAdminFolder.name).length === 0 && !folderAddModal && (

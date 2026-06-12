@@ -60,7 +60,7 @@ export function registerAdminLectureRoutes({
 
   app.post("/api/admin/lectures", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { courseId, title, description, transcript, videoUrl, fileUrl, videoType, pdfUrl, durationMinutes, orderIndex, isFreePreview, sectionTitle, lectureSubfolderTitle, downloadAllowed } =
+      const { courseId, title, description, transcript, videoUrl, fileUrl, videoType, pdfUrl, durationMinutes, orderIndex, isFreePreview, sectionTitle, lectureSubfolderTitle, downloadAllowed, subjectKey } =
         req.body;
       const parsedCourseId = Number(courseId);
       if (!Number.isFinite(parsedCourseId) || parsedCourseId <= 0) {
@@ -84,9 +84,10 @@ export function registerAdminLectureRoutes({
         lectureSubfolderTitle,
       );
       const transcriptText = transcript != null ? String(transcript) : "";
+      const normalizedSubjectKey = typeof subjectKey === "string" && subjectKey.trim() ? subjectKey.trim().toLowerCase() : null;
       const result = await db.query(
-        `INSERT INTO lectures (course_id, title, description, transcript, video_url, video_type, pdf_url, duration_minutes, order_index, is_free_preview, section_title, download_allowed, created_at) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
+        `INSERT INTO lectures (course_id, title, description, transcript, video_url, video_type, pdf_url, duration_minutes, order_index, is_free_preview, section_title, download_allowed, subject_key, created_at) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *`,
         [
           parsedCourseId,
           String(title).trim(),
@@ -100,6 +101,7 @@ export function registerAdminLectureRoutes({
           isFreePreview || false,
           normalizedSectionTitle,
           downloadAllowed || false,
+          normalizedSubjectKey,
           Date.now(),
         ]
       );
@@ -124,15 +126,16 @@ export function registerAdminLectureRoutes({
 
   app.put("/api/admin/lectures/:id", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { title, description, transcript, videoUrl, videoType, durationMinutes, orderIndex, isFreePreview, sectionTitle, lectureSubfolderTitle, downloadAllowed } = req.body;
+      const { title, description, transcript, videoUrl, videoType, durationMinutes, orderIndex, isFreePreview, sectionTitle, lectureSubfolderTitle, downloadAllowed, subjectKey } = req.body;
       const normalizedSectionTitle = resolveLectureSectionTitle(
         sectionTitle,
         lectureSubfolderTitle,
       );
       const patchTranscript = Object.prototype.hasOwnProperty.call(req.body, "transcript");
       const transcriptVal = patchTranscript ? String(transcript ?? "") : "";
+      const normalizedSubjectKey = typeof subjectKey === "string" && subjectKey.trim() ? subjectKey.trim().toLowerCase() : null;
       await db.query(
-        `UPDATE lectures SET title=$1, description=$2, transcript = CASE WHEN $11::boolean THEN $3::text ELSE transcript END, video_url=$4, video_type=$5, duration_minutes=$6, order_index=$7, is_free_preview=$8, section_title=$9, download_allowed=$10 WHERE id=$12`,
+        `UPDATE lectures SET title=$1, description=$2, transcript = CASE WHEN $11::boolean THEN $3::text ELSE transcript END, video_url=$4, video_type=$5, duration_minutes=$6, order_index=$7, is_free_preview=$8, section_title=$9, download_allowed=$10, subject_key=$13 WHERE id=$12`,
         [
           title,
           description || "",
@@ -146,6 +149,7 @@ export function registerAdminLectureRoutes({
           downloadAllowed || false,
           patchTranscript,
           req.params.id,
+          normalizedSubjectKey,
         ]
       );
       if (downloadAllowed === false) {
