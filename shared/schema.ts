@@ -224,6 +224,18 @@ export const notifications = pgTable("notifications", {
   createdAt: bigint("created_at", { mode: "number" }),
 });
 
+export const webPushSubscriptions = pgTable("web_push_subscriptions", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  endpoint: text("endpoint").notNull().unique(),
+  p256dh: text("p256dh").notNull(),
+  auth: text("auth").notNull(),
+  userAgent: text("user_agent"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  lastSeenAt: bigint("last_seen_at", { mode: "number" }).notNull(),
+});
+
 export const liveClasses = pgTable("live_classes", {
   id: serial("id").primaryKey(),
   title: text("title").notNull(),
