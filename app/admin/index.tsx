@@ -1085,6 +1085,10 @@ export default function AdminDashboard() {
 
   const standaloneFolderFullName = (folder: any): string => String(folder?.full_name || folder?.name || "").trim();
   const standaloneFolderLocalName = (folder: any): string => String(folder?.name || folder?.full_name || "").trim();
+  const findStandaloneFolderById = (folderId?: number | null) => {
+    if (!folderId) return null;
+    return [...testFolders, ...materialFolders, ...missionFolders].find((folder: any) => Number(folder.id) === Number(folderId)) || null;
+  };
 
   const updateStandaloneFolderMutation = useMutation({
     mutationFn: async (data: any) => {
@@ -6316,7 +6320,7 @@ export default function AdminDashboard() {
               <Text style={styles.formLabel}>{newStandaloneFolderParentId ? "Subfolder Name *" : "Folder Name *"}</Text>
               {newStandaloneFolderParentId ? (
                 <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: Colors.light.textMuted, marginBottom: 6 }}>
-                  Parent: {openFolderView?.folder ? standaloneFolderFullName(openFolderView.folder) : standaloneFolderFullName(standalonefolderActionSheet)}
+                  Parent: {standaloneFolderFullName(findStandaloneFolderById(newStandaloneFolderParentId)) || (openFolderView?.folder ? standaloneFolderFullName(openFolderView.folder) : standaloneFolderFullName(standalonefolderActionSheet))}
                 </Text>
               ) : null}
               <TextInput style={styles.formInput} placeholder="e.g., Chapter 1, Algebra" placeholderTextColor={Colors.light.textMuted} value={newFolderNameInput} onChangeText={setNewFolderNameInput} autoFocus />
@@ -6340,12 +6344,28 @@ export default function AdminDashboard() {
               disabled={!newFolderNameInput.trim() || createStandaloneFolderMutation.isPending}
               onPress={async () => {
                 if (!newFolderNameInput.trim() || !showCreateFolderModal) return;
-                await createStandaloneFolderMutation.mutateAsync({
-                  name: newFolderNameInput.trim(),
+                const name = newFolderNameInput.trim();
+                const folderType = showCreateFolderModal;
+                const parentFolder = findStandaloneFolderById(newStandaloneFolderParentId);
+                const parentName = parentFolder ? standaloneFolderFullName(parentFolder) : "";
+                const created = await createStandaloneFolderMutation.mutateAsync({
+                  name,
                   type: showCreateFolderModal,
                   parentId: newStandaloneFolderParentId,
                   validityMonths: showCreateFolderModal === "test" ? newFolderValidityMonths : undefined,
                 });
+                if (newStandaloneFolderParentId) {
+                  setOpenFolderView({
+                    folder: {
+                      ...created,
+                      type: folderType,
+                      parent_id: created?.parent_id ?? newStandaloneFolderParentId,
+                      full_name: created?.full_name || (parentName ? `${parentName} / ${name}` : name),
+                      name: created?.name || name,
+                    },
+                    type: folderType,
+                  });
+                }
                 setShowCreateFolderModal(null);
                 setNewFolderNameInput("");
                 setNewStandaloneFolderParentId(null);

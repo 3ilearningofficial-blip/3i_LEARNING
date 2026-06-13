@@ -184,7 +184,8 @@ export function registerAdminCourseManagementRoutes({
       }
 
       const folder = await createCourseFolderPath(db, req.params.id, normalizedType, normalizedName, normalizedParentId, subjectKey);
-      res.json(folder);
+      const fullName = await resolveCourseFolderFullName(db, folder?.id, req.params.id);
+      res.json({ ...folder, full_name: fullName || folder?.name });
     } catch {
       res.status(500).json({ message: "Failed to create folder" });
     }

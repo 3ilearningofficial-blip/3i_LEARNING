@@ -208,7 +208,8 @@ export function registerStandaloneFolderRoutes({
       const folder = await createStandaloneFolderPath(db, normalizedType, normalizedName, normalizedParentId, {
         category, price, originalPrice, isFree, description, validityMonths,
       });
-      res.json(folder);
+      const fullName = await resolveStandaloneFolderFullName(db, folder?.id);
+      res.json({ ...folder, full_name: fullName || folder?.name });
     } catch {
       res.status(500).json({ message: "Failed to create folder" });
     }

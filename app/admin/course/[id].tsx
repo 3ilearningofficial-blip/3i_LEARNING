@@ -604,6 +604,8 @@ export default function AdminCourseScreen() {
   });
   const folderFullName = (folder: any): string => String(folder?.full_name || folder?.name || "").trim();
   const folderLocalName = (folder: any): string => String(folder?.name || folder?.full_name || "").trim();
+  const findFolderById = (folderId?: number | null) =>
+    folderId ? safeFolders.find((f: any) => Number(f.id) === Number(folderId)) : null;
   const findFolderByPath = (name: string, type: "lecture" | "test" | "material") =>
     safeFolders.find((f: any) => f.type === type && folderFullName(f) === name);
   const openFolder = (folderName: string, type: "lecture" | "test" | "material") => {
@@ -2885,7 +2887,7 @@ export default function AdminCourseScreen() {
                 <Text style={styles.formLabel}>{newFolderParentId ? "New Subfolder Name" : "New Folder Name"}</Text>
                 {newFolderParentId ? (
                   <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: Colors.light.textMuted, marginBottom: 6 }}>
-                    Parent: {openAdminFolder?.name || folderFullName(folderActionSheet)}
+                    Parent: {openAdminFolder?.name || folderFullName(findFolderById(newFolderParentId)) || folderFullName(folderActionSheet)}
                   </Text>
                 ) : null}
                 <TextInput
@@ -2903,8 +2905,10 @@ export default function AdminCourseScreen() {
                 const name = newFolderName.trim();
                 const folderType = showFolderPicker!;
                 if (!name) return;
+                const parentFolder = findFolderById(newFolderParentId) || (newFolderParentId && openAdminFolder ? { id: openAdminFolder.id, full_name: openAdminFolder.name, name: openAdminFolder.name } : null);
+                const parentName = parentFolder ? folderFullName(parentFolder) : "";
                 const created = await createFolderMutation.mutateAsync({ name, type: folderType, parentId: newFolderParentId });
-                setOpenAdminFolder({ id: created?.id, name: created?.full_name || (newFolderParentId && openAdminFolder ? `${openAdminFolder.name} / ${name}` : name), type: folderType });
+                setOpenAdminFolder({ id: created?.id, name: created?.full_name || (parentName ? `${parentName} / ${name}` : name), type: folderType });
                 setShowFolderPicker(null);
                 setNewFolderName("");
                 setNewFolderParentId(null);
