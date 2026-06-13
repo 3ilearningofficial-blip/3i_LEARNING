@@ -1,5 +1,5 @@
 import React from "react";
-import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Image } from "react-native";
+import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Image, useWindowDimensions } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
@@ -68,6 +68,7 @@ export default function MultiSubjectCourseAbout() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { colors } = useAppTheme();
   const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
   const { data: course, isLoading } = useQuery({
     queryKey: ["/api/courses", String(id)],
     queryFn: () => fetchCourse(String(id)),
@@ -93,6 +94,7 @@ export default function MultiSubjectCourseAbout() {
   const testCount = tests.filter((t) => !["pyq", "mock"].includes(String(t.test_type || "").toLowerCase())).length;
   const aboutMeta = parseAboutMeta(course.teacher_details_json, course);
   const teachers = aboutMeta.teachers.length > 0 ? aboutMeta.teachers : [{ name: course.teacher_name || "3i Learning", imageUrl: course.teacher_image_url || "", bio: course.teacher_bio || "Teacher details can be managed from the admin dashboard." }];
+  const teacherCardWidth = width >= 900 ? "19%" : width >= 600 ? "31.5%" : "48%";
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -102,15 +104,16 @@ export default function MultiSubjectCourseAbout() {
             <Pressable style={styles.iconBtn} onPress={() => router.back()}>
               <Ionicons name="arrow-back" size={20} color="#fff" />
             </Pressable>
-            <Pressable style={styles.iconBtn} onPress={() => router.push(`/multi-course/${course.id}` as any)}>
-              <Ionicons name="arrow-forward" size={20} color="#fff" />
-            </Pressable>
+            <View style={{ width: 42 }} />
           </View>
           {course.thumbnail ? <Image source={{ uri: course.thumbnail }} style={styles.bannerImage} resizeMode="cover" /> : null}
           <View style={styles.heroText}>
-            <Text style={styles.badge}>MULTI SUBJECT COURSE</Text>
             <Text style={styles.title}>{course.title}</Text>
             <Text style={styles.meta}>{course.category || "Course"} · {course.level || "Beginner"} · {course.course_language || "HINGLISH"}</Text>
+            <Pressable style={styles.exploreBtn} onPress={() => router.push(`/multi-course/${course.id}` as any)}>
+              <Text style={styles.exploreText}>Explore Course</Text>
+              <Ionicons name="arrow-forward" size={18} color="#fff" />
+            </Pressable>
           </View>
         </LinearGradient>
 
@@ -157,17 +160,19 @@ export default function MultiSubjectCourseAbout() {
 
           <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <Text style={[styles.sectionTitle, { color: colors.text }]}>Teachers</Text>
+            <View style={styles.teacherGrid}>
             {teachers.map((teacher, index) => (
-              <View key={`${teacher.name}-${index}`} style={[styles.teacherCard, { borderColor: colors.border }]}>
+              <View key={`${teacher.name}-${index}`} style={[styles.teacherCard, { borderColor: colors.border, width: teacherCardWidth as any }]}>
                 {teacher.imageUrl ? <Image source={{ uri: teacher.imageUrl }} style={styles.teacherImage} /> : (
                   <View style={[styles.teacherImage, styles.teacherFallback]}><Ionicons name="person" size={30} color={Colors.light.primary} /></View>
                 )}
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.teacherName, { color: colors.text }]}>{teacher.name || "3i Learning"}</Text>
-                  <Text style={[styles.bodyText, { color: colors.textSecondary }]}>{teacher.bio || "Teacher details will be added soon."}</Text>
+                <View style={{ flex: 1, alignItems: "center" }}>
+                  <Text style={[styles.teacherName, { color: colors.text }]} numberOfLines={2}>{teacher.name || "3i Learning"}</Text>
+                  <Text style={[styles.teacherBio, { color: colors.textSecondary }]} numberOfLines={4}>{teacher.bio || "Teacher details will be added soon."}</Text>
                 </View>
               </View>
             ))}
+            </View>
           </View>
         </View>
       </ScrollView>
@@ -189,9 +194,10 @@ const styles = StyleSheet.create({
   iconBtn: { width: 42, height: 42, borderRadius: 21, backgroundColor: "rgba(255,255,255,0.18)", alignItems: "center", justifyContent: "center" },
   bannerImage: { height: 150, borderRadius: 20, marginBottom: 16 },
   heroText: { gap: 8 },
-  badge: { alignSelf: "flex-start", color: "#fff", fontSize: 11, fontFamily: "Inter_800ExtraBold", backgroundColor: "rgba(255,255,255,0.18)", paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999 },
   title: { color: "#fff", fontSize: 26, lineHeight: 32, fontFamily: "Inter_800ExtraBold" },
   meta: { color: "rgba(255,255,255,0.85)", fontSize: 13, fontFamily: "Inter_600SemiBold" },
+  exploreBtn: { marginTop: 8, alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "rgba(15,23,42,0.72)", borderRadius: 12, paddingHorizontal: 16, paddingVertical: 11 },
+  exploreText: { color: "#fff", fontSize: 14, fontFamily: "Inter_800ExtraBold" },
   body: { padding: 16, gap: 14 },
   card: { borderWidth: 1, borderRadius: 18, padding: 16, gap: 10 },
   sectionTitle: { fontSize: 18, fontFamily: "Inter_800ExtraBold" },
@@ -202,14 +208,16 @@ const styles = StyleSheet.create({
   countPill: { flexDirection: "row", alignItems: "center", gap: 5, backgroundColor: "#EEF2FF", borderRadius: 999, paddingHorizontal: 10, paddingVertical: 7 },
   countValue: { fontSize: 13, fontFamily: "Inter_800ExtraBold", color: Colors.light.primary },
   countLabel: { fontSize: 12, fontFamily: "Inter_700Bold", color: "#334155" },
-  bodyText: { fontSize: 14, lineHeight: 21, fontFamily: "Inter_500Medium" },
+  bodyText: { fontSize: 14, lineHeight: 21, fontFamily: "Inter_700Bold" },
   featuresList: { gap: 9, marginTop: 4 },
   featureRow: { flexDirection: "row", alignItems: "center", gap: 9 },
   featureText: { flex: 1, fontSize: 14, lineHeight: 20, fontFamily: "Inter_700Bold" },
-  teacherCard: { flexDirection: "row", gap: 14, borderWidth: 1, borderRadius: 16, padding: 12, marginTop: 8 },
+  teacherGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 8 },
+  teacherCard: { alignItems: "center", gap: 10, borderWidth: 1, borderRadius: 16, padding: 12, minHeight: 190 },
   teacherImage: { width: 68, height: 68, borderRadius: 18 },
   teacherFallback: { backgroundColor: "#EEF2FF", alignItems: "center", justifyContent: "center" },
-  teacherName: { fontSize: 16, fontFamily: "Inter_800ExtraBold", marginBottom: 4 },
+  teacherName: { fontSize: 15, fontFamily: "Inter_800ExtraBold", marginBottom: 4, textAlign: "center" },
+  teacherBio: { fontSize: 12, lineHeight: 17, fontFamily: "Inter_700Bold", textAlign: "center" },
   bottomBar: { position: "absolute", left: 0, right: 0, bottom: 0, paddingHorizontal: 16, paddingTop: 10, borderTopWidth: 1 },
   buyBtn: { backgroundColor: Colors.light.primary, borderRadius: 16, paddingVertical: 15, alignItems: "center" },
   buyText: { color: "#fff", fontSize: 16, fontFamily: "Inter_800ExtraBold" },

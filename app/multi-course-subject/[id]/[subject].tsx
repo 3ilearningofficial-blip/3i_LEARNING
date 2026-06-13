@@ -230,7 +230,7 @@ const styles = StyleSheet.create({
   header: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 1 },
   backBtn: { width: 42, height: 42, borderRadius: 21, alignItems: "center", justifyContent: "center" },
   title: { fontSize: 22, fontFamily: "Inter_800ExtraBold" },
-  subtitle: { fontSize: 12, fontFamily: "Inter_600SemiBold", marginTop: 2 },
+  subtitle: { fontSize: 12, fontFamily: "Inter_700Bold", marginTop: 2 },
   sectionSelector: { flexDirection: "row", flexWrap: "wrap", gap: 8, paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1 },
   tab: { paddingHorizontal: 13, paddingVertical: 9, borderRadius: 999, backgroundColor: "#EEF2FF", minWidth: 74, alignItems: "center" },
   tabActive: { backgroundColor: Colors.light.primary },
@@ -239,7 +239,7 @@ const styles = StyleSheet.create({
   sectionTitle: { fontSize: 18, fontFamily: "Inter_800ExtraBold", marginBottom: 12 },
   rowCard: { flexDirection: "row", alignItems: "center", gap: 12, borderWidth: 1, borderRadius: 16, padding: 12, marginBottom: 10 },
   rowIcon: { width: 42, height: 42, borderRadius: 14, backgroundColor: "#EEF2FF", alignItems: "center", justifyContent: "center" },
-  rowTitle: { fontSize: 14, fontFamily: "Inter_800ExtraBold" },
-  rowMeta: { fontSize: 12, fontFamily: "Inter_500Medium", marginTop: 3 },
+  rowTitle: { fontSize: 15, fontFamily: "Inter_800ExtraBold" },
+  rowMeta: { fontSize: 12, fontFamily: "Inter_700Bold", marginTop: 3 },
   emptyCard: { borderWidth: 1, borderRadius: 18, padding: 24, alignItems: "center" },
 });

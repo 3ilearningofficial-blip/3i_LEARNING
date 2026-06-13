@@ -1,7 +1,6 @@
 import React from "react";
-import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator } from "react-native";
+import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, useWindowDimensions } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
-import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import { useQuery } from "@tanstack/react-query";
 import { authFetch, getApiUrl } from "@/lib/query-client";
@@ -31,6 +30,8 @@ export default function MultiCourseLayout() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { colors } = useAppTheme();
   const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
+  const subjectBoxWidth = width >= 768 ? "23.5%" : "48%";
   const { data: course, isLoading } = useQuery({
     queryKey: ["/api/courses", String(id)],
     queryFn: () => fetchJson(`/api/courses/${id}`),
@@ -47,15 +48,15 @@ export default function MultiCourseLayout() {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <LinearGradient colors={["#0F172A", "#1E293B"]} style={[styles.header, { paddingTop: insets.top + 12 }]}>
-        <Pressable style={styles.backBtn} onPress={() => router.back()}>
-          <Ionicons name="arrow-back" size={20} color="#fff" />
+      <View style={[styles.header, { paddingTop: insets.top + 12, backgroundColor: colors.card, borderBottomColor: colors.border }]}>
+        <Pressable style={[styles.backBtn, { backgroundColor: "#EEF2FF" }]} onPress={() => router.back()}>
+          <Ionicons name="arrow-back" size={20} color={Colors.light.primary} />
         </Pressable>
         <View style={{ flex: 1 }}>
-          <Text style={styles.title} numberOfLines={1}>{course?.title || "Course Layout"}</Text>
-          <Text style={styles.subtitle}>Choose a subject to continue</Text>
+          <Text style={[styles.title, { color: colors.text }]} numberOfLines={1}>{course?.title || "Course Layout"}</Text>
+          <Text style={[styles.subtitle, { color: colors.textSecondary }]}>Choose a subject to continue</Text>
         </View>
-      </LinearGradient>
+      </View>
 
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 24 }}>
         <Text style={[styles.sectionTitle, { color: colors.text }]}>Subjects</Text>
@@ -69,7 +70,7 @@ export default function MultiCourseLayout() {
             return (
             <Pressable
               key={subject.key}
-              style={[styles.subjectBox, { backgroundColor: colors.card, borderColor: colors.border }]}
+              style={[styles.subjectBox, { width: subjectBoxWidth as any, backgroundColor: colors.card, borderColor: colors.border }]}
               onPress={() => router.push(`/multi-course-subject/${id}/${subject.key}` as any)}
             >
               <View style={[styles.subjectIconBox, { backgroundColor: subject.bg }]}>
@@ -107,14 +108,13 @@ export default function MultiCourseLayout() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
-  header: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 16, paddingBottom: 18 },
-  backBtn: { width: 42, height: 42, borderRadius: 21, backgroundColor: "rgba(255,255,255,0.14)", alignItems: "center", justifyContent: "center" },
-  title: { color: "#fff", fontSize: 21, fontFamily: "Inter_800ExtraBold" },
-  subtitle: { color: "rgba(255,255,255,0.72)", fontSize: 12, fontFamily: "Inter_600SemiBold", marginTop: 2 },
+  header: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 16, paddingBottom: 14, borderBottomWidth: 1 },
+  backBtn: { width: 42, height: 42, borderRadius: 21, alignItems: "center", justifyContent: "center" },
+  title: { fontSize: 22, fontFamily: "Inter_800ExtraBold" },
+  subtitle: { fontSize: 12, fontFamily: "Inter_700Bold", marginTop: 2 },
   sectionTitle: { fontSize: 18, fontFamily: "Inter_800ExtraBold", marginBottom: 12 },
   grid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
   subjectBox: {
-    width: "48%",
     minHeight: 104,
     borderRadius: 14,
     borderWidth: 1,

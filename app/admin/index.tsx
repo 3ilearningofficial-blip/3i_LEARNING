@@ -44,6 +44,7 @@ interface Course {
   is_published: boolean;
   price: string;
   course_type?: string;
+  batch_status?: string;
   start_date?: string;
   end_date?: string;
   validity_months?: number | null;
@@ -2078,9 +2079,9 @@ export default function AdminDashboard() {
                     <View style={styles.adminCardRow}>
                       <Text style={styles.adminCardTitle} numberOfLines={2}>{course.title}</Text>
                       <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                        <View style={{ backgroundColor: (course.course_type || "live") === "live" ? "#EF444420" : (course.course_type === "test_series" ? "#F59E0B20" : "#8B5CF620"), paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8 }}>
-                          <Text style={{ fontSize: 10, fontFamily: "Inter_700Bold", color: (course.course_type || "live") === "live" ? "#EF4444" : (course.course_type === "test_series" ? "#F59E0B" : "#8B5CF6"), textTransform: "uppercase" }}>
-                            {(course.course_type || "live") === "live" ? "🔴 LIVE" : (course.course_type === "test_series" ? "📋 TEST SERIES" : "📹 RECORDED")}
+                        <View style={{ backgroundColor: course.course_type === "test_series" ? "#F59E0B20" : course.course_type === "multi_subject" ? (String(course.batch_status || "live").toLowerCase() === "recorded" ? "#8B5CF620" : "#EF444420") : (course.course_type || "live") === "live" ? "#EF444420" : "#8B5CF620", paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8 }}>
+                          <Text style={{ fontSize: 10, fontFamily: "Inter_700Bold", color: course.course_type === "test_series" ? "#F59E0B" : course.course_type === "multi_subject" ? (String(course.batch_status || "live").toLowerCase() === "recorded" ? "#8B5CF6" : "#EF4444") : (course.course_type || "live") === "live" ? "#EF4444" : "#8B5CF6", textTransform: "uppercase" }}>
+                            {course.course_type === "test_series" ? "📋 TEST SERIES" : course.course_type === "multi_subject" ? (String(course.batch_status || "live").toLowerCase() === "recorded" ? "📹 RECORDED" : "🔴 LIVE") : (course.course_type || "live") === "live" ? "🔴 LIVE" : "📹 RECORDED"}
                           </Text>
                         </View>
                         <View style={[styles.statusDot, { backgroundColor: course.is_published ? "#22C55E" : "#F59E0B" }]} />

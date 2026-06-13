@@ -1364,21 +1364,22 @@ export default function AdminCourseScreen() {
       <ScrollView contentContainerStyle={[styles.content, { paddingBottom: bottomPadding + 80 }]}>
         {effectiveTab === "about" && isMultiSubjectCourse && (
           <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>About Course</Text>
-              <Pressable
-                style={[styles.addBtn, { opacity: saveAboutMutation.isPending ? 0.6 : 1 }]}
-                disabled={saveAboutMutation.isPending}
-                onPress={() => saveAboutMutation.mutate(aboutForm)}
-              >
-                {saveAboutMutation.isPending ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="save-outline" size={16} color="#fff" />}
-                <Text style={styles.addBtnText}>Save About</Text>
-              </Pressable>
-            </View>
-            <View style={styles.infoCard}>
-              <Ionicons name="information-circle" size={16} color={Colors.light.primary} />
-              <Text style={styles.infoText}>This section appears on the student about page. Add a course description, key features, and multiple teachers.</Text>
-            </View>
+            <LinearGradient colors={["#EEF2FF", "#F8FAFC"]} style={[styles.itemCard, { borderWidth: 0, gap: 12 }]}>
+              <View style={styles.sectionHeader}>
+                <View>
+                  <Text style={[styles.sectionTitle, { fontSize: 22 }]}>About Course</Text>
+                  <Text style={[styles.infoText, { marginTop: 4 }]}>Shown on the student about page. Use bold, clear copy for course promise, features, and teachers.</Text>
+                </View>
+                <Pressable
+                  style={[styles.addBtn, { opacity: saveAboutMutation.isPending ? 0.6 : 1 }]}
+                  disabled={saveAboutMutation.isPending}
+                  onPress={() => saveAboutMutation.mutate(aboutForm)}
+                >
+                  {saveAboutMutation.isPending ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="save-outline" size={16} color="#fff" />}
+                  <Text style={styles.addBtnText}>Save About</Text>
+                </Pressable>
+              </View>
+            </LinearGradient>
 
             <View style={styles.itemCard}>
               <FormField
@@ -1407,8 +1408,9 @@ export default function AdminCourseScreen() {
                 <Text style={styles.addBtnText}>Teacher</Text>
               </Pressable>
             </View>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 12 }}>
             {aboutForm.teachers.map((teacher, index) => (
-              <View key={`teacher-${index}`} style={styles.itemCard}>
+              <View key={`teacher-${index}`} style={[styles.itemCard, { width: Platform.OS === "web" ? "49%" : "100%" }]}>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 12 }}>
                   {teacher.imageUrl ? (
                     <Image source={{ uri: teacher.imageUrl }} style={{ width: 72, height: 72, borderRadius: 18, backgroundColor: "#F8FAFC" }} />
@@ -1459,6 +1461,7 @@ export default function AdminCourseScreen() {
                 />
               </View>
             ))}
+            </View>
           </View>
         )}
 
@@ -2823,9 +2826,11 @@ export default function AdminCourseScreen() {
                 </>
               )}
               <FormField label="Level" placeholder="beginner / intermediate / advanced" value={editForm.level} onChangeText={(v) => setEditForm(p => ({ ...p, level: v }))} />
-              {!isTestSeries && !isMultiSubjectCourse && (
+              {!isTestSeries && (
                 <>
-                  <FormField label="Duration (hours)" placeholder="10" value={editForm.durationHours} onChangeText={(v) => setEditForm(p => ({ ...p, durationHours: v }))} numeric />
+                  {!isMultiSubjectCourse ? (
+                    <FormField label="Duration (hours)" placeholder="10" value={editForm.durationHours} onChangeText={(v) => setEditForm(p => ({ ...p, durationHours: v }))} numeric />
+                  ) : null}
                   <FormField label="Start Date" placeholder="e.g., 15 Mar 2026" value={editForm.startDate} onChangeText={(v) => setEditForm(p => ({ ...p, startDate: v }))} />
                   <FormField label="End Date" placeholder="e.g., 15 Jun 2026" value={editForm.endDate} onChangeText={(v) => setEditForm(p => ({ ...p, endDate: v }))} />
                 </>

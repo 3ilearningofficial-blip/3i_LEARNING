@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable, TextInput,
   ActivityIndicator, Platform, KeyboardAvoidingView, Modal, Alert,
+  Keyboard,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
@@ -32,6 +33,7 @@ export default function SupportChatTab() {
   const tabVisible = useDocumentVisibility();
   const scrollRef = useRef<ScrollView>(null);
   const [text, setText] = useState("");
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
 
   // Admin state
   const [adminSelectedUserId, setAdminSelectedUserId] = useState<number | null>(null);
@@ -200,6 +202,19 @@ export default function SupportChatTab() {
     };
     return () => es.close();
   }, [isAdmin, user?.id, isFocused, qc]);
+
+  useEffect(() => {
+    if (Platform.OS === "web") return;
+    const showSub = Keyboard.addListener("keyboardDidShow", () => {
+      setKeyboardVisible(true);
+      setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80);
+    });
+    const hideSub = Keyboard.addListener("keyboardDidHide", () => setKeyboardVisible(false));
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   if (isAdmin) {
     return (
@@ -420,12 +435,18 @@ export default function SupportChatTab() {
   /** Clearance above the bottom tab bar — keep modest so the composer sits near the bar, not floating high. */
   const TAB_BAR_CLEARANCE = Platform.OS === "android" ? 52 : Platform.OS === "web" ? 56 : 52;
   const composerBottomPadding =
-    Platform.OS === "web"
+    keyboardVisible
+      ? Math.max(insets.bottom, 6) + 8
+      : Platform.OS === "web"
       ? 8
       : TAB_BAR_CLEARANCE + Math.max(insets.bottom, 6);
 
   return (
-    <View style={{ flex: 1, backgroundColor: "#F0F4FF" }}>
+    <KeyboardAvoidingView
+      style={{ flex: 1, backgroundColor: "#F0F4FF" }}
+      behavior={Platform.OS === "ios" ? "padding" : Platform.OS === "android" ? "height" : undefined}
+      keyboardVerticalOffset={0}
+    >
       {/* Header */}
       <View style={[styles.header, { paddingTop: Platform.OS === "web" ? 16 : insets.top + 8 }]}>
         <View style={styles.headerAvatar}>
@@ -493,34 +514,30 @@ export default function SupportChatTab() {
       )}
 
       {/* Input — sits above tab bar */}
-      <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
-        keyboardVerticalOffset={Platform.OS === "ios" ? TAB_BAR_CLEARANCE + insets.bottom : 0}
-      >
-        <View style={[styles.inputRow, { paddingBottom: composerBottomPadding }]}>
-          <TextInput
-            style={styles.input}
-            placeholder="Type your message..."
-            placeholderTextColor={Colors.light.textMuted}
-            value={text}
-            onChangeText={setText}
-            multiline
-            maxLength={1000}
-            editable
-          />
-          <Pressable
-            style={[styles.sendBtn, (!text.trim() || sendMutation.isPending) && styles.sendBtnDisabled]}
-            onPress={() => text.trim() && sendMutation.mutate(text.trim())}
-            disabled={!text.trim() || sendMutation.isPending}
-          >
-            {sendMutation.isPending
-              ? <ActivityIndicator size="small" color="#fff" />
-              : <Ionicons name="send" size={18} color="#fff" />
-            }
-          </Pressable>
-        </View>
-      </KeyboardAvoidingView>
-    </View>
+      <View style={[styles.inputRow, { paddingBottom: composerBottomPadding }]}>
+        <TextInput
+          style={styles.input}
+          placeholder="Type your message..."
+          placeholderTextColor={Colors.light.textMuted}
+          value={text}
+          onChangeText={setText}
+          multiline
+          maxLength={1000}
+          editable
+          onFocus={() => setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80)}
+        />
+        <Pressable
+          style={[styles.sendBtn, (!text.trim() || sendMutation.isPending) && styles.sendBtnDisabled]}
+          onPress={() => text.trim() && sendMutation.mutate(text.trim())}
+          disabled={!text.trim() || sendMutation.isPending}
+        >
+          {sendMutation.isPending
+            ? <ActivityIndicator size="small" color="#fff" />
+            : <Ionicons name="send" size={18} color="#fff" />
+          }
+        </Pressable>
+      </View>
+    </KeyboardAvoidingView>
   );
 }
 

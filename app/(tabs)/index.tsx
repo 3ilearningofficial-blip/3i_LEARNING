@@ -141,8 +141,8 @@ function MultiSubjectCourseCard({ course, enrolled = false }: { course: Course; 
         <Text style={[styles.multiTitle, { color: colors.text }]} numberOfLines={2}>{course.title}</Text>
         {!enrolled && (
           <View style={styles.multiMetaRow}>
-            <Ionicons name="ellipse" size={8} color={status === "COMPLETED" ? "#64748B" : status === "RECORDED" ? "#7C3AED" : "#DC2626"} />
-            <Text style={[styles.multiMetaText, { color: colors.textSecondary }]}>{status}</Text>
+            <Ionicons name="ellipse" size={9} color="#DC2626" />
+            <Text style={[styles.multiMetaText, styles.multiStatusText]}>{status}</Text>
             {validityText ? <Text style={[styles.multiMetaText, { color: colors.textSecondary }]}>| {validityText}</Text> : null}
           </View>
         )}
@@ -961,7 +961,7 @@ const styles = StyleSheet.create({
   sectionTitle: { fontSize: 18, fontFamily: "Inter_700Bold", color: Colors.light.text },
   seeAll: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.primary },
   courseCard: {
-    backgroundColor: "#fff", borderRadius: 20, overflow: "hidden",
+    backgroundColor: "#fff", borderRadius: 20, overflow: "hidden", minHeight: 238,
     marginBottom: 14, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 12, elevation: 4,
   },
   multiCourseCard: {
@@ -971,24 +971,25 @@ const styles = StyleSheet.create({
   multiCourseBanner: { height: 154, overflow: "hidden", justifyContent: "center" },
   multiBannerFallback: { flex: 1, alignItems: "center", justifyContent: "center", padding: 18 },
   multiBannerTitle: { color: "#065F46", fontSize: 15, lineHeight: 20, fontFamily: "Inter_700Bold", textAlign: "center" },
-  multiCourseBody: { paddingHorizontal: 14, paddingVertical: 14, gap: 7 },
+  multiCourseBody: { paddingHorizontal: 15, paddingVertical: 15, gap: 8 },
   multiTopRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
   multiBadgeRow: { flexDirection: "row", alignItems: "center", gap: 6, flex: 1, flexWrap: "wrap" },
-  multiCategory: { fontSize: 10, fontFamily: "Inter_700Bold", color: "#F97316", textTransform: "uppercase" },
-  multiLevel: { fontSize: 10, fontFamily: "Inter_600SemiBold", color: "#4F46E5", backgroundColor: "#EEF2FF", borderRadius: 6, paddingHorizontal: 7, paddingVertical: 3 },
-  multiLanguagePill: { borderWidth: 1, borderColor: "#CBD5E1", borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3, backgroundColor: "#fff" },
-  multiLanguageText: { fontSize: 10, fontFamily: "Inter_700Bold", color: "#0F172A" },
-  multiTitle: { fontSize: 15, lineHeight: 20, fontFamily: "Inter_700Bold" },
+  multiCategory: { fontSize: 12, fontFamily: "Inter_800ExtraBold", color: "#F97316", textTransform: "uppercase" },
+  multiLevel: { fontSize: 11, fontFamily: "Inter_800ExtraBold", color: "#4F46E5", backgroundColor: "#EEF2FF", borderRadius: 7, paddingHorizontal: 8, paddingVertical: 4 },
+  multiLanguagePill: { borderWidth: 1, borderColor: "#CBD5E1", borderRadius: 7, paddingHorizontal: 9, paddingVertical: 4, backgroundColor: "#fff" },
+  multiLanguageText: { fontSize: 11, fontFamily: "Inter_800ExtraBold", color: "#0F172A" },
+  multiTitle: { fontSize: 18, lineHeight: 24, fontFamily: "Inter_800ExtraBold" },
   multiMetaRow: { flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" },
-  multiMetaText: { fontSize: 12, fontFamily: "Inter_400Regular" },
+  multiMetaText: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
+  multiStatusText: { color: "#DC2626", fontFamily: "Inter_800ExtraBold" },
   multiPriceRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 2 },
-  multiPrice: { fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.primary },
+  multiPrice: { fontSize: 18, fontFamily: "Inter_800ExtraBold", color: Colors.light.primary },
   multiOriginalPrice: { fontSize: 12, fontFamily: "Inter_400Regular", color: "#64748B", textDecorationLine: "line-through" },
   multiDiscount: { fontSize: 11, fontFamily: "Inter_700Bold", color: "#16A34A" },
-  multiBuyBtn: { backgroundColor: "#111827", borderRadius: 8, paddingHorizontal: 14, paddingVertical: 10 },
-  multiBuyText: { color: "#fff", fontSize: 12, fontFamily: "Inter_700Bold" },
+  multiBuyBtn: { backgroundColor: "#111827", borderRadius: 9, paddingHorizontal: 16, paddingVertical: 11 },
+  multiBuyText: { color: "#fff", fontSize: 13, fontFamily: "Inter_800ExtraBold" },
   multiArrowBtn: { width: 38, height: 38, borderRadius: 8, borderWidth: 1, borderColor: "#CBD5E1", alignItems: "center", justifyContent: "center", backgroundColor: "#fff" },
-  courseCardHeader: { height: 100, padding: 12, justifyContent: "space-between" },
+  courseCardHeader: { height: 116, padding: 13, justifyContent: "space-between" },
   courseCardBadgeRow: { flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" },
   categoryBadge: { backgroundColor: "rgba(0,0,0,0.35)", borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
   categoryBadgeText: { color: "#fff", fontSize: 10, fontFamily: "Inter_700Bold" },
@@ -999,7 +1000,7 @@ const styles = StyleSheet.create({
   enrolledBadge: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "rgba(0,0,0,0.35)", borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3, alignSelf: "flex-start" },
   enrolledBadgeText: { color: "#22C55E", fontSize: 10, fontFamily: "Inter_600SemiBold" },
   courseSubject: { color: "rgba(255,255,255,0.85)", fontSize: 13, fontFamily: "Inter_600SemiBold" },
-  courseCardBody: { padding: 14, gap: 6 },
+  courseCardBody: { padding: 15, gap: 7, minHeight: 122 },
   courseTitle: { fontSize: 15, fontFamily: "Inter_700Bold", color: Colors.light.text, lineHeight: 20 },
   courseTeacher: { fontSize: 12, color: Colors.light.textSecondary, fontFamily: "Inter_400Regular" },
   courseStats: { flexDirection: "row", alignItems: "center", gap: 6 },
