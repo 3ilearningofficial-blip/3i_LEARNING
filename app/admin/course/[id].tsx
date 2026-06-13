@@ -2856,70 +2856,6 @@ export default function AdminCourseScreen() {
         </View>
       </Modal>
 
-      {/* Folder Picker Modal */}
-      <Modal visible={showFolderPicker !== null} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Manage Folders</Text>
-              <Pressable onPress={() => { setShowFolderPicker(null); setNewFolderName(""); setNewFolderParentId(null); }}>
-                <Ionicons name="close" size={24} color={Colors.light.text} />
-              </Pressable>
-            </View>
-            <ScrollView style={{ maxHeight: 400 }} showsVerticalScrollIndicator={false}>
-              {dbFolders.filter((f: any) => f.type === showFolderPicker).map((folder: any) => (
-                <Pressable
-                  key={folder.id}
-                  style={[styles.itemCard, { flexDirection: "row", alignItems: "center", padding: 12, gap: 10, marginBottom: 8 }]}
-                  onPress={() => {
-                    setOpenAdminFolder({ id: folder.id, name: folderFullName(folder), type: showFolderPicker! });
-                    setShowFolderPicker(null);
-                    setNewFolderName("");
-                    setNewFolderParentId(null);
-                  }}
-                >
-                  <Ionicons name="folder" size={20} color={Colors.light.primary} />
-                  <Text style={{ flex: 1, fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>{folderFullName(folder)}</Text>
-                  <Ionicons name="chevron-forward" size={16} color={Colors.light.textMuted} />
-                </Pressable>
-              ))}
-              <View style={styles.formField}>
-                <Text style={styles.formLabel}>{newFolderParentId ? "New Subfolder Name" : "New Folder Name"}</Text>
-                {newFolderParentId ? (
-                  <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: Colors.light.textMuted, marginBottom: 6 }}>
-                    Parent: {openAdminFolder?.name || folderFullName(findFolderById(newFolderParentId)) || folderFullName(folderActionSheet)}
-                  </Text>
-                ) : null}
-                <TextInput
-                  style={styles.formInput}
-                  placeholder="e.g., Chapter 1, Algebra"
-                  placeholderTextColor={Colors.light.textMuted}
-                  value={newFolderName}
-                  onChangeText={setNewFolderName}
-                />
-              </View>
-            </ScrollView>
-            <ActionButton
-              label="Create & Select Folder"
-              onPress={async () => {
-                const name = newFolderName.trim();
-                const folderType = showFolderPicker!;
-                if (!name) return;
-                const parentFolder = findFolderById(newFolderParentId) || (newFolderParentId && openAdminFolder ? { id: openAdminFolder.id, full_name: openAdminFolder.name, name: openAdminFolder.name } : null);
-                const parentName = parentFolder ? folderFullName(parentFolder) : "";
-                const created = await createFolderMutation.mutateAsync({ name, type: folderType, parentId: newFolderParentId });
-                setOpenAdminFolder({ id: created?.id, name: created?.full_name || (parentName ? `${parentName} / ${name}` : name), type: folderType });
-                setShowFolderPicker(null);
-                setNewFolderName("");
-                setNewFolderParentId(null);
-              }}
-              disabled={!newFolderName.trim()}
-              loading={createFolderMutation.isPending}
-            />
-          </View>
-        </View>
-      </Modal>
-
       {/* Admin Folder Detail Modal - Full Screen */}
       <Modal visible={openAdminFolder !== null} animationType="slide" transparent={false}>
         <View style={{ flex: 1, backgroundColor: Colors.light.background }}>
@@ -2979,10 +2915,12 @@ export default function AdminCourseScreen() {
                   if (!parentId) {
                     const ensuredParent = await createFolderMutation.mutateAsync({ name: openAdminFolder.name, type: folderType });
                     parentId = ensuredParent?.id || null;
+                    if (parentId) {
+                      setOpenAdminFolder({ id: parentId, name: ensuredParent?.full_name || openAdminFolder.name, type: folderType });
+                    }
                   }
                   setNewFolderName("");
                   setNewFolderParentId(parentId);
-                  setOpenAdminFolder(null);
                   setShowFolderPicker(folderType);
                 }}
               >
@@ -3009,7 +2947,7 @@ export default function AdminCourseScreen() {
               {openAdminFolder && (() => {
                 const parentId = openAdminFolder.id || findFolderByPath(openAdminFolder.name, openAdminFolder.type)?.id;
                 const childFolders = safeFolders.filter((f: any) => f.type === openAdminFolder.type && Number(f.parent_id || 0) === Number(parentId || 0));
-                if (!parentId || childFolders.length === 0) return null;
+                if (!parentId || childFolders.length === 0 || openAdminFolder.type === "lecture") return null;
                 return (
                   <View style={{ marginBottom: 12 }}>
                     {childFolders.map((child: any) => (
@@ -3145,7 +3083,7 @@ export default function AdminCourseScreen() {
                           <Pressable
                             style={{ padding: 8 }}
                             onPress={async () => {
-                              let f = safeFolders.find((df: any) => df.name === childName && df.type === "lecture");
+                              let f = safeFolders.find((df: any) => folderFullName(df) === childName && df.type === "lecture");
                               if (!f) {
                                 const r = await apiRequest("POST", `/api/admin/courses/${id}/folders`, { name: childName, type: "lecture" });
                                 f = await r.json();
@@ -3676,6 +3614,70 @@ export default function AdminCourseScreen() {
               </View>
             </Pressable>
           </Modal>
+        </View>
+      </Modal>
+
+      {/* Folder Picker Modal: declared after folder detail so nested folder creation stays in front. */}
+      <Modal visible={showFolderPicker !== null} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Manage Folders</Text>
+              <Pressable onPress={() => { setShowFolderPicker(null); setNewFolderName(""); setNewFolderParentId(null); }}>
+                <Ionicons name="close" size={24} color={Colors.light.text} />
+              </Pressable>
+            </View>
+            <ScrollView style={{ maxHeight: 400 }} showsVerticalScrollIndicator={false}>
+              {dbFolders.filter((f: any) => f.type === showFolderPicker).map((folder: any) => (
+                <Pressable
+                  key={folder.id}
+                  style={[styles.itemCard, { flexDirection: "row", alignItems: "center", padding: 12, gap: 10, marginBottom: 8 }]}
+                  onPress={() => {
+                    setOpenAdminFolder({ id: folder.id, name: folderFullName(folder), type: showFolderPicker! });
+                    setShowFolderPicker(null);
+                    setNewFolderName("");
+                    setNewFolderParentId(null);
+                  }}
+                >
+                  <Ionicons name="folder" size={20} color={Colors.light.primary} />
+                  <Text style={{ flex: 1, fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>{folderFullName(folder)}</Text>
+                  <Ionicons name="chevron-forward" size={16} color={Colors.light.textMuted} />
+                </Pressable>
+              ))}
+              <View style={styles.formField}>
+                <Text style={styles.formLabel}>{newFolderParentId ? "New Subfolder Name" : "New Folder Name"}</Text>
+                {newFolderParentId ? (
+                  <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: Colors.light.textMuted, marginBottom: 6 }}>
+                    Parent: {openAdminFolder?.name || folderFullName(findFolderById(newFolderParentId)) || folderFullName(folderActionSheet)}
+                  </Text>
+                ) : null}
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="e.g., Chapter 1, Algebra"
+                  placeholderTextColor={Colors.light.textMuted}
+                  value={newFolderName}
+                  onChangeText={setNewFolderName}
+                />
+              </View>
+            </ScrollView>
+            <ActionButton
+              label="Create & Select Folder"
+              onPress={async () => {
+                const name = newFolderName.trim();
+                const folderType = showFolderPicker!;
+                if (!name) return;
+                const parentFolder = findFolderById(newFolderParentId) || (newFolderParentId && openAdminFolder ? { id: openAdminFolder.id, full_name: openAdminFolder.name, name: openAdminFolder.name } : null);
+                const parentName = parentFolder ? folderFullName(parentFolder) : "";
+                const created = await createFolderMutation.mutateAsync({ name, type: folderType, parentId: newFolderParentId });
+                setOpenAdminFolder({ id: created?.id, name: created?.full_name || (parentName ? `${parentName} / ${name}` : name), type: folderType });
+                setShowFolderPicker(null);
+                setNewFolderName("");
+                setNewFolderParentId(null);
+              }}
+              disabled={!newFolderName.trim()}
+              loading={createFolderMutation.isPending}
+            />
+          </View>
         </View>
       </Modal>
 
