@@ -2972,10 +2972,18 @@ export default function AdminCourseScreen() {
               )}
               <Pressable
                 style={{ flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "rgba(255,255,255,0.12)", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7, borderWidth: 1, borderColor: "rgba(255,255,255,0.25)" }}
-                onPress={() => {
+                onPress={async () => {
+                  const folderType = openAdminFolder?.type || null;
+                  if (!folderType || !openAdminFolder?.name) return;
+                  let parentId = openAdminFolder.id || findFolderByPath(openAdminFolder.name, folderType)?.id || null;
+                  if (!parentId) {
+                    const ensuredParent = await createFolderMutation.mutateAsync({ name: openAdminFolder.name, type: folderType });
+                    parentId = ensuredParent?.id || null;
+                  }
                   setNewFolderName("");
-                  setNewFolderParentId(openAdminFolder?.id || findFolderByPath(openAdminFolder?.name || "", openAdminFolder?.type || "lecture")?.id || null);
-                  setShowFolderPicker(openAdminFolder?.type || null);
+                  setNewFolderParentId(parentId);
+                  setOpenAdminFolder(null);
+                  setShowFolderPicker(folderType);
                 }}
               >
                 <Ionicons name="folder-open" size={16} color="#fff" />
@@ -3583,8 +3591,9 @@ export default function AdminCourseScreen() {
                       return;
                     }
                     try {
-                      await createFolderMutation.mutateAsync({ name: full, type: "lecture" });
-                      setOpenAdminFolder({ name: full, type: "lecture" });
+                      const parentId = openAdminFolder?.id || findFolderByPath(parent, "lecture")?.id || null;
+                      const created = await createFolderMutation.mutateAsync({ name: parentId ? leaf : full, type: "lecture", parentId });
+                      setOpenAdminFolder({ id: created?.id, name: created?.full_name || full, type: "lecture" });
                       setShowLectureSubfolderModal(false);
                       setLectureSubfolderLeafName("");
                     } catch {
