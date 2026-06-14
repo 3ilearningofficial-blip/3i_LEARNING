@@ -2,6 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { router, usePathname } from "expo-router";
 import React from "react";
 import {
+  Image,
   Modal,
   Platform,
   Pressable,
@@ -17,7 +18,7 @@ const WEB_NAV_ITEMS = [
   { label: "Home", href: "/home", activePaths: ["/home"] },
   { label: "Daily Missions", href: "/(tabs)/daily-mission", activePaths: ["/daily-mission"] },
   { label: "Test Series", href: "/(tabs)/test-series", activePaths: ["/test-series"] },
-  { label: "Support", href: "/(tabs)/support-chat-tab", activePaths: ["/support-chat-tab"] },
+  { label: "Chat Support", href: "/(tabs)/support-chat-tab", activePaths: ["/support-chat-tab"] },
   { label: "AI Tutor", href: "/(tabs)/ai-tutor", activePaths: ["/ai-tutor"] },
 ] as const;
 
@@ -82,9 +83,11 @@ export function WebAppHeader() {
           {!isPhoneWeb ? <Text style={styles.backText}>Welcome</Text> : null}
         </Pressable>
         <Pressable onPress={() => navigateTo("/home")} style={styles.brand}>
-          <View style={styles.logoMark}>
-            <Text style={styles.logoText}>3i</Text>
-          </View>
+          <Image
+            source={require("@/assets/images/logo.png")}
+            style={styles.logoImg}
+            resizeMode="contain"
+          />
           <Text style={[styles.brandText, { color: colors.text }]}>3i Learning</Text>
         </Pressable>
       </View>
@@ -161,18 +164,10 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_700Bold",
     fontSize: 13,
   },
-  logoMark: {
+  logoImg: {
     width: 34,
     height: 34,
-    borderRadius: 12,
-    backgroundColor: Colors.light.primary,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  logoText: {
-    color: "#FFFFFF",
-    fontFamily: "Inter_700Bold",
-    fontSize: 15,
+    borderRadius: 8,
   },
   brandText: {
     color: Colors.light.text,

@@ -4,7 +4,6 @@ import * as Notifications from "expo-notifications";
 import { apiRequest } from "./query-client";
 
 let currentToken: string | null = null;
-let currentWebEndpoint: string | null = null;
 let configured = false;
 
 function configureHandler() {
@@ -28,30 +27,8 @@ function getProjectId(): string | null {
 }
 
 export async function registerPushForCurrentUser(): Promise<string | null> {
-  if (Platform.OS === "web") {
-    if (typeof window === "undefined") return null;
-    if (!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) return null;
-    const keyRes = await apiRequest("GET", "/push/web-public-key").catch(() => null);
-    if (!keyRes || !keyRes.ok) return null;
-    const { publicKey } = await keyRes.json().catch(() => ({ publicKey: "" }));
-    if (!publicKey) return null;
-
-    let permission = Notification.permission;
-    if (permission === "default") permission = await Notification.requestPermission();
-    if (permission !== "granted") return null;
-
-    const registration = await navigator.serviceWorker.register("/web-push-sw.js");
-    const existing = await registration.pushManager.getSubscription();
-    const subscription = existing || await registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(publicKey) as BufferSource,
-    });
-    currentWebEndpoint = subscription.endpoint;
-    await apiRequest("POST", "/push/web/register", { subscription: subscription.toJSON() }).catch((e) => {
-      console.warn("[WebPush] register API failed", e);
-    });
-    return subscription.endpoint;
-  }
+  // Web registration is handled by pushNotifications.web.ts (Metro resolves the
+  // .web.ts variant for web builds). This native file never runs on web.
   configureHandler();
   const { status: existingStatus } = await Notifications.getPermissionsAsync();
   let finalStatus = existingStatus;
@@ -93,7 +70,7 @@ export async function registerPushForCurrentUser(): Promise<string | null> {
   if (!token) return null;
   currentToken = token;
   try {
-    await apiRequest("POST", "/push/register", {
+    await apiRequest("POST", "/api/push/register", {
       token,
       platform: Platform.OS,
     });
@@ -104,35 +81,12 @@ export async function registerPushForCurrentUser(): Promise<string | null> {
   return token;
 }
 
-function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
-  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
-  const rawData = window.atob(base64);
-  const outputArray = new Uint8Array(new ArrayBuffer(rawData.length));
-  for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
-  return outputArray;
-}
-
 export async function unregisterPushForCurrentUser(): Promise<void> {
-  if (Platform.OS === "web") {
-    try {
-      const registration = typeof navigator !== "undefined" && "serviceWorker" in navigator
-        ? await navigator.serviceWorker.getRegistration("/web-push-sw.js")
-        : null;
-      const subscription = registration ? await registration.pushManager.getSubscription() : null;
-      const endpoint = subscription?.endpoint || currentWebEndpoint;
-      if (endpoint) await apiRequest("POST", "/push/web/unregister", { endpoint });
-    } catch {
-      // Ignore unregister failures during logout.
-    }
-    currentWebEndpoint = null;
-    return;
-  }
   try {
     if (currentToken) {
-      await apiRequest("POST", "/push/unregister", { token: currentToken });
+      await apiRequest("POST", "/api/push/unregister", { token: currentToken });
     } else {
-      await apiRequest("POST", "/push/unregister-all", {});
+      await apiRequest("POST", "/api/push/unregister-all", {});
     }
   } catch {
     // Ignore unregister failures during logout.

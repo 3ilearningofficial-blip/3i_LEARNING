@@ -871,9 +871,11 @@ export default function LiveClassScreen() {
     enabled: !!id && isRecordingReplay,
     staleTime: 0,
   });
-  const recordingResumeAt = Number(recordingProgressData?.last_position_seconds) || 0;
   const recordingLastSavedRef = useRef(0);
   const recordingLatestPositionRef = useRef(0);
+  // Frozen once recording progress resolves so the injected WebView HTML never
+  // changes mid-playback (which would reload the document -> black screen loop).
+  const recordingInitialResumeRef = useRef<number | null>(null);
 
   useEffect(() => {
     const savedPos = Math.floor(Number(recordingProgressData?.last_position_seconds) || 0);
@@ -881,6 +883,14 @@ export default function LiveClassScreen() {
       recordingLatestPositionRef.current = savedPos;
     }
   }, [recordingProgressData?.last_position_seconds]);
+
+  if (recordingInitialResumeRef.current === null && recordingProgressData !== undefined) {
+    recordingInitialResumeRef.current = Math.max(
+      Math.floor(Number(recordingProgressData?.last_position_seconds) || 0),
+      recordingLatestPositionRef.current,
+    );
+  }
+  const recordingResumeAt = recordingInitialResumeRef.current ?? 0;
 
   const persistRecordingPosition = useCallback((pos: number, duration = 0) => {
     if (!id || !liveClassData?.is_completed || !(pos > 0)) return;
@@ -892,17 +902,17 @@ export default function LiveClassScreen() {
     recordingLastSavedRef.current = normalizedPos;
     const watchPercent =
       duration > 0 ? Math.max(0, Math.min(100, Math.round((normalizedPos / duration) * 100))) : 0;
-    qc.setQueryData([`/api/live-classes/${id}/recording-progress`], (old: any) => ({
-      ...(old || {}),
-      watch_percent: Math.max(Number(old?.watch_percent) || 0, watchPercent),
-      last_position_seconds: Math.max(Number(old?.last_position_seconds) || 0, normalizedPos),
-    }));
+    // NOTE: do NOT write into the [`/api/live-classes/${id}/recording-progress`]
+    // cache here. The player reads its resume position from that query; mutating
+    // it mid-play would rebuild the injected WebView HTML and reload the document
+    // (black screen + 0:00 + buffering loop). Persist to the backend only; the
+    // latest position is kept in recordingLatestPositionRef and re-read on next mount.
     void authFetch(`${getApiUrl()}/live-classes/${encodeURIComponent(String(id))}/recording-progress`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ watchPercent, lastPositionSeconds: normalizedPos }),
     }).catch(() => {});
-  }, [id, liveClassData?.is_completed, qc]);
+  }, [id, liveClassData?.is_completed]);
 
   useEffect(() => {
     if (!id || !isScreenActive || !liveClassData?.is_completed || !recordingUrl.trim()) return;
@@ -936,10 +946,28 @@ export default function LiveClassScreen() {
   }, [videoUrl]);
   const hasYouTubeId = Boolean(videoId);
   const nativeStreamHlsUrl = isStreamId ? cloudflareStreamHlsUrl(videoUrl) : "";
-  const streamHtml = isStreamId ? buildCloudflareStreamHtml(videoUrl, undefined, recordingResumeAt) : "";
-  const directRecordingHtml = authenticatedVideoUrl
-    ? buildDirectRecordingHtml(authenticatedVideoUrl, recordingResumeAt)
-    : "";
+  // All injected player HTML is memoized on a stable resume position so it does
+  // not change on every re-render and force the WebView document to reload.
+  const streamHtml = useMemo(
+    () => (isStreamId ? buildCloudflareStreamHtml(videoUrl, undefined, recordingResumeAt) : ""),
+    [isStreamId, videoUrl, recordingResumeAt],
+  );
+  const directRecordingHtml = useMemo(
+    () => (authenticatedVideoUrl ? buildDirectRecordingHtml(authenticatedVideoUrl, recordingResumeAt) : ""),
+    [authenticatedVideoUrl, recordingResumeAt],
+  );
+  const cfHlsPlayerHtml = useMemo(() => {
+    const src = isCfHlsLive ? cfHlsUrl : authenticatedVideoUrl;
+    if (!isCfHls || !src) return "";
+    return buildCfHlsPlayerHtml(src, isCfHlsLive ? { liveStream: true } : { startAt: recordingResumeAt });
+  }, [isCfHls, isCfHlsLive, cfHlsUrl, authenticatedVideoUrl, recordingResumeAt]);
+  const cfHlsStreamPlayerHtml = useMemo(
+    () =>
+      isStreamId && nativeStreamHlsUrl
+        ? buildCfHlsPlayerHtml(nativeStreamHlsUrl, { startAt: recordingResumeAt })
+        : "",
+    [isStreamId, nativeStreamHlsUrl, recordingResumeAt],
+  );
 
   const { data: viewerData } = useQuery<{ count: number; viewers: any[]; visible: boolean }>({
     queryKey: [`/api/live-classes/${id}/viewers`],
@@ -1335,10 +1363,7 @@ export default function LiveClassScreen() {
               <View style={styles.webScheduledVideoSlot} />
             ) : isCfHls && canMountRecordingPlayer && Platform.OS === "web" ? (
               <iframe
-                srcDoc={buildCfHlsPlayerHtml(
-                  isCfHlsLive ? cfHlsUrl : authenticatedVideoUrl,
-                  isCfHlsLive ? { liveStream: true } : { startAt: recordingResumeAt },
-                )}
+                srcDoc={cfHlsPlayerHtml}
                 style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" } as any}
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                 onLoad={markPlayed}
@@ -1393,10 +1418,7 @@ export default function LiveClassScreen() {
             ) : isCfHls && canMountRecordingPlayer && Platform.OS !== "web" ? (
               <WebView
                 ref={cfHlsWebViewRef}
-                source={{ html: buildCfHlsPlayerHtml(
-                  isCfHlsLive ? cfHlsUrl : authenticatedVideoUrl,
-                  isCfHlsLive ? { liveStream: true } : { startAt: recordingResumeAt },
-                ) }}
+                source={{ html: cfHlsPlayerHtml }}
                 style={{ flex: 1, backgroundColor: "#000" }}
                 onLoad={markPlayed}
                 onMessage={handleWebViewMessage}
@@ -1407,7 +1429,7 @@ export default function LiveClassScreen() {
               />
             ) : isStreamId && nativeStreamHlsUrl && Platform.OS !== "web" ? (
               <WebView
-                source={{ html: buildCfHlsPlayerHtml(nativeStreamHlsUrl, { startAt: recordingResumeAt }) }}
+                source={{ html: cfHlsStreamPlayerHtml }}
                 style={{ flex: 1, backgroundColor: "#000" }}
                 onLoad={markPlayed}
                 onMessage={handleWebViewMessage}
@@ -1649,10 +1671,7 @@ export default function LiveClassScreen() {
               <View style={styles.webScheduledVideoSlot} />
             ) : isCfHls && canMountRecordingPlayer && Platform.OS === "web" ? (
               <iframe
-                srcDoc={buildCfHlsPlayerHtml(
-                  isCfHlsLive ? cfHlsUrl : authenticatedVideoUrl,
-                  isCfHlsLive ? { liveStream: true } : { startAt: recordingResumeAt },
-                )}
+                srcDoc={cfHlsPlayerHtml}
                 style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" } as any}
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                 onLoad={markPlayed}
@@ -1706,10 +1725,7 @@ export default function LiveClassScreen() {
             ) : isCfHls && canMountRecordingPlayer && Platform.OS !== "web" ? (
               <WebView
                 ref={cfHlsWebViewRef}
-                source={{ html: buildCfHlsPlayerHtml(
-                  isCfHlsLive ? cfHlsUrl : authenticatedVideoUrl,
-                  isCfHlsLive ? { liveStream: true } : { startAt: recordingResumeAt },
-                ) }}
+                source={{ html: cfHlsPlayerHtml }}
                 style={{ flex: 1, backgroundColor: "#000" }}
                 onLoad={markPlayed}
                 onMessage={handleWebViewMessage}
@@ -1720,7 +1736,7 @@ export default function LiveClassScreen() {
               />
             ) : isStreamId && nativeStreamHlsUrl && Platform.OS !== "web" ? (
               <WebView
-                source={{ html: buildCfHlsPlayerHtml(nativeStreamHlsUrl, { startAt: recordingResumeAt }) }}
+                source={{ html: cfHlsStreamPlayerHtml }}
                 style={{ flex: 1, backgroundColor: "#000" }}
                 onLoad={markPlayed}
                 onMessage={handleWebViewMessage}

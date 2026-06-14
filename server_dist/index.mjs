@@ -1,7 +1,12 @@
 var __defProp = Object.defineProperty;
 var __getOwnPropNames = Object.getOwnPropertyNames;
-var __esm = (fn, res) => function __init() {
-  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+var __esm = (fn, res, err) => function __init() {
+  if (err) throw err[0];
+  try {
+    return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+  } catch (e) {
+    throw err = [e], e;
+  }
 };
 var __export = (target, all) => {
   for (var name in all)
@@ -8277,6 +8282,19 @@ function normalizeJsonArray(value, fallback = []) {
   }
   return fallback;
 }
+function normalizeJsonValue(value, fallback = []) {
+  if (value === void 0) return fallback;
+  if (Array.isArray(value) || value && typeof value === "object") return value;
+  if (typeof value === "string" && value.trim()) {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && (Array.isArray(parsed) || typeof parsed === "object") ? parsed : fallback;
+    } catch {
+      return fallback;
+    }
+  }
+  return fallback;
+}
 function registerAdminCourseCrudRoutes({
   app: app2,
   db: db2,
@@ -8295,7 +8313,7 @@ function registerAdminCourseCrudRoutes({
         { key: "science", label: "Science", icon: "flask" },
         { key: "gk", label: "G.K", icon: "earth" }
       ]);
-      const teacherDetails = normalizeJsonArray(teacherDetailsJson);
+      const teacherDetails = normalizeJsonValue(teacherDetailsJson, []);
       const result = await db2.query(
         `INSERT INTO courses (title, description, teacher_name, price, original_price, category, is_free, level, duration_hours, course_type, subject, start_date, end_date, validity_months, thumbnail, cover_color, teacher_bio, teacher_image_url, teacher_details_json, multi_subject_config, course_language, batch_status, is_published, created_at) 
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19::jsonb, $20::jsonb, $21, $22, TRUE, $23) RETURNING *`,
@@ -8332,7 +8350,7 @@ function registerAdminCourseCrudRoutes({
     try {
       const { title, description, teacherName, price, originalPrice, category, isFree, level, durationHours, isPublished, totalTests, subject, courseType, startDate, endDate, validityMonths, thumbnail, coverColor, teacherBio, teacherImageUrl, teacherDetailsJson, multiSubjectConfig, courseLanguage, batchStatus } = req.body;
       const vm = validityMonths != null && String(validityMonths).trim() !== "" ? Math.max(0, parseFloat(String(validityMonths)) || 0) || null : null;
-      const teacherDetails = normalizeJsonArray(teacherDetailsJson);
+      const teacherDetails = normalizeJsonValue(teacherDetailsJson, []);
       const subjects = normalizeJsonArray(multiSubjectConfig);
       await db2.query(
         `UPDATE courses SET title=$1, description=$2, teacher_name=$3, price=$4, original_price=$5, category=$6, is_free=$7, level=$8, duration_hours=$9, is_published=$10, total_tests=COALESCE($11, total_tests), subject=COALESCE($12, subject), course_type=COALESCE($13, course_type), start_date=COALESCE($14, start_date), end_date=COALESCE($15, end_date), validity_months=COALESCE($16, validity_months), thumbnail=COALESCE($17, thumbnail), cover_color=COALESCE($18, cover_color), teacher_bio=COALESCE($19, teacher_bio), teacher_image_url=COALESCE($20, teacher_image_url), teacher_details_json=COALESCE($21::jsonb, teacher_details_json), multi_subject_config=COALESCE($22::jsonb, multi_subject_config), course_language=COALESCE($23, course_language), batch_status=COALESCE($24, batch_status) WHERE id=$25`,

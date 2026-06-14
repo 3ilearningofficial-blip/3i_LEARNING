@@ -792,8 +792,9 @@ export default function WelcomeScreen() {
   if (isWeb) {
     const headerLinks = [
       { label: "Home", onPress: () => openProtectedWebRoute(WEB_APP_HOME_PATH) },
-      { label: "Courses", onPress: () => openProtectedWebRoute(WEB_APP_HOME_PATH) },
+      { label: "Daily Missions", onPress: () => openProtectedWebRoute("/(tabs)/daily-mission") },
       { label: "Test Series", onPress: () => openProtectedWebRoute("/(tabs)/test-series") },
+      { label: "Chat Support", onPress: () => openProtectedWebRoute("/(tabs)/support-chat-tab") },
       { label: "AI Tutor", onPress: () => openProtectedWebRoute("/(tabs)/ai-tutor") },
     ];
 
@@ -807,17 +808,17 @@ export default function WelcomeScreen() {
 
           {isDesktopWeb ? (
             <View style={styles.websiteNav}>
+              {webContactShows ? (
+                <WebAdminContactsLaptopEnd phoneDisplay={webContactPhone} emailDisplay={webContactEmail} />
+              ) : null}
               {headerLinks.map((link) => (
                 <Pressable key={link.label} onPress={link.onPress} style={({ pressed }) => [styles.websiteNavItem, pressed && styles.pressedSoft]}>
                   <Text style={styles.websiteNavText}>{link.label}</Text>
                 </Pressable>
               ))}
-              {webContactShows ? (
-                <WebAdminContactsLaptopEnd phoneDisplay={webContactPhone} emailDisplay={webContactEmail} />
-              ) : null}
               {user?.id ? (
-                <Pressable onPress={() => openWebRoute(user.role === "admin" ? "/admin" : WEB_APP_HOME_PATH)} style={styles.websiteLoginButton}>
-                  <Text style={styles.websiteLoginButtonText}>{user.role === "admin" ? "Dashboard" : "Open App"}</Text>
+                <Pressable onPress={() => openWebRoute(WEB_APP_HOME_PATH)} style={styles.websiteLoginButton}>
+                  <Text style={styles.websiteLoginButtonText}>Open App</Text>
                 </Pressable>
               ) : (
                 <Pressable onPress={() => openAuthModal(WEB_APP_HOME_PATH)} style={styles.websiteLoginButton}>

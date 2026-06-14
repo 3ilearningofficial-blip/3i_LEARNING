@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   View, Text, StyleSheet, Pressable, Platform, Image,
   ActivityIndicator, Alert, ScrollView, useWindowDimensions,
@@ -582,6 +582,9 @@ export default function LectureScreen() {
   const autoPlaybackRetryRef = useRef(false);
   const lastSavedPositionRef = useRef(0);
   const latestPlaybackPositionRef = useRef(0);
+  // Resume position is frozen once (when progress first loads) so the injected
+  // WebView HTML never changes mid-playback and forces a full document reload.
+  const initialResumeRef = useRef<number | null>(null);
   const [mediaTokenError, setMediaTokenError] = useState<string | null>(null);
   const [mediaTokenRetryTick, setMediaTokenRetryTick] = useState(0);
 
@@ -819,15 +822,48 @@ export default function LectureScreen() {
   const isBoardImage = !videoId && !isStreamId && !isCfHls && isBoardSnapshotImage(playbackUrl);
   const isDirect = !videoId && !isStreamId && !isBoardImage && isDirectVideoUrl(playbackUrl);
   
-  const youtubeHtml = videoId ? buildYouTubeHtml(videoId) : "";
-  const resumeAt = Math.max(
-    Math.floor(Number(progressData?.last_position_seconds) || 0),
-    latestPlaybackPositionRef.current,
+  // Freeze the resume position the first time progress resolves. After this,
+  // playback progress updates never feed back into the injected HTML, so the
+  // WebView document stays stable and does not reload every ~5s.
+  if (initialResumeRef.current === null && progressData !== undefined) {
+    initialResumeRef.current = Math.max(
+      Math.floor(Number(progressData?.last_position_seconds) || 0),
+      latestPlaybackPositionRef.current,
+    );
+  }
+  const frozenResumeAt = initialResumeRef.current ?? 0;
+  // Stable identity for the player document — independent of token refreshes
+  // (fileKey stays constant while the presigned/proxied URL rotates).
+  const mediaIdentity = fileKey || playbackUrl;
+
+  const youtubeHtml = useMemo(() => (videoId ? buildYouTubeHtml(videoId) : ""), [videoId]);
+  const nativeYouTubeHtml = useMemo(
+    () => (videoId ? buildNativeYouTubeHtml(videoId, frozenResumeAt) : ""),
+    [videoId, frozenResumeAt],
   );
-  const nativeYouTubeHtml = videoId ? buildNativeYouTubeHtml(videoId, resumeAt) : "";
-  const nativeStreamHlsUrl = isStreamId ? cloudflareStreamHlsUrl(playbackUrl) : "";
-  const streamHtml = isStreamId ? buildCloudflareStreamHtml(playbackUrl, undefined, resumeAt) : "";
-  const directVideoHtml = isDirect ? buildDirectVideoHtml(playbackUrl, resumeAt) : "";
+  const nativeStreamHlsUrl = useMemo(
+    () => (isStreamId ? cloudflareStreamHlsUrl(playbackUrl) : ""),
+    [isStreamId, playbackUrl],
+  );
+  const streamHtml = useMemo(
+    () => (isStreamId ? buildCloudflareStreamHtml(playbackUrl, undefined, frozenResumeAt) : ""),
+    [isStreamId, playbackUrl, frozenResumeAt],
+  );
+  const directVideoHtml = useMemo(
+    () => (isDirect ? buildDirectVideoHtml(playbackUrl, frozenResumeAt) : ""),
+    [isDirect, playbackUrl, frozenResumeAt],
+  );
+  const cfHlsNativeHtml = useMemo(
+    () =>
+      isStreamId && nativeStreamHlsUrl
+        ? buildCfHlsPlayerHtml(nativeStreamHlsUrl, { startAt: frozenResumeAt })
+        : "",
+    [isStreamId, nativeStreamHlsUrl, frozenResumeAt],
+  );
+  const cfHlsHtml = useMemo(
+    () => (isCfHls ? buildCfHlsPlayerHtml(playbackUrl, { startAt: frozenResumeAt }) : ""),
+    [isCfHls, playbackUrl, frozenResumeAt],
+  );
 
   useEffect(() => {
     if (!isCfHls || Platform.OS !== "web" || !playbackUrl) return;
@@ -880,19 +916,18 @@ export default function LectureScreen() {
       lastSavedPositionRef.current = normalizedPos;
       const watchPercent =
         duration > 0 ? Math.max(0, Math.min(100, Math.round((normalizedPos / duration) * 100))) : 0;
-      qc.setQueryData([`/api/lectures/${id}/progress`], (old: any) => ({
-        ...(old || {}),
-        is_completed: old?.is_completed || false,
-        watch_percent: Math.max(Number(old?.watch_percent) || 0, watchPercent),
-        last_position_seconds: Math.max(Number(old?.last_position_seconds) || 0, normalizedPos),
-      }));
+      // NOTE: do NOT write into the [`/api/lectures/${id}/progress`] cache here.
+      // The player reads its resume position from that query; mutating it mid-play
+      // would rebuild the injected WebView HTML and reload the document (black
+      // screen + 0:00 + buffering loop). Persist to the backend only; the latest
+      // position is kept in latestPlaybackPositionRef and re-read on next mount.
       apiRequest("POST", `/api/lectures/${id}/progress`, {
         watchPercent,
         isCompleted: false,
         lastPositionSeconds: normalizedPos,
       }).catch(() => {});
     },
-    [id, qc],
+    [id],
   );
 
   const triggerPlayerRetry = useCallback((auto = false) => {
@@ -1102,20 +1137,20 @@ export default function LectureScreen() {
           </View>
         )}
         {!hasError && canMountPlayer && videoId && Platform.OS === "web" ? (
-          <WebYouTubePlayer key={`yt-web-${playerRetryTick}`} videoId={videoId} resumeAt={resumeAt} onReady={() => setIsLoading(false)} />
+          <WebYouTubePlayer key={`yt-web-${playerRetryTick}-${mediaIdentity}`} videoId={videoId} resumeAt={frozenResumeAt} onReady={() => setIsLoading(false)} />
         ) : !hasError && canMountPlayer && isStreamId && Platform.OS === "web" ? (
-          <WebCloudflareStreamPlayer key={`cf-web-${playerRetryTick}`} videoId={playbackUrl} resumeAt={resumeAt} onReady={() => setIsLoading(false)} />
+          <WebCloudflareStreamPlayer key={`cf-web-${playerRetryTick}-${mediaIdentity}`} videoId={playbackUrl} resumeAt={frozenResumeAt} onReady={() => setIsLoading(false)} />
         ) : !hasError && canMountPlayer && isCfHls && Platform.OS === "web" ? (
           <iframe
-            key={`hls-web-${playerRetryTick}`}
-            srcDoc={buildCfHlsPlayerHtml(playbackUrl, { startAt: resumeAt })}
+            key={`hls-web-${playerRetryTick}-${mediaIdentity}`}
+            srcDoc={cfHlsHtml}
             style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" } as any}
             allow="autoplay; fullscreen"
             onLoad={() => { setIsLoading(false); }}
           />
         ) : !hasError && canMountPlayer && videoId && nativeYouTubeHtml && Platform.OS !== "web" ? (
           <WebView
-            key={`yt-native-${playerRetryTick}`}
+            key={`yt-native-${playerRetryTick}-${mediaIdentity}`}
             source={{ html: nativeYouTubeHtml, baseUrl: "https://www.youtube.com" }}
             style={styles.webView}
             onLoad={() => { setIsLoading(false); setIsVideoPlaying(true); }}
@@ -1134,8 +1169,8 @@ export default function LectureScreen() {
           />
         ) : !hasError && canMountPlayer && isStreamId && nativeStreamHlsUrl && Platform.OS !== "web" ? (
           <WebView
-            key={`cf-hls-native-${playerRetryTick}`}
-            source={{ html: buildCfHlsPlayerHtml(nativeStreamHlsUrl, { startAt: resumeAt }) }}
+            key={`cf-hls-native-${playerRetryTick}-${mediaIdentity}`}
+            source={{ html: cfHlsNativeHtml }}
             style={styles.webView}
             onLoad={() => { setIsLoading(false); setIsVideoPlaying(true); }}
             onError={handlePlaybackError}
@@ -1152,7 +1187,7 @@ export default function LectureScreen() {
           />
         ) : !hasError && canMountPlayer && isStreamId && streamHtml ? (
           <WebView
-            key={`cf-native-${playerRetryTick}`}
+            key={`cf-native-${playerRetryTick}-${mediaIdentity}`}
             source={{ html: streamHtml, baseUrl: "https://cloudflarestream.com" }}
             style={styles.webView}
             onLoad={() => { setIsLoading(false); setIsVideoPlaying(true); }}
@@ -1170,8 +1205,8 @@ export default function LectureScreen() {
           />
         ) : !hasError && canMountPlayer && isCfHls && Platform.OS !== "web" ? (
           <WebView
-            key={`hls-native-${playerRetryTick}`}
-            source={{ html: buildCfHlsPlayerHtml(playbackUrl, { startAt: resumeAt }) }}
+            key={`hls-native-${playerRetryTick}-${mediaIdentity}`}
+            source={{ html: cfHlsHtml }}
             style={styles.webView}
             onLoad={() => { setIsLoading(false); setIsVideoPlaying(true); }}
             onError={handlePlaybackError}
@@ -1188,16 +1223,16 @@ export default function LectureScreen() {
           />
         ) : !hasError && canMountPlayer && isDirect && Platform.OS === "web" ? (
           <WebDirectVideoPlayer
-            key={`direct-web-${playerRetryTick}`}
+            key={`direct-web-${playerRetryTick}-${mediaIdentity}`}
             url={playbackUrl}
-            resumeAt={resumeAt}
+            resumeAt={frozenResumeAt}
             onReady={() => setIsLoading(false)}
             onError={handlePlaybackError}
             onPosition={persistPlaybackPosition}
           />
         ) : !hasError && canMountPlayer && isDirect && Platform.OS !== "web" ? (
           <WebView
-            key={`direct-native-${playerRetryTick}`}
+            key={`direct-native-${playerRetryTick}-${mediaIdentity}`}
             source={{ html: directVideoHtml }}
             style={styles.webView}
             onLoad={() => { setIsLoading(false); setIsVideoPlaying(true); }}
