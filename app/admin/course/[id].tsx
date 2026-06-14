@@ -210,6 +210,10 @@ const MULTI_SUBJECTS = [
   { key: "gk", label: "G.K", icon: "earth" },
 ] as const;
 
+// Multi-subject admin layout: the top-level header shows About | subjects | Students.
+// Selecting a subject reveals these content sub-tabs (same order as the student subject screen).
+const MULTI_CONTENT_TAB_KEYS: AdminCourseTab[] = ["live", "lectures", "tests", "pyqs", "mocks", "materials"];
+
 function parseCourseAboutMeta(value: any): { features: string[]; teachers: AboutTeacher[] } {
   const raw = typeof value === "string" ? (() => { try { return JSON.parse(value); } catch { return value; } })() : value;
   if (Array.isArray(raw)) {
@@ -1287,6 +1291,10 @@ export default function AdminCourseScreen() {
   const isTestSeries = course.course_type === "test_series";
   const effectiveTab = isTestSeries && activeTab !== "enrolled" ? "tests" : (activeTab === "pyqs" || activeTab === "mocks" ? "tests" : activeTab);
   const testSectionLabel = activeTab === "pyqs" ? "PYQs" : activeTab === "mocks" ? "Mock Tests" : "Tests";
+  // For multi-subject courses: a "content" tab (Live/Lectures/Tests/PYQs/Mock/Materials) means
+  // a subject is selected at the top level. About and Students are subject-agnostic.
+  const isContentTab = activeTab !== "about" && activeTab !== "enrolled";
+  const MULTI_CONTENT_TABS = ADMIN_COURSE_TABS.filter((t) => MULTI_CONTENT_TAB_KEYS.includes(t.key));
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -1325,40 +1333,76 @@ export default function AdminCourseScreen() {
           </Pressable>
         </View>
 
-        {isMultiSubjectCourse && (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 12, gap: 8 }}>
-            {MULTI_SUBJECTS.map((subject) => {
-              const selected = activeSubjectKey === subject.key;
-              return (
-                <Pressable
-                  key={subject.key}
-                  onPress={() => setActiveSubjectKey(subject.key)}
-                  style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, backgroundColor: selected ? "#fff" : "rgba(255,255,255,0.12)" }}
-                >
-                  <Ionicons name={subject.icon as keyof typeof Ionicons.glyphMap} size={15} color={selected ? Colors.light.primary : "#fff"} />
-                  <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: selected ? Colors.light.primary : "#fff" }}>{subject.label}</Text>
-                </Pressable>
-              );
-            })}
+        {isMultiSubjectCourse ? (
+          <>
+            {/* Top-level: About | Maths | English | Science | G.K | Students */}
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsRow}>
+              <Pressable
+                style={[styles.tab, activeTab === "about" && styles.tabActive]}
+                onPress={() => setActiveTab("about")}
+              >
+                <Ionicons name="information-circle" size={14} color={activeTab === "about" ? Colors.light.primary : "rgba(255,255,255,0.6)"} />
+                <Text style={[styles.tabText, activeTab === "about" && styles.tabTextActive]}>About</Text>
+              </Pressable>
+              {MULTI_SUBJECTS.map((subject) => {
+                const selected = isContentTab && activeSubjectKey === subject.key;
+                return (
+                  <Pressable
+                    key={subject.key}
+                    style={[styles.tab, selected && styles.tabActive]}
+                    onPress={() => {
+                      setActiveSubjectKey(subject.key);
+                      if (!isContentTab) setActiveTab("lectures");
+                    }}
+                  >
+                    <Ionicons name={subject.icon as keyof typeof Ionicons.glyphMap} size={14} color={selected ? Colors.light.primary : "rgba(255,255,255,0.6)"} />
+                    <Text style={[styles.tabText, selected && styles.tabTextActive]}>{subject.label}</Text>
+                  </Pressable>
+                );
+              })}
+              <Pressable
+                style={[styles.tab, activeTab === "enrolled" && styles.tabActive]}
+                onPress={() => setActiveTab("enrolled")}
+              >
+                <Ionicons name="people" size={14} color={activeTab === "enrolled" ? Colors.light.primary : "rgba(255,255,255,0.6)"} />
+                <Text style={[styles.tabText, activeTab === "enrolled" && styles.tabTextActive]}>Students</Text>
+              </Pressable>
+            </ScrollView>
+
+            {/* Subject content sub-tabs — only when a subject is selected */}
+            {isContentTab && (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={[styles.tabsRow, styles.subTabsRow]}>
+                {MULTI_CONTENT_TABS.map((tab) => (
+                  <Pressable
+                    key={tab.key}
+                    style={[styles.subTab, activeTab === tab.key && styles.subTabActive]}
+                    onPress={() => setActiveTab(tab.key)}
+                  >
+                    <Ionicons name={tab.icon} size={13} color={activeTab === tab.key ? "#fff" : "rgba(255,255,255,0.75)"} />
+                    <Text style={[styles.subTabText, activeTab === tab.key && styles.subTabTextActive]}>{tab.label}</Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            )}
+          </>
+        ) : (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsRow}>
+            {ADMIN_COURSE_TABS.filter(t => {
+              if (isTestSeries) return t.key === "tests" || t.key === "enrolled";
+              if (t.key === "about" || t.key === "pyqs" || t.key === "mocks") return false;
+              return true;
+            }).map((tab) => (
+              <Pressable
+                key={tab.key}
+                style={[styles.tab, activeTab === tab.key && styles.tabActive]}
+                onPress={() => setActiveTab(tab.key)}
+              >
+                <Ionicons name={tab.icon} size={14} color={activeTab === tab.key ? Colors.light.primary : "rgba(255,255,255,0.6)"} />
+                <Text style={[styles.tabText, activeTab === tab.key && styles.tabTextActive]}>{tab.label}</Text>
+              </Pressable>
+            ))}
           </ScrollView>
         )}
-
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsRow}>
-          {ADMIN_COURSE_TABS.filter(t => {
-            if (isTestSeries) return t.key === "tests" || t.key === "enrolled";
-            if (!isMultiSubjectCourse && (t.key === "about" || t.key === "pyqs" || t.key === "mocks")) return false;
-            return true;
-          }).map((tab) => (
-            <Pressable
-              key={tab.key}
-              style={[styles.tab, activeTab === tab.key && styles.tabActive]}
-              onPress={() => setActiveTab(tab.key)}
-            >
-              <Ionicons name={tab.icon} size={14} color={activeTab === tab.key ? Colors.light.primary : "rgba(255,255,255,0.6)"} />
-              <Text style={[styles.tabText, activeTab === tab.key && styles.tabTextActive]}>{tab.label}</Text>
-            </Pressable>
-          ))}
-        </ScrollView>
       </LinearGradient>
 
       <ScrollView contentContainerStyle={[styles.content, { paddingBottom: bottomPadding + 80 }]}>
@@ -4104,6 +4148,11 @@ const styles = StyleSheet.create({
   tabActive: { backgroundColor: "#fff" },
   tabText: { fontSize: 13, fontFamily: "Inter_500Medium", color: "rgba(255,255,255,0.7)" },
   tabTextActive: { color: Colors.light.primary },
+  subTabsRow: { paddingTop: 2, paddingBottom: 2 },
+  subTab: { flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, backgroundColor: "rgba(255,255,255,0.08)", borderWidth: 1, borderColor: "rgba(255,255,255,0.18)" },
+  subTabActive: { backgroundColor: Colors.light.primary, borderColor: Colors.light.primary },
+  subTabText: { fontSize: 12, fontFamily: "Inter_500Medium", color: "rgba(255,255,255,0.75)" },
+  subTabTextActive: { color: "#fff", fontFamily: "Inter_700Bold" },
   content: { padding: 16, gap: 12 },
   section: { gap: 10 },
   sectionHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
