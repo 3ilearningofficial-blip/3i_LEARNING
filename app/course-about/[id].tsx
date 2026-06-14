@@ -91,7 +91,6 @@ export default function MultiSubjectCourseAbout() {
     return <View style={[styles.center, { backgroundColor: colors.background }]}><Text style={{ color: colors.text }}>Course not found</Text></View>;
   }
 
-  const cover = course.cover_color || "#4F46E5";
   const isFreeCourse = course.is_free || parseFloat(String(course.price || "0")) <= 0;
   const progress = Math.max(0, Math.min(100, Number(course.progress || 0)));
   const lecturesCount = Array.isArray(course.lectures) ? course.lectures.length : 0;
@@ -120,25 +119,23 @@ export default function MultiSubjectCourseAbout() {
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 96 }}>
-        <LinearGradient colors={[cover, `${cover}CC`]} style={[styles.hero, { paddingTop: insets.top + 12 }]}>
-          <View style={styles.topRow}>
+        <LinearGradient colors={["#0A1628", "#1A2E50"]} style={[styles.hero, { paddingTop: insets.top + 8 }]}>
+          <View style={styles.headerRow}>
             <Pressable style={styles.iconBtn} onPress={() => router.back()}>
               <Ionicons name="arrow-back" size={20} color="#fff" />
             </Pressable>
-            <View style={{ width: 42 }} />
-          </View>
-          {course.thumbnail ? <Image source={{ uri: course.thumbnail }} style={styles.bannerImage} resizeMode="cover" /> : null}
-          <View style={styles.heroText}>
-            <Text style={styles.title}>{course.title}</Text>
-            <Text style={styles.meta}>{course.category || "Course"} · {course.level || "Beginner"} · {course.course_language || "HINGLISH"}</Text>
-            <Pressable style={styles.exploreBtn} onPress={() => router.push(`/multi-course/${course.id}` as any)}>
-              <Text style={styles.exploreText}>Explore Course</Text>
-              <Ionicons name="arrow-forward" size={18} color="#fff" />
-            </Pressable>
+            <View style={styles.headerTextCol}>
+              <Text style={styles.title} numberOfLines={2}>{course.title}</Text>
+              <Text style={styles.meta}>{course.category || "Course"} · {course.level || "Beginner"} · {course.course_language || "HINGLISH"}</Text>
+            </View>
           </View>
         </LinearGradient>
 
         <View style={styles.body}>
+          <Pressable style={styles.exploreBtn} onPress={() => router.push(`/multi-course/${course.id}` as any)}>
+            <Text style={styles.exploreText}>Explore Course</Text>
+            <Ionicons name="arrow-forward" size={18} color="#fff" />
+          </Pressable>
           <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
               <Text style={[styles.sectionTitle, { color: colors.text }]}>Your Progress</Text>
@@ -269,15 +266,14 @@ export default function MultiSubjectCourseAbout() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
-  hero: { paddingHorizontal: 18, paddingBottom: 22 },
-  topRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 14 },
-  iconBtn: { width: 42, height: 42, borderRadius: 21, backgroundColor: "rgba(255,255,255,0.18)", alignItems: "center", justifyContent: "center" },
-  bannerImage: { height: 150, borderRadius: 20, marginBottom: 16 },
-  heroText: { gap: 8 },
-  title: { color: "#fff", fontSize: 26, lineHeight: 32, fontFamily: "Inter_800ExtraBold" },
-  meta: { color: "rgba(255,255,255,0.85)", fontSize: 13, fontFamily: "Inter_600SemiBold" },
-  exploreBtn: { marginTop: 8, alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "rgba(15,23,42,0.72)", borderRadius: 12, paddingHorizontal: 16, paddingVertical: 11 },
-  exploreText: { color: "#fff", fontSize: 14, fontFamily: "Inter_800ExtraBold" },
+  hero: { paddingHorizontal: 16, paddingBottom: 14 },
+  headerRow: { flexDirection: "row", alignItems: "flex-start", gap: 12 },
+  headerTextCol: { flex: 1, gap: 4, paddingTop: 2 },
+  iconBtn: { width: 38, height: 38, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" },
+  title: { color: "#fff", fontSize: 22, lineHeight: 28, fontFamily: "Inter_700Bold" },
+  meta: { color: "rgba(255,255,255,0.85)", fontSize: 12, fontFamily: "Inter_600SemiBold" },
+  exploreBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: Colors.light.primary, borderRadius: 14, paddingHorizontal: 16, paddingVertical: 13 },
+  exploreText: { color: "#fff", fontSize: 14, fontFamily: "Inter_700Bold" },
   body: { padding: 20, gap: 20 },
   card: { borderWidth: 1, borderRadius: 18, padding: 16, gap: 10 },
   sectionTitle: { fontSize: 18, fontFamily: "Inter_800ExtraBold" },

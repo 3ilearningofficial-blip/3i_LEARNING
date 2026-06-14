@@ -258,16 +258,15 @@ export default function MultiCourseSubjectScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* Multi-subject distinct header */}
-      <View style={[styles.header, { paddingTop: insets.top + 12, backgroundColor: colors.background, borderBottomColor: colors.border }]}>
-        <Pressable style={[styles.backBtn, { backgroundColor: colors.surfaceAlt }]} onPress={() => router.back()}>
-          <Ionicons name="arrow-back" size={20} color={colors.text} />
+      <LinearGradient colors={["#0A1628", "#1A2E50"]} style={[styles.header, { paddingTop: insets.top + 8 }]}>
+        <Pressable style={styles.backBtn} onPress={() => router.back()}>
+          <Ionicons name="arrow-back" size={20} color="#fff" />
         </Pressable>
-        <View style={{ flex: 1 }}>
-          <Text style={[styles.title, { color: colors.text }]}>{SUBJECT_LABELS[subjectKey] || subjectKey}</Text>
-          <Text style={[styles.subtitle, { color: colors.textSecondary }]} numberOfLines={1}>{course?.title || "Course"}</Text>
+        <View style={styles.headerTextCol}>
+          <Text style={styles.title}>{SUBJECT_LABELS[subjectKey] || subjectKey}</Text>
+          <Text style={styles.subtitle} numberOfLines={1}>{course?.title || "Course"}</Text>
         </View>
-      </View>
+      </LinearGradient>
 
       {/* Section tab bar — same style as normal course screen */}
       <ScrollView
@@ -298,10 +297,11 @@ export default function MultiCourseSubjectScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
-  header: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 1 },
-  backBtn: { width: 42, height: 42, borderRadius: 21, alignItems: "center", justifyContent: "center" },
-  title: { fontSize: 22, fontFamily: "Inter_800ExtraBold" },
-  subtitle: { fontSize: 12, fontFamily: "Inter_700Bold", marginTop: 2 },
+  header: { flexDirection: "row", alignItems: "flex-start", gap: 12, paddingHorizontal: 16, paddingBottom: 14 },
+  headerTextCol: { flex: 1, gap: 4, paddingTop: 2 },
+  backBtn: { width: 38, height: 38, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" },
+  title: { fontSize: 22, fontFamily: "Inter_700Bold", color: "#fff", lineHeight: 28 },
+  subtitle: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: "rgba(255,255,255,0.85)" },
 
   // Tab bar (matches app/course/[id].tsx)
   tabBarScroll: { borderBottomWidth: 1, maxHeight: 52, flexGrow: 0 },
