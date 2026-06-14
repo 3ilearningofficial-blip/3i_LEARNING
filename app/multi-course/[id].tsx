@@ -2,6 +2,7 @@ import React from "react";
 import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, useWindowDimensions } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
 import { useQuery } from "@tanstack/react-query";
 import { authFetch, getApiUrl } from "@/lib/query-client";
 import Colors from "@/constants/colors";
@@ -48,9 +49,9 @@ export default function MultiCourseLayout() {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <View style={[styles.header, { paddingTop: insets.top + 12, backgroundColor: colors.card, borderBottomColor: colors.border }]}>
-        <Pressable style={[styles.backBtn, { backgroundColor: "#EEF2FF" }]} onPress={() => router.back()}>
-          <Ionicons name="arrow-back" size={20} color={Colors.light.primary} />
+      <View style={[styles.header, { paddingTop: insets.top + 12, backgroundColor: colors.background, borderBottomColor: colors.border }]}>
+        <Pressable style={[styles.backBtn, { backgroundColor: colors.surfaceAlt }]} onPress={() => router.back()}>
+          <Ionicons name="arrow-back" size={20} color={colors.text} />
         </Pressable>
         <View style={{ flex: 1 }}>
           <Text style={[styles.title, { color: colors.text }]} numberOfLines={1}>{course?.title || "Course Layout"}</Text>
@@ -84,18 +85,31 @@ export default function MultiCourseLayout() {
         </View>
 
         <Text style={[styles.sectionTitle, { color: colors.text, marginTop: 20 }]}>Live / Scheduled Classes</Text>
-        {Array.isArray(liveClasses) && liveClasses.length > 0 ? liveClasses.slice(0, 8).map((lc: any) => (
-          <Pressable key={lc.id} style={[styles.liveCard, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={() => router.push(`/live-class/${lc.id}` as any)}>
-            <View style={styles.liveIcon}><Ionicons name={lc.is_live ? "radio" : "calendar"} size={18} color="#DC2626" /></View>
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.liveTitle, { color: colors.text }]} numberOfLines={1}>{lc.title}</Text>
-              <Text style={[styles.liveMeta, { color: colors.textSecondary }]}>
-                {lc.subject_key ? `${String(lc.subject_key).toUpperCase()} · ` : ""}{lc.is_live ? "Live now" : new Date(Number(lc.scheduled_at || Date.now())).toLocaleString()}
-              </Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
-          </Pressable>
-        )) : (
+        {Array.isArray(liveClasses) && liveClasses.length > 0 ? liveClasses.slice(0, 8).map((lc: any) => {
+          const isLive = !!lc.is_live;
+          const isCompleted = !!lc.is_completed;
+          const badgeColors: [string, string] = isLive ? ["#DC2626", "#EF4444"] : isCompleted ? ["#1A56DB", "#3B82F6"] : ["#6B7280", "#9CA3AF"];
+          return (
+            <Pressable key={lc.id} style={({ pressed }) => [styles.liveClassItem, { backgroundColor: colors.card, borderColor: colors.border }, pressed && { opacity: 0.85 }]} onPress={() => router.push(`/live-class/${lc.id}` as any)}>
+              <LinearGradient colors={badgeColors} style={styles.liveStatusBadge}>
+                {isLive ? (
+                  <><View style={styles.liveDot} /><Text style={styles.liveStatusText}>LIVE</Text></>
+                ) : isCompleted ? (
+                  <Ionicons name="play" size={14} color="#fff" />
+                ) : (
+                  <Ionicons name="time" size={14} color="#fff" />
+                )}
+              </LinearGradient>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.liveClassTitle, { color: colors.text }]} numberOfLines={1}>{lc.title}</Text>
+                <Text style={[styles.liveClassTime, { color: colors.textSecondary }]}>
+                  {lc.subject_key ? `${String(lc.subject_key).toUpperCase()} · ` : ""}{isLive ? "Happening now" : new Date(Number(lc.scheduled_at || Date.now())).toLocaleString()}
+                </Text>
+              </View>
+              <Ionicons name={isLive || isCompleted ? "play-circle" : "calendar"} size={22} color={isLive ? "#DC2626" : isCompleted ? Colors.light.primary : colors.textMuted} />
+            </Pressable>
+          );
+        }) : (
           <View style={[styles.emptyCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <Text style={{ color: colors.textSecondary, fontFamily: "Inter_600SemiBold" }}>No live or scheduled classes yet.</Text>
           </View>
@@ -131,9 +145,11 @@ const styles = StyleSheet.create({
   subjectIconBox: { width: 42, height: 42, borderRadius: 12, alignItems: "center", justifyContent: "center", marginBottom: 8 },
   subjectBoxTitle: { fontSize: 13, fontFamily: "Inter_800ExtraBold", textAlign: "center" },
   subjectBoxMeta: { fontSize: 10, fontFamily: "Inter_600SemiBold", marginTop: 3, textAlign: "center" },
-  liveCard: { flexDirection: "row", alignItems: "center", gap: 12, borderWidth: 1, borderRadius: 16, padding: 12, marginBottom: 10 },
-  liveIcon: { width: 38, height: 38, borderRadius: 13, backgroundColor: "#FEE2E2", alignItems: "center", justifyContent: "center" },
-  liveTitle: { fontSize: 14, fontFamily: "Inter_800ExtraBold" },
-  liveMeta: { fontSize: 12, fontFamily: "Inter_500Medium", marginTop: 2 },
+  liveClassItem: { flexDirection: "row", alignItems: "center", gap: 12, borderWidth: 1, borderRadius: 16, padding: 12, marginBottom: 10 },
+  liveStatusBadge: { width: 40, height: 40, borderRadius: 12, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 3 },
+  liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: "#fff" },
+  liveStatusText: { fontSize: 9, fontFamily: "Inter_700Bold", color: "#fff" },
+  liveClassTitle: { fontSize: 14, fontFamily: "Inter_600SemiBold", marginBottom: 2 },
+  liveClassTime: { fontSize: 12, fontFamily: "Inter_400Regular" },
   emptyCard: { borderWidth: 1, borderRadius: 16, padding: 16 },
 });
