@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useEffect } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable, TextInput,
-  RefreshControl, Platform, ActivityIndicator, FlatList, Image, useWindowDimensions,
+  RefreshControl, Platform, ActivityIndicator, FlatList, Image, useWindowDimensions, Animated,
 } from "react-native";
 import { router } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
@@ -101,6 +101,7 @@ function multiStatusLabel(course: Course): string {
 
 function MultiSubjectCourseCard({ course, enrolled = false }: { course: Course; enrolled?: boolean }) {
   const { colors } = useAppTheme();
+  const livePulse = React.useRef(new Animated.Value(1)).current;
   const discount = course.original_price && parseFloat(course.original_price) > 0 && parseFloat(course.price || "0") > 0
     ? Math.round((1 - parseFloat(course.price) / parseFloat(course.original_price)) * 100)
     : 0;
@@ -115,19 +116,33 @@ function MultiSubjectCourseCard({ course, enrolled = false }: { course: Course; 
       : course.validity_months
         ? `${course.validity_months} months validity`
         : "";
+  const bannerColors: [string, string] = course.thumbnail ? [cover, `${cover}CC`] : ["#B91C1C", "#EF4444"];
+
+  useEffect(() => {
+    if (status !== "LIVE") {
+      livePulse.setValue(1);
+      return;
+    }
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(livePulse, { toValue: 0.35, duration: 650, useNativeDriver: true }),
+        Animated.timing(livePulse, { toValue: 1, duration: 650, useNativeDriver: true }),
+      ])
+    );
+    animation.start();
+    return () => animation.stop();
+  }, [livePulse, status]);
 
   return (
     <Pressable
       style={({ pressed }) => [styles.multiCourseCard, { backgroundColor: colors.card, borderColor: colors.border }, pressed && { opacity: 0.94, transform: [{ scale: 0.985 }] }]}
       onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push(`/course-about/${course.id}` as any); }}
     >
-      <LinearGradient colors={[cover, `${cover}CC`]} style={styles.multiCourseBanner}>
+      <LinearGradient colors={bannerColors} style={styles.multiCourseBanner}>
         {course.thumbnail ? (
           <Image source={{ uri: course.thumbnail }} style={StyleSheet.absoluteFillObject} resizeMode="cover" />
         ) : (
-          <View style={styles.multiBannerFallback}>
-            <Text style={styles.multiBannerTitle}>{course.title}</Text>
-          </View>
+          <View style={styles.multiBannerFallback} />
         )}
       </LinearGradient>
       <View style={styles.multiCourseBody}>
@@ -141,7 +156,9 @@ function MultiSubjectCourseCard({ course, enrolled = false }: { course: Course; 
         <Text style={[styles.multiTitle, { color: colors.text }]} numberOfLines={2}>{course.title}</Text>
         {!enrolled && (
           <View style={styles.multiMetaRow}>
-            <Ionicons name="ellipse" size={9} color="#DC2626" />
+            {status === "LIVE" ? (
+              <Animated.View style={[styles.multiLiveDot, { opacity: livePulse, transform: [{ scale: livePulse }] }]} />
+            ) : null}
             <Text style={[styles.multiMetaText, styles.multiStatusText]}>{status}</Text>
             {validityText ? <Text style={[styles.multiMetaText, { color: colors.textSecondary }]}>| {validityText}</Text> : null}
           </View>
@@ -159,7 +176,9 @@ function MultiSubjectCourseCard({ course, enrolled = false }: { course: Course; 
             {discount > 0 ? <Text style={styles.multiDiscount}>{discount}% OFF</Text> : null}
             <View style={{ flex: 1 }} />
             <Pressable style={styles.multiBuyBtn} onPress={() => router.push(`/course-about/${course.id}` as any)}>
-              <Text style={styles.multiBuyText}>{course.is_free || parseFloat(course.price || "0") <= 0 ? "Start Free" : "Buy Now"}</Text>
+              <LinearGradient colors={["#B91C1C", "#EF4444"]} style={styles.multiBuyGradient}>
+                <Text style={styles.multiBuyText}>{course.is_free || parseFloat(course.price || "0") <= 0 ? "Start Free" : "Buy Now"}</Text>
+              </LinearGradient>
             </Pressable>
             <Pressable style={styles.multiArrowBtn} onPress={() => router.push(`/course-about/${course.id}` as any)}>
               <Ionicons name="chevron-forward" size={24} color="#0F172A" />
@@ -961,7 +980,7 @@ const styles = StyleSheet.create({
   sectionTitle: { fontSize: 18, fontFamily: "Inter_700Bold", color: Colors.light.text },
   seeAll: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.primary },
   courseCard: {
-    backgroundColor: "#fff", borderRadius: 20, overflow: "hidden", minHeight: 238,
+    backgroundColor: "#fff", borderRadius: 20, overflow: "hidden", minHeight: 268,
     marginBottom: 14, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 12, elevation: 4,
   },
   multiCourseCard: {
@@ -969,27 +988,28 @@ const styles = StyleSheet.create({
     shadowColor: "#000", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.08, shadowRadius: 14, elevation: 4,
   },
   multiCourseBanner: { height: 154, overflow: "hidden", justifyContent: "center" },
-  multiBannerFallback: { flex: 1, alignItems: "center", justifyContent: "center", padding: 18 },
-  multiBannerTitle: { color: "#065F46", fontSize: 15, lineHeight: 20, fontFamily: "Inter_700Bold", textAlign: "center" },
-  multiCourseBody: { paddingHorizontal: 15, paddingVertical: 15, gap: 8 },
+  multiBannerFallback: { flex: 1 },
+  multiCourseBody: { paddingHorizontal: 16, paddingVertical: 16, gap: 10 },
   multiTopRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
   multiBadgeRow: { flexDirection: "row", alignItems: "center", gap: 6, flex: 1, flexWrap: "wrap" },
-  multiCategory: { fontSize: 12, fontFamily: "Inter_800ExtraBold", color: "#F97316", textTransform: "uppercase" },
+  multiCategory: { fontSize: 12, fontFamily: "Inter_800ExtraBold", color: "#DC2626", textTransform: "uppercase" },
   multiLevel: { fontSize: 11, fontFamily: "Inter_800ExtraBold", color: "#4F46E5", backgroundColor: "#EEF2FF", borderRadius: 7, paddingHorizontal: 8, paddingVertical: 4 },
   multiLanguagePill: { borderWidth: 1, borderColor: "#CBD5E1", borderRadius: 7, paddingHorizontal: 9, paddingVertical: 4, backgroundColor: "#fff" },
   multiLanguageText: { fontSize: 11, fontFamily: "Inter_800ExtraBold", color: "#0F172A" },
-  multiTitle: { fontSize: 18, lineHeight: 24, fontFamily: "Inter_800ExtraBold" },
+  multiTitle: { fontSize: 18, lineHeight: 25, fontFamily: "Inter_800ExtraBold" },
   multiMetaRow: { flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" },
   multiMetaText: { fontSize: 13, fontFamily: "Inter_600SemiBold" },
   multiStatusText: { color: "#DC2626", fontFamily: "Inter_800ExtraBold" },
-  multiPriceRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 2 },
+  multiLiveDot: { width: 9, height: 9, borderRadius: 4.5, backgroundColor: "#DC2626" },
+  multiPriceRow: { flexDirection: "row", alignItems: "center", gap: 9, marginTop: 4 },
   multiPrice: { fontSize: 18, fontFamily: "Inter_800ExtraBold", color: Colors.light.primary },
   multiOriginalPrice: { fontSize: 12, fontFamily: "Inter_400Regular", color: "#64748B", textDecorationLine: "line-through" },
   multiDiscount: { fontSize: 11, fontFamily: "Inter_700Bold", color: "#16A34A" },
-  multiBuyBtn: { backgroundColor: "#111827", borderRadius: 9, paddingHorizontal: 16, paddingVertical: 11 },
+  multiBuyBtn: { borderRadius: 10, overflow: "hidden" },
+  multiBuyGradient: { paddingHorizontal: 17, paddingVertical: 11, borderRadius: 10 },
   multiBuyText: { color: "#fff", fontSize: 13, fontFamily: "Inter_800ExtraBold" },
   multiArrowBtn: { width: 38, height: 38, borderRadius: 8, borderWidth: 1, borderColor: "#CBD5E1", alignItems: "center", justifyContent: "center", backgroundColor: "#fff" },
-  courseCardHeader: { height: 116, padding: 13, justifyContent: "space-between" },
+  courseCardHeader: { height: 128, padding: 14, justifyContent: "space-between" },
   courseCardBadgeRow: { flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" },
   categoryBadge: { backgroundColor: "rgba(0,0,0,0.35)", borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
   categoryBadgeText: { color: "#fff", fontSize: 10, fontFamily: "Inter_700Bold" },
@@ -1000,8 +1020,8 @@ const styles = StyleSheet.create({
   enrolledBadge: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "rgba(0,0,0,0.35)", borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3, alignSelf: "flex-start" },
   enrolledBadgeText: { color: "#22C55E", fontSize: 10, fontFamily: "Inter_600SemiBold" },
   courseSubject: { color: "rgba(255,255,255,0.85)", fontSize: 13, fontFamily: "Inter_600SemiBold" },
-  courseCardBody: { padding: 15, gap: 7, minHeight: 122 },
-  courseTitle: { fontSize: 15, fontFamily: "Inter_700Bold", color: Colors.light.text, lineHeight: 20 },
+  courseCardBody: { padding: 16, gap: 9, minHeight: 140 },
+  courseTitle: { fontSize: 15, fontFamily: "Inter_700Bold", color: Colors.light.text, lineHeight: 21 },
   courseTeacher: { fontSize: 12, color: Colors.light.textSecondary, fontFamily: "Inter_400Regular" },
   courseStats: { flexDirection: "row", alignItems: "center", gap: 6 },
   courseStat: { flexDirection: "row", alignItems: "center", gap: 3 },

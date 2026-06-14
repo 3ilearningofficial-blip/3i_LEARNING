@@ -17,6 +17,7 @@ const WEB_NAV_ITEMS = [
   { label: "Home", href: "/home", activePaths: ["/home"] },
   { label: "Daily Missions", href: "/(tabs)/daily-mission", activePaths: ["/daily-mission"] },
   { label: "Test Series", href: "/(tabs)/test-series", activePaths: ["/test-series"] },
+  { label: "Support", href: "/(tabs)/support-chat-tab", activePaths: ["/support-chat-tab"] },
   { label: "AI Tutor", href: "/(tabs)/ai-tutor", activePaths: ["/ai-tutor"] },
 ] as const;
 

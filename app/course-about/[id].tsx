@@ -30,6 +30,9 @@ type Course = {
   teacher_details_json?: any;
   course_language?: string;
   level?: string;
+  start_date?: string;
+  end_date?: string;
+  validity_months?: number | string | null;
 };
 
 type AboutTeacher = { name: string; imageUrl: string; bio: string };
@@ -64,6 +67,11 @@ async function fetchCourse(id: string): Promise<Course | null> {
   return res.json();
 }
 
+function readableValue(value?: string | number | null): string {
+  if (value == null || value === "") return "";
+  return String(value);
+}
+
 export default function MultiSubjectCourseAbout() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { colors } = useAppTheme();
@@ -95,6 +103,19 @@ export default function MultiSubjectCourseAbout() {
   const aboutMeta = parseAboutMeta(course.teacher_details_json, course);
   const teachers = aboutMeta.teachers.length > 0 ? aboutMeta.teachers : [{ name: course.teacher_name || "3i Learning", imageUrl: course.teacher_image_url || "", bio: course.teacher_bio || "Teacher details can be managed from the admin dashboard." }];
   const teacherCardWidth = width >= 900 ? "19%" : width >= 600 ? "31.5%" : "48%";
+  const descriptionLines = String(course.description || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const aboutLines = [...descriptionLines, ...aboutMeta.features];
+  const detailRows = [
+    { label: "Instructor", value: teachers[0]?.name || course.teacher_name || "3i Learning", icon: "person" },
+    { label: "Level", value: course.level || "Beginner", icon: "bar-chart" },
+    { label: "Language", value: course.course_language || "HINGLISH", icon: "language" },
+    { label: "Start Date", value: readableValue(course.start_date), icon: "calendar" },
+    { label: "End Date", value: readableValue(course.end_date), icon: "calendar-outline" },
+    { label: "Validity", value: course.validity_months ? `${course.validity_months} months` : "", icon: "time" },
+  ].filter((row) => row.value);
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -143,23 +164,65 @@ export default function MultiSubjectCourseAbout() {
             </View>
           </View>
 
-          <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Text style={[styles.sectionTitle, { color: colors.text }]}>About Course</Text>
-            <Text style={[styles.bodyText, { color: colors.textSecondary }]}>{course.description || "Course details will be added soon."}</Text>
-            {aboutMeta.features.length > 0 ? (
-              <View style={styles.featuresList}>
-                {aboutMeta.features.map((feature) => (
-                  <View key={feature} style={styles.featureRow}>
-                    <Ionicons name="checkmark-circle" size={17} color="#16A34A" />
-                    <Text style={[styles.featureText, { color: colors.text }]}>{feature}</Text>
-                  </View>
-                ))}
-              </View>
-            ) : null}
+          <View style={[styles.aboutSection, { backgroundColor: colors.card, shadowColor: colors.shadow }]}>
+            <View style={styles.aboutSectionHeader}>
+              <Ionicons name="information-circle" size={20} color={Colors.light.primary} />
+              <Text style={[styles.aboutSectionTitle, { color: colors.text }]}>About this Course</Text>
+            </View>
+            <View style={{ gap: 10 }}>
+              {(aboutLines.length > 0 ? aboutLines : ["Course details will be added soon."]).map((line, index) => (
+                <View key={`${line}-${index}`} style={styles.aboutIncludeItem}>
+                  <Ionicons name="checkmark-circle" size={18} color={Colors.light.primary} />
+                  <Text style={[styles.aboutIncludeText, { color: colors.text }]}>{line}</Text>
+                </View>
+              ))}
+            </View>
           </View>
 
-          <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Text style={[styles.sectionTitle, { color: colors.text }]}>Teachers</Text>
+          <View style={[styles.aboutSection, { backgroundColor: colors.card, shadowColor: colors.shadow }]}>
+            <View style={styles.aboutSectionHeader}>
+              <Ionicons name="list" size={20} color={Colors.light.primary} />
+              <Text style={[styles.aboutSectionTitle, { color: colors.text }]}>Course Details</Text>
+            </View>
+            <View style={styles.aboutDetailGrid}>
+              {detailRows.map((row) => (
+                <View key={row.label} style={styles.aboutDetailItem}>
+                  <Ionicons name={row.icon as keyof typeof Ionicons.glyphMap} size={16} color={Colors.light.textMuted} />
+                  <View>
+                    <Text style={[styles.aboutDetailLabel, { color: colors.textMuted }]}>{row.label}</Text>
+                    <Text style={[styles.aboutDetailValue, { color: colors.text }]}>{row.value}</Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          </View>
+
+          <View style={[styles.aboutSection, { backgroundColor: colors.card, shadowColor: colors.shadow }]}>
+            <View style={styles.aboutSectionHeader}>
+              <Ionicons name="checkmark-circle" size={20} color="#22C55E" />
+              <Text style={[styles.aboutSectionTitle, { color: colors.text }]}>What's Included</Text>
+            </View>
+            <View style={{ gap: 10 }}>
+              <View style={styles.aboutIncludeItem}>
+                <Ionicons name="grid" size={18} color={Colors.light.primary} />
+                <Text style={[styles.aboutIncludeText, { color: colors.text }]}>Maths, English, Science and G.K subject sections</Text>
+              </View>
+              <View style={styles.aboutIncludeItem}>
+                <Ionicons name="layers" size={18} color="#F59E0B" />
+                <Text style={[styles.aboutIncludeText, { color: colors.text }]}>Separate Live, Lecture, Test, PYQ, Mock and Material areas</Text>
+              </View>
+              <View style={styles.aboutIncludeItem}>
+                <Ionicons name="phone-portrait" size={18} color="#7C3AED" />
+                <Text style={[styles.aboutIncludeText, { color: colors.text }]}>Access on mobile & web</Text>
+              </View>
+            </View>
+          </View>
+
+          <View style={[styles.aboutSection, { backgroundColor: colors.card, shadowColor: colors.shadow }]}>
+            <View style={styles.aboutSectionHeader}>
+              <Ionicons name="people" size={20} color={Colors.light.primary} />
+              <Text style={[styles.aboutSectionTitle, { color: colors.text }]}>Teachers</Text>
+            </View>
             <View style={styles.teacherGrid}>
             {teachers.map((teacher, index) => (
               <View key={`${teacher.name}-${index}`} style={[styles.teacherCard, { borderColor: colors.border, width: teacherCardWidth as any }]}>
@@ -173,6 +236,23 @@ export default function MultiSubjectCourseAbout() {
               </View>
             ))}
             </View>
+          </View>
+
+          <View style={styles.aboutTncBlock}>
+            <View style={styles.aboutSectionHeader}>
+              <Ionicons name="shield-checkmark" size={18} color="#92400E" />
+              <Text style={[styles.aboutSectionTitle, { color: "#92400E", fontSize: 14 }]}>Terms & Conditions</Text>
+            </View>
+            {[
+              "Fee is non-refundable and non-transferable under any circumstances.",
+              "If you are blocked or removed from the course, you will lose all further access. To regain access, you will need to purchase the course again.",
+              "The validity of this course is fixed and cannot be extended under any circumstances.",
+            ].map((point, index) => (
+              <View key={index} style={styles.aboutTncItem}>
+                <Text style={styles.aboutTncBullet}>•</Text>
+                <Text style={styles.aboutTncText}>{point}</Text>
+              </View>
+            ))}
           </View>
         </View>
       </ScrollView>
@@ -198,7 +278,7 @@ const styles = StyleSheet.create({
   meta: { color: "rgba(255,255,255,0.85)", fontSize: 13, fontFamily: "Inter_600SemiBold" },
   exploreBtn: { marginTop: 8, alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "rgba(15,23,42,0.72)", borderRadius: 12, paddingHorizontal: 16, paddingVertical: 11 },
   exploreText: { color: "#fff", fontSize: 14, fontFamily: "Inter_800ExtraBold" },
-  body: { padding: 16, gap: 14 },
+  body: { padding: 20, gap: 20 },
   card: { borderWidth: 1, borderRadius: 18, padding: 16, gap: 10 },
   sectionTitle: { fontSize: 18, fontFamily: "Inter_800ExtraBold" },
   progressText: { fontSize: 18, fontFamily: "Inter_800ExtraBold", color: Colors.light.primary },
@@ -208,16 +288,25 @@ const styles = StyleSheet.create({
   countPill: { flexDirection: "row", alignItems: "center", gap: 5, backgroundColor: "#EEF2FF", borderRadius: 999, paddingHorizontal: 10, paddingVertical: 7 },
   countValue: { fontSize: 13, fontFamily: "Inter_800ExtraBold", color: Colors.light.primary },
   countLabel: { fontSize: 12, fontFamily: "Inter_700Bold", color: "#334155" },
-  bodyText: { fontSize: 14, lineHeight: 21, fontFamily: "Inter_700Bold" },
-  featuresList: { gap: 9, marginTop: 4 },
-  featureRow: { flexDirection: "row", alignItems: "center", gap: 9 },
-  featureText: { flex: 1, fontSize: 14, lineHeight: 20, fontFamily: "Inter_700Bold" },
+  aboutSection: { backgroundColor: "#fff", borderRadius: 16, padding: 16, gap: 12, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 6, elevation: 1 },
+  aboutSectionHeader: { flexDirection: "row", alignItems: "center", gap: 8 },
+  aboutSectionTitle: { fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text },
+  aboutDetailGrid: { gap: 14 },
+  aboutDetailItem: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
+  aboutDetailLabel: { fontSize: 11, fontFamily: "Inter_500Medium", color: Colors.light.textMuted, textTransform: "uppercase", letterSpacing: 0.5 },
+  aboutDetailValue: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text, marginTop: 1 },
+  aboutIncludeItem: { flexDirection: "row", alignItems: "center", gap: 10 },
+  aboutIncludeText: { flex: 1, fontSize: 14, fontFamily: "Inter_500Medium", color: Colors.light.text, lineHeight: 20 },
   teacherGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 8 },
-  teacherCard: { alignItems: "center", gap: 10, borderWidth: 1, borderRadius: 16, padding: 12, minHeight: 190 },
-  teacherImage: { width: 68, height: 68, borderRadius: 18 },
+  teacherCard: { alignItems: "center", gap: 9, borderWidth: 1, borderRadius: 14, padding: 12, minHeight: 166 },
+  teacherImage: { width: 62, height: 62, borderRadius: 16 },
   teacherFallback: { backgroundColor: "#EEF2FF", alignItems: "center", justifyContent: "center" },
-  teacherName: { fontSize: 15, fontFamily: "Inter_800ExtraBold", marginBottom: 4, textAlign: "center" },
-  teacherBio: { fontSize: 12, lineHeight: 17, fontFamily: "Inter_700Bold", textAlign: "center" },
+  teacherName: { fontSize: 14, fontFamily: "Inter_700Bold", marginBottom: 3, textAlign: "center" },
+  teacherBio: { fontSize: 12, lineHeight: 17, fontFamily: "Inter_400Regular", textAlign: "center" },
+  aboutTncBlock: { backgroundColor: "#FFFBEB", borderRadius: 14, padding: 16, gap: 10, borderWidth: 1, borderColor: "#FDE68A" },
+  aboutTncItem: { flexDirection: "row", gap: 8, alignItems: "flex-start" },
+  aboutTncBullet: { fontSize: 14, color: "#92400E", lineHeight: 20, marginTop: 1 },
+  aboutTncText: { flex: 1, fontSize: 13, fontFamily: "Inter_400Regular", color: "#78350F", lineHeight: 20 },
   bottomBar: { position: "absolute", left: 0, right: 0, bottom: 0, paddingHorizontal: 16, paddingTop: 10, borderTopWidth: 1 },
   buyBtn: { backgroundColor: Colors.light.primary, borderRadius: 16, paddingVertical: 15, alignItems: "center" },
   buyText: { color: "#fff", fontSize: 16, fontFamily: "Inter_800ExtraBold" },
