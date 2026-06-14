@@ -203,6 +203,8 @@ function normalizeBatchStatus(value: unknown): "live" | "recorded" {
   return status === "recorded" || status === "completed" ? "recorded" : "live";
 }
 
+const NORMAL_COURSE_TAB_ORDER: AdminCourseTab[] = ["about", "lectures", "tests", "materials", "live", "enrolled"];
+
 const MULTI_SUBJECTS = [
   { key: "maths", label: "Maths", icon: "calculator" },
   { key: "english", label: "English", icon: "book" },
@@ -429,7 +431,7 @@ export default function AdminCourseScreen() {
     }
   };
 
-  const topPadding = Platform.OS === "web" ? 67 : insets.top;
+  const topPadding = Platform.OS === "web" ? 16 : insets.top;
   const bottomPadding = Platform.OS === "web" ? 34 : insets.bottom;
 
   const isValidId = !!id && id !== "undefined" && id !== "null";
@@ -545,7 +547,7 @@ export default function AdminCourseScreen() {
   const scopedCourseLiveClasses = courseLiveClasses.filter(subjectMatches);
 
   useEffect(() => {
-    if (!course || !isMultiSubjectCourse) return;
+    if (!course || course.course_type === "test_series") return;
     const meta = parseCourseAboutMeta((course as any).teacher_details_json);
     const teachers = meta.teachers.length > 0 ? meta.teachers : [{
       name: course.teacher_name || "",
@@ -557,7 +559,7 @@ export default function AdminCourseScreen() {
       features: meta.features.join("\n"),
       teachers,
     });
-  }, [course?.id, isMultiSubjectCourse]);
+  }, [course?.id, course?.course_type]);
   const applyDeleteOptimisticUpdate = (entity: "lecture" | "test" | "material", itemId: number) => {
     qc.setQueryData<CourseDetail | undefined>(["/api/courses", String(id)], (prev) => {
       if (!prev) return prev;
@@ -640,9 +642,46 @@ export default function AdminCourseScreen() {
     });
     return [...map.values()];
   };
-  const getLectureRootName = (name: string) =>
-    name.startsWith(`${LIVE_ROOT} /`) ? LIVE_ROOT : name;
+  const getLectureRootName = (name: string) => {
+    const trimmed = String(name || "").trim();
+    if (!trimmed) return "";
+    if (trimmed.startsWith(`${LIVE_ROOT} /`)) return LIVE_ROOT;
+    const parts = trimmed.split(" / ").map((p) => p.trim()).filter(Boolean);
+    return parts[0] || trimmed;
+  };
+  const ensureLectureFolderByPath = async (pathName: string) => {
+    const normalized = String(pathName || "").trim();
+    if (!normalized) return null;
+    let folder = findFolderByPath(normalized, "lecture");
+    if (folder) return folder;
+    const parts = splitLectureSectionPath(normalized);
+    if (parts.subfolder && parts.root) {
+      let parent = findFolderByPath(parts.root, "lecture");
+      if (!parent) {
+        const parentRes = await apiRequest("POST", `/api/admin/courses/${id}/folders`, { name: parts.root, type: "lecture" });
+        parent = await parentRes.json();
+      }
+      const childRes = await apiRequest("POST", `/api/admin/courses/${id}/folders`, {
+        name: parts.subfolder,
+        type: "lecture",
+        parentId: parent?.id || null,
+      });
+      folder = await childRes.json();
+    } else {
+      const res = await apiRequest("POST", `/api/admin/courses/${id}/folders`, { name: normalized, type: "lecture" });
+      folder = await res.json();
+    }
+    await refetchFolders();
+    return folder;
+  };
   const getDirectLectureSubfolders = (parentName: string): string[] => {
+    const parent = findFolderByPath(parentName, "lecture");
+    const fromDbChildren = parent?.id
+      ? safeFolders
+          .filter((f: any) => f.type === "lecture" && Number(f.parent_id || 0) === Number(parent.id))
+          .map(folderFullName)
+          .filter(Boolean)
+      : [];
     const prefix = `${parentName} / `;
     const fromLectures = courseLectures
       .map((l: any) => l.section_title)
@@ -663,7 +702,7 @@ export default function AdminCourseScreen() {
         return head ? `${parentName} / ${head}` : "";
       })
       .filter(Boolean);
-    return [...new Set([...fromLectures, ...fromFolders])];
+    return [...new Set([...fromDbChildren, ...fromLectures, ...fromFolders])];
   };
 
   const MAX_FOLDER_NAME_LEN = 120;
@@ -713,6 +752,10 @@ export default function AdminCourseScreen() {
       const videoUrl = (data.videoUrl || "").trim();
       if (!title) throw new Error("Lecture title is required");
       if (!videoUrl) throw new Error("Video URL is required");
+      const sectionTitle = (data.sectionTitle || "").trim();
+      if (sectionTitle.includes(" / ")) {
+        await ensureLectureFolderByPath(sectionTitle);
+      }
       await apiRequest("POST", "/api/admin/lectures", {
         ...data,
         courseId: courseIdNum,
@@ -721,7 +764,7 @@ export default function AdminCourseScreen() {
         videoType: inferLectureVideoType(videoUrl),
         durationMinutes: parseInt(data.durationMinutes) || 0,
         orderIndex: parseInt(data.orderIndex) || 0,
-        sectionTitle: data.sectionTitle || null,
+        sectionTitle: sectionTitle || null,
         subjectKey: isMultiSubjectCourse ? activeSubjectKey : (data.subjectKey || null),
       });
     },
@@ -999,8 +1042,8 @@ export default function AdminCourseScreen() {
    */
   const sortFolderNamesByOrder = (names: string[], type: "lecture" | "test" | "material"): string[] =>
     [...names].sort((a, b) => {
-      const fa = safeFolders.find((f: any) => f.name === a && f.type === type);
-      const fb = safeFolders.find((f: any) => f.name === b && f.type === type);
+      const fa = findFolderByPath(a, type);
+      const fb = findFolderByPath(b, type);
       const oa = fa?.order_index ?? Number.MAX_SAFE_INTEGER;
       const ob = fb?.order_index ?? Number.MAX_SAFE_INTEGER;
       return oa - ob;
@@ -1024,7 +1067,9 @@ export default function AdminCourseScreen() {
     qc.setQueryData<any[]>(["/api/admin/courses", id, "folders"], (prev) =>
       Array.isArray(prev)
         ? prev.map((f: any) =>
-            f.type === type && orderByName.has(f.name) ? { ...f, order_index: orderByName.get(f.name) } : f
+            f.type === type && orderByName.has(folderFullName(f))
+              ? { ...f, order_index: orderByName.get(folderFullName(f)) }
+              : f
           )
         : prev
     );
@@ -1033,10 +1078,14 @@ export default function AdminCourseScreen() {
       const items: { id: number; orderIndex: number }[] = [];
       for (let i = 0; i < names.length; i += 1) {
         const name = names[i];
-        let folderRow = safeFolders.find((df: any) => df.name === name && df.type === type);
+        let folderRow = findFolderByPath(name, type);
         if (!folderRow) {
-          const created = await apiRequest("POST", `/api/admin/courses/${id}/folders`, { name, type });
-          folderRow = await created.json();
+          if (type === "lecture") {
+            folderRow = await ensureLectureFolderByPath(name);
+          } else {
+            const created = await apiRequest("POST", `/api/admin/courses/${id}/folders`, { name, type });
+            folderRow = await created.json();
+          }
         }
         if (folderRow?.id != null) items.push({ id: Number(folderRow.id), orderIndex: i });
       }
@@ -1263,7 +1312,7 @@ export default function AdminCourseScreen() {
   if (!isValidId) {
     return (
       <View style={[styles.container, { backgroundColor: colors.background }]}>
-        <LinearGradient colors={isDarkMode ? ["#020617", "#0F172A"] : ["#0A1628", "#1A2E50"]} style={[styles.header, { paddingTop: topPadding + 8 }]}>
+        <LinearGradient colors={isDarkMode ? ["#020617", "#0F172A"] : ["#0A1628", "#1A2E50"]} style={[styles.header, { paddingTop: topPadding + 4 }]}>
           <Pressable style={styles.backBtn} onPress={() => { if (router.canGoBack()) router.back(); else router.replace("/admin" as any); }}>
             <Ionicons name="arrow-back" size={20} color="#fff" />
           </Pressable>
@@ -1317,7 +1366,7 @@ export default function AdminCourseScreen() {
           <Text style={{ fontSize: 13, fontFamily: "Inter_700Bold", color: "#22C55E" }}>{uploadProgress}%</Text>
         </View>
       )}
-      <LinearGradient colors={["#0A1628", "#1A2E50"]} style={[styles.header, { paddingTop: topPadding + 8 }]}>
+      <LinearGradient colors={["#0A1628", "#1A2E50"]} style={[styles.header, { paddingTop: topPadding + 4 }]}>
         <View style={styles.headerRow}>
           <Pressable style={styles.backBtn} onPress={() => { if (router.canGoBack()) router.back(); else router.replace("/admin" as any); }}>
             <Ionicons name="arrow-back" size={20} color="#fff" />
@@ -1385,13 +1434,9 @@ export default function AdminCourseScreen() {
               </ScrollView>
             )}
           </>
-        ) : (
+        ) : isTestSeries ? (
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsRow}>
-            {ADMIN_COURSE_TABS.filter(t => {
-              if (isTestSeries) return t.key === "tests" || t.key === "enrolled";
-              if (t.key === "about" || t.key === "pyqs" || t.key === "mocks") return false;
-              return true;
-            }).map((tab) => (
+            {ADMIN_COURSE_TABS.filter((t) => t.key === "tests" || t.key === "enrolled").map((tab) => (
               <Pressable
                 key={tab.key}
                 style={[styles.tab, activeTab === tab.key && styles.tabActive]}
@@ -1402,11 +1447,28 @@ export default function AdminCourseScreen() {
               </Pressable>
             ))}
           </ScrollView>
+        ) : (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsRow}>
+            {NORMAL_COURSE_TAB_ORDER.map((tabKey) => {
+              const tab = ADMIN_COURSE_TABS.find((t) => t.key === tabKey);
+              if (!tab) return null;
+              return (
+              <Pressable
+                key={tab.key}
+                style={[styles.tab, activeTab === tab.key && styles.tabActive]}
+                onPress={() => setActiveTab(tab.key)}
+              >
+                <Ionicons name={tab.icon} size={14} color={activeTab === tab.key ? Colors.light.primary : "rgba(255,255,255,0.6)"} />
+                <Text style={[styles.tabText, activeTab === tab.key && styles.tabTextActive]}>{tab.label}</Text>
+              </Pressable>
+              );
+            })}
+          </ScrollView>
         )}
       </LinearGradient>
 
       <ScrollView contentContainerStyle={[styles.content, { paddingBottom: bottomPadding + 80 }]}>
-        {effectiveTab === "about" && isMultiSubjectCourse && (
+        {effectiveTab === "about" && !isTestSeries && (
           <View style={styles.section}>
             <LinearGradient colors={["#EEF2FF", "#F8FAFC"]} style={[styles.itemCard, { borderWidth: 0, gap: 12 }]}>
               <View style={styles.sectionHeader}>
@@ -1563,9 +1625,8 @@ export default function AdminCourseScreen() {
                     <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />
                   </Pressable>
                   <Pressable style={{ padding: 8 }} onPress={async () => {
-                    let f = findFolderByPath(folderName, "lecture");
-                    if (!f) { const r = await apiRequest("POST", `/api/admin/courses/${id}/folders`, { name: folderName, type: "lecture" }); f = await r.json(); refetchFolders(); }
-                    setFolderActionSheet(f);
+                    const f = await ensureLectureFolderByPath(folderName);
+                    if (f) setFolderActionSheet(f);
                   }}>
                     <Ionicons name="ellipsis-vertical" size={18} color={Colors.light.textMuted} />
                   </Pressable>
@@ -3114,7 +3175,10 @@ export default function AdminCourseScreen() {
                         <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
                           <Pressable
                             style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 12 }}
-                            onPress={() => setOpenAdminFolder({ name: childName, type: "lecture" })}
+                            onPress={() => {
+                              const childFolder = findFolderByPath(childName, "lecture");
+                              setOpenAdminFolder({ id: childFolder?.id, name: childName, type: "lecture" });
+                            }}
                           >
                             <View style={{ width: 40, height: 40, borderRadius: 10, backgroundColor: Colors.light.primary + "20", alignItems: "center", justifyContent: "center" }}>
                               <Ionicons name="folder" size={22} color={Colors.light.primary} />
@@ -3132,13 +3196,8 @@ export default function AdminCourseScreen() {
                           <Pressable
                             style={{ padding: 8 }}
                             onPress={async () => {
-                              let f = safeFolders.find((df: any) => folderFullName(df) === childName && df.type === "lecture");
-                              if (!f) {
-                                const r = await apiRequest("POST", `/api/admin/courses/${id}/folders`, { name: childName, type: "lecture" });
-                                f = await r.json();
-                                refetchFolders();
-                              }
-                              setFolderActionSheet(f);
+                              const f = await ensureLectureFolderByPath(childName);
+                              if (f) setFolderActionSheet(f);
                             }}
                           >
                             <Ionicons name="ellipsis-vertical" size={18} color={Colors.light.textMuted} />

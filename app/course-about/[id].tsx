@@ -8,6 +8,8 @@ import { authFetch, getApiUrl } from "@/lib/query-client";
 import Colors from "@/constants/colors";
 import { useAppTheme } from "@/context/AppThemeContext";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useAuth } from "@/context/AuthContext";
+import { useCoursePurchase } from "@/lib/use-course-purchase";
 
 type Course = {
   id: number;
@@ -19,6 +21,7 @@ type Course = {
   thumbnail?: string;
   cover_color?: string;
   category?: string;
+  subject?: string;
   price?: string;
   original_price?: string;
   is_free?: boolean;
@@ -29,13 +32,24 @@ type Course = {
   materials?: any[];
   teacher_details_json?: any;
   course_language?: string;
+  course_type?: string;
   level?: string;
   start_date?: string;
   end_date?: string;
   validity_months?: number | string | null;
+  duration_hours?: string | number;
+  total_lectures?: number;
+  total_tests?: number;
+  total_materials?: number;
 };
 
 type AboutTeacher = { name: string; imageUrl: string; bio: string };
+
+const COURSE_COLORS = ["#1A56DB", "#7C3AED", "#DC2626", "#059669", "#D97706", "#0891B2"];
+
+function courseAccentColor(course: Course): string {
+  return course.cover_color || COURSE_COLORS[course.id % COURSE_COLORS.length];
+}
 
 function parseAboutMeta(value: any, course: Course): { features: string[]; teachers: AboutTeacher[] } {
   const raw = typeof value === "string" ? (() => { try { return JSON.parse(value); } catch { return value; } })() : value;
@@ -61,8 +75,10 @@ function parseAboutMeta(value: any, course: Course): { features: string[]; teach
   };
 }
 
-async function fetchCourse(id: string): Promise<Course | null> {
-  const res = await authFetch(new URL(`/api/courses/${id}`, getApiUrl()).toString());
+async function fetchCourse(id: string, userId?: number): Promise<Course | null> {
+  const url = new URL(`/api/courses/${id}`, getApiUrl());
+  if (userId) url.searchParams.set("_uid", String(userId));
+  const res = await authFetch(url.toString());
   if (!res.ok) return null;
   return res.json();
 }
@@ -72,16 +88,24 @@ function readableValue(value?: string | number | null): string {
   return String(value);
 }
 
-export default function MultiSubjectCourseAbout() {
+export default function CourseAboutScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
+  const { user } = useAuth();
   const { colors } = useAppTheme();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const { data: course, isLoading } = useQuery({
-    queryKey: ["/api/courses", String(id)],
-    queryFn: () => fetchCourse(String(id)),
+    queryKey: ["/api/courses", String(id), String(user?.id ?? "guest")],
+    queryFn: () => fetchCourse(String(id), user?.id),
     enabled: !!id,
     staleTime: 0,
+  });
+  const isFreeCourse = !!(course && (course.is_free || parseFloat(String(course.price || "0")) <= 0));
+  const { purchase, isPending, paymentModal } = useCoursePurchase({
+    courseId: Number(id),
+    courseTitle: course?.title,
+    isFree: isFreeCourse,
+    price: course?.price,
   });
 
   if (isLoading) {
@@ -91,51 +115,109 @@ export default function MultiSubjectCourseAbout() {
     return <View style={[styles.center, { backgroundColor: colors.background }]}><Text style={{ color: colors.text }}>Course not found</Text></View>;
   }
 
-  const isFreeCourse = course.is_free || parseFloat(String(course.price || "0")) <= 0;
+  const isMultiSubject = course.course_type === "multi_subject";
+  const accent = courseAccentColor(course);
+  const discount = course.original_price && parseFloat(course.original_price) > 0 && parseFloat(course.price || "0") > 0
+    ? Math.round((1 - parseFloat(course.price!) / parseFloat(course.original_price)) * 100)
+    : 0;
   const progress = Math.max(0, Math.min(100, Number(course.progress || 0)));
-  const lecturesCount = Array.isArray(course.lectures) ? course.lectures.length : 0;
-  const materialsCount = Array.isArray(course.materials) ? course.materials.length : 0;
+  const lecturesCount = Array.isArray(course.lectures) ? course.lectures.length : Number(course.total_lectures || 0);
+  const materialsCount = Array.isArray(course.materials) ? course.materials.length : Number(course.total_materials || 0);
   const tests = Array.isArray(course.tests) ? course.tests : [];
   const pyqCount = tests.filter((t) => String(t.test_type || "").toLowerCase() === "pyq").length;
   const mockCount = tests.filter((t) => String(t.test_type || "").toLowerCase() === "mock").length;
-  const testCount = tests.filter((t) => !["pyq", "mock"].includes(String(t.test_type || "").toLowerCase())).length;
+  const testCount = isMultiSubject
+    ? tests.filter((t) => !["pyq", "mock"].includes(String(t.test_type || "").toLowerCase())).length
+    : Number(course.total_tests || tests.filter((t) => !["pyq", "mock"].includes(String(t.test_type || "").toLowerCase())).length);
   const aboutMeta = parseAboutMeta(course.teacher_details_json, course);
-  const teachers = aboutMeta.teachers.length > 0 ? aboutMeta.teachers : [{ name: course.teacher_name || "3i Learning", imageUrl: course.teacher_image_url || "", bio: course.teacher_bio || "Teacher details can be managed from the admin dashboard." }];
+  const teachers = aboutMeta.teachers.length > 0
+    ? aboutMeta.teachers
+    : [{ name: course.teacher_name || "3i Learning", imageUrl: course.teacher_image_url || "", bio: course.teacher_bio || "Teacher details can be managed from the admin dashboard." }];
   const teacherCardWidth = width >= 900 ? "19%" : width >= 600 ? "31.5%" : "48%";
-  const descriptionLines = String(course.description || "")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
+  const descriptionLines = String(course.description || "").split("\n").map((line) => line.trim()).filter(Boolean);
   const aboutLines = [...descriptionLines, ...aboutMeta.features];
-  const detailRows = [
-    { label: "Instructor", value: teachers[0]?.name || course.teacher_name || "3i Learning", icon: "person" },
-    { label: "Level", value: course.level || "Beginner", icon: "bar-chart" },
-    { label: "Language", value: course.course_language || "HINGLISH", icon: "language" },
-    { label: "Start Date", value: readableValue(course.start_date), icon: "calendar" },
-    { label: "End Date", value: readableValue(course.end_date), icon: "calendar-outline" },
-    { label: "Validity", value: course.validity_months ? `${course.validity_months} months` : "", icon: "time" },
-  ].filter((row) => row.value);
+  const detailRows = isMultiSubject
+    ? [
+        { label: "Instructor", value: teachers[0]?.name || course.teacher_name || "3i Learning", icon: "person" },
+        { label: "Level", value: course.level || "Beginner", icon: "bar-chart" },
+        { label: "Language", value: course.course_language || "HINGLISH", icon: "language" },
+        { label: "Start Date", value: readableValue(course.start_date), icon: "calendar" },
+        { label: "End Date", value: readableValue(course.end_date), icon: "calendar-outline" },
+        { label: "Validity", value: course.validity_months ? `${course.validity_months} months` : "", icon: "time" },
+      ].filter((row) => row.value)
+    : [
+        { label: "Instructor", value: teachers[0]?.name || course.teacher_name || "3i Learning", icon: "person" },
+        { label: "Level", value: course.level || "Beginner", icon: "bar-chart" },
+        { label: "Subject", value: readableValue(course.subject), icon: "bookmark" },
+        { label: "Duration", value: course.duration_hours ? `${course.duration_hours}h total` : "", icon: "time" },
+        { label: "Start Date", value: readableValue(course.start_date), icon: "calendar" },
+        { label: "End Date", value: readableValue(course.end_date), icon: "calendar-outline" },
+      ].filter((row) => row.value);
+
+  const countItems = isMultiSubject
+    ? [
+        { label: "Lectures", value: lecturesCount, icon: "play-circle" },
+        { label: "Tests", value: testCount, icon: "document-text" },
+        { label: "Mock", value: mockCount, icon: "clipboard" },
+        { label: "PYQs", value: pyqCount, icon: "school" },
+        { label: "Material", value: materialsCount, icon: "folder" },
+      ]
+    : [
+        { label: "Lectures", value: lecturesCount, icon: "play-circle" },
+        { label: "Tests", value: testCount, icon: "document-text" },
+        { label: "Material", value: materialsCount, icon: "folder" },
+      ];
+
+  const explorePath = isMultiSubject ? `/multi-course/${course.id}` : `/course/${course.id}`;
+  const continuePath = explorePath;
+
+  const handleBottomAction = () => {
+    if (course.isEnrolled) {
+      router.push(continuePath as any);
+      return;
+    }
+    purchase();
+  };
+
+  const headerGradient: [string, string] = isMultiSubject
+    ? ["#0A1628", "#1A2E50"]
+    : [accent, `${accent}DD`];
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 96 }}>
-        <LinearGradient colors={["#0A1628", "#1A2E50"]} style={[styles.hero, { paddingTop: insets.top + 8 }]}>
-          <View style={styles.headerRow}>
+        <LinearGradient colors={headerGradient} style={[styles.hero, { paddingTop: insets.top + 8 }]}>
+          <View style={styles.headerTopRow}>
             <Pressable style={styles.iconBtn} onPress={() => router.back()}>
               <Ionicons name="arrow-back" size={20} color="#fff" />
             </Pressable>
+            <View style={{ flex: 1 }} />
+            {course.is_free ? (
+              <View style={styles.headerBadge}><Text style={styles.headerBadgeText}>FREE</Text></View>
+            ) : discount > 0 ? (
+              <View style={[styles.headerBadge, { backgroundColor: Colors.light.accent }]}><Text style={styles.headerBadgeText}>{discount}% OFF</Text></View>
+            ) : null}
+          </View>
+
+          {isMultiSubject ? (
             <View style={styles.headerTextCol}>
               <Text style={styles.title} numberOfLines={2}>{course.title}</Text>
               <Text style={styles.meta}>{course.category || "Course"} · {course.level || "Beginner"} · {course.course_language || "HINGLISH"}</Text>
             </View>
-          </View>
+          ) : (
+            <>
+              <Text style={styles.category}>{course.category || "Course"}</Text>
+              <Text style={styles.title} numberOfLines={2}>{course.title}</Text>
+              <View style={styles.instructorRow}>
+                <View style={styles.instructorAvatar}><Ionicons name="person" size={14} color="#fff" /></View>
+                <Text style={styles.instructorName}>{course.teacher_name || "3i Learning"}</Text>
+                <View style={styles.levelChip}><Text style={styles.levelChipText}>{course.level || "Beginner"}</Text></View>
+              </View>
+            </>
+          )}
         </LinearGradient>
 
         <View style={styles.body}>
-          <Pressable style={styles.exploreBtn} onPress={() => router.push(`/multi-course/${course.id}` as any)}>
-            <Text style={styles.exploreText}>Explore Course</Text>
-            <Ionicons name="arrow-forward" size={18} color="#fff" />
-          </Pressable>
           <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
               <Text style={[styles.sectionTitle, { color: colors.text }]}>Your Progress</Text>
@@ -145,13 +227,7 @@ export default function MultiSubjectCourseAbout() {
               <View style={[styles.progressFill, { width: `${progress}%` as any }]} />
             </View>
             <View style={styles.countGrid}>
-              {[
-                { label: "Lectures", value: lecturesCount, icon: "play-circle" },
-                { label: "Tests", value: testCount, icon: "document-text" },
-                { label: "Mock", value: mockCount, icon: "clipboard" },
-                { label: "PYQs", value: pyqCount, icon: "school" },
-                { label: "Material", value: materialsCount, icon: "folder" },
-              ].map((item) => (
+              {countItems.map((item) => (
                 <View key={item.label} style={styles.countPill}>
                   <Ionicons name={item.icon as keyof typeof Ionicons.glyphMap} size={15} color={Colors.light.primary} />
                   <Text style={styles.countValue}>{item.value}</Text>
@@ -200,14 +276,45 @@ export default function MultiSubjectCourseAbout() {
               <Text style={[styles.aboutSectionTitle, { color: colors.text }]}>What's Included</Text>
             </View>
             <View style={{ gap: 10 }}>
-              <View style={styles.aboutIncludeItem}>
-                <Ionicons name="grid" size={18} color={Colors.light.primary} />
-                <Text style={[styles.aboutIncludeText, { color: colors.text }]}>Maths, English, Science and G.K subject sections</Text>
-              </View>
-              <View style={styles.aboutIncludeItem}>
-                <Ionicons name="layers" size={18} color="#F59E0B" />
-                <Text style={[styles.aboutIncludeText, { color: colors.text }]}>Separate Live, Lecture, Test, PYQ, Mock and Material areas</Text>
-              </View>
+              {isMultiSubject ? (
+                <>
+                  <View style={styles.aboutIncludeItem}>
+                    <Ionicons name="grid" size={18} color={Colors.light.primary} />
+                    <Text style={[styles.aboutIncludeText, { color: colors.text }]}>Maths, English, Science and G.K subject sections</Text>
+                  </View>
+                  <View style={styles.aboutIncludeItem}>
+                    <Ionicons name="layers" size={18} color="#F59E0B" />
+                    <Text style={[styles.aboutIncludeText, { color: colors.text }]}>Separate Live, Lecture, Test, PYQ, Mock and Material areas</Text>
+                  </View>
+                </>
+              ) : (
+                <>
+                  {lecturesCount > 0 ? (
+                    <View style={styles.aboutIncludeItem}>
+                      <Ionicons name="videocam" size={18} color={Colors.light.primary} />
+                      <Text style={[styles.aboutIncludeText, { color: colors.text }]}>{lecturesCount} Video Lectures</Text>
+                    </View>
+                  ) : null}
+                  {testCount > 0 ? (
+                    <View style={styles.aboutIncludeItem}>
+                      <Ionicons name="document-text" size={18} color="#F59E0B" />
+                      <Text style={[styles.aboutIncludeText, { color: colors.text }]}>{testCount} Tests</Text>
+                    </View>
+                  ) : null}
+                  {materialsCount > 0 ? (
+                    <View style={styles.aboutIncludeItem}>
+                      <Ionicons name="folder" size={18} color="#7C3AED" />
+                      <Text style={[styles.aboutIncludeText, { color: colors.text }]}>{materialsCount} Study Materials</Text>
+                    </View>
+                  ) : null}
+                  {(course.course_type || "live") === "live" ? (
+                    <View style={styles.aboutIncludeItem}>
+                      <Ionicons name="radio" size={18} color="#EF4444" />
+                      <Text style={[styles.aboutIncludeText, { color: colors.text }]}>Live classes and recordings</Text>
+                    </View>
+                  ) : null}
+                </>
+              )}
               <View style={styles.aboutIncludeItem}>
                 <Ionicons name="phone-portrait" size={18} color="#7C3AED" />
                 <Text style={[styles.aboutIncludeText, { color: colors.text }]}>Access on mobile & web</Text>
@@ -221,17 +328,17 @@ export default function MultiSubjectCourseAbout() {
               <Text style={[styles.aboutSectionTitle, { color: colors.text }]}>Teachers</Text>
             </View>
             <View style={styles.teacherGrid}>
-            {teachers.map((teacher, index) => (
-              <View key={`${teacher.name}-${index}`} style={[styles.teacherCard, { borderColor: colors.border, width: teacherCardWidth as any }]}>
-                {teacher.imageUrl ? <Image source={{ uri: teacher.imageUrl }} style={styles.teacherImage} /> : (
-                  <View style={[styles.teacherImage, styles.teacherFallback]}><Ionicons name="person" size={30} color={Colors.light.primary} /></View>
-                )}
-                <View style={{ flex: 1, alignItems: "center" }}>
-                  <Text style={[styles.teacherName, { color: colors.text }]} numberOfLines={2}>{teacher.name || "3i Learning"}</Text>
-                  <Text style={[styles.teacherBio, { color: colors.textSecondary }]} numberOfLines={4}>{teacher.bio || "Teacher details will be added soon."}</Text>
+              {teachers.map((teacher, index) => (
+                <View key={`${teacher.name}-${index}`} style={[styles.teacherCard, { borderColor: colors.border, width: teacherCardWidth as any }]}>
+                  {teacher.imageUrl ? <Image source={{ uri: teacher.imageUrl }} style={styles.teacherImage} /> : (
+                    <View style={[styles.teacherImage, styles.teacherFallback]}><Ionicons name="person" size={30} color={Colors.light.primary} /></View>
+                  )}
+                  <View style={{ flex: 1, alignItems: "center" }}>
+                    <Text style={[styles.teacherName, { color: colors.text }]} numberOfLines={2}>{teacher.name || "3i Learning"}</Text>
+                    <Text style={[styles.teacherBio, { color: colors.textSecondary }]} numberOfLines={4}>{teacher.bio || "Teacher details will be added soon."}</Text>
+                  </View>
                 </View>
-              </View>
-            ))}
+              ))}
             </View>
           </View>
 
@@ -255,10 +362,25 @@ export default function MultiSubjectCourseAbout() {
       </ScrollView>
 
       <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 10, backgroundColor: colors.card, borderTopColor: colors.border }]}>
-        <Pressable style={styles.buyBtn} onPress={() => router.push(`/course/${course.id}` as any)}>
-          <Text style={styles.buyText}>{course.isEnrolled ? "Continue Learning" : isFreeCourse ? "Enroll Free" : `Buy Now${course.price ? ` - Rs ${parseFloat(course.price).toFixed(0)}` : ""}`}</Text>
+        <Pressable style={styles.bottomBtnWrap} onPress={() => router.push(explorePath as any)}>
+          <LinearGradient colors={["#1A56DB", "#2563EB"]} style={styles.bottomBtn}>
+            <Text style={styles.exploreText}>Explore Now</Text>
+            <Ionicons name="arrow-forward" size={18} color="#fff" />
+          </LinearGradient>
+        </Pressable>
+        <Pressable style={styles.bottomBtnWrap} onPress={handleBottomAction} disabled={isPending}>
+          <LinearGradient colors={["#EA580C", "#F97316"]} style={styles.bottomBtn}>
+            {isPending ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.buyText} numberOfLines={1}>
+                {course.isEnrolled ? "Continue Learning" : isFreeCourse ? "Enroll Free" : `Buy Now${course.price ? ` - Rs ${parseFloat(course.price).toFixed(0)}` : ""}`}
+              </Text>
+            )}
+          </LinearGradient>
         </Pressable>
       </View>
+      {paymentModal}
     </View>
   );
 }
@@ -266,13 +388,20 @@ export default function MultiSubjectCourseAbout() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
-  hero: { paddingHorizontal: 16, paddingBottom: 14 },
-  headerRow: { flexDirection: "row", alignItems: "flex-start", gap: 12 },
-  headerTextCol: { flex: 1, gap: 4, paddingTop: 2 },
+  hero: { paddingHorizontal: 16, paddingBottom: 16 },
+  headerTopRow: { flexDirection: "row", alignItems: "center", marginBottom: 10 },
+  headerTextCol: { gap: 4 },
   iconBtn: { width: 38, height: 38, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" },
+  headerBadge: { backgroundColor: "#22C55E", borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
+  headerBadgeText: { color: "#fff", fontSize: 10, fontFamily: "Inter_700Bold" },
+  category: { color: "rgba(255,255,255,0.85)", fontSize: 12, fontFamily: "Inter_600SemiBold", textTransform: "uppercase", marginBottom: 4 },
   title: { color: "#fff", fontSize: 22, lineHeight: 28, fontFamily: "Inter_700Bold" },
   meta: { color: "rgba(255,255,255,0.85)", fontSize: 12, fontFamily: "Inter_600SemiBold" },
-  exploreBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: Colors.light.primary, borderRadius: 14, paddingHorizontal: 16, paddingVertical: 13 },
+  instructorRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 10 },
+  instructorAvatar: { width: 28, height: 28, borderRadius: 14, backgroundColor: "rgba(255,255,255,0.2)", alignItems: "center", justifyContent: "center" },
+  instructorName: { color: "#fff", fontSize: 13, fontFamily: "Inter_600SemiBold", flex: 1 },
+  levelChip: { backgroundColor: "rgba(255,255,255,0.18)", borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
+  levelChipText: { color: "#fff", fontSize: 11, fontFamily: "Inter_600SemiBold" },
   exploreText: { color: "#fff", fontSize: 14, fontFamily: "Inter_700Bold" },
   body: { padding: 20, gap: 20 },
   card: { borderWidth: 1, borderRadius: 18, padding: 16, gap: 10 },
@@ -303,7 +432,8 @@ const styles = StyleSheet.create({
   aboutTncItem: { flexDirection: "row", gap: 8, alignItems: "flex-start" },
   aboutTncBullet: { fontSize: 14, color: "#92400E", lineHeight: 20, marginTop: 1 },
   aboutTncText: { flex: 1, fontSize: 13, fontFamily: "Inter_400Regular", color: "#78350F", lineHeight: 20 },
-  bottomBar: { position: "absolute", left: 0, right: 0, bottom: 0, paddingHorizontal: 16, paddingTop: 10, borderTopWidth: 1 },
-  buyBtn: { backgroundColor: Colors.light.primary, borderRadius: 16, paddingVertical: 15, alignItems: "center" },
-  buyText: { color: "#fff", fontSize: 16, fontFamily: "Inter_800ExtraBold" },
+  bottomBar: { position: "absolute", left: 0, right: 0, bottom: 0, paddingHorizontal: 16, paddingTop: 10, borderTopWidth: 1, flexDirection: "row", gap: 10, alignItems: "center" },
+  bottomBtnWrap: { flex: 1, borderRadius: 16, overflow: "hidden" },
+  bottomBtn: { borderRadius: 16, paddingVertical: 15, paddingHorizontal: 12, alignItems: "center", justifyContent: "center", minHeight: 52, flexDirection: "row", gap: 6 },
+  buyText: { color: "#fff", fontSize: 15, fontFamily: "Inter_800ExtraBold", flexShrink: 1 },
 });

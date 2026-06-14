@@ -14,6 +14,7 @@ import { useAuth } from "@/context/AuthContext";
 import Colors from "@/constants/colors";
 import { useAppTheme } from "@/context/AppThemeContext";
 import { getApiUrl, authFetch } from "@/lib/query-client";
+import { useCoursePurchase } from "@/lib/use-course-purchase";
 import { liveClassQueryKey, notificationsQueryKey } from "@/lib/query-keys";
 import { useDocumentVisibility } from "@/lib/useDocumentVisibility";
 import { fetch } from "expo/fetch";
@@ -102,6 +103,13 @@ function multiStatusLabel(course: Course): string {
 function MultiSubjectCourseCard({ course, enrolled = false }: { course: Course; enrolled?: boolean }) {
   const { colors } = useAppTheme();
   const livePulse = React.useRef(new Animated.Value(1)).current;
+  const isFreeCourse = course.is_free || parseFloat(course.price || "0") <= 0;
+  const { purchase, isPending, paymentModal } = useCoursePurchase({
+    courseId: course.id,
+    courseTitle: course.title,
+    isFree: isFreeCourse,
+    price: course.price,
+  });
   const discount = course.original_price && parseFloat(course.original_price) > 0 && parseFloat(course.price || "0") > 0
     ? Math.round((1 - parseFloat(course.price) / parseFloat(course.original_price)) * 100)
     : 0;
@@ -150,47 +158,65 @@ function MultiSubjectCourseCard({ course, enrolled = false }: { course: Course; 
           <View style={styles.multiBadgeRow}>
             <Text style={styles.multiCategory}>{course.category || "Course"}</Text>
             <Text style={styles.multiLevel}>{level}</Text>
+            {enrolled ? (
+              <View style={styles.multiEnrolledBadge}>
+                <Ionicons name="checkmark-circle" size={12} color="#22C55E" />
+                <Text style={styles.multiEnrolledBadgeText}>Enrolled</Text>
+              </View>
+            ) : null}
           </View>
           <View style={styles.multiLanguagePill}><Text style={styles.multiLanguageText}>{language}</Text></View>
         </View>
         <Text style={[styles.multiTitle, { color: colors.text }]} numberOfLines={2}>{course.title}</Text>
-        {!enrolled && (
-          <View style={styles.multiMetaRow}>
-            {status === "LIVE" ? (
-              <Animated.View style={[styles.multiLiveDot, { opacity: livePulse, transform: [{ scale: livePulse }] }]} />
-            ) : null}
-            <Text style={[styles.multiMetaText, styles.multiStatusText]}>{status}</Text>
-            {validityText ? <Text style={[styles.multiMetaText, { color: colors.textSecondary }]}>| {validityText}</Text> : null}
-          </View>
-        )}
-        {enrolled ? null : (
-          <View style={styles.multiPriceRow}>
-            {course.is_free || parseFloat(course.price || "0") <= 0 ? (
-              <Text style={styles.multiPrice}>Free</Text>
-            ) : (
-              <View style={{ flexDirection: "row", alignItems: "baseline", gap: 6 }}>
-                <Text style={styles.multiPrice}>₹{parseFloat(course.price).toFixed(0)}</Text>
-                {parseFloat(course.original_price || "0") > 0 ? <Text style={styles.multiOriginalPrice}>₹{parseFloat(course.original_price).toFixed(0)}</Text> : null}
-              </View>
-            )}
-            {discount > 0 ? <Text style={styles.multiDiscount}>{discount}% OFF</Text> : null}
-            <View style={{ flex: 1 }} />
-            <Pressable style={styles.multiBuyBtn} onPress={() => router.push(`/course-about/${course.id}` as any)}>
-              <LinearGradient colors={["#B91C1C", "#EF4444"]} style={styles.multiBuyGradient}>
-                <Text style={styles.multiBuyText}>{course.is_free || parseFloat(course.price || "0") <= 0 ? "Start Free" : "Buy Now"}</Text>
-              </LinearGradient>
-            </Pressable>
-            <Pressable style={styles.multiArrowBtn} onPress={() => router.push(`/course-about/${course.id}` as any)}>
-              <Ionicons name="chevron-forward" size={18} color="#0F172A" />
-            </Pressable>
-          </View>
-        )}
-        {enrolled ? (
-          <View style={styles.multiMetaRow}>
-            <Text style={[styles.multiMetaText, { color: colors.textSecondary }]}>{validityText || "Enrolled"}</Text>
-          </View>
-        ) : null}
+        <View style={styles.multiMetaRow}>
+          {status === "LIVE" ? (
+            <Animated.View style={[styles.multiLiveDot, { opacity: livePulse, transform: [{ scale: livePulse }] }]} />
+          ) : null}
+          <Text style={[styles.multiMetaText, styles.multiStatusText]}>{status}</Text>
+          {validityText ? <Text style={[styles.multiMetaText, { color: colors.textSecondary }]}>| {validityText}</Text> : null}
+        </View>
+        <View style={styles.multiPriceRow}>
+          {enrolled ? (
+            <>
+              <View style={{ flex: 1 }} />
+              <Pressable style={styles.multiArrowBtn} onPress={() => router.push(`/course-about/${course.id}` as any)}>
+                <Ionicons name="chevron-forward" size={18} color="#0F172A" />
+              </Pressable>
+            </>
+          ) : (
+            <>
+              {course.is_free || parseFloat(course.price || "0") <= 0 ? (
+                <Text style={styles.multiPrice}>Free</Text>
+              ) : (
+                <View style={{ flexDirection: "row", alignItems: "baseline", gap: 6 }}>
+                  <Text style={styles.multiPrice}>₹{parseFloat(course.price).toFixed(0)}</Text>
+                  {parseFloat(course.original_price || "0") > 0 ? <Text style={styles.multiOriginalPrice}>₹{parseFloat(course.original_price).toFixed(0)}</Text> : null}
+                </View>
+              )}
+              {discount > 0 ? <Text style={styles.multiDiscount}>{discount}% OFF</Text> : null}
+              <View style={{ flex: 1 }} />
+              <Pressable
+                style={styles.multiBuyBtn}
+                disabled={isPending}
+                onPress={(e) => {
+                  e?.stopPropagation?.();
+                  purchase();
+                }}
+              >
+                <LinearGradient colors={["#B91C1C", "#EF4444"]} style={styles.multiBuyGradient}>
+                  <Text style={styles.multiBuyText}>
+                    {isPending ? "Please wait..." : isFreeCourse ? "Start Free" : "Buy Now"}
+                  </Text>
+                </LinearGradient>
+              </Pressable>
+              <Pressable style={styles.multiArrowBtn} onPress={() => router.push(`/course-about/${course.id}` as any)}>
+                <Ionicons name="chevron-forward" size={18} color="#0F172A" />
+              </Pressable>
+            </>
+          )}
+        </View>
       </View>
+      {paymentModal}
     </Pressable>
   );
 }
@@ -271,9 +297,8 @@ function EnrolledCourseCard({ course, index }: { course: Course; index: number }
   return (
     <Pressable
       style={({ pressed }) => [styles.courseCard, { overflow: "hidden" }, pressed && { opacity: 0.93, transform: [{ scale: 0.98 }] }]}
-      onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push((course.course_type === "multi_subject" ? `/course-about/${course.id}` : `/course/${course.id}`) as any); }}
+      onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push(`/course-about/${course.id}` as any); }}
     >
-      {/* Dark gradient header with category/type/subject badges */}
       <LinearGradient colors={[color, `${color}DD`]} style={{ paddingHorizontal: 12, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
         <View style={{ backgroundColor: "rgba(255,255,255,0.22)", borderRadius: 5, paddingHorizontal: 8, paddingVertical: 3 }}>
           <Text style={{ fontSize: 10, fontFamily: "Inter_700Bold", color: "#fff" }}>{course.category}</Text>
@@ -294,18 +319,14 @@ function EnrolledCourseCard({ course, index }: { course: Course; index: number }
         </View>
       </LinearGradient>
 
-      {/* White body */}
       <View style={{ padding: 12, gap: 8, backgroundColor: colors.card }}>
-        {/* Title */}
         <Text style={{ fontSize: 14, fontFamily: "Inter_700Bold", color: colors.text, lineHeight: 20 }} numberOfLines={2}>{course.title}</Text>
 
-        {/* Teacher */}
         <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
           <Ionicons name="person-outline" size={12} color={colors.textMuted} />
           <Text style={{ fontSize: 12, fontFamily: "Inter_400Regular", color: colors.textMuted }} numberOfLines={1}>{course.teacher_name}</Text>
         </View>
 
-        {/* Stats — compact */}
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 3 }}>
             <Ionicons name="videocam" size={12} color={color} />
@@ -323,7 +344,6 @@ function EnrolledCourseCard({ course, index }: { course: Course; index: number }
           </View>
         </View>
 
-        {/* Progress */}
         <View style={{ gap: 4 }}>
           <View style={{ height: 4, backgroundColor: colors.surfaceAlt, borderRadius: 2, overflow: "hidden" }}>
             <View style={{ height: 4, backgroundColor: color, borderRadius: 2, width: `${progress}%` as any, minWidth: progress > 0 ? 4 : 0 }} />
@@ -349,7 +369,7 @@ function CourseCard({ course, index }: { course: Course; index: number }) {
   return (
     <Pressable
       style={({ pressed }) => [styles.courseCard, pressed && { opacity: 0.92, transform: [{ scale: 0.98 }] }]}
-      onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push((course.course_type === "multi_subject" ? `/course-about/${course.id}` : `/course/${course.id}`) as any); }}
+      onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push((course.course_type === "test_series" ? `/course/${course.id}` : `/course-about/${course.id}`) as any); }}
     >
       <LinearGradient colors={[color, `${color}CC`]} style={styles.courseCardHeader}>
         <View style={styles.courseCardBadgeRow}>
@@ -991,17 +1011,19 @@ const styles = StyleSheet.create({
   multiBannerFallback: { flex: 1 },
   multiCourseBody: { paddingHorizontal: 16, paddingVertical: 12, gap: 8 },
   multiTopRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
-  multiBadgeRow: { flexDirection: "row", alignItems: "center", gap: 5, flex: 1, flexWrap: "wrap" },
-  multiCategory: { fontSize: 10, fontFamily: "Inter_700Bold", color: "#DC2626", textTransform: "uppercase" },
-  multiLevel: { fontSize: 10, fontFamily: "Inter_700Bold", color: "#4F46E5", backgroundColor: "#EEF2FF", borderRadius: 6, paddingHorizontal: 7, paddingVertical: 3 },
-  multiLanguagePill: { borderWidth: 1, borderColor: "#CBD5E1", borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3, backgroundColor: "#fff" },
-  multiLanguageText: { fontSize: 10, fontFamily: "Inter_700Bold", color: "#0F172A" },
+  multiBadgeRow: { flexDirection: "row", alignItems: "center", gap: 6, flex: 1, flexWrap: "wrap" },
+  multiCategory: { fontSize: 11, fontFamily: "Inter_700Bold", color: "#DC2626", textTransform: "uppercase" },
+  multiLevel: { fontSize: 11, fontFamily: "Inter_700Bold", color: "#4F46E5", backgroundColor: "#EEF2FF", borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4 },
+  multiLanguagePill: { borderWidth: 1, borderColor: "#CBD5E1", borderRadius: 6, paddingHorizontal: 9, paddingVertical: 4, backgroundColor: "#fff" },
+  multiLanguageText: { fontSize: 11, fontFamily: "Inter_700Bold", color: "#0F172A" },
+  multiEnrolledBadge: { flexDirection: "row", alignItems: "center", gap: 3, backgroundColor: "#ECFDF5", borderRadius: 6, paddingHorizontal: 7, paddingVertical: 3, borderWidth: 1, borderColor: "#BBF7D0" },
+  multiEnrolledBadgeText: { fontSize: 10, fontFamily: "Inter_700Bold", color: "#16A34A" },
   multiTitle: { fontSize: 15, lineHeight: 21, fontFamily: "Inter_700Bold" },
   multiMetaRow: { flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" },
   multiMetaText: { fontSize: 11, fontFamily: "Inter_500Medium" },
   multiStatusText: { color: "#DC2626", fontFamily: "Inter_700Bold" },
   multiLiveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: "#DC2626" },
-  multiPriceRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  multiPriceRow: { flexDirection: "row", alignItems: "center", gap: 6, minHeight: 34 },
   multiPrice: { fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.primary },
   multiOriginalPrice: { fontSize: 12, fontFamily: "Inter_400Regular", color: "#64748B", textDecorationLine: "line-through" },
   multiDiscount: { fontSize: 10, fontFamily: "Inter_700Bold", color: "#16A34A" },
