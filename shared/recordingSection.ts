@@ -36,6 +36,32 @@ export function buildRecordingLectureSectionTitle(
  * Split DB columns (and legacy combined `main` with " / ") into admin form main + subfolder fields.
  * Used by the frontend admin UI to pre-populate recording section inputs.
  */
+/**
+ * Top-level folder name for a nested content path (lecture section_title, material section_title, test folder_name).
+ * e.g. "Recordings / Geometry" → "Recordings", "Live Class Recordings / Chapter 1" → "Live Class Recordings".
+ */
+export function getContentFolderRootName(name: string | null | undefined): string {
+  const trimmed = String(name || "").trim();
+  if (!trimmed) return "";
+  if (trimmed.startsWith(`${DEFAULT_LIVE_RECORDING_SECTION} /`)) return DEFAULT_LIVE_RECORDING_SECTION;
+  const parts = trimmed.split(" / ").map((p) => p.trim()).filter(Boolean);
+  return parts[0] || trimmed;
+}
+
+/** Display label for a direct child folder inside `parentPath`. */
+export function getContentFolderChildDisplayName(
+  childFullPath: string,
+  parentPath: string
+): string {
+  const prefix = `${parentPath} / `;
+  if (childFullPath.startsWith(prefix)) {
+    const rest = childFullPath.slice(prefix.length);
+    return rest.split(" / ")[0]?.trim() || rest;
+  }
+  const parts = childFullPath.split(" / ");
+  return parts[parts.length - 1]?.trim() || childFullPath;
+}
+
 export function prefillLiveRecordingFormFields(
   main: string | null | undefined,
   sub: string | null | undefined

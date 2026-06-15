@@ -10,6 +10,7 @@ import { useAppTheme } from "@/context/AppThemeContext";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "@/context/AuthContext";
 import { useCoursePurchase } from "@/lib/use-course-purchase";
+import { getCourseAccentColor } from "@shared/courseTheme";
 
 type Course = {
   id: number;
@@ -45,10 +46,11 @@ type Course = {
 
 type AboutTeacher = { name: string; imageUrl: string; bio: string };
 
-const COURSE_COLORS = ["#1A56DB", "#7C3AED", "#DC2626", "#059669", "#D97706", "#0891B2"];
-
 function courseAccentColor(course: Course): string {
-  return course.cover_color || COURSE_COLORS[course.id % COURSE_COLORS.length];
+  if (course.course_type === "multi_subject") {
+    return course.cover_color || "#B91C1C";
+  }
+  return getCourseAccentColor(course.id);
 }
 
 function parseAboutMeta(value: any): { features: string[]; teachers: AboutTeacher[] } {

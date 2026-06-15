@@ -15,6 +15,7 @@ import Colors from "@/constants/colors";
 import { useAppTheme } from "@/context/AppThemeContext";
 import { getApiUrl, authFetch } from "@/lib/query-client";
 import { useCoursePurchase } from "@/lib/use-course-purchase";
+import { getCourseAccentColor, getCourseGradientColors } from "@shared/courseTheme";
 import { liveClassQueryKey, notificationsQueryKey } from "@/lib/query-keys";
 import { useDocumentVisibility } from "@/lib/useDocumentVisibility";
 import { fetch } from "expo/fetch";
@@ -80,8 +81,6 @@ interface LiveClass {
 
 const DEFAULT_CATEGORIES = ["All", "NDA", "CDS", "AFCAT"];
 
-const COURSE_COLORS = ["#1A56DB", "#7C3AED", "#DC2626", "#059669", "#D97706", "#0891B2"];
-
 function formatCourseDate(value?: string | number | null): string {
   if (value == null || value === "") return "";
   const date = typeof value === "number" ? new Date(value) : new Date(String(value));
@@ -136,6 +135,16 @@ function getMultiSubjectScheduleText(course: Course, now = Date.now()): string {
   return "";
 }
 
+function getMultiSubjectContentCounts(course: Course) {
+  // Course list API aggregates all rows for the course id (every subject_key).
+  // total_tests includes regular tests, PYQs, mocks, and other published test types.
+  return {
+    lectures: Math.max(0, Number(course.total_lectures) || 0),
+    tests: Math.max(0, Number(course.total_tests) || 0),
+    materials: Math.max(0, Number(course.total_materials) || 0),
+  };
+}
+
 function MultiSubjectCourseCard({ course, enrolled = false }: { course: Course; enrolled?: boolean }) {
   const { colors } = useAppTheme();
   const livePulse = React.useRef(new Animated.Value(1)).current;
@@ -154,6 +163,7 @@ function MultiSubjectCourseCard({ course, enrolled = false }: { course: Course; 
   const level = course.level || "Beginner";
   const status = multiStatusLabel(course);
   const scheduleText = getMultiSubjectScheduleText(course);
+  const contentCounts = getMultiSubjectContentCounts(course);
   const bannerColors: [string, string] = course.thumbnail ? [cover, `${cover}CC`] : ["#B91C1C", "#EF4444"];
 
   useEffect(() => {
@@ -217,7 +227,28 @@ function MultiSubjectCourseCard({ course, enrolled = false }: { course: Course; 
         <View style={styles.multiPriceRow}>
           {enrolled ? (
             <>
-              <View style={{ flex: 1 }} />
+              <View style={styles.multiEnrolledStats}>
+                <View style={styles.multiEnrolledStat}>
+                  <Ionicons name="videocam" size={12} color="#DC2626" />
+                  <Text style={[styles.multiEnrolledStatText, { color: colors.textSecondary }]}>
+                    {contentCounts.lectures} Lectures
+                  </Text>
+                </View>
+                <View style={[styles.multiEnrolledStatDot, { backgroundColor: colors.textMuted }]} />
+                <View style={styles.multiEnrolledStat}>
+                  <Ionicons name="document-text" size={12} color="#DC2626" />
+                  <Text style={[styles.multiEnrolledStatText, { color: colors.textSecondary }]}>
+                    {contentCounts.tests} Tests
+                  </Text>
+                </View>
+                <View style={[styles.multiEnrolledStatDot, { backgroundColor: colors.textMuted }]} />
+                <View style={styles.multiEnrolledStat}>
+                  <Ionicons name="folder" size={12} color="#DC2626" />
+                  <Text style={[styles.multiEnrolledStatText, { color: colors.textSecondary }]}>
+                    {contentCounts.materials} Materials
+                  </Text>
+                </View>
+              </View>
               <Pressable style={styles.multiArrowBtn} onPress={() => router.push(`/course-about/${course.id}` as any)}>
                 <Ionicons name="chevron-forward" size={18} color="#0F172A" />
               </Pressable>
@@ -326,7 +357,7 @@ function ScheduledLiveCard({ lc, nowMs }: { lc: any; nowMs: number }) {
 
 function EnrolledCourseCard({ course, index }: { course: Course; index: number }) {
   const { colors } = useAppTheme();
-  const color = COURSE_COLORS[index % COURSE_COLORS.length];
+  const color = getCourseAccentColor(course.id);
   const progress = course.progress || 0;
 
   if (course.course_type === "multi_subject") {
@@ -396,7 +427,7 @@ function EnrolledCourseCard({ course, index }: { course: Course; index: number }
 
 function CourseCard({ course, index }: { course: Course; index: number }) {
   const { colors } = useAppTheme();
-  const color = COURSE_COLORS[index % COURSE_COLORS.length];
+  const [color, colorFade] = getCourseGradientColors(course.id);
   const discount = course.original_price && parseFloat(course.original_price) > 0
     ? Math.round((1 - parseFloat(course.price) / parseFloat(course.original_price)) * 100)
     : 0;
@@ -410,7 +441,7 @@ function CourseCard({ course, index }: { course: Course; index: number }) {
       style={({ pressed }) => [styles.courseCard, pressed && { opacity: 0.92, transform: [{ scale: 0.98 }] }]}
       onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push((course.course_type === "test_series" ? `/course/${course.id}` : `/course-about/${course.id}`) as any); }}
     >
-      <LinearGradient colors={[color, `${color}CC`]} style={styles.courseCardHeader}>
+      <LinearGradient colors={[color, colorFade]} style={styles.courseCardHeader}>
         <View style={styles.courseCardBadgeRow}>
           <View style={styles.categoryBadge}><Text style={styles.categoryBadgeText}>{course.category}</Text></View>
           <View style={{ backgroundColor: (course.course_type || "live") === "live" ? "#EF4444" : (course.course_type === "test_series" ? "#F59E0B" : "#8B5CF6"), paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 }}>
@@ -1067,6 +1098,10 @@ const styles = StyleSheet.create({
   multiStatusText: { color: "#DC2626", fontFamily: "Inter_700Bold" },
   multiLiveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: "#DC2626" },
   multiPriceRow: { flexDirection: "row", alignItems: "center", gap: 6, minHeight: 34 },
+  multiEnrolledStats: { flex: 1, flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" },
+  multiEnrolledStat: { flexDirection: "row", alignItems: "center", gap: 3 },
+  multiEnrolledStatText: { fontSize: 11, fontFamily: "Inter_500Medium" },
+  multiEnrolledStatDot: { width: 2, height: 2, borderRadius: 1 },
   multiPrice: { fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.primary },
   multiOriginalPrice: { fontSize: 12, fontFamily: "Inter_400Regular", color: "#64748B", textDecorationLine: "line-through" },
   multiDiscount: { fontSize: 10, fontFamily: "Inter_700Bold", color: "#16A34A" },

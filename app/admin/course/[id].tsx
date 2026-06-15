@@ -17,7 +17,7 @@ import Colors from "@/constants/colors";
 import { useAppTheme } from "@/context/AppThemeContext";
 import { fetch } from "expo/fetch";
 import BulkUploadModal from "@/components/BulkUploadModal";
-import { buildRecordingLectureSectionTitle, DEFAULT_LIVE_RECORDING_SECTION } from "@shared/recordingSection";
+import { buildRecordingLectureSectionTitle, DEFAULT_LIVE_RECORDING_SECTION, getContentFolderRootName } from "@shared/recordingSection";
 import { useDocumentVisibility } from "@/lib/useDocumentVisibility";
 import SortableList from "@/components/admin/SortableList";
 import SortableItem from "@/components/admin/SortableItem";
@@ -650,13 +650,7 @@ export default function AdminCourseScreen() {
     });
     return [...map.values()];
   };
-  const getLectureRootName = (name: string) => {
-    const trimmed = String(name || "").trim();
-    if (!trimmed) return "";
-    if (trimmed.startsWith(`${LIVE_ROOT} /`)) return LIVE_ROOT;
-    const parts = trimmed.split(" / ").map((p) => p.trim()).filter(Boolean);
-    return parts[0] || trimmed;
-  };
+  const getLectureRootName = getContentFolderRootName;
   const ensureLectureFolderByPath = async (pathName: string) => {
     const normalized = String(pathName || "").trim();
     if (!normalized) return null;
@@ -1748,7 +1742,7 @@ export default function AdminCourseScreen() {
             {(() => {
               const testFolderNames = sortFolderNamesByOrder(
                 [...new Set([
-                  ...courseTests.map((t: any) => String(t.folder_name || "").split(" / ")[0]).filter(Boolean),
+                  ...courseTests.map((t: any) => getContentFolderRootName(t.folder_name)).filter(Boolean),
                   ...safeFolders.filter((f: any) => f.type === "test" && !f.parent_id).map(folderFullName),
                 ])],
                 "test"
@@ -1886,7 +1880,7 @@ export default function AdminCourseScreen() {
             {(() => {
               const materialFolderNames = sortFolderNamesByOrder(
                 [...new Set([
-                  ...courseMaterials.map((m: any) => String(m.section_title || "").split(" / ")[0]).filter(Boolean),
+                  ...courseMaterials.map((m: any) => getContentFolderRootName(m.section_title)).filter(Boolean),
                   ...safeFolders.filter((f: any) => f.type === "material" && !f.parent_id).map(folderFullName),
                 ])],
                 "material"
@@ -2958,9 +2952,6 @@ export default function AdminCourseScreen() {
               <FormField label="Level" placeholder="beginner / intermediate / advanced" value={editForm.level} onChangeText={(v) => setEditForm(p => ({ ...p, level: v }))} />
               {!isTestSeries && (
                 <>
-                  {!isMultiSubjectCourse ? (
-                    <FormField label="Duration (hours)" placeholder="10" value={editForm.durationHours} onChangeText={(v) => setEditForm(p => ({ ...p, durationHours: v }))} numeric />
-                  ) : null}
                   <FormField label="Start Date" placeholder="e.g., 15 Mar 2026" value={editForm.startDate} onChangeText={(v) => setEditForm(p => ({ ...p, startDate: v }))} />
                   <FormField label="End Date" placeholder="e.g., 15 Jun 2026" value={editForm.endDate} onChangeText={(v) => setEditForm(p => ({ ...p, endDate: v }))} />
                 </>

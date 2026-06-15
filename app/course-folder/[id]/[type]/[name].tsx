@@ -20,7 +20,7 @@ import { useScreenProtection } from "@/lib/useScreenProtection";
 import { useAuth } from "@/context/AuthContext";
 import { DownloadButton } from "@/components/DownloadButton";
 import { LectureListPreview } from "@/components/LectureListPreview";
-import { DEFAULT_LIVE_RECORDING_SECTION } from "@shared/recordingSection";
+import { DEFAULT_LIVE_RECORDING_SECTION, getContentFolderChildDisplayName } from "@shared/recordingSection";
 import { useDocumentVisibility } from "@/lib/useDocumentVisibility";
 
 type FolderType = "lectures" | "materials" | "live" | "tests";
@@ -193,6 +193,9 @@ export default function CourseFolderScreen() {
     });
   }, [liveClasses]);
 
+  const folderFullName = (folder: any): string => String(folder?.full_name || folder?.name || "").trim();
+  const folderLocalName = (folder: any): string => String(folder?.name || folder?.full_name || "").trim();
+
   const getDirectLectureSubfolders = (parentName: string): string[] => {
     const prefix = `${parentName} / `;
     const fromLectures = (course?.lectures || [])
@@ -206,7 +209,7 @@ export default function CourseFolderScreen() {
       .filter(Boolean);
     const fromFolders = scopedCourseFolders
       .filter((f: any) => f.type === "lecture")
-      .map((f: any) => f.name)
+      .map(folderFullName)
       .filter((n: any) => typeof n === "string" && n.startsWith(prefix))
       .map((n: string) => {
         const rest = n.slice(prefix.length);
@@ -217,8 +220,6 @@ export default function CourseFolderScreen() {
     return [...new Set([...fromLectures, ...fromFolders])];
   };
 
-  const folderFullName = (folder: any): string => String(folder?.full_name || folder?.name || "").trim();
-  const folderLocalName = (folder: any): string => String(folder?.name || folder?.full_name || "").trim();
   const activeFolderType = type === "lectures" ? "lecture" : type === "materials" ? "material" : type === "tests" ? "test" : "";
   const currentFolder = activeFolderType
     ? scopedCourseFolders.find((f: any) => f.type === activeFolderType && folderFullName(f) === folderName)
@@ -480,7 +481,7 @@ export default function CourseFolderScreen() {
                 <Ionicons name="folder" size={22} color={color} />
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={styles.testSectionTitle}>{childName.replace(`${folderName} / `, "")}</Text>
+                <Text style={styles.testSectionTitle}>{getContentFolderChildDisplayName(childName, folderName)}</Text>
                 <Text style={styles.testSectionCount}>{childItems.length} {type === "lectures" ? (childItems.length === 1 ? "video" : "videos") : type === "materials" ? (childItems.length === 1 ? "file" : "files") : (childItems.length === 1 ? "test" : "tests")}</Text>
               </View>
               <Ionicons name="chevron-forward" size={20} color={Colors.light.textMuted} />

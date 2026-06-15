@@ -4762,7 +4762,6 @@ export default function AdminDashboard() {
                 { label: "Level", key: "level", placeholder: "Beginner / Intermediate / Advanced" },
                 { label: "Price (₹)", key: "price", placeholder: "0 for free" },
                 { label: "Original Price (₹)", key: "originalPrice", placeholder: "For discount display" },
-                ...(newCourse.courseType !== "test_series" && newCourse.courseType !== "multi_subject" ? [{ label: "Duration (hours)", key: "durationHours", placeholder: "e.g., 40" }] : []),
               ].map((field) => (
                 <View key={field.key} style={styles.formField}>
                   <Text style={styles.formLabel}>{field.label}</Text>
@@ -4774,7 +4773,7 @@ export default function AdminDashboard() {
                     onChangeText={(val) => setNewCourse((prev) => ({ ...prev, [field.key]: val }))}
                     multiline={field.key === "description" || field.key === "teacherBio"}
                     numberOfLines={field.key === "description" || field.key === "teacherBio" ? 3 : 1}
-                    keyboardType={["price", "originalPrice", "durationHours"].includes(field.key) ? "numeric" : "default"}
+                    keyboardType={["price", "originalPrice"].includes(field.key) ? "numeric" : "default"}
                   />
                 </View>
               ))}
@@ -4880,22 +4879,6 @@ export default function AdminDashboard() {
                     ? "Recommended multi-subject banner size: 1200 × 450 px (8:3 ratio). This image appears at the top of the vertical course card."
                     : "Recommended size: 1200 × 400 px (3:1 ratio)"}
                 </Text>
-              </View>
-              {/* Cover Color */}
-              <View style={styles.formField}>
-                <Text style={styles.formLabel}>Cover Color (leave blank for auto)</Text>
-                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 6 }}>
-                  {["#1A56DB","#7C3AED","#DC2626","#059669","#D97706","#0891B2","#DB2777","#EA580C"].map((col) => (
-                    <Pressable key={col} onPress={() => setNewCourse((prev) => ({ ...prev, coverColor: col }))}
-                      style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: col, borderWidth: newCourse.coverColor === col ? 3 : 0, borderColor: "#fff", shadowColor: "#000", shadowOpacity: 0.2, shadowRadius: 4, elevation: 2 }} />
-                  ))}
-                  {newCourse.coverColor ? (
-                    <Pressable onPress={() => setNewCourse((prev) => ({ ...prev, coverColor: "" }))}
-                      style={{ paddingHorizontal: 10, paddingVertical: 8, borderRadius: 10, borderWidth: 1, borderColor: Colors.light.border, alignItems: "center", justifyContent: "center" }}>
-                      <Text style={{ fontSize: 11, color: Colors.light.textMuted }}>Auto</Text>
-                    </Pressable>
-                  ) : null}
-                </View>
               </View>
             </ScrollView>
             <Pressable

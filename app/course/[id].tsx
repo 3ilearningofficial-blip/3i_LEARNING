@@ -26,7 +26,8 @@ import { fetch } from "expo/fetch";
 import { useAuth } from "@/context/AuthContext";
 import { WebView } from "react-native-webview";
 import { DownloadButton } from "@/components/DownloadButton";
-import { DEFAULT_LIVE_RECORDING_SECTION } from "@shared/recordingSection";
+import { DEFAULT_LIVE_RECORDING_SECTION, getContentFolderRootName } from "@shared/recordingSection";
+import { getCourseAccentColor } from "@shared/courseTheme";
 import { useDocumentVisibility } from "@/lib/useDocumentVisibility";
 
 interface Lecture {
@@ -369,10 +370,6 @@ export default function CourseDetailScreen() {
       });
     });
   }, [user?.id, course, id, liveClasses, qc]);
-
-  const LIVE_ROOT = DEFAULT_LIVE_RECORDING_SECTION;
-  const getLectureRootName = (name: string) =>
-    name.startsWith(`${LIVE_ROOT} /`) ? LIVE_ROOT : name;
 
   /** Push to the dedicated folder route so back navigation through nested content works correctly on Android. */
   const openFolderView = (next: { name: string; type: "lectures" | "materials" | "live" | "tests"; color: string }) => {
@@ -784,7 +781,7 @@ setTimeout(function() {
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       {(() => {
-        const c1 = course.cover_color || "#1A56DB";
+        const c1 = getCourseAccentColor(course.id);
         const c2 = c1 + "CC";
         return (
           <LinearGradient colors={isDarkMode ? ["#020617", c1, "#0F172A"] : ["#0A1628", c1, c2]} style={[styles.header, isTestSeriesCourse ? null : styles.headerCompact, { paddingTop: topPadding + 4 }]}>
@@ -1107,7 +1104,7 @@ setTimeout(function() {
                   const unfolderedLectures: Lecture[] = [];
                   for (const lec of sorted) {
                     if (lec.section_title) {
-                      const rootName = getLectureRootName(lec.section_title);
+                      const rootName = getContentFolderRootName(lec.section_title);
                       if (!folderMap.has(rootName)) folderMap.set(rootName, []);
                       folderMap.get(rootName)!.push(lec);
                     } else {
@@ -1116,7 +1113,7 @@ setTimeout(function() {
                   }
                   // Also include empty DB folders
                   for (const f of courseFolders.filter((f: any) => f.type === "lecture" && !f.parent_id)) {
-                    const rootName = getLectureRootName(folderFullName(f));
+                    const rootName = getContentFolderRootName(folderFullName(f));
                     if (!folderMap.has(rootName)) folderMap.set(rootName, []);
                   }
                   const folders = Array.from(folderMap.entries());
@@ -1200,7 +1197,7 @@ setTimeout(function() {
                 {/* Test folders from DB (including empty ones) */}
                 {(() => {
                   const testFolderNames = new Set([
-                    ...(course.tests || []).map((t: any) => String(t.folder_name || "").split(" / ")[0]).filter(Boolean),
+                    ...(course.tests || []).map((t: any) => getContentFolderRootName(t.folder_name)).filter(Boolean),
                     ...courseFolders.filter((f: any) => f.type === "test" && !f.parent_id).map(folderFullName),
                   ]);
                   return Array.from(testFolderNames).map((folderName: any) => {
@@ -1309,7 +1306,7 @@ setTimeout(function() {
                   const unfolderedMaterials: Material[] = [];
                   for (const mat of sorted) {
                     if (mat.section_title) {
-                      const rootName = String(mat.section_title).split(" / ")[0];
+                      const rootName = getContentFolderRootName(mat.section_title);
                       if (!folderMap.has(rootName)) folderMap.set(rootName, []);
                       folderMap.get(rootName)!.push(mat);
                     } else {
@@ -1318,7 +1315,7 @@ setTimeout(function() {
                   }
                   // Also include empty DB folders
                   for (const f of courseFolders.filter((f: any) => f.type === "material" && !f.parent_id)) {
-                    const rootName = folderFullName(f);
+                    const rootName = getContentFolderRootName(folderFullName(f));
                     if (!folderMap.has(rootName)) folderMap.set(rootName, []);
                   }
                   const folders = Array.from(folderMap.entries());

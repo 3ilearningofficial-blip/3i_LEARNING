@@ -54,11 +54,15 @@ export function registerAdminCourseCrudRoutes({
         req.body;
       const COVER_COLORS = ["#1A56DB", "#7C3AED", "#DC2626", "#059669", "#D97706", "#0891B2", "#DB2777", "#EA580C"];
       const autoColor = COVER_COLORS[Math.floor(Math.random() * COVER_COLORS.length)];
+      const normalizedCourseType = courseType || "live";
+      const resolvedCoverColor =
+        normalizedCourseType === "multi_subject"
+          ? (coverColor || autoColor)
+          : null;
       const vm =
         validityMonths != null && String(validityMonths).trim() !== ""
           ? Math.max(0, parseFloat(String(validityMonths)) || 0) || null
           : null;
-      const normalizedCourseType = courseType || "live";
       const subjects = normalizeJsonArray(multiSubjectConfig, [
         { key: "maths", label: "Maths", icon: "calculator" },
         { key: "english", label: "English", icon: "book" },
@@ -69,7 +73,7 @@ export function registerAdminCourseCrudRoutes({
       const result = await db.query(
         `INSERT INTO courses (title, description, teacher_name, price, original_price, category, is_free, level, duration_hours, course_type, subject, start_date, end_date, validity_months, thumbnail, cover_color, teacher_bio, teacher_image_url, teacher_details_json, multi_subject_config, course_language, batch_status, is_published, created_at) 
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19::jsonb, $20::jsonb, $21, $22, TRUE, $23) RETURNING *`,
-        [title, description, teacherName || "3i Learning", price || 0, originalPrice || 0, category || "Mathematics", isFree || false, level || "Beginner", durationHours || 0, normalizedCourseType, subject || "", startDate || null, endDate || null, vm, thumbnail || null, coverColor || autoColor, teacherBio || null, teacherImageUrl || null, JSON.stringify(teacherDetails), JSON.stringify(normalizedCourseType === "multi_subject" ? subjects : normalizeJsonArray(multiSubjectConfig)), normalizedCourseType === "multi_subject" ? (courseLanguage || "HINGLISH") : null, normalizedCourseType === "multi_subject" ? normalizeBatchStatus(batchStatus) : null, Date.now()]
+        [title, description, teacherName || "3i Learning", price || 0, originalPrice || 0, category || "Mathematics", isFree || false, level || "Beginner", durationHours || 0, normalizedCourseType, subject || "", startDate || null, endDate || null, vm, thumbnail || null, resolvedCoverColor, teacherBio || null, teacherImageUrl || null, JSON.stringify(teacherDetails), JSON.stringify(normalizedCourseType === "multi_subject" ? subjects : normalizeJsonArray(multiSubjectConfig)), normalizedCourseType === "multi_subject" ? (courseLanguage || "HINGLISH") : null, normalizedCourseType === "multi_subject" ? normalizeBatchStatus(batchStatus) : null, Date.now()]
       );
       if (normalizedCourseType !== "test_series") {
         const course = result.rows[0];
