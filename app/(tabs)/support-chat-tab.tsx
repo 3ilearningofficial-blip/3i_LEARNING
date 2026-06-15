@@ -8,7 +8,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useIsFocused } from "@react-navigation/native";
-import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
+import { useOptionalBottomTabBarHeight } from "@/lib/useOptionalBottomTabBarHeight";
 import { KeyboardStickyView } from "react-native-keyboard-controller";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
@@ -35,8 +35,7 @@ export default function SupportChatTab() {
   const tabVisible = useDocumentVisibility();
   const scrollRef = useRef<ScrollView>(null);
   const [text, setText] = useState("");
-  const tabBarHeightHook = useBottomTabBarHeight();
-  const tabBarHeight = Platform.OS === "web" ? 0 : tabBarHeightHook;
+  const tabBarHeight = useOptionalBottomTabBarHeight();
   const INPUT_BAR_HEIGHT = 58;
 
   // Admin state

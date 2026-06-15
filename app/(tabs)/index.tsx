@@ -5,7 +5,7 @@ import {
 } from "react-native";
 import { router } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
-import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
+import { useOptionalBottomTabBarHeight } from "@/lib/useOptionalBottomTabBarHeight";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
@@ -552,7 +552,7 @@ function CourseCard({ course, index }: { course: Course; index: number }) {
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
-  const tabBarHeight = useBottomTabBarHeight();
+  const tabBarHeight = useOptionalBottomTabBarHeight();
   const { width: screenWidth } = useWindowDimensions();
   const isWideScreen = screenWidth >= 768;
   const isNative = Platform.OS !== "web";
