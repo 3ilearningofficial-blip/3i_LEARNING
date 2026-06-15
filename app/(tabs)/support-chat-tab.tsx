@@ -8,6 +8,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useIsFocused } from "@react-navigation/native";
+import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
+import { KeyboardStickyView } from "react-native-keyboard-controller";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
 import { supportMessagesQueryKey } from "@/lib/query-keys";
@@ -33,7 +35,9 @@ export default function SupportChatTab() {
   const tabVisible = useDocumentVisibility();
   const scrollRef = useRef<ScrollView>(null);
   const [text, setText] = useState("");
-  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const tabBarHeightHook = useBottomTabBarHeight();
+  const tabBarHeight = Platform.OS === "web" ? 0 : tabBarHeightHook;
+  const INPUT_BAR_HEIGHT = 58;
 
   // Admin state
   const [adminSelectedUserId, setAdminSelectedUserId] = useState<number | null>(null);
@@ -206,14 +210,9 @@ export default function SupportChatTab() {
   useEffect(() => {
     if (Platform.OS === "web") return;
     const showSub = Keyboard.addListener("keyboardDidShow", () => {
-      setKeyboardVisible(true);
       setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80);
     });
-    const hideSub = Keyboard.addListener("keyboardDidHide", () => setKeyboardVisible(false));
-    return () => {
-      showSub.remove();
-      hideSub.remove();
-    };
+    return () => showSub.remove();
   }, []);
 
   if (isAdmin) {
@@ -432,21 +431,37 @@ export default function SupportChatTab() {
     else grouped.push({ date: dateStr, msgs: [msg] });
   }
 
-  /** Clearance above the bottom tab bar — keep modest so the composer sits near the bar, not floating high. */
-  const TAB_BAR_CLEARANCE = Platform.OS === "android" ? 52 : Platform.OS === "web" ? 56 : 52;
-  const composerBottomPadding =
-    keyboardVisible
-      ? Math.max(insets.bottom, 6) + 8
-      : Platform.OS === "web"
-      ? 8
-      : TAB_BAR_CLEARANCE + Math.max(insets.bottom, 6);
+  /** Space for composer + tab bar so last messages stay visible above the input. */
+  const listBottomPadding = Platform.OS === "web" ? INPUT_BAR_HEIGHT + 12 : tabBarHeight + INPUT_BAR_HEIGHT + 8;
+
+  const composer = (
+    <View style={[styles.inputRow, Platform.OS === "web" ? { paddingBottom: 12 } : { paddingBottom: 8 }]}>
+      <TextInput
+        style={styles.input}
+        placeholder="Type your message..."
+        placeholderTextColor={Colors.light.textMuted}
+        value={text}
+        onChangeText={setText}
+        multiline
+        maxLength={1000}
+        editable
+        onFocus={() => setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80)}
+      />
+      <Pressable
+        style={[styles.sendBtn, (!text.trim() || sendMutation.isPending) && styles.sendBtnDisabled]}
+        onPress={() => text.trim() && sendMutation.mutate(text.trim())}
+        disabled={!text.trim() || sendMutation.isPending}
+      >
+        {sendMutation.isPending
+          ? <ActivityIndicator size="small" color="#fff" />
+          : <Ionicons name="send" size={18} color="#fff" />
+        }
+      </Pressable>
+    </View>
+  );
 
   return (
-    <KeyboardAvoidingView
-      style={{ flex: 1, backgroundColor: "#F0F4FF" }}
-      behavior={Platform.OS === "ios" ? "padding" : Platform.OS === "android" ? "height" : undefined}
-      keyboardVerticalOffset={0}
-    >
+    <View style={{ flex: 1, backgroundColor: "#F0F4FF" }}>
       {/* Header */}
       <View style={[styles.header, { paddingTop: Platform.OS === "web" ? 16 : insets.top + 8 }]}>
         <View style={styles.headerAvatar}>
@@ -467,7 +482,7 @@ export default function SupportChatTab() {
         <ScrollView
           ref={scrollRef}
           style={{ flex: 1 }}
-          contentContainerStyle={{ padding: 16, paddingBottom: 8, gap: 2, flexGrow: 1 }}
+          contentContainerStyle={{ padding: 16, paddingBottom: listBottomPadding, gap: 2, flexGrow: 1 }}
           showsVerticalScrollIndicator={false}
           onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: false })}
           keyboardShouldPersistTaps="handled"
@@ -513,31 +528,15 @@ export default function SupportChatTab() {
         </ScrollView>
       )}
 
-      {/* Input — sits above tab bar */}
-      <View style={[styles.inputRow, { paddingBottom: composerBottomPadding }]}>
-        <TextInput
-          style={styles.input}
-          placeholder="Type your message..."
-          placeholderTextColor={Colors.light.textMuted}
-          value={text}
-          onChangeText={setText}
-          multiline
-          maxLength={1000}
-          editable
-          onFocus={() => setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80)}
-        />
-        <Pressable
-          style={[styles.sendBtn, (!text.trim() || sendMutation.isPending) && styles.sendBtnDisabled]}
-          onPress={() => text.trim() && sendMutation.mutate(text.trim())}
-          disabled={!text.trim() || sendMutation.isPending}
-        >
-          {sendMutation.isPending
-            ? <ActivityIndicator size="small" color="#fff" />
-            : <Ionicons name="send" size={18} color="#fff" />
-          }
-        </Pressable>
-      </View>
-    </KeyboardAvoidingView>
+      {/* Composer — native: sticky above tab bar / keyboard; web: pinned at bottom */}
+      {Platform.OS === "web" ? (
+        composer
+      ) : (
+        <KeyboardStickyView offset={{ closed: tabBarHeight, opened: 0 }}>
+          {composer}
+        </KeyboardStickyView>
+      )}
+    </View>
   );
 }
 

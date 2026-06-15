@@ -5,6 +5,7 @@ import {
 } from "react-native";
 import { router } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
+import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
@@ -551,8 +552,11 @@ function CourseCard({ course, index }: { course: Course; index: number }) {
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
+  const tabBarHeight = useBottomTabBarHeight();
   const { width: screenWidth } = useWindowDimensions();
   const isWideScreen = screenWidth >= 768;
+  const isNative = Platform.OS !== "web";
+  const isNativePhone = isNative && !isWideScreen;
   const { user, isAdmin, logout } = useAuth();
   const { colors, isDarkMode } = useAppTheme();
   const qc = useQueryClient();
@@ -565,6 +569,15 @@ export default function HomeScreen() {
 
   const topPadding = Platform.OS === "web" ? 16 : insets.top;
   const bottomPadding = Platform.OS === "web" ? 16 : insets.bottom;
+  const headerTopInset = topPadding + (isNative ? 8 : 12);
+  const scrollBottomPad = Platform.OS === "web" ? bottomPadding + 80 : bottomPadding + tabBarHeight + 8;
+  const avatarSize = isNativePhone ? 40 : 52;
+  const avatarBadgeSize = isNativePhone ? 15 : 18;
+  const enrolledCardWidth = isWideScreen
+    ? 280
+    : isNativePhone
+      ? Math.min(screenWidth * 0.68, 260)
+      : Math.min(screenWidth * 0.72, 280);
 
   useEffect(() => {
     if (Platform.OS !== "web" || typeof MutationObserver === "undefined") return;
@@ -752,27 +765,63 @@ export default function HomeScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <LinearGradient colors={isDarkMode ? ["#020617", "#0F172A"] : ["#0A1628", "#1A2E50"]} style={[styles.header, { paddingTop: topPadding + 12 }]}>
+      <LinearGradient
+        colors={isDarkMode ? ["#020617", "#0F172A"] : ["#0A1628", "#1A2E50"]}
+        style={[
+          styles.header,
+          { paddingTop: headerTopInset },
+          isNativePhone && styles.headerNativePhone,
+        ]}
+      >
         <View style={styles.headerTop}>
-          <View style={styles.headerLeft}>
-            <Pressable style={styles.headerAvatar} onPress={() => router.push("/profile")}>
+          <View style={[styles.headerLeft, isNativePhone && styles.headerLeftNativePhone]}>
+            <Pressable
+              style={[
+                styles.headerAvatar,
+                { width: avatarSize, height: avatarSize, borderRadius: avatarSize / 2 },
+              ]}
+              onPress={() => router.push("/profile")}
+            >
               {user?.photo_url ? (
-                <Image source={{ uri: user.photo_url as string }} style={styles.headerAvatarImg} />
+                <Image
+                  source={{ uri: user.photo_url as string }}
+                  style={[styles.headerAvatarImg, { width: avatarSize, height: avatarSize }]}
+                />
               ) : (
-                <View style={styles.headerAvatarPlaceholder}>
-                  <Text style={styles.headerAvatarInitial}>
+                <View
+                  style={[
+                    styles.headerAvatarPlaceholder,
+                    { width: avatarSize, height: avatarSize, borderRadius: avatarSize / 2 },
+                  ]}
+                >
+                  <Text style={[styles.headerAvatarInitial, isNativePhone && styles.headerAvatarInitialNativePhone]}>
                     {user?.name?.charAt(0)?.toUpperCase() || "S"}
                   </Text>
                 </View>
               )}
               {/* Pencil badge — hints that tapping opens profile */}
-              <View style={styles.headerAvatarBadge}>
-                <Ionicons name="pencil" size={9} color="#fff" />
+              <View
+                style={[
+                  styles.headerAvatarBadge,
+                  { width: avatarBadgeSize, height: avatarBadgeSize, borderRadius: avatarBadgeSize / 2 },
+                ]}
+              >
+                <Ionicons name="pencil" size={isNativePhone ? 8 : 9} color="#fff" />
               </View>
             </Pressable>
             <View>
-              <Text style={styles.greeting}>Hello, {user?.name?.split(" ")[0] || "Student"}</Text>
-              <Text style={styles.subGreeting}>Ready to learn today?</Text>
+              <Text
+                style={[styles.greeting, isNativePhone && styles.greetingNativePhone]}
+                maxFontSizeMultiplier={isNativePhone ? 1.1 : undefined}
+              >
+                Hello, {user?.name?.split(" ")[0] || "Student"}
+              </Text>
+              <Text
+                style={[styles.subGreeting, isNativePhone && styles.subGreetingNativePhone]}
+                maxFontSizeMultiplier={isNativePhone ? 1.1 : undefined}
+              >
+                Ready to learn today?
+              </Text>
             </View>
           </View>
           <View style={styles.headerActions}>
@@ -784,8 +833,11 @@ export default function HomeScreen() {
                 </View>
               </Pressable>
             )}
-            <Pressable style={styles.notifBtn} onPress={() => router.push("/notifications")}>
-              <Ionicons name="notifications-outline" size={22} color="#fff" />
+            <Pressable
+              style={[styles.notifBtn, isNativePhone && styles.notifBtnNativePhone]}
+              onPress={() => router.push("/notifications")}
+            >
+              <Ionicons name="notifications-outline" size={isNativePhone ? 20 : 22} color="#fff" />
               {unreadNotifCount > 0 && (
                 <View style={{ position: "absolute", top: -4, right: -4, backgroundColor: "#EF4444", borderRadius: 9, minWidth: 18, height: 18, alignItems: "center", justifyContent: "center", paddingHorizontal: 4, borderWidth: 2, borderColor: "#0A1628" }}>
                   <Text style={{ fontSize: 10, fontFamily: "Inter_700Bold", color: "#fff" }}>{unreadNotifCount > 9 ? "9+" : unreadNotifCount}</Text>
@@ -795,19 +847,20 @@ export default function HomeScreen() {
           </View>
         </View>
 
-        <View style={[styles.searchBar, { backgroundColor: colors.card }]}>
-          <Ionicons name="search-outline" size={20} color={colors.textMuted} />
+        <View style={[styles.searchBar, { backgroundColor: colors.card }, isNative && styles.searchBarNative]}>
+          <Ionicons name="search-outline" size={isNative ? 18 : 20} color={colors.textMuted} />
           <TextInput
-            style={[styles.searchInput, { color: colors.text }]}
+            style={[styles.searchInput, { color: colors.text }, isNative && styles.searchInputNative]}
             placeholder="Search courses, topics..."
             placeholderTextColor={colors.textMuted}
             value={search}
             onChangeText={setSearch}
             returnKeyType="search"
+            maxFontSizeMultiplier={isNative ? 1.1 : undefined}
           />
           {search ? (
             <Pressable onPress={() => setSearch("")}>
-              <Ionicons name="close-circle" size={20} color={colors.textMuted} />
+              <Ionicons name="close-circle" size={isNative ? 18 : 20} color={colors.textMuted} />
             </Pressable>
           ) : null}
         </View>
@@ -817,7 +870,7 @@ export default function HomeScreen() {
         style={styles.scrollView}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: bottomPadding + 80 }]}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: scrollBottomPad }]}
       >
         {liveClass && (
           <Pressable style={styles.liveClassBanner} onPress={() => router.push({
@@ -950,7 +1003,7 @@ export default function HomeScreen() {
                   showsHorizontalScrollIndicator={false}
                   keyExtractor={(c) => c.id.toString()}
                   renderItem={({ item, index }) => (
-                    <View style={{ width: isWideScreen ? 280 : Math.min(screenWidth * 0.72, 280), marginRight: 14 }}>
+                    <View style={{ width: enrolledCardWidth, marginRight: 14 }}>
                       <EnrolledCourseCard course={item} index={index} />
                     </View>
                   )}
@@ -1008,6 +1061,8 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.light.background },
   header: { paddingHorizontal: 20, paddingBottom: 20, gap: 14 },
+  headerNativePhone: { paddingBottom: 12, gap: 8 },
+  headerLeftNativePhone: { gap: 10 },
   headerTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   headerLeft: { flexDirection: "row", alignItems: "center", gap: 12 },
   headerAvatar: {
@@ -1022,6 +1077,7 @@ const styles = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
   },
   headerAvatarInitial: { fontSize: 20, fontFamily: "Inter_700Bold", color: "#fff" },
+  headerAvatarInitialNativePhone: { fontSize: 16 },
   headerAvatarBadge: {
     position: "absolute", bottom: 0, right: 0,
     width: 18, height: 18, borderRadius: 9,
@@ -1030,7 +1086,9 @@ const styles = StyleSheet.create({
     borderWidth: 1.5, borderColor: "#fff",
   },
   greeting: { fontSize: 22, fontFamily: "Inter_700Bold", color: "#fff" },
+  greetingNativePhone: { fontSize: 18 },
   subGreeting: { fontSize: 13, color: "rgba(255,255,255,0.6)", fontFamily: "Inter_400Regular", marginTop: 2 },
+  subGreetingNativePhone: { fontSize: 12, marginTop: 1 },
   headerActions: { flexDirection: "row", gap: 8 },
   adminBtn: {
     paddingHorizontal: 12, height: 36, borderRadius: 18,
@@ -1042,11 +1100,35 @@ const styles = StyleSheet.create({
     width: 38, height: 38, borderRadius: 12,
     backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center",
   },
+  notifBtnNativePhone: { width: 34, height: 34, borderRadius: 10 },
   searchBar: {
     flexDirection: "row", alignItems: "center", gap: 10,
     backgroundColor: "#fff", borderRadius: 14, paddingHorizontal: 14, paddingVertical: 12,
   },
+  searchBarNative: {
+    minHeight: 42,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    gap: 8,
+    borderRadius: 12,
+  },
   searchInput: { flex: 1, fontSize: 15, fontFamily: "Inter_400Regular", color: Colors.light.text },
+  searchInputNative: Platform.select({
+    android: {
+      height: 36,
+      paddingVertical: 0,
+      includeFontPadding: false,
+      textAlignVertical: "center",
+    },
+    ios: {
+      height: 36,
+      paddingVertical: 0,
+    },
+    default: {
+      height: 36,
+      paddingVertical: 0,
+    },
+  }),
   scrollView: { flex: 1 },
   scrollContent: { gap: 8 },
   liveClassBanner: { marginHorizontal: 20, marginTop: 16, borderRadius: 14, overflow: "hidden" },

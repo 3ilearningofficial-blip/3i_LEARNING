@@ -15,6 +15,7 @@
     },
     "android": {
       "package": "com.learning3i.app",
+      "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "backgroundColor": "#0A1628",
         "foregroundImage": "./assets/images/icon.png",
@@ -51,7 +52,14 @@
           "origin": "http://localhost:5000"
         }
       ],
-      "expo-notifications",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/icon.png",
+          "color": "#1A56DB",
+          "defaultChannel": "default"
+        }
+      ],
       "expo-font",
       "expo-web-browser",
       "expo-secure-store"
