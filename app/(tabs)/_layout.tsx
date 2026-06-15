@@ -1,11 +1,9 @@
 import { Tabs } from "expo-router";
-import { Platform, StyleSheet, View, Text } from "react-native";
-import { BlurView } from "expo-blur";
+import { Platform, View, Text } from "react-native";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useQuery } from "@tanstack/react-query";
 import React from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import Colors from "@/constants/colors";
 import { authFetch, getApiUrl } from "@/lib/query-client";
 import { supportMessagesQueryKey } from "@/lib/query-keys";
 import { useAuth } from "@/context/AuthContext";
@@ -53,9 +51,8 @@ function ChatTabIcon({ color, focused }: { color: string; focused: boolean }) {
 
 export default function TabLayout() {
   const isWeb = Platform.OS === "web";
-  const isIOS = Platform.OS === "ios";
   const insets = useSafeAreaInsets();
-  const { colors, isDarkMode } = useAppTheme();
+  const { colors } = useAppTheme();
   const androidBaseTabHeight = 60;
   const tabBarBottomInset = isWeb ? 0 : Math.max(insets.bottom, Platform.OS === "android" ? 10 : 6);
 
@@ -70,20 +67,14 @@ export default function TabLayout() {
           ? { display: "none" }
           : {
               position: "absolute",
-              backgroundColor: isIOS ? "transparent" : colors.card,
-              borderTopWidth: 0,
+              backgroundColor: colors.card,
+              borderTopWidth: 1,
               borderTopColor: colors.border,
               elevation: 0,
               paddingBottom: tabBarBottomInset,
               paddingTop: 4,
               height: Platform.OS === "android" ? androidBaseTabHeight + tabBarBottomInset : undefined,
             },
-        tabBarBackground: () =>
-          isIOS ? (
-            <BlurView intensity={90} tint={isDarkMode ? "dark" : "light"} style={StyleSheet.absoluteFill} />
-          ) : (
-            <View style={[StyleSheet.absoluteFill, { backgroundColor: colors.card, borderTopWidth: 1, borderTopColor: colors.border }]} />
-          ),
       }}
     >
       <Tabs.Screen
