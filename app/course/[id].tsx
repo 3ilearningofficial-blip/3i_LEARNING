@@ -787,7 +787,7 @@ setTimeout(function() {
         const c1 = course.cover_color || "#1A56DB";
         const c2 = c1 + "CC";
         return (
-          <LinearGradient colors={isDarkMode ? ["#020617", c1, "#0F172A"] : ["#0A1628", c1, c2]} style={[styles.header, { paddingTop: topPadding + 4 }]}>
+          <LinearGradient colors={isDarkMode ? ["#020617", c1, "#0F172A"] : ["#0A1628", c1, c2]} style={[styles.header, isTestSeriesCourse ? null : styles.headerCompact, { paddingTop: topPadding + 4 }]}>
             {/* Thumbnail overlay if set */}
             {course.thumbnail ? (
               <View style={StyleSheet.absoluteFillObject} pointerEvents="none">
@@ -798,40 +798,42 @@ setTimeout(function() {
               <Pressable style={styles.backBtn} onPress={() => { if (router.canGoBack()) router.back(); else router.replace("/(tabs)"); }}>
                 <Ionicons name="arrow-back" size={22} color="#fff" />
               </Pressable>
-              <View style={styles.headerBadges}>
-                {course.is_free && <View style={styles.freeBadge}><Text style={styles.freeBadgeText}>FREE</Text></View>}
-                {isTestSeriesCourse && <View style={styles.testSeriesBadge}><Text style={styles.testSeriesBadgeText}>TEST SERIES</Text></View>}
-                {!course.is_free && discount > 0 && <View style={styles.discountBadge}><Text style={styles.discountBadgeText}>{discount}% OFF</Text></View>}
-              </View>
+              {isTestSeriesCourse ? (
+                <View style={styles.headerBadges}>
+                  {course.is_free && <View style={styles.freeBadge}><Text style={styles.freeBadgeText}>FREE</Text></View>}
+                  <View style={styles.testSeriesBadge}><Text style={styles.testSeriesBadgeText}>TEST SERIES</Text></View>
+                  {!course.is_free && discount > 0 && <View style={styles.discountBadge}><Text style={styles.discountBadgeText}>{discount}% OFF</Text></View>}
+                </View>
+              ) : null}
             </View>
 
-            {!course.thumbnail && (
-              <View style={styles.courseIconArea}>
-                <MaterialCommunityIcons
-                  name={isTestSeriesCourse ? "clipboard-check" : "math-compass"}
-                  size={48} color="rgba(255,255,255,0.25)"
-                />
-              </View>
-            )}
-
-            <Text style={styles.courseCategory}>{course.category}</Text>
-            <Text style={styles.courseTitle}>{course.title}</Text>
-
-            <View style={styles.instructorRow}>
-              <View style={styles.instructorAvatar}>
-                <Ionicons name="person" size={14} color="#fff" />
-              </View>
-              <Text style={styles.instructorName}>{course.teacher_name}</Text>
-              <View style={styles.levelChip}><Text style={styles.levelChipText}>{course.level}</Text></View>
-            </View>
-
-            {(course.course_type || "live") === "live" && (course.start_date || course.end_date) && (
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 8 }}>
-                <Ionicons name="calendar" size={14} color="rgba(255,255,255,0.9)" />
-                <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: "rgba(255,255,255,0.9)" }}>
-                  {course.start_date || "TBD"} → {course.end_date || "TBD"}
-                </Text>
-              </View>
+            {isTestSeriesCourse ? (
+              <>
+                {!course.thumbnail && (
+                  <View style={styles.courseIconArea}>
+                    <MaterialCommunityIcons name="clipboard-check" size={48} color="rgba(255,255,255,0.25)" />
+                  </View>
+                )}
+                <Text style={styles.courseCategory}>{course.category}</Text>
+                <Text style={styles.courseTitle}>{course.title}</Text>
+                <View style={styles.instructorRow}>
+                  <View style={styles.instructorAvatar}>
+                    <Ionicons name="person" size={14} color="#fff" />
+                  </View>
+                  <Text style={styles.instructorName}>{course.teacher_name}</Text>
+                  <View style={styles.levelChip}><Text style={styles.levelChipText}>{course.level}</Text></View>
+                </View>
+                {(course.course_type || "live") === "live" && (course.start_date || course.end_date) && (
+                  <View style={styles.courseDateRow}>
+                    <Ionicons name="calendar" size={14} color="rgba(255,255,255,0.9)" />
+                    <Text style={styles.courseDateText}>
+                      {course.start_date || "TBD"} → {course.end_date || "TBD"}
+                    </Text>
+                  </View>
+                )}
+              </>
+            ) : (
+              <Text style={[styles.courseTitle, styles.courseTitleCompact]}>{course.title}</Text>
             )}
 
             <View style={styles.courseQuickStats}>
@@ -870,15 +872,11 @@ setTimeout(function() {
                 <Ionicons name="folder" size={16} color="rgba(255,255,255,0.8)" />
                 <Text style={styles.quickStatText}>{course.total_materials || 0} Materials</Text>
               </View>
-              <View style={styles.quickStat}>
-                <Ionicons name="time" size={16} color="rgba(255,255,255,0.8)" />
-                <Text style={styles.quickStatText}>{course.duration_hours}h</Text>
-              </View>
             </>
           )}
         </View>
 
-        {course.isEnrolled && (
+        {isTestSeriesCourse && course.isEnrolled && (
           <View style={styles.progressSection}>
             <View style={styles.progressRow}>
               <Text style={styles.progressLabel}>Your Progress</Text>
@@ -1753,6 +1751,7 @@ const styles = StyleSheet.create({
   centered: { flex: 1, alignItems: "center", justifyContent: "center" },
   errorText: { fontSize: 16, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" },
   header: { paddingHorizontal: 20, paddingBottom: 20, gap: 8, overflow: "hidden" },
+  headerCompact: { paddingBottom: 12, gap: 6 },
   headerThumbnail: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, opacity: 0.35 },
   headerTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   backBtn: { width: 38, height: 38, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" },
@@ -1766,6 +1765,9 @@ const styles = StyleSheet.create({
   courseIconArea: { position: "absolute", right: 20, top: 60, opacity: 0.4 },
   courseCategory: { fontSize: 12, color: "rgba(255,255,255,0.6)", fontFamily: "Inter_500Medium", textTransform: "uppercase", letterSpacing: 1 },
   courseTitle: { fontSize: 22, fontFamily: "Inter_700Bold", color: "#fff", lineHeight: 30, maxWidth: "85%" },
+  courseTitleCompact: { marginTop: 4, maxWidth: "100%" },
+  courseDateRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 8 },
+  courseDateText: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: "rgba(255,255,255,0.9)" },
   instructorRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   instructorAvatar: { width: 24, height: 24, borderRadius: 8, backgroundColor: "rgba(255,255,255,0.2)", alignItems: "center", justifyContent: "center" },
   instructorName: { fontSize: 13, color: "rgba(255,255,255,0.8)", fontFamily: "Inter_500Medium" },

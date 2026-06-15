@@ -560,6 +560,14 @@ export default function AdminCourseScreen() {
       teachers,
     });
   }, [course?.id, course?.course_type]);
+
+  useEffect(() => {
+    if (course?.course_type !== "multi_subject") return;
+    setOpenAdminFolder(null);
+    setFolderAddModal(false);
+    setShowFolderPicker(null);
+  }, [activeSubjectKey, course?.course_type]);
+
   const applyDeleteOptimisticUpdate = (entity: "lecture" | "test" | "material", itemId: number) => {
     qc.setQueryData<CourseDetail | undefined>(["/api/courses", String(id)], (prev) => {
       if (!prev) return prev;
@@ -1417,22 +1425,6 @@ export default function AdminCourseScreen() {
                 <Text style={[styles.tabText, activeTab === "enrolled" && styles.tabTextActive]}>Students</Text>
               </Pressable>
             </ScrollView>
-
-            {/* Subject content sub-tabs — only when a subject is selected */}
-            {isContentTab && (
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={[styles.tabsRow, styles.subTabsRow]}>
-                {MULTI_CONTENT_TABS.map((tab) => (
-                  <Pressable
-                    key={tab.key}
-                    style={[styles.subTab, activeTab === tab.key && styles.subTabActive]}
-                    onPress={() => setActiveTab(tab.key)}
-                  >
-                    <Ionicons name={tab.icon} size={13} color={activeTab === tab.key ? "#fff" : "rgba(255,255,255,0.75)"} />
-                    <Text style={[styles.subTabText, activeTab === tab.key && styles.subTabTextActive]}>{tab.label}</Text>
-                  </Pressable>
-                ))}
-              </ScrollView>
-            )}
           </>
         ) : isTestSeries ? (
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsRow}>
@@ -1468,13 +1460,43 @@ export default function AdminCourseScreen() {
       </LinearGradient>
 
       <ScrollView contentContainerStyle={[styles.content, { paddingBottom: bottomPadding + 80 }]}>
+        {isMultiSubjectCourse && isContentTab && (() => {
+          const activeSubject = MULTI_SUBJECTS.find((s) => s.key === activeSubjectKey);
+          return (
+            <View style={[styles.subjectContentNav, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <View style={styles.subjectContentNavHeader}>
+                <View style={[styles.subjectContentNavBadge, { backgroundColor: Colors.light.primary + "18" }]}>
+                  <Ionicons name={(activeSubject?.icon || "book") as keyof typeof Ionicons.glyphMap} size={16} color={Colors.light.primary} />
+                  <Text style={styles.subjectContentNavTitle}>{activeSubject?.label || activeSubjectKey} content</Text>
+                </View>
+                <Text style={[styles.subjectContentNavHint, { color: colors.textMuted }]}>Switch subject in the header above</Text>
+              </View>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.subjectContentTabsRow}>
+                {MULTI_CONTENT_TABS.map((tab) => {
+                  const selected = activeTab === tab.key;
+                  return (
+                    <Pressable
+                      key={tab.key}
+                      style={[styles.subjectContentTab, selected && styles.subjectContentTabActive]}
+                      onPress={() => setActiveTab(tab.key)}
+                    >
+                      <Ionicons name={tab.icon} size={14} color={selected ? "#fff" : Colors.light.primary} />
+                      <Text style={[styles.subjectContentTabText, selected && styles.subjectContentTabTextActive]}>{tab.label}</Text>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          );
+        })()}
+
         {effectiveTab === "about" && !isTestSeries && (
-          <View style={styles.section}>
-            <LinearGradient colors={["#EEF2FF", "#F8FAFC"]} style={[styles.itemCard, { borderWidth: 0, gap: 12 }]}>
+          <View style={[styles.section, styles.aboutSectionWrap]}>
+            <LinearGradient colors={["#EEF2FF", "#F8FAFC"]} style={[styles.itemCard, styles.aboutPanel, { borderWidth: 0 }]}>
               <View style={styles.sectionHeader}>
-                <View>
+                <View style={{ flex: 1, paddingRight: 12 }}>
                   <Text style={[styles.sectionTitle, { fontSize: 22 }]}>About Course</Text>
-                  <Text style={[styles.infoText, { marginTop: 4 }]}>Shown on the student about page. Use bold, clear copy for course promise, features, and teachers.</Text>
+                  <Text style={[styles.infoText, { marginTop: 6 }]}>Shown on the student about page. Use bold, clear copy for course promise, features, and teachers.</Text>
                 </View>
                 <Pressable
                   style={[styles.addBtn, { opacity: saveAboutMutation.isPending ? 0.6 : 1 }]}
@@ -1487,13 +1509,14 @@ export default function AdminCourseScreen() {
               </View>
             </LinearGradient>
 
-            <View style={styles.itemCard}>
+            <View style={[styles.itemCard, styles.aboutPanel]}>
               <FormField
                 label="Course Description"
                 placeholder="Write what students will learn, batch goals, and course promise..."
                 value={aboutForm.description}
                 onChangeText={(v) => setAboutForm((p) => ({ ...p, description: v }))}
                 multiline
+                tall
               />
               <FormField
                 label="Course Features"
@@ -1501,10 +1524,11 @@ export default function AdminCourseScreen() {
                 value={aboutForm.features}
                 onChangeText={(v) => setAboutForm((p) => ({ ...p, features: v }))}
                 multiline
+                tall
               />
             </View>
 
-            <View style={styles.sectionHeader}>
+            <View style={[styles.sectionHeader, styles.aboutTeachersHeader]}>
               <Text style={styles.sectionTitle}>Teachers ({aboutForm.teachers.length})</Text>
               <Pressable
                 style={[styles.addBtn, { backgroundColor: "#7C3AED" }]}
@@ -1514,18 +1538,18 @@ export default function AdminCourseScreen() {
                 <Text style={styles.addBtnText}>Teacher</Text>
               </Pressable>
             </View>
-            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 12 }}>
+            <View style={styles.aboutTeacherGrid}>
             {aboutForm.teachers.map((teacher, index) => (
-              <View key={`teacher-${index}`} style={[styles.itemCard, { width: Platform.OS === "web" ? "49%" : "100%" }]}>
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 12 }}>
+              <View key={`teacher-${index}`} style={[styles.itemCard, styles.aboutPanel, styles.aboutTeacherCard]}>
+                <View style={styles.aboutTeacherTopRow}>
                   {teacher.imageUrl ? (
-                    <Image source={{ uri: teacher.imageUrl }} style={{ width: 72, height: 72, borderRadius: 18, backgroundColor: "#F8FAFC" }} />
+                    <Image source={{ uri: teacher.imageUrl }} style={styles.aboutTeacherAvatar} />
                   ) : (
-                    <View style={{ width: 72, height: 72, borderRadius: 18, backgroundColor: "#EEF2FF", alignItems: "center", justifyContent: "center" }}>
+                    <View style={styles.aboutTeacherAvatarFallback}>
                       <Ionicons name="person" size={30} color={Colors.light.primary} />
                     </View>
                   )}
-                  <View style={{ flex: 1, gap: 8 }}>
+                  <View style={{ flex: 1, minWidth: 0 }}>
                     <FormField
                       label={`Teacher ${index + 1} Name`}
                       placeholder="Teacher name"
@@ -1549,14 +1573,14 @@ export default function AdminCourseScreen() {
                   onChangeText={(v) => setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, imageUrl: v } : t) }))}
                 />
                 <Pressable
-                  style={{ borderWidth: 1.5, borderColor: Colors.light.primary, borderStyle: "dashed" as any, borderRadius: 10, paddingVertical: 11, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8, backgroundColor: "#EEF2FF", marginBottom: 12, opacity: uploading ? 0.6 : 1 }}
+                  style={[styles.aboutUploadBtn, { opacity: uploading ? 0.6 : 1 }]}
                   disabled={uploading}
                   onPress={() => pickFileAndUpload("images", "image/*", (url) => {
                     setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, imageUrl: url } : t) }));
                   })}
                 >
                   {uploading ? <ActivityIndicator size="small" color={Colors.light.primary} /> : <Ionicons name="cloud-upload-outline" size={17} color={Colors.light.primary} />}
-                  <Text style={{ fontSize: 13, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>{uploading ? "Uploading..." : "Upload Teacher Photo to R2"}</Text>
+                  <Text style={styles.aboutUploadBtnText}>{uploading ? "Uploading..." : "Upload Teacher Photo to R2"}</Text>
                 </Pressable>
                 <FormField
                   label="Teacher Description"
@@ -1564,6 +1588,7 @@ export default function AdminCourseScreen() {
                   value={teacher.bio}
                   onChangeText={(v) => setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, bio: v } : t) }))}
                   multiline
+                  tall
                 />
               </View>
             ))}
@@ -4153,16 +4178,16 @@ function AdminImageBox({ imageUrl, onUrlChange }: { imageUrl: string; onUrlChang
 }
 
 function FormField({
-  label, placeholder, value, onChangeText, multiline, numeric, autoCapitalize,
+  label, placeholder, value, onChangeText, multiline, numeric, autoCapitalize, tall,
 }: {
   label: string; placeholder: string; value: string;
-  onChangeText: (v: string) => void; multiline?: boolean; numeric?: boolean; autoCapitalize?: "none" | "sentences" | "words" | "characters";
+  onChangeText: (v: string) => void; multiline?: boolean; numeric?: boolean; autoCapitalize?: "none" | "sentences" | "words" | "characters"; tall?: boolean;
 }) {
   return (
     <View style={styles.formField}>
       <Text style={styles.formLabel}>{label}</Text>
       <TextInput
-        style={[styles.formInput, multiline && styles.formInputMulti]}
+        style={[styles.formInput, multiline && styles.formInputMulti, tall && styles.formInputMultiTall]}
         placeholder={placeholder}
         placeholderTextColor={Colors.light.textMuted}
         value={value}
@@ -4207,13 +4232,28 @@ const styles = StyleSheet.create({
   tabActive: { backgroundColor: "#fff" },
   tabText: { fontSize: 13, fontFamily: "Inter_500Medium", color: "rgba(255,255,255,0.7)" },
   tabTextActive: { color: Colors.light.primary },
-  subTabsRow: { paddingTop: 2, paddingBottom: 2 },
-  subTab: { flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, backgroundColor: "rgba(255,255,255,0.08)", borderWidth: 1, borderColor: "rgba(255,255,255,0.18)" },
-  subTabActive: { backgroundColor: Colors.light.primary, borderColor: Colors.light.primary },
-  subTabText: { fontSize: 12, fontFamily: "Inter_500Medium", color: "rgba(255,255,255,0.75)" },
-  subTabTextActive: { color: "#fff", fontFamily: "Inter_700Bold" },
+  subjectContentNav: { borderRadius: 14, borderWidth: 1, padding: 14, gap: 12, marginBottom: 4 },
+  subjectContentNavHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" },
+  subjectContentNavBadge: { flexDirection: "row", alignItems: "center", gap: 8, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6 },
+  subjectContentNavTitle: { fontSize: 14, fontFamily: "Inter_700Bold", color: Colors.light.primary },
+  subjectContentNavHint: { fontSize: 11, fontFamily: "Inter_500Medium" },
+  subjectContentTabsRow: { gap: 8, paddingVertical: 2 },
+  subjectContentTab: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999, backgroundColor: "#EEF2FF", borderWidth: 1, borderColor: "#DBEAFE" },
+  subjectContentTabActive: { backgroundColor: Colors.light.primary, borderColor: Colors.light.primary },
+  subjectContentTabText: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.primary },
+  subjectContentTabTextActive: { color: "#fff", fontFamily: "Inter_700Bold" },
   content: { padding: 16, gap: 12 },
   section: { gap: 10 },
+  aboutSectionWrap: { gap: 16 },
+  aboutPanel: { padding: 16 },
+  aboutTeachersHeader: { marginTop: 4 },
+  aboutTeacherGrid: { flexDirection: "row", flexWrap: "wrap", gap: 14 },
+  aboutTeacherCard: { width: Platform.OS === "web" ? "49%" : "100%", gap: 4 },
+  aboutTeacherTopRow: { flexDirection: "row", alignItems: "flex-start", gap: 14, marginBottom: 4 },
+  aboutTeacherAvatar: { width: 72, height: 72, borderRadius: 18, backgroundColor: "#F8FAFC" },
+  aboutTeacherAvatarFallback: { width: 72, height: 72, borderRadius: 18, backgroundColor: "#EEF2FF", alignItems: "center", justifyContent: "center" },
+  aboutUploadBtn: { borderWidth: 1.5, borderColor: Colors.light.primary, borderStyle: "dashed", borderRadius: 10, paddingVertical: 12, paddingHorizontal: 12, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8, backgroundColor: "#EEF2FF", marginBottom: 4 },
+  aboutUploadBtnText: { fontSize: 13, fontFamily: "Inter_700Bold", color: Colors.light.primary },
   sectionHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   sectionTitle: { fontSize: 17, fontFamily: "Inter_700Bold", color: Colors.light.text },
   addBtn: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: Colors.light.primary, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 },
@@ -4253,6 +4293,7 @@ const styles = StyleSheet.create({
   formLabel: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.text, marginBottom: 6 },
   formInput: { backgroundColor: Colors.light.background, borderRadius: 10, padding: 12, fontSize: 14, fontFamily: "Inter_400Regular", color: Colors.light.text, borderWidth: 1, borderColor: Colors.light.border },
   formInputMulti: { height: 80, textAlignVertical: "top" },
+  formInputMultiTall: { minHeight: 100, height: undefined },
   createBtn: { marginTop: 12, borderRadius: 12, overflow: "hidden" },
   createBtnDisabled: { opacity: 0.5 },
   createBtnGrad: { paddingVertical: 14, alignItems: "center" },

@@ -51,7 +51,7 @@ function courseAccentColor(course: Course): string {
   return course.cover_color || COURSE_COLORS[course.id % COURSE_COLORS.length];
 }
 
-function parseAboutMeta(value: any, course: Course): { features: string[]; teachers: AboutTeacher[] } {
+function parseAboutMeta(value: any): { features: string[]; teachers: AboutTeacher[] } {
   const raw = typeof value === "string" ? (() => { try { return JSON.parse(value); } catch { return value; } })() : value;
   const normalizeTeacher = (t: any): AboutTeacher => ({
     name: String(t?.name || "").trim(),
@@ -67,12 +67,7 @@ function parseAboutMeta(value: any, course: Course): { features: string[]; teach
     const teachers = Array.isArray(raw.teachers) ? raw.teachers.map(normalizeTeacher).filter((t: AboutTeacher) => t.name || t.imageUrl || t.bio) : [];
     return { features, teachers };
   }
-  return {
-    features: [],
-    teachers: course.teacher_name || course.teacher_bio || course.teacher_image_url
-      ? [{ name: course.teacher_name || "3i Learning", imageUrl: course.teacher_image_url || "", bio: course.teacher_bio || "" }]
-      : [],
-  };
+  return { features: [], teachers: [] };
 }
 
 async function fetchCourse(id: string, userId?: number): Promise<Course | null> {
@@ -129,16 +124,15 @@ export default function CourseAboutScreen() {
   const testCount = isMultiSubject
     ? tests.filter((t) => !["pyq", "mock"].includes(String(t.test_type || "").toLowerCase())).length
     : Number(course.total_tests || tests.filter((t) => !["pyq", "mock"].includes(String(t.test_type || "").toLowerCase())).length);
-  const aboutMeta = parseAboutMeta(course.teacher_details_json, course);
-  const teachers = aboutMeta.teachers.length > 0
-    ? aboutMeta.teachers
-    : [{ name: course.teacher_name || "3i Learning", imageUrl: course.teacher_image_url || "", bio: course.teacher_bio || "Teacher details can be managed from the admin dashboard." }];
+  const aboutMeta = parseAboutMeta(course.teacher_details_json);
+  const teachers = aboutMeta.teachers;
+  const instructorName = teachers[0]?.name || course.teacher_name || "";
   const teacherCardWidth = width >= 900 ? "19%" : width >= 600 ? "31.5%" : "48%";
   const descriptionLines = String(course.description || "").split("\n").map((line) => line.trim()).filter(Boolean);
   const aboutLines = [...descriptionLines, ...aboutMeta.features];
   const detailRows = isMultiSubject
     ? [
-        { label: "Instructor", value: teachers[0]?.name || course.teacher_name || "3i Learning", icon: "person" },
+        { label: "Instructor", value: instructorName, icon: "person" },
         { label: "Level", value: course.level || "Beginner", icon: "bar-chart" },
         { label: "Language", value: course.course_language || "HINGLISH", icon: "language" },
         { label: "Start Date", value: readableValue(course.start_date), icon: "calendar" },
@@ -146,12 +140,10 @@ export default function CourseAboutScreen() {
         { label: "Validity", value: course.validity_months ? `${course.validity_months} months` : "", icon: "time" },
       ].filter((row) => row.value)
     : [
-        { label: "Instructor", value: teachers[0]?.name || course.teacher_name || "3i Learning", icon: "person" },
+        { label: "Instructor", value: instructorName, icon: "person" },
         { label: "Level", value: course.level || "Beginner", icon: "bar-chart" },
         { label: "Subject", value: readableValue(course.subject), icon: "bookmark" },
         { label: "Duration", value: course.duration_hours ? `${course.duration_hours}h total` : "", icon: "time" },
-        { label: "Start Date", value: readableValue(course.start_date), icon: "calendar" },
-        { label: "End Date", value: readableValue(course.end_date), icon: "calendar-outline" },
       ].filter((row) => row.value);
 
   const countItems = isMultiSubject
@@ -171,14 +163,6 @@ export default function CourseAboutScreen() {
   const explorePath = isMultiSubject ? `/multi-course/${course.id}` : `/course/${course.id}`;
   const continuePath = explorePath;
 
-  const handleBottomAction = () => {
-    if (course.isEnrolled) {
-      router.push(continuePath as any);
-      return;
-    }
-    purchase();
-  };
-
   const headerGradient: [string, string] = isMultiSubject
     ? ["#0A1628", "#1A2E50"]
     : [accent, `${accent}DD`];
@@ -186,7 +170,7 @@ export default function CourseAboutScreen() {
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 96 }}>
-        <LinearGradient colors={headerGradient} style={[styles.hero, { paddingTop: insets.top + 8 }]}>
+        <LinearGradient colors={headerGradient} style={[styles.hero, isMultiSubject ? null : styles.heroNormal, { paddingTop: insets.top + 8 }]}>
           <View style={styles.headerTopRow}>
             <Pressable style={styles.iconBtn} onPress={() => router.back()}>
               <Ionicons name="arrow-back" size={20} color="#fff" />
@@ -213,6 +197,14 @@ export default function CourseAboutScreen() {
                 <Text style={styles.instructorName}>{course.teacher_name || "3i Learning"}</Text>
                 <View style={styles.levelChip}><Text style={styles.levelChipText}>{course.level || "Beginner"}</Text></View>
               </View>
+              {(course.start_date || course.end_date) ? (
+                <View style={styles.courseDateRow}>
+                  <Ionicons name="calendar" size={14} color="rgba(255,255,255,0.9)" />
+                  <Text style={styles.courseDateText}>
+                    {readableValue(course.start_date) || "TBD"} → {readableValue(course.end_date) || "TBD"}
+                  </Text>
+                </View>
+              ) : null}
             </>
           )}
         </LinearGradient>
@@ -322,6 +314,7 @@ export default function CourseAboutScreen() {
             </View>
           </View>
 
+          {teachers.length > 0 ? (
           <View style={[styles.aboutSection, { backgroundColor: colors.card, shadowColor: colors.shadow }]}>
             <View style={styles.aboutSectionHeader}>
               <Ionicons name="people" size={20} color={Colors.light.primary} />
@@ -334,13 +327,18 @@ export default function CourseAboutScreen() {
                     <View style={[styles.teacherImage, styles.teacherFallback]}><Ionicons name="person" size={30} color={Colors.light.primary} /></View>
                   )}
                   <View style={{ flex: 1, alignItems: "center" }}>
-                    <Text style={[styles.teacherName, { color: colors.text }]} numberOfLines={2}>{teacher.name || "3i Learning"}</Text>
-                    <Text style={[styles.teacherBio, { color: colors.textSecondary }]} numberOfLines={4}>{teacher.bio || "Teacher details will be added soon."}</Text>
+                    {teacher.name ? (
+                      <Text style={[styles.teacherName, { color: colors.text }]} numberOfLines={2}>{teacher.name}</Text>
+                    ) : null}
+                    <Text style={[styles.teacherBio, { color: colors.textSecondary }]} numberOfLines={4}>
+                      {teacher.bio?.trim() ? teacher.bio : "no description"}
+                    </Text>
                   </View>
                 </View>
               ))}
             </View>
           </View>
+          ) : null}
 
           <View style={styles.aboutTncBlock}>
             <View style={styles.aboutSectionHeader}>
@@ -362,23 +360,34 @@ export default function CourseAboutScreen() {
       </ScrollView>
 
       <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 10, backgroundColor: colors.card, borderTopColor: colors.border }]}>
-        <Pressable style={styles.bottomBtnWrap} onPress={() => router.push(explorePath as any)}>
-          <LinearGradient colors={["#1A56DB", "#2563EB"]} style={styles.bottomBtn}>
-            <Text style={styles.exploreText}>Explore Now</Text>
-            <Ionicons name="arrow-forward" size={18} color="#fff" />
-          </LinearGradient>
-        </Pressable>
-        <Pressable style={styles.bottomBtnWrap} onPress={handleBottomAction} disabled={isPending}>
-          <LinearGradient colors={["#EA580C", "#F97316"]} style={styles.bottomBtn}>
-            {isPending ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={styles.buyText} numberOfLines={1}>
-                {course.isEnrolled ? "Continue Learning" : isFreeCourse ? "Enroll Free" : `Buy Now${course.price ? ` - Rs ${parseFloat(course.price).toFixed(0)}` : ""}`}
-              </Text>
-            )}
-          </LinearGradient>
-        </Pressable>
+        {course.isEnrolled ? (
+          <Pressable style={styles.bottomBtnWrap} onPress={() => router.push(continuePath as any)}>
+            <LinearGradient colors={["#EA580C", "#F97316"]} style={styles.bottomBtn}>
+              <Text style={styles.buyText}>Continue Learning</Text>
+              <Ionicons name="arrow-forward" size={18} color="#fff" />
+            </LinearGradient>
+          </Pressable>
+        ) : (
+          <>
+            <Pressable style={styles.bottomBtnWrap} onPress={() => router.push(explorePath as any)}>
+              <LinearGradient colors={["#1A56DB", "#2563EB"]} style={styles.bottomBtn}>
+                <Text style={styles.exploreText}>Explore Now</Text>
+                <Ionicons name="arrow-forward" size={18} color="#fff" />
+              </LinearGradient>
+            </Pressable>
+            <Pressable style={styles.bottomBtnWrap} onPress={purchase} disabled={isPending}>
+              <LinearGradient colors={["#EA580C", "#F97316"]} style={styles.bottomBtn}>
+                {isPending ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.buyText} numberOfLines={1}>
+                    {isFreeCourse ? "Enroll Free" : `Buy Now${course.price ? ` - Rs ${parseFloat(course.price).toFixed(0)}` : ""}`}
+                  </Text>
+                )}
+              </LinearGradient>
+            </Pressable>
+          </>
+        )}
       </View>
       {paymentModal}
     </View>
@@ -389,7 +398,8 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
   hero: { paddingHorizontal: 16, paddingBottom: 16 },
-  headerTopRow: { flexDirection: "row", alignItems: "center", marginBottom: 10 },
+  heroNormal: { paddingBottom: 14, gap: 2 },
+  headerTopRow: { flexDirection: "row", alignItems: "center", marginBottom: 8 },
   headerTextCol: { gap: 4 },
   iconBtn: { width: 38, height: 38, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" },
   headerBadge: { backgroundColor: "#22C55E", borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
@@ -397,11 +407,13 @@ const styles = StyleSheet.create({
   category: { color: "rgba(255,255,255,0.85)", fontSize: 12, fontFamily: "Inter_600SemiBold", textTransform: "uppercase", marginBottom: 4 },
   title: { color: "#fff", fontSize: 22, lineHeight: 28, fontFamily: "Inter_700Bold" },
   meta: { color: "rgba(255,255,255,0.85)", fontSize: 12, fontFamily: "Inter_600SemiBold" },
-  instructorRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 10 },
+  instructorRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 8 },
   instructorAvatar: { width: 28, height: 28, borderRadius: 14, backgroundColor: "rgba(255,255,255,0.2)", alignItems: "center", justifyContent: "center" },
   instructorName: { color: "#fff", fontSize: 13, fontFamily: "Inter_600SemiBold", flex: 1 },
   levelChip: { backgroundColor: "rgba(255,255,255,0.18)", borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
   levelChipText: { color: "#fff", fontSize: 11, fontFamily: "Inter_600SemiBold" },
+  courseDateRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 8 },
+  courseDateText: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: "rgba(255,255,255,0.9)" },
   exploreText: { color: "#fff", fontSize: 14, fontFamily: "Inter_700Bold" },
   body: { padding: 20, gap: 20 },
   card: { borderWidth: 1, borderRadius: 18, padding: 16, gap: 10 },

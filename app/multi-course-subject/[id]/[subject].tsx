@@ -28,6 +28,22 @@ const SECTION_COLORS: Record<(typeof SECTIONS)[number], string> = {
   Mock: "#DC2626",
 };
 
+const EMPTY_SECTION_COPY: Record<
+  (typeof SECTIONS)[number],
+  { icon: keyof typeof Ionicons.glyphMap; title: string; subtitle?: string }
+> = {
+  Live: {
+    icon: "videocam-outline",
+    title: "No upcoming or live sessions",
+    subtitle: "Recordings from ended classes are under Lectures → Live Class Recordings",
+  },
+  Lecture: { icon: "videocam-outline", title: "No lectures added yet" },
+  Test: { icon: "document-text-outline", title: "No tests added yet" },
+  PYQs: { icon: "school-outline", title: "No PYQs added yet" },
+  Mock: { icon: "clipboard-outline", title: "No mock tests added yet" },
+  "Study Material": { icon: "folder-outline", title: "No study material added yet" },
+};
+
 async function fetchCourse(id: string) {
   const res = await authFetch(new URL(`/api/courses/${id}`, getApiUrl()).toString());
   if (!res.ok) return null;
@@ -79,6 +95,15 @@ export default function MultiCourseSubjectScreen() {
     staleTime: 30_000,
   });
 
+  const liveRowsForTab = useMemo(() => {
+    return (liveClasses || []).filter((lc: any) => {
+      if (String(lc.subject_key || "").toLowerCase() !== subjectKey) return false;
+      if (lc.is_live) return true;
+      if (lc.is_completed) return false;
+      return true;
+    });
+  }, [liveClasses, subjectKey]);
+
   const subjectContent = useMemo(() => {
     const matches = (row: any) => String(row?.subject_key || "").toLowerCase() === subjectKey;
     const lectures = Array.isArray(course?.lectures) ? course.lectures.filter(matches) : [];
@@ -113,7 +138,7 @@ export default function MultiCourseSubjectScreen() {
     .filter((folder: any) => !folder.parent_id);
 
   const allRows =
-    section === "Live" ? liveClasses.filter((lc: any) => String(lc.subject_key || "").toLowerCase() === subjectKey) :
+    section === "Live" ? liveRowsForTab :
     section === "Lecture" ? subjectContent.lectures :
     section === "Study Material" ? subjectContent.materials :
     section === "PYQs" ? subjectContent.pyqs :
@@ -254,7 +279,8 @@ export default function MultiCourseSubjectScreen() {
 
   if (isLoading) return <View style={[styles.center, { backgroundColor: colors.background }]}><ActivityIndicator color={Colors.light.primary} /></View>;
 
-  const emptyIcon = section === "Live" ? "videocam-outline" : section === "Study Material" ? "document-outline" : section === "Lecture" ? "videocam-outline" : "document-text-outline";
+  const emptyCopy = EMPTY_SECTION_COPY[section];
+  const showEmptyState = rows.length === 0 && (section === "Live" || visibleRootFolders.length === 0);
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -283,10 +309,13 @@ export default function MultiCourseSubjectScreen() {
 
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 16, gap: 12, paddingBottom: insets.bottom + 24 }}>
         {section !== "Live" ? visibleRootFolders.map(renderFolder) : null}
-        {rows.length > 0 ? rows.map(renderRow) : visibleRootFolders.length === 0 ? (
+        {rows.length > 0 ? rows.map(renderRow) : showEmptyState ? (
           <View style={styles.emptyState}>
-            <Ionicons name={emptyIcon as keyof typeof Ionicons.glyphMap} size={40} color={colors.textMuted} />
-            <Text style={[styles.emptyText, { color: colors.textMuted }]}>No content added yet</Text>
+            <Ionicons name={emptyCopy.icon} size={40} color={colors.textMuted} />
+            <Text style={[styles.emptyText, { color: colors.textMuted }]}>{emptyCopy.title}</Text>
+            {emptyCopy.subtitle ? (
+              <Text style={[styles.emptySubText, { color: colors.textMuted }]}>{emptyCopy.subtitle}</Text>
+            ) : null}
           </View>
         ) : null}
       </ScrollView>
@@ -343,5 +372,6 @@ const styles = StyleSheet.create({
   liveClassTime: { fontSize: 12, fontFamily: "Inter_400Regular" },
 
   emptyState: { paddingVertical: 48, alignItems: "center", gap: 8 },
-  emptyText: { fontSize: 15, fontFamily: "Inter_400Regular" },
+  emptyText: { fontSize: 15, fontFamily: "Inter_400Regular", textAlign: "center" },
+  emptySubText: { fontSize: 13, fontFamily: "Inter_400Regular", textAlign: "center", paddingHorizontal: 20, lineHeight: 18 },
 });

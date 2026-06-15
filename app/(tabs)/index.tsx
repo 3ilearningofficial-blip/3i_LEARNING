@@ -89,15 +89,51 @@ function formatCourseDate(value?: string | number | null): string {
   return date.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "2-digit" });
 }
 
-function multiStatusLabel(course: Course): string {
-  const status = String(course.batch_status || "ongoing").toLowerCase();
-  if (status === "completed") return "RECORDED";
-  if (status === "recorded") return "RECORDED";
-  if (course.end_date) {
-    const end = new Date(String(course.end_date)).getTime();
-    if (Number.isFinite(end) && end < Date.now()) return "RECORDED";
-  }
+function parseCourseDateMs(value?: string | number | null): number | null {
+  if (value == null || value === "") return null;
+  const date = typeof value === "number" ? new Date(value) : new Date(String(value).trim());
+  const ms = date.getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
+type MultiSubjectCardPhase = "upcoming" | "live" | "recorded";
+
+function getMultiSubjectCardPhase(course: Course, now = Date.now()): MultiSubjectCardPhase {
+  const batchStatus = String(course.batch_status || "ongoing").toLowerCase();
+  if (batchStatus === "completed" || batchStatus === "recorded") return "recorded";
+
+  const endMs = parseCourseDateMs(course.end_date);
+  if (endMs != null && endMs < now) return "recorded";
+
+  const startMs = parseCourseDateMs(course.start_date);
+  if (startMs != null && now < startMs) return "upcoming";
+
+  return "live";
+}
+
+function multiStatusLabel(course: Course, now = Date.now()): string {
+  const phase = getMultiSubjectCardPhase(course, now);
+  if (phase === "recorded") return "RECORDED";
+  if (phase === "upcoming") return "UPCOMING";
   return "LIVE";
+}
+
+function getMultiSubjectScheduleText(course: Course, now = Date.now()): string {
+  const phase = getMultiSubjectCardPhase(course, now);
+
+  if (phase === "upcoming" && course.start_date) {
+    return `Starts ${formatCourseDate(course.start_date)}`;
+  }
+  if (course.enrollmentValidUntil) {
+    return `Valid till ${formatCourseDate(course.enrollmentValidUntil)}`;
+  }
+  if (course.end_date && phase === "live") {
+    return `Ends ${formatCourseDate(course.end_date)}`;
+  }
+  if (course.validity_months) {
+    return `${course.validity_months} months validity`;
+  }
+  return "";
 }
 
 function MultiSubjectCourseCard({ course, enrolled = false }: { course: Course; enrolled?: boolean }) {
@@ -117,13 +153,7 @@ function MultiSubjectCourseCard({ course, enrolled = false }: { course: Course; 
   const language = (course.course_language || "HINGLISH").toUpperCase();
   const level = course.level || "Beginner";
   const status = multiStatusLabel(course);
-  const validityText = course.enrollmentValidUntil
-    ? `Valid till ${formatCourseDate(course.enrollmentValidUntil)}`
-    : course.end_date
-      ? `Ends ${formatCourseDate(course.end_date)}`
-      : course.validity_months
-        ? `${course.validity_months} months validity`
-        : "";
+  const scheduleText = getMultiSubjectScheduleText(course);
   const bannerColors: [string, string] = course.thumbnail ? [cover, `${cover}CC`] : ["#B91C1C", "#EF4444"];
 
   useEffect(() => {
@@ -172,8 +202,17 @@ function MultiSubjectCourseCard({ course, enrolled = false }: { course: Course; 
           {status === "LIVE" ? (
             <Animated.View style={[styles.multiLiveDot, { opacity: livePulse, transform: [{ scale: livePulse }] }]} />
           ) : null}
-          <Text style={[styles.multiMetaText, styles.multiStatusText]}>{status}</Text>
-          {validityText ? <Text style={[styles.multiMetaText, { color: colors.textSecondary }]}>| {validityText}</Text> : null}
+          <Text
+            style={[
+              styles.multiMetaText,
+              styles.multiStatusText,
+              status === "UPCOMING" && { color: "#D97706" },
+              status === "RECORDED" && { color: colors.textSecondary },
+            ]}
+          >
+            {status}
+          </Text>
+          {scheduleText ? <Text style={[styles.multiMetaText, { color: colors.textSecondary }]}>| {scheduleText}</Text> : null}
         </View>
         <View style={styles.multiPriceRow}>
           {enrolled ? (
@@ -296,7 +335,7 @@ function EnrolledCourseCard({ course, index }: { course: Course; index: number }
 
   return (
     <Pressable
-      style={({ pressed }) => [styles.courseCard, { overflow: "hidden" }, pressed && { opacity: 0.93, transform: [{ scale: 0.98 }] }]}
+      style={({ pressed }) => [styles.enrolledCourseCard, pressed && { opacity: 0.93, transform: [{ scale: 0.98 }] }]}
       onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push(`/course-about/${course.id}` as any); }}
     >
       <LinearGradient colors={[color, `${color}DD`]} style={{ paddingHorizontal: 12, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
@@ -319,7 +358,7 @@ function EnrolledCourseCard({ course, index }: { course: Course; index: number }
         </View>
       </LinearGradient>
 
-      <View style={{ padding: 12, gap: 8, backgroundColor: colors.card }}>
+      <View style={{ paddingHorizontal: 12, paddingTop: 12, paddingBottom: 10, gap: 8, backgroundColor: colors.card }}>
         <Text style={{ fontSize: 14, fontFamily: "Inter_700Bold", color: colors.text, lineHeight: 20 }} numberOfLines={2}>{course.title}</Text>
 
         <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
@@ -1002,6 +1041,10 @@ const styles = StyleSheet.create({
   courseCard: {
     backgroundColor: "#fff", borderRadius: 20, overflow: "hidden", minHeight: 268,
     marginBottom: 14, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 12, elevation: 4,
+  },
+  enrolledCourseCard: {
+    backgroundColor: "#fff", borderRadius: 20, overflow: "hidden",
+    shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 12, elevation: 4,
   },
   multiCourseCard: {
     borderRadius: 20, overflow: "hidden", borderWidth: 1, marginBottom: 14, minHeight: 294,
