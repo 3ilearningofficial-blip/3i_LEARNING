@@ -372,7 +372,7 @@ export default function CourseDetailScreen() {
   }, [user?.id, course, id, liveClasses, qc]);
 
   /** Push to the dedicated folder route so back navigation through nested content works correctly on Android. */
-  const openFolderView = (next: { name: string; type: "lectures" | "materials" | "live" | "tests"; color: string }) => {
+  const openFolderView = (next: { name: string; type: "lectures" | "materials" | "live" | "tests"; color: string; testType?: string }) => {
     router.push({
       pathname: "/course-folder/[id]/[type]/[name]",
       params: {
@@ -380,6 +380,7 @@ export default function CourseDetailScreen() {
         type: next.type,
         name: encodeURIComponent(next.name),
         color: next.color,
+        ...(next.testType ? { testType: next.testType } : {}),
       },
     } as any);
   };
@@ -765,11 +766,14 @@ setTimeout(function() {
   };
 
   const isTestSeriesCourse = course.course_type === "test_series";
+  const isMockTestType = (test: { test_type?: string }) => String(test.test_type || "").toLowerCase() === "mock";
+  const testsForTestsTab = isTestSeriesCourse ? course.tests : course.tests.filter((t) => !isMockTestType(t));
+  const testsForMockTab = course.tests.filter((t) => isMockTestType(t));
   const TABS = isTestSeriesCourse
     ? (isAdmin ? ["About", "Tests", "Enrolled"] : ["About", "Tests"])
     : isAdmin
-    ? ["Live", "Lectures", "Tests", "Materials", "Enrolled"]
-    : ["Live", "Lectures", "Tests", "Materials"];
+    ? ["Live", "Lectures", "Tests", "Mock Tests", "Materials", "Enrolled"]
+    : ["Live", "Lectures", "Tests", "Mock Tests", "Materials"];
 
   const discount = course.original_price && parseFloat(course.original_price) > 0
     ? Math.round((1 - parseFloat(course.price) / parseFloat(course.original_price)) * 100)
@@ -1187,7 +1191,7 @@ setTimeout(function() {
 
         {currentActiveTab === "Tests" && (
           <View style={styles.list}>
-            {course.tests.length === 0 && courseFolders.filter((f: any) => f.type === "test").length === 0 ? (
+            {testsForTestsTab.length === 0 && courseFolders.filter((f: any) => f.type === "test").length === 0 ? (
               <View style={styles.emptyState}>
                 <Ionicons name="document-text-outline" size={40} color={Colors.light.textMuted} />
                 <Text style={styles.emptyText}>No tests available</Text>
@@ -1197,18 +1201,19 @@ setTimeout(function() {
                 {/* Test folders from DB (including empty ones) */}
                 {(() => {
                   const testFolderNames = new Set([
-                    ...(course.tests || []).map((t: any) => getContentFolderRootName(t.folder_name)).filter(Boolean),
+                    ...(testsForTestsTab || []).map((t: any) => getContentFolderRootName(t.folder_name)).filter(Boolean),
                     ...courseFolders.filter((f: any) => f.type === "test" && !f.parent_id).map(folderFullName),
                   ]);
                   return Array.from(testFolderNames).map((folderName: any) => {
-                    const folderTests = (course.tests || []).filter((t: any) => t.folder_name === folderName || String(t.folder_name || "").startsWith(`${folderName} /`));
+                    const folderTests = (testsForTestsTab || []).filter((t: any) => t.folder_name === folderName || String(t.folder_name || "").startsWith(`${folderName} /`));
+                    if (folderTests.length === 0) return null;
                     const isLocked = !isAdmin && !course.isEnrolled;
                     const testFolderColor = "#16A34A";
                     return (
                       <Pressable key={`folder_${folderName}`}
                         style={[styles.testSectionCard, { backgroundColor: colors.card, shadowColor: colors.shadow, borderLeftColor: testFolderColor }]}
                         onPress={() => {
-                          openFolderView({ name: folderName, type: "tests", color: testFolderColor });
+                          openFolderView({ name: folderName, type: "tests", color: testFolderColor, testType: "regular" });
                         }}
                       >
                         <View style={[styles.testSectionIconWrap, { backgroundColor: testFolderColor + "18" }]}>
@@ -1247,7 +1252,7 @@ setTimeout(function() {
                   );
                 })}
                 {/* Tests without folder — show directly as individual cards (non-test-series) */}
-                {!isTestSeriesCourse && course.tests.filter((t: any) => !t.folder_name).map((test: any) => {
+                {!isTestSeriesCourse && testsForTestsTab.filter((t: any) => !t.folder_name).map((test: any) => {
                   const color = TEST_TYPE_COLORS[test.test_type] || "#1A56DB";
                   const attempt = attemptSummary[test.id];
                   const canAccess = isAdmin || course.isEnrolled;
@@ -1269,6 +1274,87 @@ setTimeout(function() {
                     <Pressable key={test.id} style={[styles.testCard, { backgroundColor: colors.card, borderBottomColor: colors.border }, !canAccess && { opacity: 0.6 }]} onPress={handlePress}>
                       <View style={[styles.testColorBar, { backgroundColor: color }]} />
                       <View style={styles.testItemIcon}><Ionicons name="document-text" size={22} color={color} /></View>
+                      <View style={styles.testItemInfo}>
+                        <Text style={styles.testItemTitle}>{test.title}</Text>
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                          <Text style={styles.testItemMeta}>{test.total_questions} questions · {test.duration_minutes}min · {test.total_marks} marks</Text>
+                          {attempt && (
+                            <View style={{ flexDirection: "row", alignItems: "center", gap: 3, backgroundColor: "#DCFCE7", borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 }}>
+                              <Ionicons name="checkmark-circle" size={11} color="#16A34A" />
+                              <Text style={{ fontSize: 10, fontFamily: "Inter_700Bold", color: "#16A34A" }}>{attempt.score}/{attempt.total_marks}</Text>
+                            </View>
+                          )}
+                        </View>
+                      </View>
+                      {!canAccess ? <Ionicons name="lock-closed" size={18} color={Colors.light.textMuted} /> : attempt ? <Ionicons name="bar-chart" size={18} color={Colors.light.primary} /> : <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />}
+                    </Pressable>
+                  );
+                })}
+              </View>
+            )}
+          </View>
+        )}
+
+        {currentActiveTab === "Mock Tests" && (
+          <View style={styles.list}>
+            {testsForMockTab.length === 0 && courseFolders.filter((f: any) => f.type === "test").length === 0 ? (
+              <View style={styles.emptyState}>
+                <Ionicons name="clipboard-outline" size={40} color={Colors.light.textMuted} />
+                <Text style={styles.emptyText}>No mock tests available</Text>
+              </View>
+            ) : (
+              <View style={{ gap: 12, padding: 16 }}>
+                {(() => {
+                  const mockFolderNames = new Set([
+                    ...(testsForMockTab || []).map((t: any) => getContentFolderRootName(t.folder_name)).filter(Boolean),
+                    ...courseFolders.filter((f: any) => f.type === "test" && !f.parent_id).map(folderFullName),
+                  ]);
+                  return Array.from(mockFolderNames).map((folderName: any) => {
+                    const folderTests = (testsForMockTab || []).filter((t: any) => t.folder_name === folderName || String(t.folder_name || "").startsWith(`${folderName} /`));
+                    if (folderTests.length === 0) return null;
+                    const isLocked = !isAdmin && !course.isEnrolled;
+                    const mockFolderColor = "#DC2626";
+                    return (
+                      <Pressable key={`mock_folder_${folderName}`}
+                        style={[styles.testSectionCard, { backgroundColor: colors.card, shadowColor: colors.shadow, borderLeftColor: mockFolderColor }]}
+                        onPress={() => {
+                          openFolderView({ name: folderName, type: "tests", color: mockFolderColor, testType: "mock" });
+                        }}
+                      >
+                        <View style={[styles.testSectionIconWrap, { backgroundColor: mockFolderColor + "18" }]}>
+                          <Ionicons name="folder" size={22} color={mockFolderColor} />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.testSectionTitle}>{folderName}</Text>
+                          <Text style={styles.testSectionCount}>{folderTests.length} {folderTests.length === 1 ? "test" : "tests"}</Text>
+                        </View>
+                        {isLocked ? <Ionicons name="lock-closed" size={20} color={Colors.light.textMuted} /> : <Ionicons name="chevron-forward" size={20} color={Colors.light.textMuted} />}
+                      </Pressable>
+                    );
+                  });
+                })()}
+                {testsForMockTab.filter((t: any) => !t.folder_name).map((test: any) => {
+                  const color = TEST_TYPE_COLORS.mock;
+                  const attempt = attemptSummary[test.id];
+                  const canAccess = isAdmin || course.isEnrolled;
+                  const handlePress = () => {
+                    if (!canAccess) {
+                      promptLockedCourseContent();
+                      return;
+                    }
+                    if (attempt) {
+                      router.push({
+                        pathname: "/test-result/[id]",
+                        params: { id: test.id, score: String(attempt.score ?? 0), total: String(attempt.total_marks ?? test.total_marks), totalQuestions: String(test.total_questions), percentage: String(attempt.percentage ?? "0"), weakTopics: "", attemptId: String(attempt.attempt_id ?? ""), testType: test.test_type ?? "", timeTakenSeconds: String(attempt.time_taken_seconds ?? 0) },
+                      });
+                    } else {
+                      router.push(`/test/${test.id}`);
+                    }
+                  };
+                  return (
+                    <Pressable key={test.id} style={[styles.testCard, { backgroundColor: colors.card, borderBottomColor: colors.border }, !canAccess && { opacity: 0.6 }]} onPress={handlePress}>
+                      <View style={[styles.testColorBar, { backgroundColor: color }]} />
+                      <View style={styles.testItemIcon}><Ionicons name="clipboard" size={22} color={color} /></View>
                       <View style={styles.testItemInfo}>
                         <Text style={styles.testItemTitle}>{test.title}</Text>
                         <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>

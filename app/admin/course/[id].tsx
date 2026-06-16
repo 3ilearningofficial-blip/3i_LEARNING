@@ -185,7 +185,7 @@ const ADMIN_COURSE_TABS: { key: AdminCourseTab; label: string; icon: keyof typeo
   { key: "lectures", label: "Lectures", icon: "videocam" },
   { key: "tests", label: "Tests", icon: "document-text" },
   { key: "pyqs", label: "PYQs", icon: "school" },
-  { key: "mocks", label: "Mock", icon: "clipboard" },
+  { key: "mocks", label: "Mock Tests", icon: "clipboard" },
   { key: "materials", label: "Materials", icon: "folder" },
   { key: "enrolled", label: "Students", icon: "people" },
 ];
@@ -203,7 +203,7 @@ function normalizeBatchStatus(value: unknown): "live" | "recorded" {
   return status === "recorded" || status === "completed" ? "recorded" : "live";
 }
 
-const NORMAL_COURSE_TAB_ORDER: AdminCourseTab[] = ["about", "lectures", "tests", "materials", "live", "enrolled"];
+const NORMAL_COURSE_TAB_ORDER: AdminCourseTab[] = ["about", "lectures", "tests", "mocks", "materials", "live", "enrolled"];
 
 const MULTI_SUBJECTS = [
   { key: "maths", label: "Maths", icon: "calculator" },
@@ -477,7 +477,7 @@ export default function AdminCourseScreen() {
     enabled: isValidId,
     staleTime: 0,
     refetchInterval:
-      tabVisible && ["lectures", "tests", "materials"].includes(activeTab) ? 10_000 : false,
+      tabVisible && ["lectures", "tests", "pyqs", "mocks", "materials"].includes(activeTab) ? 10_000 : false,
   });
 
   const { data: courseLiveClasses = [], isPending: courseLivePending } = useQuery<LiveClassItem[]>({
