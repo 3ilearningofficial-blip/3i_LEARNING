@@ -33,7 +33,10 @@ export async function notifyEnrolledCourseStudents(
     type?: string;
     now?: number;
     pushData?: Record<string, unknown>;
-    sendPush?: (userIds: number[], payload: { title: string; body: string; data?: Record<string, unknown> }) => Promise<void>;
+    sendPush?: (
+      userIds: number[],
+      payload: { title: string; body: string; data?: Record<string, unknown> }
+    ) => Promise<unknown>;
   }
 ): Promise<void> {
   const recipients = await db
