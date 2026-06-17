@@ -1,4 +1,6 @@
 import { buildRecordingLectureSectionTitle } from "../shared/recordingSection";
+import { notifyEnrolledCourseStudents } from "./auto-notification-expiry";
+import { sendPushToUsers } from "./push-notifications";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -117,6 +119,27 @@ export async function saveRecordingForClassAndPeers(
     // `courses.total_lectures` is maintained by a trigger on `lectures`.
     if (opts.recomputeCourseProgress) {
       await opts.recomputeCourseProgress(row.course_id);
+    }
+
+    const visibleNow =
+      !visibleAfterAt || Number(visibleAfterAt) <= Date.now();
+    if (visibleNow) {
+      const courseInfo = await db
+        .query("SELECT title FROM courses WHERE id = $1", [row.course_id])
+        .catch(() => ({ rows: [] as { title?: string }[] }));
+      const courseTitle = String(courseInfo.rows[0]?.title || "your course");
+      const notifTitle = "📹 Class Recording Available";
+      const notifMessage = `"${row.title}" recording is now available in ${courseTitle}.`;
+      await notifyEnrolledCourseStudents(db, row.course_id, {
+        title: notifTitle,
+        message: notifMessage,
+        pushData: {
+          type: "class_recording_available",
+          liveClassId: Number(row.id),
+          courseId: Number(row.course_id),
+        },
+        sendPush: (userIds, payload) => sendPushToUsers(db, userIds, payload),
+      });
     }
   }
 

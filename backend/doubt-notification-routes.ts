@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from "express";
 import type { Pool } from "pg";
+import { computeAutoNotificationHideAfterAt } from "./auto-notification-expiry";
 import { takeSupportPostSlotPg } from "./pg-rate-limit-store";
 
 // AI tutor rate limit: max 20 requests per hour per student.
@@ -561,8 +562,11 @@ export function registerDoubtNotificationRoutes({
         `SELECT * FROM notifications WHERE user_id = $1
          AND (source IS NULL OR source != 'support')
          AND (is_hidden IS NOT TRUE)
-         AND (is_read IS NOT TRUE)
-         AND (expires_at IS NULL OR expires_at > $2)
+         AND (
+           admin_notif_id IS NOT NULL
+           OR is_read IS NOT TRUE
+           OR (hide_after_at IS NOT NULL AND hide_after_at > $2)
+         )
          AND title NOT ILIKE 'New message from%'
          AND title NOT ILIKE 'New reply from Support%'
          ORDER BY created_at DESC LIMIT 50`,
@@ -578,8 +582,35 @@ export function registerDoubtNotificationRoutes({
     try {
       const user = await getAuthUser(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
-      await db.query("UPDATE notifications SET is_read = TRUE WHERE id = $1 AND user_id = $2", [req.params.id, user.id]);
-      res.json({ success: true });
+      const now = Date.now();
+      const existing = await db.query(
+        "SELECT id, admin_notif_id, expires_at, is_read FROM notifications WHERE id = $1 AND user_id = $2",
+        [req.params.id, user.id]
+      );
+      if (existing.rows.length === 0) {
+        return res.status(404).json({ message: "Notification not found" });
+      }
+      const row = existing.rows[0] as {
+        admin_notif_id: number | null;
+        expires_at: number | null;
+        is_read: boolean;
+      };
+      const hideAfterAt =
+        row.admin_notif_id != null
+          ? null
+          : computeAutoNotificationHideAfterAt(now, row.expires_at != null ? Number(row.expires_at) : null);
+      await db.query(
+        `UPDATE notifications
+         SET is_read = TRUE,
+             hide_after_at = CASE
+               WHEN admin_notif_id IS NOT NULL THEN hide_after_at
+               WHEN $3::bigint IS NOT NULL THEN $3::bigint
+               ELSE hide_after_at
+             END
+         WHERE id = $1 AND user_id = $2`,
+        [req.params.id, user.id, hideAfterAt]
+      );
+      res.json({ success: true, hide_after_at: hideAfterAt });
     } catch {
       res.status(500).json({ message: "Failed to mark as read" });
     }

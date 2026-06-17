@@ -286,8 +286,6 @@ export default function AdminDashboard() {
   const [notifCourseId, setNotifCourseId] = useState<number | null>(null);
   const [notifImageUrl, setNotifImageUrl] = useState("");
   const [notifImageBase64, setNotifImageBase64] = useState<string | null>(null);
-  const [notifExpiresAfter, setNotifExpiresAfter] = useState<string>("");
-  const [notifCustomHours, setNotifCustomHours] = useState(""); // local picked image
 
   const pickNotifImage = async () => {
     if (Platform.OS === "web") {
@@ -1366,11 +1364,11 @@ export default function AdminDashboard() {
 
   const sendNotificationMutation = useMutation({
     mutationFn: async ({ title, message, target, courseId, imageUrl }: { title: string; message: string; target: string; courseId?: number | null; imageUrl?: string }) => {
-      await apiRequest("POST", "/api/admin/notifications/send", { title, message, type: "info", target, courseId: courseId || undefined, imageUrl: imageUrl || undefined, expiresAfterHours: notifExpiresAfter === "custom" ? (notifCustomHours || undefined) : (notifExpiresAfter || undefined) });
+      await apiRequest("POST", "/api/admin/notifications/send", { title, message, type: "info", target, courseId: courseId || undefined, imageUrl: imageUrl || undefined });
     },
     onSuccess: () => {
       setShowNotification(false);
-      setNotifTitle(""); setNotifMessage(""); setNotifTarget("all"); setNotifCourseId(null); setNotifImageUrl(""); setNotifImageBase64(null); setNotifExpiresAfter(""); setNotifCustomHours("");
+      setNotifTitle(""); setNotifMessage(""); setNotifTarget("all"); setNotifCourseId(null); setNotifImageUrl(""); setNotifImageBase64(null);
       qc.invalidateQueries({ queryKey: ["/api/admin/notifications/history"] });
       refetchNotifHistory();
       if (Platform.OS === "web") window.alert("Notification sent successfully!");
@@ -3157,37 +3155,6 @@ export default function AdminDashboard() {
                       )}
                     </LinearGradient>
                   </Pressable>
-                  <View style={styles.notifTemplates}>
-                    <Text style={styles.notifLabel}>Auto-remove after <Text style={{ fontFamily: "Inter_400Regular", color: Colors.light.textMuted }}>(optional)</Text></Text>
-                    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
-                      {[
-                        { key: "", label: "Never" },
-                        { key: "10", label: "10 Hours" },
-                        { key: "24", label: "24 Hours" },
-                        { key: "72", label: "3 Days" },
-                        { key: "168", label: "7 Days" },
-                        { key: "custom", label: "Custom" },
-                      ].map((opt) => (
-                        <Pressable key={opt.key} onPress={() => setNotifExpiresAfter(opt.key)}
-                          style={{ paddingHorizontal: 14, paddingVertical: 7, borderRadius: 8, borderWidth: 1.5, borderColor: notifExpiresAfter === opt.key ? Colors.light.primary : Colors.light.border, backgroundColor: notifExpiresAfter === opt.key ? Colors.light.primary : "#fff" }}>
-                          <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: notifExpiresAfter === opt.key ? "#fff" : Colors.light.text }}>{opt.label}</Text>
-                        </Pressable>
-                      ))}
-                    </View>
-                    {notifExpiresAfter === "custom" && (
-                      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                        <TextInput
-                          style={[styles.formInput, { flex: 1, paddingVertical: 8 }]}
-                          placeholder="Enter hours (e.g. 48)"
-                          placeholderTextColor={Colors.light.textMuted}
-                          keyboardType="numeric"
-                          value={notifCustomHours}
-                          onChangeText={setNotifCustomHours}
-                        />
-                        <Text style={{ fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.textMuted }}>hours</Text>
-                      </View>
-                    )}
-                  </View>
                   <View style={styles.notifTemplates}>
                     <Text style={styles.notifLabel}>Quick Templates</Text>
                     {[

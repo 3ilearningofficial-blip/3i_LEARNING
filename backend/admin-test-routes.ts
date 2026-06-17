@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { autoNotificationExpiresAt } from "./auto-notification-expiry";
 import { sendPushToUsers } from "./push-notifications";
 
 type DbClient = {
@@ -149,16 +150,19 @@ export function registerAdminTestRoutes({
         const courseTitle = String(courseInfo.rows[0]?.title || "your course");
         const recipients = await db.query("SELECT user_id FROM enrollments WHERE course_id = $1", [courseId]).catch(() => ({ rows: [] as any[] }));
         const recipientIds = recipients.rows.map((r: any) => Number(r.user_id));
-        const notifTitle = "📝 New Test Added";
+        const testTypeNorm = String(testType || "practice").toLowerCase();
+        const notifTitle =
+          testTypeNorm === "mock" ? "📝 New Mock Test Added" : testTypeNorm === "pyq" ? "📝 New PYQ Added" : "📝 New Test Added";
         const notifMessage = `"${title}" has been added in ${courseTitle}.`;
         const now = Date.now();
+        const expiresAt = autoNotificationExpiresAt(now);
         if (recipientIds.length > 0) {
           await db
             .query(
-              `INSERT INTO notifications (user_id, title, message, type, created_at)
-               SELECT u, $2::text, $3::text, $4::text, $5::bigint
+              `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
+               SELECT u, $2::text, $3::text, $4::text, $5::bigint, $6::bigint
                FROM unnest($1::int[]) AS u`,
-              [recipientIds, notifTitle, notifMessage, "info", now]
+              [recipientIds, notifTitle, notifMessage, "info", now, expiresAt]
             )
             .catch(() => {});
         }

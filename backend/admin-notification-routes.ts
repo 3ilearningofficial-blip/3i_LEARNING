@@ -18,7 +18,7 @@ export function registerAdminNotificationRoutes({
 }: RegisterAdminNotificationRoutesDeps): void {
   app.post("/api/admin/notifications/send", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { userId, title, message, type, target, courseId, imageUrl, expiresAfterHours } = req.body;
+      const { userId, title, message, type, target, courseId, imageUrl } = req.body;
       let userIds: number[] = [];
 
       if (userId) {
@@ -35,7 +35,8 @@ export function registerAdminNotificationRoutes({
       }
 
       const now = Date.now();
-      const expiresAt = expiresAfterHours ? now + parseFloat(expiresAfterHours) * 3600000 : null;
+      // Admin broadcasts stay until explicitly deleted from the Notify dashboard — no time expiry.
+      const expiresAt = null;
 
       const insertResult = await db.query(
         "INSERT INTO admin_notifications (title, message, target, course_id, sent_count, image_url, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",

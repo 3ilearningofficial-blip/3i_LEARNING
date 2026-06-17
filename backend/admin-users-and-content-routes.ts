@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { autoNotificationExpiresAt } from "./auto-notification-expiry";
 import { sendPushToUsers } from "./push-notifications";
 import { purgeStudentAccountById } from "./user-account-purge";
 
@@ -65,13 +66,14 @@ export function registerAdminUsersAndContentRoutes({
         const notifTitle = "📘 New Material Added";
         const notifMessage = `"${normalizedTitle}" has been added in ${courseTitle}.`;
         const now = Date.now();
+        const expiresAt = autoNotificationExpiresAt(now);
         if (recipientIds.length > 0) {
           await db
             .query(
-              `INSERT INTO notifications (user_id, title, message, type, created_at)
-               SELECT u, $2::text, $3::text, $4::text, $5::bigint
+              `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
+               SELECT u, $2::text, $3::text, $4::text, $5::bigint, $6::bigint
                FROM unnest($1::int[]) AS u`,
-              [recipientIds, notifTitle, notifMessage, "info", now]
+              [recipientIds, notifTitle, notifMessage, "info", now, expiresAt]
             )
             .catch(() => {});
         }

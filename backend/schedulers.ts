@@ -22,6 +22,7 @@
  * supported for complete disablement on worker-only instances.
  */
 
+import { autoNotificationExpiresAt } from "./auto-notification-expiry";
 import { deleteDownloadsForUser } from "./download-utils";
 import { getRedisClient } from "./redis-client";
 import { filterNewNotificationRecipientsRedis } from "./redis-notification-dedup";
@@ -232,7 +233,7 @@ function startLiveClassNotificationScheduler(
       );
 
       for (const lc of classes.rows) {
-        const expiresAt = now + 6 * 3600000;
+        const expiresAt = autoNotificationExpiresAt(now);
 
         const notifTitle = "⏰ Live Class in 30 minutes!";
         const notifMessage = `"${lc.title}" starts in 30 minutes. Get ready!`;

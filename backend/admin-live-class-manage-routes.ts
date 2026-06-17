@@ -1,6 +1,7 @@
 import type { Express, Request, Response } from "express";
 import { purgeUserDownloadsForItem } from "./download-access-utils";
 import { buildRecordingLectureSectionTitle } from "../shared/recordingSection";
+import { autoNotificationExpiresAt } from "./auto-notification-expiry";
 import { sendPushToUsers } from "./push-notifications";
 import {
   convertLiveClassTitlePeersToLectures,
@@ -190,7 +191,7 @@ export function registerAdminLiveClassManageRoutes({
           (liveClass.is_free_preview === true || liveClass.is_public === true)
             ? await db.query("SELECT id AS user_id FROM users WHERE role = 'student'")
             : await db.query("SELECT user_id FROM enrollments WHERE course_id = $1", [liveClass.course_id]);
-        const expiresAt = Date.now() + 6 * 3600000;
+        const expiresAt = autoNotificationExpiresAt(Date.now());
         const recipientIds = recipients.rows.map((e: any) => Number(e.user_id));
         const notifTitle = "🔴 Live Class Started!";
         const notifMessage = '"' + liveClass.title + '" is live now. Join now!';
@@ -251,7 +252,7 @@ export function registerAdminLiveClassManageRoutes({
           const otherClasses = await db
             .query("SELECT course_id FROM live_classes WHERE id != $1 AND title = $2 AND is_completed IS NOT TRUE AND course_id IS NOT NULL", [req.params.id, liveClass.title])
             .catch(() => ({ rows: [] as any[] }));
-          const peerExpiresAt = Date.now() + 12 * 3600000;
+          const peerExpiresAt = autoNotificationExpiresAt(Date.now());
           const extraRecipients = new Set<number>();
           for (const other of otherClasses.rows) {
             const enrolled = await db.query("SELECT user_id FROM enrollments WHERE course_id = $1", [other.course_id]).catch(() => ({ rows: [] as any[] }));

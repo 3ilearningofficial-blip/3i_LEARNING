@@ -17,6 +17,7 @@ interface Notification {
   message: string;
   type: string;
   is_read: boolean;
+  admin_notif_id?: number | null;
   created_at: number;
   image_url?: string;
 }

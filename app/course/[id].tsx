@@ -868,20 +868,16 @@ setTimeout(function() {
             <>
               <View style={styles.quickStat}>
                 <Ionicons name="document-text" size={16} color="rgba(255,255,255,0.8)" />
-                <Text style={styles.quickStatText}>{course.total_tests} Tests</Text>
+                <Text style={styles.quickStatText}>{testsForTestsTab.length} Tests</Text>
               </View>
-              {(course.mock_count || 0) > 0 && (
-                <View style={styles.quickStat}>
-                  <Ionicons name="clipboard" size={16} color="rgba(255,255,255,0.8)" />
-                  <Text style={styles.quickStatText}>{course.mock_count} Mock</Text>
-                </View>
-              )}
-              {(course.daily_mission_count || 0) > 0 && (
-                <View style={styles.quickStat}>
-                  <Ionicons name="flag" size={16} color="rgba(255,255,255,0.8)" />
-                  <Text style={styles.quickStatText}>{course.daily_mission_count} Missions</Text>
-                </View>
-              )}
+              <View style={styles.quickStat}>
+                <Ionicons name="clipboard" size={16} color="rgba(255,255,255,0.8)" />
+                <Text style={styles.quickStatText}>{course.mock_count ?? testsForMockTab.length} Mock</Text>
+              </View>
+              <View style={styles.quickStat}>
+                <Ionicons name="flag" size={16} color="rgba(255,255,255,0.8)" />
+                <Text style={styles.quickStatText}>{course.daily_mission_count || 0} Missions</Text>
+              </View>
               <View style={styles.quickStat}>
                 <Ionicons name="folder" size={16} color="rgba(255,255,255,0.8)" />
                 <Text style={styles.quickStatText}>{course.total_materials || 0} Materials</Text>

@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { autoNotificationExpiresAt } from "./auto-notification-expiry";
 import { sendPushToUsers } from "./push-notifications";
 
 type DbClient = {
@@ -81,12 +82,14 @@ export function registerAdminCourseCrudRoutes({
         const studentIds = students.rows.map((row: any) => Number(row.id)).filter((id: number) => Number.isFinite(id));
         const notifTitle = "📚 New Course Added";
         const notifMessage = `"${course.title}" is now available.`;
+        const courseNotifNow = Date.now();
+        const courseNotifExpiresAt = autoNotificationExpiresAt(courseNotifNow);
         if (studentIds.length > 0) {
           await db.query(
-            `INSERT INTO notifications (user_id, title, message, type, created_at)
-             SELECT u, $2::text, $3::text, 'info', $4::bigint
+            `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
+             SELECT u, $2::text, $3::text, 'info', $4::bigint, $5::bigint
              FROM unnest($1::int[]) AS u`,
-            [studentIds, notifTitle, notifMessage, Date.now()]
+            [studentIds, notifTitle, notifMessage, courseNotifNow, courseNotifExpiresAt]
           ).catch(() => {});
         }
         await sendPushToUsers(db, studentIds, {

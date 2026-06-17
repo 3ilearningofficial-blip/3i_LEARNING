@@ -42,6 +42,7 @@ type Course = {
   total_lectures?: number;
   total_tests?: number;
   total_materials?: number;
+  mock_count?: number;
   daily_mission_count?: number;
 };
 
@@ -123,7 +124,11 @@ export default function CourseAboutScreen() {
   const materialsCount = Array.isArray(course.materials) ? course.materials.length : Number(course.total_materials || 0);
   const tests = Array.isArray(course.tests) ? course.tests : [];
   const pyqCount = tests.filter((t) => String(t.test_type || "").toLowerCase() === "pyq").length;
-  const mockCount = tests.filter((t) => String(t.test_type || "").toLowerCase() === "mock").length;
+  const mockCount = Math.max(
+    tests.filter((t) => String(t.test_type || "").toLowerCase() === "mock").length,
+    Number(course.mock_count) || 0,
+  );
+  const missionCount = Number(course.daily_mission_count) || 0;
   const testCount = isMultiSubject
     ? tests.filter((t) => !["pyq", "mock"].includes(String(t.test_type || "").toLowerCase())).length
     : Number(course.total_tests || tests.filter((t) => !["pyq", "mock"].includes(String(t.test_type || "").toLowerCase())).length);
@@ -156,15 +161,14 @@ export default function CourseAboutScreen() {
         { label: "Mock", value: mockCount, icon: "clipboard" },
         { label: "PYQs", value: pyqCount, icon: "school" },
         { label: "Material", value: materialsCount, icon: "folder" },
+        { label: "Missions", value: missionCount, icon: "flag" },
       ]
     : [
         { label: "Lectures", value: lecturesCount, icon: "play-circle" },
         { label: "Tests", value: testCount, icon: "document-text" },
-        ...(mockCount > 0 ? [{ label: "Mock", value: mockCount, icon: "clipboard" }] : []),
+        { label: "Mock", value: mockCount, icon: "clipboard" },
         { label: "Material", value: materialsCount, icon: "folder" },
-        ...((Number(course.daily_mission_count) || 0) > 0
-          ? [{ label: "Missions", value: Number(course.daily_mission_count), icon: "flag" }]
-          : []),
+        { label: "Missions", value: missionCount, icon: "flag" },
       ];
 
   const explorePath = isMultiSubject ? `/multi-course/${course.id}` : `/course/${course.id}`;
