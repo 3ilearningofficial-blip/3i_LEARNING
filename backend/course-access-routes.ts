@@ -327,17 +327,21 @@ export function registerCourseAccessRoutes({
         user?.role === "admin"
           ? `SELECT c.*,
                COALESCE(t_agg.cnt, 0) AS total_tests,
-               COALESCE(m_agg.cnt, 0) AS total_materials
+               COALESCE(m_agg.cnt, 0) AS total_materials,
+               COALESCE(dm_agg.cnt, 0) AS daily_mission_count
              FROM courses c
              LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM tests WHERE is_published = TRUE GROUP BY 1) t_agg ON t_agg.course_id = c.id
              LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM study_materials GROUP BY 1) m_agg ON m_agg.course_id = c.id
+             LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM daily_missions GROUP BY 1) dm_agg ON dm_agg.course_id = c.id
              WHERE 1=1`
           : `SELECT c.*,
                COALESCE(t_agg.cnt, 0) AS total_tests,
-               COALESCE(m_agg.cnt, 0) AS total_materials
+               COALESCE(m_agg.cnt, 0) AS total_materials,
+               COALESCE(dm_agg.cnt, 0) AS daily_mission_count
              FROM courses c
              LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM tests WHERE is_published = TRUE GROUP BY 1) t_agg ON t_agg.course_id = c.id
              LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM study_materials GROUP BY 1) m_agg ON m_agg.course_id = c.id
+             LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM daily_missions GROUP BY 1) dm_agg ON dm_agg.course_id = c.id
              WHERE c.is_published = TRUE`;
       const params: unknown[] = [];
 
@@ -444,7 +448,7 @@ export function registerCourseAccessRoutes({
       // Previously these were sequential awaits — 3 round trips × ~50ms each = 150ms of
       // unnecessary latency. lectures, tests, and study_materials do not depend on each other.
       const nowMs = Date.now();
-      const [lecturesResult, testsResult, materialsResult] = await Promise.all([
+      const [lecturesResult, testsResult, materialsResult, dailyMissionResult] = await Promise.all([
         user?.role === "admin"
           ? db.query(
               "SELECT * FROM lectures WHERE course_id = $1 ORDER BY order_index",
@@ -456,6 +460,7 @@ export function registerCourseAccessRoutes({
             ),
         db.query("SELECT * FROM tests WHERE course_id = $1 AND is_published = TRUE ORDER BY COALESCE(order_index, 0) ASC, created_at ASC, id ASC", [courseIdParam]),
         db.query("SELECT * FROM study_materials WHERE course_id = $1 ORDER BY COALESCE(order_index, 0) ASC, created_at ASC, id ASC", [courseIdParam]),
+        db.query("SELECT COUNT(*)::int AS cnt FROM daily_missions WHERE course_id = $1", [courseIdParam]),
       ]);
       const fullLectures = lecturesResult.rows;
       const fullMaterials = materialsResult.rows;
@@ -534,6 +539,7 @@ export function registerCourseAccessRoutes({
       res.set("Cache-Control", "private, no-store");
       res.json({
         ...course,
+        daily_mission_count: Number(dailyMissionResult.rows[0]?.cnt || 0),
         total_materials: gatedMaterials.length,
         lectures: responseLectures,
         tests: testsResult.rows,

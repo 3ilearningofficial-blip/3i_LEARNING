@@ -46,6 +46,7 @@ interface Course {
   pyq_count?: number;
   mock_count?: number;
   practice_count?: number;
+  daily_mission_count?: number;
   cover_color?: string;
   course_language?: string;
   batch_status?: string;
@@ -408,6 +409,15 @@ function EnrolledCourseCard({ course, index }: { course: Course; index: number }
             <Ionicons name="document-text" size={12} color={color} />
             <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: colors.textSecondary }}>{course.total_tests} Tests</Text>
           </View>
+          {(course.daily_mission_count || 0) > 0 && (
+            <>
+              <View style={{ width: 2, height: 2, borderRadius: 1, backgroundColor: colors.textMuted }} />
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 3 }}>
+                <Ionicons name="flag" size={12} color={color} />
+                <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: colors.textSecondary }}>{course.daily_mission_count} Missions</Text>
+              </View>
+            </>
+          )}
           <View style={{ width: 2, height: 2, borderRadius: 1, backgroundColor: colors.textMuted }} />
           <View style={{ flexDirection: "row", alignItems: "center", gap: 3 }}>
             <Ionicons name="folder" size={12} color={color} />
@@ -501,6 +511,11 @@ function CourseCard({ course, index }: { course: Course; index: number }) {
               <View style={styles.courseStat}>
                 <Ionicons name="document-text" size={13} color={colors.textMuted} />
                 <Text style={[styles.courseStatText, { color: colors.textMuted }]}>{course.total_tests} tests</Text>
+              </View>
+              <View style={styles.courseStatDot} />
+              <View style={styles.courseStat}>
+                <Ionicons name="flag" size={13} color={colors.textMuted} />
+                <Text style={[styles.courseStatText, { color: colors.textMuted }]}>{course.daily_mission_count || 0} missions</Text>
               </View>
               <View style={styles.courseStatDot} />
               <View style={styles.courseStat}>

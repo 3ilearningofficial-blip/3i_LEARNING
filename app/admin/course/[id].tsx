@@ -21,6 +21,7 @@ import { buildRecordingLectureSectionTitle, DEFAULT_LIVE_RECORDING_SECTION, getC
 import { useDocumentVisibility } from "@/lib/useDocumentVisibility";
 import SortableList from "@/components/admin/SortableList";
 import SortableItem from "@/components/admin/SortableItem";
+import { MULTI_SUBJECTS, SubjectIcon, getSubjectMeta } from "@/constants/multiSubjects";
 
 interface Lecture {
   id: number;
@@ -204,13 +205,6 @@ function normalizeBatchStatus(value: unknown): "live" | "recorded" {
 }
 
 const NORMAL_COURSE_TAB_ORDER: AdminCourseTab[] = ["about", "lectures", "tests", "mocks", "materials", "live", "enrolled"];
-
-const MULTI_SUBJECTS = [
-  { key: "maths", label: "Maths", icon: "calculator" },
-  { key: "english", label: "English", icon: "book" },
-  { key: "science", label: "Science", icon: "flask" },
-  { key: "gk", label: "G.K", icon: "earth" },
-] as const;
 
 // Multi-subject admin layout: the top-level header shows About | subjects | Students.
 // Selecting a subject reveals these content sub-tabs (same order as the student subject screen).
@@ -618,6 +612,10 @@ export default function AdminCourseScreen() {
   });
   const folderFullName = (folder: any): string => String(folder?.full_name || folder?.name || "").trim();
   const folderLocalName = (folder: any): string => String(folder?.name || folder?.full_name || "").trim();
+  const testMatchesFolder = (test: { folder_name?: string | null }, folderName: string) => {
+    const fn = String(test.folder_name || "");
+    return fn === folderName || fn.startsWith(`${folderName} /`);
+  };
   const findFolderById = (folderId?: number | null) =>
     folderId ? safeFolders.find((f: any) => Number(f.id) === Number(folderId)) : null;
   const findFolderByPath = (name: string, type: "lecture" | "test" | "material") =>
@@ -734,6 +732,11 @@ export default function AdminCourseScreen() {
     onSuccess: () => {
       refetchFolders();
       qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] });
+      qc.invalidateQueries({ queryKey: ["/api/admin/courses", id, "folders"] });
+    },
+    onError: (err: any) => {
+      const msg = String(err?.message || "").replace(/^\d+:\s*/, "") || "Failed to rename folder";
+      Alert.alert("Error", msg);
     },
   });
 
@@ -1406,7 +1409,7 @@ export default function AdminCourseScreen() {
                       if (!isContentTab) setActiveTab("lectures");
                     }}
                   >
-                    <Ionicons name={subject.icon as keyof typeof Ionicons.glyphMap} size={14} color={selected ? Colors.light.primary : "rgba(255,255,255,0.6)"} />
+                    <SubjectIcon subject={subject} size={14} color={selected ? Colors.light.primary : "rgba(255,255,255,0.6)"} />
                     <Text style={[styles.tabText, selected && styles.tabTextActive]}>{subject.label}</Text>
                   </Pressable>
                 );
@@ -1460,7 +1463,7 @@ export default function AdminCourseScreen() {
             <View style={[styles.subjectContentNav, { backgroundColor: colors.card, borderColor: colors.border }]}>
               <View style={styles.subjectContentNavHeader}>
                 <View style={[styles.subjectContentNavBadge, { backgroundColor: Colors.light.primary + "18" }]}>
-                  <Ionicons name={(activeSubject?.icon || "book") as keyof typeof Ionicons.glyphMap} size={16} color={Colors.light.primary} />
+                  <SubjectIcon subject={activeSubject || getSubjectMeta(activeSubjectKey)} size={16} color={Colors.light.primary} />
                   <Text style={styles.subjectContentNavTitle}>{activeSubject?.label || activeSubjectKey} content</Text>
                 </View>
                 <Text style={[styles.subjectContentNavHint, { color: colors.textMuted }]}>Switch subject in the header above</Text>
@@ -1743,7 +1746,9 @@ export default function AdminCourseScreen() {
               const testFolderNames = sortFolderNamesByOrder(
                 [...new Set([
                   ...courseTests.map((t: any) => getContentFolderRootName(t.folder_name)).filter(Boolean),
-                  ...safeFolders.filter((f: any) => f.type === "test" && !f.parent_id).map(folderFullName),
+                  // PYQ/Mock tabs: only folders that actually contain tests of that type.
+                  // Main Tests tab may also list empty DB folders so admin can add content.
+                  ...(activeTestType ? [] : safeFolders.filter((f: any) => f.type === "test" && !f.parent_id).map(folderFullName)),
                 ])],
                 "test"
               );
@@ -1753,7 +1758,8 @@ export default function AdminCourseScreen() {
                 onReorder={(a, o) => reorderFoldersByDrag("test", testFolderNames, a, o)}
               >
               {testFolderNames.map((folderName: any) => {
-              const count = courseTests.filter((t: any) => t.folder_name === folderName || String(t.folder_name || "").startsWith(`${folderName} /`)).length;
+              const count = courseTests.filter((t: any) => testMatchesFolder(t, folderName)).length;
+              if (count === 0) return null;
               const folder = findFolderByPath(folderName, "test");
               return (
                 <SortableItem key={folderName} id={folderName}>
@@ -2196,155 +2202,6 @@ export default function AdminCourseScreen() {
         )}
       </ScrollView>
 
-      {/* Test Attempts Modal */}
-      <Modal
-        visible={!!selectedAdminTest && !selectedTestAttempt}
-        animationType="slide"
-        onRequestClose={() => {
-          setSelectedAdminTest(null);
-          setAdminTestAttempts([]);
-          setAdminTestQuestions([]);
-        }}
-      >
-        <View style={{ flex: 1, backgroundColor: Colors.light.background }}>
-          <LinearGradient colors={["#0A1628", "#1A2E50"]} style={{ paddingTop: topPadding + 8, paddingHorizontal: 16, paddingBottom: 14, flexDirection: "row", alignItems: "center", gap: 12 }}>
-            <Pressable
-              style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" }}
-              onPress={() => {
-                setSelectedAdminTest(null);
-                setAdminTestAttempts([]);
-                setAdminTestQuestions([]);
-              }}
-            >
-              <Ionicons name="arrow-back" size={20} color="#fff" />
-            </Pressable>
-            <View style={{ flex: 1 }}>
-              <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: "#fff" }} numberOfLines={1}>{selectedAdminTest?.title}</Text>
-              <Text style={{ fontSize: 12, color: "rgba(255,255,255,0.6)", fontFamily: "Inter_400Regular" }}>
-                {adminTestAttempts.length} student{adminTestAttempts.length !== 1 ? "s" : ""} attempted
-              </Text>
-            </View>
-          </LinearGradient>
-          {adminTestAttemptsLoading ? (
-            <ActivityIndicator color={Colors.light.primary} style={{ marginTop: 40 }} />
-          ) : adminTestAttempts.length === 0 ? (
-            <View style={{ flex: 1, alignItems: "center", justifyContent: "center", gap: 12, padding: 24 }}>
-              <Ionicons name="people-outline" size={52} color={Colors.light.textMuted} />
-              <Text style={{ fontSize: 16, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>No attempts yet</Text>
-              <Text style={{ fontSize: 13, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", textAlign: "center" }}>No students have attempted this test.</Text>
-            </View>
-          ) : (
-            <ScrollView contentContainerStyle={{ padding: 16, gap: 10 }}>
-              {adminTestAttempts.map((attempt: any, idx: number) => {
-                const timeTaken = Number(attempt.time_taken_seconds || 0);
-                const timeMins = Math.floor(timeTaken / 60);
-                const timeSecs = timeTaken % 60;
-                const rankColors = ["#F59E0B", "#9CA3AF", "#CD7C2F"];
-                return (
-                  <Pressable
-                    key={`${attempt.user_id}-${attempt.attempt_id}`}
-                    style={[styles.itemCard, { flexDirection: "row", alignItems: "center", gap: 12 }]}
-                    onPress={() => setSelectedTestAttempt({ ...attempt, test: selectedAdminTest, questions: adminTestQuestions })}
-                  >
-                    <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: idx < 3 ? rankColors[idx] : Colors.light.secondary, alignItems: "center", justifyContent: "center" }}>
-                      <Text style={{ fontSize: 14, fontFamily: "Inter_700Bold", color: idx < 3 ? "#fff" : Colors.light.text }}>#{idx + 1}</Text>
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>{attempt.name || attempt.phone || attempt.email || "Student"}</Text>
-                      <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>
-                        {Number(attempt.score || 0)}/{Number(attempt.total_marks || selectedAdminTest?.total_marks || 0)} marks · {timeMins}m {timeSecs}s
-                      </Text>
-                    </View>
-                    <View style={{ backgroundColor: "#EEF2FF", borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 }}>
-                      <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>
-                        {Math.round(Number(attempt.percentage || 0))}%
-                      </Text>
-                    </View>
-                    <Ionicons name="chevron-forward" size={16} color={Colors.light.textMuted} />
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-          )}
-        </View>
-      </Modal>
-
-      {/* Student Test Report Modal */}
-      <Modal visible={!!selectedTestAttempt} animationType="slide" onRequestClose={() => setSelectedTestAttempt(null)}>
-        <View style={{ flex: 1, backgroundColor: Colors.light.background }}>
-          <LinearGradient colors={["#0A1628", "#1A2E50"]} style={{ paddingTop: topPadding + 8, paddingHorizontal: 16, paddingBottom: 14, flexDirection: "row", alignItems: "center", gap: 12 }}>
-            <Pressable style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" }} onPress={() => setSelectedTestAttempt(null)}>
-              <Ionicons name="arrow-back" size={20} color="#fff" />
-            </Pressable>
-            <View style={{ flex: 1 }}>
-              <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: "#fff" }}>{selectedTestAttempt?.name || selectedTestAttempt?.phone || "Student"}</Text>
-              <Text style={{ fontSize: 12, color: "rgba(255,255,255,0.6)", fontFamily: "Inter_400Regular" }}>Test Result</Text>
-            </View>
-          </LinearGradient>
-          {selectedTestAttempt && (() => {
-            const questions = Array.isArray(selectedTestAttempt.questions) ? selectedTestAttempt.questions : [];
-            const answers = selectedTestAttempt.answers || {};
-            const score = Number(selectedTestAttempt.score || 0);
-            const totalMarks = Number(selectedTestAttempt.total_marks || selectedTestAttempt.test?.total_marks || 0);
-            const correct = Number(selectedTestAttempt.correct || 0);
-            const incorrect = Number(selectedTestAttempt.incorrect || 0);
-            const attempted = Number(selectedTestAttempt.attempted || 0);
-            const skipped = Math.max(0, questions.length - attempted);
-            const pct = Math.round(Number(selectedTestAttempt.percentage || 0));
-            const timeTaken = Number(selectedTestAttempt.time_taken_seconds || 0);
-            const timeMins = Math.floor(timeTaken / 60);
-            const timeSecs = timeTaken % 60;
-            return (
-              <ScrollView contentContainerStyle={{ padding: 20, gap: 16 }}>
-                <LinearGradient colors={pct >= 60 ? ["#22C55E", "#16A34A"] : ["#F59E0B", "#D97706"]} style={{ borderRadius: 20, padding: 24, alignItems: "center", gap: 8 }}>
-                  <Ionicons name="trophy" size={48} color="#fff" />
-                  <Text style={{ fontSize: 20, fontFamily: "Inter_700Bold", color: "#fff", textAlign: "center" }}>{selectedTestAttempt.test?.title}</Text>
-                  <Text style={{ fontSize: 40, fontFamily: "Inter_700Bold", color: "#fff" }}>{score}/{totalMarks}</Text>
-                  <Text style={{ fontSize: 16, color: "rgba(255,255,255,0.85)", fontFamily: "Inter_400Regular" }}>{pct}% score</Text>
-                </LinearGradient>
-                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
-                  {[
-                    { label: "Time Taken", value: `${timeMins}m ${timeSecs}s`, icon: "time-outline", color: Colors.light.primary },
-                    { label: "Correct", value: String(correct), icon: "checkmark-circle-outline", color: "#22C55E" },
-                    { label: "Incorrect", value: String(incorrect), icon: "close-circle-outline", color: "#EF4444" },
-                    { label: "Skipped", value: String(skipped), icon: "remove-circle-outline", color: "#9CA3AF" },
-                    { label: "Attempted", value: String(attempted), icon: "radio-button-on-outline", color: "#F59E0B" },
-                  ].map((stat) => (
-                    <View key={stat.label} style={{ flex: 1, minWidth: 100, backgroundColor: "#fff", borderRadius: 14, padding: 14, alignItems: "center", gap: 4, borderWidth: 1, borderColor: Colors.light.border }}>
-                      <Ionicons name={stat.icon as any} size={22} color={stat.color} />
-                      <Text style={{ fontSize: 20, fontFamily: "Inter_700Bold", color: Colors.light.text }}>{stat.value}</Text>
-                      <Text style={{ fontSize: 11, fontFamily: "Inter_400Regular", color: Colors.light.textMuted }}>{stat.label}</Text>
-                    </View>
-                  ))}
-                </View>
-                <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Question Breakdown</Text>
-                {questions.map((q: any, idx: number) => {
-                  const ans = answers[q.id] ?? answers[String(q.id)];
-                  const isCorrect = ans === q.correct_option;
-                  const isSkipped = !ans;
-                  const options = [q.option_a, q.option_b, q.option_c, q.option_d];
-                  const correctText = options[String(q.correct_option || "A").charCodeAt(0) - 65] || q.correct_option;
-                  const userText = ans ? options[String(ans).charCodeAt(0) - 65] || ans : "";
-                  return (
-                    <View key={q.id} style={{ backgroundColor: "#fff", borderRadius: 12, padding: 14, borderLeftWidth: 4, borderLeftColor: isCorrect ? "#22C55E" : isSkipped ? "#9CA3AF" : "#EF4444", gap: 6 }}>
-                      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                        <Ionicons name={isCorrect ? "checkmark-circle" : isSkipped ? "remove-circle" : "close-circle"} size={18} color={isCorrect ? "#22C55E" : isSkipped ? "#9CA3AF" : "#EF4444"} />
-                        <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: Colors.light.textMuted }}>Q{idx + 1}</Text>
-                        {q.topic ? <Text style={{ fontSize: 11, color: Colors.light.primary, fontFamily: "Inter_500Medium" }}>{q.topic}</Text> : null}
-                      </View>
-                      <Text style={{ fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.text }}>{q.question_text}</Text>
-                      <Text style={{ fontSize: 12, color: "#22C55E", fontFamily: "Inter_600SemiBold" }}>Correct: {correctText}</Text>
-                      {!isCorrect && !isSkipped && <Text style={{ fontSize: 12, color: "#EF4444", fontFamily: "Inter_400Regular" }}>Student: {userText}</Text>}
-                      {isSkipped && <Text style={{ fontSize: 12, color: "#9CA3AF", fontFamily: "Inter_400Regular" }}>Not answered</Text>}
-                    </View>
-                  );
-                })}
-              </ScrollView>
-            );
-          })()}
-        </View>
-      </Modal>
-
       {/* Folder Action Sheet (root course view only) */}
       <Modal visible={folderActionSheet !== null && openAdminFolder === null} animationType="slide" transparent>
         <Pressable style={styles.modalOverlay} onPress={() => setFolderActionSheet(null)}>
@@ -2573,11 +2430,19 @@ export default function AdminCourseScreen() {
               style={{ backgroundColor: Colors.light.primary, borderRadius: 12, paddingVertical: 14, alignItems: "center", opacity: !editFolderName.trim() ? 0.5 : 1 }}
               disabled={!editFolderName.trim() || renameFolderMutation.isPending}
               onPress={async () => {
-                if (!editFolderName.trim() || !editingFolderId) return;
-                await renameFolderMutation.mutateAsync({ folderId: editingFolderId, name: editFolderName.trim() });
-                setEditFolderModal(false);
-                setEditFolderName("");
-                setEditingFolderId(null);
+                if (!editFolderName.trim()) return;
+                if (!editingFolderId) {
+                  Alert.alert("Error", "This folder can't be renamed (missing folder reference). Please reopen the folder and try again.");
+                  return;
+                }
+                try {
+                  await renameFolderMutation.mutateAsync({ folderId: editingFolderId, name: editFolderName.trim() });
+                  setEditFolderModal(false);
+                  setEditFolderName("");
+                  setEditingFolderId(null);
+                } catch {
+                  // error surfaced by mutation onError; keep modal open for retry
+                }
               }}
             >
               {renameFolderMutation.isPending
@@ -2821,7 +2686,7 @@ export default function AdminCourseScreen() {
                         onPress={() => setNewLiveClass((p) => ({ ...p, subjectKey: subject.key, lectureSectionTitle: "Live Class Recordings", lectureSubfolderTitle: "" }))}
                         style={{ flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 999, backgroundColor: (newLiveClass.subjectKey || activeSubjectKey) === subject.key ? Colors.light.primary : "#EEF2FF" }}
                       >
-                        <Ionicons name={subject.icon as keyof typeof Ionicons.glyphMap} size={14} color={(newLiveClass.subjectKey || activeSubjectKey) === subject.key ? "#fff" : Colors.light.primary} />
+                        <SubjectIcon subject={subject} size={14} color={(newLiveClass.subjectKey || activeSubjectKey) === subject.key ? "#fff" : Colors.light.primary} />
                         <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: (newLiveClass.subjectKey || activeSubjectKey) === subject.key ? "#fff" : Colors.light.primary }}>{subject.label}</Text>
                       </Pressable>
                     ))}
@@ -3056,8 +2921,10 @@ export default function AdminCourseScreen() {
               <Pressable
                 style={{ flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "rgba(255,255,255,0.15)", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 }}
                 onPress={() => {
-                  if (openAdminFolder?.type === "test") setNewTest({ ...emptyTest, folderName: openAdminFolder!.name });
-                  else if (openAdminFolder?.type === "lecture") setNewLecture({ ...emptyLecture, sectionTitle: openAdminFolder!.name });
+                  if (openAdminFolder?.type === "test") {
+                    const preset = activeTab === "pyqs" ? "pyq" : activeTab === "mocks" ? "mock" : "practice";
+                    setNewTest({ ...emptyTest, testType: preset, folderName: openAdminFolder!.name, subjectKey: isMultiSubjectCourse ? activeSubjectKey : "" });
+                  } else if (openAdminFolder?.type === "lecture") setNewLecture({ ...emptyLecture, sectionTitle: openAdminFolder!.name });
                   else if (openAdminFolder?.type === "material") setNewMaterial({ ...emptyMaterial, sectionTitle: openAdminFolder!.name });
                   setFolderAddModal(true);
                 }}
@@ -3095,22 +2962,21 @@ export default function AdminCourseScreen() {
                   </View>
                 );
               })()}
-              {openAdminFolder?.type === "test" && (
+              {openAdminFolder?.type === "test" && (() => {
+                const folderTests = courseTests.filter((t: any) => testMatchesFolder(t, openAdminFolder!.name));
+                return (
                 <>
-                  {course?.tests?.filter((test: any) => test.folder_name === openAdminFolder.name).length === 0 && !folderAddModal && (
+                  {folderTests.length === 0 && !folderAddModal && (
                     <View style={[styles.infoCard, { marginBottom: 12 }]}>
                       <Ionicons name="folder-open-outline" size={16} color={Colors.light.primary} />
                       <Text style={styles.infoText}>This folder is empty. Tap "Add Test" to add tests.</Text>
                     </View>
                   )}
-                  {(() => {
-                    const folderTests = course?.tests?.filter((t: any) => t.folder_name === openAdminFolder.name) || [];
-                    return (
-                    <SortableList
-                      ids={folderTests.map((t: any) => t.id)}
-                      onReorder={(a, o) => reorderByDrag("test", folderTests, a, o)}
-                    >
-                    {folderTests.map((test: any, idx: number) => (
+                  <SortableList
+                    ids={folderTests.map((t: any) => t.id)}
+                    onReorder={(a, o) => reorderByDrag("test", folderTests, a, o)}
+                  >
+                  {folderTests.map((test: any, idx: number) => (
                       <SortableItem key={test.id} id={test.id}>
                       <View style={{ marginBottom: 8 }}>
                         <Pressable style={[styles.testCard]} onPress={() => openAdminTestAttempts(test)}>
@@ -3169,11 +3035,10 @@ export default function AdminCourseScreen() {
                       </View>
                       </SortableItem>
                     ))}
-                    </SortableList>
-                    );
-                  })()}
+                  </SortableList>
                 </>
-              )}
+                );
+              })()}
               {openAdminFolder?.type === "lecture" && (
                 <>
                   {(() => {
@@ -3738,6 +3603,155 @@ export default function AdminCourseScreen() {
               </View>
             </Pressable>
           </Modal>
+        </View>
+      </Modal>
+
+      {/* Test Attempts Modal — after folder detail so attempts open on top of an open folder. */}
+      <Modal
+        visible={!!selectedAdminTest && !selectedTestAttempt}
+        animationType="slide"
+        onRequestClose={() => {
+          setSelectedAdminTest(null);
+          setAdminTestAttempts([]);
+          setAdminTestQuestions([]);
+        }}
+      >
+        <View style={{ flex: 1, backgroundColor: Colors.light.background }}>
+          <LinearGradient colors={["#0A1628", "#1A2E50"]} style={{ paddingTop: topPadding + 8, paddingHorizontal: 16, paddingBottom: 14, flexDirection: "row", alignItems: "center", gap: 12 }}>
+            <Pressable
+              style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" }}
+              onPress={() => {
+                setSelectedAdminTest(null);
+                setAdminTestAttempts([]);
+                setAdminTestQuestions([]);
+              }}
+            >
+              <Ionicons name="arrow-back" size={20} color="#fff" />
+            </Pressable>
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: "#fff" }} numberOfLines={1}>{selectedAdminTest?.title}</Text>
+              <Text style={{ fontSize: 12, color: "rgba(255,255,255,0.6)", fontFamily: "Inter_400Regular" }}>
+                {adminTestAttempts.length} student{adminTestAttempts.length !== 1 ? "s" : ""} attempted
+              </Text>
+            </View>
+          </LinearGradient>
+          {adminTestAttemptsLoading ? (
+            <ActivityIndicator color={Colors.light.primary} style={{ marginTop: 40 }} />
+          ) : adminTestAttempts.length === 0 ? (
+            <View style={{ flex: 1, alignItems: "center", justifyContent: "center", gap: 12, padding: 24 }}>
+              <Ionicons name="people-outline" size={52} color={Colors.light.textMuted} />
+              <Text style={{ fontSize: 16, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>No attempts yet</Text>
+              <Text style={{ fontSize: 13, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", textAlign: "center" }}>No students have attempted this test.</Text>
+            </View>
+          ) : (
+            <ScrollView contentContainerStyle={{ padding: 16, gap: 10 }}>
+              {adminTestAttempts.map((attempt: any, idx: number) => {
+                const timeTaken = Number(attempt.time_taken_seconds || 0);
+                const timeMins = Math.floor(timeTaken / 60);
+                const timeSecs = timeTaken % 60;
+                const rankColors = ["#F59E0B", "#9CA3AF", "#CD7C2F"];
+                return (
+                  <Pressable
+                    key={`${attempt.user_id}-${attempt.attempt_id}`}
+                    style={[styles.itemCard, { flexDirection: "row", alignItems: "center", gap: 12 }]}
+                    onPress={() => setSelectedTestAttempt({ ...attempt, test: selectedAdminTest, questions: adminTestQuestions })}
+                  >
+                    <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: idx < 3 ? rankColors[idx] : Colors.light.secondary, alignItems: "center", justifyContent: "center" }}>
+                      <Text style={{ fontSize: 14, fontFamily: "Inter_700Bold", color: idx < 3 ? "#fff" : Colors.light.text }}>#{idx + 1}</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>{attempt.name || attempt.phone || attempt.email || "Student"}</Text>
+                      <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" }}>
+                        {Number(attempt.score || 0)}/{Number(attempt.total_marks || selectedAdminTest?.total_marks || 0)} marks · {timeMins}m {timeSecs}s
+                      </Text>
+                    </View>
+                    <View style={{ backgroundColor: "#EEF2FF", borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 }}>
+                      <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>
+                        {Math.round(Number(attempt.percentage || 0))}%
+                      </Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={16} color={Colors.light.textMuted} />
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          )}
+        </View>
+      </Modal>
+
+      {/* Student Test Report Modal */}
+      <Modal visible={!!selectedTestAttempt} animationType="slide" onRequestClose={() => setSelectedTestAttempt(null)}>
+        <View style={{ flex: 1, backgroundColor: Colors.light.background }}>
+          <LinearGradient colors={["#0A1628", "#1A2E50"]} style={{ paddingTop: topPadding + 8, paddingHorizontal: 16, paddingBottom: 14, flexDirection: "row", alignItems: "center", gap: 12 }}>
+            <Pressable style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" }} onPress={() => setSelectedTestAttempt(null)}>
+              <Ionicons name="arrow-back" size={20} color="#fff" />
+            </Pressable>
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: "#fff" }}>{selectedTestAttempt?.name || selectedTestAttempt?.phone || "Student"}</Text>
+              <Text style={{ fontSize: 12, color: "rgba(255,255,255,0.6)", fontFamily: "Inter_400Regular" }}>Test Result</Text>
+            </View>
+          </LinearGradient>
+          {selectedTestAttempt && (() => {
+            const questions = Array.isArray(selectedTestAttempt.questions) ? selectedTestAttempt.questions : [];
+            const answers = selectedTestAttempt.answers || {};
+            const score = Number(selectedTestAttempt.score || 0);
+            const totalMarks = Number(selectedTestAttempt.total_marks || selectedTestAttempt.test?.total_marks || 0);
+            const correct = Number(selectedTestAttempt.correct || 0);
+            const incorrect = Number(selectedTestAttempt.incorrect || 0);
+            const attempted = Number(selectedTestAttempt.attempted || 0);
+            const skipped = Math.max(0, questions.length - attempted);
+            const pct = Math.round(Number(selectedTestAttempt.percentage || 0));
+            const timeTaken = Number(selectedTestAttempt.time_taken_seconds || 0);
+            const timeMins = Math.floor(timeTaken / 60);
+            const timeSecs = timeTaken % 60;
+            return (
+              <ScrollView contentContainerStyle={{ padding: 20, gap: 16 }}>
+                <LinearGradient colors={pct >= 60 ? ["#22C55E", "#16A34A"] : ["#F59E0B", "#D97706"]} style={{ borderRadius: 20, padding: 24, alignItems: "center", gap: 8 }}>
+                  <Ionicons name="trophy" size={48} color="#fff" />
+                  <Text style={{ fontSize: 20, fontFamily: "Inter_700Bold", color: "#fff", textAlign: "center" }}>{selectedTestAttempt.test?.title}</Text>
+                  <Text style={{ fontSize: 40, fontFamily: "Inter_700Bold", color: "#fff" }}>{score}/{totalMarks}</Text>
+                  <Text style={{ fontSize: 16, color: "rgba(255,255,255,0.85)", fontFamily: "Inter_400Regular" }}>{pct}% score</Text>
+                </LinearGradient>
+                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
+                  {[
+                    { label: "Time Taken", value: `${timeMins}m ${timeSecs}s`, icon: "time-outline", color: Colors.light.primary },
+                    { label: "Correct", value: String(correct), icon: "checkmark-circle-outline", color: "#22C55E" },
+                    { label: "Incorrect", value: String(incorrect), icon: "close-circle-outline", color: "#EF4444" },
+                    { label: "Skipped", value: String(skipped), icon: "remove-circle-outline", color: "#9CA3AF" },
+                    { label: "Attempted", value: String(attempted), icon: "radio-button-on-outline", color: "#F59E0B" },
+                  ].map((stat) => (
+                    <View key={stat.label} style={{ flex: 1, minWidth: 100, backgroundColor: "#fff", borderRadius: 14, padding: 14, alignItems: "center", gap: 4, borderWidth: 1, borderColor: Colors.light.border }}>
+                      <Ionicons name={stat.icon as any} size={22} color={stat.color} />
+                      <Text style={{ fontSize: 20, fontFamily: "Inter_700Bold", color: Colors.light.text }}>{stat.value}</Text>
+                      <Text style={{ fontSize: 11, fontFamily: "Inter_400Regular", color: Colors.light.textMuted }}>{stat.label}</Text>
+                    </View>
+                  ))}
+                </View>
+                <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Question Breakdown</Text>
+                {questions.map((q: any, idx: number) => {
+                  const ans = answers[q.id] ?? answers[String(q.id)];
+                  const isCorrect = ans === q.correct_option;
+                  const isSkipped = !ans;
+                  const options = [q.option_a, q.option_b, q.option_c, q.option_d];
+                  const correctText = options[String(q.correct_option || "A").charCodeAt(0) - 65] || q.correct_option;
+                  const userText = ans ? options[String(ans).charCodeAt(0) - 65] || ans : "";
+                  return (
+                    <View key={q.id} style={{ backgroundColor: "#fff", borderRadius: 12, padding: 14, borderLeftWidth: 4, borderLeftColor: isCorrect ? "#22C55E" : isSkipped ? "#9CA3AF" : "#EF4444", gap: 6 }}>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                        <Ionicons name={isCorrect ? "checkmark-circle" : isSkipped ? "remove-circle" : "close-circle"} size={18} color={isCorrect ? "#22C55E" : isSkipped ? "#9CA3AF" : "#EF4444"} />
+                        <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: Colors.light.textMuted }}>Q{idx + 1}</Text>
+                        {q.topic ? <Text style={{ fontSize: 11, color: Colors.light.primary, fontFamily: "Inter_500Medium" }}>{q.topic}</Text> : null}
+                      </View>
+                      <Text style={{ fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.text }}>{q.question_text}</Text>
+                      <Text style={{ fontSize: 12, color: "#22C55E", fontFamily: "Inter_600SemiBold" }}>Correct: {correctText}</Text>
+                      {!isCorrect && !isSkipped && <Text style={{ fontSize: 12, color: "#EF4444", fontFamily: "Inter_400Regular" }}>Student: {userText}</Text>}
+                      {isSkipped && <Text style={{ fontSize: 12, color: "#9CA3AF", fontFamily: "Inter_400Regular" }}>Not answered</Text>}
+                    </View>
+                  );
+                })}
+              </ScrollView>
+            );
+          })()}
         </View>
       </Modal>
 

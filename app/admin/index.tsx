@@ -17,6 +17,7 @@ import Colors from "@/constants/colors";
 import { useAuth } from "@/context/AuthContext";
 import { useAppTheme } from "@/context/AppThemeContext";
 import { fetch } from "expo/fetch";
+import { MULTI_SUBJECTS, SubjectIcon } from "@/constants/multiSubjects";
 import BulkUploadModal from "@/components/BulkUploadModal";
 import SortableList from "@/components/admin/SortableList";
 import SortableItem from "@/components/admin/SortableItem";
@@ -73,13 +74,6 @@ interface NewCourse {
   thumbnail: string; coverColor: string; teacherBio: string; teacherImageUrl: string;
   courseLanguage: string; batchStatus: string;
 }
-
-const MULTI_SUBJECTS = [
-  { key: "maths", label: "Maths", icon: "calculator" },
-  { key: "english", label: "English", icon: "book" },
-  { key: "science", label: "Science", icon: "flask" },
-  { key: "gk", label: "G.K", icon: "earth" },
-] as const;
 
 const defaultNewCourse = (courseType = "live"): NewCourse => ({
   title: "", description: "", teacherName: "3i Learning",
@@ -2122,6 +2116,9 @@ export default function AdminDashboard() {
                       }}>
                         <Ionicons name="download-outline" size={18} color="#8B5CF6" />
                       </Pressable>
+                    <Pressable style={[styles.editBtn, { backgroundColor: "#EEF2FF" }]} onPress={() => router.push({ pathname: "/admin/course/[id]", params: { id: String(course.id), tab: "enrolled" } })}>
+                      <Ionicons name="people-outline" size={18} color={Colors.light.primary} />
+                    </Pressable>
                     <Pressable style={styles.editBtn} onPress={() => router.push({ pathname: "/admin/course/[id]", params: { id: course.id } })}>
                       <Ionicons name="create-outline" size={18} color={Colors.light.primary} />
                     </Pressable>
@@ -2377,7 +2374,7 @@ export default function AdminDashboard() {
                               }}
                               style={{ flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 999, backgroundColor: liveSubjectKey === subject.key ? Colors.light.primary : "#EEF2FF" }}
                             >
-                              <Ionicons name={subject.icon as keyof typeof Ionicons.glyphMap} size={14} color={liveSubjectKey === subject.key ? "#fff" : Colors.light.primary} />
+                              <SubjectIcon subject={subject} size={14} color={liveSubjectKey === subject.key ? "#fff" : Colors.light.primary} />
                               <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: liveSubjectKey === subject.key ? "#fff" : Colors.light.primary }}>{subject.label}</Text>
                             </Pressable>
                           ))}
@@ -4803,7 +4800,7 @@ export default function AdminDashboard() {
                   <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
                     {MULTI_SUBJECTS.map((subject) => (
                       <View key={subject.key} style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 12, backgroundColor: "#EEF2FF" }}>
-                        <Ionicons name={subject.icon as keyof typeof Ionicons.glyphMap} size={16} color="#4F46E5" />
+                        <SubjectIcon subject={subject} size={16} color="#4F46E5" />
                         <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: "#3730A3" }}>{subject.label}</Text>
                       </View>
                     ))}
@@ -5863,7 +5860,7 @@ export default function AdminDashboard() {
                           style={{ flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 999, backgroundColor: recSubjectKey === subject.key ? Colors.light.primary : "#EEF2FF" }}
                           disabled={recSubmitting}
                         >
-                          <Ionicons name={subject.icon as keyof typeof Ionicons.glyphMap} size={14} color={recSubjectKey === subject.key ? "#fff" : Colors.light.primary} />
+                          <SubjectIcon subject={subject} size={14} color={recSubjectKey === subject.key ? "#fff" : Colors.light.primary} />
                           <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: recSubjectKey === subject.key ? "#fff" : Colors.light.primary }}>{subject.label}</Text>
                         </Pressable>
                       ))}

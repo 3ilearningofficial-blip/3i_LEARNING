@@ -118,6 +118,7 @@ interface CourseDetail {
   pyq_count?: number;
   mock_count?: number;
   practice_count?: number;
+  daily_mission_count?: number;
   thumbnail?: string;
   cover_color?: string;
 }
@@ -869,6 +870,18 @@ setTimeout(function() {
                 <Ionicons name="document-text" size={16} color="rgba(255,255,255,0.8)" />
                 <Text style={styles.quickStatText}>{course.total_tests} Tests</Text>
               </View>
+              {(course.mock_count || 0) > 0 && (
+                <View style={styles.quickStat}>
+                  <Ionicons name="clipboard" size={16} color="rgba(255,255,255,0.8)" />
+                  <Text style={styles.quickStatText}>{course.mock_count} Mock</Text>
+                </View>
+              )}
+              {(course.daily_mission_count || 0) > 0 && (
+                <View style={styles.quickStat}>
+                  <Ionicons name="flag" size={16} color="rgba(255,255,255,0.8)" />
+                  <Text style={styles.quickStatText}>{course.daily_mission_count} Missions</Text>
+                </View>
+              )}
               <View style={styles.quickStat}>
                 <Ionicons name="folder" size={16} color="rgba(255,255,255,0.8)" />
                 <Text style={styles.quickStatText}>{course.total_materials || 0} Materials</Text>
@@ -1015,6 +1028,12 @@ setTimeout(function() {
                     <Text style={styles.aboutIncludeText}>{course.pyq_count} Previous Year Questions</Text>
                   </View>
                 )}
+                {!isTestSeriesCourse && (course.mock_count || 0) > 0 && (
+                  <View style={styles.aboutIncludeItem}>
+                    <Ionicons name="trophy" size={18} color="#DC2626" />
+                    <Text style={styles.aboutIncludeText}>{course.mock_count} Mock Tests</Text>
+                  </View>
+                )}
                 {isTestSeriesCourse && (course.mock_count || 0) > 0 && (
                   <View style={styles.aboutIncludeItem}>
                     <Ionicons name="trophy" size={18} color="#DC2626" />
@@ -1031,6 +1050,12 @@ setTimeout(function() {
                   <View style={styles.aboutIncludeItem}>
                     <Ionicons name="folder" size={18} color="#DC2626" />
                     <Text style={styles.aboutIncludeText}>{course.total_materials} Study Materials</Text>
+                  </View>
+                )}
+                {(course.daily_mission_count || 0) > 0 && (
+                  <View style={styles.aboutIncludeItem}>
+                    <Ionicons name="flag" size={18} color="#7C3AED" />
+                    <Text style={styles.aboutIncludeText}>{course.daily_mission_count} Daily Missions</Text>
                   </View>
                 )}
                 <View style={styles.aboutIncludeItem}>
@@ -1297,7 +1322,7 @@ setTimeout(function() {
 
         {currentActiveTab === "Mock Tests" && (
           <View style={styles.list}>
-            {testsForMockTab.length === 0 && courseFolders.filter((f: any) => f.type === "test").length === 0 ? (
+            {testsForMockTab.length === 0 ? (
               <View style={styles.emptyState}>
                 <Ionicons name="clipboard-outline" size={40} color={Colors.light.textMuted} />
                 <Text style={styles.emptyText}>No mock tests available</Text>
@@ -1305,10 +1330,9 @@ setTimeout(function() {
             ) : (
               <View style={{ gap: 12, padding: 16 }}>
                 {(() => {
-                  const mockFolderNames = new Set([
-                    ...(testsForMockTab || []).map((t: any) => getContentFolderRootName(t.folder_name)).filter(Boolean),
-                    ...courseFolders.filter((f: any) => f.type === "test" && !f.parent_id).map(folderFullName),
-                  ]);
+                  const mockFolderNames = new Set(
+                    (testsForMockTab || []).map((t: any) => getContentFolderRootName(t.folder_name)).filter(Boolean)
+                  );
                   return Array.from(mockFolderNames).map((folderName: any) => {
                     const folderTests = (testsForMockTab || []).filter((t: any) => t.folder_name === folderName || String(t.folder_name || "").startsWith(`${folderName} /`));
                     if (folderTests.length === 0) return null;

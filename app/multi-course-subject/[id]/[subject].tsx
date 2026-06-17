@@ -11,8 +11,7 @@ import { useAuth } from "@/context/AuthContext";
 import Colors from "@/constants/colors";
 import { useAppTheme } from "@/context/AppThemeContext";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-
-const SUBJECT_LABELS: Record<string, string> = { maths: "Maths", english: "English", science: "Science", gk: "G.K" };
+import { SUBJECT_LABELS, getSubjectMeta } from "@/constants/multiSubjects";
 // Order mirrors the admin course view tabs after selecting a subject:
 // Live -> Lectures -> Tests -> PYQs -> Mock -> Materials.
 const SECTIONS = ["Live", "Lecture", "Test", "PYQs", "Mock", "Study Material"] as const;
@@ -289,7 +288,7 @@ export default function MultiCourseSubjectScreen() {
           <Ionicons name="arrow-back" size={20} color="#fff" />
         </Pressable>
         <View style={styles.headerTextCol}>
-          <Text style={styles.title}>{SUBJECT_LABELS[subjectKey] || subjectKey}</Text>
+          <Text style={styles.title}>{SUBJECT_LABELS[subjectKey] || getSubjectMeta(subjectKey).label}</Text>
           <Text style={styles.subtitle} numberOfLines={1}>{course?.title || "Course"}</Text>
         </View>
       </LinearGradient>

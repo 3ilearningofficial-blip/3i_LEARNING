@@ -42,6 +42,7 @@ type Course = {
   total_lectures?: number;
   total_tests?: number;
   total_materials?: number;
+  daily_mission_count?: number;
 };
 
 type AboutTeacher = { name: string; imageUrl: string; bio: string };
@@ -159,7 +160,11 @@ export default function CourseAboutScreen() {
     : [
         { label: "Lectures", value: lecturesCount, icon: "play-circle" },
         { label: "Tests", value: testCount, icon: "document-text" },
+        ...(mockCount > 0 ? [{ label: "Mock", value: mockCount, icon: "clipboard" }] : []),
         { label: "Material", value: materialsCount, icon: "folder" },
+        ...((Number(course.daily_mission_count) || 0) > 0
+          ? [{ label: "Missions", value: Number(course.daily_mission_count), icon: "flag" }]
+          : []),
       ];
 
   const explorePath = isMultiSubject ? `/multi-course/${course.id}` : `/course/${course.id}`;
