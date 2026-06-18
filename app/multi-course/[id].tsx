@@ -1,18 +1,29 @@
-import React, { useMemo } from "react";
-import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, useWindowDimensions } from "react-native";
+import React, { useEffect, useMemo } from "react";
+import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, useWindowDimensions, Alert } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useQuery } from "@tanstack/react-query";
-import { authFetch, getApiUrl } from "@/lib/query-client";
+import { authFetch, getApiUrl, apiRequest } from "@/lib/query-client";
 import Colors from "@/constants/colors";
 import { useAppTheme } from "@/context/AppThemeContext";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useAuth } from "@/context/AuthContext";
+import { useCoursePurchase } from "@/lib/use-course-purchase";
 import { MULTI_SUBJECTS, SubjectIcon, getSubjectMeta, type MultiSubject } from "@/constants/multiSubjects";
 
 function countBySubject(rows: any[] | undefined, subjectKey: string): number {
   if (!Array.isArray(rows)) return 0;
   return rows.filter((row) => String(row?.subject_key || "").toLowerCase() === subjectKey).length;
+}
+
+function countRegularTestsBySubject(rows: any[] | undefined, subjectKey: string): number {
+  if (!Array.isArray(rows)) return 0;
+  return rows.filter((row) => {
+    if (String(row?.subject_key || "").toLowerCase() !== subjectKey) return false;
+    const t = String(row?.test_type || "").toLowerCase();
+    return t !== "pyq" && t !== "mock";
+  }).length;
 }
 
 function buildSubjectList(course: any, liveClasses: any[]): MultiSubject[] {
@@ -40,13 +51,16 @@ async function fetchJson(path: string) {
 export default function MultiCourseLayout() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { colors } = useAppTheme();
+  const { user, isAdmin } = useAuth();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const isWebGrid = width >= 768;
-  const { data: course, isLoading } = useQuery({
-    queryKey: ["/api/courses", String(id)],
+  const courseIdNum = Number(id);
+  const { data: course, isLoading, refetch } = useQuery({
+    queryKey: ["/api/courses", String(id), String(user?.id ?? "guest")],
     queryFn: () => fetchJson(`/api/courses/${id}`),
     enabled: !!id,
+    staleTime: 0,
   });
   const { data: liveClasses = [] } = useQuery({
     queryKey: ["/api/live-classes", id, "multi"],
@@ -55,7 +69,50 @@ export default function MultiCourseLayout() {
     staleTime: 30_000,
   });
 
+  const isFreeCourse = !!(course && (course.is_free || parseFloat(String(course.price || "0")) <= 0));
+  const { purchase, paymentModal } = useCoursePurchase({
+    courseId: courseIdNum,
+    courseTitle: course?.title,
+    isFree: isFreeCourse,
+    price: course?.price,
+  });
+
+  useEffect(() => {
+    if (!user?.id || !Number.isFinite(courseIdNum) || courseIdNum <= 0) return;
+    apiRequest("POST", "/api/payments/sync-enrollment", { courseId: courseIdNum })
+      .then(() => refetch())
+      .catch(() => {});
+  }, [user?.id, courseIdNum, refetch]);
+
+  const locked = !isAdmin && !course?.isEnrolled;
+  const promptLocked = (onProceed?: () => void) => {
+    if (!locked) {
+      onProceed?.();
+      return;
+    }
+    Alert.alert(
+      course?.is_free ? "Enroll Required" : "Purchase Required",
+      course?.is_free
+        ? "Please enroll in this course to access this content."
+        : "Please purchase this course to access this content.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: course?.is_free ? "Enroll Free" : "Buy Now",
+          onPress: () => {
+            if (course?.is_free) purchase();
+            else router.push(`/course-about/${id}` as any);
+          },
+        },
+      ],
+    );
+  };
+
   const subjects = useMemo(() => buildSubjectList(course, liveClasses), [course, liveClasses]);
+  const upcomingLive = useMemo(
+    () => (Array.isArray(liveClasses) ? liveClasses.filter((lc: any) => !lc.is_completed) : []),
+    [liveClasses],
+  );
 
   if (isLoading) return <View style={[styles.center, { backgroundColor: colors.background }]}><ActivityIndicator color={Colors.light.primary} /></View>;
 
@@ -72,11 +129,46 @@ export default function MultiCourseLayout() {
       </LinearGradient>
 
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 24 }}>
-        <Text style={[styles.sectionTitle, { color: colors.text }]}>Subjects</Text>
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>Live / Scheduled Classes</Text>
+        {upcomingLive.length > 0 ? (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10, paddingBottom: 4 }}>
+            {upcomingLive.map((lc: any) => {
+              const isLive = !!lc.is_live;
+              const badgeColors: [string, string] = isLive ? ["#DC2626", "#EF4444"] : ["#6B7280", "#9CA3AF"];
+              return (
+                <Pressable
+                  key={lc.id}
+                  style={({ pressed }) => [styles.liveCardHorizontal, { backgroundColor: colors.card, borderColor: colors.border }, pressed && { opacity: 0.85 }]}
+                  onPress={() => promptLocked(() => router.push(`/live-class/${lc.id}` as any))}
+                >
+                  <LinearGradient colors={badgeColors} style={styles.liveStatusBadge}>
+                    {isLive ? (
+                      <><View style={styles.liveDot} /><Text style={styles.liveStatusText}>LIVE</Text></>
+                    ) : (
+                      <Ionicons name="time" size={14} color="#fff" />
+                    )}
+                  </LinearGradient>
+                  <Text style={[styles.liveClassTitle, { color: colors.text }]} numberOfLines={2}>{lc.title}</Text>
+                  <Text style={[styles.liveClassTime, { color: colors.textSecondary }]} numberOfLines={2}>
+                    {lc.subject_key ? `${getSubjectMeta(lc.subject_key).label} · ` : ""}
+                    {isLive ? "Happening now" : new Date(Number(lc.scheduled_at || Date.now())).toLocaleString()}
+                  </Text>
+                  {locked ? <Ionicons name="lock-closed" size={16} color={colors.textMuted} style={{ marginTop: 6 }} /> : null}
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        ) : (
+          <View style={[styles.emptyCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <Text style={{ color: colors.textSecondary, fontFamily: "Inter_600SemiBold" }}>No live or scheduled classes yet.</Text>
+          </View>
+        )}
+
+        <Text style={[styles.sectionTitle, { color: colors.text, marginTop: 20 }]}>Subjects</Text>
         <View style={[styles.grid, isWebGrid ? styles.gridWeb : styles.gridMobile]}>
           {subjects.map((subject) => {
             const lectures = countBySubject(course?.lectures, subject.key);
-            const tests = countBySubject(course?.tests, subject.key);
+            const tests = countRegularTestsBySubject(course?.tests, subject.key);
             const countText = `${lectures} Lecture${lectures === 1 ? "" : "s"} · ${tests} Test${tests === 1 ? "" : "s"}`;
             return (
               <Pressable
@@ -99,38 +191,8 @@ export default function MultiCourseLayout() {
             );
           })}
         </View>
-
-        <Text style={[styles.sectionTitle, { color: colors.text, marginTop: 20 }]}>Live / Scheduled Classes</Text>
-        {Array.isArray(liveClasses) && liveClasses.length > 0 ? liveClasses.slice(0, 8).map((lc: any) => {
-          const isLive = !!lc.is_live;
-          const isCompleted = !!lc.is_completed;
-          const badgeColors: [string, string] = isLive ? ["#DC2626", "#EF4444"] : isCompleted ? ["#1A56DB", "#3B82F6"] : ["#6B7280", "#9CA3AF"];
-          return (
-            <Pressable key={lc.id} style={({ pressed }) => [styles.liveClassItem, { backgroundColor: colors.card, borderColor: colors.border }, pressed && { opacity: 0.85 }]} onPress={() => router.push(`/live-class/${lc.id}` as any)}>
-              <LinearGradient colors={badgeColors} style={styles.liveStatusBadge}>
-                {isLive ? (
-                  <><View style={styles.liveDot} /><Text style={styles.liveStatusText}>LIVE</Text></>
-                ) : isCompleted ? (
-                  <Ionicons name="play" size={14} color="#fff" />
-                ) : (
-                  <Ionicons name="time" size={14} color="#fff" />
-                )}
-              </LinearGradient>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.liveClassTitle, { color: colors.text }]} numberOfLines={1}>{lc.title}</Text>
-                <Text style={[styles.liveClassTime, { color: colors.textSecondary }]}>
-                  {lc.subject_key ? `${getSubjectMeta(lc.subject_key).label} · ` : ""}{isLive ? "Happening now" : new Date(Number(lc.scheduled_at || Date.now())).toLocaleString()}
-                </Text>
-              </View>
-              <Ionicons name={isLive || isCompleted ? "play-circle" : "calendar"} size={22} color={isLive ? "#DC2626" : isCompleted ? Colors.light.primary : colors.textMuted} />
-            </Pressable>
-          );
-        }) : (
-          <View style={[styles.emptyCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Text style={{ color: colors.textSecondary, fontFamily: "Inter_600SemiBold" }}>No live or scheduled classes yet.</Text>
-          </View>
-        )}
       </ScrollView>
+      {paymentModal}
     </View>
   );
 }
@@ -188,11 +250,17 @@ const styles = StyleSheet.create({
   subjectBoxTitleMobile: { textAlign: "left" },
   subjectBoxMeta: { fontSize: 10, fontFamily: "Inter_600SemiBold", marginTop: 3, textAlign: "center" },
   subjectBoxMetaMobile: { textAlign: "left" },
-  liveClassItem: { flexDirection: "row", alignItems: "center", gap: 12, borderWidth: 1, borderRadius: 16, padding: 12, marginBottom: 10 },
-  liveStatusBadge: { width: 40, height: 40, borderRadius: 12, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 3 },
+  liveCardHorizontal: {
+    width: 220,
+    borderWidth: 1,
+    borderRadius: 16,
+    padding: 12,
+    gap: 8,
+  },
+  liveStatusBadge: { width: 40, height: 40, borderRadius: 12, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 3, alignSelf: "flex-start" },
   liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: "#fff" },
   liveStatusText: { fontSize: 9, fontFamily: "Inter_800ExtraBold", color: "#fff" },
   liveClassTitle: { fontSize: 14, fontFamily: "Inter_700Bold" },
-  liveClassTime: { fontSize: 11, fontFamily: "Inter_500Medium", marginTop: 2 },
+  liveClassTime: { fontSize: 11, fontFamily: "Inter_500Medium" },
   emptyCard: { borderWidth: 1, borderRadius: 14, padding: 18, alignItems: "center" },
 });

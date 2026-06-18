@@ -9,6 +9,7 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import { apiRequest, getApiUrl, authFetch } from "@/lib/query-client";
+import { invalidateAccessCaches } from "@/lib/invalidate-access-caches";
 import Colors from "@/constants/colors";
 import { useAppTheme } from "@/context/AppThemeContext";
 import { useScreenProtection } from "@/lib/useScreenProtection";
@@ -315,6 +316,14 @@ export default function DailyMissionScreen() {
       // Also invalidate to get fresh server data
       qc.invalidateQueries({ queryKey: ["/api/daily-missions"] });
       qc.invalidateQueries({ queryKey: ["/api/daily-missions/folder"] });
+      const patchCourseId = (key: unknown) => {
+        const list = qc.getQueryData<DailyMission[]>(key as any);
+        return list?.find((m) => m.id === data.missionId)?.course_id;
+      };
+      const courseId = patchCourseId(["/api/daily-missions", "all"])
+        ?? patchCourseId(["/api/daily-missions", "daily_drill"])
+        ?? patchCourseId(["/api/daily-missions", "free_practice"]);
+      invalidateAccessCaches(qc, { courseId: courseId ?? null });
       setCompletedThisSession((prev) => new Set(prev).add(data.missionId));
       setSessionResults((prev) => ({
         ...prev,

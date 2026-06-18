@@ -129,9 +129,14 @@ export default function CourseAboutScreen() {
     Number(course.mock_count) || 0,
   );
   const missionCount = Number(course.daily_mission_count) || 0;
+  const regularTestCountFromList = tests.filter((t) => !["pyq", "mock"].includes(String(t.test_type || "").toLowerCase())).length;
   const testCount = isMultiSubject
-    ? tests.filter((t) => !["pyq", "mock"].includes(String(t.test_type || "").toLowerCase())).length
-    : Number(course.total_tests || tests.filter((t) => !["pyq", "mock"].includes(String(t.test_type || "").toLowerCase())).length);
+    ? regularTestCountFromList
+    : Math.max(
+        regularTestCountFromList,
+        Number(course.practice_count) || 0,
+        Math.max(0, (Number(course.total_tests) || 0) - mockCount - pyqCount),
+      );
   const aboutMeta = parseAboutMeta(course.teacher_details_json);
   const teachers = aboutMeta.teachers;
   const instructorName = teachers[0]?.name || course.teacher_name || "";
@@ -167,7 +172,7 @@ export default function CourseAboutScreen() {
         { label: "Lectures", value: lecturesCount, icon: "play-circle" },
         { label: "Tests", value: testCount, icon: "document-text" },
         { label: "Mock", value: mockCount, icon: "clipboard" },
-        { label: "Material", value: materialsCount, icon: "folder" },
+        { label: "Materials", value: materialsCount, icon: "folder" },
         { label: "Missions", value: missionCount, icon: "flag" },
       ];
 

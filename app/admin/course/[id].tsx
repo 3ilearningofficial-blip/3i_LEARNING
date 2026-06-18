@@ -22,6 +22,7 @@ import { useDocumentVisibility } from "@/lib/useDocumentVisibility";
 import SortableList from "@/components/admin/SortableList";
 import SortableItem from "@/components/admin/SortableItem";
 import { MULTI_SUBJECTS, SubjectIcon, getSubjectMeta } from "@/constants/multiSubjects";
+import { downloadAdminContent } from "@/lib/admin-export";
 
 interface Lecture {
   id: number;
@@ -729,10 +730,15 @@ export default function AdminCourseScreen() {
     mutationFn: async ({ folderId, name }: { folderId: number; name: string }) => {
       await apiRequest("PUT", `/api/admin/courses/${id}/folders/${folderId}`, { name });
     },
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       refetchFolders();
       qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] });
       qc.invalidateQueries({ queryKey: ["/api/admin/courses", id, "folders"] });
+      setOpenAdminFolder((prev) => {
+        if (!prev || Number(prev.id) !== Number(variables.folderId)) return prev;
+        const f = findFolderById(variables.folderId);
+        return { ...prev, name: f ? folderFullName(f) : variables.name };
+      });
     },
     onError: (err: any) => {
       const msg = String(err?.message || "").replace(/^\d+:\s*/, "") || "Failed to rename folder";
@@ -1684,6 +1690,14 @@ export default function AdminCourseScreen() {
                     <Text style={styles.itemTitle}>{lecture.title}</Text>
                     <Text style={styles.itemMeta}>{lecture.duration_minutes}min · Order {lecture.order_index}{lecture.is_free_preview ? " · Free Preview" : ""}</Text>
                   </View>
+                  {(lecture.video_type === "r2" || inferLectureVideoType(lecture.video_url || "") === "r2") && !!lecture.video_url && (
+                    <Pressable
+                      style={[styles.deleteItemBtn, { backgroundColor: "#ECFDF5", marginRight: 6 }]}
+                      onPress={() => void downloadAdminContent("lecture", lecture.id, `${lecture.title}.mp4`)}
+                    >
+                      <Ionicons name="download-outline" size={16} color="#059669" />
+                    </Pressable>
+                  )}
                   <Pressable
                     style={[styles.deleteItemBtn, { backgroundColor: "#EEF2FF", marginRight: 6 }]}
                     onPress={() => {
@@ -1821,6 +1835,12 @@ export default function AdminCourseScreen() {
                           </Pressable>
                         </>
                       )}
+                      <Pressable
+                        style={[styles.deleteItemBtn, { backgroundColor: "#ECFDF5" }]}
+                        onPress={(e) => { e.stopPropagation?.(); void downloadAdminContent("test", test.id, `${test.title}.pdf`); }}
+                      >
+                        <Ionicons name="download-outline" size={14} color="#059669" />
+                      </Pressable>
                       <Pressable style={[styles.deleteItemBtn, { backgroundColor: "#EEF2FF" }]} onPress={(e) => { e.stopPropagation?.(); setEditTest({ ...test, durationMinutes: String(test.duration_minutes), difficulty: test.difficulty || "moderate" }); }}>
                         <Ionicons name="pencil-outline" size={14} color={Colors.light.primary} />
                       </Pressable>
@@ -1964,6 +1984,14 @@ export default function AdminCourseScreen() {
                             <Ionicons name="chevron-down" size={14} color={Colors.light.text} />
                           </Pressable>
                         </>
+                      )}
+                      {!!mat.file_url && (
+                        <Pressable
+                          style={[styles.deleteItemBtn, { backgroundColor: "#ECFDF5" }]}
+                          onPress={() => void downloadAdminContent("material", mat.id, mat.title)}
+                        >
+                          <Ionicons name="download-outline" size={16} color="#059669" />
+                        </Pressable>
                       )}
                       <Pressable style={[styles.deleteItemBtn, { backgroundColor: "#EEF2FF" }]} onPress={() => setEditMaterial({ ...mat, sectionTitle: mat.section_title || "", downloadAllowed: mat.download_allowed || false })}>
                         <Ionicons name="pencil-outline" size={16} color={Colors.light.primary} />
@@ -2215,8 +2243,11 @@ export default function AdminCourseScreen() {
             <Pressable
               style={{ flexDirection: "row", alignItems: "center", gap: 12, padding: 16, borderRadius: 12, backgroundColor: "#EEF2FF", marginBottom: 8 }}
               onPress={() => {
-                setEditFolderName(folderActionSheet?.name || "");
-                setEditingFolderId(folderActionSheet?.id ?? null);
+                const folder = folderActionSheet;
+                if (!folder) return;
+                const resolved = folder.id ?? findFolderByPath(folder.name, folder.type)?.id ?? null;
+                setEditFolderName(folder.name || "");
+                setEditingFolderId(resolved);
                 setEditFolderModal(true);
                 setFolderActionSheet(null);
               }}
@@ -2405,53 +2436,6 @@ export default function AdminCourseScreen() {
             <ActionButton label="Save Changes" onPress={() => editMaterial && updateMaterialMutation.mutate({ id: editMaterial.id, title: editMaterial.title, description: editMaterial.description || "", fileUrl: editMaterial.file_url || editMaterial.fileUrl, fileType: editMaterial.file_type || editMaterial.fileType || "pdf", isFree: editMaterial.is_free || false, sectionTitle: editMaterial.sectionTitle || editMaterial.section_title || null, downloadAllowed: editMaterial.downloadAllowed || editMaterial.download_allowed || false })} disabled={!editMaterial?.title} loading={updateMaterialMutation.isPending} />
           </View>
         </View>
-      </Modal>
-
-      {/* Edit Folder Modal */}
-      <Modal visible={editFolderModal} animationType="slide" transparent>
-        <Pressable style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end" }} onPress={() => setEditFolderModal(false)}>
-          <View style={{ backgroundColor: "#fff", borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, paddingBottom: bottomPadding + 20, gap: 16 }}>
-            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-              <Text style={{ fontSize: 18, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Edit Folder</Text>
-              <Pressable onPress={() => setEditFolderModal(false)}>
-                <Ionicons name="close" size={24} color={Colors.light.text} />
-              </Pressable>
-            </View>
-            <Text style={{ fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.textMuted }}>Folder Name</Text>
-            <TextInput
-              style={{ backgroundColor: Colors.light.background, borderRadius: 12, borderWidth: 1, borderColor: Colors.light.border, paddingHorizontal: 14, paddingVertical: 12, fontSize: 16, fontFamily: "Inter_400Regular", color: Colors.light.text }}
-              value={editFolderName}
-              onChangeText={setEditFolderName}
-              placeholder="Enter folder name"
-              placeholderTextColor={Colors.light.textMuted}
-              autoFocus
-            />
-            <Pressable
-              style={{ backgroundColor: Colors.light.primary, borderRadius: 12, paddingVertical: 14, alignItems: "center", opacity: !editFolderName.trim() ? 0.5 : 1 }}
-              disabled={!editFolderName.trim() || renameFolderMutation.isPending}
-              onPress={async () => {
-                if (!editFolderName.trim()) return;
-                if (!editingFolderId) {
-                  Alert.alert("Error", "This folder can't be renamed (missing folder reference). Please reopen the folder and try again.");
-                  return;
-                }
-                try {
-                  await renameFolderMutation.mutateAsync({ folderId: editingFolderId, name: editFolderName.trim() });
-                  setEditFolderModal(false);
-                  setEditFolderName("");
-                  setEditingFolderId(null);
-                } catch {
-                  // error surfaced by mutation onError; keep modal open for retry
-                }
-              }}
-            >
-              {renameFolderMutation.isPending
-                ? <ActivityIndicator color="#fff" />
-                : <Text style={{ fontSize: 15, fontFamily: "Inter_600SemiBold", color: "#fff" }}>Save Changes</Text>
-              }
-            </Pressable>
-          </View>
-        </Pressable>
       </Modal>
 
       {/* Student Action Sheet */}
@@ -3133,6 +3117,14 @@ export default function AdminCourseScreen() {
                             </Pressable>
                           </>
                         )}
+                        {(lecture.video_type === "r2" || inferLectureVideoType(lecture.video_url || "") === "r2") && !!lecture.video_url && (
+                          <Pressable
+                            style={[styles.deleteItemBtn, { backgroundColor: "#ECFDF5", marginRight: 4 }]}
+                            onPress={() => void downloadAdminContent("lecture", lecture.id, `${lecture.title}.mp4`)}
+                          >
+                            <Ionicons name="download-outline" size={14} color="#059669" />
+                          </Pressable>
+                        )}
                         <Pressable
                           style={[styles.deleteItemBtn, { backgroundColor: "#EEF2FF", marginRight: 4 }]}
                           onPress={() => {
@@ -3546,8 +3538,11 @@ export default function AdminCourseScreen() {
                 <Pressable
                   style={{ flexDirection: "row", alignItems: "center", gap: 12, padding: 16, borderRadius: 12, backgroundColor: "#EEF2FF", marginBottom: 8 }}
                   onPress={() => {
-                    setEditFolderName(folderActionSheet?.name || "");
-                    setEditingFolderId(folderActionSheet?.id ?? null);
+                    const folder = folderActionSheet;
+                    if (!folder) return;
+                    const resolved = folder.id ?? findFolderByPath(folder.name, folder.type)?.id ?? null;
+                    setEditFolderName(folder.name || "");
+                    setEditingFolderId(resolved);
                     setEditFolderModal(true);
                     setFolderActionSheet(null);
                   }}
@@ -4124,6 +4119,60 @@ export default function AdminCourseScreen() {
         bottomPadding={bottomPadding}
         modalStyle={Platform.OS === "web" ? { zIndex: 100004 } : undefined}
       />
+
+      {/* Edit Folder Modal — after folder detail so rename form stacks on top */}
+      <Modal visible={editFolderModal} animationType="slide" transparent style={Platform.OS === "web" ? { zIndex: 100005 } : undefined}>
+        <Pressable style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end" }} onPress={() => setEditFolderModal(false)}>
+          <View style={{ backgroundColor: "#fff", borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, paddingBottom: bottomPadding + 20, gap: 16 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+              <Text style={{ fontSize: 18, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Edit Folder</Text>
+              <Pressable onPress={() => setEditFolderModal(false)}>
+                <Ionicons name="close" size={24} color={Colors.light.text} />
+              </Pressable>
+            </View>
+            <Text style={{ fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.textMuted }}>Folder Name</Text>
+            <TextInput
+              style={{ backgroundColor: Colors.light.background, borderRadius: 12, borderWidth: 1, borderColor: Colors.light.border, paddingHorizontal: 14, paddingVertical: 12, fontSize: 16, fontFamily: "Inter_400Regular", color: Colors.light.text }}
+              value={editFolderName}
+              onChangeText={setEditFolderName}
+              placeholder="Enter folder name"
+              placeholderTextColor={Colors.light.textMuted}
+              autoFocus
+            />
+            <Pressable
+              style={{ backgroundColor: Colors.light.primary, borderRadius: 12, paddingVertical: 14, alignItems: "center", opacity: !editFolderName.trim() ? 0.5 : 1 }}
+              disabled={!editFolderName.trim() || renameFolderMutation.isPending}
+              onPress={async () => {
+                if (!editFolderName.trim()) return;
+                let folderId = editingFolderId;
+                if (!folderId && folderActionSheet) {
+                  folderId = folderActionSheet.id ?? findFolderByPath(folderActionSheet.name, folderActionSheet.type)?.id ?? null;
+                }
+                if (!folderId && openAdminFolder) {
+                  folderId = openAdminFolder.id ?? findFolderByPath(openAdminFolder.name, openAdminFolder.type)?.id ?? null;
+                }
+                if (!folderId) {
+                  Alert.alert("Error", "This folder can't be renamed (missing folder reference). Please reopen the folder and try again.");
+                  return;
+                }
+                try {
+                  await renameFolderMutation.mutateAsync({ folderId, name: editFolderName.trim() });
+                  setEditFolderModal(false);
+                  setEditFolderName("");
+                  setEditingFolderId(null);
+                } catch {
+                  // error surfaced by mutation onError
+                }
+              }}
+            >
+              {renameFolderMutation.isPending
+                ? <ActivityIndicator color="#fff" />
+                : <Text style={{ fontSize: 15, fontFamily: "Inter_600SemiBold", color: "#fff" }}>Save Changes</Text>
+              }
+            </Pressable>
+          </View>
+        </Pressable>
+      </Modal>
 
     </View>
   );

@@ -239,6 +239,31 @@ export function registerAdminQuestionBulkRoutes({
     }
   });
 
+  /** Parse PDF only (no testId) — used for daily mission bulk upload. */
+  app.post("/api/admin/questions/parse-pdf", requireAdmin, upload.single("pdf"), async (req: Request, res: Response) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ message: "PDF file is required" });
+      }
+      if (!/application\/pdf/i.test(String(req.file.mimetype || ""))) {
+        return res.status(400).json({ message: "Only PDF files are allowed" });
+      }
+      const parser = new PDFParse({ data: req.file.buffer });
+      const result = await parser.getText();
+      const parsed = parseQuestionsFromText(result.text);
+      if (parsed.length === 0) {
+        return res.status(400).json({
+          message: "No questions could be parsed from this PDF",
+          data: { rawTextPreview: result.text.substring(0, 500) },
+        });
+      }
+      res.json({ success: true, count: parsed.length, questions: parsed });
+    } catch (err: any) {
+      console.error("[parse-pdf] error:", err);
+      res.status(500).json({ message: `Failed to parse PDF: ${err?.message || "unknown error"}` });
+    }
+  });
+
   app.post("/api/admin/questions/bulk-save", requireAdmin, async (req: Request, res: Response) => {
     try {
       const { testId, questions, defaultMarks, defaultNegativeMarks } = req.body;

@@ -1,20 +1,21 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Alert } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
+import { useFocusEffect } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useQuery } from "@tanstack/react-query";
-import { authFetch, getApiUrl } from "@/lib/query-client";
+import { authFetch, getApiUrl, apiRequest } from "@/lib/query-client";
 import { myAttemptsSummaryQueryKey } from "@/lib/query-keys";
 import { DownloadButton } from "@/components/DownloadButton";
 import { useAuth } from "@/context/AuthContext";
 import Colors from "@/constants/colors";
 import { useAppTheme } from "@/context/AppThemeContext";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useCoursePurchase } from "@/lib/use-course-purchase";
 import { SUBJECT_LABELS, getSubjectMeta } from "@/constants/multiSubjects";
-// Order mirrors the admin course view tabs after selecting a subject:
-// Live -> Lectures -> Tests -> PYQs -> Mock -> Materials.
-const SECTIONS = ["Live", "Lecture", "Test", "PYQs", "Mock", "Study Material"] as const;
+// Live -> Lectures -> Tests -> PYQs -> Mock -> Missions -> Materials.
+const SECTIONS = ["Live", "Lecture", "Test", "PYQs", "Mock", "Missions", "Study Material"] as const;
 
 // Per-section accent colors mirror the normal course screen (lectures blue, materials red,
 // tests green, pyq amber, mock red, live red).
@@ -25,6 +26,7 @@ const SECTION_COLORS: Record<(typeof SECTIONS)[number], string> = {
   Test: "#059669",
   PYQs: "#F59E0B",
   Mock: "#DC2626",
+  Missions: "#0F766E",
 };
 
 const EMPTY_SECTION_COPY: Record<
@@ -40,6 +42,7 @@ const EMPTY_SECTION_COPY: Record<
   Test: { icon: "document-text-outline", title: "No tests added yet" },
   PYQs: { icon: "school-outline", title: "No PYQs added yet" },
   Mock: { icon: "clipboard-outline", title: "No mock tests added yet" },
+  Missions: { icon: "flag-outline", title: "No daily missions for this course yet" },
   "Study Material": { icon: "folder-outline", title: "No study material added yet" },
 };
 
@@ -57,10 +60,44 @@ export default function MultiCourseSubjectScreen() {
   const [section, setSection] = useState<(typeof SECTIONS)[number]>("Lecture");
   const subjectKey = String(subject || "").toLowerCase();
   const sectionColor = SECTION_COLORS[section];
-  const { data: course, isLoading } = useQuery({
-    queryKey: ["/api/courses", String(id)],
+  const { data: course, isLoading, refetch } = useQuery({
+    queryKey: ["/api/courses", String(id), String(user?.id ?? "guest")],
     queryFn: () => fetchCourse(String(id)),
     enabled: !!id,
+    staleTime: 0,
+  });
+  const courseIdNum = Number(id);
+  const isFreeCourse = !!(course && (course.is_free || parseFloat(String(course.price || "0")) <= 0));
+  const { purchase, paymentModal } = useCoursePurchase({
+    courseId: courseIdNum,
+    courseTitle: course?.title,
+    isFree: isFreeCourse,
+    price: course?.price,
+  });
+
+  useEffect(() => {
+    if (!user?.id || !Number.isFinite(courseIdNum) || courseIdNum <= 0) return;
+    apiRequest("POST", "/api/payments/sync-enrollment", { courseId: courseIdNum })
+      .then(() => refetch())
+      .catch(() => {});
+  }, [user?.id, courseIdNum, refetch]);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      void refetch();
+    }, [refetch]),
+  );
+
+  const { data: courseMissions = [] } = useQuery<any[]>({
+    queryKey: ["/api/daily-missions", "course", String(id)],
+    queryFn: async () => {
+      const res = await authFetch(new URL("/api/daily-missions?type=all", getApiUrl()).toString());
+      if (!res.ok) return [];
+      const rows = await res.json();
+      if (!Array.isArray(rows)) return [];
+      return rows.filter((m: any) => Number(m.course_id) === courseIdNum);
+    },
+    enabled: !!id && !!user?.id,
     staleTime: 0,
   });
   const { data: courseFolders = [] } = useQuery<any[]>({
@@ -120,10 +157,22 @@ export default function MultiCourseSubjectScreen() {
   const locked = !isAdmin && !course?.isEnrolled;
   const requireAccess = () => {
     if (!locked) return true;
-    Alert.alert(course?.is_free ? "Enroll Required" : "Purchase Required", "Please enroll or buy this course to access this content.", [
-      { text: "Cancel", style: "cancel" },
-      { text: course?.is_free ? "Enroll Free" : "Buy Now", onPress: () => router.push(`/course/${id}` as any) },
-    ]);
+    Alert.alert(
+      course?.is_free ? "Enroll Required" : "Purchase Required",
+      course?.is_free
+        ? "Please enroll in this course to access this content."
+        : "Please purchase this course to access this content.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: course?.is_free ? "Enroll Free" : "Buy Now",
+          onPress: () => {
+            if (course?.is_free) purchase();
+            else router.push(`/course-about/${id}` as any);
+          },
+        },
+      ],
+    );
     return false;
   };
 
@@ -140,6 +189,7 @@ export default function MultiCourseSubjectScreen() {
     section === "Live" ? liveRowsForTab :
     section === "Lecture" ? subjectContent.lectures :
     section === "Study Material" ? subjectContent.materials :
+    section === "Missions" ? courseMissions :
     section === "PYQs" ? subjectContent.pyqs :
     section === "Mock" ? subjectContent.mocks :
     subjectContent.tests;
@@ -169,7 +219,7 @@ export default function MultiCourseSubjectScreen() {
   };
   const visibleRootFolders = rootFolders.filter((folder: any) => folderItemCount(folder) > 0);
 
-  const noun = section === "Lecture" ? "videos" : section === "Study Material" ? "files" : section === "Live" ? "classes" : "tests";
+  const noun = section === "Lecture" ? "videos" : section === "Study Material" ? "files" : section === "Live" ? "classes" : section === "Missions" ? "missions" : "tests";
 
   const renderFolder = (folder: any) => {
     const name = folderFullName(folder);
@@ -178,7 +228,10 @@ export default function MultiCourseSubjectScreen() {
       <Pressable
         key={`folder-${folder.id || name}`}
         style={[styles.sectionCard, { backgroundColor: colors.card, shadowColor: colors.shadow, borderLeftColor: sectionColor }]}
-        onPress={() => router.push({ pathname: "/course-folder/[id]/[type]/[name]", params: { id: String(id), type: routeType, name: encodeURIComponent(name), subjectKey, testType: routeTestType } } as any)}
+        onPress={() => {
+          if (!requireAccess()) return;
+          router.push({ pathname: "/course-folder/[id]/[type]/[name]", params: { id: String(id), type: routeType, name: encodeURIComponent(name), subjectKey, testType: routeTestType } } as any);
+        }}
       >
         <View style={[styles.sectionIconWrap, { backgroundColor: sectionColor + "18" }]}>
           <Ionicons name="folder" size={22} color={sectionColor} />
@@ -225,6 +278,31 @@ export default function MultiCourseSubjectScreen() {
 
   const renderRow = (item: any) => {
     if (section === "Live") return renderLiveRow(item);
+    if (section === "Missions") {
+      return (
+        <View key={`mission-${item.id}`} style={[styles.itemCard, { backgroundColor: colors.card, borderBottomColor: colors.border }, locked && { opacity: 0.6 }]}>
+          <Pressable
+            style={{ flex: 1, flexDirection: "row", alignItems: "center" }}
+            onPress={() => {
+              if (!requireAccess()) return;
+              router.push(`/(tabs)/daily-mission` as any);
+            }}
+          >
+            <View style={[styles.itemColorBar, { backgroundColor: sectionColor }]} />
+            <View style={[styles.itemIcon, { backgroundColor: colors.surfaceAlt }]}>
+              <Ionicons name="flag" size={22} color={sectionColor} />
+            </View>
+            <View style={styles.itemInfo}>
+              <Text style={[styles.itemTitle, { color: colors.text }]} numberOfLines={2}>{item.title}</Text>
+              <Text style={[styles.itemMeta, { color: colors.textMuted }]}>
+                {Array.isArray(item.questions) ? item.questions.length : 0} questions · {item.xp_reward || 50} XP
+              </Text>
+            </View>
+            {locked ? <Ionicons name="lock-closed" size={18} color={colors.textMuted} /> : <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />}
+          </Pressable>
+        </View>
+      );
+    }
     const isLecture = section === "Lecture";
     const isMaterial = section === "Study Material";
     const attempt = !isLecture && !isMaterial ? attemptSummary[item.id] : null;
@@ -307,7 +385,7 @@ export default function MultiCourseSubjectScreen() {
       </ScrollView>
 
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 16, gap: 12, paddingBottom: insets.bottom + 24 }}>
-        {section !== "Live" ? visibleRootFolders.map(renderFolder) : null}
+        {section !== "Live" && section !== "Missions" ? visibleRootFolders.map(renderFolder) : null}
         {rows.length > 0 ? rows.map(renderRow) : showEmptyState ? (
           <View style={styles.emptyState}>
             <Ionicons name={emptyCopy.icon} size={40} color={colors.textMuted} />
@@ -318,6 +396,7 @@ export default function MultiCourseSubjectScreen() {
           </View>
         ) : null}
       </ScrollView>
+      {paymentModal}
     </View>
   );
 }

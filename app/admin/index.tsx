@@ -19,6 +19,7 @@ import { useAppTheme } from "@/context/AppThemeContext";
 import { fetch } from "expo/fetch";
 import { MULTI_SUBJECTS, SubjectIcon } from "@/constants/multiSubjects";
 import BulkUploadModal from "@/components/BulkUploadModal";
+import { parseMissionQuestionsPdf } from "@/lib/mission-bulk-parse";
 import SortableList from "@/components/admin/SortableList";
 import SortableItem from "@/components/admin/SortableItem";
 import { buildRecordingLectureSectionTitle, prefillLiveRecordingFormFields } from "@shared/recordingSection";
@@ -350,6 +351,9 @@ export default function AdminDashboard() {
   const [missionCourseId, setMissionCourseId] = useState<number | null>(null);
   const [showMissionBulkUpload, setShowMissionBulkUpload] = useState(false);
   const [missionBulkText, setMissionBulkText] = useState("");
+  const [missionBulkMode, setMissionBulkMode] = useState<"text" | "pdf">("text");
+  const [missionPdfLoading, setMissionPdfLoading] = useState(false);
+  const [missionBulkError, setMissionBulkError] = useState<string | null>(null);
   // Mission leaderboard
   const [selectedMission, setSelectedMission] = useState<any | null>(null);
   const [missionAttempts, setMissionAttempts] = useState<any[]>([]);
@@ -1094,11 +1098,22 @@ export default function AdminDashboard() {
     mutationFn: async ({ id, name, validityMonths }: { id: number; name: string; validityMonths?: string }) => {
       await apiRequest("PUT", `/api/admin/standalone-folders/${id}`, { name, validityMonths });
     },
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       refetchTestFolders(); refetchMaterialFolders(); refetchMissionFolders();
       qc.invalidateQueries({ queryKey: ["/api/admin/tests"] });
       qc.invalidateQueries({ queryKey: ["/api/study-materials"] });
       qc.invalidateQueries({ queryKey: ["/api/admin/daily-missions"] });
+      setOpenFolderView((prev) => {
+        if (!prev || Number(prev.folder?.id) !== Number(variables.id)) return prev;
+        return {
+          ...prev,
+          folder: {
+            ...prev.folder,
+            name: variables.name,
+            full_name: variables.name,
+          },
+        };
+      });
       setEditStandaloneFolderModal(false);
     },
   });
@@ -2091,7 +2106,7 @@ export default function AdminDashboard() {
                       <Text style={styles.adminCardMetaText}>|</Text>
                       <Text style={styles.adminCardMetaText}>{course.is_free ? "FREE" : `₹${parseFloat(course.price).toFixed(0)}`}</Text>
                     </View>
-                    {(course.course_type || "live") === "live" && (course.start_date || course.end_date) && (
+                    {((course.course_type || "live") === "live" || course.course_type === "multi_subject") && (course.start_date || course.end_date) && (
                       <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 2 }}>
                         <Ionicons name="calendar-outline" size={12} color={Colors.light.textMuted} />
                         <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: Colors.light.textMuted }}>
@@ -6434,7 +6449,7 @@ export default function AdminDashboard() {
       </Modal>
 
       {/* Rename Folder Modal */}
-      <Modal visible={editStandaloneFolderModal} animationType="slide" transparent>
+      <Modal visible={editStandaloneFolderModal} animationType="slide" transparent style={Platform.OS === "web" ? { zIndex: 100010 } : undefined}>
         <View style={styles.modalOverlay}>
           <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16, maxHeight: 300 }]}>
             <View style={styles.modalHeader}>
@@ -6812,10 +6827,22 @@ export default function AdminDashboard() {
           <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Bulk Upload Questions</Text>
-              <Pressable onPress={() => setShowMissionBulkUpload(false)}>
+              <Pressable onPress={() => { setShowMissionBulkUpload(false); setMissionBulkError(null); setMissionBulkMode("text"); }}>
                 <Ionicons name="close" size={24} color={Colors.light.text} />
               </Pressable>
             </View>
+            <View style={{ flexDirection: "row", gap: 8, paddingHorizontal: 16, marginBottom: 8 }}>
+              {(["text", "pdf"] as const).map((mode) => (
+                <Pressable
+                  key={mode}
+                  onPress={() => { setMissionBulkMode(mode); setMissionBulkError(null); }}
+                  style={{ flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: "center", backgroundColor: missionBulkMode === mode ? Colors.light.primary : "#F3F4F6" }}
+                >
+                  <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: missionBulkMode === mode ? "#fff" : Colors.light.text, textTransform: "uppercase" }}>{mode}</Text>
+                </Pressable>
+              ))}
+            </View>
+            {missionBulkMode === "text" ? (
             <ScrollView style={styles.modalScroll}>
               <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", marginBottom: 8 }}>
                 Paste questions in format:{"\n"}Q1. Question text{"\n"}A) Option A{"\n"}B) Option B{"\n"}C) Option C{"\n"}D) Option D{"\n"}Answer: A
@@ -6829,6 +6856,61 @@ export default function AdminDashboard() {
                 multiline
               />
             </ScrollView>
+            ) : (
+            <View style={{ paddingHorizontal: 16, paddingBottom: 8 }}>
+              <Text style={{ fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", marginBottom: 12 }}>
+                Upload a PDF with numbered questions and A/B/C/D options (same format as test bulk upload).
+              </Text>
+              {missionBulkError ? (
+                <Text style={{ fontSize: 12, color: "#EF4444", marginBottom: 8, fontFamily: "Inter_500Medium" }}>{missionBulkError}</Text>
+              ) : null}
+              <Pressable
+                style={[styles.addQBtn, { backgroundColor: "#FFF3E0", justifyContent: "center", paddingVertical: 24 }]}
+                disabled={missionPdfLoading}
+                onPress={async () => {
+                  setMissionBulkError(null);
+                  const handleFile = async (file: any) => {
+                    setMissionPdfLoading(true);
+                    try {
+                      const parsed = await parseMissionQuestionsPdf(file);
+                      setMissionQuestions((prev) => [...prev, ...parsed]);
+                      setShowMissionBulkUpload(false);
+                      setMissionBulkMode("text");
+                      Alert.alert("Success", `${parsed.length} question(s) added.`);
+                    } catch (err: any) {
+                      const msg = err?.message || "Failed to parse PDF";
+                      setMissionBulkError(msg);
+                      Alert.alert("PDF Parse Error", msg);
+                    } finally {
+                      setMissionPdfLoading(false);
+                    }
+                  };
+                  if (Platform.OS === "web") {
+                    const input = document.createElement("input");
+                    input.type = "file";
+                    input.accept = ".pdf";
+                    input.onchange = (e: any) => {
+                      const file = e.target?.files?.[0];
+                      if (file) void handleFile(file);
+                    };
+                    input.click();
+                  } else {
+                    try {
+                      const DocumentPicker = await import("expo-document-picker");
+                      const result = await DocumentPicker.getDocumentAsync({ type: "application/pdf" });
+                      if (!result.canceled && result.assets?.[0]) void handleFile(result.assets[0]);
+                    } catch {
+                      Alert.alert("Error", "Could not open file picker");
+                    }
+                  }
+                }}
+              >
+                {missionPdfLoading ? <ActivityIndicator color="#FF6B35" /> : <Ionicons name="cloud-upload-outline" size={28} color="#FF6B35" />}
+                <Text style={{ fontSize: 14, fontFamily: "Inter_600SemiBold", color: "#FF6B35" }}>{missionPdfLoading ? "Parsing PDF..." : "Select PDF"}</Text>
+              </Pressable>
+            </View>
+            )}
+            {missionBulkMode === "text" && (
             <Pressable
               style={[styles.createBtn, !missionBulkText.trim() && styles.createBtnDisabled]}
               disabled={!missionBulkText.trim()}
@@ -6872,6 +6954,7 @@ export default function AdminDashboard() {
                 <Text style={styles.createBtnText}>Parse & Add Questions</Text>
               </LinearGradient>
             </Pressable>
+            )}
           </View>
         </View>
       </Modal>

@@ -130,11 +130,12 @@ export default function BulkUploadModal({ visible, testId, onClose, onSaved, bot
       if (Platform.OS === "web") {
         formData.append("pdf", file);
       } else {
-        const FileSystem = await import("expo-file-system");
-        const base64 = await FileSystem.readAsStringAsync(file.uri, { encoding: "base64" as any });
-        const byteArray = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
-        const blob = new Blob([byteArray], { type: "application/pdf" });
-        formData.append("pdf", blob, file.name || "questions.pdf");
+        const name = file.name || "questions.pdf";
+        formData.append("pdf", {
+          uri: file.uri,
+          name,
+          type: "application/pdf",
+        } as any);
       }
       const { headers } = await prepareAuthorizedFetchHeaders();
       // Use globalThis.fetch — do NOT set Content-Type (browser sets multipart boundary)

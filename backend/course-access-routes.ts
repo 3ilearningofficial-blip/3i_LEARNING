@@ -332,7 +332,7 @@ export function registerCourseAccessRoutes({
              FROM courses c
              LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM tests WHERE is_published = TRUE GROUP BY 1) t_agg ON t_agg.course_id = c.id
              LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM study_materials GROUP BY 1) m_agg ON m_agg.course_id = c.id
-             LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM daily_missions GROUP BY 1) dm_agg ON dm_agg.course_id = c.id
+             LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM daily_missions WHERE course_id IS NOT NULL GROUP BY 1) dm_agg ON dm_agg.course_id = c.id
              WHERE 1=1`
           : `SELECT c.*,
                COALESCE(t_agg.cnt, 0) AS total_tests,
@@ -341,7 +341,7 @@ export function registerCourseAccessRoutes({
              FROM courses c
              LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM tests WHERE is_published = TRUE GROUP BY 1) t_agg ON t_agg.course_id = c.id
              LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM study_materials GROUP BY 1) m_agg ON m_agg.course_id = c.id
-             LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM daily_missions GROUP BY 1) dm_agg ON dm_agg.course_id = c.id
+             LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM daily_missions WHERE course_id IS NOT NULL GROUP BY 1) dm_agg ON dm_agg.course_id = c.id
              WHERE c.is_published = TRUE`;
       const params: unknown[] = [];
 
@@ -460,7 +460,7 @@ export function registerCourseAccessRoutes({
             ),
         db.query("SELECT * FROM tests WHERE course_id = $1 AND is_published = TRUE ORDER BY COALESCE(order_index, 0) ASC, created_at ASC, id ASC", [courseIdParam]),
         db.query("SELECT * FROM study_materials WHERE course_id = $1 ORDER BY COALESCE(order_index, 0) ASC, created_at ASC, id ASC", [courseIdParam]),
-        db.query("SELECT COUNT(*)::int AS cnt FROM daily_missions WHERE course_id = $1", [courseIdParam]),
+        db.query("SELECT COUNT(*)::int AS cnt FROM daily_missions WHERE course_id = $1 AND course_id IS NOT NULL", [courseIdParam]),
       ]);
       const fullLectures = lecturesResult.rows;
       const fullMaterials = materialsResult.rows;

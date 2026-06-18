@@ -10,6 +10,7 @@ type RegisterStudentMissionMaterialRoutesDeps = {
   app: Express;
   db: DbClient;
   getAuthUser: (req: Request) => Promise<any>;
+  updateCourseProgress?: (userId: number, courseId: number | string) => Promise<void>;
 };
 
 const STANDALONE_FOLDER_SELECT = `
@@ -35,6 +36,7 @@ export function registerStudentMissionMaterialRoutes({
   app,
   db,
   getAuthUser,
+  updateCourseProgress,
 }: RegisterStudentMissionMaterialRoutesDeps): void {
   const canAccessStandaloneMaterial = async (user: any | null, material: any): Promise<boolean> => {
     if (material?.is_free) return true;
@@ -276,6 +278,10 @@ export function registerStudentMissionMaterialRoutes({
          ON CONFLICT (user_id, mission_id) DO UPDATE SET is_completed = TRUE, score = $3, completed_at = $4, time_taken = $5, answers = $6, incorrect = $7, skipped = $8`,
         [user.id, req.params.id, score, Date.now(), timeTaken || 0, JSON.stringify(answers || {}), incorrect || 0, skipped || 0]
       );
+      const courseId = mission.course_id != null ? Number(mission.course_id) : NaN;
+      if (updateCourseProgress && Number.isFinite(courseId) && courseId > 0) {
+        await updateCourseProgress(user.id, courseId).catch(() => {});
+      }
       res.json({ success: true });
     } catch (err) {
       console.error("[Mission Complete] Error:", err);

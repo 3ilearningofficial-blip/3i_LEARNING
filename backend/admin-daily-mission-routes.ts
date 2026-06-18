@@ -9,12 +9,25 @@ type RegisterAdminDailyMissionRoutesDeps = {
   app: Express;
   db: DbClient;
   requireAdmin: (req: Request, res: Response, next: () => void) => any;
+  recomputeAllEnrollmentsProgressForCourse?: (courseId: number | string) => Promise<void>;
 };
+
+async function recomputeMissionCourseProgress(
+  db: DbClient,
+  recompute: RegisterAdminDailyMissionRoutesDeps["recomputeAllEnrollmentsProgressForCourse"],
+  courseId: unknown
+): Promise<void> {
+  if (!recompute) return;
+  const cid = courseId != null && courseId !== "" ? Number(courseId) : NaN;
+  if (!Number.isFinite(cid) || cid <= 0) return;
+  await recompute(cid).catch(() => {});
+}
 
 export function registerAdminDailyMissionRoutes({
   app,
   db,
   requireAdmin,
+  recomputeAllEnrollmentsProgressForCourse,
 }: RegisterAdminDailyMissionRoutesDeps): void {
   app.post("/api/admin/daily-missions", requireAdmin, async (req: Request, res: Response) => {
     try {
@@ -60,6 +73,7 @@ export function registerAdminDailyMissionRoutes({
           console.error("Course mission notify:", e);
         }
       }
+      await recomputeMissionCourseProgress(db, recomputeAllEnrollmentsProgressForCourse, courseId);
       res.json(row);
     } catch (err) {
       console.error(err);
@@ -75,6 +89,7 @@ export function registerAdminDailyMissionRoutes({
         `UPDATE daily_missions SET title=$1, description=$2, questions=$3, mission_date=$4, xp_reward=$5, mission_type=$6, course_id=$7, folder_name=$8 WHERE id=$9`,
         [title, description || "", JSON.stringify(questions), missionDate, xpReward || 50, missionType, courseId || null, folderNameNorm, req.params.id]
       );
+      await recomputeMissionCourseProgress(db, recomputeAllEnrollmentsProgressForCourse, courseId);
       res.json({ success: true });
     } catch {
       res.status(500).json({ message: "Failed to update mission" });
@@ -83,7 +98,9 @@ export function registerAdminDailyMissionRoutes({
 
   app.delete("/api/admin/daily-missions/:id", requireAdmin, async (req: Request, res: Response) => {
     try {
+      const prev = await db.query("SELECT course_id FROM daily_missions WHERE id = $1 LIMIT 1", [req.params.id]);
       await db.query("DELETE FROM daily_missions WHERE id = $1", [req.params.id]);
+      await recomputeMissionCourseProgress(db, recomputeAllEnrollmentsProgressForCourse, prev.rows[0]?.course_id);
       res.json({ success: true });
     } catch {
       res.status(500).json({ message: "Failed to delete mission" });
