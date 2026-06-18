@@ -42,6 +42,8 @@ type Course = {
   total_lectures?: number;
   total_tests?: number;
   total_materials?: number;
+  practice_count?: number;
+  pyq_count?: number;
   mock_count?: number;
   daily_mission_count?: number;
 };

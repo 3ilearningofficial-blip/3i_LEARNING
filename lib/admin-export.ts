@@ -1,7 +1,15 @@
-import { Platform, Alert } from "react-native";
+import { Platform, Alert, Share } from "react-native";
 import * as FileSystem from "expo-file-system";
-import * as Sharing from "expo-sharing";
 import { getApiUrl, prepareAuthorizedFetchHeaders } from "@/lib/query-client";
+
+const legacyFs = FileSystem as typeof FileSystem & {
+  cacheDirectory?: string | null;
+  downloadAsync?: (
+    uri: string,
+    fileUri: string,
+    options?: { headers?: Record<string, string> },
+  ) => Promise<{ status: number; uri: string }>;
+};
 
 export type AdminExportKind = "test" | "material" | "lecture";
 
@@ -40,14 +48,18 @@ export async function downloadAdminContent(
       return;
     }
 
-    const dest = `${FileSystem.cacheDirectory}admin-export-${kind}-${id}-${Date.now()}`;
-    const download = await FileSystem.downloadAsync(url, dest, { headers });
+    const cacheDir = legacyFs.cacheDirectory;
+    if (!cacheDir || !legacyFs.downloadAsync) {
+      throw new Error("File download is not available on this device");
+    }
+    const dest = `${cacheDir}admin-export-${kind}-${id}-${Date.now()}`;
+    const download = await legacyFs.downloadAsync(url, dest, { headers });
     if (download.status < 200 || download.status >= 300) {
       throw new Error(`Download failed (${download.status})`);
     }
-    if (await Sharing.isAvailableAsync()) {
-      await Sharing.shareAsync(download.uri);
-    } else {
+    try {
+      await Share.share({ url: download.uri, title: suggestedFilename || `export-${kind}-${id}` });
+    } catch {
       Alert.alert("Downloaded", `Saved to ${download.uri}`);
     }
   } catch (err: any) {
