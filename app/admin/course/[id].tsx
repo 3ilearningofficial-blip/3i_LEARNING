@@ -612,7 +612,12 @@ export default function AdminCourseScreen() {
     return String(folder?.subject_key || "").toLowerCase() === activeSubjectKey;
   });
   const folderFullName = (folder: any): string => String(folder?.full_name || folder?.name || "").trim();
-  const folderLocalName = (folder: any): string => String(folder?.name || folder?.full_name || "").trim();
+  const folderLocalName = (folder: any): string => {
+    if (folder?.name) return String(folder.name).trim();
+    const full = folderFullName(folder);
+    if (full.includes(" / ")) return full.split(" / ").pop()!.trim();
+    return full;
+  };
   const testMatchesFolder = (test: { folder_name?: string | null }, folderName: string) => {
     const fn = String(test.folder_name || "");
     return fn === folderName || fn.startsWith(`${folderName} /`);
@@ -731,14 +736,19 @@ export default function AdminCourseScreen() {
       await apiRequest("PUT", `/api/admin/courses/${id}/folders/${folderId}`, { name });
     },
     onSuccess: (_data, variables) => {
+      const renamedFullPath = (prevFullName: string, localName: string) => {
+        if (prevFullName.includes(" / ")) {
+          return `${prevFullName.slice(0, prevFullName.lastIndexOf(" / "))} / ${localName}`;
+        }
+        return localName;
+      };
+      setOpenAdminFolder((prev) => {
+        if (!prev || Number(prev.id) !== Number(variables.folderId)) return prev;
+        return { ...prev, name: renamedFullPath(prev.name, variables.name) };
+      });
       refetchFolders();
       qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] });
       qc.invalidateQueries({ queryKey: ["/api/admin/courses", id, "folders"] });
-      setOpenAdminFolder((prev) => {
-        if (!prev || Number(prev.id) !== Number(variables.folderId)) return prev;
-        const f = findFolderById(variables.folderId);
-        return { ...prev, name: f ? folderFullName(f) : variables.name };
-      });
     },
     onError: (err: any) => {
       const msg = String(err?.message || "").replace(/^\d+:\s*/, "") || "Failed to rename folder";
@@ -1241,8 +1251,8 @@ export default function AdminCourseScreen() {
         startDate: data.startDate || null,
         endDate: data.endDate || null,
         validityMonths: data.validityMonths || null,
-        thumbnail: isMultiSubjectCourse ? data.thumbnail || null : undefined,
-        courseLanguage: isMultiSubjectCourse ? data.courseLanguage || null : undefined,
+        thumbnail: data.thumbnail || null,
+        courseLanguage: data.courseLanguage || null,
         batchStatus: isMultiSubjectCourse ? data.batchStatus || null : undefined,
       });
     },
@@ -2245,8 +2255,8 @@ export default function AdminCourseScreen() {
               onPress={() => {
                 const folder = folderActionSheet;
                 if (!folder) return;
-                const resolved = folder.id ?? findFolderByPath(folder.name, folder.type)?.id ?? null;
-                setEditFolderName(folder.name || "");
+                const resolved = folder.id ?? findFolderByPath(folderFullName(folder) || folder.name, folder.type)?.id ?? null;
+                setEditFolderName(folderLocalName(folder));
                 setEditingFolderId(resolved);
                 setEditFolderModal(true);
                 setFolderActionSheet(null);
@@ -2756,13 +2766,27 @@ export default function AdminCourseScreen() {
             </View>
             <ScrollView style={{ maxHeight: 480 }} showsVerticalScrollIndicator={false}>
               <FormField label="Course Title *" placeholder="e.g., NDA Mathematics" value={editForm.title} onChangeText={(v) => setEditForm(p => ({ ...p, title: v }))} />
-              {!isMultiSubjectCourse && (
-                <FormField label="Description" placeholder="Course description" value={editForm.description} onChangeText={(v) => setEditForm(p => ({ ...p, description: v }))} multiline />
-              )}
               <FormField label="Category *" placeholder="e.g., NDA, CDS, AFCAT" value={editForm.category} onChangeText={(v) => setEditForm(p => ({ ...p, category: v }))} />
               <FormField label="Subject" placeholder="e.g., Mathematics, English, GK" value={editForm.subject} onChangeText={(v) => setEditForm(p => ({ ...p, subject: v }))} />
               {!isMultiSubjectCourse && (
                 <FormField label="Teacher Name" placeholder="e.g., Pankaj Sir" value={editForm.teacherName} onChangeText={(v) => setEditForm(p => ({ ...p, teacherName: v }))} />
+              )}
+              {!isMultiSubjectCourse && (
+                <>
+                  <FormField label="Course Card Banner Image URL" placeholder="https://... (shown at top of home course card)" value={editForm.thumbnail} onChangeText={(v) => setEditForm(p => ({ ...p, thumbnail: v }))} />
+                  {editForm.thumbnail ? (
+                    <Image source={{ uri: editForm.thumbnail }} style={{ width: "100%", height: 120, borderRadius: 12, marginBottom: 8, backgroundColor: "#F8FAFC" }} resizeMode="cover" />
+                  ) : null}
+                  <Pressable
+                    style={{ borderWidth: 1.5, borderColor: Colors.light.primary, borderStyle: "dashed" as any, borderRadius: 10, paddingVertical: 11, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8, backgroundColor: "#EEF2FF", marginBottom: 10, opacity: uploading ? 0.6 : 1 }}
+                    disabled={uploading}
+                    onPress={() => pickFileAndUpload("images", "image/*", (url) => setEditForm((p) => ({ ...p, thumbnail: url })))}
+                  >
+                    {uploading ? <ActivityIndicator size="small" color={Colors.light.primary} /> : <Ionicons name="cloud-upload-outline" size={17} color={Colors.light.primary} />}
+                    <Text style={{ fontSize: 13, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>{uploading ? "Uploading..." : "Upload Banner to R2"}</Text>
+                  </Pressable>
+                  <FormField label="Language" placeholder="e.g., HINGLISH, Hindi, English" value={editForm.courseLanguage} onChangeText={(v) => setEditForm(p => ({ ...p, courseLanguage: v }))} />
+                </>
               )}
               {isMultiSubjectCourse && (
                 <>
@@ -2881,6 +2905,18 @@ export default function AdminCourseScreen() {
                   <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#fff" }}>Add Subfolder</Text>
                 </Pressable>
               )}
+              <Pressable
+                style={{ flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "rgba(255,255,255,0.12)", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7, borderWidth: 1, borderColor: "rgba(255,255,255,0.25)" }}
+                onPress={() => {
+                  if (!openAdminFolder) return;
+                  const current = findFolderByPath(openAdminFolder.name, openAdminFolder.type) || (openAdminFolder.id ? findFolderById(openAdminFolder.id) : null);
+                  setEditFolderName(folderLocalName(current || openAdminFolder));
+                  setEditingFolderId(current?.id ?? openAdminFolder.id ?? null);
+                  setEditFolderModal(true);
+                }}
+              >
+                <Ionicons name="pencil" size={16} color="#fff" />
+              </Pressable>
               <Pressable
                 style={{ flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "rgba(255,255,255,0.12)", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7, borderWidth: 1, borderColor: "rgba(255,255,255,0.25)" }}
                 onPress={async () => {
@@ -3540,8 +3576,8 @@ export default function AdminCourseScreen() {
                   onPress={() => {
                     const folder = folderActionSheet;
                     if (!folder) return;
-                    const resolved = folder.id ?? findFolderByPath(folder.name, folder.type)?.id ?? null;
-                    setEditFolderName(folder.name || "");
+                    const resolved = folder.id ?? findFolderByPath(folderFullName(folder) || folder.name, folder.type)?.id ?? null;
+                    setEditFolderName(folderLocalName(folder));
                     setEditingFolderId(resolved);
                     setEditFolderModal(true);
                     setFolderActionSheet(null);
@@ -4122,8 +4158,12 @@ export default function AdminCourseScreen() {
 
       {/* Edit Folder Modal — after folder detail so rename form stacks on top */}
       <Modal visible={editFolderModal} animationType="slide" transparent style={Platform.OS === "web" ? { zIndex: 100005 } : undefined}>
-        <Pressable style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end" }} onPress={() => setEditFolderModal(false)}>
-          <View style={{ backgroundColor: "#fff", borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, paddingBottom: bottomPadding + 20, gap: 16 }}>
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end", ...(Platform.OS === "web" ? { zIndex: 100005 } : {}) }}>
+          <Pressable style={{ flex: 1 }} onPress={() => setEditFolderModal(false)} />
+          <View
+            style={{ backgroundColor: "#fff", borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, paddingBottom: bottomPadding + 20, gap: 16 }}
+            onStartShouldSetResponder={() => true}
+          >
             <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
               <Text style={{ fontSize: 18, fontFamily: "Inter_700Bold", color: Colors.light.text }}>Edit Folder</Text>
               <Pressable onPress={() => setEditFolderModal(false)}>
@@ -4146,7 +4186,7 @@ export default function AdminCourseScreen() {
                 if (!editFolderName.trim()) return;
                 let folderId = editingFolderId;
                 if (!folderId && folderActionSheet) {
-                  folderId = folderActionSheet.id ?? findFolderByPath(folderActionSheet.name, folderActionSheet.type)?.id ?? null;
+                  folderId = folderActionSheet.id ?? findFolderByPath(folderFullName(folderActionSheet) || folderActionSheet.name, folderActionSheet.type)?.id ?? null;
                 }
                 if (!folderId && openAdminFolder) {
                   folderId = openAdminFolder.id ?? findFolderByPath(openAdminFolder.name, openAdminFolder.type)?.id ?? null;
@@ -4171,7 +4211,7 @@ export default function AdminCourseScreen() {
               }
             </Pressable>
           </View>
-        </Pressable>
+        </View>
       </Modal>
 
     </View>

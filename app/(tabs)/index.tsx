@@ -167,6 +167,14 @@ function CourseBanner({ course, height }: { course: Course; height?: number }) {
   );
 }
 
+function normalCourseStatusLabel(course: Course, now = Date.now()): string {
+  const phase = getMultiSubjectCardPhase(course, now);
+  if (phase === "upcoming") return "UPCOMING";
+  if (phase === "recorded") return "RECORDED";
+  if ((course.course_type || "live") === "recorded") return "RECORDED";
+  return "LIVE";
+}
+
 function getRegularTestCount(course: Course): number {
   const mock = Number(course.mock_count) || 0;
   const pyq = Number(course.pyq_count) || 0;
@@ -212,10 +220,6 @@ function NormalCourseCardStats({
   );
 }
 
-function EnrolledStatsGrid({ course, color, colors }: { course: Course; color: string; colors: { textSecondary: string; textMuted: string } }) {
-  return <NormalCourseCardStats course={course} color={color} colors={colors} />;
-}
-
 function CourseProgressBar({ progress, color, colors }: { progress: number; color: string; colors: { surfaceAlt: string; textMuted: string } }) {
   const pct = Math.max(0, Math.min(100, Number(progress) || 0));
   return (
@@ -246,8 +250,6 @@ function MultiSubjectCourseCard({ course, enrolled = false }: { course: Course; 
   const level = course.level || "Beginner";
   const status = multiStatusLabel(course);
   const scheduleText = getMultiSubjectScheduleText(course);
-  const contentCounts = getMultiSubjectContentCounts(course);
-  const progress = Math.max(0, Math.min(100, Number(course.progress) || 0));
   const bannerColors: [string, string] = course.thumbnail ? [cover, `${cover}CC`] : [getCourseAccentColor(course.id), `${getCourseAccentColor(course.id)}CC`];
 
   useEffect(() => {
@@ -279,17 +281,19 @@ function MultiSubjectCourseCard({ course, enrolled = false }: { course: Course; 
       </LinearGradient>
       <View style={styles.multiCourseBody}>
         <View style={styles.multiTopRow}>
-          <View style={styles.multiBadgeRow}>
+          <View style={[styles.multiBadgeRow, { flexShrink: 1 }]}>
             <Text style={styles.multiCategory}>{course.category || "Course"}</Text>
             <Text style={styles.multiLevel}>{level}</Text>
+          </View>
+          <View style={styles.multiTopRightGroup}>
             {enrolled ? (
               <View style={styles.multiEnrolledBadge}>
                 <Ionicons name="checkmark-circle" size={12} color="#22C55E" />
                 <Text style={styles.multiEnrolledBadgeText}>Enrolled</Text>
               </View>
             ) : null}
+            <View style={styles.multiLanguagePill}><Text style={styles.multiLanguageText}>{language}</Text></View>
           </View>
-          <View style={styles.multiLanguagePill}><Text style={styles.multiLanguageText}>{language}</Text></View>
         </View>
         <Text style={[styles.multiTitle, { color: colors.text }]} numberOfLines={2}>{course.title}</Text>
         <View style={styles.multiMetaRow}>
@@ -309,68 +313,161 @@ function MultiSubjectCourseCard({ course, enrolled = false }: { course: Course; 
           {scheduleText ? <Text style={[styles.multiMetaText, { color: colors.textSecondary }]}>| {scheduleText}</Text> : null}
         </View>
         <View style={styles.multiPriceRow}>
-          {enrolled ? (
-            <>
-              <View style={{ flex: 1, gap: 8 }}>
-                <View style={styles.multiEnrolledStats}>
-                  <View style={styles.multiEnrolledStat}>
-                    <Ionicons name="videocam" size={12} color="#DC2626" />
-                    <Text style={[styles.multiEnrolledStatText, { color: colors.textSecondary }]}>
-                      {contentCounts.lectures} Lectures
-                    </Text>
-                  </View>
-                  <View style={[styles.multiEnrolledStatDot, { backgroundColor: colors.textMuted }]} />
-                  <View style={styles.multiEnrolledStat}>
-                    <Ionicons name="document-text" size={12} color="#DC2626" />
-                    <Text style={[styles.multiEnrolledStatText, { color: colors.textSecondary }]}>
-                      {contentCounts.tests} Tests
-                    </Text>
-                  </View>
-                  <View style={[styles.multiEnrolledStatDot, { backgroundColor: colors.textMuted }]} />
-                  <View style={styles.multiEnrolledStat}>
-                    <Ionicons name="folder" size={12} color="#DC2626" />
-                    <Text style={[styles.multiEnrolledStatText, { color: colors.textSecondary }]}>
-                      {contentCounts.materials} Materials
-                    </Text>
-                  </View>
-                </View>
-                <CourseProgressBar progress={progress} color="#DC2626" colors={colors} />
-              </View>
-              <Pressable style={styles.multiArrowBtn} onPress={() => router.push(`/course-about/${course.id}` as any)}>
-                <Ionicons name="chevron-forward" size={18} color="#0F172A" />
-              </Pressable>
-            </>
+          {course.is_free || parseFloat(course.price || "0") <= 0 ? (
+            <Text style={styles.multiPrice}>Free</Text>
           ) : (
-            <>
-              {course.is_free || parseFloat(course.price || "0") <= 0 ? (
-                <Text style={styles.multiPrice}>Free</Text>
-              ) : (
-                <View style={{ flexDirection: "row", alignItems: "baseline", gap: 6 }}>
-                  <Text style={styles.multiPrice}>₹{parseFloat(course.price).toFixed(0)}</Text>
-                  {parseFloat(course.original_price || "0") > 0 ? <Text style={styles.multiOriginalPrice}>₹{parseFloat(course.original_price).toFixed(0)}</Text> : null}
-                </View>
-              )}
-              {discount > 0 ? <Text style={styles.multiDiscount}>{discount}% OFF</Text> : null}
-              <View style={{ flex: 1 }} />
-              <Pressable
-                style={styles.multiBuyBtn}
-                disabled={isPending}
-                onPress={(e) => {
-                  e?.stopPropagation?.();
-                  purchase();
-                }}
-              >
-                <LinearGradient colors={["#B91C1C", "#EF4444"]} style={styles.multiBuyGradient}>
-                  <Text style={styles.multiBuyText}>
-                    {isPending ? "Please wait..." : isFreeCourse ? "Start Free" : "Buy Now"}
-                  </Text>
-                </LinearGradient>
-              </Pressable>
-              <Pressable style={styles.multiArrowBtn} onPress={() => router.push(`/course-about/${course.id}` as any)}>
-                <Ionicons name="chevron-forward" size={18} color="#0F172A" />
-              </Pressable>
-            </>
+            <View style={{ flexDirection: "row", alignItems: "baseline", gap: 6 }}>
+              <Text style={styles.multiPrice}>₹{parseFloat(course.price).toFixed(0)}</Text>
+              {parseFloat(course.original_price || "0") > 0 ? <Text style={styles.multiOriginalPrice}>₹{parseFloat(course.original_price).toFixed(0)}</Text> : null}
+            </View>
           )}
+          {discount > 0 ? <Text style={styles.multiDiscount}>{discount}% OFF</Text> : null}
+          <View style={{ flex: 1 }} />
+          <Pressable
+            style={styles.multiBuyBtn}
+            disabled={isPending}
+            onPress={(e) => {
+              e?.stopPropagation?.();
+              purchase();
+            }}
+          >
+            <LinearGradient colors={["#B91C1C", "#EF4444"]} style={styles.multiBuyGradient}>
+              <Text style={styles.multiBuyText}>
+                {isPending ? "Please wait..." : isFreeCourse ? "Start Free" : "Buy Now"}
+              </Text>
+            </LinearGradient>
+          </Pressable>
+          <Pressable style={styles.multiArrowBtn} onPress={() => router.push(`/course-about/${course.id}` as any)}>
+            <Ionicons name="chevron-forward" size={18} color="#0F172A" />
+          </Pressable>
+        </View>
+      </View>
+      {paymentModal}
+    </Pressable>
+  );
+}
+
+function getNormalCourseDateRange(course: Course): string {
+  if (!course.start_date && !course.end_date) return "";
+  const start = formatCourseDate(course.start_date) || "TBD";
+  const end = formatCourseDate(course.end_date) || "TBD";
+  return `${start} → ${end}`;
+}
+
+function NormalCourseCard({ course, enrolled = false }: { course: Course; enrolled?: boolean }) {
+  const { colors } = useAppTheme();
+  const livePulse = React.useRef(new Animated.Value(1)).current;
+  const color = getCourseAccentColor(course.id);
+  const isFreeCourse = course.is_free || parseFloat(course.price || "0") <= 0;
+  const { purchase, isPending, paymentModal } = useCoursePurchase({
+    courseId: course.id,
+    courseTitle: course.title,
+    isFree: isFreeCourse,
+    price: course.price,
+  });
+  const discount = course.original_price && parseFloat(course.original_price) > 0 && parseFloat(course.price || "0") > 0
+    ? Math.round((1 - parseFloat(course.price) / parseFloat(course.original_price)) * 100)
+    : 0;
+  const language = (course.course_language || "HINGLISH").toUpperCase();
+  const level = course.level || "Beginner";
+  const status = normalCourseStatusLabel(course);
+  const dateRange = getNormalCourseDateRange(course);
+  const explorePath = `/course-about/${course.id}`;
+
+  useEffect(() => {
+    if (status !== "LIVE") {
+      livePulse.setValue(1);
+      return;
+    }
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(livePulse, { toValue: 0.35, duration: 650, useNativeDriver: true }),
+        Animated.timing(livePulse, { toValue: 1, duration: 650, useNativeDriver: true }),
+      ])
+    );
+    animation.start();
+    return () => animation.stop();
+  }, [livePulse, status]);
+
+  return (
+    <Pressable
+      style={({ pressed }) => [styles.multiCourseCard, { backgroundColor: colors.card, borderColor: colors.border }, pressed && { opacity: 0.94, transform: [{ scale: 0.985 }] }]}
+      onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push(explorePath as any); }}
+    >
+      <CourseBanner course={course} />
+      <View style={[styles.multiCourseBody, { backgroundColor: colors.card }]}>
+        <View style={styles.multiTopRow}>
+          <View style={[styles.multiBadgeRow, { flexShrink: 1 }]}>
+            <Text style={[styles.multiCategory, { color }]}>{course.category || "Course"}</Text>
+            {course.subject ? <Text style={[styles.multiSubject, { color: colors.textSecondary }]}>{course.subject}</Text> : null}
+            <Text style={styles.multiLevel}>{level}</Text>
+          </View>
+          <View style={styles.multiTopRightGroup}>
+            {enrolled ? (
+              <View style={styles.multiEnrolledBadge}>
+                <Ionicons name="checkmark-circle" size={12} color="#22C55E" />
+                <Text style={styles.multiEnrolledBadgeText}>Enrolled</Text>
+              </View>
+            ) : null}
+            <View style={styles.multiLanguagePill}><Text style={styles.multiLanguageText}>{language}</Text></View>
+          </View>
+        </View>
+        <Text style={[styles.multiTitle, { color: colors.text }]} numberOfLines={2}>{course.title}</Text>
+        {course.teacher_name ? (
+          <Text style={[styles.courseTeacher, { color: colors.textSecondary }]}>
+            <Ionicons name="person" size={12} color={colors.textSecondary} /> {course.teacher_name}
+          </Text>
+        ) : null}
+        <NormalCourseCardStats course={course} color={color} colors={colors} muted />
+        <View style={styles.multiMetaRow}>
+          {status === "LIVE" ? (
+            <Animated.View style={[styles.multiLiveDot, { opacity: livePulse, transform: [{ scale: livePulse }] }]} />
+          ) : null}
+          <Text
+            style={[
+              styles.multiMetaText,
+              status === "LIVE" && styles.multiStatusText,
+              status === "UPCOMING" && { color: "#D97706", fontFamily: "Inter_700Bold" },
+              status === "RECORDED" && { color: "#7C3AED", fontFamily: "Inter_700Bold" },
+            ]}
+          >
+            {status}
+          </Text>
+          {dateRange ? (
+            <>
+              <Ionicons name="calendar-outline" size={12} color={colors.textMuted} />
+              <Text style={[styles.multiMetaText, { color: colors.textMuted }]}>{dateRange}</Text>
+            </>
+          ) : null}
+        </View>
+        <View style={styles.multiPriceRow}>
+          {course.is_free || parseFloat(course.price || "0") <= 0 ? (
+            <Text style={styles.multiPrice}>Free</Text>
+          ) : (
+            <View style={{ flexDirection: "row", alignItems: "baseline", gap: 6 }}>
+              <Text style={styles.multiPrice}>₹{parseFloat(course.price).toFixed(0)}</Text>
+              {parseFloat(course.original_price || "0") > 0 ? <Text style={styles.multiOriginalPrice}>₹{parseFloat(course.original_price).toFixed(0)}</Text> : null}
+            </View>
+          )}
+          {discount > 0 ? <Text style={styles.multiDiscount}>{discount}% OFF</Text> : null}
+          <View style={{ flex: 1 }} />
+          <Pressable
+            style={styles.multiBuyBtn}
+            disabled={isPending}
+            onPress={(e) => {
+              e?.stopPropagation?.();
+              purchase();
+            }}
+          >
+            <LinearGradient colors={["#B91C1C", "#EF4444"]} style={styles.multiBuyGradient}>
+              <Text style={styles.multiBuyText}>
+                {isPending ? "Please wait..." : isFreeCourse ? "Start Free" : "Buy Now"}
+              </Text>
+            </LinearGradient>
+          </Pressable>
+          <Pressable style={styles.multiArrowBtn} onPress={() => router.push(explorePath as any)}>
+            <Ionicons name="chevron-forward" size={18} color="#0F172A" />
+          </Pressable>
         </View>
       </View>
       {paymentModal}
@@ -443,61 +540,19 @@ function ScheduledLiveCard({ lc, nowMs }: { lc: any; nowMs: number }) {
 }
 
 function EnrolledCourseCard({ course, index }: { course: Course; index: number }) {
-  const { colors } = useAppTheme();
-  const color = getCourseAccentColor(course.id);
-  const progress = course.progress || 0;
-
-  if (course.course_type === "multi_subject") {
-    return <MultiSubjectCourseCard course={course} enrolled />;
-  }
-
-  return (
-    <Pressable
-      style={({ pressed }) => [styles.multiCourseCard, { backgroundColor: colors.card, borderColor: colors.border }, pressed && { opacity: 0.93, transform: [{ scale: 0.98 }] }]}
-      onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push(`/course-about/${course.id}` as any); }}
-    >
-      <CourseBanner course={course} />
-      <View style={{ paddingHorizontal: 12, paddingTop: 12, paddingBottom: 10, gap: 8, backgroundColor: colors.card }}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-          <View style={{ backgroundColor: color + "18", borderRadius: 5, paddingHorizontal: 8, paddingVertical: 3 }}>
-            <Text style={{ fontSize: 10, fontFamily: "Inter_700Bold", color }}>{course.category}</Text>
-          </View>
-          <View style={{ backgroundColor: (course.course_type || "live") === "live" ? "#FEE2E2" : "#EDE9FE", borderRadius: 5, paddingHorizontal: 8, paddingVertical: 3 }}>
-            <Text style={{ fontSize: 10, fontFamily: "Inter_700Bold", color: (course.course_type || "live") === "live" ? "#DC2626" : "#7C3AED" }}>
-              {(course.course_type || "live") === "live" ? "LIVE" : "RECORDED"}
-            </Text>
-          </View>
-          {course.subject ? (
-            <View style={{ backgroundColor: colors.surfaceAlt, borderRadius: 5, paddingHorizontal: 8, paddingVertical: 3 }}>
-              <Text style={{ fontSize: 10, fontFamily: "Inter_600SemiBold", color: colors.textSecondary }}>{course.subject}</Text>
-            </View>
-          ) : null}
-          <View style={styles.multiEnrolledBadge}>
-            <Ionicons name="checkmark-circle" size={12} color="#22C55E" />
-            <Text style={styles.multiEnrolledBadgeText}>Enrolled</Text>
-          </View>
-        </View>
-        <Text style={{ fontSize: 14, fontFamily: "Inter_700Bold", color: colors.text, lineHeight: 20 }} numberOfLines={2}>{course.title}</Text>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
-          <Ionicons name="person-outline" size={12} color={colors.textMuted} />
-          <Text style={{ fontSize: 12, fontFamily: "Inter_400Regular", color: colors.textMuted }} numberOfLines={1}>{course.teacher_name}</Text>
-        </View>
-        <EnrolledStatsGrid course={course} color={color} colors={colors} />
-        <CourseProgressBar progress={progress} color={color} colors={colors} />
-      </View>
-    </Pressable>
-  );
+  return <CourseCard course={{ ...course, isEnrolled: true }} index={index} />;
 }
 
 function CourseCard({ course, index }: { course: Course; index: number }) {
   const { colors } = useAppTheme();
   const color = getCourseAccentColor(course.id);
-  const discount = course.original_price && parseFloat(course.original_price) > 0
-    ? Math.round((1 - parseFloat(course.price) / parseFloat(course.original_price)) * 100)
-    : 0;
 
   if (course.course_type === "multi_subject") {
-    return <MultiSubjectCourseCard course={course} />;
+    return <MultiSubjectCourseCard course={course} enrolled={!!course.isEnrolled} />;
+  }
+
+  if (course.course_type !== "test_series") {
+    return <NormalCourseCard course={course} enrolled={!!course.isEnrolled} />;
   }
 
   return (
@@ -509,16 +564,6 @@ function CourseCard({ course, index }: { course: Course; index: number }) {
       <View style={[styles.multiCourseBody, { backgroundColor: colors.card }]}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
           <Text style={[styles.multiCategory, { color }]}>{course.category}</Text>
-          <View style={{ backgroundColor: (course.course_type || "live") === "live" ? "#FEE2E2" : course.course_type === "test_series" ? "#FEF3C7" : "#EDE9FE", borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 }}>
-            <Text style={{ fontSize: 10, fontFamily: "Inter_700Bold", color: (course.course_type || "live") === "live" ? "#DC2626" : course.course_type === "test_series" ? "#D97706" : "#7C3AED" }}>
-              {(course.course_type || "live") === "live" ? "LIVE" : course.course_type === "test_series" ? "TEST SERIES" : "RECORDED"}
-            </Text>
-          </View>
-          {course.is_free ? (
-            <View style={styles.freeBadge}><Text style={styles.freeBadgeText}>FREE</Text></View>
-          ) : discount > 0 ? (
-            <View style={styles.discountBadge}><Text style={styles.discountBadgeText}>{discount}% OFF</Text></View>
-          ) : null}
           {course.isEnrolled ? (
             <View style={styles.multiEnrolledBadge}>
               <Ionicons name="checkmark-circle" size={12} color="#22C55E" />
@@ -526,44 +571,23 @@ function CourseCard({ course, index }: { course: Course; index: number }) {
             </View>
           ) : null}
         </View>
-        {course.subject ? (
-          <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: colors.textSecondary }}>{course.subject}</Text>
-        ) : null}
         <Text style={[styles.multiTitle, { color: colors.text }]} numberOfLines={2}>{course.title}</Text>
-        <Text style={[styles.courseTeacher, { color: colors.textSecondary }]}>
-          <Ionicons name="person" size={12} color={colors.textSecondary} /> {course.teacher_name}
-        </Text>
         <View style={styles.courseStats}>
-          {course.course_type === "test_series" ? (
-            <>
-              <View style={styles.courseStat}>
-                <Ionicons name="document-text" size={13} color={colors.textMuted} />
-                <Text style={[styles.courseStatText, { color: colors.textMuted }]}>{course.total_tests || 0} Tests</Text>
-              </View>
-              <View style={styles.courseStatDot} />
-              <View style={styles.courseStat}>
-                <Ionicons name="clipboard" size={13} color={colors.textMuted} />
-                <Text style={[styles.courseStatText, { color: colors.textMuted }]}>{course.mock_count || 0} Mock</Text>
-              </View>
-              <View style={styles.courseStatDot} />
-              <View style={styles.courseStat}>
-                <Ionicons name="create" size={13} color={colors.textMuted} />
-                <Text style={[styles.courseStatText, { color: colors.textMuted }]}>{course.practice_count || 0} Practice</Text>
-              </View>
-            </>
-          ) : (
-            <NormalCourseCardStats course={course} colors={colors} muted />
-          )}
-        </View>
-        {(course.course_type || "live") === "live" && (course.start_date || course.end_date) && (
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-            <Ionicons name="calendar-outline" size={12} color={colors.textMuted} />
-            <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: colors.textMuted }}>
-              {course.start_date || "TBD"} → {course.end_date || "TBD"}
-            </Text>
+          <View style={styles.courseStat}>
+            <Ionicons name="document-text" size={13} color={colors.textMuted} />
+            <Text style={[styles.courseStatText, { color: colors.textMuted }]}>{course.total_tests || 0} Tests</Text>
           </View>
-        )}
-        {course.isEnrolled ? <CourseProgressBar progress={course.progress || 0} color={color} colors={colors} /> : null}
+          <View style={styles.courseStatDot} />
+          <View style={styles.courseStat}>
+            <Ionicons name="clipboard" size={13} color={colors.textMuted} />
+            <Text style={[styles.courseStatText, { color: colors.textMuted }]}>{course.mock_count || 0} Mock</Text>
+          </View>
+          <View style={styles.courseStatDot} />
+          <View style={styles.courseStat}>
+            <Ionicons name="create" size={13} color={colors.textMuted} />
+            <Text style={[styles.courseStatText, { color: colors.textMuted }]}>{course.practice_count || 0} Practice</Text>
+          </View>
+        </View>
         <View style={styles.coursePriceRow}>
           {course.is_free ? (
             <Text style={styles.coursePrice}>Free</Text>
@@ -1200,9 +1224,11 @@ const styles = StyleSheet.create({
   multiCourseBanner: { height: 154, overflow: "hidden", justifyContent: "center" },
   multiBannerFallback: { flex: 1 },
   multiCourseBody: { paddingHorizontal: 16, paddingVertical: 12, gap: 8 },
-  multiTopRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
+  multiTopRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
   multiBadgeRow: { flexDirection: "row", alignItems: "center", gap: 6, flex: 1, flexWrap: "wrap" },
+  multiTopRightGroup: { flexDirection: "row", alignItems: "center", gap: 8, flexShrink: 0, marginLeft: 8 },
   multiCategory: { fontSize: 11, fontFamily: "Inter_700Bold", color: "#DC2626", textTransform: "uppercase" },
+  multiSubject: { fontSize: 11, fontFamily: "Inter_600SemiBold", textTransform: "capitalize" },
   multiLevel: { fontSize: 11, fontFamily: "Inter_700Bold", color: "#4F46E5", backgroundColor: "#EEF2FF", borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4 },
   multiLanguagePill: { borderWidth: 1, borderColor: "#CBD5E1", borderRadius: 6, paddingHorizontal: 9, paddingVertical: 4, backgroundColor: "#fff" },
   multiLanguageText: { fontSize: 11, fontFamily: "Inter_700Bold", color: "#0F172A" },

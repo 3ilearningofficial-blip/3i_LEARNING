@@ -1105,16 +1105,25 @@ export default function AdminDashboard() {
       qc.invalidateQueries({ queryKey: ["/api/admin/daily-missions"] });
       setOpenFolderView((prev) => {
         if (!prev || Number(prev.folder?.id) !== Number(variables.id)) return prev;
+        const oldFull = standaloneFolderFullName(prev.folder);
+        const newFull = oldFull.includes(" / ")
+          ? `${oldFull.slice(0, oldFull.lastIndexOf(" / "))} / ${variables.name}`
+          : variables.name;
         return {
           ...prev,
           folder: {
             ...prev.folder,
             name: variables.name,
-            full_name: variables.name,
+            full_name: newFull,
           },
         };
       });
       setEditStandaloneFolderModal(false);
+    },
+    onError: (err: any) => {
+      const msg = String(err?.message || "").replace(/^\d+:\s*/, "") || "Failed to rename folder";
+      if (Platform.OS === "web") window.alert(msg);
+      else Alert.alert("Error", msg);
     },
   });
 
@@ -4730,8 +4739,8 @@ export default function AdminDashboard() {
               {[
                 { label: "Course Title *", key: "title", placeholder: "e.g., Class 10 Mathematics" },
                 ...(newCourse.courseType !== "multi_subject" ? [
-                  { label: "Description", key: "description", placeholder: "Course description..." },
                   { label: "Teacher Name", key: "teacherName", placeholder: "3i Learning" },
+                  { label: "Language", key: "courseLanguage", placeholder: "e.g., HINGLISH, Hindi, English" },
                 ] : []),
                 ...(newCourse.courseType === "multi_subject" ? [
                   { label: "Language", key: "courseLanguage", placeholder: "e.g., HINGLISH, Hindi, English" },
@@ -4745,13 +4754,13 @@ export default function AdminDashboard() {
                 <View key={field.key} style={styles.formField}>
                   <Text style={styles.formLabel}>{field.label}</Text>
                   <TextInput
-                    style={[styles.formInput, (field.key === "description" || field.key === "teacherBio") && styles.formInputMulti]}
+                    style={[styles.formInput, field.key === "teacherBio" && styles.formInputMulti]}
                     placeholder={field.placeholder}
                     placeholderTextColor={Colors.light.textMuted}
                     value={String(newCourse[field.key as keyof NewCourse])}
                     onChangeText={(val) => setNewCourse((prev) => ({ ...prev, [field.key]: val }))}
-                    multiline={field.key === "description" || field.key === "teacherBio"}
-                    numberOfLines={field.key === "description" || field.key === "teacherBio" ? 3 : 1}
+                    multiline={field.key === "teacherBio"}
+                    numberOfLines={field.key === "teacherBio" ? 3 : 1}
                     keyboardType={["price", "originalPrice"].includes(field.key) ? "numeric" : "default"}
                   />
                 </View>
@@ -4761,7 +4770,15 @@ export default function AdminDashboard() {
                   label="Course Card Banner Image"
                   value={newCourse.thumbnail}
                   onChange={(url) => setNewCourse((prev) => ({ ...prev, thumbnail: url }))}
-                  hint="Recommended banner size: 1200 × 450 px. Used on the vertical multi-subject card and course hero."
+                  hint="Recommended banner size: 1200 × 450 px. Used on the vertical multi-subject card."
+                />
+              )}
+              {(newCourse.courseType === "live" || newCourse.courseType === "recorded") && (
+                <AdminR2ImagePicker
+                  label="Course Card Banner Image"
+                  value={newCourse.thumbnail}
+                  onChange={(url) => setNewCourse((prev) => ({ ...prev, thumbnail: url }))}
+                  hint="Recommended banner size: 1200 × 450 px. Shown at the top of the home course card."
                 />
               )}
               {newCourse.courseType === "multi_subject" && (
@@ -4841,23 +4858,6 @@ export default function AdminDashboard() {
                   trackColor={{ false: Colors.light.border, true: Colors.light.primary }}
                   thumbColor="#fff"
                 />
-              </View>
-              {/* Cover Image URL */}
-              <View style={styles.formField}>
-                <Text style={styles.formLabel}>{newCourse.courseType === "multi_subject" ? "Course Banner Image URL (optional)" : "Cover Image URL (optional)"}</Text>
-                <TextInput
-                  style={styles.formInput}
-                  placeholder="https://... (image URL for course banner)"
-                  placeholderTextColor={Colors.light.textMuted}
-                  value={newCourse.thumbnail}
-                  onChangeText={(val) => setNewCourse((prev) => ({ ...prev, thumbnail: val }))}
-                  autoCapitalize="none"
-                />
-                <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: Colors.light.textMuted, marginTop: 4 }}>
-                  {newCourse.courseType === "multi_subject"
-                    ? "Recommended multi-subject banner size: 1200 × 450 px (8:3 ratio). This image appears at the top of the vertical course card."
-                    : "Recommended size: 1200 × 400 px (3:1 ratio)"}
-                </Text>
               </View>
             </ScrollView>
             <Pressable
@@ -6366,7 +6366,7 @@ export default function AdminDashboard() {
                   {/* Edit */}
                   <Pressable style={{ flexDirection: "row", alignItems: "center", gap: 12, padding: 16, borderRadius: 12, backgroundColor: "#EEF2FF", marginBottom: 8 }}
                     onPress={() => {
-                      setEditStandaloneFolderName(standalonefolderActionSheet?.name || "");
+                      setEditStandaloneFolderName(standaloneFolderLocalName(standalonefolderActionSheet) || "");
                       setEditStandaloneFolderValidityMonths(String(standalonefolderActionSheet?.validity_months ?? ""));
                       setEditingStandaloneFolderId(standalonefolderActionSheet?.id ?? null);
                       setEditStandaloneFolderModal(true);
