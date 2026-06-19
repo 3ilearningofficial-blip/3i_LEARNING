@@ -296,6 +296,12 @@ function MultiSubjectCourseCard({ course, enrolled = false }: { course: Course; 
           </View>
         </View>
         <Text style={[styles.multiTitle, { color: colors.text }]} numberOfLines={2}>{course.title}</Text>
+        <View style={styles.courseTeacherRow}>
+          <Ionicons name="people" size={13} color={colors.textSecondary} />
+          <Text style={[styles.courseTeacher, { color: colors.textSecondary }]} numberOfLines={1}>
+            {`|  ${course.teacher_name?.trim() || "Pankaj Sir & Team"}`}
+          </Text>
+        </View>
         <View style={styles.multiMetaRow}>
           {status === "LIVE" ? (
             <Animated.View style={[styles.multiLiveDot, { opacity: livePulse, transform: [{ scale: livePulse }] }]} />
@@ -414,7 +420,6 @@ function NormalCourseCard({ course, enrolled = false }: { course: Course; enroll
         <View style={styles.multiTopRow}>
           <View style={[styles.multiBadgeRow, { flexShrink: 1 }]}>
             <Text style={[styles.multiCategory, { color }]}>{course.category || "Course"}</Text>
-            {course.subject ? <Text style={[styles.multiSubject, { color: colors.textSecondary }]}>{course.subject}</Text> : null}
             <Text style={styles.multiLevel}>{level}</Text>
           </View>
           <View style={styles.multiTopRightGroup}>
@@ -428,10 +433,15 @@ function NormalCourseCard({ course, enrolled = false }: { course: Course; enroll
           </View>
         </View>
         <Text style={[styles.multiTitle, { color: colors.text }]} numberOfLines={2}>{course.title}</Text>
-        {course.teacher_name ? (
-          <Text style={[styles.courseTeacher, { color: colors.textSecondary }]}>
-            <Ionicons name="person" size={12} color={colors.textSecondary} /> {course.teacher_name}
-          </Text>
+        {(course.teacher_name || course.subject) ? (
+          <View style={styles.courseTeacherRow}>
+            <Ionicons name="person" size={12} color={colors.textSecondary} />
+            <Text style={[styles.courseTeacher, { color: colors.textSecondary }]} numberOfLines={1}>
+              {course.teacher_name || ""}
+              {course.teacher_name && course.subject ? "  |  " : ""}
+              {course.subject ? `Subject - ${course.subject}` : ""}
+            </Text>
+          </View>
         ) : null}
         <NormalCourseCardStats course={course} color={color} colors={colors} muted />
         <View style={styles.multiMetaRow}>
@@ -450,6 +460,7 @@ function NormalCourseCard({ course, enrolled = false }: { course: Course; enroll
           </Text>
           {dateRange ? (
             <>
+              <Text style={[styles.multiMetaText, { color: colors.textMuted }]}>|</Text>
               <Ionicons name="calendar-outline" size={12} color={colors.textMuted} />
               <Text style={[styles.multiMetaText, { color: colors.textMuted }]}>{dateRange}</Text>
             </>
@@ -1292,7 +1303,8 @@ const styles = StyleSheet.create({
   courseSubject: { color: "rgba(255,255,255,0.85)", fontSize: 13, fontFamily: "Inter_600SemiBold" },
   courseCardBody: { padding: 16, gap: 9, minHeight: 140 },
   courseTitle: { fontSize: 15, fontFamily: "Inter_700Bold", color: Colors.light.text, lineHeight: 21 },
-  courseTeacher: { fontSize: 12, color: Colors.light.textSecondary, fontFamily: "Inter_400Regular" },
+  courseTeacher: { fontSize: 12, color: Colors.light.textSecondary, fontFamily: "Inter_400Regular", flexShrink: 1 },
+  courseTeacherRow: { flexDirection: "row", alignItems: "center", gap: 4 },
   courseStats: { flexDirection: "row", alignItems: "center", gap: 6 },
   courseStat: { flexDirection: "row", alignItems: "center", gap: 3 },
   courseStatText: { fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" },

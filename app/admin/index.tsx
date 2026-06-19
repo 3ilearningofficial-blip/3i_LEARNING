@@ -4774,6 +4774,7 @@ export default function AdminDashboard() {
                   { label: "Language", key: "courseLanguage", placeholder: "e.g., HINGLISH, Hindi, English" },
                 ] : []),
                 ...(newCourse.courseType === "multi_subject" ? [
+                  { label: "Teacher / Team Name", key: "teacherName", placeholder: "Pankaj Sir & Team" },
                   { label: "Language", key: "courseLanguage", placeholder: "e.g., HINGLISH, Hindi, English" },
                 ] : []),
                 { label: "Category", key: "category", placeholder: "e.g., NDA, CDS, AFCAT" },

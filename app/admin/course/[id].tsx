@@ -2776,9 +2776,12 @@ export default function AdminCourseScreen() {
               <FormField label="Course Title *" placeholder="e.g., NDA Mathematics" value={editForm.title} onChangeText={(v) => setEditForm(p => ({ ...p, title: v }))} />
               <FormField label="Category *" placeholder="e.g., NDA, CDS, AFCAT" value={editForm.category} onChangeText={(v) => setEditForm(p => ({ ...p, category: v }))} />
               <FormField label="Subject" placeholder="e.g., Mathematics, English, GK" value={editForm.subject} onChangeText={(v) => setEditForm(p => ({ ...p, subject: v }))} />
-              {!isMultiSubjectCourse && (
-                <FormField label="Teacher Name" placeholder="e.g., Pankaj Sir" value={editForm.teacherName} onChangeText={(v) => setEditForm(p => ({ ...p, teacherName: v }))} />
-              )}
+              <FormField
+                label={isMultiSubjectCourse ? "Teacher / Team Name" : "Teacher Name"}
+                placeholder={isMultiSubjectCourse ? "Pankaj Sir & Team" : "e.g., Pankaj Sir"}
+                value={editForm.teacherName}
+                onChangeText={(v) => setEditForm(p => ({ ...p, teacherName: v }))}
+              />
               {!isMultiSubjectCourse && (
                 <>
                   <FormField label="Course Card Banner Image URL" placeholder="https://... (shown at top of home course card)" value={editForm.thumbnail} onChangeText={(v) => setEditForm(p => ({ ...p, thumbnail: v }))} />
