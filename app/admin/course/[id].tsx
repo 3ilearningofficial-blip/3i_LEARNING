@@ -2511,7 +2511,7 @@ export default function AdminCourseScreen() {
               <Ionicons name="person-remove" size={20} color="#EF4444" />
               <View style={{ flex: 1 }}>
                 <Text style={{ fontSize: 15, fontFamily: "Inter_600SemiBold", color: "#EF4444" }}>Remove from Course</Text>
-                <Text style={{ fontSize: 12, color: "#EF4444", fontFamily: "Inter_400Regular", opacity: 0.7 }}>Permanently removes enrollment</Text>
+                <Text style={{ fontSize: 12, color: "#EF4444", fontFamily: "Inter_400Regular", opacity: 0.7 }}>Permanently deletes enrollment, progress, test attempts, and downloads</Text>
               </View>
             </Pressable>
           </View>
@@ -2538,7 +2538,6 @@ export default function AdminCourseScreen() {
                 {uploading ? <Text style={{ fontSize: 14, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>{uploadProgress}%</Text> : <Ionicons name="cloud-upload-outline" size={18} color={Colors.light.primary} />}
                 <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>{uploading ? `Uploading... ${uploadProgress}%` : "Upload Video from Device"}</Text>
               </Pressable>
-              <FormField label="Description" placeholder="What students will learn" value={newLecture.description} onChangeText={(v) => setNewLecture(p => ({ ...p, description: v }))} multiline />
               <FormField label="Duration (minutes)" placeholder="45" value={newLecture.durationMinutes} onChangeText={(v) => setNewLecture(p => ({ ...p, durationMinutes: v }))} numeric />
               <FormField label="Order Index (lower = first)" placeholder="1" value={newLecture.orderIndex} onChangeText={(v) => setNewLecture(p => ({ ...p, orderIndex: v }))} numeric />
               <View style={styles.formField}>
@@ -2572,7 +2571,6 @@ export default function AdminCourseScreen() {
             </View>
             <ScrollView style={{ maxHeight: 420 }} showsVerticalScrollIndicator={false}>
               <FormField label="Test Title *" placeholder="e.g., Chapter 1 Test" value={newTest.title} onChangeText={(v) => setNewTest(p => ({ ...p, title: v }))} />
-              <FormField label="Description" placeholder="Test description" value={newTest.description} onChangeText={(v) => setNewTest(p => ({ ...p, description: v }))} />
               <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.text, marginBottom: 6 }}>Category</Text>
               <View style={{ flexDirection: "row", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
                 {TEST_TYPES.map((t) => (
@@ -3295,7 +3293,6 @@ export default function AdminCourseScreen() {
                       {uploading ? <Text style={{ fontSize: 14, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>{uploadProgress}%</Text> : <Ionicons name="cloud-upload-outline" size={18} color={Colors.light.primary} />}
                       <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>{uploading ? `Uploading... ${uploadProgress}%` : "Upload Video"}</Text>
                     </Pressable>
-                    <FormField label="Description" placeholder="What students will learn" value={newLecture.description} onChangeText={(v) => setNewLecture(p => ({ ...p, description: v }))} />
                     <FormField label="Duration (minutes)" placeholder="45" value={newLecture.durationMinutes} onChangeText={(v) => setNewLecture(p => ({ ...p, durationMinutes: v }))} numeric />
                     <FormField label="Order Index" placeholder="1" value={newLecture.orderIndex} onChangeText={(v) => setNewLecture(p => ({ ...p, orderIndex: v }))} numeric />
                     <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 12 }}>

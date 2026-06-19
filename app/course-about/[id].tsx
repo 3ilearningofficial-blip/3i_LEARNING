@@ -122,13 +122,18 @@ export default function CourseAboutScreen() {
     ? Math.round((1 - parseFloat(course.price!) / parseFloat(course.original_price)) * 100)
     : 0;
   const progress = Math.max(0, Math.min(100, Number(course.progress || 0)));
+  const filterBySubject = (row: any) =>
+    !isMultiSubject || String(row?.subject_key || "").trim() !== "";
+  const visibleLectures = Array.isArray(course.lectures) ? course.lectures.filter(filterBySubject) : [];
+  const visibleMaterials = Array.isArray(course.materials) ? course.materials.filter(filterBySubject) : [];
+  const visibleTests = Array.isArray(course.tests) ? course.tests.filter(filterBySubject) : [];
   const lecturesCount = isMultiSubject
-    ? (Array.isArray(course.lectures) ? course.lectures.length : 0)
+    ? visibleLectures.length
     : (Array.isArray(course.lectures) ? course.lectures.length : Number(course.total_lectures || 0));
   const materialsCount = isMultiSubject
-    ? (Array.isArray(course.materials) ? course.materials.length : 0)
+    ? visibleMaterials.length
     : (Array.isArray(course.materials) ? course.materials.length : Number(course.total_materials || 0));
-  const tests = Array.isArray(course.tests) ? course.tests : [];
+  const tests = isMultiSubject ? visibleTests : (Array.isArray(course.tests) ? course.tests : []);
   const pyqCount = tests.filter((t) => String(t.test_type || "").toLowerCase() === "pyq").length;
   const mockListCount = tests.filter((t) => String(t.test_type || "").toLowerCase() === "mock").length;
   const mockCount = isMultiSubject

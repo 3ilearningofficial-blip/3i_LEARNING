@@ -4515,10 +4515,6 @@ export default function AdminDashboard() {
                 <TextInput style={styles.formInput} placeholder="e.g., Algebra Practice" placeholderTextColor={Colors.light.textMuted} value={missionTitle} onChangeText={setMissionTitle} />
               </View>
               <View style={styles.formField}>
-                <Text style={styles.formLabel}>Description</Text>
-                <TextInput style={[styles.formInput, styles.formInputMulti]} placeholder="Mission description..." placeholderTextColor={Colors.light.textMuted} value={missionDesc} onChangeText={setMissionDesc} multiline numberOfLines={2} />
-              </View>
-              <View style={styles.formField}>
                 <Text style={styles.formLabel}>Folder (optional)</Text>
                 <TextInput style={styles.formInput} placeholder="e.g., Free Drills, CDS Paid, June 2026" placeholderTextColor={Colors.light.textMuted} value={missionFolder} onChangeText={setMissionFolder} />
               </View>
@@ -5214,10 +5210,6 @@ export default function AdminDashboard() {
               <View style={styles.formField}>
                 <Text style={styles.formLabel}>Test Title *</Text>
                 <TextInput style={styles.formInput} placeholder="e.g., Chapter 1 Test" placeholderTextColor={Colors.light.textMuted} value={testTitle} onChangeText={setTestTitle} />
-              </View>
-              <View style={styles.formField}>
-                <Text style={styles.formLabel}>Description</Text>
-                <TextInput style={[styles.formInput, styles.formInputMulti]} placeholder="Test description" placeholderTextColor={Colors.light.textMuted} value={testDesc} onChangeText={setTestDesc} multiline numberOfLines={2} />
               </View>
               <View style={styles.formField}>
                 <Text style={styles.formLabel}>Type</Text>

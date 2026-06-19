@@ -122,43 +122,85 @@ export function registerAdminEnrollmentRoutes({
     try {
       const adminUserId = Number((req as any).user?.id) || null;
       const enrollment = await db.query(
-        "SELECT user_id, course_id, status, valid_until FROM enrollments WHERE id = $1",
+        "SELECT id, user_id, course_id, status, valid_until FROM enrollments WHERE id = $1",
         [req.params.id]
       );
+      if (enrollment.rows.length === 0) {
+        return res.json({ success: true });
+      }
+      const { user_id, course_id } = enrollment.rows[0];
 
-      if (enrollment.rows.length > 0) {
-        const { user_id, course_id } = enrollment.rows[0];
-        // Revoke access immediately for the student.
-        // If cleanup fails, keep the enrollment row and mark it for retry.
-        await db.query(
-          "UPDATE enrollments SET status = 'inactive', download_cleanup_pending = TRUE WHERE id = $1",
-          [req.params.id]
-        );
-
-        try {
-          await deleteDownloadsForUser(user_id, course_id);
-          await db.query("UPDATE enrollments SET download_cleanup_pending = FALSE WHERE id = $1", [req.params.id]);
-        } catch (cleanupErr) {
-          console.warn("[Cleanup] download cleanup failed; will retry", {
-            enrollmentId: req.params.id,
-            user_id,
-            course_id,
-          });
-        }
-
-        // Non-blocking audit log
-        void writeEnrollmentAuditLog(db, adminUserId, "deleted", String(req.params.id), {
-          user_id,
-          course_id,
-          status: enrollment.rows[0].status,
-          valid_until: enrollment.rows[0].valid_until,
-        });
-      } else {
-        await db.query("DELETE FROM enrollments WHERE id = $1", [req.params.id]);
+      // R2 / IndexedDB offline downloads are external state — run before the DB
+      // transaction so a storage failure doesn't block the DB cleanup.
+      try {
+        await deleteDownloadsForUser(Number(user_id), Number(course_id));
+      } catch (cleanupErr) {
+        console.warn("[Cleanup] download cleanup failed:", cleanupErr);
       }
 
+      await runInTransaction(async (tx) => {
+        // Invalidate active media tokens the student holds for this course's content
+        await tx.query(
+          `DELETE FROM media_tokens
+           WHERE user_id = $1
+             AND file_key IN (
+               SELECT file_url FROM study_materials WHERE course_id = $2 AND file_url IS NOT NULL
+               UNION ALL
+               SELECT video_url FROM lectures        WHERE course_id = $2 AND video_url IS NOT NULL
+               UNION ALL
+               SELECT pdf_url   FROM lectures        WHERE course_id = $2 AND pdf_url IS NOT NULL
+               UNION ALL
+               SELECT recording_url FROM live_classes WHERE course_id = $2 AND recording_url IS NOT NULL
+             )`,
+          [user_id, course_id]
+        );
+
+        // Download tokens for this user+course (table added in 0034; tolerate absence)
+        await tx
+          .query(`DELETE FROM download_tokens WHERE user_id = $1 AND course_id = $2`, [user_id, course_id])
+          .catch(() => {});
+
+        // Lecture progress for any lecture in this course
+        await tx.query(
+          `DELETE FROM lecture_progress
+           WHERE user_id = $1
+             AND lecture_id IN (SELECT id FROM lectures WHERE course_id = $2)`,
+          [user_id, course_id]
+        );
+
+        // Test attempts for any test in this course
+        await tx.query(
+          `DELETE FROM test_attempts
+           WHERE user_id = $1
+             AND test_id IN (SELECT id FROM tests WHERE course_id = $2)`,
+          [user_id, course_id]
+        );
+
+        // Daily mission attempts for this user on this course's missions (table from 0035; tolerate absence)
+        await tx
+          .query(
+            `DELETE FROM user_missions
+             WHERE user_id = $1
+               AND mission_id IN (SELECT id FROM daily_missions WHERE course_id = $2)`,
+            [user_id, course_id]
+          )
+          .catch(() => {});
+
+        // Hard-delete the enrollment row last so the cascade above is atomic
+        await tx.query(`DELETE FROM enrollments WHERE id = $1`, [req.params.id]);
+      });
+
+      void writeEnrollmentAuditLog(db, adminUserId, "deleted", String(req.params.id), {
+        user_id,
+        course_id,
+        hard_delete: true,
+        status_before: enrollment.rows[0].status,
+        valid_until_before: enrollment.rows[0].valid_until,
+      });
+
       res.json({ success: true });
-    } catch {
+    } catch (err) {
+      console.error("Remove from course error:", err);
       res.status(500).json({ message: "Failed to remove enrollment" });
     }
   });
