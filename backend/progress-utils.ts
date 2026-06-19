@@ -40,10 +40,10 @@ export async function updateCourseTestCounts(
   }
   await db.query(
     `UPDATE courses SET
-      total_tests    = (SELECT COUNT(*) FROM tests WHERE course_id = $1::int),
-      pyq_count      = (SELECT COUNT(*) FROM tests WHERE course_id = $1::int AND test_type = 'pyq'),
-      mock_count     = (SELECT COUNT(*) FROM tests WHERE course_id = $1::int AND test_type = 'mock'),
-      practice_count = (SELECT COUNT(*) FROM tests WHERE course_id = $1::int AND test_type = 'practice')
+      total_tests    = (SELECT COUNT(*) FROM tests WHERE course_id = $1::int AND is_published = TRUE),
+      pyq_count      = (SELECT COUNT(*) FROM tests WHERE course_id = $1::int AND test_type = 'pyq' AND is_published = TRUE),
+      mock_count     = (SELECT COUNT(*) FROM tests WHERE course_id = $1::int AND test_type = 'mock' AND is_published = TRUE),
+      practice_count = (SELECT COUNT(*) FROM tests WHERE course_id = $1::int AND test_type = 'practice' AND is_published = TRUE)
     WHERE id = $1::int`,
     [id]
   );

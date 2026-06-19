@@ -4,6 +4,7 @@ import { userCanAccessLiveClassContent } from "./live-class-access";
 import { buildRecordingLectureSectionTitle } from "../shared/recordingSection";
 import { saveRecordingForClassAndPeers } from "./live-class-recording-save";
 import { convertLiveClassTitlePeersToLectures } from "./live-class-lecture-convert";
+import { notifyAdminsLiveClassCompleted } from "./notification-utils";
 import { signClassroomSyncToken } from "./classroom-sync";
 
 type DbClient = {
@@ -271,6 +272,7 @@ export function registerClassroomRoutes({
       }
 
       if (!recordingUrl || isImageUrl(recordingUrl)) {
+        const wasCompleted = lc.is_completed === true;
         const endedAt = Date.now();
         await db.query(
           `UPDATE live_classes 
@@ -279,6 +281,11 @@ export function registerClassroomRoutes({
           [endedAt, liveClassId]
         );
         const refreshed = await db.query("SELECT * FROM live_classes WHERE id = $1", [liveClassId]);
+        if (!wasCompleted) {
+          await notifyAdminsLiveClassCompleted(db, refreshed.rows[0] || lc).catch((err) =>
+            console.error("[Classroom] admin completion notify failed:", err)
+          );
+        }
         lectureIds = await convertLiveClassTitlePeersToLectures(db, refreshed.rows[0] || lc, {
           sectionTitleOverride: sectionTitle,
           recomputeCourseProgress: recomputeAllEnrollmentsProgressForCourse,

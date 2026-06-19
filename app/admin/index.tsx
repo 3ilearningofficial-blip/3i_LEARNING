@@ -20,6 +20,8 @@ import { fetch } from "expo/fetch";
 import { MULTI_SUBJECTS, SubjectIcon } from "@/constants/multiSubjects";
 import BulkUploadModal from "@/components/BulkUploadModal";
 import { parseMissionQuestionsPdf } from "@/lib/mission-bulk-parse";
+import { downloadAdminContent } from "@/lib/admin-export";
+import { AdminExportDownloadButton } from "@/components/admin/AdminExportDownloadButton";
 import SortableList from "@/components/admin/SortableList";
 import SortableItem from "@/components/admin/SortableItem";
 import { buildRecordingLectureSectionTitle, prefillLiveRecordingFormFields } from "@shared/recordingSection";
@@ -1800,6 +1802,9 @@ export default function AdminDashboard() {
     }
   };
 
+  const findAdminTestById = (testId: number | null | undefined) =>
+    testId ? adminTests.find((t: any) => Number(t.id) === Number(testId)) : null;
+
   const renderAdminMissionCard = (m: any) => {
     const qCount = Array.isArray(m.questions) ? m.questions.length : 0;
     const totalMarks = Array.isArray(m.questions) ? m.questions.reduce((s: number, q: any) => s + (q.marks || 0), 0) : 0;
@@ -1850,6 +1855,12 @@ export default function AdminDashboard() {
         </View>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
           <Ionicons name="people-outline" size={16} color={Colors.light.primary} />
+          <Pressable style={[styles.deleteBtn, { backgroundColor: "#ECFDF5" }]} onPress={(e) => {
+            e.stopPropagation?.();
+            void downloadAdminContent("mission", m.id, `${m.title}.pdf`);
+          }}>
+            <Ionicons name="download-outline" size={18} color="#059669" />
+          </Pressable>
           <Pressable style={[styles.deleteBtn, { backgroundColor: "#EEF2FF" }]} onPress={(e) => {
             e.stopPropagation?.();
             setEditMission({ ...m, questions: Array.isArray(m.questions) ? m.questions.map((q: any) => ({ ...q, marks: String(q.marks || ""), solution: q.solution || "", image_url: q.image_url || "", solution_image_url: q.solution_image_url || "", subtopic: q.subtopic || "" })) : [] });
@@ -1897,6 +1908,7 @@ export default function AdminDashboard() {
               <View style={styles.adminCardRow}>
                 <Text style={styles.adminCardTitle} numberOfLines={2}>{test.title}</Text>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                  <AdminExportDownloadButton kind="test" id={test.id} filename={`${test.title}.pdf`} stopPropagation size={14} />
                   <Pressable style={[styles.testActionBtn, { backgroundColor: "#EEF2FF" }]} onPress={(e) => { e.stopPropagation?.(); setEditAdminTest({ ...test, durationMinutes: String(test.duration_minutes), totalMarks: String(test.total_marks), passingMarks: String(test.passing_marks || 35), ts_course_id: tsCourses.some((c: any) => c.id === test.course_id) ? test.course_id : null }); }}>
                     <Ionicons name="pencil-outline" size={14} color={Colors.light.primary} />
                     <Text style={[styles.testActionBtnText, { color: Colors.light.primary }]}>Edit Test</Text>
@@ -1911,6 +1923,10 @@ export default function AdminDashboard() {
                 {test.course_title && <Text style={[styles.adminCardMetaText, { color: Colors.light.primary }]}> · {test.course_title}</Text>}
               </View>
               <View style={styles.testActionRow}>
+                <Pressable style={[styles.testActionBtn, { backgroundColor: "#ECFDF5" }]} onPress={(e) => { e.stopPropagation?.(); void downloadAdminContent("test", test.id, `${test.title}.pdf`); }}>
+                  <Ionicons name="download-outline" size={14} color="#059669" />
+                  <Text style={[styles.testActionBtnText, { color: "#059669" }]}>Download PDF</Text>
+                </Pressable>
                 <Pressable style={styles.testActionBtn} onPress={(e) => { e.stopPropagation?.(); setShowTestQuestions(test.id); setShowAddQ(true); setShowBulkQ(false); setShowViewQuestions(false); setBulkQResult(null); setBulkQText(""); }}>
                   <Ionicons name="create-outline" size={14} color={Colors.light.primary} />
                   <Text style={styles.testActionBtnText}>Add Questions</Text>
@@ -1950,6 +1966,11 @@ export default function AdminDashboard() {
               </View>
             </View>
             <View style={styles.adminCardActions}>
+              {!!mat.file_url && (
+                <Pressable style={[styles.deleteBtn, { backgroundColor: "#ECFDF5", marginRight: 6 }]} onPress={() => void downloadAdminContent("material", mat.id, mat.title)}>
+                  <Ionicons name="download-outline" size={18} color="#059669" />
+                </Pressable>
+              )}
               <Pressable style={[styles.deleteBtn, { backgroundColor: "#EEF2FF", marginRight: 6 }]} onPress={() => setEditFreeMaterial({ ...mat, sectionTitle: mat.section_title || "", downloadAllowed: mat.download_allowed || false })}>
                 <Ionicons name="pencil-outline" size={18} color={Colors.light.primary} />
               </Pressable>
@@ -2742,6 +2763,11 @@ export default function AdminDashboard() {
                     </View>
                   </View>
                   <View style={styles.adminCardActions}>
+                    {!!mat.file_url && (
+                      <Pressable style={[styles.deleteBtn, { backgroundColor: "#ECFDF5", marginRight: 6 }]} onPress={() => void downloadAdminContent("material", mat.id, mat.title)}>
+                        <Ionicons name="download-outline" size={18} color="#059669" />
+                      </Pressable>
+                    )}
                     <Pressable style={[styles.deleteBtn, { backgroundColor: "#EEF2FF", marginRight: 6 }]} onPress={() => setEditFreeMaterial({ ...mat, sectionTitle: mat.section_title || "", downloadAllowed: mat.download_allowed || false })}>
                       <Ionicons name="pencil-outline" size={18} color={Colors.light.primary} />
                     </Pressable>
@@ -3451,6 +3477,7 @@ export default function AdminDashboard() {
                     <View style={styles.adminCardRow}>
                       <Text style={styles.adminCardTitle} numberOfLines={2}>{test.title}</Text>
                       <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                        <AdminExportDownloadButton kind="test" id={test.id} filename={`${test.title}.pdf`} stopPropagation size={14} />
                         <Pressable style={[styles.testActionBtn, { backgroundColor: "#EEF2FF" }]} onPress={(e) => { e.stopPropagation?.(); setEditAdminTest({ ...test, durationMinutes: String(test.duration_minutes), totalMarks: String(test.total_marks), passingMarks: String(test.passing_marks || 35), ts_course_id: tsCourses.some((c: any) => c.id === test.course_id) ? test.course_id : null }); }}>
                           <Ionicons name="pencil-outline" size={14} color={Colors.light.primary} />
                           <Text style={[styles.testActionBtnText, { color: Colors.light.primary }]}>Edit Test</Text>
@@ -3465,6 +3492,10 @@ export default function AdminDashboard() {
                       {test.course_title && <Text style={[styles.adminCardMetaText, { color: Colors.light.primary }]}> · {test.course_title}</Text>}
                     </View>
                     <View style={styles.testActionRow}>
+                      <Pressable style={[styles.testActionBtn, { backgroundColor: "#ECFDF5" }]} onPress={(e) => { e.stopPropagation?.(); void downloadAdminContent("test", test.id, `${test.title}.pdf`); }}>
+                        <Ionicons name="download-outline" size={14} color="#059669" />
+                        <Text style={[styles.testActionBtnText, { color: "#059669" }]}>Download PDF</Text>
+                      </Pressable>
                       <Pressable style={styles.testActionBtn} onPress={(e) => { e.stopPropagation?.(); setShowTestQuestions(test.id); setShowAddQ(true); setShowBulkQ(false); setShowViewQuestions(false); setBulkQResult(null); setBulkQText(""); }}>
                         <Ionicons name="create-outline" size={14} color={Colors.light.primary} />
                         <Text style={styles.testActionBtnText}>Add Questions</Text>
@@ -5299,6 +5330,14 @@ export default function AdminDashboard() {
                   <Text style={{ fontSize: 11, fontFamily: "Inter_400Regular", color: Colors.light.textMuted, marginTop: 2 }}>New question is inserted after the selected one.</Text>
                 )}
               </View>
+              {showTestQuestions ? (
+                <AdminExportDownloadButton
+                  kind="test"
+                  id={showTestQuestions}
+                  filename={`${findAdminTestById(showTestQuestions)?.title || "test"}.pdf`}
+                  style={{ marginRight: 8 }}
+                />
+              ) : null}
               <Pressable onPress={dismissStandaloneTestQuestionsLayer} accessibilityLabel="Close or go back">
                 <Ionicons name={showBulkQ || showAddQ || showViewQuestions ? "chevron-back" : "close"} size={24} color={Colors.light.text} />
               </Pressable>
@@ -5995,6 +6034,15 @@ export default function AdminDashboard() {
               <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: "#fff" }} numberOfLines={1}>{selectedMission?.title}</Text>
               <Text style={{ fontSize: 12, color: "rgba(255,255,255,0.6)", fontFamily: "Inter_400Regular" }}>{missionAttempts.length} student{missionAttempts.length !== 1 ? "s" : ""} attempted</Text>
             </View>
+            {selectedMission?.id ? (
+              <AdminExportDownloadButton
+                kind="mission"
+                id={selectedMission.id}
+                filename={`${selectedMission.title || "mission"}.pdf`}
+                variant="header"
+                size={18}
+              />
+            ) : null}
           </LinearGradient>
           {missionAttemptsLoading ? (
             <ActivityIndicator color={Colors.light.primary} style={{ marginTop: 40 }} />
@@ -6149,6 +6197,15 @@ export default function AdminDashboard() {
                 {adminTestAttempts.length} student{adminTestAttempts.length !== 1 ? "s" : ""} attempted
               </Text>
             </View>
+            {selectedAdminTest?.id ? (
+              <AdminExportDownloadButton
+                kind="test"
+                id={selectedAdminTest.id}
+                filename={`${selectedAdminTest.title || "test"}.pdf`}
+                variant="header"
+                size={18}
+              />
+            ) : null}
           </LinearGradient>
           {adminTestAttemptsLoading ? (
             <ActivityIndicator color={Colors.light.primary} style={{ marginTop: 40 }} />
@@ -6490,7 +6547,12 @@ export default function AdminDashboard() {
           <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Edit Test</Text>
-              <Pressable onPress={() => setEditAdminTest(null)}><Ionicons name="close" size={24} color={Colors.light.text} /></Pressable>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                {editAdminTest?.id ? (
+                  <AdminExportDownloadButton kind="test" id={editAdminTest.id} filename={`${editAdminTest.title || "test"}.pdf`} />
+                ) : null}
+                <Pressable onPress={() => setEditAdminTest(null)}><Ionicons name="close" size={24} color={Colors.light.text} /></Pressable>
+              </View>
             </View>
             <ScrollView style={styles.modalScroll}>
               <View style={styles.formField}>
@@ -6645,9 +6707,14 @@ export default function AdminDashboard() {
           <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Edit Mission</Text>
-              <Pressable onPress={() => setEditMission(null)}>
-                <Ionicons name="close" size={24} color={Colors.light.text} />
-              </Pressable>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                {editMission?.id ? (
+                  <AdminExportDownloadButton kind="mission" id={editMission.id} filename={`${editMission.title || "mission"}.pdf`} />
+                ) : null}
+                <Pressable onPress={() => setEditMission(null)}>
+                  <Ionicons name="close" size={24} color={Colors.light.text} />
+                </Pressable>
+              </View>
             </View>
             <ScrollView style={styles.modalScroll}>
               <View style={styles.formField}>

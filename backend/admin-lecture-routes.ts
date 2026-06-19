@@ -1,6 +1,8 @@
 import type { Express, Request, Response } from "express";
+import { notifyEnrolledCourseStudents } from "./auto-notification-expiry";
 import { purgeUserDownloadsForItem } from "./download-access-utils";
 import { withTimeout } from "./async-utils";
+import { sendPushToUsers } from "./push-notifications";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -107,6 +109,21 @@ export function registerAdminLectureRoutes({
       );
       // `courses.total_lectures` is maintained by a trigger on `lectures`.
       await recomputeAllEnrollmentsProgressForCourse(parsedCourseId);
+      const lectureTitle = String(title).trim();
+      const courseInfo = await db.query("SELECT title FROM courses WHERE id = $1", [parsedCourseId]).catch(() => ({ rows: [] as any[] }));
+      const courseTitle = String(courseInfo.rows[0]?.title || "your course");
+      const notifTitle = "📹 New Lecture Added";
+      const notifMessage = `"${lectureTitle}" has been added in ${courseTitle}.`;
+      await notifyEnrolledCourseStudents(db, parsedCourseId, {
+        title: notifTitle,
+        message: notifMessage,
+        pushData: {
+          type: "new_lecture_added",
+          lectureId: result.rows[0]?.id,
+          courseId: parsedCourseId,
+        },
+        sendPush: (userIds, payload) => sendPushToUsers(db, userIds, payload),
+      });
       res.json(result.rows[0]);
     } catch (err) {
       console.error("[AdminLectures] create failed", {

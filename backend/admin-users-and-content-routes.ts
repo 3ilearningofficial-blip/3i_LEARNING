@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { autoNotificationExpiresAt } from "./auto-notification-expiry";
+import { notifyStandaloneMaterialAdded } from "./notification-utils";
 import { sendPushToUsers } from "./push-notifications";
 import { purgeStudentAccountById } from "./user-account-purge";
 
@@ -82,6 +83,12 @@ export function registerAdminUsersAndContentRoutes({
           body: notifMessage,
           data: { type: "new_material_added", materialId: result.rows[0]?.id, courseId: parsedCourseId },
         });
+      } else {
+        await notifyStandaloneMaterialAdded(db, {
+          materialId: Number(result.rows[0]?.id),
+          title: normalizedTitle,
+          sectionTitle: sectionTitle || null,
+        }).catch((err) => console.error("[AdminMaterials] standalone notify failed:", err));
       }
       res.json(result.rows[0]);
     } catch (err) {

@@ -126,10 +126,10 @@ export default function CourseAboutScreen() {
   const materialsCount = Array.isArray(course.materials) ? course.materials.length : Number(course.total_materials || 0);
   const tests = Array.isArray(course.tests) ? course.tests : [];
   const pyqCount = tests.filter((t) => String(t.test_type || "").toLowerCase() === "pyq").length;
-  const mockCount = Math.max(
-    tests.filter((t) => String(t.test_type || "").toLowerCase() === "mock").length,
-    Number(course.mock_count) || 0,
-  );
+  const mockListCount = tests.filter((t) => String(t.test_type || "").toLowerCase() === "mock").length;
+  const mockCount = isMultiSubject
+    ? mockListCount
+    : Math.max(mockListCount, Number(course.mock_count) || 0);
   const missionCount = Number(course.daily_mission_count) || 0;
   const regularTestCountFromList = tests.filter((t) => !["pyq", "mock"].includes(String(t.test_type || "").toLowerCase())).length;
   const testCount = isMultiSubject

@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { autoNotificationExpiresAt } from "./auto-notification-expiry";
+import { notifyStandaloneTestAdded, testNotificationCopy } from "./notification-utils";
 import { sendPushToUsers } from "./push-notifications";
 
 type DbClient = {
@@ -151,9 +152,7 @@ export function registerAdminTestRoutes({
         const recipients = await db.query("SELECT user_id FROM enrollments WHERE course_id = $1", [courseId]).catch(() => ({ rows: [] as any[] }));
         const recipientIds = recipients.rows.map((r: any) => Number(r.user_id));
         const testTypeNorm = String(testType || "practice").toLowerCase();
-        const notifTitle =
-          testTypeNorm === "mock" ? "📝 New Mock Test Added" : testTypeNorm === "pyq" ? "📝 New PYQ Added" : "📝 New Test Added";
-        const notifMessage = `"${title}" has been added in ${courseTitle}.`;
+        const { notifTitle, notifMessage } = testNotificationCopy(testTypeNorm, title, courseTitle);
         const now = Date.now();
         const expiresAt = autoNotificationExpiresAt(now);
         if (recipientIds.length > 0) {
@@ -171,6 +170,14 @@ export function registerAdminTestRoutes({
           body: notifMessage,
           data: { type: "new_test_added", testId: result.rows[0]?.id, courseId: Number(courseId) },
         });
+      } else {
+        const miniId = miniCourseId != null && miniCourseId !== "" ? Number(miniCourseId) : null;
+        await notifyStandaloneTestAdded(db, {
+          testId: Number(result.rows[0]?.id),
+          title: String(title),
+          testType,
+          miniCourseId: Number.isFinite(miniId) && miniId! > 0 ? miniId : null,
+        }).catch((err) => console.error("[AdminTests] standalone notify failed:", err));
       }
       res.json(result.rows[0]);
     } catch {

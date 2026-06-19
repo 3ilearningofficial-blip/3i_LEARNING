@@ -23,6 +23,7 @@ import SortableList from "@/components/admin/SortableList";
 import SortableItem from "@/components/admin/SortableItem";
 import { MULTI_SUBJECTS, SubjectIcon, getSubjectMeta } from "@/constants/multiSubjects";
 import { downloadAdminContent } from "@/lib/admin-export";
+import { AdminExportDownloadButton } from "@/components/admin/AdminExportDownloadButton";
 
 interface Lecture {
   id: number;
@@ -526,6 +527,8 @@ export default function AdminCourseScreen() {
 
   const allCourseLectures = Array.isArray(course?.lectures) ? course.lectures : [];
   const allCourseTests = Array.isArray(course?.tests) ? course.tests : [];
+  const findCourseTestById = (testId: number | null | undefined) =>
+    testId ? allCourseTests.find((t: any) => Number(t.id) === Number(testId)) : null;
   const allCourseMaterials = Array.isArray(course?.materials) ? course.materials : [];
   const isMultiSubjectCourse = course?.course_type === "multi_subject";
   const subjectMatches = (row: { subject_key?: string | null }) =>
@@ -2377,7 +2380,12 @@ export default function AdminCourseScreen() {
           <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Edit Test</Text>
-              <Pressable onPress={() => setEditTest(null)}><Ionicons name="close" size={24} color={Colors.light.text} /></Pressable>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                {editTest?.id ? (
+                  <AdminExportDownloadButton kind="test" id={editTest.id} filename={`${editTest.title || "test"}.pdf`} />
+                ) : null}
+                <Pressable onPress={() => setEditTest(null)}><Ionicons name="close" size={24} color={Colors.light.text} /></Pressable>
+              </View>
             </View>
             <ScrollView style={{ maxHeight: 420 }} showsVerticalScrollIndicator={false}>
               <FormField label="Test Title *" placeholder="e.g., Chapter 1 Test" value={editTest?.title || ""} onChangeText={(v) => setEditTest((p: any) => ({ ...p, title: v }))} />
@@ -3021,6 +3029,12 @@ export default function AdminCourseScreen() {
                                   </Pressable>
                                 </>
                               )}
+                              <Pressable
+                                style={[styles.deleteItemBtn, { backgroundColor: "#ECFDF5" }]}
+                                onPress={(e) => { e.stopPropagation?.(); void downloadAdminContent("test", test.id, `${test.title}.pdf`); }}
+                              >
+                                <Ionicons name="download-outline" size={14} color="#059669" />
+                              </Pressable>
                               <Pressable style={[styles.deleteItemBtn, { backgroundColor: "#EEF2FF" }]} onPress={(e) => {
                                 e.stopPropagation?.();
                                 setFolderEditTest({ ...test, durationMinutes: String(test.duration_minutes), totalMarks: String(test.total_marks), difficulty: test.difficulty || "moderate" });
@@ -3234,6 +3248,14 @@ export default function AdminCourseScreen() {
                                 </Pressable>
                               </>
                             )}
+                            {!!mat.file_url && (
+                              <Pressable
+                                style={[styles.deleteItemBtn, { backgroundColor: "#ECFDF5" }]}
+                                onPress={() => void downloadAdminContent("material", mat.id, mat.title)}
+                              >
+                                <Ionicons name="download-outline" size={14} color="#059669" />
+                              </Pressable>
+                            )}
                             <Pressable style={[styles.deleteItemBtn, { backgroundColor: "#EEF2FF" }]} onPress={() => setFolderEditMaterial({ ...mat, fileUrl: mat.file_url || "", fileType: mat.file_type || "pdf", sectionTitle: mat.section_title || "", description: mat.description || "", downloadAllowed: mat.download_allowed || false })}>
                               <Ionicons name="pencil" size={14} color={Colors.light.primary} />
                             </Pressable>
@@ -3420,7 +3442,12 @@ export default function AdminCourseScreen() {
               <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
                 <View style={styles.modalHeader}>
                   <Text style={styles.modalTitle}>Edit Test</Text>
-                  <Pressable onPress={() => setFolderEditTest(null)}><Ionicons name="close" size={24} color={Colors.light.text} /></Pressable>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                    {folderEditTest?.id ? (
+                      <AdminExportDownloadButton kind="test" id={folderEditTest.id} filename={`${folderEditTest.title || "test"}.pdf`} />
+                    ) : null}
+                    <Pressable onPress={() => setFolderEditTest(null)}><Ionicons name="close" size={24} color={Colors.light.text} /></Pressable>
+                  </View>
                 </View>
                 <ScrollView style={{ maxHeight: 420 }} showsVerticalScrollIndicator={false}>
                   <FormField label="Test Title *" placeholder="e.g., Chapter 1 Test" value={folderEditTest?.title || ""} onChangeText={(v) => setFolderEditTest((p: any) => ({ ...p, title: v }))} />
@@ -3665,6 +3692,15 @@ export default function AdminCourseScreen() {
                 {adminTestAttempts.length} student{adminTestAttempts.length !== 1 ? "s" : ""} attempted
               </Text>
             </View>
+            {selectedAdminTest?.id ? (
+              <AdminExportDownloadButton
+                kind="test"
+                id={selectedAdminTest.id}
+                filename={`${selectedAdminTest.title || "test"}.pdf`}
+                variant="header"
+                size={18}
+              />
+            ) : null}
           </LinearGradient>
           {adminTestAttemptsLoading ? (
             <ActivityIndicator color={Colors.light.primary} style={{ marginTop: 40 }} />
@@ -3864,6 +3900,16 @@ export default function AdminCourseScreen() {
             <Text style={{ fontSize: 17, fontFamily: "Inter_700Bold", color: "#fff", flex: 1 }}>
               {editQuestion != null ? "Edit question" : `Questions (${questionsList.length})`}
             </Text>
+            {editQuestion == null && showViewQuestions ? (
+              <AdminExportDownloadButton
+                kind="test"
+                id={showViewQuestions}
+                filename={`${findCourseTestById(showViewQuestions)?.title || "test"}.pdf`}
+                variant="header"
+                size={18}
+                style={{ marginRight: 8 }}
+              />
+            ) : null}
             {editQuestion == null && (
               <Pressable style={{ flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: Colors.light.primary, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8 }}
                 onPress={() => {

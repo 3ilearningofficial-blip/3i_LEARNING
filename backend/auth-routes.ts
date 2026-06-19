@@ -1,5 +1,5 @@
 import type { Express, Request, Response } from "express";
-import { sendPushToAdmins } from "./push-notifications";
+import { notifyAdminsInAppAndPush } from "./notification-utils";
 import { hashPassword, isScryptHash, verifyLegacySha256, verifyPassword } from "./password-utils";
 import {
   GENERIC_LOGIN_ERROR,
@@ -874,11 +874,11 @@ export function registerAuthRoutes({
         [normalizedName, finalEmail, phone, dob, photo, passwordHash, now]
       );
       const user = inserted.rows[0];
-      await sendPushToAdmins(db, {
+      await notifyAdminsInAppAndPush(db, {
         title: "👤 New User Registered",
-        body: `${user.name || "A student"} just created an account.`,
-        data: { type: "new_user_registration", userId: Number(user.id) },
-      }).catch((err) => console.error("[Auth] admin registration push failed:", err));
+        message: `${user.name || "A student"} just created an account.`,
+        pushData: { type: "new_user_registration", userId: Number(user.id) },
+      }).catch((err) => console.error("[Auth] admin registration notify failed:", err));
 
       // Clean up the one-shot challenge so it can't be reused.
       await db

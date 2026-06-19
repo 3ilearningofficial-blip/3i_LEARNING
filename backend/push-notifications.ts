@@ -143,6 +143,9 @@ export async function sendPushToUsers(
   const tokens = [...new Set(tokenResult.rows.map((r: any) => String(r.expo_push_token || "").trim()).filter(Boolean))];
   if (!tokens.length) {
     const webResult = await webResultPromise;
+    if (webResult.subscriptions === 0) {
+      console.warn(`[Push] No active tokens for ${uniqueUserIds.length} user(s); in-app only`);
+    }
     return { sent: 0, tokens: 0, webSent: webResult.sent, webSubscriptions: webResult.subscriptions };
   }
 

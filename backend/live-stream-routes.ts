@@ -1,6 +1,7 @@
 import type { Express, Request, Response } from "express";
 import { buildRecordingLectureSectionTitle } from "../shared/recordingSection";
 import { saveRecordingForClassAndPeers as saveRecordingCore } from "./live-class-recording-save";
+import { notifyAdminsLiveClassCompleted } from "./notification-utils";
 import {
   buildLegacyMp4CandidateUrls,
   ensureCloudflareMp4DownloadUrl,
@@ -314,10 +315,18 @@ export function registerLiveStreamRoutes({
         return res.json({ success: true, alreadyEnded: true, recordingUrl: existingRecordingUrl });
       }
       const endedAtNow = Date.now();
+      const wasCompleted = current?.is_completed === true;
       await db.query(
         "UPDATE live_classes SET is_live = FALSE, ended_at = COALESCE(ended_at, $1), is_completed = TRUE WHERE id = $2",
         [endedAtNow, req.params.id]
       ).catch(() => {});
+      if (!wasCompleted) {
+        await notifyAdminsLiveClassCompleted(db, {
+          id: req.params.id,
+          title: liveTitle || current?.title,
+          course_id: current?.course_id,
+        }).catch((err) => console.error("[CF Stream] admin completion notify failed:", err));
+      }
       await db.query(
         `INSERT INTO live_stream_finalize_jobs
            (live_class_id, status, attempts, next_attempt_at, created_at, updated_at)

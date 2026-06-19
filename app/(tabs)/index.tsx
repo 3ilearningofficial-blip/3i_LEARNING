@@ -312,35 +312,50 @@ function MultiSubjectCourseCard({ course, enrolled = false }: { course: Course; 
           </Text>
           {scheduleText ? <Text style={[styles.multiMetaText, { color: colors.textSecondary }]}>| {scheduleText}</Text> : null}
         </View>
-        <View style={styles.multiPriceRow}>
-          {course.is_free || parseFloat(course.price || "0") <= 0 ? (
-            <Text style={styles.multiPrice}>Free</Text>
-          ) : (
-            <View style={{ flexDirection: "row", alignItems: "baseline", gap: 6 }}>
-              <Text style={styles.multiPrice}>₹{parseFloat(course.price).toFixed(0)}</Text>
-              {parseFloat(course.original_price || "0") > 0 ? <Text style={styles.multiOriginalPrice}>₹{parseFloat(course.original_price).toFixed(0)}</Text> : null}
+        {enrolled ? (
+          <View style={[styles.multiPriceRow, { alignItems: "center" }]}>
+            <View style={{ flex: 1 }}>
+              <CourseProgressBar
+                progress={Number(course.progress) || 0}
+                color={getCourseAccentColor(course.id)}
+                colors={{ surfaceAlt: colors.surfaceAlt, textMuted: colors.textMuted }}
+              />
             </View>
-          )}
-          {discount > 0 ? <Text style={styles.multiDiscount}>{discount}% OFF</Text> : null}
-          <View style={{ flex: 1 }} />
-          <Pressable
-            style={styles.multiBuyBtn}
-            disabled={isPending}
-            onPress={(e) => {
-              e?.stopPropagation?.();
-              purchase();
-            }}
-          >
-            <LinearGradient colors={["#B91C1C", "#EF4444"]} style={styles.multiBuyGradient}>
-              <Text style={styles.multiBuyText}>
-                {isPending ? "Please wait..." : isFreeCourse ? "Start Free" : "Buy Now"}
-              </Text>
-            </LinearGradient>
-          </Pressable>
-          <Pressable style={styles.multiArrowBtn} onPress={() => router.push(`/course-about/${course.id}` as any)}>
-            <Ionicons name="chevron-forward" size={18} color="#0F172A" />
-          </Pressable>
-        </View>
+            <Pressable style={styles.multiArrowBtn} onPress={() => router.push(`/course-about/${course.id}` as any)}>
+              <Ionicons name="chevron-forward" size={18} color="#0F172A" />
+            </Pressable>
+          </View>
+        ) : (
+          <View style={styles.multiPriceRow}>
+            {course.is_free || parseFloat(course.price || "0") <= 0 ? (
+              <Text style={styles.multiPrice}>Free</Text>
+            ) : (
+              <View style={{ flexDirection: "row", alignItems: "baseline", gap: 6 }}>
+                <Text style={styles.multiPrice}>₹{parseFloat(course.price).toFixed(0)}</Text>
+                {parseFloat(course.original_price || "0") > 0 ? <Text style={styles.multiOriginalPrice}>₹{parseFloat(course.original_price).toFixed(0)}</Text> : null}
+              </View>
+            )}
+            {discount > 0 ? <Text style={styles.multiDiscount}>{discount}% OFF</Text> : null}
+            <View style={{ flex: 1 }} />
+            <Pressable
+              style={styles.multiBuyBtn}
+              disabled={isPending}
+              onPress={(e) => {
+                e?.stopPropagation?.();
+                purchase();
+              }}
+            >
+              <LinearGradient colors={["#B91C1C", "#EF4444"]} style={styles.multiBuyGradient}>
+                <Text style={styles.multiBuyText}>
+                  {isPending ? "Please wait..." : isFreeCourse ? "Start Free" : "Buy Now"}
+                </Text>
+              </LinearGradient>
+            </Pressable>
+            <Pressable style={styles.multiArrowBtn} onPress={() => router.push(`/course-about/${course.id}` as any)}>
+              <Ionicons name="chevron-forward" size={18} color="#0F172A" />
+            </Pressable>
+          </View>
+        )}
       </View>
       {paymentModal}
     </Pressable>
@@ -440,35 +455,50 @@ function NormalCourseCard({ course, enrolled = false }: { course: Course; enroll
             </>
           ) : null}
         </View>
-        <View style={styles.multiPriceRow}>
-          {course.is_free || parseFloat(course.price || "0") <= 0 ? (
-            <Text style={styles.multiPrice}>Free</Text>
-          ) : (
-            <View style={{ flexDirection: "row", alignItems: "baseline", gap: 6 }}>
-              <Text style={styles.multiPrice}>₹{parseFloat(course.price).toFixed(0)}</Text>
-              {parseFloat(course.original_price || "0") > 0 ? <Text style={styles.multiOriginalPrice}>₹{parseFloat(course.original_price).toFixed(0)}</Text> : null}
+        {enrolled ? (
+          <View style={[styles.multiPriceRow, { alignItems: "center" }]}>
+            <View style={{ flex: 1 }}>
+              <CourseProgressBar
+                progress={Number(course.progress) || 0}
+                color={color}
+                colors={{ surfaceAlt: colors.surfaceAlt, textMuted: colors.textMuted }}
+              />
             </View>
-          )}
-          {discount > 0 ? <Text style={styles.multiDiscount}>{discount}% OFF</Text> : null}
-          <View style={{ flex: 1 }} />
-          <Pressable
-            style={styles.multiBuyBtn}
-            disabled={isPending}
-            onPress={(e) => {
-              e?.stopPropagation?.();
-              purchase();
-            }}
-          >
-            <LinearGradient colors={["#B91C1C", "#EF4444"]} style={styles.multiBuyGradient}>
-              <Text style={styles.multiBuyText}>
-                {isPending ? "Please wait..." : isFreeCourse ? "Start Free" : "Buy Now"}
-              </Text>
-            </LinearGradient>
-          </Pressable>
-          <Pressable style={styles.multiArrowBtn} onPress={() => router.push(explorePath as any)}>
-            <Ionicons name="chevron-forward" size={18} color="#0F172A" />
-          </Pressable>
-        </View>
+            <Pressable style={styles.multiArrowBtn} onPress={() => router.push(explorePath as any)}>
+              <Ionicons name="chevron-forward" size={18} color="#0F172A" />
+            </Pressable>
+          </View>
+        ) : (
+          <View style={styles.multiPriceRow}>
+            {course.is_free || parseFloat(course.price || "0") <= 0 ? (
+              <Text style={styles.multiPrice}>Free</Text>
+            ) : (
+              <View style={{ flexDirection: "row", alignItems: "baseline", gap: 6 }}>
+                <Text style={styles.multiPrice}>₹{parseFloat(course.price).toFixed(0)}</Text>
+                {parseFloat(course.original_price || "0") > 0 ? <Text style={styles.multiOriginalPrice}>₹{parseFloat(course.original_price).toFixed(0)}</Text> : null}
+              </View>
+            )}
+            {discount > 0 ? <Text style={styles.multiDiscount}>{discount}% OFF</Text> : null}
+            <View style={{ flex: 1 }} />
+            <Pressable
+              style={styles.multiBuyBtn}
+              disabled={isPending}
+              onPress={(e) => {
+                e?.stopPropagation?.();
+                purchase();
+              }}
+            >
+              <LinearGradient colors={["#B91C1C", "#EF4444"]} style={styles.multiBuyGradient}>
+                <Text style={styles.multiBuyText}>
+                  {isPending ? "Please wait..." : isFreeCourse ? "Start Free" : "Buy Now"}
+                </Text>
+              </LinearGradient>
+            </Pressable>
+            <Pressable style={styles.multiArrowBtn} onPress={() => router.push(explorePath as any)}>
+              <Ionicons name="chevron-forward" size={18} color="#0F172A" />
+            </Pressable>
+          </View>
+        )}
       </View>
       {paymentModal}
     </Pressable>
@@ -632,10 +662,8 @@ export default function HomeScreen() {
   const avatarSize = isNativePhone ? 40 : 52;
   const avatarBadgeSize = isNativePhone ? 15 : 18;
   const enrolledCardWidth = isWideScreen
-    ? 280
-    : isNativePhone
-      ? Math.min(screenWidth * 0.68, 260)
-      : Math.min(screenWidth * 0.72, 280);
+    ? 360
+    : Math.min(screenWidth - 40, 420);
 
   useEffect(() => {
     if (Platform.OS !== "web" || typeof MutationObserver === "undefined") return;
@@ -1065,7 +1093,7 @@ export default function HomeScreen() {
                       <EnrolledCourseCard course={item} index={index} />
                     </View>
                   )}
-                  contentContainerStyle={{ paddingLeft: 20, paddingRight: 8 }}
+                  contentContainerStyle={{ paddingLeft: 10, paddingRight: 8 }}
                   scrollEnabled={myCourses.length > 1}
                 />
               </View>

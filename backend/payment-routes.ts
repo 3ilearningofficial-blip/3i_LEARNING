@@ -1,6 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { computeEnrollmentValidUntil, isEnrollmentExpired } from "./course-access-utils";
-import { sendPushToAdmins } from "./push-notifications";
+import { notifyAdminsInAppAndPush } from "./notification-utils";
 import {
   assertNativePaidPurchaseInstallation,
   finalizeInstallationBindAfterPurchase,
@@ -407,11 +407,11 @@ export function registerPaymentRoutes({
         ]);
         const courseTitle = String(courseInfo.rows[0]?.title || "a course");
         const buyerName = String(userInfo.rows[0]?.name || userInfo.rows[0]?.phone || userInfo.rows[0]?.email || "A student");
-        await sendPushToAdmins(db, {
+        await notifyAdminsInAppAndPush(db, {
           title: "💰 New Course Purchase",
-          body: `${buyerName} purchased ${courseTitle}.`,
-          data: { type: "new_purchase", userId: result.userId, courseId: result.courseId },
-        }).catch((err) => console.error("[Payment] admin purchase push failed:", err));
+          message: `${buyerName} purchased ${courseTitle}.`,
+          pushData: { type: "new_purchase", userId: result.userId, courseId: result.courseId },
+        }).catch((err) => console.error("[Payment] admin purchase notify failed:", err));
         console.log("[Payments] verify success");
         return { statusCode: 200, body: { success: true, message: "Payment verified and enrolled successfully" } as any };
       });

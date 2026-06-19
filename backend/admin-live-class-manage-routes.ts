@@ -2,6 +2,7 @@ import type { Express, Request, Response } from "express";
 import { purgeUserDownloadsForItem } from "./download-access-utils";
 import { buildRecordingLectureSectionTitle } from "../shared/recordingSection";
 import { autoNotificationExpiresAt } from "./auto-notification-expiry";
+import { notifyAdminsLiveClassCompleted } from "./notification-utils";
 import { sendPushToUsers } from "./push-notifications";
 import {
   convertLiveClassTitlePeersToLectures,
@@ -67,6 +68,8 @@ export function registerAdminLiveClassManageRoutes({
 
   app.put("/api/admin/live-classes/:id", requireAdmin, async (req: Request, res: Response) => {
     try {
+      const prevRow = await db.query("SELECT id, title, course_id, is_completed FROM live_classes WHERE id = $1", [req.params.id]);
+      const wasCompleted = prevRow.rows[0]?.is_completed === true;
       const { isLive, isCompleted, youtubeUrl, title, description, convertToLecture, sectionTitle, scheduledAt, notifyEmail, notifyBell, isFreePreview, streamType, chatMode, showViewerCount, recordingUrl, cfStreamUid, lectureSectionTitle, lectureSubfolderTitle, pipPosition, subjectKey } = req.body;
       const normalizedPipPosition =
         pipPosition === undefined ? undefined : pipPosition === "bottom-right" ? "bottom-right" : "top-right";
@@ -365,6 +368,12 @@ export function registerAdminLiveClassManageRoutes({
         await db
           .query("DELETE FROM live_class_hand_raises WHERE live_class_id = $1", [req.params.id])
           .catch(() => {});
+      }
+
+      if ((isCompleted === true || isLive === false) && !wasCompleted && liveClass) {
+        await notifyAdminsLiveClassCompleted(db, liveClass).catch((err) =>
+          console.error("[GoLive] admin completion notify failed:", err)
+        );
       }
 
       res.json(liveClass);

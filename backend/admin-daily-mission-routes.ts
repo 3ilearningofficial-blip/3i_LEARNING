@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { notifyStandaloneMissionAdded } from "./notification-utils";
 import { sendPushToUsers } from "./push-notifications";
 
 type DbClient = {
@@ -72,6 +73,12 @@ export function registerAdminDailyMissionRoutes({
         } catch (e) {
           console.error("Course mission notify:", e);
         }
+      } else if (row?.id != null) {
+        await notifyStandaloneMissionAdded(db, {
+          missionId: Number(row.id),
+          title: String(title),
+          folderName: folderNameNorm,
+        }).catch((err) => console.error("[AdminMissions] standalone notify failed:", err));
       }
       await recomputeMissionCourseProgress(db, recomputeAllEnrollmentsProgressForCourse, courseId);
       res.json(row);
