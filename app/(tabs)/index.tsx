@@ -20,6 +20,8 @@ import { getCourseAccentColor } from "@shared/courseTheme";
 import { liveClassQueryKey, notificationsQueryKey } from "@/lib/query-keys";
 import { useDocumentVisibility } from "@/lib/useDocumentVisibility";
 import { fetch } from "expo/fetch";
+import CourseBannerImage from "@/components/CourseBannerImage";
+import { COURSE_BANNER_ASPECT } from "@/constants/courseBanner";
 
 interface Course {
   id: number;
@@ -156,14 +158,13 @@ function getCourseBannerColors(course: Course): [string, string] {
   return [cover, `${cover}CC`];
 }
 
-function CourseBanner({ course, height }: { course: Course; height?: number }) {
+function CourseBanner({ course }: { course: Course }) {
   const bannerColors = getCourseBannerColors(course);
   return (
-    <LinearGradient colors={bannerColors} style={[styles.multiCourseBanner, height != null && { height }]}>
-      {course.thumbnail ? (
-        <Image source={{ uri: course.thumbnail }} style={StyleSheet.absoluteFillObject} resizeMode="cover" />
-      ) : null}
-    </LinearGradient>
+    <CourseBannerImage
+      uri={course.thumbnail}
+      fallbackColors={bannerColors}
+    />
   );
 }
 
@@ -272,13 +273,10 @@ function MultiSubjectCourseCard({ course, enrolled = false }: { course: Course; 
       style={({ pressed }) => [styles.multiCourseCard, { backgroundColor: colors.card, borderColor: colors.border }, pressed && { opacity: 0.94, transform: [{ scale: 0.985 }] }]}
       onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push(`/course-about/${course.id}` as any); }}
     >
-      <LinearGradient colors={bannerColors} style={styles.multiCourseBanner}>
-        {course.thumbnail ? (
-          <Image source={{ uri: course.thumbnail }} style={StyleSheet.absoluteFillObject} resizeMode="cover" />
-        ) : (
-          <View style={styles.multiBannerFallback} />
-        )}
-      </LinearGradient>
+      <CourseBannerImage
+        uri={course.thumbnail}
+        fallbackColors={bannerColors}
+      />
       <View style={styles.multiCourseBody}>
         <View style={styles.multiTopRow}>
           <View style={[styles.multiBadgeRow, { flexShrink: 1 }]}>
@@ -1260,8 +1258,7 @@ const styles = StyleSheet.create({
     borderRadius: 20, overflow: "hidden", borderWidth: 1, marginBottom: 14, minHeight: 294,
     shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 12, elevation: 4,
   },
-  multiCourseBanner: { height: 154, overflow: "hidden", justifyContent: "center" },
-  multiBannerFallback: { flex: 1 },
+  multiCourseBanner: { width: "100%", aspectRatio: COURSE_BANNER_ASPECT, overflow: "hidden" },
   multiCourseBody: { paddingHorizontal: 16, paddingVertical: 12, gap: 8 },
   multiTopRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
   multiBadgeRow: { flexDirection: "row", alignItems: "center", gap: 6, flex: 1, flexWrap: "wrap" },

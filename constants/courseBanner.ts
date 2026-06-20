@@ -1,0 +1,2 @@
+export const COURSE_BANNER_ASPECT = 1200 / 450;
+export const COURSE_BANNER_RECOMMENDED = "1200 × 450 px";

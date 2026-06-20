@@ -36,7 +36,7 @@
       "supportsTablet": true
     },
     "web": {
-      "favicon": "./assets/images/favicon.png",
+      "favicon": "./public/favicon.png",
       "bundler": "metro",
       "output": "single",
       "name": "3i Learning",

@@ -18,6 +18,8 @@ import { blurActiveElementWeb } from "@/lib/navigate-auth-back";
 import { markWebPostLoginHomeGrace } from "@/lib/web-post-login-grace";
 import { formatLockCountdown, sendOtpRequest, verifyOtpRequest } from "@/lib/otp-lockout";
 import Colors from "@/constants/colors";
+import CourseBannerImage from "@/components/CourseBannerImage";
+import { COURSE_BANNER_ASPECT } from "@/constants/courseBanner";
 
 const DEFAULT_FEATURES = [
   { icon: "videocam", color: "#1A56DB", title: "Video Courses", desc: "Structured courses for NDA, CDS, AFCAT with live & recorded lectures" },
@@ -939,9 +941,11 @@ export default function WelcomeScreen() {
                 <View key={`${course.id || "fallback"}-${index}`} style={styles.websiteCourseCard}>
                   <View style={styles.websiteCourseThumb}>
                     {course.thumbnail ? (
-                      <Image source={{ uri: resolveWelcomeMediaUrl(course.thumbnail, apiOrigin) }} style={StyleSheet.absoluteFillObject} resizeMode="cover" />
+                      <CourseBannerImage uri={resolveWelcomeMediaUrl(course.thumbnail, apiOrigin)} backgroundColor="#EEF4FF" />
                     ) : (
-                      <Ionicons name="book" size={34} color={Colors.light.primary} />
+                      <View style={styles.websiteCourseThumbFallback}>
+                        <Ionicons name="book" size={34} color={Colors.light.primary} />
+                      </View>
                     )}
                   </View>
                   <Text style={styles.websiteCourseTitle} numberOfLines={2}>{course.title}</Text>
@@ -1853,12 +1857,17 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   websiteCourseThumb: {
-    height: 130,
+    width: "100%",
+    aspectRatio: COURSE_BANNER_ASPECT,
     borderRadius: 16,
     backgroundColor: "#EEF4FF",
     overflow: "hidden",
+  },
+  websiteCourseThumbFallback: {
+    flex: 1,
     alignItems: "center",
     justifyContent: "center",
+    width: "100%",
   },
   websiteCourseTitle: {
     fontFamily: "Inter_700Bold",

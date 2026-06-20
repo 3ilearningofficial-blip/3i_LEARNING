@@ -27,6 +27,8 @@ import { AdminExportDownloadButton } from "@/components/admin/AdminExportDownloa
 import AdminLectureAddBody, { type AddContentMode } from "@/components/admin/AdminLectureAddBody";
 import AdminMaterialAddBody from "@/components/admin/AdminMaterialAddBody";
 import { computeBaseOrderIndex } from "@/lib/bulk-upload-utils";
+import AdminBannerPreview from "@/components/admin/AdminBannerPreview";
+import { AdminImageBoxInline } from "@/app/admin/components/AdminImageBoxInline";
 
 interface Lecture {
   id: number;
@@ -382,6 +384,14 @@ export default function AdminCourseScreen() {
   const [folderEditMaterial, setFolderEditMaterial] = useState<any>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const uploadAbortRef = useRef<AbortController | null>(null);
+
+  const cancelUpload = () => {
+    uploadAbortRef.current?.abort();
+    uploadAbortRef.current = null;
+    setUploading(false);
+    setUploadProgress(0);
+  };
   const [activeSubjectKey, setActiveSubjectKey] = useState("maths");
   const courseIdNum = Number(id);
   const tabVisible = useDocumentVisibility();
@@ -396,6 +406,29 @@ export default function AdminCourseScreen() {
   };
 
   const pickFileAndUpload = async (folder: "lectures" | "materials" | "images", accept: string, onDone: (url: string) => void) => {
+    const runUpload = async (fileUri: string, fileName: string, mimeType: string, contentLength?: number) => {
+      const controller = new AbortController();
+      uploadAbortRef.current = controller;
+      setUploading(true);
+      setUploadProgress(0);
+      try {
+        const { publicUrl } = await uploadToR2(fileUri, fileName, mimeType, folder, {
+          onProgress: (pct) => setUploadProgress(pct),
+          signal: controller.signal,
+          contentLength,
+        });
+        onDone(publicUrl);
+      } catch (err: any) {
+        if (err?.name !== "AbortError") {
+          Alert.alert("Upload Failed", err?.message || "Could not upload file.");
+        }
+      } finally {
+        if (uploadAbortRef.current === controller) uploadAbortRef.current = null;
+        setUploading(false);
+        setUploadProgress(0);
+      }
+    };
+
     try {
       if (Platform.OS === "web") {
         const input = document.createElement("input");
@@ -404,31 +437,24 @@ export default function AdminCourseScreen() {
         input.onchange = async (e: any) => {
           const file = e.target.files?.[0];
           if (!file) return;
-          setUploading(true); setUploadProgress(0);
+          const blobUrl = URL.createObjectURL(file);
           try {
-            const blobUrl = URL.createObjectURL(file);
-            const { publicUrl } = await uploadToR2(blobUrl, file.name, file.type || getMimeType(file.name), folder, (pct) => setUploadProgress(pct));
+            await runUpload(blobUrl, file.name, file.type || getMimeType(file.name), file.size);
+          } finally {
             URL.revokeObjectURL(blobUrl);
-            onDone(publicUrl);
-            setUploading(false); setUploadProgress(0);
-          } catch (err: any) {
-            Alert.alert("Upload Failed", err?.message || "Could not upload file.");
-            setUploading(false); setUploadProgress(0);
           }
         };
         input.click();
       } else {
         const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.All, quality: 1 });
         if (result.canceled || !result.assets[0]) return;
-        setUploading(true); setUploadProgress(0);
         const asset = result.assets[0];
-        const { publicUrl } = await uploadToR2(asset.uri, asset.fileName || `file-${Date.now()}`, asset.mimeType || getMimeType(asset.fileName || ""), folder, (pct) => setUploadProgress(pct));
-        onDone(publicUrl);
-        setUploading(false); setUploadProgress(0);
+        await runUpload(asset.uri, asset.fileName || `file-${Date.now()}`, asset.mimeType || getMimeType(asset.fileName || ""), asset.fileSize);
       }
     } catch (err: any) {
       Alert.alert("Upload Failed", err?.message || "Could not upload file.");
-      setUploading(false); setUploadProgress(0);
+      setUploading(false);
+      setUploadProgress(0);
     }
   };
 
@@ -1429,6 +1455,9 @@ export default function AdminCourseScreen() {
             </View>
           </View>
           <Text style={{ fontSize: 13, fontFamily: "Inter_700Bold", color: "#22C55E" }}>{uploadProgress}%</Text>
+          <Pressable onPress={cancelUpload} hitSlop={8}>
+            <Ionicons name="close-circle" size={24} color="#EF4444" />
+          </Pressable>
         </View>
       )}
       <LinearGradient colors={["#0A1628", "#1A2E50"]} style={[styles.header, { paddingTop: topPadding + 4 }]}>
@@ -1599,13 +1628,23 @@ export default function AdminCourseScreen() {
             {aboutForm.teachers.map((teacher, index) => (
               <View key={`teacher-${index}`} style={[styles.itemCard, styles.aboutPanel, styles.aboutTeacherCard]}>
                 <View style={styles.aboutTeacherTopRow}>
-                  {teacher.imageUrl ? (
-                    <Image source={{ uri: teacher.imageUrl }} style={styles.aboutTeacherAvatar} />
-                  ) : (
-                    <View style={styles.aboutTeacherAvatarFallback}>
-                      <Ionicons name="person" size={30} color={Colors.light.primary} />
-                    </View>
-                  )}
+                  <View style={{ position: "relative" }}>
+                    {teacher.imageUrl ? (
+                      <>
+                        <Image source={{ uri: teacher.imageUrl }} style={styles.aboutTeacherAvatar} />
+                        <Pressable
+                          style={{ position: "absolute", top: -4, right: -4, backgroundColor: "#EF4444", borderRadius: 12, width: 24, height: 24, alignItems: "center", justifyContent: "center", zIndex: 2 }}
+                          onPress={() => setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, imageUrl: "" } : t) }))}
+                        >
+                          <Ionicons name="close" size={13} color="#fff" />
+                        </Pressable>
+                      </>
+                    ) : (
+                      <View style={styles.aboutTeacherAvatarFallback}>
+                        <Ionicons name="person" size={30} color={Colors.light.primary} />
+                      </View>
+                    )}
+                  </View>
                   <View style={{ flex: 1, minWidth: 0 }}>
                     <FormField
                       label={`Teacher ${index + 1} Name`}
@@ -2855,7 +2894,7 @@ export default function AdminCourseScreen() {
                 <>
                   <FormField label="Course Card Banner Image URL" placeholder="https://... (shown at top of home course card)" value={editForm.thumbnail} onChangeText={(v) => setEditForm(p => ({ ...p, thumbnail: v }))} />
                   {editForm.thumbnail ? (
-                    <Image source={{ uri: editForm.thumbnail }} style={{ width: "100%", height: 120, borderRadius: 12, marginBottom: 8, backgroundColor: "#F8FAFC" }} resizeMode="cover" />
+                    <AdminBannerPreview uri={editForm.thumbnail} onClear={() => setEditForm((p) => ({ ...p, thumbnail: "" }))} />
                   ) : null}
                   <Pressable
                     style={{ borderWidth: 1.5, borderColor: Colors.light.primary, borderStyle: "dashed" as any, borderRadius: 10, paddingVertical: 11, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8, backgroundColor: "#EEF2FF", marginBottom: 10, opacity: uploading ? 0.6 : 1 }}
@@ -2872,7 +2911,7 @@ export default function AdminCourseScreen() {
                 <>
                   <FormField label="Course Card Banner Image URL" placeholder="https://... (shown at top of multi-subject card)" value={editForm.thumbnail} onChangeText={(v) => setEditForm(p => ({ ...p, thumbnail: v }))} />
                   {editForm.thumbnail ? (
-                    <Image source={{ uri: editForm.thumbnail }} style={{ width: "100%", height: 120, borderRadius: 12, marginBottom: 8, backgroundColor: "#F8FAFC" }} resizeMode="cover" />
+                    <AdminBannerPreview uri={editForm.thumbnail} onClear={() => setEditForm((p) => ({ ...p, thumbnail: "" }))} />
                   ) : null}
                   <Pressable
                     style={{ borderWidth: 1.5, borderColor: Colors.light.primary, borderStyle: "dashed" as any, borderRadius: 10, paddingVertical: 11, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8, backgroundColor: "#EEF2FF", marginBottom: 10, opacity: uploading ? 0.6 : 1 }}
@@ -4273,11 +4312,11 @@ export default function AdminCourseScreen() {
               {/* Question Image */}
               <Text style={styles.formLabel}>Question Image (optional)</Text>
               <Text style={{ fontSize: 11, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", marginBottom: 6 }}>Recommended: 800×400px, JPG/PNG, max 2MB</Text>
-              <AdminImageBox imageUrl={newQuestion.imageUrl} onUrlChange={(v) => setNewQuestion(p => ({ ...p, imageUrl: v }))} />
+              <AdminImageBoxInline imageUrl={newQuestion.imageUrl} onUrlChange={(v) => setNewQuestion(p => ({ ...p, imageUrl: v }))} />
               {/* Solution Image */}
               <Text style={styles.formLabel}>Solution Image (optional)</Text>
               <Text style={{ fontSize: 11, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", marginBottom: 6 }}>Recommended: 800×400px, JPG/PNG, max 2MB</Text>
-              <AdminImageBox imageUrl={newQuestion.solutionImageUrl} onUrlChange={(v) => setNewQuestion(p => ({ ...p, solutionImageUrl: v }))} />
+              <AdminImageBoxInline imageUrl={newQuestion.solutionImageUrl} onUrlChange={(v) => setNewQuestion(p => ({ ...p, solutionImageUrl: v }))} />
             </ScrollView>
             <ActionButton
               label="Add Question"
@@ -4364,59 +4403,6 @@ export default function AdminCourseScreen() {
         </View>
       </Modal>
 
-    </View>
-  );
-}
-
-function AdminImageBox({ imageUrl, onUrlChange }: { imageUrl: string; onUrlChange: (v: string) => void }) {
-  const [showInput, setShowInput] = useState(false);
-  const [urlText, setUrlText] = useState(imageUrl);
-  const pickImage = () => {
-    if (Platform.OS === "web") {
-      const input = document.createElement("input");
-      input.type = "file"; input.accept = "image/*";
-      input.onchange = (e: any) => {
-        const file = e.target?.files?.[0]; if (!file) return;
-        const reader = new FileReader();
-        reader.onload = (ev) => { const d = ev.target?.result as string; onUrlChange(d); setUrlText(d); };
-        reader.readAsDataURL(file);
-      };
-      input.click();
-    } else {
-      import("expo-image-picker").then(async (ImagePicker) => {
-        const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.8 });
-        if (!result.canceled && result.assets?.[0]) { onUrlChange(result.assets[0].uri); setUrlText(result.assets[0].uri); }
-      }).catch(() => Alert.alert("Error", "Could not open image picker"));
-    }
-  };
-  return (
-    <View style={{ marginBottom: 12 }}>
-      {imageUrl ? (
-        <View style={{ borderRadius: 10, overflow: "hidden", borderWidth: 1, borderColor: Colors.light.border, marginBottom: 6 }}>
-          <Image source={{ uri: imageUrl }} style={{ width: "100%", height: 140 }} resizeMode="contain" />
-          <Pressable style={{ position: "absolute", top: 6, right: 6, backgroundColor: "#EF4444", borderRadius: 14, width: 26, height: 26, alignItems: "center", justifyContent: "center" }} onPress={() => { onUrlChange(""); setUrlText(""); }}>
-            <Ionicons name="close" size={14} color="#fff" />
-          </Pressable>
-        </View>
-      ) : null}
-      <View style={{ flexDirection: "row", gap: 8 }}>
-        <Pressable style={{ flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, paddingVertical: 9, borderRadius: 8, backgroundColor: Colors.light.secondary, borderWidth: 1, borderColor: Colors.light.border }} onPress={pickImage}>
-          <Ionicons name="image-outline" size={15} color={Colors.light.primary} />
-          <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>Upload</Text>
-        </Pressable>
-        <Pressable style={{ flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, paddingVertical: 9, borderRadius: 8, backgroundColor: Colors.light.secondary, borderWidth: 1, borderColor: Colors.light.border }} onPress={() => setShowInput(v => !v)}>
-          <Ionicons name="link-outline" size={15} color={Colors.light.primary} />
-          <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>URL</Text>
-        </Pressable>
-      </View>
-      {showInput && (
-        <View style={{ flexDirection: "row", gap: 8, marginTop: 6 }}>
-          <TextInput style={[styles.formInput, { flex: 1, marginBottom: 0 }]} placeholder="https://..." placeholderTextColor={Colors.light.textMuted} value={urlText} onChangeText={setUrlText} autoCapitalize="none" />
-          <Pressable style={{ backgroundColor: Colors.light.primary, borderRadius: 8, paddingHorizontal: 12, alignItems: "center", justifyContent: "center" }} onPress={() => { onUrlChange(urlText); setShowInput(false); }}>
-            <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: "#fff" }}>Set</Text>
-          </Pressable>
-        </View>
-      )}
     </View>
   );
 }

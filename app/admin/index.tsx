@@ -28,6 +28,7 @@ import { buildRecordingLectureSectionTitle, prefillLiveRecordingFormFields } fro
 import type { DeviceDeniedUserRow, UserRecord } from "./user-types";
 // AdminImageBoxInline is used throughout many sections — keep it eagerly loaded.
 import { AdminImageBoxInline } from "./components/AdminImageBoxInline";
+import AdminBannerPreview from "@/components/admin/AdminBannerPreview";
 // Heavy tab components are lazy-loaded: they are never rendered until the user
 // switches to that tab, so deferring their JS parse keeps the initial /admin
 // bundle smaller and speeds up first-paint for the default (welcome) tab.
@@ -92,14 +93,49 @@ function AdminR2ImagePicker({
   onChange,
   folder = "images",
   hint,
+  variant = "image",
 }: {
   label: string;
   value: string;
   onChange: (url: string) => void;
   folder?: "images" | "books" | "lectures" | "materials";
   hint?: string;
+  variant?: "banner" | "image";
 }) {
   const [uploading, setUploading] = useState(false);
+  const [uploadPct, setUploadPct] = useState(0);
+  const abortRef = useRef<AbortController | null>(null);
+
+  const cancelUpload = () => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setUploading(false);
+    setUploadPct(0);
+  };
+
+  const runUpload = async (fileUri: string, fileName: string, mimeType: string, contentLength?: number) => {
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setUploading(true);
+    setUploadPct(0);
+    try {
+      const { publicUrl } = await uploadToR2(fileUri, fileName, mimeType, folder, {
+        onProgress: (pct) => setUploadPct(pct),
+        signal: controller.signal,
+        contentLength,
+      });
+      onChange(publicUrl);
+    } catch (err: any) {
+      if (err?.name !== "AbortError") {
+        Alert.alert("Upload Failed", err?.message || "Could not upload image.");
+      }
+    } finally {
+      if (abortRef.current === controller) abortRef.current = null;
+      setUploading(false);
+      setUploadPct(0);
+    }
+  };
+
   const pickImage = async () => {
     try {
       if (Platform.OS === "web") {
@@ -109,16 +145,11 @@ function AdminR2ImagePicker({
         input.onchange = async (event: any) => {
           const file = event.target?.files?.[0];
           if (!file) return;
-          setUploading(true);
+          const blobUrl = URL.createObjectURL(file);
           try {
-            const blobUrl = URL.createObjectURL(file);
-            const { publicUrl } = await uploadToR2(blobUrl, file.name, file.type || "image/jpeg", folder);
-            URL.revokeObjectURL(blobUrl);
-            onChange(publicUrl);
-          } catch (err: any) {
-            Alert.alert("Upload Failed", err?.message || "Could not upload image.");
+            await runUpload(blobUrl, file.name, file.type || "image/jpeg", file.size);
           } finally {
-            setUploading(false);
+            URL.revokeObjectURL(blobUrl);
           }
         };
         input.click();
@@ -137,14 +168,10 @@ function AdminR2ImagePicker({
       });
       if (!result.canceled && result.assets?.[0]) {
         const asset = result.assets[0];
-        setUploading(true);
-        const { publicUrl } = await uploadToR2(asset.uri, asset.fileName || `course-${Date.now()}.jpg`, asset.mimeType || "image/jpeg", folder);
-        onChange(publicUrl);
+        await runUpload(asset.uri, asset.fileName || `course-${Date.now()}.jpg`, asset.mimeType || "image/jpeg", asset.fileSize);
       }
     } catch (err: any) {
       Alert.alert("Upload Failed", err?.message || "Could not upload image.");
-    } finally {
-      setUploading(false);
     }
   };
 
@@ -152,8 +179,27 @@ function AdminR2ImagePicker({
     <View style={styles.formField}>
       <Text style={styles.formLabel}>{label}</Text>
       {value ? (
-        <View style={{ borderRadius: 12, overflow: "hidden", borderWidth: 1, borderColor: Colors.light.border, marginBottom: 8 }}>
-          <Image source={{ uri: value }} style={{ width: "100%", height: 130, backgroundColor: "#F8FAFC" }} resizeMode="cover" />
+        variant === "banner" ? (
+          <AdminBannerPreview uri={value} onClear={() => onChange("")} showHint={false} />
+        ) : (
+          <View style={{ borderRadius: 12, overflow: "hidden", borderWidth: 1, borderColor: Colors.light.border, marginBottom: 8, position: "relative" }}>
+            <Image source={{ uri: value }} style={{ width: "100%", height: 130, backgroundColor: "#F8FAFC" }} resizeMode="contain" />
+            <Pressable
+              style={{ position: "absolute", top: 6, right: 6, backgroundColor: "#EF4444", borderRadius: 14, width: 26, height: 26, alignItems: "center", justifyContent: "center" }}
+              onPress={() => onChange("")}
+            >
+              <Ionicons name="close" size={14} color="#fff" />
+            </Pressable>
+          </View>
+        )
+      ) : null}
+      {uploading ? (
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 8, padding: 10, borderRadius: 10, backgroundColor: "#EEF2FF", borderWidth: 1, borderColor: "#C7D2FE" }}>
+          <ActivityIndicator size="small" color={Colors.light.primary} />
+          <Text style={{ flex: 1, fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>Uploading {uploadPct}%</Text>
+          <Pressable onPress={cancelUpload} hitSlop={8}>
+            <Ionicons name="close-circle" size={22} color="#EF4444" />
+          </Pressable>
         </View>
       ) : null}
       <TextInput
@@ -4798,6 +4844,7 @@ export default function AdminDashboard() {
                   label="Course Card Banner Image"
                   value={newCourse.thumbnail}
                   onChange={(url) => setNewCourse((prev) => ({ ...prev, thumbnail: url }))}
+                  variant="banner"
                   hint="Recommended banner size: 1200 × 450 px. Used on the vertical multi-subject card."
                 />
               )}
@@ -4806,6 +4853,7 @@ export default function AdminDashboard() {
                   label="Course Card Banner Image"
                   value={newCourse.thumbnail}
                   onChange={(url) => setNewCourse((prev) => ({ ...prev, thumbnail: url }))}
+                  variant="banner"
                   hint="Recommended banner size: 1200 × 450 px. Shown at the top of the home course card."
                 />
               )}
