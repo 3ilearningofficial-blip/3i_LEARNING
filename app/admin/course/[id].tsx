@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable, TextInput,
-  Platform, ActivityIndicator, Alert, Modal, Switch, Image, Linking,
+  Platform, ActivityIndicator, Alert, Modal, Switch, Image, Linking, useWindowDimensions,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -29,6 +29,13 @@ import AdminMaterialAddBody from "@/components/admin/AdminMaterialAddBody";
 import { computeBaseOrderIndex } from "@/lib/bulk-upload-utils";
 import AdminBannerPreview from "@/components/admin/AdminBannerPreview";
 import { AdminImageBoxInline } from "@/app/admin/components/AdminImageBoxInline";
+import {
+  type AboutTeacher,
+  parseCourseAboutMeta,
+  isMultiTeacherNarrowLayout,
+  multiTeacherScrollCardWidth,
+  MULTI_TEACHER_GAP,
+} from "@/lib/course-about-teachers";
 
 interface Lecture {
   id: number;
@@ -139,12 +146,6 @@ interface EditCourseForm {
   batchStatus: string;
 }
 
-type AboutTeacher = {
-  name: string;
-  imageUrl: string;
-  bio: string;
-};
-
 type CourseAboutForm = {
   description: string;
   features: string;
@@ -216,35 +217,6 @@ const NORMAL_COURSE_TAB_ORDER: AdminCourseTab[] = ["about", "lectures", "tests",
 // Multi-subject admin layout: the top-level header shows About | subjects | Students.
 // Selecting a subject reveals these content sub-tabs (same order as the student subject screen).
 const MULTI_CONTENT_TAB_KEYS: AdminCourseTab[] = ["live", "lectures", "tests", "pyqs", "mocks", "materials"];
-
-function parseCourseAboutMeta(value: any): { features: string[]; teachers: AboutTeacher[] } {
-  const raw = typeof value === "string" ? (() => { try { return JSON.parse(value); } catch { return value; } })() : value;
-  if (Array.isArray(raw)) {
-    return {
-      features: [],
-      teachers: raw.map((t: any) => ({
-        name: String(t?.name || "").trim(),
-        imageUrl: String(t?.imageUrl || t?.image_url || "").trim(),
-        bio: String(t?.bio || t?.description || "").trim(),
-      })).filter((t: AboutTeacher) => t.name || t.imageUrl || t.bio),
-    };
-  }
-  if (raw && typeof raw === "object") {
-    const teachers = Array.isArray(raw.teachers) ? raw.teachers : [];
-    const features = Array.isArray(raw.features) ? raw.features : [];
-    return {
-      features: features.map((f: any) => String(f || "").trim()).filter(Boolean),
-      teachers: teachers.map((t: any) => ({
-        name: String(t?.name || "").trim(),
-        imageUrl: String(t?.imageUrl || t?.image_url || "").trim(),
-        bio: String(t?.bio || t?.description || "").trim(),
-      })).filter((t: AboutTeacher) => t.name || t.imageUrl || t.bio),
-    };
-  }
-  return { features: [], teachers: [] };
-}
-
-const LIVE_RECORDING_ROOT = DEFAULT_LIVE_RECORDING_SECTION;
 
 function splitLectureSectionPath(sectionTitle: unknown): { root: string; subfolder: string } {
   const raw = String(sectionTitle || "").trim();
@@ -562,6 +534,9 @@ export default function AdminCourseScreen() {
     testId ? allCourseTests.find((t: any) => Number(t.id) === Number(testId)) : null;
   const allCourseMaterials = Array.isArray(course?.materials) ? course.materials : [];
   const isMultiSubjectCourse = course?.course_type === "multi_subject";
+  const { width: viewportWidth } = useWindowDimensions();
+  const multiTeacherNarrow = isMultiTeacherNarrowLayout(viewportWidth);
+  const multiTeacherCardWidth = multiTeacherScrollCardWidth(viewportWidth);
   const subjectMatches = (row: { subject_key?: string | null }) =>
     !isMultiSubjectCourse || String(row.subject_key || "").toLowerCase() === activeSubjectKey;
   const courseLectures = allCourseLectures.filter(subjectMatches);
@@ -1615,7 +1590,10 @@ export default function AdminCourseScreen() {
             </View>
 
             <View style={[styles.sectionHeader, styles.aboutTeachersHeader]}>
-              <Text style={styles.sectionTitle}>Teachers ({aboutForm.teachers.length})</Text>
+              <View style={{ flex: 1, paddingRight: 8 }}>
+                <Text style={styles.sectionTitle}>Teachers ({aboutForm.teachers.length})</Text>
+                <Text style={[styles.infoText, { marginTop: 4 }]}>Layout matches the student about page.</Text>
+              </View>
               <Pressable
                 style={[styles.addBtn, { backgroundColor: "#7C3AED" }]}
                 onPress={() => setAboutForm((p) => ({ ...p, teachers: [...p.teachers, { name: "", imageUrl: "", bio: "" }] }))}
@@ -1624,71 +1602,217 @@ export default function AdminCourseScreen() {
                 <Text style={styles.addBtnText}>Teacher</Text>
               </Pressable>
             </View>
-            <View style={styles.aboutTeacherGrid}>
-            {aboutForm.teachers.map((teacher, index) => (
-              <View key={`teacher-${index}`} style={[styles.itemCard, styles.aboutPanel, styles.aboutTeacherCard]}>
-                <View style={styles.aboutTeacherTopRow}>
-                  <View style={{ position: "relative" }}>
-                    {teacher.imageUrl ? (
-                      <>
-                        <Image source={{ uri: teacher.imageUrl }} style={styles.aboutTeacherAvatar} />
-                        <Pressable
-                          style={{ position: "absolute", top: -4, right: -4, backgroundColor: "#EF4444", borderRadius: 12, width: 24, height: 24, alignItems: "center", justifyContent: "center", zIndex: 2 }}
-                          onPress={() => setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, imageUrl: "" } : t) }))}
-                        >
-                          <Ionicons name="close" size={13} color="#fff" />
-                        </Pressable>
-                      </>
-                    ) : (
-                      <View style={styles.aboutTeacherAvatarFallback}>
-                        <Ionicons name="person" size={30} color={Colors.light.primary} />
+            {!isMultiSubjectCourse || aboutForm.teachers.length === 1 ? (
+              <View style={styles.aboutTeacherSingleWrap}>
+                {aboutForm.teachers.map((teacher, index) => (
+                  <View key={`teacher-${index}`} style={[styles.itemCard, styles.aboutPanel, styles.aboutTeacherCardFull]}>
+                    {aboutForm.teachers.length > 1 ? (
+                      <Pressable
+                        style={styles.aboutTeacherDeleteBtn}
+                        onPress={() => setAboutForm((p) => ({ ...p, teachers: p.teachers.filter((_, i) => i !== index) }))}
+                      >
+                        <Ionicons name="trash-outline" size={16} color="#EF4444" />
+                      </Pressable>
+                    ) : null}
+                    <View style={styles.aboutTeacherBodyRow}>
+                      <View style={{ position: "relative" }}>
+                        {teacher.imageUrl ? (
+                          <>
+                            <Image source={{ uri: teacher.imageUrl }} style={styles.aboutTeacherAvatar} />
+                            <Pressable
+                              style={styles.aboutTeacherClearBtn}
+                              onPress={() => setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, imageUrl: "" } : t) }))}
+                            >
+                              <Ionicons name="close" size={13} color="#fff" />
+                            </Pressable>
+                          </>
+                        ) : (
+                          <View style={styles.aboutTeacherAvatarFallback}>
+                            <Ionicons name="person" size={30} color={Colors.light.primary} />
+                          </View>
+                        )}
                       </View>
-                    )}
+                      <View style={styles.aboutTeacherFieldsCol}>
+                        <FormField
+                          label={`Teacher ${index + 1} Name`}
+                          placeholder="Teacher name"
+                          value={teacher.name}
+                          onChangeText={(v) => setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, name: v } : t) }))}
+                        />
+                        <FormField
+                          label="Teacher Description"
+                          placeholder="Experience, achievements, teaching style..."
+                          value={teacher.bio}
+                          onChangeText={(v) => setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, bio: v } : t) }))}
+                          multiline
+                          tall
+                        />
+                        <FormField
+                          label="Teacher Photo URL"
+                          placeholder="Paste URL or upload to R2"
+                          value={teacher.imageUrl}
+                          onChangeText={(v) => setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, imageUrl: v } : t) }))}
+                        />
+                        <Pressable
+                          style={[styles.aboutUploadBtn, { opacity: uploading ? 0.6 : 1 }]}
+                          disabled={uploading}
+                          onPress={() => pickFileAndUpload("images", "image/*", (url) => {
+                            setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, imageUrl: url } : t) }));
+                          })}
+                        >
+                          {uploading ? <ActivityIndicator size="small" color={Colors.light.primary} /> : <Ionicons name="cloud-upload-outline" size={17} color={Colors.light.primary} />}
+                          <Text style={styles.aboutUploadBtnText}>{uploading ? "Uploading..." : "Upload Teacher Photo to R2"}</Text>
+                        </Pressable>
+                      </View>
+                    </View>
                   </View>
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <FormField
-                      label={`Teacher ${index + 1} Name`}
-                      placeholder="Teacher name"
-                      value={teacher.name}
-                      onChangeText={(v) => setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, name: v } : t) }))}
-                    />
-                  </View>
-                  {aboutForm.teachers.length > 1 ? (
+                ))}
+              </View>
+            ) : multiTeacherNarrow ? (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.aboutTeacherScrollContent}
+                snapToInterval={multiTeacherCardWidth + MULTI_TEACHER_GAP}
+                decelerationRate="fast"
+                disableIntervalMomentum
+              >
+                {aboutForm.teachers.map((teacher, index) => (
+                  <View
+                    key={`teacher-${index}`}
+                    style={[
+                      styles.itemCard,
+                      styles.aboutPanel,
+                      styles.aboutTeacherCardMulti,
+                      { width: multiTeacherCardWidth },
+                      index < aboutForm.teachers.length - 1 ? { marginRight: MULTI_TEACHER_GAP } : null,
+                    ]}
+                  >
                     <Pressable
-                      style={styles.deleteItemBtn}
+                      style={styles.aboutTeacherDeleteBtn}
                       onPress={() => setAboutForm((p) => ({ ...p, teachers: p.teachers.filter((_, i) => i !== index) }))}
                     >
                       <Ionicons name="trash-outline" size={16} color="#EF4444" />
                     </Pressable>
-                  ) : null}
-                </View>
-                <FormField
-                  label="Teacher Photo URL"
-                  placeholder="Paste URL or upload to R2"
-                  value={teacher.imageUrl}
-                  onChangeText={(v) => setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, imageUrl: v } : t) }))}
-                />
-                <Pressable
-                  style={[styles.aboutUploadBtn, { opacity: uploading ? 0.6 : 1 }]}
-                  disabled={uploading}
-                  onPress={() => pickFileAndUpload("images", "image/*", (url) => {
-                    setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, imageUrl: url } : t) }));
-                  })}
-                >
-                  {uploading ? <ActivityIndicator size="small" color={Colors.light.primary} /> : <Ionicons name="cloud-upload-outline" size={17} color={Colors.light.primary} />}
-                  <Text style={styles.aboutUploadBtnText}>{uploading ? "Uploading..." : "Upload Teacher Photo to R2"}</Text>
-                </Pressable>
-                <FormField
-                  label="Teacher Description"
-                  placeholder="Experience, achievements, teaching style..."
-                  value={teacher.bio}
-                  onChangeText={(v) => setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, bio: v } : t) }))}
-                  multiline
-                  tall
-                />
+                    <View style={styles.aboutTeacherBodyRow}>
+                      <View style={{ position: "relative" }}>
+                        {teacher.imageUrl ? (
+                          <>
+                            <Image source={{ uri: teacher.imageUrl }} style={styles.aboutTeacherAvatar} />
+                            <Pressable
+                              style={styles.aboutTeacherClearBtn}
+                              onPress={() => setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, imageUrl: "" } : t) }))}
+                            >
+                              <Ionicons name="close" size={13} color="#fff" />
+                            </Pressable>
+                          </>
+                        ) : (
+                          <View style={styles.aboutTeacherAvatarFallback}>
+                            <Ionicons name="person" size={30} color={Colors.light.primary} />
+                          </View>
+                        )}
+                      </View>
+                      <View style={styles.aboutTeacherFieldsCol}>
+                        <FormField
+                          label={`Teacher ${index + 1} Name`}
+                          placeholder="Teacher name"
+                          value={teacher.name}
+                          onChangeText={(v) => setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, name: v } : t) }))}
+                        />
+                        <FormField
+                          label="Teacher Description"
+                          placeholder="Experience, achievements, teaching style..."
+                          value={teacher.bio}
+                          onChangeText={(v) => setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, bio: v } : t) }))}
+                          multiline
+                          tall
+                        />
+                        <FormField
+                          label="Teacher Photo URL"
+                          placeholder="Paste URL or upload to R2"
+                          value={teacher.imageUrl}
+                          onChangeText={(v) => setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, imageUrl: v } : t) }))}
+                        />
+                        <Pressable
+                          style={[styles.aboutUploadBtn, { opacity: uploading ? 0.6 : 1 }]}
+                          disabled={uploading}
+                          onPress={() => pickFileAndUpload("images", "image/*", (url) => {
+                            setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, imageUrl: url } : t) }));
+                          })}
+                        >
+                          {uploading ? <ActivityIndicator size="small" color={Colors.light.primary} /> : <Ionicons name="cloud-upload-outline" size={17} color={Colors.light.primary} />}
+                          <Text style={styles.aboutUploadBtnText}>{uploading ? "Uploading..." : "Upload Teacher Photo to R2"}</Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                  </View>
+                ))}
+              </ScrollView>
+            ) : (
+              <View style={styles.aboutTeacherDesktopWrap}>
+                {aboutForm.teachers.map((teacher, index) => (
+                  <View key={`teacher-${index}`} style={[styles.itemCard, styles.aboutPanel, styles.aboutTeacherCardMulti]}>
+                    <Pressable
+                      style={styles.aboutTeacherDeleteBtn}
+                      onPress={() => setAboutForm((p) => ({ ...p, teachers: p.teachers.filter((_, i) => i !== index) }))}
+                    >
+                      <Ionicons name="trash-outline" size={16} color="#EF4444" />
+                    </Pressable>
+                    <View style={styles.aboutTeacherBodyRow}>
+                      <View style={{ position: "relative" }}>
+                        {teacher.imageUrl ? (
+                          <>
+                            <Image source={{ uri: teacher.imageUrl }} style={styles.aboutTeacherAvatar} />
+                            <Pressable
+                              style={styles.aboutTeacherClearBtn}
+                              onPress={() => setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, imageUrl: "" } : t) }))}
+                            >
+                              <Ionicons name="close" size={13} color="#fff" />
+                            </Pressable>
+                          </>
+                        ) : (
+                          <View style={styles.aboutTeacherAvatarFallback}>
+                            <Ionicons name="person" size={30} color={Colors.light.primary} />
+                          </View>
+                        )}
+                      </View>
+                      <View style={styles.aboutTeacherFieldsCol}>
+                        <FormField
+                          label={`Teacher ${index + 1} Name`}
+                          placeholder="Teacher name"
+                          value={teacher.name}
+                          onChangeText={(v) => setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, name: v } : t) }))}
+                        />
+                        <FormField
+                          label="Teacher Description"
+                          placeholder="Experience, achievements, teaching style..."
+                          value={teacher.bio}
+                          onChangeText={(v) => setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, bio: v } : t) }))}
+                          multiline
+                          tall
+                        />
+                        <FormField
+                          label="Teacher Photo URL"
+                          placeholder="Paste URL or upload to R2"
+                          value={teacher.imageUrl}
+                          onChangeText={(v) => setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, imageUrl: v } : t) }))}
+                        />
+                        <Pressable
+                          style={[styles.aboutUploadBtn, { opacity: uploading ? 0.6 : 1 }]}
+                          disabled={uploading}
+                          onPress={() => pickFileAndUpload("images", "image/*", (url) => {
+                            setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, imageUrl: url } : t) }));
+                          })}
+                        >
+                          {uploading ? <ActivityIndicator size="small" color={Colors.light.primary} /> : <Ionicons name="cloud-upload-outline" size={17} color={Colors.light.primary} />}
+                          <Text style={styles.aboutUploadBtnText}>{uploading ? "Uploading..." : "Upload Teacher Photo to R2"}</Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                  </View>
+                ))}
               </View>
-            ))}
-            </View>
+            )}
           </View>
         )}
 
@@ -4477,11 +4601,45 @@ const styles = StyleSheet.create({
   aboutSectionWrap: { gap: 16 },
   aboutPanel: { padding: 16 },
   aboutTeachersHeader: { marginTop: 4 },
-  aboutTeacherGrid: { flexDirection: "row", flexWrap: "wrap", gap: 14 },
-  aboutTeacherCard: { width: Platform.OS === "web" ? "49%" : "100%", gap: 4 },
-  aboutTeacherTopRow: { flexDirection: "row", alignItems: "flex-start", gap: 14, marginBottom: 4 },
-  aboutTeacherAvatar: { width: 72, height: 72, borderRadius: 18, backgroundColor: "#F8FAFC" },
-  aboutTeacherAvatarFallback: { width: 72, height: 72, borderRadius: 18, backgroundColor: "#EEF2FF", alignItems: "center", justifyContent: "center" },
+  aboutTeacherSingleWrap: { gap: 14 },
+  aboutTeacherScrollContent: { paddingVertical: 2, paddingRight: 4 },
+  aboutTeacherDesktopWrap: { flexDirection: "row", flexWrap: "wrap", gap: MULTI_TEACHER_GAP },
+  aboutTeacherCardFull: { width: "100%", position: "relative" },
+  aboutTeacherCardMulti: {
+    position: "relative",
+    flexGrow: 1,
+    flexShrink: 1,
+    minWidth: 300,
+    maxWidth: "100%",
+  },
+  aboutTeacherBodyRow: { flexDirection: "row", alignItems: "flex-start", gap: 14 },
+  aboutTeacherFieldsCol: { flex: 1, minWidth: 0, gap: 2 },
+  aboutTeacherDeleteBtn: {
+    position: "absolute",
+    top: 10,
+    right: 10,
+    zIndex: 3,
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: "#FEE2E2",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  aboutTeacherClearBtn: {
+    position: "absolute",
+    top: -4,
+    right: -4,
+    backgroundColor: "#EF4444",
+    borderRadius: 12,
+    width: 24,
+    height: 24,
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 2,
+  },
+  aboutTeacherAvatar: { width: 92, height: 92, borderRadius: 18, backgroundColor: "#F8FAFC" },
+  aboutTeacherAvatarFallback: { width: 92, height: 92, borderRadius: 18, backgroundColor: "#EEF2FF", alignItems: "center", justifyContent: "center" },
   aboutUploadBtn: { borderWidth: 1.5, borderColor: Colors.light.primary, borderStyle: "dashed", borderRadius: 10, paddingVertical: 12, paddingHorizontal: 12, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8, backgroundColor: "#EEF2FF", marginBottom: 4 },
   aboutUploadBtnText: { fontSize: 13, fontFamily: "Inter_700Bold", color: Colors.light.primary },
   sectionHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },

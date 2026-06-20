@@ -1,5 +1,5 @@
 import React from "react";
-import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Image, useWindowDimensions } from "react-native";
+import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
@@ -11,6 +11,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "@/context/AuthContext";
 import { useCoursePurchase } from "@/lib/use-course-purchase";
 import { getCourseAccentColor } from "@shared/courseTheme";
+import CourseTeachersSection from "@/components/CourseTeachersSection";
+import { parseCourseAboutMeta, resolveCourseTeachers } from "@/lib/course-about-teachers";
 
 type Course = {
   id: number;
@@ -48,32 +50,11 @@ type Course = {
   daily_mission_count?: number;
 };
 
-type AboutTeacher = { name: string; imageUrl: string; bio: string };
-
 function courseAccentColor(course: Course): string {
   if (course.course_type === "multi_subject") {
     return course.cover_color || "#B91C1C";
   }
   return getCourseAccentColor(course.id);
-}
-
-function parseAboutMeta(value: any): { features: string[]; teachers: AboutTeacher[] } {
-  const raw = typeof value === "string" ? (() => { try { return JSON.parse(value); } catch { return value; } })() : value;
-  const normalizeTeacher = (t: any): AboutTeacher => ({
-    name: String(t?.name || "").trim(),
-    imageUrl: String(t?.imageUrl || t?.image_url || "").trim(),
-    bio: String(t?.bio || t?.description || "").trim(),
-  });
-  if (Array.isArray(raw)) {
-    const teachers = raw.map(normalizeTeacher).filter((t) => t.name || t.imageUrl || t.bio);
-    return { features: [], teachers };
-  }
-  if (raw && typeof raw === "object") {
-    const features = Array.isArray(raw.features) ? raw.features.map((f: any) => String(f || "").trim()).filter(Boolean) : [];
-    const teachers = Array.isArray(raw.teachers) ? raw.teachers.map(normalizeTeacher).filter((t: AboutTeacher) => t.name || t.imageUrl || t.bio) : [];
-    return { features, teachers };
-  }
-  return { features: [], teachers: [] };
 }
 
 async function fetchCourse(id: string, userId?: number): Promise<Course | null> {
@@ -94,7 +75,6 @@ export default function CourseAboutScreen() {
   const { user } = useAuth();
   const { colors } = useAppTheme();
   const insets = useSafeAreaInsets();
-  const { width } = useWindowDimensions();
   const { data: course, isLoading } = useQuery({
     queryKey: ["/api/courses", String(id), String(user?.id ?? "guest")],
     queryFn: () => fetchCourse(String(id), user?.id),
@@ -148,10 +128,13 @@ export default function CourseAboutScreen() {
         Number(course.practice_count) || 0,
         Math.max(0, (Number(course.total_tests) || 0) - mockCount - pyqCount),
       );
-  const aboutMeta = parseAboutMeta(course.teacher_details_json);
-  const teachers = aboutMeta.teachers;
+  const aboutMeta = parseCourseAboutMeta(course.teacher_details_json);
+  const teachers = resolveCourseTeachers(course.teacher_details_json, {
+    teacher_name: course.teacher_name,
+    teacher_image_url: course.teacher_image_url,
+    teacher_bio: course.teacher_bio,
+  });
   const instructorName = teachers[0]?.name || course.teacher_name || "";
-  const teacherCardWidth = width >= 900 ? "19%" : width >= 600 ? "31.5%" : "48%";
   const descriptionLines = String(course.description || "").split("\n").map((line) => line.trim()).filter(Boolean);
   const aboutLines = [...descriptionLines, ...aboutMeta.features];
   const detailRows = isMultiSubject
@@ -347,23 +330,11 @@ export default function CourseAboutScreen() {
               <Ionicons name="people" size={20} color={Colors.light.primary} />
               <Text style={[styles.aboutSectionTitle, { color: colors.text }]}>Teachers</Text>
             </View>
-            <View style={styles.teacherGrid}>
-              {teachers.map((teacher, index) => (
-                <View key={`${teacher.name}-${index}`} style={[styles.teacherCard, { borderColor: colors.border, width: teacherCardWidth as any }]}>
-                  {teacher.imageUrl ? <Image source={{ uri: teacher.imageUrl }} style={styles.teacherImage} /> : (
-                    <View style={[styles.teacherImage, styles.teacherFallback]}><Ionicons name="person" size={30} color={Colors.light.primary} /></View>
-                  )}
-                  <View style={{ flex: 1, alignItems: "center" }}>
-                    {teacher.name ? (
-                      <Text style={[styles.teacherName, { color: colors.text }]} numberOfLines={2}>{teacher.name}</Text>
-                    ) : null}
-                    <Text style={[styles.teacherBio, { color: colors.textSecondary }]} numberOfLines={4}>
-                      {teacher.bio?.trim() ? teacher.bio : "no description"}
-                    </Text>
-                  </View>
-                </View>
-              ))}
-            </View>
+            <CourseTeachersSection
+              teachers={teachers}
+              isMultiSubject={isMultiSubject}
+              colors={{ text: colors.text, textSecondary: colors.textSecondary, border: colors.border }}
+            />
           </View>
           ) : null}
 
@@ -461,12 +432,6 @@ const styles = StyleSheet.create({
   aboutDetailValue: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text, marginTop: 1 },
   aboutIncludeItem: { flexDirection: "row", alignItems: "center", gap: 10 },
   aboutIncludeText: { flex: 1, fontSize: 14, fontFamily: "Inter_500Medium", color: Colors.light.text, lineHeight: 20 },
-  teacherGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 8 },
-  teacherCard: { alignItems: "center", gap: 9, borderWidth: 1, borderRadius: 14, padding: 12, minHeight: 166 },
-  teacherImage: { width: 62, height: 62, borderRadius: 16 },
-  teacherFallback: { backgroundColor: "#EEF2FF", alignItems: "center", justifyContent: "center" },
-  teacherName: { fontSize: 14, fontFamily: "Inter_700Bold", marginBottom: 3, textAlign: "center" },
-  teacherBio: { fontSize: 12, lineHeight: 17, fontFamily: "Inter_400Regular", textAlign: "center" },
   aboutTncBlock: { backgroundColor: "#FFFBEB", borderRadius: 14, padding: 16, gap: 10, borderWidth: 1, borderColor: "#FDE68A" },
   aboutTncItem: { flexDirection: "row", gap: 8, alignItems: "flex-start" },
   aboutTncBullet: { fontSize: 14, color: "#92400E", lineHeight: 20, marginTop: 1 },
