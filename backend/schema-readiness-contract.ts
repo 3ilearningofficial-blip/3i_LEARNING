@@ -99,7 +99,7 @@ export const REQUIRED_COLUMNS: Record<string, string[]> = {
   ],
   notifications: ["source", "expires_at", "is_hidden", "admin_notif_id", "image_url", "hide_after_at"],
   web_push_subscriptions: ["endpoint", "p256dh", "auth", "is_active", "last_seen_at"],
-  courses: ["subject", "cover_color", "pyq_count", "mock_count", "practice_count", "teacher_bio", "teacher_image_url", "teacher_details_json", "multi_subject_config", "course_language", "batch_status"],
+  courses: ["subject", "exam", "cover_color", "pyq_count", "mock_count", "practice_count", "teacher_bio", "teacher_image_url", "teacher_details_json", "multi_subject_config", "course_language", "batch_status"],
   lectures: [
     "download_allowed",
     "section_title",

@@ -3,7 +3,7 @@ import {
   View, Text, StyleSheet, ScrollView, Pressable, TextInput,
   RefreshControl, Platform, ActivityIndicator, FlatList, Image, useWindowDimensions, Animated,
 } from "react-native";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
 import { useOptionalBottomTabBarHeight } from "@/lib/useOptionalBottomTabBarHeight";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -22,6 +22,8 @@ import { useDocumentVisibility } from "@/lib/useDocumentVisibility";
 import { fetch } from "expo/fetch";
 import CourseBannerImage from "@/components/CourseBannerImage";
 import { COURSE_BANNER_ASPECT } from "@/constants/courseBanner";
+import { buildHomeCategoryChips, filterCoursesByHomeCategory } from "@/constants/homeCategories";
+import { getCourseExplorePath } from "@/lib/course-explore-path";
 
 interface Course {
   id: number;
@@ -82,8 +84,6 @@ interface LiveClass {
   is_live: boolean;
   scheduled_at: number;
 }
-
-const DEFAULT_CATEGORIES = ["All", "NDA", "CDS", "AFCAT"];
 
 function formatCourseDate(value?: string | number | null): string {
   if (value == null || value === "") return "";
@@ -271,7 +271,7 @@ function MultiSubjectCourseCard({ course, enrolled = false }: { course: Course; 
   return (
     <Pressable
       style={({ pressed }) => [styles.multiCourseCard, { backgroundColor: colors.card, borderColor: colors.border }, pressed && { opacity: 0.94, transform: [{ scale: 0.985 }] }]}
-      onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push(`/course-about/${course.id}` as any); }}
+      onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push(getCourseExplorePath(course) as any); }}
     >
       <CourseBannerImage
         uri={course.thumbnail}
@@ -325,7 +325,7 @@ function MultiSubjectCourseCard({ course, enrolled = false }: { course: Course; 
                 colors={{ surfaceAlt: colors.surfaceAlt, textMuted: colors.textMuted }}
               />
             </View>
-            <Pressable style={styles.multiArrowBtn} onPress={() => router.push(`/course-about/${course.id}` as any)}>
+            <Pressable style={styles.multiArrowBtn} onPress={() => router.push(getCourseExplorePath(course) as any)}>
               <Ionicons name="chevron-forward" size={18} color="#0F172A" />
             </Pressable>
           </View>
@@ -355,7 +355,7 @@ function MultiSubjectCourseCard({ course, enrolled = false }: { course: Course; 
                 </Text>
               </LinearGradient>
             </Pressable>
-            <Pressable style={styles.multiArrowBtn} onPress={() => router.push(`/course-about/${course.id}` as any)}>
+            <Pressable style={styles.multiArrowBtn} onPress={() => router.push(getCourseExplorePath(course) as any)}>
               <Ionicons name="chevron-forward" size={18} color="#0F172A" />
             </Pressable>
           </View>
@@ -391,7 +391,7 @@ function NormalCourseCard({ course, enrolled = false }: { course: Course; enroll
   const level = course.level || "Beginner";
   const status = normalCourseStatusLabel(course);
   const dateRange = getNormalCourseDateRange(course);
-  const explorePath = `/course-about/${course.id}`;
+  const explorePath = getCourseExplorePath(course);
 
   useEffect(() => {
     if (status !== "LIVE") {
@@ -578,14 +578,109 @@ function ScheduledLiveCard({ lc, nowMs }: { lc: any; nowMs: number }) {
   );
 }
 
+function getTestSeriesRegularCount(course: Course): number {
+  const mock = Number(course.mock_count) || 0;
+  const pyq = Number(course.pyq_count) || 0;
+  const practice = Number(course.practice_count) || 0;
+  return Math.max(0, (Number(course.total_tests) || 0) - mock - pyq - practice);
+}
+
+function TestSeriesHomeCard({ course }: { course: Course }) {
+  const { colors } = useAppTheme();
+  const color = getCourseAccentColor(course.id);
+  const isFreeCourse = course.is_free || parseFloat(course.price || "0") <= 0;
+  const { purchase, isPending, paymentModal } = useCoursePurchase({
+    courseId: course.id,
+    courseTitle: course.title,
+    isFree: isFreeCourse,
+    price: course.price,
+  });
+  const discount = course.original_price && parseFloat(course.original_price) > 0 && parseFloat(course.price || "0") > 0
+    ? Math.round((1 - parseFloat(course.price) / parseFloat(course.original_price)) * 100)
+    : 0;
+  const language = (course.course_language || "HINGLISH").toUpperCase();
+  const level = course.level || "Beginner";
+  const tests = getTestSeriesRegularCount(course);
+  const practice = Number(course.practice_count) || 0;
+  const pyq = Number(course.pyq_count) || 0;
+  const mock = Number(course.mock_count) || 0;
+  const explorePath = getCourseExplorePath(course);
+
+  return (
+    <Pressable
+      style={({ pressed }) => [styles.multiCourseCard, { backgroundColor: colors.card, borderColor: colors.border }, pressed && { opacity: 0.94, transform: [{ scale: 0.985 }] }]}
+      onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push(explorePath as any); }}
+    >
+      <CourseBanner course={course} />
+      <View style={[styles.multiCourseBody, { backgroundColor: colors.card }]}>
+        <View style={styles.multiTopRow}>
+          <View style={[styles.multiBadgeRow, { flexShrink: 1 }]}>
+            <Text style={[styles.multiCategory, { color }]}>{course.category || "Test Series"}</Text>
+            <Text style={styles.multiLevel}>{level}</Text>
+          </View>
+          <View style={styles.multiTopRightGroup}>
+            <View style={styles.multiLanguagePill}><Text style={styles.multiLanguageText}>{language}</Text></View>
+          </View>
+        </View>
+        <Text style={[styles.multiTitle, { color: colors.text }]} numberOfLines={2}>{course.title}</Text>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 3 }}>
+            <Ionicons name="document-text" size={12} color={colors.textSecondary} />
+            <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: colors.textSecondary }}>{tests} Tests</Text>
+          </View>
+          <View style={{ width: 2, height: 2, borderRadius: 1, backgroundColor: colors.textMuted }} />
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 3 }}>
+            <Ionicons name="create" size={12} color={colors.textSecondary} />
+            <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: colors.textSecondary }}>{practice} Practice</Text>
+          </View>
+          <View style={{ width: 2, height: 2, borderRadius: 1, backgroundColor: colors.textMuted }} />
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 3 }}>
+            <Ionicons name="school" size={12} color={colors.textSecondary} />
+            <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: colors.textSecondary }}>{pyq} PYQs</Text>
+          </View>
+          <View style={{ width: 2, height: 2, borderRadius: 1, backgroundColor: colors.textMuted }} />
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 3 }}>
+            <Ionicons name="clipboard" size={12} color={colors.textSecondary} />
+            <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: colors.textSecondary }}>{mock} Mocks</Text>
+          </View>
+        </View>
+        <View style={styles.multiPriceRow}>
+          {isFreeCourse ? (
+            <Text style={styles.multiPrice}>Free</Text>
+          ) : (
+            <View style={{ flexDirection: "row", alignItems: "baseline", gap: 6 }}>
+              <Text style={styles.multiPrice}>₹{parseFloat(course.price).toFixed(0)}</Text>
+              {parseFloat(course.original_price || "0") > 0 ? <Text style={styles.multiOriginalPrice}>₹{parseFloat(course.original_price).toFixed(0)}</Text> : null}
+            </View>
+          )}
+          {discount > 0 ? <Text style={styles.multiDiscount}>{discount}% OFF</Text> : null}
+          <View style={{ flex: 1 }} />
+          <Pressable
+            style={styles.multiBuyBtn}
+            disabled={isPending}
+            onPress={(e) => {
+              e?.stopPropagation?.();
+              purchase();
+            }}
+          >
+            <LinearGradient colors={["#B91C1C", "#EF4444"]} style={styles.multiBuyGradient}>
+              <Text style={styles.multiBuyText}>
+                {isPending ? "Please wait..." : isFreeCourse ? "Start Free" : "Buy Now"}
+              </Text>
+            </LinearGradient>
+          </Pressable>
+        </View>
+      </View>
+      {paymentModal}
+    </Pressable>
+  );
+}
+
 function EnrolledCourseCard({ course, index }: { course: Course; index: number }) {
   return <CourseCard course={{ ...course, isEnrolled: true }} index={index} />;
 }
 
 function CourseCard({ course, index }: { course: Course; index: number }) {
-  const { colors } = useAppTheme();
-  const color = getCourseAccentColor(course.id);
-
   if (course.course_type === "multi_subject") {
     return <MultiSubjectCourseCard course={course} enrolled={!!course.isEnrolled} />;
   }
@@ -594,57 +689,7 @@ function CourseCard({ course, index }: { course: Course; index: number }) {
     return <NormalCourseCard course={course} enrolled={!!course.isEnrolled} />;
   }
 
-  return (
-    <Pressable
-      style={({ pressed }) => [styles.multiCourseCard, { backgroundColor: colors.card, borderColor: colors.border }, pressed && { opacity: 0.92, transform: [{ scale: 0.98 }] }]}
-      onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push((course.course_type === "test_series" ? `/course/${course.id}` : `/course-about/${course.id}`) as any); }}
-    >
-      <CourseBanner course={course} />
-      <View style={[styles.multiCourseBody, { backgroundColor: colors.card }]}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-          <Text style={[styles.multiCategory, { color }]}>{course.category}</Text>
-          {course.isEnrolled ? (
-            <View style={styles.multiEnrolledBadge}>
-              <Ionicons name="checkmark-circle" size={12} color="#22C55E" />
-              <Text style={styles.multiEnrolledBadgeText}>Enrolled</Text>
-            </View>
-          ) : null}
-        </View>
-        <Text style={[styles.multiTitle, { color: colors.text }]} numberOfLines={2}>{course.title}</Text>
-        <View style={styles.courseStats}>
-          <View style={styles.courseStat}>
-            <Ionicons name="document-text" size={13} color={colors.textMuted} />
-            <Text style={[styles.courseStatText, { color: colors.textMuted }]}>{course.total_tests || 0} Tests</Text>
-          </View>
-          <View style={styles.courseStatDot} />
-          <View style={styles.courseStat}>
-            <Ionicons name="clipboard" size={13} color={colors.textMuted} />
-            <Text style={[styles.courseStatText, { color: colors.textMuted }]}>{course.mock_count || 0} Mock</Text>
-          </View>
-          <View style={styles.courseStatDot} />
-          <View style={styles.courseStat}>
-            <Ionicons name="create" size={13} color={colors.textMuted} />
-            <Text style={[styles.courseStatText, { color: colors.textMuted }]}>{course.practice_count || 0} Practice</Text>
-          </View>
-        </View>
-        <View style={styles.coursePriceRow}>
-          {course.is_free ? (
-            <Text style={styles.coursePrice}>Free</Text>
-          ) : (
-            <>
-              <Text style={styles.coursePrice}>₹{parseFloat(course.price).toFixed(0)}</Text>
-              {parseFloat(course.original_price) > 0 && (
-                <Text style={[styles.courseOriginalPrice, { color: colors.textMuted }]}>₹{parseFloat(course.original_price).toFixed(0)}</Text>
-              )}
-            </>
-          )}
-          <View style={styles.levelBadge}>
-            <Text style={styles.levelText}>{course.level}</Text>
-          </View>
-        </View>
-      </View>
-    </Pressable>
-  );
+  return <TestSeriesHomeCard course={course} />;
 }
 
 export default function HomeScreen() {
@@ -658,6 +703,7 @@ export default function HomeScreen() {
   const { colors, isDarkMode } = useAppTheme();
   const qc = useQueryClient();
   const tabVisible = useDocumentVisibility();
+  const { category: categoryParam } = useLocalSearchParams<{ category?: string }>();
   const [search, setSearch] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("All");
   const [refreshing, setRefreshing] = useState(false);
@@ -726,23 +772,18 @@ export default function HomeScreen() {
     }, [refetchCourses]),
   );
 
+  useEffect(() => {
+    const raw = typeof categoryParam === "string" ? categoryParam : Array.isArray(categoryParam) ? categoryParam[0] : "";
+    if (raw?.trim()) setSelectedCategory(decodeURIComponent(raw.trim()));
+  }, [categoryParam]);
+
   const dynamicCategories = React.useMemo(() => {
-    const combined = [...DEFAULT_CATEGORIES];
-    const lowerSet = new Set(combined.map((c) => c.trim().toLowerCase()));
     const courseCategories = [...new Set(allCourses.map((c) => (c.category || "").trim()).filter(Boolean))];
-    courseCategories.forEach((cat) => {
-      const lower = cat.trim().toLowerCase();
-      if (!lowerSet.has(lower)) {
-        lowerSet.add(lower);
-        combined.push(cat.trim());
-      }
-    });
-    return combined;
+    return buildHomeCategoryChips(courseCategories);
   }, [allCourses]);
 
   const courses = React.useMemo(() => {
-    let filtered = allCourses;
-    if (selectedCategory && selectedCategory !== "All") filtered = filtered.filter((c) => (c.category || "").trim().toLowerCase() === selectedCategory.trim().toLowerCase());
+    let filtered = filterCoursesByHomeCategory(allCourses, selectedCategory);
     if (search) {
       const q = search.toLowerCase();
       filtered = filtered.filter((c) => c.title.toLowerCase().includes(q) || c.description?.toLowerCase().includes(q));

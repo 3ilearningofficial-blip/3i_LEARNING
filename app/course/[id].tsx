@@ -127,13 +127,6 @@ const TEST_TYPE_COLORS: Record<string, string> = {
   mock: "#DC2626", practice: "#1A56DB", chapter: "#059669", weekly: "#7C3AED", test: "#059669", pyq: "#F59E0B",
 };
 
-const TEST_SERIES_SECTIONS = [
-  { key: "practice", label: "Practice", icon: "fitness" as const, color: "#1A56DB" },
-  { key: "test", label: "Test", icon: "document-text" as const, color: "#059669" },
-  { key: "pyq", label: "PYQs", icon: "time" as const, color: "#F59E0B" },
-  { key: "mock", label: "Mock", icon: "trophy" as const, color: "#DC2626" },
-];
-
 export default function CourseDetailScreen() {
   useScreenProtection(true);
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -768,13 +761,68 @@ setTimeout(function() {
 
   const isTestSeriesCourse = course.course_type === "test_series";
   const isMockTestType = (test: { test_type?: string }) => String(test.test_type || "").toLowerCase() === "mock";
-  const testsForTestsTab = isTestSeriesCourse ? course.tests : course.tests.filter((t) => !isMockTestType(t));
+  const testsForTestsTab = isTestSeriesCourse
+    ? course.tests.filter((t) => String(t.test_type || "").toLowerCase() === "test")
+    : course.tests.filter((t) => !isMockTestType(t));
+  const testsForPracticeTab = isTestSeriesCourse
+    ? course.tests.filter((t) => String(t.test_type || "").toLowerCase() === "practice")
+    : [];
+  const testsForPyqTab = isTestSeriesCourse
+    ? course.tests.filter((t) => String(t.test_type || "").toLowerCase() === "pyq")
+    : [];
   const testsForMockTab = course.tests.filter((t) => isMockTestType(t));
   const TABS = isTestSeriesCourse
-    ? (isAdmin ? ["About", "Tests", "Enrolled"] : ["About", "Tests"])
+    ? (isAdmin ? ["About", "Practice", "Tests", "PYQs", "Mock Tests", "Enrolled"] : ["About", "Practice", "Tests", "PYQs", "Mock Tests"])
     : isAdmin
     ? ["Live", "Lectures", "Tests", "Mock Tests", "Materials", "Enrolled"]
     : ["Live", "Lectures", "Tests", "Mock Tests", "Materials"];
+
+  const renderTestSeriesTabList = (
+    tabTests: CourseTest[],
+    opts: { emptyIcon: keyof typeof Ionicons.glyphMap; emptyText: string; folderColor: string; testType: string },
+  ) => {
+    if (tabTests.length === 0) {
+      return (
+        <View style={styles.emptyState}>
+          <Ionicons name={opts.emptyIcon} size={40} color={Colors.light.textMuted} />
+          <Text style={styles.emptyText}>{opts.emptyText}</Text>
+        </View>
+      );
+    }
+    const testFolderNames = new Set(
+      tabTests.map((t) => getContentFolderRootName(t.folder_name)).filter(Boolean),
+    );
+    return (
+      <View style={{ gap: 12, padding: 16 }}>
+        {Array.from(testFolderNames).map((folderName) => {
+          const folderTests = tabTests.filter(
+            (t) => t.folder_name === folderName || String(t.folder_name || "").startsWith(`${folderName} /`),
+          );
+          if (folderTests.length === 0) return null;
+          const isLocked = !isAdmin && !course.isEnrolled;
+          return (
+            <Pressable
+              key={`${opts.testType}_folder_${folderName}`}
+              style={[styles.testSectionCard, { backgroundColor: colors.card, shadowColor: colors.shadow, borderLeftColor: opts.folderColor }]}
+              onPress={() => {
+                openFolderView({ name: folderName, type: "tests", color: opts.folderColor, testType: opts.testType });
+              }}
+            >
+              <View style={[styles.testSectionIconWrap, { backgroundColor: opts.folderColor + "18" }]}>
+                <Ionicons name="folder" size={22} color={opts.folderColor} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.testSectionTitle}>{folderName}</Text>
+                <Text style={styles.testSectionCount}>{folderTests.length} {folderTests.length === 1 ? "test" : "tests"}</Text>
+              </View>
+              {isLocked ? <Ionicons name="lock-closed" size={20} color={Colors.light.textMuted} /> : <Ionicons name="chevron-forward" size={20} color={Colors.light.textMuted} />}
+            </Pressable>
+          );
+        })}
+        {tabTests.filter((t) => !t.folder_name).map((test) => renderTestItem(test, course))}
+      </View>
+    );
+  };
 
   const discount = course.original_price && parseFloat(course.original_price) > 0
     ? Math.round((1 - parseFloat(course.price) / parseFloat(course.original_price)) * 100)
@@ -1210,9 +1258,27 @@ setTimeout(function() {
           </View>
         )}
 
+        {currentActiveTab === "Practice" && isTestSeriesCourse && (
+          <View style={styles.list}>
+            {renderTestSeriesTabList(testsForPracticeTab, {
+              emptyIcon: "fitness-outline",
+              emptyText: "No practice tests available",
+              folderColor: "#1A56DB",
+              testType: "practice",
+            })}
+          </View>
+        )}
+
         {currentActiveTab === "Tests" && (
           <View style={styles.list}>
-            {testsForTestsTab.length === 0 && courseFolders.filter((f: any) => f.type === "test").length === 0 ? (
+            {isTestSeriesCourse ? (
+              renderTestSeriesTabList(testsForTestsTab, {
+                emptyIcon: "document-text-outline",
+                emptyText: "No tests available",
+                folderColor: "#059669",
+                testType: "test",
+              })
+            ) : testsForTestsTab.length === 0 && courseFolders.filter((f: any) => f.type === "test").length === 0 ? (
               <View style={styles.emptyState}>
                 <Ionicons name="document-text-outline" size={40} color={Colors.light.textMuted} />
                 <Text style={styles.emptyText}>No tests available</Text>
@@ -1249,29 +1315,6 @@ setTimeout(function() {
                     );
                   });
                 })()}
-                {/* Tests grouped by type (no folder) — only for test series courses */}
-                {isTestSeriesCourse && TEST_SERIES_SECTIONS.map((section) => {
-                  if (testTypeFilter !== "all" && section.key !== testTypeFilter) return null;
-                  const sectionTests = course.tests.filter((t) => t.test_type === section.key && !t.folder_name);
-                  if (sectionTests.length === 0) return null;
-                  return (
-                    <Pressable key={section.key}
-                      style={[styles.testSectionCard, { backgroundColor: colors.card, shadowColor: colors.shadow, borderLeftColor: section.color }]}
-                      onPress={() => {
-                        openFolderView({ name: section.label, type: "tests", color: section.color });
-                      }}
-                    >
-                      <View style={[styles.testSectionIconWrap, { backgroundColor: section.color + "18" }]}>
-                        <Ionicons name={section.icon} size={22} color={section.color} />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.testSectionTitle}>{section.label}</Text>
-                        <Text style={styles.testSectionCount}>{sectionTests.length} {sectionTests.length === 1 ? "test" : "tests"}</Text>
-                      </View>
-                      <Ionicons name="chevron-forward" size={20} color={Colors.light.textMuted} />
-                    </Pressable>
-                  );
-                })}
                 {/* Tests without folder — show directly as individual cards (non-test-series) */}
                 {!isTestSeriesCourse && testsForTestsTab.filter((t: any) => !t.folder_name).map((test: any) => {
                   const color = TEST_TYPE_COLORS[test.test_type] || "#1A56DB";
@@ -1313,6 +1356,17 @@ setTimeout(function() {
                 })}
               </View>
             )}
+          </View>
+        )}
+
+        {currentActiveTab === "PYQs" && isTestSeriesCourse && (
+          <View style={styles.list}>
+            {renderTestSeriesTabList(testsForPyqTab, {
+              emptyIcon: "school-outline",
+              emptyText: "No PYQs available",
+              folderColor: "#F59E0B",
+              testType: "pyq",
+            })}
           </View>
         )}
 

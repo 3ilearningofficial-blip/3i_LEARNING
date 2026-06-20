@@ -598,7 +598,7 @@ export default function TestSeriesScreen() {
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 14, marginTop: 4 }}>
               {myTestSeries.map((course, idx) => {
                 const theme = { grad: ["#EEF2FF", "#E0E7FF"] as [string,string], accent: "#4F46E5", light: "#EEF2FF" };
-                const totalTests = course.total_tests || 0;
+                const itemCount = course.total_tests || 0;
                 const progressPct = course.progress || 0;
                 return (
                   <Pressable
@@ -606,7 +606,7 @@ export default function TestSeriesScreen() {
                     style={[styles.tsCardLarge, { shadowColor: theme.accent, shadowOpacity: 0.15, shadowRadius: 8, elevation: 3 }]}
                     onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); router.push(`/course/${course.id}`); }}
                   >
-                    <LinearGradient colors={theme.grad} style={styles.tsCardLargeGrad}>
+                    <LinearGradient colors={theme.grad} style={[styles.tsCardLargeGrad, { gap: 12 }]}>
                       {/* Icon + badges row */}
                       <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
                         <View style={{ width: 38, height: 38, borderRadius: 12, backgroundColor: theme.accent + "18", alignItems: "center", justifyContent: "center" }}>
@@ -624,12 +624,12 @@ export default function TestSeriesScreen() {
                         </View>
                       </View>
                       {/* Title */}
-                      <Text style={{ fontSize: 13, fontFamily: "Inter_700Bold", color: "#111827", lineHeight: 19 }} numberOfLines={3}>{course.title}</Text>
+                      <Text style={{ fontSize: 13, fontFamily: "Inter_700Bold", color: "#111827", lineHeight: 19, marginTop: 2 }} numberOfLines={3}>{course.title}</Text>
                       {/* Progress */}
                       <View style={{ height: 5, backgroundColor: theme.accent + "20", borderRadius: 3, overflow: "hidden" }}>
                         <View style={{ height: 5, backgroundColor: theme.accent, borderRadius: 3, width: `${progressPct}%` as any }} />
                       </View>
-                      <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: "#6B7280" }}>{progressPct}% complete · {totalTests} tests</Text>
+                      <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: "#6B7280" }}>{progressPct}% complete · {itemCount} items</Text>
                     </LinearGradient>
                   </Pressable>
                 );
@@ -686,7 +686,7 @@ export default function TestSeriesScreen() {
                         </View>
                         <View style={{ alignItems: "center", gap: 2 }}>
                           <Text style={{ fontSize: 18, fontFamily: "Inter_700Bold", color: course.isEnrolled ? "#16A34A" : "#F59E0B" }}>{course.total_tests || 0}</Text>
-                          <Text style={{ fontSize: 10, fontFamily: "Inter_500Medium", color: Colors.light.textMuted }}>Tests</Text>
+                          <Text style={{ fontSize: 10, fontFamily: "Inter_500Medium", color: Colors.light.textMuted }}>Items</Text>
                         </View>
                       </View>
                     </View>

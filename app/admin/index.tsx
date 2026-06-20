@@ -73,7 +73,7 @@ const ADMIN_TABS: { key: AdminTab; label: string; icon: keyof typeof Ionicons.gl
 
 interface NewCourse {
   title: string; description: string; teacherName: string; price: string;
-  originalPrice: string; category: string; subject: string; isFree: boolean; level: string; durationHours: string;
+  originalPrice: string; category: string; subject: string; exam: string; isFree: boolean; level: string; durationHours: string;
   courseType: string; startDate: string; endDate: string; validityMonths: string;
   thumbnail: string; coverColor: string; teacherBio: string; teacherImageUrl: string;
   courseLanguage: string; batchStatus: string;
@@ -81,8 +81,8 @@ interface NewCourse {
 
 const defaultNewCourse = (courseType = "live"): NewCourse => ({
   title: "", description: "", teacherName: "3i Learning",
-  price: "0", originalPrice: "0", category: "Mathematics",
-  subject: "", isFree: false, level: "Beginner", durationHours: "0",
+  price: "0", originalPrice: "0", category: courseType === "test_series" ? "Test Series" : "Mathematics",
+  subject: "", exam: "", isFree: false, level: "Beginner", durationHours: "0",
   courseType, startDate: "", endDate: "", validityMonths: "", thumbnail: "", coverColor: "",
   teacherBio: "", teacherImageUrl: "", courseLanguage: "HINGLISH", batchStatus: "live",
 });
@@ -4819,8 +4819,13 @@ export default function AdminDashboard() {
                   { label: "Teacher / Team Name", key: "teacherName", placeholder: "Pankaj Sir & Team" },
                   { label: "Language", key: "courseLanguage", placeholder: "e.g., HINGLISH, Hindi, English" },
                 ] : []),
-                { label: "Category", key: "category", placeholder: "e.g., NDA, CDS, AFCAT" },
+                ...(newCourse.courseType !== "test_series" ? [
+                  { label: "Category", key: "category", placeholder: "e.g., NDA, CDS, AFCAT" },
+                ] : []),
                 { label: "Subject", key: "subject", placeholder: "e.g., Mathematics, English, GK" },
+                ...(newCourse.courseType === "test_series" ? [
+                  { label: "Exam", key: "exam", placeholder: "e.g., NDA, CDS, AFCAT" },
+                ] : []),
                 { label: "Level", key: "level", placeholder: "Beginner / Intermediate / Advanced" },
                 { label: "Price (₹)", key: "price", placeholder: "0 for free" },
                 { label: "Original Price (₹)", key: "originalPrice", placeholder: "For discount display" },
@@ -4857,6 +4862,15 @@ export default function AdminDashboard() {
                   hint="Recommended banner size: 1200 × 450 px. Shown at the top of the home course card."
                 />
               )}
+              {newCourse.courseType === "test_series" && (
+                <AdminR2ImagePicker
+                  label="Test Series Banner Image"
+                  value={newCourse.thumbnail}
+                  onChange={(url) => setNewCourse((prev) => ({ ...prev, thumbnail: url }))}
+                  variant="banner"
+                  hint="Recommended banner size: 1200 × 450 px. Shown on the home test series card and course header."
+                />
+              )}
               {newCourse.courseType === "multi_subject" && (
                 <View style={styles.formField}>
                   <Text style={styles.formLabel}>Batch Status</Text>
@@ -4884,6 +4898,28 @@ export default function AdminDashboard() {
                     These fixed subjects will appear on the student course layout screen.
                   </Text>
                 </View>
+              )}
+              {newCourse.courseType === "test_series" && (
+                <>
+                  <View style={styles.formField}>
+                    <Text style={styles.formLabel}>Course End Date</Text>
+                    <TextInput style={styles.formInput} placeholder="e.g., 15 Jun 2026" placeholderTextColor={Colors.light.textMuted} value={newCourse.endDate} onChangeText={(val) => setNewCourse((prev) => ({ ...prev, endDate: val }))} />
+                  </View>
+                  <View style={styles.formField}>
+                    <Text style={styles.formLabel}>Access validity (months from purchase, optional)</Text>
+                    <TextInput
+                      style={styles.formInput}
+                      placeholder="e.g., 6 or 12 or 18 (leave empty for no extra limit from purchase date)"
+                      placeholderTextColor={Colors.light.textMuted}
+                      value={newCourse.validityMonths}
+                      onChangeText={(val) => setNewCourse((prev) => ({ ...prev, validityMonths: val }))}
+                      keyboardType="numeric"
+                    />
+                    <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: Colors.light.textMuted, marginTop: 4 }}>
+                      Access ends on the earlier of: course end date, or (purchase time + this many months).
+                    </Text>
+                  </View>
+                </>
               )}
               {newCourse.courseType !== "test_series" && newCourse.courseType !== "multi_subject" && (
                 <View style={styles.formField}>

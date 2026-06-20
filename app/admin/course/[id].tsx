@@ -28,6 +28,7 @@ import AdminLectureAddBody, { type AddContentMode } from "@/components/admin/Adm
 import AdminMaterialAddBody from "@/components/admin/AdminMaterialAddBody";
 import { computeBaseOrderIndex } from "@/lib/bulk-upload-utils";
 import AdminBannerPreview from "@/components/admin/AdminBannerPreview";
+import CourseBannerImage from "@/components/CourseBannerImage";
 import { AdminImageBoxInline } from "@/app/admin/components/AdminImageBoxInline";
 import {
   type AboutTeacher,
@@ -134,6 +135,7 @@ interface EditCourseForm {
   originalPrice: string;
   category: string;
   subject: string;
+  exam: string;
   isFree: boolean;
   isPublished: boolean;
   level: string;
@@ -186,13 +188,14 @@ interface NewLiveClass {
   subjectKey: string;
 }
 
-type AdminCourseTab = "about" | "lectures" | "tests" | "pyqs" | "mocks" | "materials" | "live" | "enrolled";
+type AdminCourseTab = "about" | "lectures" | "tests" | "practice" | "pyqs" | "mocks" | "materials" | "live" | "enrolled";
 
 const ADMIN_COURSE_TABS: { key: AdminCourseTab; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
   { key: "about", label: "About", icon: "information-circle" },
   { key: "live", label: "Live", icon: "radio" },
   { key: "lectures", label: "Lectures", icon: "videocam" },
   { key: "tests", label: "Tests", icon: "document-text" },
+  { key: "practice", label: "Practice", icon: "fitness" },
   { key: "pyqs", label: "PYQs", icon: "school" },
   { key: "mocks", label: "Mock Tests", icon: "clipboard" },
   { key: "materials", label: "Materials", icon: "folder" },
@@ -205,7 +208,9 @@ const emptyTest: NewTestForm = { title: "", description: "", durationMinutes: "6
 const emptyQuestion: NewQuestion = { questionText: "", optionA: "", optionB: "", optionC: "", optionD: "", correctOption: "A", explanation: "", topic: "", marks: "4", negativeMarks: "1", imageUrl: "", solutionImageUrl: "", difficulty: "moderate" };
 const emptyMaterial: NewMaterial = { title: "", description: "", fileUrl: "", fileType: "pdf", isFree: false, sectionTitle: "", downloadAllowed: false, subjectKey: "" };
 const emptyLiveClass: NewLiveClass = { title: "", description: "", youtubeUrl: "", scheduledAt: "", isLive: false, isPublic: false, lectureSectionTitle: "Live Class Recordings", lectureSubfolderTitle: "", subjectKey: "" };
-const COURSE_TABS = new Set<AdminCourseTab>(["about", "lectures", "tests", "pyqs", "mocks", "materials", "live", "enrolled"]);
+const COURSE_TABS = new Set<AdminCourseTab>(["about", "lectures", "tests", "practice", "pyqs", "mocks", "materials", "live", "enrolled"]);
+
+const TEST_SERIES_TAB_ORDER: AdminCourseTab[] = ["about", "practice", "tests", "pyqs", "mocks", "enrolled"];
 
 function normalizeBatchStatus(value: unknown): "live" | "recorded" {
   const status = String(value || "").toLowerCase();
@@ -308,7 +313,7 @@ export default function AdminCourseScreen() {
   const [showEditCourse, setShowEditCourse] = useState(false);
   const [editForm, setEditForm] = useState<EditCourseForm>({
     title: "", description: "", teacherName: "", price: "0", originalPrice: "0",
-    category: "", subject: "", isFree: false, isPublished: true, level: "beginner", durationHours: "0", startDate: "", endDate: "", validityMonths: "",
+    category: "", subject: "", exam: "", isFree: false, isPublished: true, level: "beginner", durationHours: "0", startDate: "", endDate: "", validityMonths: "",
     thumbnail: "", courseLanguage: "HINGLISH", batchStatus: "live",
   });
   const [aboutForm, setAboutForm] = useState<CourseAboutForm>({
@@ -541,7 +546,13 @@ export default function AdminCourseScreen() {
     !isMultiSubjectCourse || String(row.subject_key || "").toLowerCase() === activeSubjectKey;
   const courseLectures = allCourseLectures.filter(subjectMatches);
   const subjectTests = allCourseTests.filter(subjectMatches);
-  const activeTestType = activeTab === "pyqs" ? "pyq" : activeTab === "mocks" ? "mock" : "";
+  const isTestSeriesCourse = course?.course_type === "test_series";
+  const activeTestType =
+    activeTab === "pyqs" ? "pyq"
+    : activeTab === "mocks" ? "mock"
+    : activeTab === "practice" ? "practice"
+    : activeTab === "tests" && isTestSeriesCourse ? "test"
+    : "";
   const courseTests = activeTestType
     ? subjectTests.filter((test: any) => String(test.test_type || "").toLowerCase() === activeTestType)
     : subjectTests.filter((test: any) => !["pyq", "mock"].includes(String(test.test_type || "").toLowerCase()));
@@ -584,7 +595,7 @@ export default function AdminCourseScreen() {
   const scopedCourseLiveClasses = courseLiveClasses.filter(subjectMatches);
 
   useEffect(() => {
-    if (!course || course.course_type === "test_series") return;
+    if (!course) return;
     const meta = parseCourseAboutMeta((course as any).teacher_details_json);
     const teachers = meta.teachers.length > 0 ? meta.teachers : [{
       name: course.teacher_name || "",
@@ -1289,6 +1300,7 @@ export default function AdminCourseScreen() {
         originalPrice: parseFloat(data.originalPrice) || 0,
         category: data.category,
         subject: data.subject,
+        exam: data.exam,
         isFree: data.isFree,
         isPublished: data.isPublished,
         level: data.level,
@@ -1360,6 +1372,7 @@ export default function AdminCourseScreen() {
         originalPrice: String(course.original_price || 0),
         category: course.category || "",
         subject: (course as any).subject || "",
+        exam: (course as any).exam || "",
         isFree: course.is_free || false,
         isPublished: course.is_published !== false,
         level: course.level || "beginner",
@@ -1404,8 +1417,15 @@ export default function AdminCourseScreen() {
   }
 
   const isTestSeries = course.course_type === "test_series";
-  const effectiveTab = isTestSeries && activeTab !== "enrolled" ? "tests" : (activeTab === "pyqs" || activeTab === "mocks" ? "tests" : activeTab);
-  const testSectionLabel = activeTab === "pyqs" ? "PYQs" : activeTab === "mocks" ? "Mock Tests" : "Tests";
+  const effectiveTab = isTestSeries
+    ? (TEST_SERIES_TAB_ORDER.includes(activeTab) ? activeTab : "about")
+    : (activeTab === "pyqs" || activeTab === "mocks" || activeTab === "practice" ? "tests" : activeTab);
+  const testSectionLabel =
+    activeTab === "pyqs" ? "PYQs"
+    : activeTab === "mocks" ? "Mock Tests"
+    : activeTab === "practice" ? "Practice"
+    : "Tests";
+  const isTestAdminTab = effectiveTab === "tests" || effectiveTab === "practice" || effectiveTab === "pyqs" || effectiveTab === "mocks";
   // For multi-subject courses: a "content" tab (Live/Lectures/Tests/PYQs/Mock/Materials) means
   // a subject is selected at the top level. About and Students are subject-agnostic.
   const isContentTab = activeTab !== "about" && activeTab !== "enrolled";
@@ -1489,7 +1509,10 @@ export default function AdminCourseScreen() {
           </>
         ) : isTestSeries ? (
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsRow}>
-            {ADMIN_COURSE_TABS.filter((t) => t.key === "tests" || t.key === "enrolled").map((tab) => (
+            {TEST_SERIES_TAB_ORDER.map((tabKey) => {
+              const tab = ADMIN_COURSE_TABS.find((t) => t.key === tabKey);
+              if (!tab) return null;
+              return (
               <Pressable
                 key={tab.key}
                 style={[styles.tab, activeTab === tab.key && styles.tabActive]}
@@ -1498,7 +1521,8 @@ export default function AdminCourseScreen() {
                 <Ionicons name={tab.icon} size={14} color={activeTab === tab.key ? Colors.light.primary : "rgba(255,255,255,0.6)"} />
                 <Text style={[styles.tabText, activeTab === tab.key && styles.tabTextActive]}>{tab.label}</Text>
               </Pressable>
-            ))}
+              );
+            })}
           </ScrollView>
         ) : (
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabsRow}>
@@ -1551,13 +1575,52 @@ export default function AdminCourseScreen() {
           );
         })()}
 
-        {effectiveTab === "about" && !isTestSeries && (
+        {effectiveTab === "about" && (
           <View style={[styles.section, styles.aboutSectionWrap]}>
+            {isTestSeries ? (
+              <View style={[styles.itemCard, styles.aboutPanel]}>
+                <View style={styles.sectionHeader}>
+                  <Text style={styles.sectionTitle}>Course Details</Text>
+                  <Pressable style={[styles.addBtn, { backgroundColor: Colors.light.primary }]} onPress={openEditCourse}>
+                    <Ionicons name="create-outline" size={16} color="#fff" />
+                    <Text style={styles.addBtnText}>Edit Settings</Text>
+                  </Pressable>
+                </View>
+                <View style={{ gap: 10, marginTop: 8 }}>
+                  {[
+                    { label: "Title", value: course.title },
+                    { label: "Exam", value: (course as any).exam || "—" },
+                    { label: "Subject", value: (course as any).subject || "—" },
+                    { label: "Category", value: course.category || "—" },
+                    { label: "Level", value: course.level || "—" },
+                    { label: "Language", value: (course as any).course_language || "—" },
+                    { label: "Teacher", value: course.teacher_name || "—" },
+                    { label: "End Date", value: (course as any).end_date || "—" },
+                    { label: "Validity", value: (course as any).validity_months ? `${(course as any).validity_months} months` : "—" },
+                    { label: "Price", value: course.is_free ? "Free" : `₹${parseFloat(String(course.price || "0")).toFixed(0)}` },
+                    { label: "Published", value: course.is_published !== false ? "Yes" : "No" },
+                  ].map((row) => (
+                    <View key={row.label} style={{ flexDirection: "row", gap: 12 }}>
+                      <Text style={{ width: 92, fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.textMuted }}>{row.label}</Text>
+                      <Text style={{ flex: 1, fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.text }}>{row.value}</Text>
+                    </View>
+                  ))}
+                  {(course as any).thumbnail ? (
+                    <View style={{ marginTop: 6 }}>
+                      <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.textMuted, marginBottom: 8 }}>Banner</Text>
+                      <View style={{ borderRadius: 12, overflow: "hidden", borderWidth: 1, borderColor: Colors.light.border }}>
+                        <CourseBannerImage uri={(course as any).thumbnail} backgroundColor="#F8FAFC" />
+                      </View>
+                    </View>
+                  ) : null}
+                </View>
+              </View>
+            ) : null}
             <LinearGradient colors={["#EEF2FF", "#F8FAFC"]} style={[styles.itemCard, styles.aboutPanel, { borderWidth: 0 }]}>
               <View style={styles.sectionHeader}>
                 <View style={{ flex: 1, paddingRight: 12 }}>
-                  <Text style={[styles.sectionTitle, { fontSize: 22 }]}>About Course</Text>
-                  <Text style={[styles.infoText, { marginTop: 6 }]}>Shown on the student about page. Use bold, clear copy for course promise, features, and teachers.</Text>
+                  <Text style={[styles.sectionTitle, { fontSize: 22 }]}>{isTestSeries ? "About Test Series" : "About Course"}</Text>
+                  <Text style={[styles.infoText, { marginTop: 6 }]}>{isTestSeries ? "Edit the description shown to students on the course About tab." : "Shown on the student about page. Use bold, clear copy for course promise, features, and teachers."}</Text>
                 </View>
                 <Pressable
                   style={[styles.addBtn, { opacity: saveAboutMutation.isPending ? 0.6 : 1 }]}
@@ -1572,23 +1635,27 @@ export default function AdminCourseScreen() {
 
             <View style={[styles.itemCard, styles.aboutPanel]}>
               <FormField
-                label="Course Description"
-                placeholder="Write what students will learn, batch goals, and course promise..."
+                label={isTestSeries ? "Test Series Description" : "Course Description"}
+                placeholder={isTestSeries ? "Describe what this test series includes..." : "Write what students will learn, batch goals, and course promise..."}
                 value={aboutForm.description}
                 onChangeText={(v) => setAboutForm((p) => ({ ...p, description: v }))}
                 multiline
                 tall
               />
-              <FormField
-                label="Course Features"
-                placeholder={"One feature per line\ne.g., Live doubt support\ne.g., Chapter-wise PYQs"}
-                value={aboutForm.features}
-                onChangeText={(v) => setAboutForm((p) => ({ ...p, features: v }))}
-                multiline
-                tall
-              />
+              {!isTestSeries ? (
+                <FormField
+                  label="Course Features"
+                  placeholder={"One feature per line\ne.g., Live doubt support\ne.g., Chapter-wise PYQs"}
+                  value={aboutForm.features}
+                  onChangeText={(v) => setAboutForm((p) => ({ ...p, features: v }))}
+                  multiline
+                  tall
+                />
+              ) : null}
             </View>
 
+            {!isTestSeries ? (
+            <>
             <View style={[styles.sectionHeader, styles.aboutTeachersHeader]}>
               <View style={{ flex: 1, paddingRight: 8 }}>
                 <Text style={styles.sectionTitle}>Teachers ({aboutForm.teachers.length})</Text>
@@ -1614,8 +1681,8 @@ export default function AdminCourseScreen() {
                         <Ionicons name="trash-outline" size={16} color="#EF4444" />
                       </Pressable>
                     ) : null}
-                    <View style={styles.aboutTeacherBodyRow}>
-                      <View style={{ position: "relative" }}>
+                    <View style={styles.aboutTeacherBodyCol}>
+                      <View style={{ position: "relative", alignSelf: "center" }}>
                         {teacher.imageUrl ? (
                           <>
                             <Image source={{ uri: teacher.imageUrl }} style={styles.aboutTeacherAvatar} />
@@ -1632,7 +1699,6 @@ export default function AdminCourseScreen() {
                           </View>
                         )}
                       </View>
-                      <View style={styles.aboutTeacherFieldsCol}>
                         <FormField
                           label={`Teacher ${index + 1} Name`}
                           placeholder="Teacher name"
@@ -1663,7 +1729,6 @@ export default function AdminCourseScreen() {
                           {uploading ? <ActivityIndicator size="small" color={Colors.light.primary} /> : <Ionicons name="cloud-upload-outline" size={17} color={Colors.light.primary} />}
                           <Text style={styles.aboutUploadBtnText}>{uploading ? "Uploading..." : "Upload Teacher Photo to R2"}</Text>
                         </Pressable>
-                      </View>
                     </View>
                   </View>
                 ))}
@@ -1694,8 +1759,8 @@ export default function AdminCourseScreen() {
                     >
                       <Ionicons name="trash-outline" size={16} color="#EF4444" />
                     </Pressable>
-                    <View style={styles.aboutTeacherBodyRow}>
-                      <View style={{ position: "relative" }}>
+                    <View style={styles.aboutTeacherBodyCol}>
+                      <View style={{ position: "relative", alignSelf: "center" }}>
                         {teacher.imageUrl ? (
                           <>
                             <Image source={{ uri: teacher.imageUrl }} style={styles.aboutTeacherAvatar} />
@@ -1712,7 +1777,6 @@ export default function AdminCourseScreen() {
                           </View>
                         )}
                       </View>
-                      <View style={styles.aboutTeacherFieldsCol}>
                         <FormField
                           label={`Teacher ${index + 1} Name`}
                           placeholder="Teacher name"
@@ -1743,7 +1807,6 @@ export default function AdminCourseScreen() {
                           {uploading ? <ActivityIndicator size="small" color={Colors.light.primary} /> : <Ionicons name="cloud-upload-outline" size={17} color={Colors.light.primary} />}
                           <Text style={styles.aboutUploadBtnText}>{uploading ? "Uploading..." : "Upload Teacher Photo to R2"}</Text>
                         </Pressable>
-                      </View>
                     </View>
                   </View>
                 ))}
@@ -1758,8 +1821,8 @@ export default function AdminCourseScreen() {
                     >
                       <Ionicons name="trash-outline" size={16} color="#EF4444" />
                     </Pressable>
-                    <View style={styles.aboutTeacherBodyRow}>
-                      <View style={{ position: "relative" }}>
+                    <View style={styles.aboutTeacherBodyCol}>
+                      <View style={{ position: "relative", alignSelf: "center" }}>
                         {teacher.imageUrl ? (
                           <>
                             <Image source={{ uri: teacher.imageUrl }} style={styles.aboutTeacherAvatar} />
@@ -1776,7 +1839,6 @@ export default function AdminCourseScreen() {
                           </View>
                         )}
                       </View>
-                      <View style={styles.aboutTeacherFieldsCol}>
                         <FormField
                           label={`Teacher ${index + 1} Name`}
                           placeholder="Teacher name"
@@ -1807,12 +1869,13 @@ export default function AdminCourseScreen() {
                           {uploading ? <ActivityIndicator size="small" color={Colors.light.primary} /> : <Ionicons name="cloud-upload-outline" size={17} color={Colors.light.primary} />}
                           <Text style={styles.aboutUploadBtnText}>{uploading ? "Uploading..." : "Upload Teacher Photo to R2"}</Text>
                         </Pressable>
-                      </View>
                     </View>
                   </View>
                 ))}
               </View>
             )}
+            </>
+            ) : null}
           </View>
         )}
 
@@ -1953,7 +2016,7 @@ export default function AdminCourseScreen() {
           </View>
         )}
 
-        {effectiveTab === "tests" && (
+        {isTestAdminTab && (
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>{testSectionLabel} ({courseTests.length})</Text>
@@ -1963,12 +2026,17 @@ export default function AdminCourseScreen() {
                   <Text style={styles.addBtnText}>Folder</Text>
                 </Pressable>
                 <Pressable style={styles.addBtn} onPress={() => {
-                  const preset = activeTab === "pyqs" ? "pyq" : activeTab === "mocks" ? "mock" : "practice";
+                  const preset =
+                    activeTab === "pyqs" ? "pyq"
+                    : activeTab === "mocks" ? "mock"
+                    : activeTab === "practice" ? "practice"
+                    : isTestSeries ? "test"
+                    : "practice";
                   setNewTest((p) => ({ ...p, testType: preset, subjectKey: isMultiSubjectCourse ? activeSubjectKey : p.subjectKey }));
                   setShowAddTest(true);
                 }}>
                   <Ionicons name="add" size={16} color="#fff" />
-                  <Text style={styles.addBtnText}>Add {activeTab === "pyqs" ? "PYQ" : activeTab === "mocks" ? "Mock" : "Test"}</Text>
+                  <Text style={styles.addBtnText}>Add {activeTab === "pyqs" ? "PYQ" : activeTab === "mocks" ? "Mock" : activeTab === "practice" ? "Practice" : "Test"}</Text>
                 </Pressable>
               </View>
             </View>
@@ -3006,8 +3074,13 @@ export default function AdminCourseScreen() {
             </View>
             <ScrollView style={{ maxHeight: 480 }} showsVerticalScrollIndicator={false}>
               <FormField label="Course Title *" placeholder="e.g., NDA Mathematics" value={editForm.title} onChangeText={(v) => setEditForm(p => ({ ...p, title: v }))} />
-              <FormField label="Category *" placeholder="e.g., NDA, CDS, AFCAT" value={editForm.category} onChangeText={(v) => setEditForm(p => ({ ...p, category: v }))} />
+              {!isTestSeries ? (
+                <FormField label="Category *" placeholder="e.g., NDA, CDS, AFCAT" value={editForm.category} onChangeText={(v) => setEditForm(p => ({ ...p, category: v }))} />
+              ) : null}
               <FormField label="Subject" placeholder="e.g., Mathematics, English, GK" value={editForm.subject} onChangeText={(v) => setEditForm(p => ({ ...p, subject: v }))} />
+              {isTestSeries ? (
+                <FormField label="Exam" placeholder="e.g., NDA, CDS, AFCAT" value={editForm.exam} onChangeText={(v) => setEditForm(p => ({ ...p, exam: v }))} />
+              ) : null}
               <FormField
                 label={isMultiSubjectCourse ? "Teacher / Team Name" : "Teacher Name"}
                 placeholder={isMultiSubjectCourse ? "Pankaj Sir & Team" : "e.g., Pankaj Sir"}
@@ -3072,6 +3145,9 @@ export default function AdminCourseScreen() {
                   <FormField label="End Date" placeholder="e.g., 15 Jun 2026" value={editForm.endDate} onChangeText={(v) => setEditForm(p => ({ ...p, endDate: v }))} />
                 </>
               )}
+              {isTestSeries ? (
+                <FormField label="Course End Date" placeholder="e.g., 15 Jun 2026" value={editForm.endDate} onChangeText={(v) => setEditForm(p => ({ ...p, endDate: v }))} />
+              ) : null}
               <FormField label="Validity (months)" placeholder="e.g., 6" value={editForm.validityMonths} onChangeText={(v) => setEditForm(p => ({ ...p, validityMonths: v }))} numeric />
               <View style={styles.formField}>
                 <Text style={styles.formLabel}>Free Course</Text>
@@ -3185,7 +3261,12 @@ export default function AdminCourseScreen() {
                 style={{ flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "rgba(255,255,255,0.15)", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 }}
                 onPress={() => {
                   if (openAdminFolder?.type === "test") {
-                    const preset = activeTab === "pyqs" ? "pyq" : activeTab === "mocks" ? "mock" : "practice";
+                    const preset =
+                    activeTab === "pyqs" ? "pyq"
+                    : activeTab === "mocks" ? "mock"
+                    : activeTab === "practice" ? "practice"
+                    : isTestSeries ? "test"
+                    : "practice";
                     setNewTest({ ...emptyTest, testType: preset, folderName: openAdminFolder!.name, subjectKey: isMultiSubjectCourse ? activeSubjectKey : "" });
                   } else if (openAdminFolder?.type === "lecture") setNewLecture({ ...emptyLecture, sectionTitle: openAdminFolder!.name });
                   else if (openAdminFolder?.type === "material") setNewMaterial({ ...emptyMaterial, sectionTitle: openAdminFolder!.name });
@@ -4612,8 +4693,7 @@ const styles = StyleSheet.create({
     minWidth: 300,
     maxWidth: "100%",
   },
-  aboutTeacherBodyRow: { flexDirection: "row", alignItems: "flex-start", gap: 14 },
-  aboutTeacherFieldsCol: { flex: 1, minWidth: 0, gap: 2 },
+  aboutTeacherBodyCol: { flexDirection: "column", alignItems: "stretch", gap: 10 },
   aboutTeacherDeleteBtn: {
     position: "absolute",
     top: 10,
@@ -4638,8 +4718,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     zIndex: 2,
   },
-  aboutTeacherAvatar: { width: 92, height: 92, borderRadius: 18, backgroundColor: "#F8FAFC" },
-  aboutTeacherAvatarFallback: { width: 92, height: 92, borderRadius: 18, backgroundColor: "#EEF2FF", alignItems: "center", justifyContent: "center" },
+  aboutTeacherAvatar: { width: 100, height: 100, borderRadius: 20, backgroundColor: "#F8FAFC" },
+  aboutTeacherAvatarFallback: { width: 100, height: 100, borderRadius: 20, backgroundColor: "#EEF2FF", alignItems: "center", justifyContent: "center" },
   aboutUploadBtn: { borderWidth: 1.5, borderColor: Colors.light.primary, borderStyle: "dashed", borderRadius: 10, paddingVertical: 12, paddingHorizontal: 12, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8, backgroundColor: "#EEF2FF", marginBottom: 4 },
   aboutUploadBtnText: { fontSize: 13, fontFamily: "Inter_700Bold", color: Colors.light.primary },
   sectionHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },

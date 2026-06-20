@@ -25,6 +25,7 @@ export const courses = pgTable("courses", {
   price: decimal("price", { precision: 10, scale: 2 }).default("0"),
   originalPrice: decimal("original_price", { precision: 10, scale: 2 }).default("0"),
   category: text("category").default("Mathematics"),
+  exam: text("exam").default(""),
   thumbnail: text("thumbnail"),
   isFree: boolean("is_free").default(false),
   totalLectures: integer("total_lectures").default(0),

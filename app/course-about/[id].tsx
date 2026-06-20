@@ -150,7 +150,8 @@ export default function CourseAboutScreen() {
         { label: "Instructor", value: instructorName, icon: "person" },
         { label: "Level", value: course.level || "Beginner", icon: "bar-chart" },
         { label: "Subject", value: readableValue(course.subject), icon: "bookmark" },
-        { label: "Duration", value: course.duration_hours ? `${course.duration_hours}h total` : "", icon: "time" },
+        { label: "Start Date", value: readableValue(course.start_date), icon: "calendar" },
+        { label: "End Date", value: readableValue(course.end_date), icon: "calendar-outline" },
       ].filter((row) => row.value);
 
   const countItems = isMultiSubject

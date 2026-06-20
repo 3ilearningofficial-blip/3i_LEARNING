@@ -29,55 +29,51 @@ export default function CourseTeacherAboutCard({ teacher, colors, style, cardWid
         <Image source={{ uri: teacher.imageUrl }} style={styles.photo} />
       ) : (
         <View style={[styles.photo, styles.photoFallback]}>
-          <Ionicons name="person" size={34} color={Colors.light.primary} />
+          <Ionicons name="person" size={38} color={Colors.light.primary} />
         </View>
       )}
-      <View style={styles.textCol}>
-        {teacher.name ? (
-          <Text style={[styles.name, { color: textColor }]}>{teacher.name}</Text>
-        ) : null}
-        <Text style={[styles.bio, { color: bioColor }]}>
-          {teacher.bio?.trim() ? teacher.bio : "No description"}
-        </Text>
-      </View>
+      {teacher.name ? (
+        <Text style={[styles.name, { color: textColor }]}>{teacher.name}</Text>
+      ) : null}
+      <Text style={[styles.bio, { color: bioColor }]}>
+        {teacher.bio?.trim() ? teacher.bio : "No description"}
+      </Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   card: {
-    flexDirection: "row",
+    flexDirection: "column",
     alignItems: "flex-start",
-    gap: 14,
+    gap: 10,
     borderWidth: 1,
     borderRadius: 14,
     padding: 14,
     width: "100%",
   },
   photo: {
-    width: 92,
-    height: 92,
-    borderRadius: 18,
+    width: 100,
+    height: 100,
+    borderRadius: 20,
     backgroundColor: "#F8FAFC",
+    alignSelf: "center",
   },
   photoFallback: {
     backgroundColor: "#EEF2FF",
     alignItems: "center",
     justifyContent: "center",
   },
-  textCol: {
-    flex: 1,
-    minWidth: 0,
-    gap: 6,
-  },
   name: {
     fontSize: 16,
     fontFamily: "Inter_700Bold",
     lineHeight: 22,
+    width: "100%",
   },
   bio: {
     fontSize: 14,
     lineHeight: 22,
     fontFamily: "Inter_400Regular",
+    width: "100%",
   },
 });

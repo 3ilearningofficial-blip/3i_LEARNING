@@ -20,6 +20,8 @@ import { formatLockCountdown, sendOtpRequest, verifyOtpRequest } from "@/lib/otp
 import Colors from "@/constants/colors";
 import CourseBannerImage from "@/components/CourseBannerImage";
 import { COURSE_BANNER_ASPECT } from "@/constants/courseBanner";
+import { getCourseExplorePath } from "@/lib/course-explore-path";
+import { HOME_TEST_SERIES_CHIP } from "@/constants/homeCategories";
 
 const DEFAULT_FEATURES = [
   { icon: "videocam", color: "#1A56DB", title: "Video Courses", desc: "Structured courses for NDA, CDS, AFCAT with live & recorded lectures" },
@@ -230,6 +232,7 @@ type PublicCourse = {
   total_lectures?: number;
   total_tests?: number;
   level?: string;
+  course_type?: string;
 };
 
 function getCoursePriceNumber(course: PublicCourse): number | null {
@@ -245,7 +248,7 @@ const WEBSITE_STATS = [
   { icon: "trophy", title: "Exam Ready", desc: "NDA, CDS and AFCAT", color: "#F59E0B" },
 ] as const;
 
-const WEBSITE_EXAM_CATEGORIES = ["NDA", "CDS", "AFCAT"] as const;
+const WEBSITE_EXAM_CATEGORIES = ["NDA", "CDS", "AFCAT", HOME_TEST_SERIES_CHIP] as const;
 const WEB_APP_HOME_PATH = "/home";
 type WelcomeAuthMode = "signin" | "register";
 
@@ -563,7 +566,7 @@ export default function WelcomeScreen() {
   );
 
   const websiteCategories = WEBSITE_EXAM_CATEGORIES;
-  const featuredWebsiteCourses = websiteCourses.slice(0, 6);
+  const featuredWebsiteCourses = websiteCourses;
   const heroCoursePrice = React.useMemo(() => {
     const paidPrices = websiteCourses
       .map(getCoursePriceNumber)
@@ -767,24 +770,31 @@ export default function WelcomeScreen() {
     }
   };
 
-  const openCategoryCourse = (category: string) => {
-    const normalized = category.trim().toLowerCase();
-    const course = websiteCourses.find((item) => String(item.category || "").trim().toLowerCase() === normalized);
-    if (!course?.id) {
-      setInfoPrompt({ visible: true, message: `No course available for ${category}.` });
-      return;
-    }
-    openWebRoute(`/course/${course.id}`);
-  };
-
-  const openCourse = (courseId: number) => {
-    const next = `/course/${courseId}`;
+  const openHomeCategory = (category: string) => {
+    const next = `/home?category=${encodeURIComponent(category)}`;
     blurActiveElementWeb();
+    setWebMenuOpen(false);
     if (user?.id) {
       router.push(next as any);
       return;
     }
-    showAuthRequired(next, "Please login/register first to buy this course.");
+    void showAuthRequired(next, "Please login/register first to browse courses.");
+  };
+
+  const openCourse = (course: PublicCourse) => {
+    if (!course?.id) {
+      if (user?.id) openWebRoute(WEB_APP_HOME_PATH);
+      else void showAuthRequired(WEB_APP_HOME_PATH);
+      return;
+    }
+    const next = getCourseExplorePath({ id: course.id, course_type: course.course_type });
+    blurActiveElementWeb();
+    setWebMenuOpen(false);
+    if (user?.id) {
+      router.push(next as any);
+      return;
+    }
+    void showAuthRequired(next, "Please login/register first to buy this course.");
   };
 
   if (isWeb && user?.id && !allowLoggedInWelcome) {
@@ -906,14 +916,15 @@ export default function WelcomeScreen() {
               {websiteCategories.map((category, index) => (
                 <Pressable
                   key={category}
-                  onPress={() => openCategoryCourse(category)}
+                  onPress={() => openHomeCategory(category)}
                   style={({ pressed }) => [
                     styles.websiteCategoryCard,
+                    !isDesktopWeb && styles.websiteCategoryCardMobile,
                     { backgroundColor: ["#FFF7ED", "#EEF4FF", "#F5F3FF", "#ECFDF5"][index % 4] },
                     pressed && styles.pressedSoft,
                   ]}
                 >
-                  <Text style={styles.websiteCategoryTitle}>{category}</Text>
+                  <Text style={[styles.websiteCategoryTitle, !isDesktopWeb && { fontSize: 22 }]}>{category}</Text>
                   <Text style={styles.websiteCategorySub}>Explore Category</Text>
                   <Ionicons name="arrow-forward" size={22} color={Colors.light.text} />
                 </Pressable>
@@ -938,7 +949,7 @@ export default function WelcomeScreen() {
                 </View>
               ) : null}
               {featuredWebsiteCourses.map((course, index) => (
-                <View key={`${course.id || "fallback"}-${index}`} style={styles.websiteCourseCard}>
+                <View key={`${course.id || "fallback"}-${index}`} style={[styles.websiteCourseCard, !isDesktopWeb && styles.websiteCourseCardMobile]}>
                   <View style={styles.websiteCourseThumb}>
                     {course.thumbnail ? (
                       <CourseBannerImage uri={resolveWelcomeMediaUrl(course.thumbnail, apiOrigin)} backgroundColor="#EEF4FF" />
@@ -948,14 +959,14 @@ export default function WelcomeScreen() {
                       </View>
                     )}
                   </View>
-                  <Text style={styles.websiteCourseTitle} numberOfLines={2}>{course.title}</Text>
+                  <Text style={[styles.websiteCourseTitle, !isDesktopWeb && { fontSize: 18 }]} numberOfLines={2}>{course.title}</Text>
                   <Text style={styles.websiteCourseDesc} numberOfLines={2}>{course.description || "Complete preparation with lectures, tests and practice."}</Text>
                   <View style={styles.websiteCourseMeta}>
                     <Text style={styles.websiteCoursePrice}>{course.is_free ? "Free" : `₹${parseFloat(String(course.price || "0")).toFixed(0)}`}</Text>
                     <Text style={styles.websiteCourseCategory}>{course.category || "Course"}</Text>
                   </View>
                   <Pressable
-                    onPress={() => (course.id ? openCourse(course.id) : user?.id ? openWebRoute(WEB_APP_HOME_PATH) : showAuthRequired(WEB_APP_HOME_PATH))}
+                    onPress={() => openCourse(course)}
                     style={({ pressed }) => [styles.websiteBuyButton, pressed && styles.pressedSoft]}
                   >
                     <Text style={styles.websiteBuyButtonText}>{course.is_free ? "Start Free" : "Buy Now"}</Text>
@@ -1806,6 +1817,7 @@ const styles = StyleSheet.create({
   },
   websiteCategoryGridMobile: {
     flexDirection: "column",
+    alignItems: "center",
   },
   websiteCategoryCard: {
     width: 230,
@@ -1815,6 +1827,13 @@ const styles = StyleSheet.create({
     borderColor: Colors.light.border,
     padding: 18,
     justifyContent: "space-between",
+  },
+  websiteCategoryCardMobile: {
+    width: "100%",
+    maxWidth: 320,
+    minHeight: 168,
+    alignSelf: "center",
+    padding: 22,
   },
   websiteCategoryTitle: {
     fontFamily: "Inter_700Bold",
@@ -1834,6 +1853,7 @@ const styles = StyleSheet.create({
   },
   websiteCourseGridMobile: {
     flexDirection: "column",
+    alignItems: "center",
   },
   websiteCourseCard: {
     width: 292,
@@ -1843,6 +1863,13 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFFFFF",
     padding: 16,
     gap: 10,
+  },
+  websiteCourseCardMobile: {
+    width: "100%",
+    maxWidth: 340,
+    alignSelf: "center",
+    padding: 18,
+    gap: 12,
   },
   websiteEmptyCourseCard: {
     width: 292,
