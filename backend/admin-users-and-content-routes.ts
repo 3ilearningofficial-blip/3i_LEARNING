@@ -105,6 +105,135 @@ export function registerAdminUsersAndContentRoutes({
     }
   });
 
+  app.post("/api/admin/study-materials/bulk", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const { courseId, subjectKey, items } = req.body;
+      const parsedCourseId = Number(courseId);
+      if (!Number.isFinite(parsedCourseId) || parsedCourseId <= 0) {
+        return res.status(400).json({ message: "Invalid courseId" });
+      }
+      if (!Array.isArray(items) || items.length === 0 || items.length > 50) {
+        return res.status(400).json({ message: "items must contain 1–50 materials" });
+      }
+
+      const courseCheck = await db.query("SELECT id, title FROM courses WHERE id = $1 LIMIT 1", [parsedCourseId]);
+      if (courseCheck.rows.length === 0) {
+        return res.status(404).json({ message: "Course not found" });
+      }
+      const courseTitle = String(courseCheck.rows[0]?.title || "your course");
+      const normalizedSubjectKey =
+        typeof subjectKey === "string" && subjectKey.trim() ? subjectKey.trim().toLowerCase() : null;
+
+      const titles: string[] = [];
+      const fileUrls: string[] = [];
+      const fileTypes: string[] = [];
+      const orderIndexes: number[] = [];
+      const sectionTitles: (string | null)[] = [];
+      const downloadFlags: boolean[] = [];
+
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i] || {};
+        const title = String(item.title || "").trim();
+        const fileUrl = String(item.fileUrl || "").trim();
+        if (!title || !fileUrl) {
+          return res.status(400).json({ message: `Item ${i + 1}: title and fileUrl are required` });
+        }
+        titles.push(title);
+        fileUrls.push(fileUrl);
+        fileTypes.push(String(item.fileType || "pdf").trim() || "pdf");
+        orderIndexes.push(Number(item.orderIndex) || 0);
+        const section = item.sectionTitle != null ? String(item.sectionTitle).trim() : "";
+        sectionTitles.push(section || null);
+        downloadFlags.push(!!item.downloadAllowed);
+      }
+
+      const now = Date.now();
+      const inserted = await runInTransaction(async (tx) => {
+        const result = await tx.query(
+          `INSERT INTO study_materials (
+             title, description, file_url, file_type, course_id, is_free,
+             section_title, download_allowed, subject_key, order_index, created_at
+           )
+           SELECT
+             t.title,
+             ''::text,
+             t.file_url,
+             t.file_type,
+             $1::int,
+             false,
+             t.section_title,
+             t.download_allowed,
+             $2::text,
+             t.order_index,
+             $3::bigint
+           FROM unnest(
+             $4::text[],
+             $5::text[],
+             $6::text[],
+             $7::int[],
+             $8::text[],
+             $9::boolean[]
+           ) AS t(title, file_url, file_type, order_index, section_title, download_allowed)
+           RETURNING *`,
+          [
+            parsedCourseId,
+            normalizedSubjectKey,
+            now,
+            titles,
+            fileUrls,
+            fileTypes,
+            orderIndexes,
+            sectionTitles,
+            downloadFlags,
+          ],
+        );
+        return result.rows;
+      });
+
+      await db.query(
+        "UPDATE courses SET total_materials = (SELECT COUNT(*) FROM study_materials WHERE course_id = $1) WHERE id = $1",
+        [parsedCourseId],
+      );
+      await recomputeAllEnrollmentsProgressForCourse(parsedCourseId);
+
+      const count = inserted.length;
+      const recipients = await db
+        .query("SELECT user_id FROM enrollments WHERE course_id = $1", [parsedCourseId])
+        .catch(() => ({ rows: [] as any[] }));
+      const recipientIds = recipients.rows.map((r: any) => Number(r.user_id));
+      const notifTitle = count === 1 ? "📘 New Material Added" : `📘 ${count} new materials added`;
+      const notifMessage =
+        count === 1
+          ? `"${titles[0]}" has been added in ${courseTitle}.`
+          : `${count} new materials have been added in ${courseTitle}.`;
+      const expiresAt = autoNotificationExpiresAt(now);
+      if (recipientIds.length > 0) {
+        await db
+          .query(
+            `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
+             SELECT u, $2::text, $3::text, $4::text, $5::bigint, $6::bigint
+             FROM unnest($1::int[]) AS u`,
+            [recipientIds, notifTitle, notifMessage, "info", now, expiresAt],
+          )
+          .catch(() => {});
+      }
+      await sendPushToUsers(db, recipientIds, {
+        title: notifTitle,
+        body: notifMessage,
+        data: { type: "new_material_added", courseId: parsedCourseId, count },
+      });
+
+      res.json({ inserted, count });
+    } catch (err) {
+      console.error("[AdminMaterials] bulk create failed", {
+        courseId: req.body?.courseId,
+        itemCount: Array.isArray(req.body?.items) ? req.body.items.length : 0,
+        error: err instanceof Error ? err.message : err,
+      });
+      res.status(500).json({ message: "Failed to bulk add materials", detail: err instanceof Error ? err.message : "unknown_error" });
+    }
+  });
+
   app.post("/api/admin/live-classes", requireAdmin, async (req: Request, res: Response) => {
     try {
       const { title, description, courseId, youtubeUrl, scheduledAt, isLive, isPublic, notifyEmail, notifyBell, isFreePreview, streamType, chatMode, showViewerCount, lectureSectionTitle, lectureSubfolderTitle, isRecordingMode, visibleAfterAt, subjectKey } = req.body;

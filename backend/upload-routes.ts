@@ -7,7 +7,24 @@ type RegisterUploadRoutesDeps = {
   requireAdmin: (req: Request, res: Response, next: () => void) => any;
   getAuthUser: (req: Request) => Promise<{ id: number } | null>;
   getR2Client: () => Promise<any>;
+  db: { query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }> };
 };
+
+const MAX_VIDEO_BYTES = 500 * 1024 * 1024;
+const MAX_PDF_BYTES = 50 * 1024 * 1024;
+const MAX_DOC_BYTES = 50 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+
+function maxBytesForPresign(folder: string, contentType: string): number {
+  const ct = String(contentType || "").toLowerCase();
+  if (ct.startsWith("video/")) return MAX_VIDEO_BYTES;
+  if (ct === "application/pdf") return MAX_PDF_BYTES;
+  if (ct.includes("word") || ct.includes("msword")) return MAX_DOC_BYTES;
+  if (ct.startsWith("image/")) return MAX_IMAGE_BYTES;
+  if (folder === "lectures") return MAX_VIDEO_BYTES;
+  if (folder === "materials") return MAX_PDF_BYTES;
+  return MAX_PDF_BYTES;
+}
 
 function getPublicApiBaseUrl(req: Request): string {
   const configured = String(process.env.PUBLIC_API_BASE_URL || "").trim();
@@ -46,6 +63,7 @@ export function registerUploadRoutes({
   requireAdmin,
   getAuthUser,
   getR2Client,
+  db,
 }: RegisterUploadRoutesDeps): void {
   app.post("/api/upload/presign-profile", async (req: Request, res: Response) => {
     try {
@@ -158,6 +176,8 @@ export function registerUploadRoutes({
     "image/jpeg", "image/png", "image/webp", "image/gif",
     // Documents
     "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     // Video (Cloudflare Stream handles these; direct R2 for recordings)
     "video/mp4", "video/webm", "video/quicktime",
     // Audio
@@ -170,8 +190,15 @@ export function registerUploadRoutes({
 
   app.post("/api/upload/presign", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { filename, contentType, folder, subfolder } = req.body;
+      const { filename, contentType, folder, subfolder, contentLength } = req.body;
       if (!filename || !contentType) return res.status(400).json({ message: "filename and contentType required" });
+      const maxBytes = maxBytesForPresign(String(folder || "uploads"), String(contentType));
+      const len = Number(contentLength);
+      if (Number.isFinite(len) && len > 0 && len > maxBytes) {
+        return res.status(413).json({
+          message: `File too large (${len} bytes). Maximum for this type is ${maxBytes} bytes.`,
+        });
+      }
       // Validate MIME type against the server-side allowlist.
       // Never pass the client-supplied contentType directly to S3 without validation —
       // an admin could presign a text/html or application/javascript object, which would
@@ -238,11 +265,27 @@ export function registerUploadRoutes({
         "images/",
         "live-class-recording/",
       ];
-      const keyAllowed = ALLOWED_KEY_PREFIXES.some((prefix) => String(key).startsWith(prefix));
+      const keyStr = String(key);
+      const keyAllowed = ALLOWED_KEY_PREFIXES.some((prefix) => keyStr.startsWith(prefix));
       if (!keyAllowed) return res.status(403).json({ message: "Invalid file key — operation not permitted" });
+
+      if (keyStr.startsWith("lectures/") || keyStr.startsWith("materials/")) {
+        const refCheck = await db.query(
+          `SELECT
+             (SELECT COUNT(*)::int FROM lectures WHERE video_url LIKE '%' || $1) AS lecture_refs,
+             (SELECT COUNT(*)::int FROM study_materials WHERE file_url LIKE '%' || $1) AS material_refs`,
+          [keyStr],
+        );
+        const lectureRefs = Number(refCheck.rows[0]?.lecture_refs) || 0;
+        const materialRefs = Number(refCheck.rows[0]?.material_refs) || 0;
+        if (lectureRefs > 0 || materialRefs > 0) {
+          return res.status(409).json({ message: "File is referenced by course content and cannot be deleted" });
+        }
+      }
+
       const { DeleteObjectCommand } = await import("@aws-sdk/client-s3");
       const r2 = await getR2Client();
-      await r2.send(new DeleteObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: key }));
+      await r2.send(new DeleteObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: keyStr }));
       res.json({ success: true });
     } catch (err) {
       console.error("[R2] Delete error:", err);

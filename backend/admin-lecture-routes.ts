@@ -14,6 +14,7 @@ type RegisterAdminLectureRoutesDeps = {
   requireAdmin: (req: Request, res: Response, next: () => void) => any;
   getR2Client: () => Promise<any>;
   recomputeAllEnrollmentsProgressForCourse: (courseId: number | string) => Promise<void>;
+  runInTransaction: <T>(fn: (tx: DbClient) => Promise<T>) => Promise<T>;
 };
 
 export function registerAdminLectureRoutes({
@@ -22,6 +23,7 @@ export function registerAdminLectureRoutes({
   requireAdmin,
   getR2Client,
   recomputeAllEnrollmentsProgressForCourse,
+  runInTransaction,
 }: RegisterAdminLectureRoutesDeps): void {
   const normalizeSectionSegments = (value: unknown): string[] =>
     String(value || "")
@@ -138,6 +140,140 @@ export function registerAdminLectureRoutes({
         error: err instanceof Error ? err.message : err,
       });
       res.status(500).json({ message: "Failed to add lecture", detail: err instanceof Error ? err.message : "unknown_error" });
+    }
+  });
+
+  app.post("/api/admin/lectures/bulk", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const { courseId, subjectKey, items } = req.body;
+      const parsedCourseId = Number(courseId);
+      if (!Number.isFinite(parsedCourseId) || parsedCourseId <= 0) {
+        return res.status(400).json({ message: "Invalid courseId" });
+      }
+      if (!Array.isArray(items) || items.length === 0 || items.length > 50) {
+        return res.status(400).json({ message: "items must contain 1–50 lectures" });
+      }
+
+      const courseCheck = await db.query("SELECT id, title FROM courses WHERE id = $1 LIMIT 1", [parsedCourseId]);
+      if (courseCheck.rows.length === 0) {
+        return res.status(404).json({ message: "Course not found" });
+      }
+      const courseTitle = String(courseCheck.rows[0]?.title || "your course");
+      const normalizedSubjectKey =
+        typeof subjectKey === "string" && subjectKey.trim() ? subjectKey.trim().toLowerCase() : null;
+
+      const titles: string[] = [];
+      const videoUrls: string[] = [];
+      const videoTypes: string[] = [];
+      const durations: number[] = [];
+      const orderIndexes: number[] = [];
+      const sectionTitles: (string | null)[] = [];
+      const freeFlags: boolean[] = [];
+      const downloadFlags: boolean[] = [];
+
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i] || {};
+        const title = String(item.title || "").trim();
+        const videoUrl = String(item.videoUrl || "").trim();
+        if (!title || !videoUrl) {
+          return res.status(400).json({ message: `Item ${i + 1}: title and videoUrl are required` });
+        }
+        const duration = Number(item.durationMinutes);
+        if (!Number.isFinite(duration) || duration <= 0) {
+          return res.status(400).json({ message: `Item ${i + 1}: durationMinutes must be > 0` });
+        }
+        titles.push(title);
+        videoUrls.push(videoUrl);
+        videoTypes.push(String(item.videoType || "").trim() || inferLectureVideoType(videoUrl));
+        durations.push(Math.round(duration));
+        orderIndexes.push(Number(item.orderIndex) || 0);
+        const section = item.sectionTitle != null ? String(item.sectionTitle).trim() : "";
+        sectionTitles.push(section || null);
+        freeFlags.push(!!item.isFreePreview);
+        downloadFlags.push(!!item.downloadAllowed);
+      }
+
+      const now = Date.now();
+      const inserted = await runInTransaction(async (tx) => {
+        const result = await tx.query(
+          `INSERT INTO lectures (
+             course_id, title, description, transcript, video_url, video_type, pdf_url,
+             duration_minutes, order_index, is_free_preview, section_title, download_allowed, subject_key, created_at
+           )
+           SELECT
+             $1::int,
+             t.title,
+             ''::text,
+             ''::text,
+             t.video_url,
+             t.video_type,
+             NULL::text,
+             t.duration_minutes,
+             t.order_index,
+             t.is_free_preview,
+             t.section_title,
+             t.download_allowed,
+             $2::text,
+             $3::bigint
+           FROM unnest(
+             $4::text[],
+             $5::text[],
+             $6::text[],
+             $7::int[],
+             $8::int[],
+             $9::text[],
+             $10::boolean[],
+             $11::boolean[]
+           ) AS t(
+             title, video_url, video_type, duration_minutes, order_index,
+             section_title, is_free_preview, download_allowed
+           )
+           RETURNING *`,
+          [
+            parsedCourseId,
+            normalizedSubjectKey,
+            now,
+            titles,
+            videoUrls,
+            videoTypes,
+            durations,
+            orderIndexes,
+            sectionTitles,
+            freeFlags,
+            downloadFlags,
+          ],
+        );
+        return result.rows;
+      });
+
+      await recomputeAllEnrollmentsProgressForCourse(parsedCourseId);
+
+      const count = inserted.length;
+      const notifTitle = count === 1 ? "📹 New Lecture Added" : `📹 ${count} new lectures added`;
+      const notifMessage =
+        count === 1
+          ? `"${titles[0]}" has been added in ${courseTitle}.`
+          : `${count} new lectures have been added in ${courseTitle}.`;
+
+      await notifyEnrolledCourseStudents(db, parsedCourseId, {
+        title: notifTitle,
+        message: notifMessage,
+        pushData: {
+          type: "new_lecture_added",
+          courseId: parsedCourseId,
+          count,
+        },
+        sendPush: (userIds, payload) => sendPushToUsers(db, userIds, payload),
+      });
+
+      res.json({ inserted, count });
+    } catch (err) {
+      console.error("[AdminLectures] bulk create failed", {
+        courseId: req.body?.courseId,
+        itemCount: Array.isArray(req.body?.items) ? req.body.items.length : 0,
+        error: err instanceof Error ? err.message : err,
+      });
+      res.status(500).json({ message: "Failed to bulk add lectures", detail: err instanceof Error ? err.message : "unknown_error" });
     }
   });
 

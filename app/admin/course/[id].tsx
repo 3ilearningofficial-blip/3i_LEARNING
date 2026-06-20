@@ -24,6 +24,9 @@ import SortableItem from "@/components/admin/SortableItem";
 import { MULTI_SUBJECTS, SubjectIcon, getSubjectMeta } from "@/constants/multiSubjects";
 import { downloadAdminContent } from "@/lib/admin-export";
 import { AdminExportDownloadButton } from "@/components/admin/AdminExportDownloadButton";
+import AdminLectureAddBody, { type AddContentMode } from "@/components/admin/AdminLectureAddBody";
+import AdminMaterialAddBody from "@/components/admin/AdminMaterialAddBody";
+import { computeBaseOrderIndex } from "@/lib/bulk-upload-utils";
 
 interface Lecture {
   id: number;
@@ -325,6 +328,8 @@ export default function AdminCourseScreen() {
   /** When opening Add Question from the Questions modal, reopen that modal after close/success */
   const resumeQuestionsModalAfterAddRef = useRef<number | null>(null);
   const [showAddMaterial, setShowAddMaterial] = useState(false);
+  const [lectureAddMode, setLectureAddMode] = useState<AddContentMode>("single");
+  const [materialAddMode, setMaterialAddMode] = useState<AddContentMode>("single");
   const [showAddLiveClass, setShowAddLiveClass] = useState(false);
   const [showEditCourse, setShowEditCourse] = useState(false);
   const [editForm, setEditForm] = useState<EditCourseForm>({
@@ -542,6 +547,39 @@ export default function AdminCourseScreen() {
   const pyqTests = subjectTests.filter((test: any) => String(test.test_type || "").toLowerCase() === "pyq");
   const mockTests = subjectTests.filter((test: any) => String(test.test_type || "").toLowerCase() === "mock");
   const courseMaterials = allCourseMaterials.filter(subjectMatches);
+
+  const lectureBulkBaseOrder = computeBaseOrderIndex(courseLectures, {
+    sectionTitle: openAdminFolder?.type === "lecture" ? openAdminFolder.name : "",
+    subjectKey: isMultiSubjectCourse ? activeSubjectKey : null,
+  });
+  const materialBulkBaseOrder = computeBaseOrderIndex(courseMaterials, {
+    sectionTitle: openAdminFolder?.type === "material" ? openAdminFolder.name : "",
+    subjectKey: isMultiSubjectCourse ? activeSubjectKey : null,
+  });
+
+  const closeAddLectureModal = () => {
+    setShowAddLecture(false);
+    setFolderAddModal(false);
+    setLectureAddMode("single");
+    setNewLecture(emptyLecture);
+  };
+  const closeAddMaterialModal = () => {
+    setShowAddMaterial(false);
+    setFolderAddModal(false);
+    setMaterialAddMode("single");
+    setNewMaterial(emptyMaterial);
+  };
+  const onBulkLectureSaved = () => {
+    qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] });
+    refetchFolders();
+    closeAddLectureModal();
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+  };
+  const onBulkMaterialSaved = () => {
+    qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] });
+    refetchFolders();
+    closeAddMaterialModal();
+  };
   const scopedCourseLiveClasses = courseLiveClasses.filter(subjectMatches);
 
   useEffect(() => {
@@ -683,6 +721,9 @@ export default function AdminCourseScreen() {
     await refetchFolders();
     return folder;
   };
+  const ensureLectureFolderForBulk = async (path: string) => {
+    await ensureLectureFolderByPath(path);
+  };
   const getDirectLectureSubfolders = (parentName: string): string[] => {
     const parent = findFolderByPath(parentName, "lecture");
     const fromDbChildren = parent?.id
@@ -795,7 +836,7 @@ export default function AdminCourseScreen() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] });
       refetchFolders();
-      setShowAddLecture(false); setFolderAddModal(false); setNewLecture(emptyLecture);
+      closeAddLectureModal();
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       Alert.alert("Success", "Lecture added!");
     },
@@ -952,7 +993,7 @@ export default function AdminCourseScreen() {
       qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] });
       qc.invalidateQueries({ queryKey: ["/api/courses"] });
       refetchFolders();
-      setShowAddMaterial(false); setFolderAddModal(false); setNewMaterial(emptyMaterial);
+      closeAddMaterialModal();
       Alert.alert("Success", "Material added!");
     },
     onError: (err: any) => Alert.alert("Error", err?.message?.replace(/^\S+\s->\s\d+:\s*/, "") || "Failed to add material"),
@@ -2524,37 +2565,53 @@ export default function AdminCourseScreen() {
           <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Add Lecture</Text>
-              <Pressable onPress={() => { setShowAddLecture(false); setNewLecture(emptyLecture); }}>
+              <Pressable onPress={closeAddLectureModal}>
                 <Ionicons name="close" size={24} color={Colors.light.text} />
               </Pressable>
             </View>
-            <ScrollView style={{ maxHeight: 480 }} showsVerticalScrollIndicator={false}>
-              <FormField label="Folder/Section Name (optional)" placeholder="e.g., Chapter 1 - Introduction" value={newLecture.sectionTitle} onChangeText={(v) => setNewLecture(p => ({ ...p, sectionTitle: v }))} />
-              <FormField label="Lecture Title *" placeholder="e.g., Introduction to Algebra" value={newLecture.title} onChangeText={(v) => setNewLecture(p => ({ ...p, title: v }))} />
-              <FormField label="Video URL (YouTube or uploaded)" placeholder="https://youtube.com/watch?v=..." value={newLecture.videoUrl} onChangeText={(v) => setNewLecture(p => ({ ...p, videoUrl: v }))} />
-              <Pressable style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: "#EEF2FF", borderRadius: 10, paddingVertical: 10, borderWidth: 1.5, borderColor: Colors.light.primary, borderStyle: "dashed" as any, marginBottom: 12, opacity: uploading ? 0.5 : 1 }}
-                disabled={uploading}
-                onPress={() => pickFileAndUpload("lectures", "video/*,.mp4,.mov,.mkv", (url) => setNewLecture(p => ({ ...p, videoUrl: url, videoType: "r2" })))}>
-                {uploading ? <Text style={{ fontSize: 14, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>{uploadProgress}%</Text> : <Ionicons name="cloud-upload-outline" size={18} color={Colors.light.primary} />}
-                <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>{uploading ? `Uploading... ${uploadProgress}%` : "Upload Video from Device"}</Text>
-              </Pressable>
-              <FormField label="Duration (minutes)" placeholder="45" value={newLecture.durationMinutes} onChangeText={(v) => setNewLecture(p => ({ ...p, durationMinutes: v }))} numeric />
-              <FormField label="Order Index (lower = first)" placeholder="1" value={newLecture.orderIndex} onChangeText={(v) => setNewLecture(p => ({ ...p, orderIndex: v }))} numeric />
-              <View style={styles.formField}>
-                <Text style={styles.formLabel}>Free Preview (visible without enrollment)</Text>
-                <Switch value={newLecture.isFreePreview} onValueChange={(v) => setNewLecture(p => ({ ...p, isFreePreview: v }))} trackColor={{ false: Colors.light.border, true: Colors.light.primary }} thumbColor="#fff" />
-              </View>
-              <View style={styles.formField}>
-                <Text style={styles.formLabel}>Allow Download</Text>
-                <Switch value={(newLecture as any).downloadAllowed || false} onValueChange={(v) => setNewLecture(p => ({ ...p, downloadAllowed: v } as any))} trackColor={{ false: Colors.light.border, true: "#22C55E" }} thumbColor="#fff" />
-              </View>
+            <ScrollView style={{ maxHeight: lectureAddMode === "bulk" ? 560 : 480 }} showsVerticalScrollIndicator={false}>
+              <AdminLectureAddBody
+                mode={lectureAddMode}
+                onModeChange={setLectureAddMode}
+                courseId={courseIdNum}
+                subjectKey={isMultiSubjectCourse ? activeSubjectKey : null}
+                baseOrderIndex={lectureBulkBaseOrder}
+                existingLectures={courseLectures}
+                onBulkSaved={onBulkLectureSaved}
+                onEnsureLectureFolder={ensureLectureFolderForBulk}
+                singleContent={
+                  <>
+                    <FormField label="Folder/Section Name (optional)" placeholder="e.g., Chapter 1 - Introduction" value={newLecture.sectionTitle} onChangeText={(v) => setNewLecture(p => ({ ...p, sectionTitle: v }))} />
+                    <FormField label="Lecture Title *" placeholder="e.g., Introduction to Algebra" value={newLecture.title} onChangeText={(v) => setNewLecture(p => ({ ...p, title: v }))} />
+                    <FormField label="Video URL (YouTube or uploaded)" placeholder="https://youtube.com/watch?v=..." value={newLecture.videoUrl} onChangeText={(v) => setNewLecture(p => ({ ...p, videoUrl: v }))} />
+                    <Pressable style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: "#EEF2FF", borderRadius: 10, paddingVertical: 10, borderWidth: 1.5, borderColor: Colors.light.primary, borderStyle: "dashed" as any, marginBottom: 12, opacity: uploading ? 0.5 : 1 }}
+                      disabled={uploading}
+                      onPress={() => pickFileAndUpload("lectures", "video/*,.mp4,.mov,.mkv", (url) => setNewLecture(p => ({ ...p, videoUrl: url, videoType: "r2" })))}>
+                      {uploading ? <Text style={{ fontSize: 14, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>{uploadProgress}%</Text> : <Ionicons name="cloud-upload-outline" size={18} color={Colors.light.primary} />}
+                      <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>{uploading ? `Uploading... ${uploadProgress}%` : "Upload Video from Device"}</Text>
+                    </Pressable>
+                    <FormField label="Duration (minutes)" placeholder="45" value={newLecture.durationMinutes} onChangeText={(v) => setNewLecture(p => ({ ...p, durationMinutes: v }))} numeric />
+                    <FormField label="Order Index (lower = first)" placeholder="1" value={newLecture.orderIndex} onChangeText={(v) => setNewLecture(p => ({ ...p, orderIndex: v }))} numeric />
+                    <View style={styles.formField}>
+                      <Text style={styles.formLabel}>Free Preview (visible without enrollment)</Text>
+                      <Switch value={newLecture.isFreePreview} onValueChange={(v) => setNewLecture(p => ({ ...p, isFreePreview: v }))} trackColor={{ false: Colors.light.border, true: Colors.light.primary }} thumbColor="#fff" />
+                    </View>
+                    <View style={styles.formField}>
+                      <Text style={styles.formLabel}>Allow Download</Text>
+                      <Switch value={(newLecture as any).downloadAllowed || false} onValueChange={(v) => setNewLecture(p => ({ ...p, downloadAllowed: v } as any))} trackColor={{ false: Colors.light.border, true: "#22C55E" }} thumbColor="#fff" />
+                    </View>
+                  </>
+                }
+              />
             </ScrollView>
-            <ActionButton
-              label="Add Lecture"
-              onPress={() => addLectureMutation.mutate(newLecture)}
-              disabled={!newLecture.title || !newLecture.videoUrl}
-              loading={addLectureMutation.isPending}
-            />
+            {lectureAddMode === "single" && (
+              <ActionButton
+                label="Add Lecture"
+                onPress={() => addLectureMutation.mutate(newLecture)}
+                disabled={!newLecture.title || !newLecture.videoUrl}
+                loading={addLectureMutation.isPending}
+              />
+            )}
           </View>
         </View>
       </Modal>
@@ -2608,55 +2665,69 @@ export default function AdminCourseScreen() {
           <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Add Study Material</Text>
-              <Pressable onPress={() => { setShowAddMaterial(false); setNewMaterial(emptyMaterial); }}>
+              <Pressable onPress={closeAddMaterialModal}>
                 <Ionicons name="close" size={24} color={Colors.light.text} />
               </Pressable>
             </View>
-            <ScrollView style={{ maxHeight: 420 }} showsVerticalScrollIndicator={false}>
-              <FormField label="Folder Name (optional)" placeholder="e.g., Chapter 1 Notes" value={newMaterial.sectionTitle} onChangeText={(v) => setNewMaterial(p => ({ ...p, sectionTitle: v }))} />
-              <FormField label="Title *" placeholder="e.g., Algebra Formula Sheet" value={newMaterial.title} onChangeText={(v) => setNewMaterial(p => ({ ...p, title: v }))} />
-              {/* File picker */}
-              <View style={{ marginBottom: 12 }}>
-                <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.text, marginBottom: 6 }}>File *</Text>
-                {newMaterial.fileUrl ? (
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "#F0FDF4", borderRadius: 10, padding: 10, borderWidth: 1, borderColor: "#BBF7D0" }}>
-                    <Ionicons name="document-text" size={20} color="#16A34A" />
-                    <Text style={{ flex: 1, fontSize: 12, fontFamily: "Inter_500Medium", color: "#166534" }} numberOfLines={1}>{newMaterial.fileUrl.startsWith("data:") ? "File selected (local)" : newMaterial.fileUrl.includes("cdn.3ilearning") ? "Uploaded to cloud ✓" : newMaterial.fileUrl}</Text>
-                    <Pressable onPress={() => setNewMaterial(p => ({ ...p, fileUrl: "" }))}><Ionicons name="close-circle" size={20} color="#16A34A" /></Pressable>
-                  </View>
-                ) : (
+            <ScrollView style={{ maxHeight: materialAddMode === "bulk" ? 560 : 420 }} showsVerticalScrollIndicator={false}>
+              <AdminMaterialAddBody
+                mode={materialAddMode}
+                onModeChange={setMaterialAddMode}
+                courseId={courseIdNum}
+                subjectKey={isMultiSubjectCourse ? activeSubjectKey : null}
+                baseOrderIndex={materialBulkBaseOrder}
+                existingMaterials={courseMaterials}
+                onBulkSaved={onBulkMaterialSaved}
+                singleContent={
                   <>
-                    <Pressable
-                      style={{ borderWidth: 1.5, borderColor: Colors.light.primary, borderStyle: "dashed" as any, borderRadius: 10, padding: 14, alignItems: "center", gap: 4, backgroundColor: "#EEF2FF", marginBottom: 6, opacity: uploading ? 0.5 : 1 }}
-                      disabled={uploading}
-                      onPress={() => pickFileAndUpload("materials", ".pdf,.doc,.docx,video/*,.mp4,.mov", (url) => {
-                        const ext = url.split(".").pop()?.toLowerCase() || "";
-                        const ft = ext === "pdf" ? "pdf" : ["doc","docx"].includes(ext) ? "doc" : ["mp4","mov","mkv","avi"].includes(ext) ? "video" : "pdf";
-                        setNewMaterial(p => ({ ...p, fileUrl: url, fileType: ft }));
-                      })}>
-                      {uploading ? <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>{uploadProgress}%</Text> : <Ionicons name="cloud-upload-outline" size={22} color={Colors.light.primary} />}
-                      <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>{uploading ? `Uploading... ${uploadProgress}%` : "Upload File (PDF/DOC/Video)"}</Text>
-                      <Text style={{ fontSize: 10, color: Colors.light.textMuted }}>{uploading ? "" : "Uploads to Cloudflare R2"}</Text>
-                    </Pressable>
-                    <FormField label="" placeholder="Or paste file URL..." value={newMaterial.fileUrl} onChangeText={(v) => setNewMaterial(p => ({ ...p, fileUrl: v }))} />
+                    <FormField label="Folder Name (optional)" placeholder="e.g., Chapter 1 Notes" value={newMaterial.sectionTitle} onChangeText={(v) => setNewMaterial(p => ({ ...p, sectionTitle: v }))} />
+                    <FormField label="Title *" placeholder="e.g., Algebra Formula Sheet" value={newMaterial.title} onChangeText={(v) => setNewMaterial(p => ({ ...p, title: v }))} />
+                    <View style={{ marginBottom: 12 }}>
+                      <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.text, marginBottom: 6 }}>File *</Text>
+                      {newMaterial.fileUrl ? (
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "#F0FDF4", borderRadius: 10, padding: 10, borderWidth: 1, borderColor: "#BBF7D0" }}>
+                          <Ionicons name="document-text" size={20} color="#16A34A" />
+                          <Text style={{ flex: 1, fontSize: 12, fontFamily: "Inter_500Medium", color: "#166534" }} numberOfLines={1}>{newMaterial.fileUrl.startsWith("data:") ? "File selected (local)" : newMaterial.fileUrl.includes("cdn.3ilearning") ? "Uploaded to cloud ✓" : newMaterial.fileUrl}</Text>
+                          <Pressable onPress={() => setNewMaterial(p => ({ ...p, fileUrl: "" }))}><Ionicons name="close-circle" size={20} color="#16A34A" /></Pressable>
+                        </View>
+                      ) : (
+                        <>
+                          <Pressable
+                            style={{ borderWidth: 1.5, borderColor: Colors.light.primary, borderStyle: "dashed" as any, borderRadius: 10, padding: 14, alignItems: "center", gap: 4, backgroundColor: "#EEF2FF", marginBottom: 6, opacity: uploading ? 0.5 : 1 }}
+                            disabled={uploading}
+                            onPress={() => pickFileAndUpload("materials", ".pdf,.doc,.docx,video/*,.mp4,.mov", (url) => {
+                              const ext = url.split(".").pop()?.toLowerCase() || "";
+                              const ft = ext === "pdf" ? "pdf" : ["doc","docx"].includes(ext) ? "doc" : ["mp4","mov","mkv","avi"].includes(ext) ? "video" : "pdf";
+                              setNewMaterial(p => ({ ...p, fileUrl: url, fileType: ft }));
+                            })}>
+                            {uploading ? <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>{uploadProgress}%</Text> : <Ionicons name="cloud-upload-outline" size={22} color={Colors.light.primary} />}
+                            <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>{uploading ? `Uploading... ${uploadProgress}%` : "Upload File (PDF/DOC/Video)"}</Text>
+                            <Text style={{ fontSize: 10, color: Colors.light.textMuted }}>{uploading ? "" : "Uploads to Cloudflare R2"}</Text>
+                          </Pressable>
+                          <FormField label="" placeholder="Or paste file URL..." value={newMaterial.fileUrl} onChangeText={(v) => setNewMaterial(p => ({ ...p, fileUrl: v }))} />
+                        </>
+                      )}
+                    </View>
+                    <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.text, marginBottom: 4 }}>File Type</Text>
+                    <View style={{ flexDirection: "row", gap: 8, marginBottom: 12 }}>
+                      {["pdf", "video", "doc", "link"].map(t => (
+                        <Pressable key={t} onPress={() => setNewMaterial(p => ({ ...p, fileType: t }))} style={{ paddingHorizontal: 14, paddingVertical: 6, borderRadius: 8, backgroundColor: newMaterial.fileType === t ? Colors.light.primary : "#F3F4F6" }}>
+                          <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: newMaterial.fileType === t ? "#fff" : Colors.light.text }}>{t.toUpperCase()}</Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                    <FormField label="Description" placeholder="Short description of the material" value={newMaterial.description} onChangeText={(v) => setNewMaterial(p => ({ ...p, description: v }))} />
+                    <View style={styles.formField}>
+                      <Text style={styles.formLabel}>Allow Download</Text>
+                      <Switch value={newMaterial.downloadAllowed} onValueChange={(v) => setNewMaterial(p => ({ ...p, downloadAllowed: v }))} trackColor={{ false: Colors.light.border, true: "#22C55E" }} thumbColor="#fff" />
+                    </View>
                   </>
-                )}
-              </View>
-              <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.text, marginBottom: 4 }}>File Type</Text>
-              <View style={{ flexDirection: "row", gap: 8, marginBottom: 12 }}>
-                {["pdf", "video", "doc", "link"].map(t => (
-                  <Pressable key={t} onPress={() => setNewMaterial(p => ({ ...p, fileType: t }))} style={{ paddingHorizontal: 14, paddingVertical: 6, borderRadius: 8, backgroundColor: newMaterial.fileType === t ? Colors.light.primary : "#F3F4F6" }}>
-                    <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: newMaterial.fileType === t ? "#fff" : Colors.light.text }}>{t.toUpperCase()}</Text>
-                  </Pressable>
-                ))}
-              </View>
-              <FormField label="Description" placeholder="Short description of the material" value={newMaterial.description} onChangeText={(v) => setNewMaterial(p => ({ ...p, description: v }))} />
-              <View style={styles.formField}>
-                <Text style={styles.formLabel}>Allow Download</Text>
-                <Switch value={newMaterial.downloadAllowed} onValueChange={(v) => setNewMaterial(p => ({ ...p, downloadAllowed: v }))} trackColor={{ false: Colors.light.border, true: "#22C55E" }} thumbColor="#fff" />
-              </View>
+                }
+              />
             </ScrollView>
-            <ActionButton label="Add Material" onPress={() => addMaterialMutation.mutate(newMaterial)} disabled={!newMaterial.title || !(newMaterial.fileUrl || "").trim()} loading={addMaterialMutation.isPending} />
+            {materialAddMode === "single" && (
+              <ActionButton label="Add Material" onPress={() => addMaterialMutation.mutate(newMaterial)} disabled={!newMaterial.title || !(newMaterial.fileUrl || "").trim()} loading={addMaterialMutation.isPending} />
+            )}
           </View>
         </View>
       </Modal>
@@ -3282,29 +3353,46 @@ export default function AdminCourseScreen() {
                 <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
                   <View style={styles.modalHeader}>
                     <Text style={styles.modalTitle}>Add Lecture</Text>
-                    <Pressable onPress={() => setFolderAddModal(false)}><Ionicons name="close" size={24} color={Colors.light.text} /></Pressable>
+                    <Pressable onPress={closeAddLectureModal}><Ionicons name="close" size={24} color={Colors.light.text} /></Pressable>
                   </View>
-                  <ScrollView style={{ maxHeight: 420 }} showsVerticalScrollIndicator={false}>
-                    <FormField label="Lecture Title *" placeholder="e.g., Introduction" value={newLecture.title} onChangeText={(v) => setNewLecture(p => ({ ...p, title: v }))} />
-                    <FormField label="Video URL (YouTube or uploaded)" placeholder="https://youtube.com/watch?v=..." value={newLecture.videoUrl} onChangeText={(v) => setNewLecture(p => ({ ...p, videoUrl: v }))} />
-                    <Pressable style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: "#EEF2FF", borderRadius: 10, paddingVertical: 10, borderWidth: 1.5, borderColor: Colors.light.primary, borderStyle: "dashed" as any, marginBottom: 12, opacity: uploading ? 0.5 : 1 }}
-                      disabled={uploading}
-                      onPress={() => pickFileAndUpload("lectures", "video/*,.mp4,.mov", (url) => setNewLecture(p => ({ ...p, videoUrl: url, videoType: "r2" } as any)))}>
-                      {uploading ? <Text style={{ fontSize: 14, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>{uploadProgress}%</Text> : <Ionicons name="cloud-upload-outline" size={18} color={Colors.light.primary} />}
-                      <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>{uploading ? `Uploading... ${uploadProgress}%` : "Upload Video"}</Text>
-                    </Pressable>
-                    <FormField label="Duration (minutes)" placeholder="45" value={newLecture.durationMinutes} onChangeText={(v) => setNewLecture(p => ({ ...p, durationMinutes: v }))} numeric />
-                    <FormField label="Order Index" placeholder="1" value={newLecture.orderIndex} onChangeText={(v) => setNewLecture(p => ({ ...p, orderIndex: v }))} numeric />
-                    <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 12 }}>
-                      <Switch value={newLecture.isFreePreview} onValueChange={(v) => setNewLecture(p => ({ ...p, isFreePreview: v }))} trackColor={{ false: Colors.light.border, true: Colors.light.primary }} thumbColor="#fff" />
-                      <Text style={{ fontSize: 14, fontFamily: "Inter_500Medium", color: Colors.light.text }}>Free Preview</Text>
-                    </View>
-                    <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 12 }}>
-                      <Switch value={(newLecture as any).downloadAllowed || false} onValueChange={(v) => setNewLecture(p => ({ ...p, downloadAllowed: v } as any))} trackColor={{ false: Colors.light.border, true: "#22C55E" }} thumbColor="#fff" />
-                      <Text style={{ fontSize: 14, fontFamily: "Inter_500Medium", color: Colors.light.text }}>Allow Download</Text>
-                    </View>
+                  <ScrollView style={{ maxHeight: lectureAddMode === "bulk" ? 560 : 420 }} showsVerticalScrollIndicator={false}>
+                    <AdminLectureAddBody
+                      mode={lectureAddMode}
+                      onModeChange={setLectureAddMode}
+                      courseId={courseIdNum}
+                      parentFolderName={openAdminFolder.name}
+                      subjectKey={isMultiSubjectCourse ? activeSubjectKey : null}
+                      baseOrderIndex={lectureBulkBaseOrder}
+                      existingLectures={courseLectures}
+                      onBulkSaved={onBulkLectureSaved}
+                      onEnsureLectureFolder={ensureLectureFolderForBulk}
+                      singleContent={
+                        <>
+                          <FormField label="Lecture Title *" placeholder="e.g., Introduction" value={newLecture.title} onChangeText={(v) => setNewLecture(p => ({ ...p, title: v }))} />
+                          <FormField label="Video URL (YouTube or uploaded)" placeholder="https://youtube.com/watch?v=..." value={newLecture.videoUrl} onChangeText={(v) => setNewLecture(p => ({ ...p, videoUrl: v }))} />
+                          <Pressable style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: "#EEF2FF", borderRadius: 10, paddingVertical: 10, borderWidth: 1.5, borderColor: Colors.light.primary, borderStyle: "dashed" as any, marginBottom: 12, opacity: uploading ? 0.5 : 1 }}
+                            disabled={uploading}
+                            onPress={() => pickFileAndUpload("lectures", "video/*,.mp4,.mov", (url) => setNewLecture(p => ({ ...p, videoUrl: url, videoType: "r2" } as any)))}>
+                            {uploading ? <Text style={{ fontSize: 14, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>{uploadProgress}%</Text> : <Ionicons name="cloud-upload-outline" size={18} color={Colors.light.primary} />}
+                            <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>{uploading ? `Uploading... ${uploadProgress}%` : "Upload Video"}</Text>
+                          </Pressable>
+                          <FormField label="Duration (minutes)" placeholder="45" value={newLecture.durationMinutes} onChangeText={(v) => setNewLecture(p => ({ ...p, durationMinutes: v }))} numeric />
+                          <FormField label="Order Index" placeholder="1" value={newLecture.orderIndex} onChangeText={(v) => setNewLecture(p => ({ ...p, orderIndex: v }))} numeric />
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 12 }}>
+                            <Switch value={newLecture.isFreePreview} onValueChange={(v) => setNewLecture(p => ({ ...p, isFreePreview: v }))} trackColor={{ false: Colors.light.border, true: Colors.light.primary }} thumbColor="#fff" />
+                            <Text style={{ fontSize: 14, fontFamily: "Inter_500Medium", color: Colors.light.text }}>Free Preview</Text>
+                          </View>
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 12 }}>
+                            <Switch value={(newLecture as any).downloadAllowed || false} onValueChange={(v) => setNewLecture(p => ({ ...p, downloadAllowed: v } as any))} trackColor={{ false: Colors.light.border, true: "#22C55E" }} thumbColor="#fff" />
+                            <Text style={{ fontSize: 14, fontFamily: "Inter_500Medium", color: Colors.light.text }}>Allow Download</Text>
+                          </View>
+                        </>
+                      }
+                    />
                   </ScrollView>
-                  <ActionButton label="Add Lecture" onPress={() => { addLectureMutation.mutate({ ...newLecture, sectionTitle: openAdminFolder!.name }); setFolderAddModal(false); }} disabled={!newLecture.title || !newLecture.videoUrl} loading={addLectureMutation.isPending} />
+                  {lectureAddMode === "single" && (
+                    <ActionButton label="Add Lecture" onPress={() => { addLectureMutation.mutate({ ...newLecture, sectionTitle: openAdminFolder!.name }); setFolderAddModal(false); }} disabled={!newLecture.title || !newLecture.videoUrl} loading={addLectureMutation.isPending} />
+                  )}
                 </View>
               </View>
             </Modal>
@@ -3353,48 +3441,64 @@ export default function AdminCourseScreen() {
                 <View style={[styles.modalSheet, { paddingBottom: bottomPadding + 16 }]}>
                   <View style={styles.modalHeader}>
                     <Text style={styles.modalTitle}>Add Material</Text>
-                    <Pressable onPress={() => setFolderAddModal(false)}><Ionicons name="close" size={24} color={Colors.light.text} /></Pressable>
+                    <Pressable onPress={closeAddMaterialModal}><Ionicons name="close" size={24} color={Colors.light.text} /></Pressable>
                   </View>
-                  <ScrollView style={{ maxHeight: 420 }} showsVerticalScrollIndicator={false}>
-                    <FormField label="Title *" placeholder="e.g., Chapter 1 Notes" value={newMaterial.title} onChangeText={(v) => setNewMaterial(p => ({ ...p, title: v }))} />
-                    <View style={{ marginBottom: 12 }}>
-                      <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.text, marginBottom: 6 }}>File *</Text>
-                      {newMaterial.fileUrl ? (
-                        <View style={{ flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "#F0FDF4", borderRadius: 10, padding: 10, borderWidth: 1, borderColor: "#BBF7D0" }}>
-                          <Ionicons name="document-text" size={20} color="#16A34A" />
-                          <Text style={{ flex: 1, fontSize: 12, fontFamily: "Inter_500Medium", color: "#166534" }} numberOfLines={1}>{newMaterial.fileUrl.includes("cdn.3ilearning") ? "Uploaded to cloud ✓" : newMaterial.fileUrl}</Text>
-                          <Pressable onPress={() => setNewMaterial(p => ({ ...p, fileUrl: "" }))}><Ionicons name="close-circle" size={20} color="#16A34A" /></Pressable>
-                        </View>
-                      ) : (
+                  <ScrollView style={{ maxHeight: materialAddMode === "bulk" ? 560 : 420 }} showsVerticalScrollIndicator={false}>
+                    <AdminMaterialAddBody
+                      mode={materialAddMode}
+                      onModeChange={setMaterialAddMode}
+                      courseId={courseIdNum}
+                      parentFolderName={openAdminFolder.name}
+                      subjectKey={isMultiSubjectCourse ? activeSubjectKey : null}
+                      baseOrderIndex={materialBulkBaseOrder}
+                      existingMaterials={courseMaterials}
+                      onBulkSaved={onBulkMaterialSaved}
+                      singleContent={
                         <>
-                          <Pressable style={{ borderWidth: 1.5, borderColor: Colors.light.primary, borderStyle: "dashed" as any, borderRadius: 10, padding: 14, alignItems: "center", gap: 4, backgroundColor: "#EEF2FF", marginBottom: 6, opacity: uploading ? 0.5 : 1 }}
-                            disabled={uploading}
-                            onPress={() => pickFileAndUpload("materials", ".pdf,.doc,.docx,video/*,.mp4,.mov", (url) => {
-                              const ext = url.split(".").pop()?.toLowerCase() || "";
-                              const ft = ext === "pdf" ? "pdf" : ["doc","docx"].includes(ext) ? "doc" : "video";
-                              setNewMaterial(p => ({ ...p, fileUrl: url, fileType: ft }));
-                            })}>
-                            {uploading ? <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>{uploadProgress}%</Text> : <Ionicons name="cloud-upload-outline" size={22} color={Colors.light.primary} />}
-                            <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>{uploading ? `Uploading... ${uploadProgress}%` : "Upload File (PDF/DOC/Video)"}</Text>
-                          </Pressable>
-                          <FormField label="" placeholder="Or paste file URL..." value={newMaterial.fileUrl} onChangeText={(v) => setNewMaterial(p => ({ ...p, fileUrl: v }))} />
+                          <FormField label="Title *" placeholder="e.g., Chapter 1 Notes" value={newMaterial.title} onChangeText={(v) => setNewMaterial(p => ({ ...p, title: v }))} />
+                          <View style={{ marginBottom: 12 }}>
+                            <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.text, marginBottom: 6 }}>File *</Text>
+                            {newMaterial.fileUrl ? (
+                              <View style={{ flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "#F0FDF4", borderRadius: 10, padding: 10, borderWidth: 1, borderColor: "#BBF7D0" }}>
+                                <Ionicons name="document-text" size={20} color="#16A34A" />
+                                <Text style={{ flex: 1, fontSize: 12, fontFamily: "Inter_500Medium", color: "#166534" }} numberOfLines={1}>{newMaterial.fileUrl.includes("cdn.3ilearning") ? "Uploaded to cloud ✓" : newMaterial.fileUrl}</Text>
+                                <Pressable onPress={() => setNewMaterial(p => ({ ...p, fileUrl: "" }))}><Ionicons name="close-circle" size={20} color="#16A34A" /></Pressable>
+                              </View>
+                            ) : (
+                              <>
+                                <Pressable style={{ borderWidth: 1.5, borderColor: Colors.light.primary, borderStyle: "dashed" as any, borderRadius: 10, padding: 14, alignItems: "center", gap: 4, backgroundColor: "#EEF2FF", marginBottom: 6, opacity: uploading ? 0.5 : 1 }}
+                                  disabled={uploading}
+                                  onPress={() => pickFileAndUpload("materials", ".pdf,.doc,.docx,video/*,.mp4,.mov", (url) => {
+                                    const ext = url.split(".").pop()?.toLowerCase() || "";
+                                    const ft = ext === "pdf" ? "pdf" : ["doc","docx"].includes(ext) ? "doc" : "video";
+                                    setNewMaterial(p => ({ ...p, fileUrl: url, fileType: ft }));
+                                  })}>
+                                  {uploading ? <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>{uploadProgress}%</Text> : <Ionicons name="cloud-upload-outline" size={22} color={Colors.light.primary} />}
+                                  <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>{uploading ? `Uploading... ${uploadProgress}%` : "Upload File (PDF/DOC/Video)"}</Text>
+                                </Pressable>
+                                <FormField label="" placeholder="Or paste file URL..." value={newMaterial.fileUrl} onChangeText={(v) => setNewMaterial(p => ({ ...p, fileUrl: v }))} />
+                              </>
+                            )}
+                          </View>
+                          <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.text, marginBottom: 6 }}>File Type</Text>
+                          <View style={{ flexDirection: "row", gap: 8, marginBottom: 12 }}>
+                            {["pdf", "video", "doc", "link"].map(t => (
+                              <Pressable key={t} onPress={() => setNewMaterial(p => ({ ...p, fileType: t }))} style={{ paddingHorizontal: 14, paddingVertical: 6, borderRadius: 8, backgroundColor: newMaterial.fileType === t ? Colors.light.primary : "#F3F4F6" }}>
+                                <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: newMaterial.fileType === t ? "#fff" : Colors.light.text }}>{t.toUpperCase()}</Text>
+                              </Pressable>
+                            ))}
+                          </View>
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 12 }}>
+                            <Switch value={newMaterial.downloadAllowed} onValueChange={(v) => setNewMaterial(p => ({ ...p, downloadAllowed: v }))} trackColor={{ false: Colors.light.border, true: "#22C55E" }} thumbColor="#fff" />
+                            <Text style={{ fontSize: 14, fontFamily: "Inter_500Medium", color: Colors.light.text }}>Allow Download</Text>
+                          </View>
                         </>
-                      )}
-                    </View>
-                    <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.text, marginBottom: 6 }}>File Type</Text>
-                    <View style={{ flexDirection: "row", gap: 8, marginBottom: 12 }}>
-                      {["pdf", "video", "doc", "link"].map(t => (
-                        <Pressable key={t} onPress={() => setNewMaterial(p => ({ ...p, fileType: t }))} style={{ paddingHorizontal: 14, paddingVertical: 6, borderRadius: 8, backgroundColor: newMaterial.fileType === t ? Colors.light.primary : "#F3F4F6" }}>
-                          <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: newMaterial.fileType === t ? "#fff" : Colors.light.text }}>{t.toUpperCase()}</Text>
-                        </Pressable>
-                      ))}
-                    </View>
-                    <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 12 }}>
-                      <Switch value={newMaterial.downloadAllowed} onValueChange={(v) => setNewMaterial(p => ({ ...p, downloadAllowed: v }))} trackColor={{ false: Colors.light.border, true: "#22C55E" }} thumbColor="#fff" />
-                      <Text style={{ fontSize: 14, fontFamily: "Inter_500Medium", color: Colors.light.text }}>Allow Download</Text>
-                    </View>
+                      }
+                    />
                   </ScrollView>
-                  <ActionButton label="Add Material" onPress={() => { addMaterialMutation.mutate({ ...newMaterial, sectionTitle: openAdminFolder!.name }); setFolderAddModal(false); }} disabled={!newMaterial.title || !(newMaterial.fileUrl || "").trim()} loading={addMaterialMutation.isPending} />
+                  {materialAddMode === "single" && (
+                    <ActionButton label="Add Material" onPress={() => { addMaterialMutation.mutate({ ...newMaterial, sectionTitle: openAdminFolder!.name }); setFolderAddModal(false); }} disabled={!newMaterial.title || !(newMaterial.fileUrl || "").trim()} loading={addMaterialMutation.isPending} />
+                  )}
                 </View>
               </View>
             </Modal>

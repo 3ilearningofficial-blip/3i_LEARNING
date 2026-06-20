@@ -737,6 +737,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     requireAdmin,
     getAuthUser,
     getR2Client,
+    db,
   });
 
   registerMediaStreamRoutes({
@@ -795,6 +796,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     requireAdmin,
     getR2Client,
     recomputeAllEnrollmentsProgressForCourse,
+    runInTransaction,
   });
 
   registerAdminTestRoutes({

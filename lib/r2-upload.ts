@@ -15,29 +15,65 @@ export interface UploadResult {
   key: string;
 }
 
+export interface UploadToR2Options {
+  onProgress?: (pct: number) => void;
+  presignEndpoint?: string;
+  subfolder?: string;
+  signal?: AbortSignal;
+  contentLength?: number;
+}
+
+export async function deleteR2Orphan(key: string): Promise<void> {
+  try {
+    await apiRequest("DELETE", "/api/upload/file", { key });
+  } catch {
+    // Non-fatal — nightly sweep can catch stragglers
+  }
+}
+
 export async function uploadToR2(
   fileUri: string,
   filename: string,
   contentType: string,
   folder: UploadFolder = "uploads",
-  onProgress?: (pct: number) => void,
-  presignEndpoint: string = "/api/upload/presign",
-  /** For `folder === "live-class-recording"` only: chapter/sort subfolder in R2 (e.g. "chapter-1") */
-  subfolder?: string
+  onProgressOrOptions?: ((pct: number) => void) | UploadToR2Options,
+  presignEndpointLegacy?: string,
+  subfolderLegacy?: string,
 ): Promise<UploadResult> {
+  const opts: UploadToR2Options =
+    typeof onProgressOrOptions === "function"
+      ? {
+          onProgress: onProgressOrOptions,
+          presignEndpoint: presignEndpointLegacy,
+          subfolder: subfolderLegacy,
+        }
+      : onProgressOrOptions || {};
+
+  const {
+    onProgress,
+    presignEndpoint = "/api/upload/presign",
+    subfolder,
+    signal,
+    contentLength,
+  } = opts;
+
+  if (signal?.aborted) {
+    throw new DOMException("Upload aborted", "AbortError");
+  }
+
   let presignRes;
 
-  // =========================
-  // 🔑 STEP 1: Get presigned URL
-  // =========================
   try {
-    const body: Record<string, string> = {
+    const body: Record<string, string | number> = {
       filename,
       contentType,
       folder,
     };
     if (folder === "live-class-recording" && subfolder && String(subfolder).trim() !== "") {
       body.subfolder = String(subfolder).trim();
+    }
+    if (contentLength != null && Number.isFinite(contentLength) && contentLength > 0) {
+      body.contentLength = contentLength;
     }
     presignRes = await apiRequest("POST", presignEndpoint, body);
   } catch (err: any) {
@@ -46,116 +82,93 @@ export async function uploadToR2(
 
   const { uploadUrl, publicUrl, key } = await presignRes.json();
 
-  // =========================
-  // 📱 MOBILE (React Native)
-  // =========================
-  if (Platform.OS !== "web") {
-    await new Promise<void>((resolve, reject) => {
+  const putWithXhr = (sendBody: Blob | { uri: string; type: string; name: string }) =>
+    new Promise<void>((resolve, reject) => {
       const xhr = new XMLHttpRequest();
+      let settled = false;
+
+      const finish = (fn: () => void) => {
+        if (settled) return;
+        settled = true;
+        fn();
+      };
+
+      const onAbort = () => {
+        xhr.abort();
+        finish(() => reject(new DOMException("Upload aborted", "AbortError")));
+      };
+
+      if (signal) {
+        if (signal.aborted) {
+          onAbort();
+          return;
+        }
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
 
       xhr.open("PUT", uploadUrl);
       xhr.setRequestHeader("Content-Type", contentType);
-
-      xhr.timeout = 1000 * 60 * 10;
+      xhr.timeout = 1000 * 60 * 60;
 
       xhr.upload.onprogress = (event) => {
         if (event.lengthComputable && onProgress) {
-          const percent = Math.round((event.loaded / event.total) * 100);
-          onProgress(percent);
+          onProgress(Math.round((event.loaded / event.total) * 100));
         }
       };
 
       xhr.onload = () => {
+        signal?.removeEventListener("abort", onAbort);
         if (xhr.status >= 200 && xhr.status < 300) {
           if (onProgress) onProgress(100);
-          resolve();
+          finish(resolve);
         } else {
-          reject(new Error(`Upload failed: ${xhr.status}`));
+          finish(() => reject(new Error(`Upload failed: ${xhr.status}`)));
         }
       };
 
-      xhr.onerror = () => reject(new Error("Upload error"));
-      xhr.ontimeout = () => reject(new Error("Upload timeout"));
+      xhr.onerror = () => {
+        signal?.removeEventListener("abort", onAbort);
+        finish(() => reject(new Error("Upload error")));
+      };
 
-      xhr.send({
-        uri: fileUri,
-        type: contentType || "application/octet-stream",
-        name: filename || "upload",
-      } as any);
+      xhr.ontimeout = () => {
+        signal?.removeEventListener("abort", onAbort);
+        finish(() => reject(new Error("Upload timeout")));
+      };
+
+      xhr.send(sendBody as any);
     });
 
+  if (Platform.OS !== "web") {
+    await putWithXhr({
+      uri: fileUri,
+      type: contentType || "application/octet-stream",
+      name: filename || "upload",
+    });
     return { publicUrl, key };
   }
 
-  // =========================
-  // 🌐 WEB
-  // =========================
-
-  // Convert fileUri → Blob
   let blob: Blob;
-
   if (fileUri.startsWith("data:")) {
     const [, b64] = fileUri.split(",");
     const byteString = atob(b64);
     const ab = new ArrayBuffer(byteString.length);
     const ia = new Uint8Array(ab);
-
-    for (let i = 0; i < byteString.length; i++) {
-      ia[i] = byteString.charCodeAt(i);
-    }
-
+    for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
     blob = new Blob([ab], { type: contentType });
   } else {
     const response = await fetch(fileUri);
     blob = await response.blob();
   }
 
-  // =========================
-  // 🚀 Upload using XHR (for progress)
-  // =========================
-  const putBlobOnce = () =>
-    new Promise<void>((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-
-      xhr.open("PUT", uploadUrl);
-      xhr.setRequestHeader("Content-Type", contentType);
-
-      xhr.timeout = 1000 * 60 * 10;
-
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable && onProgress) {
-          const percent = Math.round((e.loaded / e.total) * 100);
-          onProgress(percent);
-        }
-      };
-
-      xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
-          if (onProgress) onProgress(100);
-          resolve();
-        } else {
-          reject(new Error(`R2 upload failed: ${xhr.status}. Check R2 CORS settings.`));
-        }
-      };
-
-      xhr.onerror = () =>
-        reject(new Error("Upload failed — check Cloudflare R2 CORS configuration."));
-
-      xhr.ontimeout = () => reject(new Error("Upload timeout"));
-
-      xhr.send(blob);
-    });
-
-  // One automatic retry: presigned PUTs can fail on a transient network blip or
-  // a brief R2 5xx. A deterministic CORS rejection will simply fail again and
-  // surface the same error, so the caller's fallback (board checkpoint/archive)
-  // still kicks in.
   try {
-    await putBlobOnce();
+    await putWithXhr(blob);
   } catch (firstErr) {
+    if (firstErr instanceof DOMException && firstErr.name === "AbortError") throw firstErr;
     await new Promise((r) => setTimeout(r, 800));
+    if (signal?.aborted) throw new DOMException("Upload aborted", "AbortError");
     try {
-      await putBlobOnce();
+      await putWithXhr(blob);
     } catch {
       throw firstErr;
     }
@@ -164,9 +177,89 @@ export async function uploadToR2(
   return { publicUrl, key };
 }
 
-// =========================
-// 📎 MIME TYPE HELPER
-// =========================
+export type BulkUploadJobFile =
+  | File
+  | { uri: string; name: string; mimeType: string; size: number };
+
+export interface BulkUploadJob {
+  id: string;
+  file: BulkUploadJobFile;
+  folder: UploadFolder;
+}
+
+export interface UploadManyCallbacks {
+  onProgress: (id: string, pct: number) => void;
+  onDone: (id: string, result: UploadResult) => void;
+  onError: (id: string, err: Error) => void;
+}
+
+export interface UploadManyOptions {
+  concurrency?: number;
+  getSignal: (id: string) => AbortSignal | undefined;
+}
+
+export async function uploadManyToR2(
+  jobs: BulkUploadJob[],
+  callbacks: UploadManyCallbacks,
+  options: UploadManyOptions,
+): Promise<void> {
+  const concurrency = Math.max(1, options.concurrency ?? 2);
+  let cursor = 0;
+  let active = 0;
+
+  await new Promise<void>((resolve) => {
+    const pump = () => {
+      while (active < concurrency && cursor < jobs.length) {
+        const job = jobs[cursor++];
+        active++;
+        void (async () => {
+          try {
+            const signal = options.getSignal(job.id);
+            if (signal?.aborted) {
+              callbacks.onError(job.id, new DOMException("Upload aborted", "AbortError"));
+              return;
+            }
+
+            let fileUri: string;
+            let filename: string;
+            let contentType: string;
+            let contentLength: number | undefined;
+
+            if (job.file instanceof File) {
+              fileUri = URL.createObjectURL(job.file);
+              filename = job.file.name;
+              contentType = job.file.type || getMimeType(job.file.name);
+              contentLength = job.file.size;
+            } else {
+              fileUri = job.file.uri;
+              filename = job.file.name;
+              contentType = job.file.mimeType || getMimeType(job.file.name);
+              contentLength = job.file.size;
+            }
+
+            const result = await uploadToR2(fileUri, filename, contentType, job.folder, {
+              onProgress: (pct) => callbacks.onProgress(job.id, pct),
+              signal,
+              contentLength,
+            });
+
+            if (job.file instanceof File) URL.revokeObjectURL(fileUri);
+            callbacks.onDone(job.id, result);
+          } catch (err: any) {
+            callbacks.onError(job.id, err instanceof Error ? err : new Error(String(err)));
+          } finally {
+            active--;
+            if (cursor >= jobs.length && active === 0) resolve();
+            else pump();
+          }
+        })();
+      }
+      if (cursor >= jobs.length && active === 0) resolve();
+    };
+    if (jobs.length === 0) resolve();
+    else pump();
+  });
+}
 
 export function getMimeType(filename: string): string {
   const ext = filename.split(".").pop()?.toLowerCase() || "";
@@ -177,6 +270,7 @@ export function getMimeType(filename: string): string {
     mov: "video/quicktime",
     avi: "video/x-msvideo",
     mkv: "video/x-matroska",
+    webm: "video/webm",
     jpg: "image/jpeg",
     jpeg: "image/jpeg",
     png: "image/png",

@@ -1,12 +1,7 @@
 var __defProp = Object.defineProperty;
 var __getOwnPropNames = Object.getOwnPropertyNames;
-var __esm = (fn, res, err) => function __init() {
-  if (err) throw err[0];
-  try {
-    return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
-  } catch (e) {
-    throw err = [e], e;
-  }
+var __esm = (fn, res) => function __init() {
+  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
 };
 var __export = (target, all) => {
   for (var name in all)
@@ -1398,6 +1393,43 @@ var init_require_admin = __esm({
   }
 });
 
+// backend/auto-notification-expiry.ts
+function autoNotificationExpiresAt(now = Date.now()) {
+  return now + AUTO_NOTIFICATION_TTL_MS;
+}
+function computeAutoNotificationHideAfterAt(tappedAt, expiresAt) {
+  if (expiresAt == null || !Number.isFinite(Number(expiresAt))) return null;
+  const expiry = Number(expiresAt);
+  if (tappedAt < expiry) return expiry;
+  return tappedAt + AUTO_NOTIFICATION_POST_EXPIRY_TAP_GRACE_MS;
+}
+async function notifyEnrolledCourseStudents(db2, courseId, opts) {
+  const recipients = await db2.query("SELECT user_id FROM enrollments WHERE course_id = $1", [courseId]).catch(() => ({ rows: [] }));
+  const recipientIds = recipients.rows.map((r) => Number(r.user_id)).filter((id) => Number.isFinite(id));
+  if (recipientIds.length === 0) return;
+  const now = opts.now ?? Date.now();
+  const expiresAt = autoNotificationExpiresAt(now);
+  await db2.query(
+    `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
+       SELECT u, $2::text, $3::text, $4::text, $5::bigint, $6::bigint
+       FROM unnest($1::int[]) AS u`,
+    [recipientIds, opts.title, opts.message, opts.type ?? "info", now, expiresAt]
+  ).catch(() => {
+  });
+  if (opts.sendPush) {
+    await opts.sendPush(recipientIds, { title: opts.title, body: opts.message, data: opts.pushData }).catch(() => {
+    });
+  }
+}
+var AUTO_NOTIFICATION_TTL_MS, AUTO_NOTIFICATION_POST_EXPIRY_TAP_GRACE_MS;
+var init_auto_notification_expiry = __esm({
+  "backend/auto-notification-expiry.ts"() {
+    "use strict";
+    AUTO_NOTIFICATION_TTL_MS = 12 * 60 * 60 * 1e3;
+    AUTO_NOTIFICATION_POST_EXPIRY_TAP_GRACE_MS = 60 * 60 * 1e3;
+  }
+});
+
 // backend/push-notifications.ts
 import webpush from "web-push";
 function chunkArray(arr, size) {
@@ -1515,6 +1547,9 @@ async function sendPushToUsers(db2, userIds, payload) {
   const tokens = [...new Set(tokenResult.rows.map((r) => String(r.expo_push_token || "").trim()).filter(Boolean))];
   if (!tokens.length) {
     const webResult2 = await webResultPromise;
+    if (webResult2.subscriptions === 0) {
+      console.warn(`[Push] No active tokens for ${uniqueUserIds.length} user(s); in-app only`);
+    }
     return { sent: 0, tokens: 0, webSent: webResult2.sent, webSubscriptions: webResult2.subscriptions };
   }
   const messages = tokens.map((to) => ({
@@ -1561,14 +1596,135 @@ async function sendPushToUsers(db2, userIds, payload) {
   const webResult = await webResultPromise;
   return { sent, tokens: tokens.length, webSent: webResult.sent, webSubscriptions: webResult.subscriptions };
 }
-async function sendPushToAdmins(db2, payload) {
-  const result = await db2.query("SELECT id FROM users WHERE role = 'admin'");
-  const adminIds = result.rows.map((row) => Number(row.id)).filter((id) => Number.isFinite(id));
-  return sendPushToUsers(db2, adminIds, payload);
-}
 var init_push_notifications = __esm({
   "backend/push-notifications.ts"() {
     "use strict";
+  }
+});
+
+// backend/notification-utils.ts
+function testNotificationCopy(testType, title, contextLabel) {
+  const norm = String(testType || "practice").toLowerCase();
+  const notifTitle = norm === "mock" ? "\u{1F4DD} New Mock Test Added" : norm === "pyq" ? "\u{1F4DD} New PYQ Added" : "\u{1F4DD} New Test Added";
+  const notifMessage = `"${title}" has been added in ${contextLabel}.`;
+  return { notifTitle, notifMessage };
+}
+async function getAllStudentIds(db2) {
+  const result = await db2.query("SELECT id FROM users WHERE role = 'student'").catch(() => ({ rows: [] }));
+  return result.rows.map((row) => Number(row.id)).filter((id) => Number.isFinite(id) && id > 0);
+}
+async function getAdminIds(db2) {
+  const result = await db2.query("SELECT id FROM users WHERE role = 'admin'").catch(() => ({ rows: [] }));
+  return result.rows.map((row) => Number(row.id)).filter((id) => Number.isFinite(id) && id > 0);
+}
+async function getFolderPurchaserIds(db2, folderId) {
+  const result = await db2.query("SELECT DISTINCT user_id FROM folder_purchases WHERE folder_id = $1", [folderId]).catch(() => ({ rows: [] }));
+  return result.rows.map((row) => Number(row.user_id)).filter((id) => Number.isFinite(id) && id > 0);
+}
+async function getMiniCourseNotificationRecipients(db2, miniCourseId) {
+  const folder = await db2.query("SELECT id, is_free, name FROM standalone_folders WHERE id = $1 AND type = 'mini_course' LIMIT 1", [miniCourseId]).catch(() => ({ rows: [] }));
+  if (!folder.rows.length) return getAllStudentIds(db2);
+  if (folder.rows[0].is_free) return getAllStudentIds(db2);
+  const purchasers = await getFolderPurchaserIds(db2, miniCourseId);
+  return purchasers.length > 0 ? purchasers : getAllStudentIds(db2);
+}
+async function notifyUsersInAppAndPush(db2, userIds, opts) {
+  const recipientIds = [...new Set(userIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0))];
+  if (!recipientIds.length) return;
+  const now = opts.now ?? Date.now();
+  const expiresAt = opts.expiresAt === void 0 ? autoNotificationExpiresAt(now) : opts.expiresAt;
+  await db2.query(
+    `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
+       SELECT u, $2::text, $3::text, $4::text, $5::bigint, $6::bigint
+       FROM unnest($1::int[]) AS u`,
+    [recipientIds, opts.title, opts.message, opts.type ?? "info", now, expiresAt]
+  ).catch(() => {
+  });
+  await sendPushToUsers(db2, recipientIds, {
+    title: opts.title,
+    body: opts.message,
+    data: opts.pushData || {}
+  }).catch((err) => console.error("[Notify] push failed:", err));
+}
+async function notifyAdminsInAppAndPush(db2, opts) {
+  const adminIds = await getAdminIds(db2);
+  if (!adminIds.length) return;
+  await notifyUsersInAppAndPush(db2, adminIds, { ...opts, expiresAt: null });
+}
+async function notifyAdminsLiveClassCompleted(db2, liveClass) {
+  const liveClassId = Number(liveClass.id);
+  if (!Number.isFinite(liveClassId) || liveClassId <= 0) return;
+  const adminIds = await getAdminIds(db2);
+  if (!adminIds.length) return;
+  const newlyNotified = [];
+  const now = Date.now();
+  for (const adminId of adminIds) {
+    const inserted = await db2.query(
+      `INSERT INTO notifications_sent (class_id, user_id, type, sent_at)
+         VALUES ($1::int, $2::int, 'admin_live_completed', $3::bigint)
+         ON CONFLICT (class_id, user_id, type) DO NOTHING
+         RETURNING user_id`,
+      [liveClassId, adminId, now]
+    ).catch(() => ({ rows: [] }));
+    if (inserted.rows.length > 0) newlyNotified.push(adminId);
+  }
+  if (!newlyNotified.length) return;
+  const title = String(liveClass.title || "Live class").trim();
+  await notifyUsersInAppAndPush(db2, newlyNotified, {
+    title: "\u2705 Live Class Completed",
+    message: `"${title}" has ended.`,
+    expiresAt: null,
+    pushData: {
+      type: "live_class_completed",
+      liveClassId,
+      courseId: liveClass.course_id != null ? Number(liveClass.course_id) : null
+    }
+  });
+}
+async function notifyStandaloneTestAdded(db2, opts) {
+  let contextLabel = "Tests";
+  let recipientIds = [];
+  if (opts.miniCourseId) {
+    const folder = await db2.query("SELECT name FROM standalone_folders WHERE id = $1 LIMIT 1", [opts.miniCourseId]).catch(() => ({ rows: [] }));
+    contextLabel = String(folder.rows[0]?.name || "Mini Test Series");
+    recipientIds = await getMiniCourseNotificationRecipients(db2, opts.miniCourseId);
+  } else {
+    recipientIds = await getAllStudentIds(db2);
+  }
+  const { notifTitle, notifMessage } = testNotificationCopy(opts.testType, opts.title, contextLabel);
+  await notifyUsersInAppAndPush(db2, recipientIds, {
+    title: notifTitle,
+    message: notifMessage,
+    pushData: {
+      type: "new_test_added",
+      testId: opts.testId,
+      miniCourseId: opts.miniCourseId || null
+    }
+  });
+}
+async function notifyStandaloneMaterialAdded(db2, opts) {
+  const contextLabel = opts.sectionTitle?.trim() || "Study Materials";
+  const recipientIds = await getAllStudentIds(db2);
+  await notifyUsersInAppAndPush(db2, recipientIds, {
+    title: "\u{1F4D8} New Material Added",
+    message: `"${opts.title}" has been added in ${contextLabel}.`,
+    pushData: { type: "new_material_added", materialId: opts.materialId }
+  });
+}
+async function notifyStandaloneMissionAdded(db2, opts) {
+  const contextLabel = opts.folderName?.trim() || "Daily Missions";
+  const recipientIds = await getAllStudentIds(db2);
+  await notifyUsersInAppAndPush(db2, recipientIds, {
+    title: "\u{1F3AF} New Daily Mission",
+    message: `"${opts.title}" has been added to ${contextLabel}.`,
+    pushData: { type: "standalone_mission_added", missionId: opts.missionId }
+  });
+}
+var init_notification_utils = __esm({
+  "backend/notification-utils.ts"() {
+    "use strict";
+    init_auto_notification_expiry();
+    init_push_notifications();
   }
 });
 
@@ -2513,11 +2669,11 @@ function registerAuthRoutes({
         [normalizedName, finalEmail, phone, dob, photo, passwordHash, now]
       );
       const user = inserted.rows[0];
-      await sendPushToAdmins(db2, {
+      await notifyAdminsInAppAndPush(db2, {
         title: "\u{1F464} New User Registered",
-        body: `${user.name || "A student"} just created an account.`,
-        data: { type: "new_user_registration", userId: Number(user.id) }
-      }).catch((err) => console.error("[Auth] admin registration push failed:", err));
+        message: `${user.name || "A student"} just created an account.`,
+        pushData: { type: "new_user_registration", userId: Number(user.id) }
+      }).catch((err) => console.error("[Auth] admin registration notify failed:", err));
       await db2.query("DELETE FROM otp_challenges WHERE identifier = $1", [payload.identifier]).catch(() => {
       });
       const gate = await assertLoginAllowedForInstallation(db2, req, {
@@ -2666,7 +2822,7 @@ function registerAuthRoutes({
 var init_auth_routes = __esm({
   "backend/auth-routes.ts"() {
     "use strict";
-    init_push_notifications();
+    init_notification_utils();
     init_password_utils();
     init_auth_service();
     init_native_device_binding();
@@ -3518,11 +3674,11 @@ function registerPaymentRoutes({
           ]);
           const courseTitle = String(courseInfo.rows[0]?.title || "a course");
           const buyerName = String(userInfo.rows[0]?.name || userInfo.rows[0]?.phone || userInfo.rows[0]?.email || "A student");
-          await sendPushToAdmins(db2, {
+          await notifyAdminsInAppAndPush(db2, {
             title: "\u{1F4B0} New Course Purchase",
-            body: `${buyerName} purchased ${courseTitle}.`,
-            data: { type: "new_purchase", userId: result.userId, courseId: result.courseId }
-          }).catch((err) => console.error("[Payment] admin purchase push failed:", err));
+            message: `${buyerName} purchased ${courseTitle}.`,
+            pushData: { type: "new_purchase", userId: result.userId, courseId: result.courseId }
+          }).catch((err) => console.error("[Payment] admin purchase notify failed:", err));
           console.log("[Payments] verify success");
           return { statusCode: 200, body: { success: true, message: "Payment verified and enrolled successfully" } };
         });
@@ -3791,7 +3947,7 @@ var init_payment_routes = __esm({
   "backend/payment-routes.ts"() {
     "use strict";
     init_course_access_utils();
-    init_push_notifications();
+    init_notification_utils();
     init_native_device_binding();
     init_idempotency();
     init_validation();
@@ -3974,11 +4130,11 @@ data: ${JSON.stringify({ message: "Realtime unavailable" })}
         "INSERT INTO support_messages (user_id, sender, message, created_at) VALUES ($1, 'user', $2, $3) RETURNING *",
         [user.id, message.trim().slice(0, 1e3), Date.now()]
       );
-      await sendPushToAdmins(db2, {
+      await notifyAdminsInAppAndPush(db2, {
         title: "\u{1F4AC} New Support Message",
-        body: `Student #${user.id}: ${message.trim().slice(0, 80)}`,
-        data: { type: "support_message", userId: Number(user.id), messageId: result.rows[0]?.id }
-      }).catch((err) => console.error("[Support] admin push failed:", err));
+        message: `Student #${user.id}: ${message.trim().slice(0, 80)}`,
+        pushData: { type: "support_message", userId: Number(user.id), messageId: result.rows[0]?.id }
+      }).catch((err) => console.error("[Support] admin notify failed:", err));
       res.json(result.rows[0]);
     } catch {
       res.status(500).json({ message: "Failed to send message" });
@@ -4146,7 +4302,7 @@ var init_support_routes = __esm({
   "backend/support-routes.ts"() {
     "use strict";
     init_pg_rate_limit_store();
-    init_push_notifications();
+    init_notification_utils();
     init_sse_listen_budget();
     SUPPORT_POST_WINDOW_MS = 10 * 60 * 1e3;
     SUPPORT_POST_MAX = 20;
@@ -4740,6 +4896,23 @@ async function saveRecordingForClassAndPeers(db2, liveClassId, recordingUrl, opt
     if (opts.recomputeCourseProgress) {
       await opts.recomputeCourseProgress(row.course_id);
     }
+    const visibleNow = !visibleAfterAt || Number(visibleAfterAt) <= Date.now();
+    if (visibleNow) {
+      const courseInfo = await db2.query("SELECT title FROM courses WHERE id = $1", [row.course_id]).catch(() => ({ rows: [] }));
+      const courseTitle = String(courseInfo.rows[0]?.title || "your course");
+      const notifTitle = "\u{1F4F9} Class Recording Available";
+      const notifMessage = `"${row.title}" recording is now available in ${courseTitle}.`;
+      await notifyEnrolledCourseStudents(db2, row.course_id, {
+        title: notifTitle,
+        message: notifMessage,
+        pushData: {
+          type: "class_recording_available",
+          liveClassId: Number(row.id),
+          courseId: Number(row.course_id)
+        },
+        sendPush: (userIds, payload) => sendPushToUsers(db2, userIds, payload)
+      });
+    }
   }
   return { lectureId: lectureIds[0] ?? null, lectureIds };
 }
@@ -4747,6 +4920,8 @@ var init_live_class_recording_save = __esm({
   "backend/live-class-recording-save.ts"() {
     "use strict";
     init_recordingSection();
+    init_auto_notification_expiry();
+    init_push_notifications();
   }
 });
 
@@ -5197,11 +5372,19 @@ function registerLiveStreamRoutes({
         return res.json({ success: true, alreadyEnded: true, recordingUrl: existingRecordingUrl });
       }
       const endedAtNow = Date.now();
+      const wasCompleted = current?.is_completed === true;
       await db2.query(
         "UPDATE live_classes SET is_live = FALSE, ended_at = COALESCE(ended_at, $1), is_completed = TRUE WHERE id = $2",
         [endedAtNow, req.params.id]
       ).catch(() => {
       });
+      if (!wasCompleted) {
+        await notifyAdminsLiveClassCompleted(db2, {
+          id: req.params.id,
+          title: liveTitle || current?.title,
+          course_id: current?.course_id
+        }).catch((err) => console.error("[CF Stream] admin completion notify failed:", err));
+      }
       await db2.query(
         `INSERT INTO live_stream_finalize_jobs
            (live_class_id, status, attempts, next_attempt_at, created_at, updated_at)
@@ -5467,6 +5650,7 @@ var init_live_stream_routes = __esm({
     "use strict";
     init_recordingSection();
     init_live_class_recording_save();
+    init_notification_utils();
     init_cloudflare_stream_download();
     init_cloudflare_stream_api();
   }
@@ -6124,7 +6308,8 @@ function registerAdminCourseManagementRoutes({
         if (parent.rows.length === 0) return res.status(400).json({ message: "Parent folder not found" });
       }
       const folder = await createCourseFolderPath(db2, req.params.id, normalizedType, normalizedName, normalizedParentId, subjectKey);
-      res.json(folder);
+      const fullName = await resolveCourseFolderFullName(db2, folder?.id, req.params.id);
+      res.json({ ...folder, full_name: fullName || folder?.name });
     } catch {
       res.status(500).json({ message: "Failed to create folder" });
     }
@@ -6866,36 +7051,66 @@ function registerAdminEnrollmentRoutes({
     try {
       const adminUserId = Number(req.user?.id) || null;
       const enrollment = await db2.query(
-        "SELECT user_id, course_id, status, valid_until FROM enrollments WHERE id = $1",
+        "SELECT id, user_id, course_id, status, valid_until FROM enrollments WHERE id = $1",
         [req.params.id]
       );
-      if (enrollment.rows.length > 0) {
-        const { user_id, course_id } = enrollment.rows[0];
-        await db2.query(
-          "UPDATE enrollments SET status = 'inactive', download_cleanup_pending = TRUE WHERE id = $1",
-          [req.params.id]
-        );
-        try {
-          await deleteDownloadsForUser3(user_id, course_id);
-          await db2.query("UPDATE enrollments SET download_cleanup_pending = FALSE WHERE id = $1", [req.params.id]);
-        } catch (cleanupErr) {
-          console.warn("[Cleanup] download cleanup failed; will retry", {
-            enrollmentId: req.params.id,
-            user_id,
-            course_id
-          });
-        }
-        void writeEnrollmentAuditLog(db2, adminUserId, "deleted", String(req.params.id), {
-          user_id,
-          course_id,
-          status: enrollment.rows[0].status,
-          valid_until: enrollment.rows[0].valid_until
-        });
-      } else {
-        await db2.query("DELETE FROM enrollments WHERE id = $1", [req.params.id]);
+      if (enrollment.rows.length === 0) {
+        return res.json({ success: true });
       }
+      const { user_id, course_id } = enrollment.rows[0];
+      try {
+        await deleteDownloadsForUser3(Number(user_id), Number(course_id));
+      } catch (cleanupErr) {
+        console.warn("[Cleanup] download cleanup failed:", cleanupErr);
+      }
+      await runInTransaction2(async (tx) => {
+        await tx.query(
+          `DELETE FROM media_tokens
+           WHERE user_id = $1
+             AND file_key IN (
+               SELECT file_url FROM study_materials WHERE course_id = $2 AND file_url IS NOT NULL
+               UNION ALL
+               SELECT video_url FROM lectures        WHERE course_id = $2 AND video_url IS NOT NULL
+               UNION ALL
+               SELECT pdf_url   FROM lectures        WHERE course_id = $2 AND pdf_url IS NOT NULL
+               UNION ALL
+               SELECT recording_url FROM live_classes WHERE course_id = $2 AND recording_url IS NOT NULL
+             )`,
+          [user_id, course_id]
+        );
+        await tx.query(`DELETE FROM download_tokens WHERE user_id = $1 AND course_id = $2`, [user_id, course_id]).catch(() => {
+        });
+        await tx.query(
+          `DELETE FROM lecture_progress
+           WHERE user_id = $1
+             AND lecture_id IN (SELECT id FROM lectures WHERE course_id = $2)`,
+          [user_id, course_id]
+        );
+        await tx.query(
+          `DELETE FROM test_attempts
+           WHERE user_id = $1
+             AND test_id IN (SELECT id FROM tests WHERE course_id = $2)`,
+          [user_id, course_id]
+        );
+        await tx.query(
+          `DELETE FROM user_missions
+             WHERE user_id = $1
+               AND mission_id IN (SELECT id FROM daily_missions WHERE course_id = $2)`,
+          [user_id, course_id]
+        ).catch(() => {
+        });
+        await tx.query(`DELETE FROM enrollments WHERE id = $1`, [req.params.id]);
+      });
+      void writeEnrollmentAuditLog(db2, adminUserId, "deleted", String(req.params.id), {
+        user_id,
+        course_id,
+        hard_delete: true,
+        status_before: enrollment.rows[0].status,
+        valid_until_before: enrollment.rows[0].valid_until
+      });
       res.json({ success: true });
-    } catch {
+    } catch (err) {
+      console.error("Remove from course error:", err);
       res.status(500).json({ message: "Failed to remove enrollment" });
     }
   });
@@ -6970,7 +7185,8 @@ function registerAdminLectureRoutes({
   db: db2,
   requireAdmin: requireAdmin2,
   getR2Client,
-  recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse3
+  recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse3,
+  runInTransaction: runInTransaction2
 }) {
   const normalizeSectionSegments = (value) => String(value || "").split("/").map((s) => s.trim()).filter(Boolean);
   const resolveLectureSectionTitle = (sectionTitle, subfolderTitle) => {
@@ -7041,6 +7257,21 @@ function registerAdminLectureRoutes({
         ]
       );
       await recomputeAllEnrollmentsProgressForCourse3(parsedCourseId);
+      const lectureTitle = String(title).trim();
+      const courseInfo = await db2.query("SELECT title FROM courses WHERE id = $1", [parsedCourseId]).catch(() => ({ rows: [] }));
+      const courseTitle = String(courseInfo.rows[0]?.title || "your course");
+      const notifTitle = "\u{1F4F9} New Lecture Added";
+      const notifMessage = `"${lectureTitle}" has been added in ${courseTitle}.`;
+      await notifyEnrolledCourseStudents(db2, parsedCourseId, {
+        title: notifTitle,
+        message: notifMessage,
+        pushData: {
+          type: "new_lecture_added",
+          lectureId: result.rows[0]?.id,
+          courseId: parsedCourseId
+        },
+        sendPush: (userIds, payload) => sendPushToUsers(db2, userIds, payload)
+      });
       res.json(result.rows[0]);
     } catch (err) {
       console.error("[AdminLectures] create failed", {
@@ -7055,6 +7286,127 @@ function registerAdminLectureRoutes({
         error: err instanceof Error ? err.message : err
       });
       res.status(500).json({ message: "Failed to add lecture", detail: err instanceof Error ? err.message : "unknown_error" });
+    }
+  });
+  app2.post("/api/admin/lectures/bulk", requireAdmin2, async (req, res) => {
+    try {
+      const { courseId, subjectKey, items } = req.body;
+      const parsedCourseId = Number(courseId);
+      if (!Number.isFinite(parsedCourseId) || parsedCourseId <= 0) {
+        return res.status(400).json({ message: "Invalid courseId" });
+      }
+      if (!Array.isArray(items) || items.length === 0 || items.length > 50) {
+        return res.status(400).json({ message: "items must contain 1\u201350 lectures" });
+      }
+      const courseCheck = await db2.query("SELECT id, title FROM courses WHERE id = $1 LIMIT 1", [parsedCourseId]);
+      if (courseCheck.rows.length === 0) {
+        return res.status(404).json({ message: "Course not found" });
+      }
+      const courseTitle = String(courseCheck.rows[0]?.title || "your course");
+      const normalizedSubjectKey = typeof subjectKey === "string" && subjectKey.trim() ? subjectKey.trim().toLowerCase() : null;
+      const titles = [];
+      const videoUrls = [];
+      const videoTypes = [];
+      const durations = [];
+      const orderIndexes = [];
+      const sectionTitles = [];
+      const freeFlags = [];
+      const downloadFlags = [];
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i] || {};
+        const title = String(item.title || "").trim();
+        const videoUrl = String(item.videoUrl || "").trim();
+        if (!title || !videoUrl) {
+          return res.status(400).json({ message: `Item ${i + 1}: title and videoUrl are required` });
+        }
+        const duration = Number(item.durationMinutes);
+        if (!Number.isFinite(duration) || duration <= 0) {
+          return res.status(400).json({ message: `Item ${i + 1}: durationMinutes must be > 0` });
+        }
+        titles.push(title);
+        videoUrls.push(videoUrl);
+        videoTypes.push(String(item.videoType || "").trim() || inferLectureVideoType(videoUrl));
+        durations.push(Math.round(duration));
+        orderIndexes.push(Number(item.orderIndex) || 0);
+        const section = item.sectionTitle != null ? String(item.sectionTitle).trim() : "";
+        sectionTitles.push(section || null);
+        freeFlags.push(!!item.isFreePreview);
+        downloadFlags.push(!!item.downloadAllowed);
+      }
+      const now = Date.now();
+      const inserted = await runInTransaction2(async (tx) => {
+        const result = await tx.query(
+          `INSERT INTO lectures (
+             course_id, title, description, transcript, video_url, video_type, pdf_url,
+             duration_minutes, order_index, is_free_preview, section_title, download_allowed, subject_key, created_at
+           )
+           SELECT
+             $1::int,
+             t.title,
+             ''::text,
+             ''::text,
+             t.video_url,
+             t.video_type,
+             NULL::text,
+             t.duration_minutes,
+             t.order_index,
+             t.is_free_preview,
+             t.section_title,
+             t.download_allowed,
+             $2::text,
+             $3::bigint
+           FROM unnest(
+             $4::text[],
+             $5::text[],
+             $6::text[],
+             $7::int[],
+             $8::int[],
+             $9::text[],
+             $10::boolean[],
+             $11::boolean[]
+           ) AS t(
+             title, video_url, video_type, duration_minutes, order_index,
+             section_title, is_free_preview, download_allowed
+           )
+           RETURNING *`,
+          [
+            parsedCourseId,
+            normalizedSubjectKey,
+            now,
+            titles,
+            videoUrls,
+            videoTypes,
+            durations,
+            orderIndexes,
+            sectionTitles,
+            freeFlags,
+            downloadFlags
+          ]
+        );
+        return result.rows;
+      });
+      await recomputeAllEnrollmentsProgressForCourse3(parsedCourseId);
+      const count = inserted.length;
+      const notifTitle = count === 1 ? "\u{1F4F9} New Lecture Added" : `\u{1F4F9} ${count} new lectures added`;
+      const notifMessage = count === 1 ? `"${titles[0]}" has been added in ${courseTitle}.` : `${count} new lectures have been added in ${courseTitle}.`;
+      await notifyEnrolledCourseStudents(db2, parsedCourseId, {
+        title: notifTitle,
+        message: notifMessage,
+        pushData: {
+          type: "new_lecture_added",
+          courseId: parsedCourseId,
+          count
+        },
+        sendPush: (userIds, payload) => sendPushToUsers(db2, userIds, payload)
+      });
+      res.json({ inserted, count });
+    } catch (err) {
+      console.error("[AdminLectures] bulk create failed", {
+        courseId: req.body?.courseId,
+        itemCount: Array.isArray(req.body?.items) ? req.body.items.length : 0,
+        error: err instanceof Error ? err.message : err
+      });
+      res.status(500).json({ message: "Failed to bulk add lectures", detail: err instanceof Error ? err.message : "unknown_error" });
     }
   });
   app2.put("/api/admin/lectures/:id", requireAdmin2, async (req, res) => {
@@ -7169,8 +7521,10 @@ function registerAdminLectureRoutes({
 var init_admin_lecture_routes = __esm({
   "backend/admin-lecture-routes.ts"() {
     "use strict";
+    init_auto_notification_expiry();
     init_download_access_utils();
     init_async_utils();
+    init_push_notifications();
   }
 });
 
@@ -7303,15 +7657,16 @@ function registerAdminTestRoutes({
         const courseTitle = String(courseInfo.rows[0]?.title || "your course");
         const recipients = await db2.query("SELECT user_id FROM enrollments WHERE course_id = $1", [courseId]).catch(() => ({ rows: [] }));
         const recipientIds = recipients.rows.map((r) => Number(r.user_id));
-        const notifTitle = "\u{1F4DD} New Test Added";
-        const notifMessage = `"${title}" has been added in ${courseTitle}.`;
+        const testTypeNorm = String(testType || "practice").toLowerCase();
+        const { notifTitle, notifMessage } = testNotificationCopy(testTypeNorm, title, courseTitle);
         const now = Date.now();
+        const expiresAt = autoNotificationExpiresAt(now);
         if (recipientIds.length > 0) {
           await db2.query(
-            `INSERT INTO notifications (user_id, title, message, type, created_at)
-               SELECT u, $2::text, $3::text, $4::text, $5::bigint
+            `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
+               SELECT u, $2::text, $3::text, $4::text, $5::bigint, $6::bigint
                FROM unnest($1::int[]) AS u`,
-            [recipientIds, notifTitle, notifMessage, "info", now]
+            [recipientIds, notifTitle, notifMessage, "info", now, expiresAt]
           ).catch(() => {
           });
         }
@@ -7320,6 +7675,14 @@ function registerAdminTestRoutes({
           body: notifMessage,
           data: { type: "new_test_added", testId: result.rows[0]?.id, courseId: Number(courseId) }
         });
+      } else {
+        const miniId = miniCourseId != null && miniCourseId !== "" ? Number(miniCourseId) : null;
+        await notifyStandaloneTestAdded(db2, {
+          testId: Number(result.rows[0]?.id),
+          title: String(title),
+          testType,
+          miniCourseId: Number.isFinite(miniId) && miniId > 0 ? miniId : null
+        }).catch((err) => console.error("[AdminTests] standalone notify failed:", err));
       }
       res.json(result.rows[0]);
     } catch {
@@ -7390,6 +7753,8 @@ function registerAdminTestRoutes({
 var init_admin_test_routes = __esm({
   "backend/admin-test-routes.ts"() {
     "use strict";
+    init_auto_notification_expiry();
+    init_notification_utils();
     init_push_notifications();
   }
 });
@@ -7581,6 +7946,29 @@ function registerAdminQuestionBulkRoutes({
       });
     }
   });
+  app2.post("/api/admin/questions/parse-pdf", requireAdmin2, upload3.single("pdf"), async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ message: "PDF file is required" });
+      }
+      if (!/application\/pdf/i.test(String(req.file.mimetype || ""))) {
+        return res.status(400).json({ message: "Only PDF files are allowed" });
+      }
+      const parser = new PDFParse2({ data: req.file.buffer });
+      const result = await parser.getText();
+      const parsed = parseQuestionsFromText(result.text);
+      if (parsed.length === 0) {
+        return res.status(400).json({
+          message: "No questions could be parsed from this PDF",
+          data: { rawTextPreview: result.text.substring(0, 500) }
+        });
+      }
+      res.json({ success: true, count: parsed.length, questions: parsed });
+    } catch (err) {
+      console.error("[parse-pdf] error:", err);
+      res.status(500).json({ message: `Failed to parse PDF: ${err?.message || "unknown error"}` });
+    }
+  });
   app2.post("/api/admin/questions/bulk-save", requireAdmin2, async (req, res) => {
     try {
       const { testId, questions, defaultMarks, defaultNegativeMarks } = req.body;
@@ -7662,12 +8050,13 @@ function registerAdminUsersAndContentRoutes({
         const notifTitle = "\u{1F4D8} New Material Added";
         const notifMessage = `"${normalizedTitle}" has been added in ${courseTitle}.`;
         const now = Date.now();
+        const expiresAt = autoNotificationExpiresAt(now);
         if (recipientIds.length > 0) {
           await db2.query(
-            `INSERT INTO notifications (user_id, title, message, type, created_at)
-               SELECT u, $2::text, $3::text, $4::text, $5::bigint
+            `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
+               SELECT u, $2::text, $3::text, $4::text, $5::bigint, $6::bigint
                FROM unnest($1::int[]) AS u`,
-            [recipientIds, notifTitle, notifMessage, "info", now]
+            [recipientIds, notifTitle, notifMessage, "info", now, expiresAt]
           ).catch(() => {
           });
         }
@@ -7676,6 +8065,12 @@ function registerAdminUsersAndContentRoutes({
           body: notifMessage,
           data: { type: "new_material_added", materialId: result.rows[0]?.id, courseId: parsedCourseId }
         });
+      } else {
+        await notifyStandaloneMaterialAdded(db2, {
+          materialId: Number(result.rows[0]?.id),
+          title: normalizedTitle,
+          sectionTitle: sectionTitle || null
+        }).catch((err) => console.error("[AdminMaterials] standalone notify failed:", err));
       }
       res.json(result.rows[0]);
     } catch (err) {
@@ -7689,6 +8084,120 @@ function registerAdminUsersAndContentRoutes({
         error: err instanceof Error ? err.message : err
       });
       res.status(500).json({ message: "Failed to add material", detail: err instanceof Error ? err.message : "unknown_error" });
+    }
+  });
+  app2.post("/api/admin/study-materials/bulk", requireAdmin2, async (req, res) => {
+    try {
+      const { courseId, subjectKey, items } = req.body;
+      const parsedCourseId = Number(courseId);
+      if (!Number.isFinite(parsedCourseId) || parsedCourseId <= 0) {
+        return res.status(400).json({ message: "Invalid courseId" });
+      }
+      if (!Array.isArray(items) || items.length === 0 || items.length > 50) {
+        return res.status(400).json({ message: "items must contain 1\u201350 materials" });
+      }
+      const courseCheck = await db2.query("SELECT id, title FROM courses WHERE id = $1 LIMIT 1", [parsedCourseId]);
+      if (courseCheck.rows.length === 0) {
+        return res.status(404).json({ message: "Course not found" });
+      }
+      const courseTitle = String(courseCheck.rows[0]?.title || "your course");
+      const normalizedSubjectKey = typeof subjectKey === "string" && subjectKey.trim() ? subjectKey.trim().toLowerCase() : null;
+      const titles = [];
+      const fileUrls = [];
+      const fileTypes = [];
+      const orderIndexes = [];
+      const sectionTitles = [];
+      const downloadFlags = [];
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i] || {};
+        const title = String(item.title || "").trim();
+        const fileUrl = String(item.fileUrl || "").trim();
+        if (!title || !fileUrl) {
+          return res.status(400).json({ message: `Item ${i + 1}: title and fileUrl are required` });
+        }
+        titles.push(title);
+        fileUrls.push(fileUrl);
+        fileTypes.push(String(item.fileType || "pdf").trim() || "pdf");
+        orderIndexes.push(Number(item.orderIndex) || 0);
+        const section = item.sectionTitle != null ? String(item.sectionTitle).trim() : "";
+        sectionTitles.push(section || null);
+        downloadFlags.push(!!item.downloadAllowed);
+      }
+      const now = Date.now();
+      const inserted = await runInTransaction2(async (tx) => {
+        const result = await tx.query(
+          `INSERT INTO study_materials (
+             title, description, file_url, file_type, course_id, is_free,
+             section_title, download_allowed, subject_key, order_index, created_at
+           )
+           SELECT
+             t.title,
+             ''::text,
+             t.file_url,
+             t.file_type,
+             $1::int,
+             false,
+             t.section_title,
+             t.download_allowed,
+             $2::text,
+             t.order_index,
+             $3::bigint
+           FROM unnest(
+             $4::text[],
+             $5::text[],
+             $6::text[],
+             $7::int[],
+             $8::text[],
+             $9::boolean[]
+           ) AS t(title, file_url, file_type, order_index, section_title, download_allowed)
+           RETURNING *`,
+          [
+            parsedCourseId,
+            normalizedSubjectKey,
+            now,
+            titles,
+            fileUrls,
+            fileTypes,
+            orderIndexes,
+            sectionTitles,
+            downloadFlags
+          ]
+        );
+        return result.rows;
+      });
+      await db2.query(
+        "UPDATE courses SET total_materials = (SELECT COUNT(*) FROM study_materials WHERE course_id = $1) WHERE id = $1",
+        [parsedCourseId]
+      );
+      await recomputeAllEnrollmentsProgressForCourse3(parsedCourseId);
+      const count = inserted.length;
+      const recipients = await db2.query("SELECT user_id FROM enrollments WHERE course_id = $1", [parsedCourseId]).catch(() => ({ rows: [] }));
+      const recipientIds = recipients.rows.map((r) => Number(r.user_id));
+      const notifTitle = count === 1 ? "\u{1F4D8} New Material Added" : `\u{1F4D8} ${count} new materials added`;
+      const notifMessage = count === 1 ? `"${titles[0]}" has been added in ${courseTitle}.` : `${count} new materials have been added in ${courseTitle}.`;
+      const expiresAt = autoNotificationExpiresAt(now);
+      if (recipientIds.length > 0) {
+        await db2.query(
+          `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
+             SELECT u, $2::text, $3::text, $4::text, $5::bigint, $6::bigint
+             FROM unnest($1::int[]) AS u`,
+          [recipientIds, notifTitle, notifMessage, "info", now, expiresAt]
+        ).catch(() => {
+        });
+      }
+      await sendPushToUsers(db2, recipientIds, {
+        title: notifTitle,
+        body: notifMessage,
+        data: { type: "new_material_added", courseId: parsedCourseId, count }
+      });
+      res.json({ inserted, count });
+    } catch (err) {
+      console.error("[AdminMaterials] bulk create failed", {
+        courseId: req.body?.courseId,
+        itemCount: Array.isArray(req.body?.items) ? req.body.items.length : 0,
+        error: err instanceof Error ? err.message : err
+      });
+      res.status(500).json({ message: "Failed to bulk add materials", detail: err instanceof Error ? err.message : "unknown_error" });
     }
   });
   app2.post("/api/admin/live-classes", requireAdmin2, async (req, res) => {
@@ -7962,6 +8471,8 @@ function registerAdminUsersAndContentRoutes({
 var init_admin_users_and_content_routes = __esm({
   "backend/admin-users-and-content-routes.ts"() {
     "use strict";
+    init_auto_notification_expiry();
+    init_notification_utils();
     init_push_notifications();
     init_user_account_purge();
   }
@@ -8052,10 +8563,18 @@ var init_admin_test_management_routes = __esm({
 });
 
 // backend/admin-daily-mission-routes.ts
+async function recomputeMissionCourseProgress(db2, recompute, courseId) {
+  if (!recompute) return;
+  const cid = courseId != null && courseId !== "" ? Number(courseId) : NaN;
+  if (!Number.isFinite(cid) || cid <= 0) return;
+  await recompute(cid).catch(() => {
+  });
+}
 function registerAdminDailyMissionRoutes({
   app: app2,
   db: db2,
-  requireAdmin: requireAdmin2
+  requireAdmin: requireAdmin2,
+  recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse3
 }) {
   app2.post("/api/admin/daily-missions", requireAdmin2, async (req, res) => {
     try {
@@ -8097,7 +8616,14 @@ function registerAdminDailyMissionRoutes({
         } catch (e) {
           console.error("Course mission notify:", e);
         }
+      } else if (row?.id != null) {
+        await notifyStandaloneMissionAdded(db2, {
+          missionId: Number(row.id),
+          title: String(title),
+          folderName: folderNameNorm
+        }).catch((err) => console.error("[AdminMissions] standalone notify failed:", err));
       }
+      await recomputeMissionCourseProgress(db2, recomputeAllEnrollmentsProgressForCourse3, courseId);
       res.json(row);
     } catch (err) {
       console.error(err);
@@ -8112,6 +8638,7 @@ function registerAdminDailyMissionRoutes({
         `UPDATE daily_missions SET title=$1, description=$2, questions=$3, mission_date=$4, xp_reward=$5, mission_type=$6, course_id=$7, folder_name=$8 WHERE id=$9`,
         [title, description || "", JSON.stringify(questions), missionDate, xpReward || 50, missionType, courseId || null, folderNameNorm, req.params.id]
       );
+      await recomputeMissionCourseProgress(db2, recomputeAllEnrollmentsProgressForCourse3, courseId);
       res.json({ success: true });
     } catch {
       res.status(500).json({ message: "Failed to update mission" });
@@ -8119,7 +8646,9 @@ function registerAdminDailyMissionRoutes({
   });
   app2.delete("/api/admin/daily-missions/:id", requireAdmin2, async (req, res) => {
     try {
+      const prev = await db2.query("SELECT course_id FROM daily_missions WHERE id = $1 LIMIT 1", [req.params.id]);
       await db2.query("DELETE FROM daily_missions WHERE id = $1", [req.params.id]);
+      await recomputeMissionCourseProgress(db2, recomputeAllEnrollmentsProgressForCourse3, prev.rows[0]?.course_id);
       res.json({ success: true });
     } catch {
       res.status(500).json({ message: "Failed to delete mission" });
@@ -8160,7 +8689,211 @@ function registerAdminDailyMissionRoutes({
 var init_admin_daily_mission_routes = __esm({
   "backend/admin-daily-mission-routes.ts"() {
     "use strict";
+    init_notification_utils();
     init_push_notifications();
+  }
+});
+
+// backend/admin-content-export-routes.ts
+function safeFilename(raw, fallback) {
+  const base = String(raw || fallback).replace(/[^\w.\- ()[\]]+/g, "_").slice(0, 120);
+  return base || fallback;
+}
+async function buildQuestionsPdfBuffer(title, subtitle, questions) {
+  const { jsPDF } = await import("jspdf");
+  const doc = new jsPDF({ unit: "pt", format: "a4" });
+  const margin = 48;
+  let y = margin;
+  const lineHeight = 14;
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const maxWidth = doc.internal.pageSize.getWidth() - margin * 2;
+  const addLine = (text, opts) => {
+    const size = opts?.size ?? 11;
+    doc.setFontSize(size);
+    doc.setFont("helvetica", opts?.bold ? "bold" : "normal");
+    const lines = doc.splitTextToSize(text, maxWidth);
+    for (const line of lines) {
+      if (y > pageHeight - margin) {
+        doc.addPage();
+        y = margin;
+      }
+      doc.text(String(line), margin, y);
+      y += lineHeight + (size > 11 ? 4 : 0);
+    }
+  };
+  addLine(title || "Export", { bold: true, size: 16 });
+  y += 8;
+  if (subtitle) addLine(subtitle);
+  y += 12;
+  questions.forEach((q, idx) => {
+    addLine(`Q${idx + 1}. ${q.question_text || ""}`, { bold: true });
+    ["A", "B", "C", "D"].forEach((letter) => {
+      const key = `option_${letter.toLowerCase()}`;
+      const val = q[key];
+      if (val) addLine(`(${letter}) ${val}`);
+    });
+    if (q.correct_option) addLine(`Answer: ${q.correct_option}`);
+    if (q.explanation) addLine(`Explanation: ${q.explanation}`);
+    y += 10;
+  });
+  const arrayBuffer = doc.output("arraybuffer");
+  return Buffer.from(arrayBuffer);
+}
+function normalizeMissionQuestions(raw) {
+  let parsed = raw;
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(parsed)) return [];
+  return parsed.map((q) => {
+    const options = Array.isArray(q?.options) ? q.options : [];
+    return {
+      question_text: String(q?.question || q?.question_text || "").trim(),
+      option_a: String(options[0] ?? q?.option_a ?? "").trim(),
+      option_b: String(options[1] ?? q?.option_b ?? "").trim(),
+      option_c: String(options[2] ?? q?.option_c ?? "").trim(),
+      option_d: String(options[3] ?? q?.option_d ?? "").trim(),
+      correct_option: String(q?.correct || q?.correct_option || "").trim(),
+      explanation: String(q?.solution || q?.explanation || "").trim()
+    };
+  });
+}
+function guessDownloadExtension(key, contentType, fallback = "") {
+  const fromKey = key.match(/(\.[a-z0-9]{2,5})$/i)?.[1]?.toLowerCase();
+  if (fromKey) return fromKey;
+  const ct = String(contentType || "").toLowerCase();
+  if (ct.includes("pdf")) return ".pdf";
+  if (ct.includes("mp4")) return ".mp4";
+  if (ct.includes("mpeg")) return ".mp3";
+  return fallback;
+}
+async function streamR2FileToResponse(getR2Client, res, key, downloadName) {
+  const bucket = String(process.env.R2_BUCKET_NAME || "").trim();
+  if (!bucket) {
+    res.status(500).json({ message: "Storage not configured" });
+    return;
+  }
+  const { GetObjectCommand } = await import("@aws-sdk/client-s3");
+  const r2 = await getR2Client();
+  const r2Response = await r2.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+  if (!r2Response.Body) {
+    res.status(404).json({ message: "File not found in storage" });
+    return;
+  }
+  const ext = guessDownloadExtension(key, r2Response.ContentType);
+  const baseName = safeFilename(downloadName, "download");
+  const filename = baseName.toLowerCase().endsWith(ext) || !ext ? baseName : `${baseName}${ext}`;
+  res.setHeader("Content-Type", r2Response.ContentType || "application/octet-stream");
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  res.setHeader("Cache-Control", "private, no-store");
+  res.setHeader("Pragma", "no-cache");
+  if (r2Response.ContentLength != null) {
+    res.setHeader("Content-Length", String(r2Response.ContentLength));
+  }
+  const stream = r2Response.Body;
+  if (typeof stream.pipe !== "function") {
+    res.status(500).json({ message: "Could not stream file" });
+    return;
+  }
+  stream.pipe(res);
+  stream.on?.("error", (err) => {
+    console.error("[admin-export] stream error:", err);
+    if (!res.headersSent) res.status(500).json({ message: "Stream error" });
+  });
+}
+function registerAdminContentExportRoutes({
+  app: app2,
+  db: db2,
+  requireAdmin: requireAdmin2,
+  getR2Client
+}) {
+  app2.get("/api/admin/export/test/:id.pdf", requireAdmin2, async (req, res) => {
+    try {
+      const testId = Number(req.params.id);
+      if (!Number.isFinite(testId)) return res.status(400).json({ message: "Invalid test id" });
+      const testRes = await db2.query("SELECT * FROM tests WHERE id = $1 LIMIT 1", [testId]);
+      if (!testRes.rows.length) return res.status(404).json({ message: "Test not found" });
+      const test = testRes.rows[0];
+      const qRes = await db2.query(
+        "SELECT * FROM questions WHERE test_id = $1 ORDER BY COALESCE(order_index, 0) ASC, id ASC",
+        [testId]
+      );
+      const pdf = await buildQuestionsPdfBuffer(
+        test.title || "Test",
+        `Type: ${test.test_type || "practice"} \xB7 Questions: ${qRes.rows.length}`,
+        qRes.rows
+      );
+      const filename = safeFilename(test.title, `test-${testId}`) + ".pdf";
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.send(pdf);
+    } catch (err) {
+      console.error("[admin-export] test pdf:", err);
+      res.status(500).json({ message: "Failed to export test PDF" });
+    }
+  });
+  app2.get("/api/admin/export/material/:id", requireAdmin2, async (req, res) => {
+    try {
+      const materialId = Number(req.params.id);
+      if (!Number.isFinite(materialId)) return res.status(400).json({ message: "Invalid material id" });
+      const matRes = await db2.query("SELECT * FROM study_materials WHERE id = $1 LIMIT 1", [materialId]);
+      if (!matRes.rows.length) return res.status(404).json({ message: "Material not found" });
+      const mat = matRes.rows[0];
+      const key = canonicalMediaKey(mat.file_url || "");
+      if (!key) return res.status(400).json({ message: "Material has no file" });
+      await streamR2FileToResponse(getR2Client, res, key, safeFilename(mat.title, `material-${materialId}`));
+    } catch (err) {
+      console.error("[admin-export] material:", err);
+      res.status(500).json({ message: "Failed to export material" });
+    }
+  });
+  app2.get("/api/admin/export/mission/:id.pdf", requireAdmin2, async (req, res) => {
+    try {
+      const missionId = Number(String(req.params.id).replace(/\.pdf$/i, ""));
+      if (!Number.isFinite(missionId)) return res.status(400).json({ message: "Invalid mission id" });
+      const missionRes = await db2.query("SELECT * FROM daily_missions WHERE id = $1 LIMIT 1", [missionId]);
+      if (!missionRes.rows.length) return res.status(404).json({ message: "Mission not found" });
+      const mission = missionRes.rows[0];
+      const questions = normalizeMissionQuestions(mission.questions);
+      if (!questions.length) return res.status(400).json({ message: "Mission has no questions" });
+      const pdf = await buildQuestionsPdfBuffer(
+        mission.title || "Mission",
+        `Type: ${mission.mission_type || "daily_drill"} \xB7 Questions: ${questions.length}`,
+        questions
+      );
+      const filename = safeFilename(mission.title, `mission-${missionId}`) + ".pdf";
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.send(pdf);
+    } catch (err) {
+      console.error("[admin-export] mission pdf:", err);
+      res.status(500).json({ message: "Failed to export mission PDF" });
+    }
+  });
+  app2.get("/api/admin/export/lecture/:id.mp4", requireAdmin2, async (req, res) => {
+    try {
+      const lectureId = Number(String(req.params.id).replace(/\.mp4$/i, ""));
+      if (!Number.isFinite(lectureId)) return res.status(400).json({ message: "Invalid lecture id" });
+      const lecRes = await db2.query("SELECT * FROM lectures WHERE id = $1 LIMIT 1", [lectureId]);
+      if (!lecRes.rows.length) return res.status(404).json({ message: "Lecture not found" });
+      const lec = lecRes.rows[0];
+      const key = canonicalMediaKey(lec.video_url || "");
+      if (!key) return res.status(400).json({ message: "Lecture has no video file" });
+      await streamR2FileToResponse(getR2Client, res, key, safeFilename(lec.title, `lecture-${lectureId}`));
+    } catch (err) {
+      console.error("[admin-export] lecture mp4:", err);
+      res.status(500).json({ message: "Failed to export lecture video" });
+    }
+  });
+}
+var init_admin_content_export_routes = __esm({
+  "backend/admin-content-export-routes.ts"() {
+    "use strict";
+    init_media_key_utils();
   }
 });
 
@@ -8172,7 +8905,7 @@ function registerAdminNotificationRoutes({
 }) {
   app2.post("/api/admin/notifications/send", requireAdmin2, async (req, res) => {
     try {
-      const { userId, title, message, type, target, courseId, imageUrl, expiresAfterHours } = req.body;
+      const { userId, title, message, type, target, courseId, imageUrl } = req.body;
       let userIds = [];
       if (userId) {
         userIds = [userId];
@@ -8187,7 +8920,7 @@ function registerAdminNotificationRoutes({
         userIds = result.rows.map((r) => r.id);
       }
       const now = Date.now();
-      const expiresAt = expiresAfterHours ? now + parseFloat(expiresAfterHours) * 36e5 : null;
+      const expiresAt = null;
       const insertResult = await db2.query(
         "INSERT INTO admin_notifications (title, message, target, course_id, sent_count, image_url, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
         [title, message, target || "all", courseId || null, userIds.length, imageUrl || null, now]
@@ -8295,6 +9028,10 @@ function normalizeJsonValue(value, fallback = []) {
   }
   return fallback;
 }
+function normalizeBatchStatus(value) {
+  const status = String(value || "").toLowerCase();
+  return status === "recorded" || status === "completed" ? "recorded" : "live";
+}
 function registerAdminCourseCrudRoutes({
   app: app2,
   db: db2,
@@ -8305,8 +9042,9 @@ function registerAdminCourseCrudRoutes({
       const { title, description, teacherName, price, originalPrice, category, isFree, level, durationHours, courseType, subject, startDate, endDate, validityMonths, thumbnail, coverColor, teacherBio, teacherImageUrl, teacherDetailsJson, multiSubjectConfig, courseLanguage, batchStatus } = req.body;
       const COVER_COLORS = ["#1A56DB", "#7C3AED", "#DC2626", "#059669", "#D97706", "#0891B2", "#DB2777", "#EA580C"];
       const autoColor = COVER_COLORS[Math.floor(Math.random() * COVER_COLORS.length)];
-      const vm = validityMonths != null && String(validityMonths).trim() !== "" ? Math.max(0, parseFloat(String(validityMonths)) || 0) || null : null;
       const normalizedCourseType = courseType || "live";
+      const resolvedCoverColor = normalizedCourseType === "multi_subject" ? coverColor || autoColor : null;
+      const vm = validityMonths != null && String(validityMonths).trim() !== "" ? Math.max(0, parseFloat(String(validityMonths)) || 0) || null : null;
       const subjects = normalizeJsonArray(multiSubjectConfig, [
         { key: "maths", label: "Maths", icon: "calculator" },
         { key: "english", label: "English", icon: "book" },
@@ -8317,7 +9055,7 @@ function registerAdminCourseCrudRoutes({
       const result = await db2.query(
         `INSERT INTO courses (title, description, teacher_name, price, original_price, category, is_free, level, duration_hours, course_type, subject, start_date, end_date, validity_months, thumbnail, cover_color, teacher_bio, teacher_image_url, teacher_details_json, multi_subject_config, course_language, batch_status, is_published, created_at) 
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19::jsonb, $20::jsonb, $21, $22, TRUE, $23) RETURNING *`,
-        [title, description, teacherName || "3i Learning", price || 0, originalPrice || 0, category || "Mathematics", isFree || false, level || "Beginner", durationHours || 0, normalizedCourseType, subject || "", startDate || null, endDate || null, vm, thumbnail || null, coverColor || autoColor, teacherBio || null, teacherImageUrl || null, JSON.stringify(teacherDetails), JSON.stringify(normalizedCourseType === "multi_subject" ? subjects : normalizeJsonArray(multiSubjectConfig)), normalizedCourseType === "multi_subject" ? courseLanguage || "HINGLISH" : null, normalizedCourseType === "multi_subject" ? batchStatus || "ongoing" : null, Date.now()]
+        [title, description, teacherName || "3i Learning", price || 0, originalPrice || 0, category || "Mathematics", isFree || false, level || "Beginner", durationHours || 0, normalizedCourseType, subject || "", startDate || null, endDate || null, vm, thumbnail || null, resolvedCoverColor, teacherBio || null, teacherImageUrl || null, JSON.stringify(teacherDetails), JSON.stringify(normalizedCourseType === "multi_subject" ? subjects : normalizeJsonArray(multiSubjectConfig)), courseLanguage || "HINGLISH", normalizedCourseType === "multi_subject" ? normalizeBatchStatus(batchStatus) : null, Date.now()]
       );
       if (normalizedCourseType !== "test_series") {
         const course = result.rows[0];
@@ -8325,12 +9063,14 @@ function registerAdminCourseCrudRoutes({
         const studentIds = students.rows.map((row) => Number(row.id)).filter((id) => Number.isFinite(id));
         const notifTitle = "\u{1F4DA} New Course Added";
         const notifMessage = `"${course.title}" is now available.`;
+        const courseNotifNow = Date.now();
+        const courseNotifExpiresAt = autoNotificationExpiresAt(courseNotifNow);
         if (studentIds.length > 0) {
           await db2.query(
-            `INSERT INTO notifications (user_id, title, message, type, created_at)
-             SELECT u, $2::text, $3::text, 'info', $4::bigint
+            `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
+             SELECT u, $2::text, $3::text, 'info', $4::bigint, $5::bigint
              FROM unnest($1::int[]) AS u`,
-            [studentIds, notifTitle, notifMessage, Date.now()]
+            [studentIds, notifTitle, notifMessage, courseNotifNow, courseNotifExpiresAt]
           ).catch(() => {
           });
         }
@@ -8354,7 +9094,7 @@ function registerAdminCourseCrudRoutes({
       const subjects = normalizeJsonArray(multiSubjectConfig);
       await db2.query(
         `UPDATE courses SET title=$1, description=$2, teacher_name=$3, price=$4, original_price=$5, category=$6, is_free=$7, level=$8, duration_hours=$9, is_published=$10, total_tests=COALESCE($11, total_tests), subject=COALESCE($12, subject), course_type=COALESCE($13, course_type), start_date=COALESCE($14, start_date), end_date=COALESCE($15, end_date), validity_months=COALESCE($16, validity_months), thumbnail=COALESCE($17, thumbnail), cover_color=COALESCE($18, cover_color), teacher_bio=COALESCE($19, teacher_bio), teacher_image_url=COALESCE($20, teacher_image_url), teacher_details_json=COALESCE($21::jsonb, teacher_details_json), multi_subject_config=COALESCE($22::jsonb, multi_subject_config), course_language=COALESCE($23, course_language), batch_status=COALESCE($24, batch_status) WHERE id=$25`,
-        [title, description, teacherName, price, originalPrice, category, isFree, level, durationHours, isPublished, totalTests, subject, courseType, startDate, endDate, vm, thumbnail ?? null, coverColor ?? null, teacherBio ?? null, teacherImageUrl ?? null, teacherDetailsJson !== void 0 ? JSON.stringify(teacherDetails) : null, multiSubjectConfig !== void 0 ? JSON.stringify(subjects) : null, courseLanguage ?? null, batchStatus ?? null, req.params.id]
+        [title, description, teacherName, price, originalPrice, category, isFree, level, durationHours, isPublished, totalTests, subject, courseType, startDate, endDate, vm, thumbnail ?? null, coverColor ?? null, teacherBio ?? null, teacherImageUrl ?? null, teacherDetailsJson !== void 0 ? JSON.stringify(teacherDetails) : null, multiSubjectConfig !== void 0 ? JSON.stringify(subjects) : null, courseLanguage ?? null, batchStatus !== void 0 ? normalizeBatchStatus(batchStatus) : null, req.params.id]
       );
       res.json({ success: true });
     } catch {
@@ -8365,6 +9105,7 @@ function registerAdminCourseCrudRoutes({
 var init_admin_course_crud_routes = __esm({
   "backend/admin-course-crud-routes.ts"() {
     "use strict";
+    init_auto_notification_expiry();
     init_push_notifications();
   }
 });
@@ -8750,7 +9491,8 @@ function registerStandaloneFolderRoutes({
         description,
         validityMonths
       });
-      res.json(folder);
+      const fullName = await resolveStandaloneFolderFullName(db2, folder?.id);
+      res.json({ ...folder, full_name: fullName || folder?.name });
     } catch {
       res.status(500).json({ message: "Failed to create folder" });
     }
@@ -9404,8 +10146,11 @@ function registerDoubtNotificationRoutes({
         `SELECT * FROM notifications WHERE user_id = $1
          AND (source IS NULL OR source != 'support')
          AND (is_hidden IS NOT TRUE)
-         AND (is_read IS NOT TRUE)
-         AND (expires_at IS NULL OR expires_at > $2)
+         AND (
+           admin_notif_id IS NOT NULL
+           OR is_read IS NOT TRUE
+           OR (hide_after_at IS NOT NULL AND hide_after_at > $2)
+         )
          AND title NOT ILIKE 'New message from%'
          AND title NOT ILIKE 'New reply from Support%'
          ORDER BY created_at DESC LIMIT 50`,
@@ -9420,8 +10165,28 @@ function registerDoubtNotificationRoutes({
     try {
       const user = await getAuthUser2(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
-      await db2.query("UPDATE notifications SET is_read = TRUE WHERE id = $1 AND user_id = $2", [req.params.id, user.id]);
-      res.json({ success: true });
+      const now = Date.now();
+      const existing = await db2.query(
+        "SELECT id, admin_notif_id, expires_at, is_read FROM notifications WHERE id = $1 AND user_id = $2",
+        [req.params.id, user.id]
+      );
+      if (existing.rows.length === 0) {
+        return res.status(404).json({ message: "Notification not found" });
+      }
+      const row = existing.rows[0];
+      const hideAfterAt = row.admin_notif_id != null ? null : computeAutoNotificationHideAfterAt(now, row.expires_at != null ? Number(row.expires_at) : null);
+      await db2.query(
+        `UPDATE notifications
+         SET is_read = TRUE,
+             hide_after_at = CASE
+               WHEN admin_notif_id IS NOT NULL THEN hide_after_at
+               WHEN $3::bigint IS NOT NULL THEN $3::bigint
+               ELSE hide_after_at
+             END
+         WHERE id = $1 AND user_id = $2`,
+        [req.params.id, user.id, hideAfterAt]
+      );
+      res.json({ success: true, hide_after_at: hideAfterAt });
     } catch {
       res.status(500).json({ message: "Failed to mark as read" });
     }
@@ -9431,6 +10196,7 @@ var AI_TUTOR_RATE_WINDOW_MS, AI_TUTOR_RATE_MAX;
 var init_doubt_notification_routes = __esm({
   "backend/doubt-notification-routes.ts"() {
     "use strict";
+    init_auto_notification_expiry();
     init_pg_rate_limit_store();
     AI_TUTOR_RATE_WINDOW_MS = 60 * 60 * 1e3;
     AI_TUTOR_RATE_MAX = 20;
@@ -9462,7 +10228,8 @@ var init_standalone_entitlement_service = __esm({
 function registerStudentMissionMaterialRoutes({
   app: app2,
   db: db2,
-  getAuthUser: getAuthUser2
+  getAuthUser: getAuthUser2,
+  updateCourseProgress: updateCourseProgress3
 }) {
   const canAccessStandaloneMaterial = async (user, material) => {
     if (material?.is_free) return true;
@@ -9671,6 +10438,11 @@ function registerStudentMissionMaterialRoutes({
          ON CONFLICT (user_id, mission_id) DO UPDATE SET is_completed = TRUE, score = $3, completed_at = $4, time_taken = $5, answers = $6, incorrect = $7, skipped = $8`,
         [user.id, req.params.id, score, Date.now(), timeTaken || 0, JSON.stringify(answers || {}), incorrect || 0, skipped || 0]
       );
+      const courseId = mission.course_id != null ? Number(mission.course_id) : NaN;
+      if (updateCourseProgress3 && Number.isFinite(courseId) && courseId > 0) {
+        await updateCourseProgress3(user.id, courseId).catch(() => {
+        });
+      }
       res.json({ success: true });
     } catch (err) {
       console.error("[Mission Complete] Error:", err);
@@ -11079,6 +11851,8 @@ function registerAdminLiveClassManageRoutes({
   });
   app2.put("/api/admin/live-classes/:id", requireAdmin2, async (req, res) => {
     try {
+      const prevRow = await db2.query("SELECT id, title, course_id, is_completed FROM live_classes WHERE id = $1", [req.params.id]);
+      const wasCompleted = prevRow.rows[0]?.is_completed === true;
       const { isLive, isCompleted, youtubeUrl, title, description, convertToLecture, sectionTitle, scheduledAt, notifyEmail, notifyBell, isFreePreview, streamType, chatMode, showViewerCount, recordingUrl, cfStreamUid, lectureSectionTitle, lectureSubfolderTitle, pipPosition, subjectKey } = req.body;
       const normalizedPipPosition = pipPosition === void 0 ? void 0 : pipPosition === "bottom-right" ? "bottom-right" : "top-right";
       const updates = [];
@@ -11179,7 +11953,7 @@ function registerAdminLiveClassManageRoutes({
       const isRecordingMode = liveClass?.is_recording_mode === true;
       if (isLive === true && !isRecordingMode && liveClass.course_id) {
         const recipients = liveClass.is_free_preview === true || liveClass.is_public === true ? await db2.query("SELECT id AS user_id FROM users WHERE role = 'student'") : await db2.query("SELECT user_id FROM enrollments WHERE course_id = $1", [liveClass.course_id]);
-        const expiresAt = Date.now() + 6 * 36e5;
+        const expiresAt = autoNotificationExpiresAt(Date.now());
         const recipientIds = recipients.rows.map((e) => Number(e.user_id));
         const notifTitle = "\u{1F534} Live Class Started!";
         const notifMessage = '"' + liveClass.title + '" is live now. Join now!';
@@ -11233,7 +12007,7 @@ function registerAdminLiveClassManageRoutes({
         });
         if (!isRecordingMode) {
           const otherClasses = await db2.query("SELECT course_id FROM live_classes WHERE id != $1 AND title = $2 AND is_completed IS NOT TRUE AND course_id IS NOT NULL", [req.params.id, liveClass.title]).catch(() => ({ rows: [] }));
-          const peerExpiresAt = Date.now() + 12 * 36e5;
+          const peerExpiresAt = autoNotificationExpiresAt(Date.now());
           const extraRecipients = /* @__PURE__ */ new Set();
           for (const other of otherClasses.rows) {
             const enrolled = await db2.query("SELECT user_id FROM enrollments WHERE course_id = $1", [other.course_id]).catch(() => ({ rows: [] }));
@@ -11319,6 +12093,11 @@ function registerAdminLiveClassManageRoutes({
         await db2.query("DELETE FROM live_class_hand_raises WHERE live_class_id = $1", [req.params.id]).catch(() => {
         });
       }
+      if ((isCompleted === true || isLive === false) && !wasCompleted && liveClass) {
+        await notifyAdminsLiveClassCompleted(db2, liveClass).catch(
+          (err) => console.error("[GoLive] admin completion notify failed:", err)
+        );
+      }
       res.json(liveClass);
     } catch (err) {
       console.error("Update live class error:", err);
@@ -11403,6 +12182,8 @@ var init_admin_live_class_manage_routes = __esm({
     "use strict";
     init_download_access_utils();
     init_recordingSection();
+    init_auto_notification_expiry();
+    init_notification_utils();
     init_push_notifications();
     init_live_class_lecture_convert();
   }
@@ -11998,6 +12779,7 @@ function registerClassroomRoutes({
         );
       }
       if (!recordingUrl || isImageUrl(recordingUrl)) {
+        const wasCompleted = lc.is_completed === true;
         const endedAt = Date.now();
         await db2.query(
           `UPDATE live_classes 
@@ -12006,6 +12788,11 @@ function registerClassroomRoutes({
           [endedAt, liveClassId]
         );
         const refreshed2 = await db2.query("SELECT * FROM live_classes WHERE id = $1", [liveClassId]);
+        if (!wasCompleted) {
+          await notifyAdminsLiveClassCompleted(db2, refreshed2.rows[0] || lc).catch(
+            (err) => console.error("[Classroom] admin completion notify failed:", err)
+          );
+        }
         lectureIds = await convertLiveClassTitlePeersToLectures(db2, refreshed2.rows[0] || lc, {
           sectionTitleOverride: sectionTitle,
           recomputeCourseProgress: recomputeAllEnrollmentsProgressForCourse3
@@ -12051,6 +12838,7 @@ var init_classroom_routes = __esm({
     init_recordingSection();
     init_live_class_recording_save();
     init_live_class_lecture_convert();
+    init_notification_utils();
     init_classroom_sync();
   }
 });
@@ -12824,16 +13612,20 @@ function registerCourseAccessRoutes({
       const { category, search } = req.query;
       let query = user?.role === "admin" ? `SELECT c.*,
                COALESCE(t_agg.cnt, 0) AS total_tests,
-               COALESCE(m_agg.cnt, 0) AS total_materials
+               COALESCE(m_agg.cnt, 0) AS total_materials,
+               COALESCE(dm_agg.cnt, 0) AS daily_mission_count
              FROM courses c
              LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM tests WHERE is_published = TRUE GROUP BY 1) t_agg ON t_agg.course_id = c.id
              LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM study_materials GROUP BY 1) m_agg ON m_agg.course_id = c.id
+             LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM daily_missions WHERE course_id IS NOT NULL GROUP BY 1) dm_agg ON dm_agg.course_id = c.id
              WHERE 1=1` : `SELECT c.*,
                COALESCE(t_agg.cnt, 0) AS total_tests,
-               COALESCE(m_agg.cnt, 0) AS total_materials
+               COALESCE(m_agg.cnt, 0) AS total_materials,
+               COALESCE(dm_agg.cnt, 0) AS daily_mission_count
              FROM courses c
              LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM tests WHERE is_published = TRUE GROUP BY 1) t_agg ON t_agg.course_id = c.id
              LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM study_materials GROUP BY 1) m_agg ON m_agg.course_id = c.id
+             LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM daily_missions WHERE course_id IS NOT NULL GROUP BY 1) dm_agg ON dm_agg.course_id = c.id
              WHERE c.is_published = TRUE`;
       const params = [];
       if (search) {
@@ -12922,7 +13714,7 @@ function registerCourseAccessRoutes({
         course.courseEnded = false;
       }
       const nowMs2 = Date.now();
-      const [lecturesResult, testsResult, materialsResult] = await Promise.all([
+      const [lecturesResult, testsResult, materialsResult, dailyMissionResult] = await Promise.all([
         user?.role === "admin" ? db2.query(
           "SELECT * FROM lectures WHERE course_id = $1 ORDER BY order_index",
           [courseIdParam]
@@ -12931,7 +13723,8 @@ function registerCourseAccessRoutes({
           [courseIdParam, nowMs2]
         ),
         db2.query("SELECT * FROM tests WHERE course_id = $1 AND is_published = TRUE ORDER BY COALESCE(order_index, 0) ASC, created_at ASC, id ASC", [courseIdParam]),
-        db2.query("SELECT * FROM study_materials WHERE course_id = $1 ORDER BY COALESCE(order_index, 0) ASC, created_at ASC, id ASC", [courseIdParam])
+        db2.query("SELECT * FROM study_materials WHERE course_id = $1 ORDER BY COALESCE(order_index, 0) ASC, created_at ASC, id ASC", [courseIdParam]),
+        db2.query("SELECT COUNT(*)::int AS cnt FROM daily_missions WHERE course_id = $1 AND course_id IS NOT NULL", [courseIdParam])
       ]);
       const fullLectures = lecturesResult.rows;
       const fullMaterials = materialsResult.rows;
@@ -12985,6 +13778,7 @@ function registerCourseAccessRoutes({
       res.set("Cache-Control", "private, no-store");
       res.json({
         ...course,
+        daily_mission_count: Number(dailyMissionResult.rows[0]?.cnt || 0),
         total_materials: gatedMaterials.length,
         lectures: responseLectures,
         tests: testsResult.rows,
@@ -13406,6 +14200,16 @@ var init_r2_path_utils = __esm({
 });
 
 // backend/upload-routes.ts
+function maxBytesForPresign(folder, contentType) {
+  const ct = String(contentType || "").toLowerCase();
+  if (ct.startsWith("video/")) return MAX_VIDEO_BYTES;
+  if (ct === "application/pdf") return MAX_PDF_BYTES;
+  if (ct.includes("word") || ct.includes("msword")) return MAX_DOC_BYTES;
+  if (ct.startsWith("image/")) return MAX_IMAGE_BYTES;
+  if (folder === "lectures") return MAX_VIDEO_BYTES;
+  if (folder === "materials") return MAX_PDF_BYTES;
+  return MAX_PDF_BYTES;
+}
 function getPublicApiBaseUrl(req) {
   const configured = String(process.env.PUBLIC_API_BASE_URL || "").trim();
   if (configured) return configured.replace(/\/+$/, "");
@@ -13436,7 +14240,8 @@ function registerUploadRoutes({
   app: app2,
   requireAdmin: requireAdmin2,
   getAuthUser: getAuthUser2,
-  getR2Client
+  getR2Client,
+  db: db2
 }) {
   app2.post("/api/upload/presign-profile", async (req, res) => {
     try {
@@ -13535,6 +14340,8 @@ function registerUploadRoutes({
     "image/gif",
     // Documents
     "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     // Video (Cloudflare Stream handles these; direct R2 for recordings)
     "video/mp4",
     "video/webm",
@@ -13551,8 +14358,15 @@ function registerUploadRoutes({
   ]);
   app2.post("/api/upload/presign", requireAdmin2, async (req, res) => {
     try {
-      const { filename, contentType, folder, subfolder } = req.body;
+      const { filename, contentType, folder, subfolder, contentLength } = req.body;
       if (!filename || !contentType) return res.status(400).json({ message: "filename and contentType required" });
+      const maxBytes = maxBytesForPresign(String(folder || "uploads"), String(contentType));
+      const len = Number(contentLength);
+      if (Number.isFinite(len) && len > 0 && len > maxBytes) {
+        return res.status(413).json({
+          message: `File too large (${len} bytes). Maximum for this type is ${maxBytes} bytes.`
+        });
+      }
       if (!ALLOWED_ADMIN_MIME_TYPES.has(String(contentType))) {
         return res.status(400).json({
           message: `Content type '${contentType}' is not allowed. Permitted types: images (JPEG/PNG/WebP/GIF), PDF, MP4/WebM/MOV video, and common audio formats.`
@@ -13606,11 +14420,25 @@ function registerUploadRoutes({
         "images/",
         "live-class-recording/"
       ];
-      const keyAllowed = ALLOWED_KEY_PREFIXES.some((prefix) => String(key).startsWith(prefix));
+      const keyStr = String(key);
+      const keyAllowed = ALLOWED_KEY_PREFIXES.some((prefix) => keyStr.startsWith(prefix));
       if (!keyAllowed) return res.status(403).json({ message: "Invalid file key \u2014 operation not permitted" });
+      if (keyStr.startsWith("lectures/") || keyStr.startsWith("materials/")) {
+        const refCheck = await db2.query(
+          `SELECT
+             (SELECT COUNT(*)::int FROM lectures WHERE video_url LIKE '%' || $1) AS lecture_refs,
+             (SELECT COUNT(*)::int FROM study_materials WHERE file_url LIKE '%' || $1) AS material_refs`,
+          [keyStr]
+        );
+        const lectureRefs = Number(refCheck.rows[0]?.lecture_refs) || 0;
+        const materialRefs = Number(refCheck.rows[0]?.material_refs) || 0;
+        if (lectureRefs > 0 || materialRefs > 0) {
+          return res.status(409).json({ message: "File is referenced by course content and cannot be deleted" });
+        }
+      }
       const { DeleteObjectCommand } = await import("@aws-sdk/client-s3");
       const r2 = await getR2Client();
-      await r2.send(new DeleteObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: key }));
+      await r2.send(new DeleteObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: keyStr }));
       res.json({ success: true });
     } catch (err) {
       console.error("[R2] Delete error:", err);
@@ -13618,11 +14446,16 @@ function registerUploadRoutes({
     }
   });
 }
+var MAX_VIDEO_BYTES, MAX_PDF_BYTES, MAX_DOC_BYTES, MAX_IMAGE_BYTES;
 var init_upload_routes = __esm({
   "backend/upload-routes.ts"() {
     "use strict";
     init_r2_path_utils();
     init_async_utils();
+    MAX_VIDEO_BYTES = 500 * 1024 * 1024;
+    MAX_PDF_BYTES = 50 * 1024 * 1024;
+    MAX_DOC_BYTES = 50 * 1024 * 1024;
+    MAX_IMAGE_BYTES = 10 * 1024 * 1024;
   }
 });
 
@@ -14372,7 +15205,7 @@ var init_schema_readiness_contract = __esm({
         "cf_recording_uid",
         "recording_url_normalized"
       ],
-      notifications: ["source", "expires_at", "is_hidden", "admin_notif_id", "image_url"],
+      notifications: ["source", "expires_at", "is_hidden", "admin_notif_id", "image_url", "hide_after_at"],
       web_push_subscriptions: ["endpoint", "p256dh", "auth", "is_active", "last_seen_at"],
       courses: ["subject", "cover_color", "pyq_count", "mock_count", "practice_count", "teacher_bio", "teacher_image_url", "teacher_details_json", "multi_subject_config", "course_language", "batch_status"],
       lectures: [
@@ -14588,6 +15421,21 @@ var init_sms_utils = __esm({
 });
 
 // backend/progress-utils.ts
+function progressTestWhere(courseType, alias = "") {
+  const p = alias ? `${alias}.` : "";
+  const pub = `${p}is_published = TRUE`;
+  if (String(courseType).toLowerCase() === "multi_subject") {
+    return pub;
+  }
+  return `${pub} AND COALESCE(LOWER(${p}test_type), 'practice') <> 'pyq'`;
+}
+async function getCourseType(db2, courseId) {
+  const r = await db2.query(
+    `SELECT COALESCE(course_type, 'live') AS course_type FROM courses WHERE id = $1::int LIMIT 1`,
+    [courseId]
+  );
+  return String(r.rows[0]?.course_type || "live").toLowerCase();
+}
 async function updateCourseTestCounts(db2, courseId) {
   const id = Number(courseId);
   if (!Number.isFinite(id)) {
@@ -14596,10 +15444,10 @@ async function updateCourseTestCounts(db2, courseId) {
   }
   await db2.query(
     `UPDATE courses SET
-      total_tests    = (SELECT COUNT(*) FROM tests WHERE course_id = $1::int),
-      pyq_count      = (SELECT COUNT(*) FROM tests WHERE course_id = $1::int AND test_type = 'pyq'),
-      mock_count     = (SELECT COUNT(*) FROM tests WHERE course_id = $1::int AND test_type = 'mock'),
-      practice_count = (SELECT COUNT(*) FROM tests WHERE course_id = $1::int AND test_type = 'practice')
+      total_tests    = (SELECT COUNT(*) FROM tests WHERE course_id = $1::int AND is_published = TRUE),
+      pyq_count      = (SELECT COUNT(*) FROM tests WHERE course_id = $1::int AND test_type = 'pyq' AND is_published = TRUE),
+      mock_count     = (SELECT COUNT(*) FROM tests WHERE course_id = $1::int AND test_type = 'mock' AND is_published = TRUE),
+      practice_count = (SELECT COUNT(*) FROM tests WHERE course_id = $1::int AND test_type = 'practice' AND is_published = TRUE)
     WHERE id = $1::int`,
     [id]
   );
@@ -14618,29 +15466,32 @@ async function updateCourseProgress(db2, userId, courseId, runTx) {
         [userId, cid]
       );
     }
-    const totalLec = await client2.query(
-      `SELECT COUNT(*) FROM lectures
-       WHERE course_id = $1::int
-       AND (visible_after_at IS NULL OR visible_after_at <= EXTRACT(EPOCH FROM NOW()) * 1000)`,
+    const courseType = await getCourseType(client2, cid);
+    const testWhere = progressTestWhere(courseType);
+    const testWhereT = progressTestWhere(courseType, "t");
+    const totals = await client2.query(
+      `SELECT
+         (SELECT COUNT(*)::int FROM lectures WHERE course_id = $1::int AND ${VISIBLE_LECTURE}) AS lec,
+         (SELECT COUNT(*)::int FROM tests WHERE course_id = $1::int AND ${testWhere}) AS tests,
+         (SELECT COUNT(*)::int FROM daily_missions WHERE course_id = $1::int) AS missions`,
       [cid]
     );
-    const totalTests = await client2.query(
-      "SELECT COUNT(*) FROM tests WHERE course_id = $1::int AND is_published = TRUE",
-      [cid]
+    const done = await client2.query(
+      `SELECT
+         (SELECT COUNT(*)::int FROM lecture_progress lp
+          JOIN lectures l ON lp.lecture_id = l.id
+          WHERE lp.user_id = $2 AND l.course_id = $1::int AND lp.is_completed = TRUE AND ${VISIBLE_LECTURE_L}) AS lec,
+         (SELECT COUNT(DISTINCT ta.test_id)::int FROM test_attempts ta
+          JOIN tests t ON ta.test_id = t.id AND t.course_id = $1::int AND ${testWhereT}
+          WHERE ta.user_id = $2 AND ta.status = 'completed') AS tests,
+         (SELECT COUNT(*)::int FROM user_missions um
+          JOIN daily_missions dm ON dm.id = um.mission_id AND dm.course_id = $1::int
+          WHERE um.user_id = $2 AND um.is_completed = TRUE) AS missions`,
+      [cid, userId]
     );
-    const completedLec = await client2.query(
-      `SELECT COUNT(*) FROM lecture_progress lp JOIN lectures l ON lp.lecture_id = l.id
-       WHERE lp.user_id = $1 AND l.course_id = $2::int AND lp.is_completed = TRUE`,
-      [userId, cid]
-    );
-    const completedTests = await client2.query(
-      `SELECT COUNT(DISTINCT test_id) FROM test_attempts
-       WHERE user_id = $1 AND test_id IN (SELECT id FROM tests WHERE course_id = $2::int) AND status = 'completed'`,
-      [userId, cid]
-    );
-    const total = parseInt(totalLec.rows[0].count) + parseInt(totalTests.rows[0].count);
-    const completed = parseInt(completedLec.rows[0].count) + parseInt(completedTests.rows[0].count);
-    const progress = total > 0 ? Math.round(completed / total * 100) : 0;
+    const total = Number(totals.rows[0]?.lec || 0) + Number(totals.rows[0]?.tests || 0) + Number(totals.rows[0]?.missions || 0);
+    const completed = Number(done.rows[0]?.lec || 0) + Number(done.rows[0]?.tests || 0) + Number(done.rows[0]?.missions || 0);
+    const progress = total > 0 ? Math.min(100, Math.round(completed / total * 100)) : 0;
     await client2.query(
       "UPDATE enrollments SET progress_percent = $1 WHERE user_id = $2 AND course_id = $3::int",
       [progress, userId, cid]
@@ -14663,30 +15514,42 @@ async function recomputeAllEnrollmentsProgressForCourse(db2, courseId) {
     return;
   }
   try {
+    const courseType = await getCourseType(db2, cid);
+    const testWhere = progressTestWhere(courseType);
+    const testWhereT = progressTestWhere(courseType, "t");
     await db2.query(
       `WITH
-         -- Course-level totals \u2014 computed once, not once per student
          total_lec AS (
-           SELECT COUNT(*)::bigint AS n FROM lectures WHERE course_id = $1::int
+           SELECT COUNT(*)::bigint AS n FROM lectures
+           WHERE course_id = $1::int AND ${VISIBLE_LECTURE}
          ),
          total_tests AS (
-           SELECT COUNT(*)::bigint AS n FROM tests WHERE course_id = $1::int AND is_published = TRUE
+           SELECT COUNT(*)::bigint AS n FROM tests
+           WHERE course_id = $1::int AND ${testWhere}
          ),
-         -- Per-student lecture completions \u2014 single table scan across all students
+         total_missions AS (
+           SELECT COUNT(*)::bigint AS n FROM daily_missions WHERE course_id = $1::int
+         ),
          lec_done AS (
            SELECT lp.user_id, COUNT(*)::bigint AS n
            FROM lecture_progress lp
            JOIN lectures l ON lp.lecture_id = l.id AND l.course_id = $1::int
-           WHERE lp.is_completed = TRUE
+           WHERE lp.is_completed = TRUE AND ${VISIBLE_LECTURE_L}
            GROUP BY lp.user_id
          ),
-         -- Per-student test completions \u2014 single table scan via JOIN instead of IN (SELECT)
          tests_done AS (
            SELECT ta.user_id, COUNT(DISTINCT ta.test_id)::bigint AS n
            FROM test_attempts ta
-           JOIN tests t ON ta.test_id = t.id AND t.course_id = $1::int AND t.is_published = TRUE
+           JOIN tests t ON ta.test_id = t.id AND t.course_id = $1::int AND ${testWhereT}
            WHERE ta.status = 'completed'
            GROUP BY ta.user_id
+         ),
+         missions_done AS (
+           SELECT um.user_id, COUNT(*)::bigint AS n
+           FROM user_missions um
+           JOIN daily_missions dm ON dm.id = um.mission_id AND dm.course_id = $1::int
+           WHERE um.is_completed = TRUE
+           GROUP BY um.user_id
          )
        UPDATE enrollments AS e
        SET progress_percent = calc.pct
@@ -14695,17 +15558,19 @@ async function recomputeAllEnrollmentsProgressForCourse(db2, courseId) {
            en.user_id,
            en.course_id,
            CASE
-             WHEN (tl.n + tt.n) <= 0 THEN 0
+             WHEN (tl.n + tt.n + tm.n) <= 0 THEN 0
              ELSE LEAST(100, GREATEST(0, ROUND(
-               100.0 * (COALESCE(ld.n, 0) + COALESCE(td.n, 0))
-               / NULLIF(tl.n + tt.n, 0)
+               100.0 * (COALESCE(ld.n, 0) + COALESCE(td.n, 0) + COALESCE(md.n, 0))
+               / NULLIF(tl.n + tt.n + tm.n, 0)
              )))
            END::integer AS pct
          FROM enrollments en
          CROSS JOIN total_lec tl
          CROSS JOIN total_tests tt
-         LEFT JOIN lec_done  ld ON ld.user_id = en.user_id
+         CROSS JOIN total_missions tm
+         LEFT JOIN lec_done ld ON ld.user_id = en.user_id
          LEFT JOIN tests_done td ON td.user_id = en.user_id
+         LEFT JOIN missions_done md ON md.user_id = en.user_id
          WHERE en.course_id = $1::int AND (en.status = 'active' OR en.status IS NULL)
        ) AS calc
        WHERE e.user_id = calc.user_id AND e.course_id = calc.course_id`,
@@ -14715,9 +15580,12 @@ async function recomputeAllEnrollmentsProgressForCourse(db2, courseId) {
     console.error("[Progress] recomputeAllEnrollmentsProgressForCourse failed:", err);
   }
 }
+var VISIBLE_LECTURE, VISIBLE_LECTURE_L;
 var init_progress_utils = __esm({
   "backend/progress-utils.ts"() {
     "use strict";
+    VISIBLE_LECTURE = `(visible_after_at IS NULL OR visible_after_at <= EXTRACT(EPOCH FROM NOW()) * 1000)`;
+    VISIBLE_LECTURE_L = `(l.visible_after_at IS NULL OR l.visible_after_at <= EXTRACT(EPOCH FROM NOW()) * 1000)`;
   }
 });
 
@@ -14904,7 +15772,7 @@ function startLiveClassNotificationScheduler(db2, pool2, sendPushToUsers2) {
         [minScheduleAt, maxScheduleAt]
       );
       for (const lc of classes.rows) {
-        const expiresAt = now + 6 * 36e5;
+        const expiresAt = autoNotificationExpiresAt(now);
         const notifTitle = "\u23F0 Live Class in 30 minutes!";
         const notifMessage = `"${lc.title}" starts in 30 minutes. Get ready!`;
         const PUSH_BATCH_SIZE = 500;
@@ -15236,6 +16104,7 @@ var LIVE_NOTIF_ADVISORY_LOCK_KEY, DOWNLOAD_CLEANUP_RETRY_LOCK_KEY, DOWNLOAD_TOKE
 var init_schedulers = __esm({
   "backend/schedulers.ts"() {
     "use strict";
+    init_auto_notification_expiry();
     init_download_utils();
     init_redis_client();
     init_redis_notification_dedup();
@@ -15513,7 +16382,8 @@ async function registerRoutes(app2) {
   registerStudentMissionMaterialRoutes({
     app: app2,
     db,
-    getAuthUser
+    getAuthUser,
+    updateCourseProgress: updateCourseProgress2
   });
   registerLiveClassRoutes({
     app: app2,
@@ -15741,7 +16611,8 @@ async function registerRoutes(app2) {
     app: app2,
     requireAdmin,
     getAuthUser,
-    getR2Client
+    getR2Client,
+    db
   });
   registerMediaStreamRoutes({
     app: app2,
@@ -15791,7 +16662,8 @@ async function registerRoutes(app2) {
     db,
     requireAdmin,
     getR2Client,
-    recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse2
+    recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse2,
+    runInTransaction
   });
   registerAdminTestRoutes({
     app: app2,
@@ -15828,7 +16700,14 @@ async function registerRoutes(app2) {
   registerAdminDailyMissionRoutes({
     app: app2,
     db,
-    requireAdmin
+    requireAdmin,
+    recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse2
+  });
+  registerAdminContentExportRoutes({
+    app: app2,
+    db,
+    requireAdmin,
+    getR2Client
   });
   registerLiveChatRoutes({
     app: app2,
@@ -15903,6 +16782,7 @@ var init_routes = __esm({
     init_admin_users_and_content_routes();
     init_admin_test_management_routes();
     init_admin_daily_mission_routes();
+    init_admin_content_export_routes();
     init_admin_notification_routes();
     init_admin_course_crud_routes();
     init_book_routes();
