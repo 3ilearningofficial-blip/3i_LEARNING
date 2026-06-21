@@ -12,7 +12,11 @@ import {
   NativeScrollEvent,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { COURSE_BANNER_ASPECT } from "@/constants/courseBanner";
+import {
+  COURSE_BANNER_ASPECT,
+  WELCOME_BANNER_MAX_HEIGHT,
+  WELCOME_BANNER_WIDE_BREAKPOINT,
+} from "@/constants/courseBanner";
 import Colors from "@/constants/colors";
 
 type Props = {
@@ -74,7 +78,12 @@ export default function WelcomeBannerCarousel({
     .filter(Boolean);
 
   const slideWidth = screenWidth;
-  const slideHeight = slideWidth / COURSE_BANNER_ASPECT;
+  const naturalHeight = slideWidth / COURSE_BANNER_ASPECT;
+  const slideHeight =
+    screenWidth >= WELCOME_BANNER_WIDE_BREAKPOINT
+      ? Math.min(naturalHeight, WELCOME_BANNER_MAX_HEIGHT)
+      : naturalHeight;
+  const isWide = screenWidth >= WELCOME_BANNER_WIDE_BREAKPOINT;
   const lastIndex = slides.length - 1;
 
   const scrollToIndex = useCallback(
@@ -144,7 +153,7 @@ export default function WelcomeBannerCarousel({
       </View>
 
       {showControls ? (
-        <View style={styles.dotsRow}>
+        <View style={[styles.dotsRow, isWide && styles.dotsRowWide]}>
           {slides.map((_, i) => (
             <View
               key={`dot-${i}`}
@@ -192,6 +201,7 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingVertical: 10,
   },
+  dotsRowWide: { paddingVertical: 6 },
   dot: {
     width: 8,
     height: 8,
