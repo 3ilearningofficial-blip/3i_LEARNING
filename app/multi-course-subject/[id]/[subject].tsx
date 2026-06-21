@@ -366,8 +366,8 @@ export default function MultiCourseSubjectScreen() {
           <Ionicons name="arrow-back" size={20} color="#fff" />
         </Pressable>
         <View style={styles.headerTextCol}>
-          <Text style={styles.title}>{SUBJECT_LABELS[subjectKey] || getSubjectMeta(subjectKey).label}</Text>
-          <Text style={styles.subtitle} numberOfLines={1}>{course?.title || "Course"}</Text>
+          <Text style={styles.title} numberOfLines={2}>{course?.title || "Course"}</Text>
+          <Text style={styles.subtitle}>{SUBJECT_LABELS[subjectKey] || getSubjectMeta(subjectKey).label}</Text>
         </View>
       </LinearGradient>
 
@@ -404,8 +404,8 @@ export default function MultiCourseSubjectScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
-  header: { flexDirection: "row", alignItems: "flex-start", gap: 12, paddingHorizontal: 16, paddingBottom: 14 },
-  headerTextCol: { flex: 1, gap: 4, paddingTop: 2 },
+  header: { flexDirection: "column", alignItems: "flex-start", gap: 12, paddingHorizontal: 16, paddingBottom: 14 },
+  headerTextCol: { width: "100%", gap: 4 },
   backBtn: { width: 38, height: 38, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" },
   title: { fontSize: 22, fontFamily: "Inter_700Bold", color: "#fff", lineHeight: 28 },
   subtitle: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: "rgba(255,255,255,0.85)" },

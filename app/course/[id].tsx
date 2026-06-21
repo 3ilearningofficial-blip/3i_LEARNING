@@ -865,7 +865,7 @@ setTimeout(function() {
       {(() => {
         const c1 = getCourseAccentColor(course.id);
         const c2 = c1 + "CC";
-        const headerMinHeight = course.thumbnail && headerWidth > 0
+        const headerMinHeight = isTestSeriesCourse && course.thumbnail && headerWidth > 0
           ? Math.min(220, headerWidth / COURSE_BANNER_ASPECT)
           : undefined;
         return (
@@ -2018,7 +2018,7 @@ const styles = StyleSheet.create({
   centered: { flex: 1, alignItems: "center", justifyContent: "center" },
   errorText: { fontSize: 16, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" },
   header: { paddingHorizontal: 20, paddingBottom: 20, gap: 8, overflow: "hidden" },
-  headerCompact: { paddingBottom: 12, gap: 6 },
+  headerCompact: { paddingBottom: 8, gap: 4 },
   headerThumbnail: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, opacity: 0.10 },
   headerTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   backBtn: { width: 38, height: 38, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" },

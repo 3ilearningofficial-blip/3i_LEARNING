@@ -15,7 +15,7 @@ import {
   storeAuthUser,
   type StoredAuthUser,
 } from "@/lib/auth-storage";
-import { registerPushForCurrentUser, unregisterPushForCurrentUser } from "@/lib/pushNotifications";
+import { registerPushForCurrentUser, unregisterPushForCurrentUser, startWebPushVisibilityWatcher, stopWebPushVisibilityWatcher } from "@/lib/pushNotifications";
 import { fetch } from "expo/fetch";
 
 type AuthUser = StoredAuthUser;
@@ -309,6 +309,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     registerPushForCurrentUser().catch((err) => {
       console.warn("[Push] register failed:", err);
     });
+    if (Platform.OS === "web") startWebPushVisibilityWatcher();
+    return () => {
+      if (Platform.OS === "web") stopWebPushVisibilityWatcher();
+    };
   }, [user?.id]);
 
   // Periodic background session keep-alive.

@@ -119,6 +119,9 @@ export async function notifyAdminsInAppAndPush(
   console.log(
     `[AdminNotify] "${opts.title}" — admins=${adminIds.length} expoSent=${pushResult.sent}/${pushResult.tokens} webSent=${pushResult.webSent}/${pushResult.webSubscriptions}`
   );
+  if ((pushResult.webSubscriptions ?? 0) === 0) {
+    console.warn("[AdminNotify] hint: no active web_push_subscriptions for admin(s); browser push skipped (in-app still delivered)");
+  }
 }
 
 async function dedupAdminEvent(

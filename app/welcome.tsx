@@ -22,6 +22,8 @@ import CourseBannerImage from "@/components/CourseBannerImage";
 import { COURSE_BANNER_ASPECT } from "@/constants/courseBanner";
 import { getCourseExplorePath } from "@/lib/course-explore-path";
 import { HOME_TEST_SERIES_CHIP } from "@/constants/homeCategories";
+import WelcomeBannerCarousel from "@/components/WelcomeBannerCarousel";
+import { parseWelcomeBannerUrls } from "@/lib/welcome-banners";
 
 const DEFAULT_FEATURES = [
   { icon: "videocam", color: "#1A56DB", title: "Video Courses", desc: "Structured courses for NDA, CDS, AFCAT with live & recorded lectures" },
@@ -464,6 +466,14 @@ export default function WelcomeScreen() {
 
   const extraSections = parseJsonArray<ExtraSection>(cfg.welcome_extra_sections_json, []);
   const features = getFeatures(cfg);
+  const welcomeBannerUrls = React.useMemo(
+    () => parseWelcomeBannerUrls(cfg.welcome_banner_images_json),
+    [cfg.welcome_banner_images_json],
+  );
+  const resolveBannerUrl = React.useCallback(
+    (raw: string) => resolveWelcomeMediaUrl(raw, getApiUrl()),
+    [],
+  );
   const allowLoggedInWelcome =
     isWeb &&
     (params.fromApp === "1" ||
@@ -859,6 +869,10 @@ export default function WelcomeScreen() {
               <Text style={styles.websiteLoginButtonText}>{user?.id ? "Open App" : "Login/Register"}</Text>
             </Pressable>
           </View>
+        ) : null}
+
+        {welcomeBannerUrls.length > 0 ? (
+          <WelcomeBannerCarousel urls={welcomeBannerUrls} resolveUrl={resolveBannerUrl} />
         ) : null}
 
         <ScrollView style={styles.websiteScroll} contentContainerStyle={styles.websiteScrollContent} showsVerticalScrollIndicator={false}>
@@ -1296,6 +1310,10 @@ export default function WelcomeScreen() {
             </>
           )}
         </View>
+
+        {welcomeBannerUrls.length > 0 ? (
+          <WelcomeBannerCarousel urls={welcomeBannerUrls} resolveUrl={resolveBannerUrl} />
+        ) : null}
 
         {/* CTAs */}
         <View style={[styles.ctaRow, webHero && styles.ctaRowWeb]}>

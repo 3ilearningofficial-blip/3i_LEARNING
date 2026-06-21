@@ -11,12 +11,19 @@ import { uploadToR2 } from "@/lib/r2-upload";
 import {
   WELCOME_LOGO_DISPLAY_ADMIN_HINT,
 } from "@/lib/welcome-image-sizes";
+import {
+  MAX_WELCOME_BANNERS,
+  parseWelcomeBannerUrls,
+  serializeWelcomeBannerUrls,
+  validateWelcomeBannerJsonForSave,
+} from "@/lib/welcome-banners";
+import { COURSE_BANNER_RECOMMENDED } from "@/constants/courseBanner";
+import WelcomeBannerPreview from "@/components/admin/WelcomeBannerPreview";
 import Colors from "@/constants/colors";
 import { useAppTheme } from "@/context/AppThemeContext";
 
 function validateWelcomeJsonForSave(settings: Record<string, string>): string | null {
-  void settings;
-  return null;
+  return validateWelcomeBannerJsonForSave(settings);
 }
 
 export function WelcomeSettingsTab() {
@@ -27,11 +34,16 @@ export function WelcomeSettingsTab() {
   const [loaded, setLoaded] = React.useState(false);
   const [saveMsg, setSaveMsg] = React.useState("");
   const [welcomeUploadProgress, setWelcomeUploadProgress] = React.useState<{ key: string; pct: number } | null>(null);
+  const [bannerSlots, setBannerSlots] = React.useState<string[]>([]);
+  const [bannerUpload, setBannerUpload] = React.useState<{ slot: number; pct: number } | null>(null);
+  const welcomeAbortRef = React.useRef<AbortController | null>(null);
+  const bannerAbortRef = React.useRef<AbortController | null>(null);
 
   const defaults: Record<string, string> = {
     welcome_tagline: "Master Mathematics Under Pankaj Sir Guidance",
     welcome_brand_text: "3i Learning",
     welcome_logo_url: "",
+    welcome_banner_images_json: "[]",
     welcome_show_get_app: "true",
     welcome_get_app_title: "Join students on the app today!",
     welcome_get_app_subtitle: "You can download the app from iOS, Play Store, or continue on web.",
@@ -65,12 +77,16 @@ export function WelcomeSettingsTab() {
         const res = await authFetch(new URL("/api/site-settings", baseUrl).toString());
         if (res.ok) {
           const data = await res.json();
-          setSettings({ ...defaults, ...data });
+          const merged = { ...defaults, ...data };
+          setSettings(merged);
+          setBannerSlots(parseWelcomeBannerUrls(merged.welcome_banner_images_json));
         } else {
           setSettings({ ...defaults });
+          setBannerSlots([]);
         }
       } catch {
         setSettings({ ...defaults });
+        setBannerSlots([]);
       }
       setLoaded(true);
     })();
@@ -89,7 +105,11 @@ export function WelcomeSettingsTab() {
     }
     setSaving(true);
     try {
-      const res = await apiRequest("PUT", "/api/admin/site-settings", { settings });
+      const payload = {
+        ...settings,
+        welcome_banner_images_json: serializeWelcomeBannerUrls(bannerSlots),
+      };
+      await apiRequest("PUT", "/api/admin/site-settings", { settings: payload });
       await qc.invalidateQueries({ queryKey: ["/api/site-settings"] });
       if (Platform.OS === "web") {
         setSaveMsg("✅ Settings saved successfully!");
@@ -114,6 +134,65 @@ export function WelcomeSettingsTab() {
   const set = (key: string, v: string) => setSettings(prev => ({ ...prev, [key]: v }));
   const toggle = (key: string) => set(key, val(key) === "true" ? "false" : "true");
 
+  const cancelWelcomeUpload = () => {
+    welcomeAbortRef.current?.abort();
+    welcomeAbortRef.current = null;
+    setWelcomeUploadProgress(null);
+  };
+
+  const cancelBannerUpload = () => {
+    bannerAbortRef.current?.abort();
+    bannerAbortRef.current = null;
+    setBannerUpload(null);
+  };
+
+  const runWelcomeUpload = async (settingKey: string, fileUri: string, fileName: string, mimeType: string, contentLength?: number) => {
+    const controller = new AbortController();
+    welcomeAbortRef.current = controller;
+    setWelcomeUploadProgress({ key: settingKey, pct: 0 });
+    try {
+      const { publicUrl } = await uploadToR2(fileUri, fileName, mimeType, "images", {
+        onProgress: (pct) => setWelcomeUploadProgress({ key: settingKey, pct }),
+        signal: controller.signal,
+        contentLength,
+      });
+      set(settingKey, publicUrl);
+    } catch (err: any) {
+      if (err?.name !== "AbortError") {
+        Alert.alert("Upload Failed", err?.message || "Could not upload image.");
+      }
+    } finally {
+      if (welcomeAbortRef.current === controller) welcomeAbortRef.current = null;
+      setWelcomeUploadProgress(null);
+    }
+  };
+
+  const runBannerUpload = async (slotIndex: number, fileUri: string, fileName: string, mimeType: string, contentLength?: number) => {
+    const controller = new AbortController();
+    bannerAbortRef.current = controller;
+    setBannerUpload({ slot: slotIndex, pct: 0 });
+    try {
+      const { publicUrl } = await uploadToR2(fileUri, fileName, mimeType, "images", {
+        onProgress: (pct) => setBannerUpload({ slot: slotIndex, pct }),
+        signal: controller.signal,
+        contentLength,
+      });
+      setBannerSlots((prev) => {
+        const next = [...prev];
+        while (next.length <= slotIndex) next.push("");
+        next[slotIndex] = publicUrl;
+        return next;
+      });
+    } catch (err: any) {
+      if (err?.name !== "AbortError") {
+        Alert.alert("Upload Failed", err?.message || "Could not upload image.");
+      }
+    } finally {
+      if (bannerAbortRef.current === controller) bannerAbortRef.current = null;
+      setBannerUpload(null);
+    }
+  };
+
   const pickImageFor = async (settingKey: string) => {
     if (Platform.OS === "web") {
       const input = document.createElement("input");
@@ -122,22 +201,11 @@ export function WelcomeSettingsTab() {
       input.onchange = async (e: any) => {
         const file = e.target.files?.[0];
         if (!file) return;
-        setWelcomeUploadProgress({ key: settingKey, pct: 0 });
         const blobUrl = URL.createObjectURL(file);
         try {
-          const { publicUrl } = await uploadToR2(
-            blobUrl,
-            file.name,
-            file.type || "image/jpeg",
-            "images",
-            (pct) => setWelcomeUploadProgress({ key: settingKey, pct })
-          );
-          set(settingKey, publicUrl);
-        } catch (err: any) {
-          Alert.alert("Upload Failed", err?.message || "Could not upload image.");
+          await runWelcomeUpload(settingKey, blobUrl, file.name, file.type || "image/jpeg", file.size);
         } finally {
           URL.revokeObjectURL(blobUrl);
-          setWelcomeUploadProgress(null);
         }
       };
       input.click();
@@ -156,27 +224,90 @@ export function WelcomeSettingsTab() {
       });
       if (!result.canceled && result.assets[0]) {
         const asset = result.assets[0];
-        setWelcomeUploadProgress({ key: settingKey, pct: 0 });
-        try {
-          const { publicUrl } = await uploadToR2(
-            asset.uri,
-            asset.fileName || `welcome-${Date.now()}.jpg`,
-            asset.mimeType || "image/jpeg",
-            "images",
-            (pct) => setWelcomeUploadProgress({ key: settingKey, pct })
-          );
-          set(settingKey, publicUrl);
-        } catch (uploadErr: any) {
-          Alert.alert("Upload Failed", uploadErr?.message || "Could not upload image.");
-        } finally {
-          setWelcomeUploadProgress(null);
-        }
+        await runWelcomeUpload(
+          settingKey,
+          asset.uri,
+          asset.fileName || `welcome-${Date.now()}.jpg`,
+          asset.mimeType || "image/jpeg",
+          asset.fileSize,
+        );
       }
     } catch (err: any) {
       setWelcomeUploadProgress(null);
       Alert.alert("Upload Failed", err?.message || "Could not upload image.");
     }
   };
+
+  const pickBannerForSlot = async (slotIndex: number) => {
+    if (Platform.OS === "web") {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = "image/*";
+      input.onchange = async (e: any) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        const blobUrl = URL.createObjectURL(file);
+        try {
+          await runBannerUpload(slotIndex, blobUrl, file.name, file.type || "image/jpeg", file.size);
+        } finally {
+          URL.revokeObjectURL(blobUrl);
+        }
+      };
+      input.click();
+      return;
+    }
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert("Permission needed", "Allow photo library access to pick an image.");
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: false,
+        quality: 0.85,
+      });
+      if (!result.canceled && result.assets[0]) {
+        const asset = result.assets[0];
+        await runBannerUpload(
+          slotIndex,
+          asset.uri,
+          asset.fileName || `welcome-banner-${Date.now()}.jpg`,
+          asset.mimeType || "image/jpeg",
+          asset.fileSize,
+        );
+      }
+    } catch (err: any) {
+      setBannerUpload(null);
+      Alert.alert("Upload Failed", err?.message || "Could not upload image.");
+    }
+  };
+
+  const updateBannerSlot = (index: number, url: string) => {
+    setBannerSlots((prev) => {
+      const next = [...prev];
+      while (next.length <= index) next.push("");
+      next[index] = url;
+      return next;
+    });
+  };
+
+  const removeBannerSlot = (index: number) => {
+    setBannerSlots((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const addBannerSlot = () => {
+    setBannerSlots((prev) => {
+      const filled = prev.filter((u) => u.trim()).length;
+      if (filled >= MAX_WELCOME_BANNERS) {
+        Alert.alert("Limit reached", `Maximum ${MAX_WELCOME_BANNERS} banner images allowed.`);
+        return prev;
+      }
+      return [...prev, ""];
+    });
+  };
+
+  const bannerSlotRows = bannerSlots.length > 0 ? bannerSlots : [];
 
   if (!loaded) return <ActivityIndicator color={Colors.light.primary} style={{ marginTop: 40 }} />;
 
@@ -222,11 +353,12 @@ export function WelcomeSettingsTab() {
           </Pressable>
         </View>
         {uploadingHere ? (
-          <View style={{ gap: 4 }}>
-            <Text style={{ fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.textSecondary }}>Uploading… {pct}%</Text>
-            <View style={{ height: 8, borderRadius: 4, overflow: "hidden", backgroundColor: "#E5E7EB", width: "100%" }}>
-              <View style={{ height: "100%", width: `${pct}%`, backgroundColor: Colors.light.primary, borderRadius: 4 }} />
-            </View>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8, padding: 10, borderRadius: 10, backgroundColor: "#EEF2FF", borderWidth: 1, borderColor: "#C7D2FE" }}>
+            <ActivityIndicator size="small" color={Colors.light.primary} />
+            <Text style={{ flex: 1, fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>Uploading… {pct}%</Text>
+            <Pressable onPress={cancelWelcomeUpload} hitSlop={8}>
+              <Ionicons name="close-circle" size={22} color="#EF4444" />
+            </Pressable>
           </View>
         ) : null}
       </View>
@@ -276,6 +408,85 @@ export function WelcomeSettingsTab() {
           <Text style={labelStyle}>Tagline (single line on web)</Text>
           <TextInput style={inputStyle} value={val("welcome_tagline")} onChangeText={v => set("welcome_tagline", v)} placeholder="Master Mathematics Under Pankaj Sir Guidance" />
         </View>
+      </View>
+
+      <View style={{ backgroundColor: colors.card, borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: colors.border }}>
+        <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: colors.text }}>Homepage banner carousel</Text>
+        <Text style={{ fontSize: 12, color: colors.textMuted, fontFamily: "Inter_400Regular", lineHeight: 17 }}>
+          Promotional banners appear on the welcome page directly under the header. Upload {COURSE_BANNER_RECOMMENDED} (8:3). The full image is shown — nothing is cropped. Leave empty to hide the carousel.
+        </Text>
+        {bannerSlotRows.map((url, index) => {
+          const uploadingHere = bannerUpload?.slot === index;
+          const pct = uploadingHere ? Math.max(0, Math.min(100, bannerUpload!.pct)) : 0;
+          const busyBannerUpload = bannerUpload != null;
+          return (
+            <View key={`banner-slot-${index}`} style={{ gap: 8, paddingBottom: 12, borderBottomWidth: index < bannerSlotRows.length - 1 ? 1 : 0, borderBottomColor: colors.border }}>
+              <Text style={labelStyle}>Banner {index + 1}</Text>
+              {url.trim() ? (
+                <WelcomeBannerPreview uri={url.trim()} onClear={() => updateBannerSlot(index, "")} showHint={false} />
+              ) : null}
+              {uploadingHere ? (
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8, padding: 10, borderRadius: 10, backgroundColor: "#EEF2FF", borderWidth: 1, borderColor: "#C7D2FE" }}>
+                  <ActivityIndicator size="small" color={Colors.light.primary} />
+                  <Text style={{ flex: 1, fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>Uploading… {pct}%</Text>
+                  <Pressable onPress={cancelBannerUpload} hitSlop={8}>
+                    <Ionicons name="close-circle" size={22} color="#EF4444" />
+                  </Pressable>
+                </View>
+              ) : null}
+              <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
+                <TextInput
+                  style={[inputStyle, { flex: 1 }]}
+                  value={url}
+                  onChangeText={(v) => updateBannerSlot(index, v)}
+                  placeholder="https://..."
+                  autoCapitalize="none"
+                  editable={!uploadingHere}
+                />
+                <Pressable
+                  onPress={() => pickBannerForSlot(index)}
+                  disabled={busyBannerUpload}
+                  style={{
+                    backgroundColor: busyBannerUpload && !uploadingHere ? Colors.light.border : Colors.light.secondary,
+                    paddingHorizontal: 12,
+                    paddingVertical: 10,
+                    borderRadius: 10,
+                    opacity: busyBannerUpload && !uploadingHere ? 0.6 : 1,
+                  }}
+                >
+                  <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>{uploadingHere ? "…" : "Upload"}</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => removeBannerSlot(index)}
+                  disabled={busyBannerUpload}
+                  style={{ padding: 8, opacity: busyBannerUpload ? 0.5 : 1 }}
+                >
+                  <Ionicons name="trash-outline" size={20} color="#EF4444" />
+                </Pressable>
+              </View>
+            </View>
+          );
+        })}
+        <Pressable
+          onPress={addBannerSlot}
+          disabled={bannerUpload != null || bannerSlots.filter((u) => u.trim()).length >= MAX_WELCOME_BANNERS}
+          style={{
+            borderWidth: 1.5,
+            borderColor: Colors.light.primary,
+            borderStyle: "dashed",
+            borderRadius: 10,
+            paddingVertical: 12,
+            alignItems: "center",
+            flexDirection: "row",
+            justifyContent: "center",
+            gap: 8,
+            backgroundColor: "#EEF2FF",
+            opacity: bannerUpload != null ? 0.6 : 1,
+          }}
+        >
+          <Ionicons name="add-circle-outline" size={18} color={Colors.light.primary} />
+          <Text style={{ fontSize: 13, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>Add banner image</Text>
+        </Pressable>
       </View>
 
       <View style={{ backgroundColor: colors.card, borderRadius: 16, padding: 18, gap: 4, borderWidth: 1, borderColor: colors.border }}>

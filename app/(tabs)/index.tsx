@@ -24,7 +24,7 @@ import CourseBannerImage from "@/components/CourseBannerImage";
 import { COURSE_BANNER_ASPECT } from "@/constants/courseBanner";
 import { buildHomeCategoryChips, filterCoursesByHomeCategory } from "@/constants/homeCategories";
 import { getCourseExplorePath } from "@/lib/course-explore-path";
-import { getTestSeriesMetaLine } from "@/lib/course-category-label";
+import { getCourseCategoryLabel, getTestSeriesCardMetaLine } from "@/lib/course-category-label";
 import { ensurePushRegisteredWithGesture } from "@/lib/pushNotifications";
 
 interface Course {
@@ -590,6 +590,7 @@ function getTestSeriesRegularCount(course: Course): number {
 
 function TestSeriesHomeCard({ course }: { course: Course }) {
   const { colors } = useAppTheme();
+  const color = getCourseAccentColor(course.id);
   const isFreeCourse = course.is_free || parseFloat(course.price || "0") <= 0;
   const { purchase, isPending, paymentModal } = useCoursePurchase({
     courseId: course.id,
@@ -601,7 +602,8 @@ function TestSeriesHomeCard({ course }: { course: Course }) {
     ? Math.round((1 - parseFloat(course.price) / parseFloat(course.original_price)) * 100)
     : 0;
   const language = (course.course_language || "HINGLISH").toUpperCase();
-  const metaLine = getTestSeriesMetaLine(course);
+  const level = course.level || "Beginner";
+  const cardMetaLine = getTestSeriesCardMetaLine(course);
   const tests = getTestSeriesRegularCount(course);
   const practice = Number(course.practice_count) || 0;
   const pyq = Number(course.pyq_count) || 0;
@@ -616,13 +618,17 @@ function TestSeriesHomeCard({ course }: { course: Course }) {
       <CourseBanner course={course} />
       <View style={[styles.multiCourseBody, { backgroundColor: colors.card }]}>
         <View style={styles.multiTopRow}>
-          <Text style={[styles.multiMetaText, { color: colors.textSecondary, flexShrink: 1 }]} numberOfLines={1}>
-            {metaLine}
-          </Text>
+          <View style={[styles.multiBadgeRow, { flexShrink: 1 }]}>
+            <Text style={[styles.multiCategory, { color }]}>{getCourseCategoryLabel(course)}</Text>
+            <Text style={styles.multiLevel}>{level}</Text>
+          </View>
           <View style={styles.multiTopRightGroup}>
             <View style={styles.multiLanguagePill}><Text style={styles.multiLanguageText}>{language}</Text></View>
           </View>
         </View>
+        {cardMetaLine ? (
+          <Text style={[styles.multiMetaText, { color: colors.textSecondary }]} numberOfLines={1}>{cardMetaLine}</Text>
+        ) : null}
         <Text style={[styles.multiTitle, { color: colors.text }]} numberOfLines={2}>{course.title}</Text>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 3 }}>

@@ -99,3 +99,21 @@ export async function unregisterPushForCurrentUser(): Promise<void> {
   currentToken = null;
 }
 
+export type WebPushConnectionStatus = {
+  supported: boolean;
+  permission: NotificationPermission | "unsupported";
+  connected: boolean;
+};
+
+export function startWebPushVisibilityWatcher(): void {
+  // Native only — web uses pushNotifications.web.ts
+}
+
+export function stopWebPushVisibilityWatcher(): void {
+  // Native only — web uses pushNotifications.web.ts
+}
+
+export async function getWebPushConnectionStatus(): Promise<WebPushConnectionStatus> {
+  return { supported: false, permission: "unsupported", connected: false };
+}
+

@@ -6,6 +6,13 @@ export function getCourseCategoryLabel(course: {
   return (course.category || "").trim() || "Course";
 }
 
+export function getTestSeriesCardMetaLine(course: {
+  exam?: string | null;
+  subject?: string | null;
+}): string {
+  return [course.exam, course.subject].filter(Boolean).join(" · ");
+}
+
 export function getTestSeriesMetaLine(course: {
   course_type?: string | null;
   category?: string | null;

@@ -10,7 +10,7 @@ import { notificationsQueryKey } from "@/lib/query-keys";
 import Colors from "@/constants/colors";
 import { useAppTheme } from "@/context/AppThemeContext";
 import { useAuth } from "@/context/AuthContext";
-import { ensurePushRegisteredWithGesture } from "@/lib/pushNotifications";
+import { ensurePushRegisteredWithGesture, getWebPushConnectionStatus, type WebPushConnectionStatus } from "@/lib/pushNotifications";
 
 interface Notification {
   id: number;
@@ -54,10 +54,44 @@ export default function NotificationsScreen() {
 
   const isAdmin = user?.role === "admin";
   const unread = notifications.filter((n) => !n.is_read).length;
+  const [webPushStatus, setWebPushStatus] = React.useState<WebPushConnectionStatus | null>(null);
+  const [webPushRetrying, setWebPushRetrying] = React.useState(false);
+
+  const refreshWebPushStatus = React.useCallback(async () => {
+    if (Platform.OS !== "web" || !isAdmin) {
+      setWebPushStatus(null);
+      return;
+    }
+    const status = await getWebPushConnectionStatus();
+    setWebPushStatus(status);
+  }, [isAdmin]);
 
   React.useEffect(() => {
-    if (isAdmin) ensurePushRegisteredWithGesture().catch(() => {});
-  }, [isAdmin]);
+    if (!isAdmin) return;
+    ensurePushRegisteredWithGesture()
+      .then(() => refreshWebPushStatus())
+      .catch(() => {});
+  }, [isAdmin, refreshWebPushStatus]);
+
+  React.useEffect(() => {
+    void refreshWebPushStatus();
+  }, [refreshWebPushStatus]);
+
+  const retryWebPush = async () => {
+    setWebPushRetrying(true);
+    try {
+      await ensurePushRegisteredWithGesture();
+      await refreshWebPushStatus();
+    } finally {
+      setWebPushRetrying(false);
+    }
+  };
+
+  const showWebPushBanner =
+    Platform.OS === "web" &&
+    isAdmin &&
+    webPushStatus?.supported &&
+    (webPushStatus.permission !== "granted" || !webPushStatus.connected);
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -78,6 +112,38 @@ export default function NotificationsScreen() {
           {unread === 0 && <View style={{ width: 36 }} />}
         </View>
       </LinearGradient>
+
+      {showWebPushBanner ? (
+        <View style={[styles.webPushBanner, { backgroundColor: isDarkMode ? "#1E293B" : "#FFFBEB", borderColor: isDarkMode ? "#334155" : "#FDE68A" }]}>
+          <Ionicons name="notifications-outline" size={20} color="#D97706" />
+          <View style={{ flex: 1, gap: 2 }}>
+            <Text style={[styles.webPushBannerTitle, { color: colors.text }]}>
+              {webPushStatus?.permission !== "granted"
+                ? "Browser notifications are blocked"
+                : "Browser push not connected"}
+            </Text>
+            <Text style={[styles.webPushBannerText, { color: colors.textSecondary }]}>
+              {webPushStatus?.permission !== "granted"
+                ? "Allow notifications for 3ilearning.in in your browser site settings, then tap Enable below."
+                : "Tap Enable to register this browser for OS alerts when new admin events arrive."}
+            </Text>
+          </View>
+          <Pressable
+            onPress={() => void retryWebPush()}
+            disabled={webPushRetrying}
+            style={[styles.webPushBannerBtn, webPushRetrying && { opacity: 0.6 }]}
+          >
+            <Text style={styles.webPushBannerBtnText}>{webPushRetrying ? "…" : "Enable"}</Text>
+          </Pressable>
+        </View>
+      ) : null}
+
+      {Platform.OS === "web" && isAdmin && webPushStatus?.connected ? (
+        <View style={[styles.webPushOk, { backgroundColor: isDarkMode ? "#052E16" : "#ECFDF5", borderColor: isDarkMode ? "#14532D" : "#BBF7D0" }]}>
+          <Ionicons name="checkmark-circle" size={16} color="#16A34A" />
+          <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#16A34A" }}>Browser push connected</Text>
+        </View>
+      ) : null}
 
       <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 32 }]}>
         {isLoading ? (
@@ -148,6 +214,36 @@ const styles = StyleSheet.create({
   headerTitle: { flex: 1, fontSize: 18, fontFamily: "Inter_700Bold", color: "#fff" },
   badge: { backgroundColor: "#EF4444", borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2 },
   badgeText: { fontSize: 12, fontFamily: "Inter_700Bold", color: "#fff" },
+  webPushBanner: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    padding: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  webPushBannerTitle: { fontSize: 13, fontFamily: "Inter_700Bold" },
+  webPushBannerText: { fontSize: 12, fontFamily: "Inter_400Regular", lineHeight: 17 },
+  webPushBannerBtn: {
+    backgroundColor: Colors.light.primary,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  webPushBannerBtnText: { fontSize: 12, fontFamily: "Inter_700Bold", color: "#fff" },
+  webPushOk: {
+    marginHorizontal: 16,
+    marginTop: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
   content: { padding: 16, gap: 10 },
   empty: { alignItems: "center", paddingTop: 60, gap: 10 },
   emptyTitle: { fontSize: 16, fontFamily: "Inter_600SemiBold", color: Colors.light.text },

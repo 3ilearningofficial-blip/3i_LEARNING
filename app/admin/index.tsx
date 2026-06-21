@@ -21,6 +21,7 @@ import { MULTI_SUBJECTS, SubjectIcon } from "@/constants/multiSubjects";
 import BulkUploadModal from "@/components/BulkUploadModal";
 import { parseMissionQuestionsPdf } from "@/lib/mission-bulk-parse";
 import { downloadAdminContent } from "@/lib/admin-export";
+import { registerPushForCurrentUser, ensurePushRegisteredWithGesture } from "@/lib/pushNotifications";
 import { AdminExportDownloadButton } from "@/components/admin/AdminExportDownloadButton";
 import SortableList from "@/components/admin/SortableList";
 import SortableItem from "@/components/admin/SortableItem";
@@ -311,6 +312,16 @@ export default function AdminDashboard() {
     const valid: AdminTab[] = ["welcome", "courses", "tests", "materials", "missions", "notifications", "aiTutor", "books", "support", "analytics", "users"];
     if (valid.includes(t as AdminTab)) setActiveTab(t as AdminTab);
   }, [adminTabParam]);
+
+  useEffect(() => {
+    if (Platform.OS !== "web" || !isAdmin) return;
+    registerPushForCurrentUser().catch(() => {});
+  }, [isAdmin]);
+
+  const openAdminAlerts = () => {
+    ensurePushRegisteredWithGesture().catch(() => {});
+    router.push("/notifications" as any);
+  };
   const [aiDoubtDays, setAiDoubtDays] = useState<"all" | "7" | "30">("all");
   const [aiDoubtTopic, setAiDoubtTopic] = useState<string>("all");
   const [aiDoubtStudent, setAiDoubtStudent] = useState("");
@@ -4146,9 +4157,28 @@ export default function AdminDashboard() {
                   </Text>
                 </View>
               </View>
-              <View style={{ backgroundColor: "#DCFCE7", borderRadius: 20, paddingHorizontal: 14, paddingVertical: 7, flexDirection: "row", alignItems: "center", gap: 7 }}>
-                <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: "#22C55E" }} />
-                <Text style={{ fontSize: 14, fontFamily: "Inter_600SemiBold", color: "#16A34A" }}>Admin</Text>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                <Pressable
+                  onPress={openAdminAlerts}
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 7,
+                    backgroundColor: colors.card,
+                    borderRadius: 20,
+                    paddingHorizontal: 14,
+                    paddingVertical: 7,
+                    borderWidth: 1,
+                    borderColor: colors.border,
+                  }}
+                >
+                  <Ionicons name="notifications-outline" size={18} color={Colors.light.primary} />
+                  <Text style={{ fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>Admin Alerts</Text>
+                </Pressable>
+                <View style={{ backgroundColor: "#DCFCE7", borderRadius: 20, paddingHorizontal: 14, paddingVertical: 7, flexDirection: "row", alignItems: "center", gap: 7 }}>
+                  <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: "#22C55E" }} />
+                  <Text style={{ fontSize: 14, fontFamily: "Inter_600SemiBold", color: "#16A34A" }}>Admin</Text>
+                </View>
               </View>
             </View>
             {tabContent}
@@ -4167,6 +4197,11 @@ export default function AdminDashboard() {
                 <Text style={styles.headerTitle}>Admin Dashboard</Text>
                 <Text style={styles.headerSub}>3i Learning · {user?.name}</Text>
               </View>
+              {Platform.OS === "web" && (
+                <Pressable onPress={openAdminAlerts} style={{ width: 34, height: 34, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.12)", alignItems: "center", justifyContent: "center", marginRight: 8 }}>
+                  <Ionicons name="notifications-outline" size={18} color="#fff" />
+                </Pressable>
+              )}
               {Platform.OS === "web" && (
                 <Pressable onPress={() => router.replace("/(tabs)")} style={{ width: 34, height: 34, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.12)", alignItems: "center", justifyContent: "center" }}>
                   <Ionicons name="arrow-back" size={18} color="#fff" />
