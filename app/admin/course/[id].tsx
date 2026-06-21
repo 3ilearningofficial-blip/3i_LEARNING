@@ -23,6 +23,7 @@ import SortableList from "@/components/admin/SortableList";
 import SortableItem from "@/components/admin/SortableItem";
 import { MULTI_SUBJECTS, SubjectIcon, getSubjectMeta } from "@/constants/multiSubjects";
 import { downloadAdminContent } from "@/lib/admin-export";
+import { getCourseCategoryLabel } from "@/lib/course-category-label";
 import { AdminExportDownloadButton } from "@/components/admin/AdminExportDownloadButton";
 import AdminLectureAddBody, { type AddContentMode } from "@/components/admin/AdminLectureAddBody";
 import AdminMaterialAddBody from "@/components/admin/AdminMaterialAddBody";
@@ -1299,7 +1300,7 @@ export default function AdminCourseScreen() {
         teacherName: data.teacherName,
         price: parseFloat(data.price) || 0,
         originalPrice: parseFloat(data.originalPrice) || 0,
-        category: data.category || (isTestSeriesEdit ? "Test Series" : course?.category || "Course"),
+        category: isTestSeriesEdit ? "Test Series" : (data.category || course?.category || "Course"),
         subject: data.subject,
         exam: data.exam,
         isFree: data.isFree,
@@ -1346,7 +1347,7 @@ export default function AdminCourseScreen() {
         teacherName: primaryTeacher.name || c.teacher_name || "3i Learning",
         price: parseFloat(String(c.price)) || 0,
         originalPrice: parseFloat(String(c.original_price)) || 0,
-        category: c.category || (isTestSeriesCourse ? "Test Series" : "Course"),
+        category: isTestSeriesCourse ? "Test Series" : (c.category || "Course"),
         isFree: c.is_free,
         level: c.level || "Beginner",
         durationHours: parseFloat(String(c.duration_hours)) || 0,
@@ -1594,7 +1595,7 @@ export default function AdminCourseScreen() {
                     { label: "Title", value: course.title },
                     { label: "Exam", value: (course as any).exam || "—" },
                     { label: "Subject", value: (course as any).subject || "—" },
-                    { label: "Category", value: course.category || "—" },
+                    { label: "Category", value: getCourseCategoryLabel(course) },
                     { label: "Level", value: course.level || "—" },
                     { label: "Language", value: (course as any).course_language || "—" },
                     { label: "Teacher", value: course.teacher_name || "—" },

@@ -24,6 +24,7 @@ import CourseBannerImage from "@/components/CourseBannerImage";
 import { COURSE_BANNER_ASPECT } from "@/constants/courseBanner";
 import { buildHomeCategoryChips, filterCoursesByHomeCategory } from "@/constants/homeCategories";
 import { getCourseExplorePath } from "@/lib/course-explore-path";
+import { getTestSeriesMetaLine } from "@/lib/course-category-label";
 import { ensurePushRegisteredWithGesture } from "@/lib/pushNotifications";
 
 interface Course {
@@ -585,15 +586,6 @@ function getTestSeriesRegularCount(course: Course): number {
   const pyq = Number(course.pyq_count) || 0;
   const practice = Number(course.practice_count) || 0;
   return Math.max(0, (Number(course.total_tests) || 0) - mock - pyq - practice);
-}
-
-function getTestSeriesMetaLine(course: Course): string {
-  return [
-    course.category || "Test Series",
-    course.exam,
-    course.subject,
-    course.level || "Beginner",
-  ].filter(Boolean).join(" · ");
 }
 
 function TestSeriesHomeCard({ course }: { course: Course }) {

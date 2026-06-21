@@ -15,6 +15,7 @@ import { getApiUrl, getBaseUrl, authFetch, apiRequest } from "@/lib/query-client
 import { myAttemptsSummaryQueryKey, testQueryKey } from "@/lib/query-keys";
 import { useAuth } from "@/context/AuthContext";
 import { WebView } from "react-native-webview";
+import { getCourseCategoryLabel } from "@/lib/course-category-label";
 
 interface Test {
   id: number;
@@ -613,9 +614,9 @@ export default function TestSeriesScreen() {
                           <Ionicons name="clipboard-outline" size={20} color={theme.accent} />
                         </View>
                         <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-                          {course.category ? (
+                          {getCourseCategoryLabel(course) ? (
                             <View style={{ backgroundColor: theme.accent + "18", borderRadius: 6, paddingHorizontal: 9, paddingVertical: 4 }}>
-                              <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: theme.accent }}>{course.category}</Text>
+                              <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: theme.accent }}>{getCourseCategoryLabel(course)}</Text>
                             </View>
                           ) : null}
                           <View style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: "#DCFCE7", alignItems: "center", justifyContent: "center" }}>
@@ -660,9 +661,9 @@ export default function TestSeriesScreen() {
                         <View style={{ flex: 1, gap: 2 }}>
                           <Text style={{ fontSize: 15, fontFamily: "Inter_700Bold", color: Colors.light.text }} numberOfLines={2}>{course.title}</Text>
                           <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                            {course.category && (
+                            {getCourseCategoryLabel(course) && (
                               <View style={{ backgroundColor: "#EEF2FF", borderRadius: 5, paddingHorizontal: 8, paddingVertical: 3 }}>
-                                <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>{course.category}</Text>
+                                <Text style={{ fontSize: 11, fontFamily: "Inter_700Bold", color: Colors.light.primary }}>{getCourseCategoryLabel(course)}</Text>
                               </View>
                             )}
                             {course.isEnrolled ? (

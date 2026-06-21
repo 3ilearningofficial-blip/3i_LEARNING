@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useMemo } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable,
-  Platform, ActivityIndicator, Alert, Modal, Image,
+  Platform, ActivityIndicator, Alert, Modal, Image, useWindowDimensions,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
@@ -30,6 +30,7 @@ import { DEFAULT_LIVE_RECORDING_SECTION, getContentFolderRootName } from "@share
 import { getCourseAccentColor } from "@shared/courseTheme";
 import { COURSE_BANNER_ASPECT } from "@/constants/courseBanner";
 import { useDocumentVisibility } from "@/lib/useDocumentVisibility";
+import { getCourseCategoryLabel } from "@/lib/course-category-label";
 
 interface Lecture {
   id: number;
@@ -132,6 +133,26 @@ const TEST_TYPE_COLORS: Record<string, string> = {
   mock: "#DC2626", practice: "#1A56DB", chapter: "#059669", weekly: "#7C3AED", test: "#059669", pyq: "#F59E0B",
 };
 
+function CourseQuickStat({
+  icon,
+  count,
+  label,
+}: {
+  icon: React.ComponentProps<typeof Ionicons>["name"];
+  count: number | string;
+  label: string;
+}) {
+  return (
+    <View style={styles.quickStat}>
+      <Ionicons name={icon} size={16} color="rgba(255,255,255,0.8)" />
+      <View style={styles.quickStatTextGroup}>
+        <Text style={styles.quickStatNum}>{count}</Text>
+        <Text style={styles.quickStatLabel}>{label}</Text>
+      </View>
+    </View>
+  );
+}
+
 export default function CourseDetailScreen() {
   useScreenProtection(true);
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -147,6 +168,8 @@ export default function CourseDetailScreen() {
   const [testTypeFilter, setTestTypeFilter] = useState<string>("all");
   const [isPaymentPending, setIsPaymentPending] = useState(false);
   const [headerWidth, setHeaderWidth] = useState(0);
+  const { width: windowWidth } = useWindowDimensions();
+  const quickStatsGap = Platform.OS === "web" && windowWidth >= 768 ? 10 : 12;
 
   // After Razorpay redirect (iOS / Android web), show result and clean URL
   useEffect(() => {
@@ -894,7 +917,6 @@ setTimeout(function() {
                     <MaterialCommunityIcons name="clipboard-check" size={48} color="rgba(255,255,255,0.25)" />
                   </View>
                 )}
-                <Text style={styles.courseCategory}>{course.category}</Text>
                 <Text style={styles.courseTitle}>{course.title}</Text>
                 <View style={styles.instructorRow}>
                   <View style={styles.instructorAvatar}>
@@ -922,50 +944,23 @@ setTimeout(function() {
               <Text style={[styles.courseTitle, styles.courseTitleCompact]}>{course.title}</Text>
             )}
 
-            <View style={styles.courseQuickStats}>
+            <View style={[styles.courseQuickStats, { gap: quickStatsGap }]}>
           {!isTestSeriesCourse && (
-            <View style={styles.quickStat}>
-              <Ionicons name="videocam" size={16} color="rgba(255,255,255,0.8)" />
-              <Text style={styles.quickStatText}>{course.total_lectures} Lectures</Text>
-            </View>
+            <CourseQuickStat icon="videocam" count={course.total_lectures} label="Lectures" />
           )}
           {isTestSeriesCourse ? (
             <>
-              <View style={styles.quickStat}>
-                <Ionicons name="layers" size={16} color="rgba(255,255,255,0.8)" />
-                <Text style={styles.quickStatText}>{course.total_tests || 0} Tests</Text>
-              </View>
-              <View style={styles.quickStat}>
-                <Ionicons name="document-text" size={16} color="rgba(255,255,255,0.8)" />
-                <Text style={styles.quickStatText}>{course.pyq_count || 0} PYQ</Text>
-              </View>
-              <View style={styles.quickStat}>
-                <Ionicons name="clipboard" size={16} color="rgba(255,255,255,0.8)" />
-                <Text style={styles.quickStatText}>{course.mock_count || 0} Mock</Text>
-              </View>
-              <View style={styles.quickStat}>
-                <Ionicons name="create" size={16} color="rgba(255,255,255,0.8)" />
-                <Text style={styles.quickStatText}>{course.practice_count || 0} Practice</Text>
-              </View>
+              <CourseQuickStat icon="layers" count={course.total_tests || 0} label="Tests" />
+              <CourseQuickStat icon="document-text" count={course.pyq_count || 0} label="PYQ" />
+              <CourseQuickStat icon="clipboard" count={course.mock_count || 0} label="Mock" />
+              <CourseQuickStat icon="create" count={course.practice_count || 0} label="Practice" />
             </>
           ) : (
             <>
-              <View style={styles.quickStat}>
-                <Ionicons name="document-text" size={16} color="rgba(255,255,255,0.8)" />
-                <Text style={styles.quickStatText}>{testsForTestsTab.length} Tests</Text>
-              </View>
-              <View style={styles.quickStat}>
-                <Ionicons name="clipboard" size={16} color="rgba(255,255,255,0.8)" />
-                <Text style={styles.quickStatText}>{course.mock_count ?? testsForMockTab.length} Mock</Text>
-              </View>
-              <View style={styles.quickStat}>
-                <Ionicons name="flag" size={16} color="rgba(255,255,255,0.8)" />
-                <Text style={styles.quickStatText}>{course.daily_mission_count || 0} Missions</Text>
-              </View>
-              <View style={styles.quickStat}>
-                <Ionicons name="folder" size={16} color="rgba(255,255,255,0.8)" />
-                <Text style={styles.quickStatText}>{course.total_materials || 0} Materials</Text>
-              </View>
+              <CourseQuickStat icon="document-text" count={testsForTestsTab.length} label="Tests" />
+              <CourseQuickStat icon="clipboard" count={course.mock_count ?? testsForMockTab.length} label="Mock" />
+              <CourseQuickStat icon="flag" count={course.daily_mission_count || 0} label="Missions" />
+              <CourseQuickStat icon="folder" count={course.total_materials || 0} label="Materials" />
             </>
           )}
         </View>
@@ -1039,12 +1034,12 @@ setTimeout(function() {
               <View style={styles.aboutDetailGrid}>
                 {isTestSeriesCourse ? (
                   <>
-                    {course.category ? (
+                    {course.category || isTestSeriesCourse ? (
                       <View style={styles.aboutDetailItem}>
                         <Ionicons name="bookmark" size={16} color={Colors.light.textMuted} />
                         <View>
                           <Text style={[styles.aboutDetailLabel, { color: colors.textMuted }]}>Category</Text>
-                          <Text style={[styles.aboutDetailValue, { color: colors.text }]}>{course.category}</Text>
+                          <Text style={[styles.aboutDetailValue, { color: colors.text }]}>{getCourseCategoryLabel(course)}</Text>
                         </View>
                       </View>
                     ) : null}
@@ -2035,7 +2030,6 @@ const styles = StyleSheet.create({
   discountBadge: { backgroundColor: Colors.light.accent, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4 },
   discountBadgeText: { color: "#fff", fontSize: 11, fontFamily: "Inter_700Bold" },
   courseIconArea: { position: "absolute", right: 20, top: 60, opacity: 0.4 },
-  courseCategory: { fontSize: 12, color: "rgba(255,255,255,0.6)", fontFamily: "Inter_500Medium", textTransform: "uppercase", letterSpacing: 1 },
   courseTitle: { fontSize: 22, fontFamily: "Inter_700Bold", color: "#fff", lineHeight: 30, maxWidth: "85%" },
   courseTitleCompact: { marginTop: 4, maxWidth: "100%" },
   courseDateRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 8 },
@@ -2045,9 +2039,11 @@ const styles = StyleSheet.create({
   instructorName: { fontSize: 13, color: "rgba(255,255,255,0.8)", fontFamily: "Inter_500Medium" },
   levelChip: { backgroundColor: Colors.light.accent, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
   levelChipText: { color: "#fff", fontSize: 11, fontFamily: "Inter_600SemiBold" },
-  courseQuickStats: { flexDirection: "row", gap: 16, flexWrap: "wrap" },
-  quickStat: { flexDirection: "row", alignItems: "center", gap: 5 },
-  quickStatText: { fontSize: 13, color: "rgba(255,255,255,0.8)", fontFamily: "Inter_400Regular" },
+  courseQuickStats: { flexDirection: "row", flexWrap: "wrap" },
+  quickStat: { flexDirection: "row", alignItems: "center", gap: 4 },
+  quickStatTextGroup: { flexDirection: "row", alignItems: "center", gap: 2 },
+  quickStatNum: { fontSize: 13, color: "rgba(255,255,255,0.95)", fontFamily: "Inter_600SemiBold" },
+  quickStatLabel: { fontSize: 13, color: "rgba(255,255,255,0.8)", fontFamily: "Inter_400Regular" },
   progressSection: { gap: 6 },
   progressRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   progressLabel: { fontSize: 12, color: "rgba(255,255,255,0.7)", fontFamily: "Inter_400Regular" },

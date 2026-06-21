@@ -1399,6 +1399,7 @@ export default function AdminDashboard() {
     mutationFn: async (courseData: NewCourse) => {
       const payload = {
         ...courseData,
+        category: courseData.courseType === "test_series" ? "Test Series" : courseData.category,
         multiSubjectConfig: courseData.courseType === "multi_subject" ? MULTI_SUBJECTS : [],
         teacherDetailsJson: courseData.courseType === "multi_subject"
           ? []
