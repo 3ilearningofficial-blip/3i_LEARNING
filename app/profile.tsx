@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable, TextInput,
-  Platform, ActivityIndicator, Alert, Image, Linking, Modal, Share, Switch,
+  Platform, ActivityIndicator, Alert, Linking, Modal, Share, Switch,
 } from "react-native";
 import { router } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
@@ -9,8 +9,9 @@ import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
-import * as ImagePicker from "expo-image-picker";
 import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
+import { uploadToR2 } from "@/lib/r2-upload";
+import { SquareImageCropPicker } from "@/components/SquareImageCropPicker";
 import { myPaymentsQueryKey } from "@/lib/query-keys";
 import { getInstallationId } from "@/lib/installation-id";
 import { sendOtpRequest, verifyOtpRequest, formatLockCountdown } from "@/lib/otp-lockout";
@@ -112,40 +113,19 @@ export default function ProfileScreen() {
 
   const [activeSection, setActiveSection] = useState<"payments" | "contact" | null>(null);
 
-  const handlePickPhoto = async () => {
-    if (Platform.OS === "web") {
-      const input = document.createElement("input");
-      input.type = "file"; input.accept = "image/*";
-      input.onchange = async (e: any) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
-        const MAX_BYTES = 8 * 1024 * 1024;
-        if (file.size > MAX_BYTES) {
-          Alert.alert("Image too large", "Please choose an image smaller than 8 MB.");
-          return;
-        }
-        const reader = new FileReader();
-        reader.onload = async (ev) => {
-          const uri = ev.target?.result as string;
-          setPhotoUri(uri);
-          await savePhoto(uri);
-        };
-        reader.readAsDataURL(file);
-      };
-      input.click();
-      return;
-    }
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== "granted") { Alert.alert("Permission needed", "Please allow photo library access."); return; }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true, aspect: [1, 1], quality: 0.5, base64: true,
-    });
-    if (!result.canceled && result.assets[0]) {
-      const asset = result.assets[0];
-      const uri = asset.base64 ? `data:image/jpeg;base64,${asset.base64}` : asset.uri;
-      setPhotoUri(uri);
-      await savePhoto(uri);
+  const handleRemovePhoto = async () => {
+    const previousPhoto = photoUri || profile?.photo_url || null;
+    setPhotoUri(null);
+    setIsSavingPhoto(true);
+    try {
+      await apiRequest("PUT", "/api/auth/profile", { photoUrl: null });
+      updateUser({ photo_url: undefined });
+      if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch {
+      setPhotoUri(previousPhoto);
+      Alert.alert("Error", "Failed to remove photo.");
+    } finally {
+      setIsSavingPhoto(false);
     }
   };
 
@@ -162,6 +142,15 @@ export default function ProfileScreen() {
     } finally {
       setIsSavingPhoto(false);
     }
+  };
+
+  const handlePhotoChange = async (url: string) => {
+    if (!url) {
+      await handleRemovePhoto();
+      return;
+    }
+    setPhotoUri(url);
+    await savePhoto(url);
   };
 
   const handleSaveEdit = async () => {
@@ -356,18 +345,29 @@ export default function ProfileScreen() {
 
         {/* Avatar only — no name/phone text */}
         <View style={styles.avatarSection}>
-          <Pressable style={styles.avatarWrap} onPress={handlePickPhoto}>
-            {displayPhoto ? (
-              <Image source={{ uri: displayPhoto }} style={styles.avatar} />
-            ) : (
-              <View style={styles.avatarPlaceholder}>
-                <Text style={styles.avatarInitial}>{profile?.name?.charAt(0)?.toUpperCase() || "S"}</Text>
-              </View>
-            )}
-            <View style={styles.avatarCamBadge}>
-              {isSavingPhoto ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="camera" size={13} color="#fff" />}
-            </View>
-          </Pressable>
+          <SquareImageCropPicker
+            value={displayPhoto || ""}
+            onChange={handlePhotoChange}
+            size={72}
+            shape="circle"
+            disabled={isSavingPhoto}
+            placeholderInitial={profile?.name?.charAt(0)?.toUpperCase() || "S"}
+            changeLabel={isSavingPhoto ? "Saving..." : "Change photo"}
+            onUpload={async (uri, opts) => {
+              const { publicUrl } = await uploadToR2(
+                uri,
+                `profile-${Date.now()}.jpg`,
+                "image/jpeg",
+                "images",
+                {
+                  signal: opts?.signal,
+                  onProgress: opts?.onProgress,
+                },
+                "/api/upload/presign-profile",
+              );
+              return publicUrl;
+            }}
+          />
         </View>
       </LinearGradient>
 

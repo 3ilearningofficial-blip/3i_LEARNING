@@ -20,6 +20,12 @@ import { isAndroidWeb } from "@/lib/useAndroidWebGate";
 import AndroidWebGate from "@/components/AndroidWebGate";
 import { DownloadButton } from "@/components/DownloadButton";
 import { extractMediaFileKey } from "@/lib/media-key";
+import { buildYouTubePhoneWebSrcDoc } from "@/lib/buildYouTubePhoneWebSrcDoc";
+import { fullscreenLandscapeScript } from "@/lib/fullscreen-landscape-html";
+import {
+  handlePlaybackFullscreenMessage,
+  useVideoPlaybackOrientation,
+} from "@/lib/video-playback-orientation";
 
 const mediaTokenCache = new Map<string, { token: string; expiresAt: number; readUrl?: string }>();
 
@@ -61,44 +67,19 @@ function getYouTubeVideoId(url: string): string | null {
 }
 
 function buildYouTubeHtml(videoId: string): string {
-  return `<!DOCTYPE html>
-<html>
-<head>
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-html, body { width: 100%; height: 100%; background: #000; overflow: hidden; -webkit-user-select: none; user-select: none; }
-.wrapper { position: relative; width: 100%; height: 100%; overflow: hidden; }
-iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; }
-.cover-tl { position: absolute; top: 0; left: 0; width: 25%; height: 56px; background: #000; z-index: 9999; pointer-events: auto; cursor: default; }
-.cover-tr { position: absolute; top: 0; right: 0; width: 130px; height: 56px; background: #000; z-index: 9999; pointer-events: auto; cursor: default; }
-.cover-bl { position: absolute; bottom: 0; left: 0; width: 70px; height: 60px; background: #000; z-index: 9999; pointer-events: auto; cursor: default; }
-.cover-fs { position: absolute; bottom: 78px; right: 0; width: 90px; height: 50px; background: #000; z-index: 9999; pointer-events: auto; cursor: default; }
-.cover-br { position: absolute; bottom: 0; right: 50px; width: 280px; height: 60px; background: #000; z-index: 9999; pointer-events: auto; cursor: default; }
-@media (max-width: 600px) {
-  .cover-tl { width: 55%; }
-  .cover-tr { display: none; }
-  .cover-fs { display: none; }
-  .cover-br { width: 100%; right: 0; }
-}
-@media print { body { display: none !important; } }
-</style>
-</head>
-<body>
-<div class="wrapper">
-<div class="cover-tl"></div>
-<div class="cover-tr"></div>
-<iframe
-  src="https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&mute=1&playsinline=1&rel=0&modestbranding=1&showinfo=0&iv_load_policy=3&cc_load_policy=0&fs=1&disablekb=0&controls=1"
-  allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; fullscreen"
-></iframe>
-<div class="cover-bl"></div>
-<div class="cover-fs"></div>
-<div class="cover-br"></div>
-</div>
-<script>document.addEventListener('contextmenu', function(e) { e.preventDefault(); });</script>
-</body>
-</html>`;
+  const q = new URLSearchParams({
+    autoplay: "1",
+    mute: "1",
+    playsinline: "1",
+    rel: "0",
+    modestbranding: "1",
+    showinfo: "0",
+    iv_load_policy: "3",
+    cc_load_policy: "0",
+    disablekb: "0",
+    controls: "1",
+  });
+  return buildYouTubePhoneWebSrcDoc({ videoId, embedQueryWithoutFs: q.toString() });
 }
 
 // Native-only: YouTube IFrame API with custom controls
@@ -138,6 +119,7 @@ html,body{width:100%;height:100%;background:#000;overflow:hidden;-webkit-user-se
 <button class="cb sm" ontouchend="fwd(10)"><svg viewBox="0 0 24 24"><path d="M18 13c0 3.31-2.69 6-6 6s-6-2.69-6-6h-2c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8V1l-5 5 5 5V7c3.31 0 6 2.69 6 6z"/></svg></button>
 <button class="cb sm" ontouchend="tm()"><svg viewBox="0 0 24 24" id="vi"><path d="M16.5 12A4.5 4.5 0 0014 8v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51A8.8 8.8 0 0021 12c0-4.28-3-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06a8.99 8.99 0 003.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></svg></button>
 <div class="sp"></div>
+<button class="cb sm" ontouchend="tfs()"><svg viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg></button>
 <button class="cb sm" ontouchend="tsp()"><svg viewBox="0 0 24 24"><text x="12" y="17" font-size="12" fill="#fff" text-anchor="middle" font-weight="bold" font-family="sans-serif" id="spt">1x</text></svg></button>
 </div></div></div>
 <script>
@@ -154,7 +136,15 @@ function skT(e){if(!rdy)return;e.preventDefault();var b=document.getElementById(
 function fm(s){s=Math.floor(s);var h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sc=s%60;return h>0?h+':'+(m<10?'0':'')+m+':'+(sc<10?'0':'')+sc:m+':'+(sc<10?'0':'')+sc;}
 function up(){if(rdy&&p.getDuration){var c=p.getCurrentTime()||0,d=p.getDuration()||1;document.getElementById('pf').style.width=(c/d*100)+'%';document.getElementById('tt').textContent=fm(c)+' / '+fm(d);var l=p.getVideoLoadedFraction?p.getVideoLoadedFraction():0;document.getElementById('bf').style.width=(l*100)+'%';}requestAnimationFrame(up);}
 function sc(){document.getElementById('ctl').className='ctl';clearTimeout(ht);ht=setTimeout(function(){if(p&&p.getPlayerState()===1)document.getElementById('ctl').className='ctl h';},4000);}
+function tfs(){
+  var pw=document.getElementById('pw');
+  if(!pw)return;
+  var fn=pw.requestFullscreen||pw.webkitRequestFullscreen||pw.webkitRequestFullScreen;
+  if(fn){var pr=fn.call(pw);if(pr&&pr.then)pr.then(function(){try{if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify({event:'fullscreen',active:true}));}catch(_){}}).catch(function(){try{if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify({event:'fullscreen',active:true}));}catch(_){}});}
+  else{try{if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify({event:'fullscreen',active:true}));}catch(_){}}
+}
 document.addEventListener('contextmenu',function(e){e.preventDefault();});
+${fullscreenLandscapeScript()}
 </script></body></html>`;
 }
 
@@ -325,6 +315,7 @@ document.addEventListener('keydown', function(e) {
 
 export default function MaterialViewerScreen() {
   useScreenProtection(true);
+  useVideoPlaybackOrientation();
   const { colors } = useAppTheme();
   if (isAndroidWeb()) return <AndroidWebGate />;
   const { id, localUri } = useLocalSearchParams<{ id: string; localUri?: string }>();
@@ -409,6 +400,15 @@ export default function MaterialViewerScreen() {
   const youtubeVideoId = material ? getYouTubeVideoId(fileUrl || "") : null;
   const isYouTube = !!youtubeVideoId;
   const apiBaseUrl = getBaseUrl();
+
+  useEffect(() => {
+    if (Platform.OS !== "web" || !isYouTube || typeof window === "undefined") return;
+    const onMessage = (event: MessageEvent) => {
+      handlePlaybackFullscreenMessage(event.data);
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [isYouTube]);
 
   // Extract the R2 file key from the URL for token generation
   const fileKey = extractMediaFileKey(material?.file_url);
@@ -544,6 +544,7 @@ export default function MaterialViewerScreen() {
                 source={{ html: buildNativeYouTubeHtml(youtubeVideoId!), baseUrl: "https://www.youtube.com" }}
                 style={{ flex: 1, backgroundColor: "#000" }}
                 onLoad={() => setLoading(false)}
+                onMessage={(event) => handlePlaybackFullscreenMessage(event.nativeEvent.data)}
                 allowsFullscreenVideo
                 mediaPlaybackRequiresUserAction={false}
                 allowsInlineMediaPlayback

@@ -24,6 +24,7 @@ import CourseBannerImage from "@/components/CourseBannerImage";
 import { COURSE_BANNER_ASPECT } from "@/constants/courseBanner";
 import { buildHomeCategoryChips, filterCoursesByHomeCategory } from "@/constants/homeCategories";
 import { getCourseExplorePath } from "@/lib/course-explore-path";
+import { ensurePushRegisteredWithGesture } from "@/lib/pushNotifications";
 
 interface Course {
   id: number;
@@ -34,6 +35,7 @@ interface Course {
   original_price: string;
   category: string;
   subject?: string;
+  exam?: string;
   thumbnail?: string;
   is_free: boolean;
   total_lectures: number;
@@ -585,9 +587,17 @@ function getTestSeriesRegularCount(course: Course): number {
   return Math.max(0, (Number(course.total_tests) || 0) - mock - pyq - practice);
 }
 
+function getTestSeriesMetaLine(course: Course): string {
+  return [
+    course.category || "Test Series",
+    course.exam,
+    course.subject,
+    course.level || "Beginner",
+  ].filter(Boolean).join(" · ");
+}
+
 function TestSeriesHomeCard({ course }: { course: Course }) {
   const { colors } = useAppTheme();
-  const color = getCourseAccentColor(course.id);
   const isFreeCourse = course.is_free || parseFloat(course.price || "0") <= 0;
   const { purchase, isPending, paymentModal } = useCoursePurchase({
     courseId: course.id,
@@ -599,7 +609,7 @@ function TestSeriesHomeCard({ course }: { course: Course }) {
     ? Math.round((1 - parseFloat(course.price) / parseFloat(course.original_price)) * 100)
     : 0;
   const language = (course.course_language || "HINGLISH").toUpperCase();
-  const level = course.level || "Beginner";
+  const metaLine = getTestSeriesMetaLine(course);
   const tests = getTestSeriesRegularCount(course);
   const practice = Number(course.practice_count) || 0;
   const pyq = Number(course.pyq_count) || 0;
@@ -614,10 +624,9 @@ function TestSeriesHomeCard({ course }: { course: Course }) {
       <CourseBanner course={course} />
       <View style={[styles.multiCourseBody, { backgroundColor: colors.card }]}>
         <View style={styles.multiTopRow}>
-          <View style={[styles.multiBadgeRow, { flexShrink: 1 }]}>
-            <Text style={[styles.multiCategory, { color }]}>{course.category || "Test Series"}</Text>
-            <Text style={styles.multiLevel}>{level}</Text>
-          </View>
+          <Text style={[styles.multiMetaText, { color: colors.textSecondary, flexShrink: 1 }]} numberOfLines={1}>
+            {metaLine}
+          </Text>
           <View style={styles.multiTopRightGroup}>
             <View style={styles.multiLanguagePill}><Text style={styles.multiLanguageText}>{language}</Text></View>
           </View>
@@ -962,7 +971,13 @@ export default function HomeScreen() {
           </View>
           <View style={styles.headerActions}>
             {isAdmin && (
-              <Pressable style={styles.adminBtn} onPress={() => router.push("/admin")}>
+              <Pressable
+                style={styles.adminBtn}
+                onPress={() => {
+                  ensurePushRegisteredWithGesture().catch(() => {});
+                  router.push("/admin");
+                }}
+              >
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
                   <Ionicons name="grid" size={15} color="#fff" />
                   <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: "#fff", letterSpacing: 0.3 }}>Admin</Text>
@@ -971,7 +986,10 @@ export default function HomeScreen() {
             )}
             <Pressable
               style={[styles.notifBtn, isNativePhone && styles.notifBtnNativePhone]}
-              onPress={() => router.push("/notifications")}
+              onPress={() => {
+                if (isAdmin) ensurePushRegisteredWithGesture().catch(() => {});
+                router.push("/notifications");
+              }}
             >
               <Ionicons name="notifications-outline" size={isNativePhone ? 20 : 22} color="#fff" />
               {unreadNotifCount > 0 && (

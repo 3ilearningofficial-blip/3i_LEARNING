@@ -33,6 +33,55 @@ function removeWebAuthStorage(): void {
   }
 }
 
+function clearLegacyAdminSessionStorage(): void {
+  if (typeof sessionStorage === "undefined") return;
+  sessionStorage.removeItem(userStorageKey);
+  sessionStorage.removeItem(webTokenKey);
+}
+
+/** One-time upgrade: admin sessions previously lived in sessionStorage (tab-scoped). */
+function migrateLegacyAdminWebSession(): StoredAuthUser | null {
+  if (typeof sessionStorage === "undefined" || typeof localStorage === "undefined") return null;
+
+  const sessionUserRaw = sessionStorage.getItem(userStorageKey);
+  if (!sessionUserRaw) return null;
+
+  let parsed: StoredAuthUser;
+  try {
+    parsed = JSON.parse(sessionUserRaw);
+  } catch {
+    clearLegacyAdminSessionStorage();
+    return null;
+  }
+
+  if (parsed?.role !== "admin") return null;
+
+  const legacyToken = sessionStorage.getItem(webTokenKey);
+  localStorage.setItem(userStorageKey, sessionUserRaw);
+  if (legacyToken) localStorage.setItem(webTokenKey, legacyToken);
+  clearLegacyAdminSessionStorage();
+  return { ...parsed, sessionToken: legacyToken || undefined };
+}
+
+function readWebAdminAuthUser(): StoredAuthUser | null {
+  if (typeof localStorage !== "undefined") {
+    const stored = localStorage.getItem(userStorageKey);
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        if (parsed?.role === "admin") {
+          const token = getWebStoredToken("admin");
+          return { ...parsed, sessionToken: token || undefined };
+        }
+      } catch {
+        /* fall through to migration */
+      }
+    }
+  }
+
+  return migrateLegacyAdminWebSession();
+}
+
 async function setNativeStoredToken(token?: string | null) {
   if (Platform.OS === "web") return;
   const SecureStore = await import("expo-secure-store");
@@ -54,16 +103,16 @@ async function getNativeStoredToken(): Promise<string | null> {
 }
 
 function setWebStoredToken(token?: string | null, role?: StoredAuthUser["role"]): void {
+  if (typeof localStorage === "undefined") return;
+
   if (role === "admin") {
-    if (typeof sessionStorage === "undefined") return;
-    if (token) sessionStorage.setItem(webTokenKey, token);
-    else sessionStorage.removeItem(webTokenKey);
-    if (typeof localStorage !== "undefined") localStorage.removeItem(webTokenKey);
+    if (token) localStorage.setItem(webTokenKey, token);
+    else localStorage.removeItem(webTokenKey);
+    clearLegacyAdminSessionStorage();
     return;
   }
 
   // Student web bearer token must be durable for the 7-day inactivity window.
-  if (typeof localStorage === "undefined") return;
   if (token) localStorage.setItem(webTokenKey, token);
   else localStorage.removeItem(webTokenKey);
   if (typeof sessionStorage !== "undefined") sessionStorage.removeItem(webTokenKey);
@@ -71,8 +120,23 @@ function setWebStoredToken(token?: string | null, role?: StoredAuthUser["role"])
 
 function getWebStoredToken(role?: StoredAuthUser["role"] | null): string | null {
   if (role === "admin") {
-    if (typeof sessionStorage === "undefined") return null;
-    return sessionStorage.getItem(webTokenKey);
+    if (typeof localStorage !== "undefined") {
+      const v = localStorage.getItem(webTokenKey);
+      if (v) return v;
+    }
+    if (typeof sessionStorage !== "undefined") {
+      const legacy = sessionStorage.getItem(webTokenKey);
+      if (legacy) {
+        try {
+          if (typeof localStorage !== "undefined") localStorage.setItem(webTokenKey, legacy);
+          sessionStorage.removeItem(webTokenKey);
+        } catch {
+          /* ignore */
+        }
+        return legacy;
+      }
+    }
+    return null;
   }
 
   if (typeof localStorage !== "undefined") {
@@ -98,14 +162,11 @@ export async function storeAuthUser(userData: StoredAuthUser) {
   if (Platform.OS === "web") {
     const { sessionToken, ...rest } = userData;
     if (userData.role === "admin") {
-      if (typeof sessionStorage !== "undefined") {
-        sessionStorage.setItem(userStorageKey, JSON.stringify(rest));
+      if (typeof localStorage !== "undefined") {
+        localStorage.setItem(userStorageKey, JSON.stringify(rest));
         setWebStoredToken(sessionToken || null, "admin");
       }
-      if (typeof localStorage !== "undefined") {
-        localStorage.removeItem(userStorageKey);
-        localStorage.removeItem(webTokenKey);
-      }
+      clearLegacyAdminSessionStorage();
       return;
     }
 
@@ -133,16 +194,8 @@ export async function storeAuthUser(userData: StoredAuthUser) {
 export async function getStoredAuthUser(): Promise<StoredAuthUser | null> {
   try {
     if (Platform.OS === "web") {
-      if (typeof sessionStorage !== "undefined") {
-        const sessionStored = sessionStorage.getItem(userStorageKey);
-        if (sessionStored) {
-          const parsed = JSON.parse(sessionStored);
-          if (parsed?.role === "admin") {
-            const token = getWebStoredToken("admin");
-            return { ...parsed, sessionToken: token || undefined };
-          }
-        }
-      }
+      const adminUser = readWebAdminAuthUser();
+      if (adminUser) return adminUser;
 
       const sessionStudentBackup =
         typeof sessionStorage !== "undefined"
@@ -153,10 +206,6 @@ export async function getStoredAuthUser(): Promise<StoredAuthUser | null> {
       const rawStored = stored || sessionStudentBackup;
       if (!rawStored) return null;
       const parsed = JSON.parse(rawStored);
-      if (parsed?.role === "admin") {
-        removeWebAuthStorage();
-        return null;
-      }
       const token =
         getWebStoredToken("student") ||
         (typeof sessionStorage !== "undefined"
@@ -187,18 +236,19 @@ export async function getStoredAuthToken(): Promise<string | null> {
   try {
     if (Platform.OS === "web") {
       let role: StoredAuthUser["role"] | null = null;
-      if (typeof sessionStorage !== "undefined") {
-        const sessionUser = sessionStorage.getItem(userStorageKey);
-        if (sessionUser) role = JSON.parse(sessionUser)?.role ?? null;
-      }
-      if (!role && typeof localStorage !== "undefined") {
+      if (typeof localStorage !== "undefined") {
         const localUser = localStorage.getItem(userStorageKey);
-        if (localUser) {
-          const parsed = JSON.parse(localUser);
-          role = parsed?.role ?? null;
-          if (role === "admin") {
-            removeWebAuthStorage();
-            return null;
+        if (localUser) role = JSON.parse(localUser)?.role ?? null;
+      }
+      if (!role && typeof sessionStorage !== "undefined") {
+        const sessionUser = sessionStorage.getItem(userStorageKey);
+        if (sessionUser) {
+          const parsedRole = JSON.parse(sessionUser)?.role ?? null;
+          if (parsedRole === "admin") {
+            migrateLegacyAdminWebSession();
+            role = "admin";
+          } else {
+            role = parsedRole;
           }
         }
       }

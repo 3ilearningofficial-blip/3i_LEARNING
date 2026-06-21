@@ -3,6 +3,7 @@ import {
   assertNativePaidPurchaseInstallation,
   finalizeInstallationBindAfterPurchase,
 } from "./native-device-binding";
+import { notifyAdminsBuyNowTap, notifyAdminsPurchase } from "./notification-utils";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -147,7 +148,7 @@ export function registerBookRoutes({
       if (!bookId) return res.json({ ok: true });
       const purchased = await db.query("SELECT id FROM book_purchases WHERE user_id = $1 AND book_id = $2", [user.id, bookId]);
       if (purchased.rows.length > 0) return res.json({ ok: true });
-      const result = await db.query(
+      await db.query(
         `
         INSERT INTO book_click_tracking (user_id, book_id, click_count, created_at)
         VALUES ($1, $2, 1, $3)
@@ -156,6 +157,15 @@ export function registerBookRoutes({
       `,
         [user.id, bookId, Date.now()]
       );
+      const bookInfo = await db.query("SELECT title FROM books WHERE id = $1", [bookId]).catch(() => ({ rows: [] as any[] }));
+      const buyerName = String(user.name || user.phone || user.email || "A student");
+      await notifyAdminsBuyNowTap(db, {
+        kind: "book",
+        buyerName,
+        itemTitle: String(bookInfo.rows[0]?.title || "a book"),
+        userId: Number(user.id),
+        itemId: Number(bookId),
+      }).catch((err) => console.error("[Book] admin buy-now notify failed:", err));
       console.log("[BookClick] tracked");
       res.json({ ok: true });
     } catch (err) {
@@ -224,6 +234,17 @@ export function registerBookRoutes({
       );
       await finalizeInstallationBindAfterPurchase(db, userId, req);
       await db.query("DELETE FROM book_click_tracking WHERE user_id = $1 AND book_id = $2", [userId, bookId]).catch(() => {});
+      const [bookInfo, userInfo] = await Promise.all([
+        db.query("SELECT title FROM books WHERE id = $1", [bookId]).catch(() => ({ rows: [] as any[] })),
+        db.query("SELECT name, phone, email FROM users WHERE id = $1", [userId]).catch(() => ({ rows: [] as any[] })),
+      ]);
+      await notifyAdminsPurchase(db, {
+        kind: "book",
+        buyerName: String(userInfo.rows[0]?.name || userInfo.rows[0]?.phone || userInfo.rows[0]?.email || "A student"),
+        itemTitle: String(bookInfo.rows[0]?.title || "a book"),
+        userId,
+        itemId: bookId,
+      }).catch((err) => console.error("[Book] admin purchase notify failed:", err));
       return res.redirect(`${frontendBase}/store?payment=success&bookId=${bookId}`);
     } catch (err) {
       console.error("Book verify-redirect error:", err);
@@ -248,6 +269,15 @@ export function registerBookRoutes({
       await db.query("INSERT INTO book_purchases (user_id, book_id, purchased_at) VALUES ($1, $2, $3) ON CONFLICT (user_id, book_id) DO NOTHING", [user.id, parsedBookId, Date.now()]);
       await finalizeInstallationBindAfterPurchase(db, user.id, req);
       await db.query("DELETE FROM book_click_tracking WHERE user_id = $1 AND book_id = $2", [user.id, parsedBookId]).catch(() => {});
+      const bookInfo = await db.query("SELECT title FROM books WHERE id = $1", [parsedBookId]).catch(() => ({ rows: [] as any[] }));
+      const buyerName = String(user.name || user.phone || user.email || "A student");
+      await notifyAdminsPurchase(db, {
+        kind: "book",
+        buyerName,
+        itemTitle: String(bookInfo.rows[0]?.title || "a book"),
+        userId: Number(user.id),
+        itemId: parsedBookId,
+      }).catch((err) => console.error("[Book] admin purchase notify failed:", err));
       res.json({ success: true });
     } catch (err) {
       console.error("Book verify-payment error:", err);

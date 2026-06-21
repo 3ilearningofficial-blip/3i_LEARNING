@@ -13,6 +13,11 @@ export default function Root({ children }: PropsWithChildren) {
         <meta name="apple-mobile-web-app-title" content="3i Learning" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="theme-color" content="#1A56DB" />
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var k='__3i_app_dark_mode';if(localStorage.getItem(k)==='1'){var c='#07111F';document.documentElement.style.backgroundColor=c;document.body.style.backgroundColor=c;}}catch(e){}})();`,
+          }}
+        />
         <ScrollViewStyleReset />
       </head>
       <body>{children}</body>

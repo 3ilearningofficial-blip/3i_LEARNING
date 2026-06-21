@@ -21,6 +21,15 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
 }
 
 export async function registerPushForCurrentUser(): Promise<string | null> {
+  return subscribeWebPush(false);
+}
+
+/** Call from a user gesture (bell / Admin tap) so iOS PWA can show the permission prompt. */
+export async function ensurePushRegisteredWithGesture(): Promise<string | null> {
+  return subscribeWebPush(true);
+}
+
+async function subscribeWebPush(requestPermission: boolean): Promise<string | null> {
   if (typeof window === "undefined") return null;
   if (!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) {
     return null;
@@ -32,7 +41,10 @@ export async function registerPushForCurrentUser(): Promise<string | null> {
   if (!publicKey) return null;
 
   let permission = Notification.permission;
-  if (permission === "default") permission = await Notification.requestPermission();
+  if (permission === "default") {
+    if (!requestPermission) return null;
+    permission = await Notification.requestPermission();
+  }
   if (permission !== "granted") return null;
 
   const registration = await navigator.serviceWorker.register("/web-push-sw.js");

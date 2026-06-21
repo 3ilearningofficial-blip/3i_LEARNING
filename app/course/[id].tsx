@@ -28,6 +28,7 @@ import { WebView } from "react-native-webview";
 import { DownloadButton } from "@/components/DownloadButton";
 import { DEFAULT_LIVE_RECORDING_SECTION, getContentFolderRootName } from "@shared/recordingSection";
 import { getCourseAccentColor } from "@shared/courseTheme";
+import { COURSE_BANNER_ASPECT } from "@/constants/courseBanner";
 import { useDocumentVisibility } from "@/lib/useDocumentVisibility";
 
 interface Lecture {
@@ -100,6 +101,10 @@ interface CourseDetail {
   price: string;
   original_price: string;
   category: string;
+  subject?: string;
+  exam?: string;
+  course_language?: string;
+  validity_months?: number | string | null;
   is_free: boolean;
   course_type?: string;
   start_date?: string;
@@ -141,6 +146,7 @@ export default function CourseDetailScreen() {
   const [paymentWebViewHtml, setPaymentWebViewHtml] = useState<string | null>(null);
   const [testTypeFilter, setTestTypeFilter] = useState<string>("all");
   const [isPaymentPending, setIsPaymentPending] = useState(false);
+  const [headerWidth, setHeaderWidth] = useState(0);
 
   // After Razorpay redirect (iOS / Android web), show result and clean URL
   useEffect(() => {
@@ -836,12 +842,36 @@ setTimeout(function() {
       {(() => {
         const c1 = getCourseAccentColor(course.id);
         const c2 = c1 + "CC";
+        const headerMinHeight = course.thumbnail && headerWidth > 0
+          ? Math.min(220, headerWidth / COURSE_BANNER_ASPECT)
+          : undefined;
         return (
-          <LinearGradient colors={isDarkMode ? ["#020617", c1, "#0F172A"] : ["#0A1628", c1, c2]} style={[styles.header, isTestSeriesCourse ? null : styles.headerCompact, { paddingTop: topPadding + 4 }]}>
-            {/* Thumbnail overlay if set */}
+          <LinearGradient
+            colors={isDarkMode ? ["#020617", c1, "#0F172A"] : ["#0A1628", c1, c2]}
+            style={[
+              styles.header,
+              isTestSeriesCourse ? null : styles.headerCompact,
+              { paddingTop: topPadding + 4 },
+              headerMinHeight != null ? { minHeight: headerMinHeight } : null,
+            ]}
+            onLayout={(e) => setHeaderWidth(e.nativeEvent.layout.width)}
+          >
             {course.thumbnail ? (
               <View style={StyleSheet.absoluteFillObject} pointerEvents="none">
-                <Image source={{ uri: course.thumbnail }} style={styles.headerThumbnail} resizeMode="cover" />
+                <Image
+                  source={{ uri: course.thumbnail }}
+                  style={[
+                    styles.headerThumbnail,
+                    Platform.OS === "web"
+                      ? ({ objectFit: "cover", objectPosition: "center center", width: "100%", height: "100%" } as any)
+                      : null,
+                  ]}
+                  resizeMode="cover"
+                />
+                <LinearGradient
+                  colors={["rgba(10,22,40,0.55)", "rgba(10,22,40,0.75)"]}
+                  style={StyleSheet.absoluteFillObject}
+                />
               </View>
             ) : null}
             <View style={styles.headerTop}>
@@ -879,6 +909,12 @@ setTimeout(function() {
                     <Text style={styles.courseDateText}>
                       {course.start_date || "TBD"} → {course.end_date || "TBD"}
                     </Text>
+                  </View>
+                )}
+                {isTestSeriesCourse && course.end_date && (
+                  <View style={styles.courseDateRow}>
+                    <Ionicons name="calendar-outline" size={14} color="rgba(255,255,255,0.9)" />
+                    <Text style={styles.courseDateText}>Ends {course.end_date}</Text>
                   </View>
                 )}
               </>
@@ -979,7 +1015,9 @@ setTimeout(function() {
               <View style={[styles.aboutSection, { backgroundColor: colors.card, shadowColor: colors.shadow }]}>
                 <View style={styles.aboutSectionHeader}>
                   <Ionicons name="information-circle" size={20} color={Colors.light.primary} />
-                  <Text style={[styles.aboutSectionTitle, { color: colors.text }]}>About this Course</Text>
+                  <Text style={[styles.aboutSectionTitle, { color: colors.text }]}>
+                    {isTestSeriesCourse ? "Description" : "About this Course"}
+                  </Text>
                 </View>
                 <View style={{ gap: 10 }}>
                   {course.description.split("\n").filter((l) => l.trim()).map((line, i) => (
@@ -999,48 +1037,125 @@ setTimeout(function() {
                 <Text style={[styles.aboutSectionTitle, { color: colors.text }]}>Course Details</Text>
               </View>
               <View style={styles.aboutDetailGrid}>
-                <View style={styles.aboutDetailItem}>
-                  <Ionicons name="person" size={16} color={Colors.light.textMuted} />
-                  <View>
-                    <Text style={[styles.aboutDetailLabel, { color: colors.textMuted }]}>Instructor</Text>
-                    <Text style={[styles.aboutDetailValue, { color: colors.text }]}>{course.teacher_name}</Text>
-                  </View>
-                </View>
-                <View style={styles.aboutDetailItem}>
-                  <Ionicons name="bar-chart" size={16} color={Colors.light.textMuted} />
-                  <View>
-                    <Text style={[styles.aboutDetailLabel, { color: colors.textMuted }]}>Level</Text>
-                    <Text style={[styles.aboutDetailValue, { color: colors.text }]}>{course.level}</Text>
-                  </View>
-                </View>
-                {!isTestSeriesCourse && (
-                  <View style={styles.aboutDetailItem}>
-                    <Ionicons name="time" size={16} color={Colors.light.textMuted} />
-                    <View>
-                      <Text style={[styles.aboutDetailLabel, { color: colors.textMuted }]}>Duration</Text>
-                      <Text style={[styles.aboutDetailValue, { color: colors.text }]}>{course.duration_hours}h total</Text>
-                    </View>
-                  </View>
-                )}
-                {(course.course_type || "live") === "live" && (course.start_date || course.end_date) && (
+                {isTestSeriesCourse ? (
                   <>
-                    {course.start_date && (
+                    {course.category ? (
                       <View style={styles.aboutDetailItem}>
-                        <Ionicons name="calendar" size={16} color={Colors.light.textMuted} />
+                        <Ionicons name="bookmark" size={16} color={Colors.light.textMuted} />
                         <View>
-                          <Text style={styles.aboutDetailLabel}>Start Date</Text>
-                          <Text style={styles.aboutDetailValue}>{course.start_date}</Text>
+                          <Text style={[styles.aboutDetailLabel, { color: colors.textMuted }]}>Category</Text>
+                          <Text style={[styles.aboutDetailValue, { color: colors.text }]}>{course.category}</Text>
                         </View>
                       </View>
-                    )}
-                    {course.end_date && (
+                    ) : null}
+                    {course.exam ? (
+                      <View style={styles.aboutDetailItem}>
+                        <Ionicons name="school" size={16} color={Colors.light.textMuted} />
+                        <View>
+                          <Text style={[styles.aboutDetailLabel, { color: colors.textMuted }]}>Exam</Text>
+                          <Text style={[styles.aboutDetailValue, { color: colors.text }]}>{course.exam}</Text>
+                        </View>
+                      </View>
+                    ) : null}
+                    {course.subject ? (
+                      <View style={styles.aboutDetailItem}>
+                        <Ionicons name="book" size={16} color={Colors.light.textMuted} />
+                        <View>
+                          <Text style={[styles.aboutDetailLabel, { color: colors.textMuted }]}>Subject</Text>
+                          <Text style={[styles.aboutDetailValue, { color: colors.text }]}>{course.subject}</Text>
+                        </View>
+                      </View>
+                    ) : null}
+                    {course.level ? (
+                      <View style={styles.aboutDetailItem}>
+                        <Ionicons name="bar-chart" size={16} color={Colors.light.textMuted} />
+                        <View>
+                          <Text style={[styles.aboutDetailLabel, { color: colors.textMuted }]}>Level</Text>
+                          <Text style={[styles.aboutDetailValue, { color: colors.text }]}>{course.level}</Text>
+                        </View>
+                      </View>
+                    ) : null}
+                    {course.course_language ? (
+                      <View style={styles.aboutDetailItem}>
+                        <Ionicons name="language" size={16} color={Colors.light.textMuted} />
+                        <View>
+                          <Text style={[styles.aboutDetailLabel, { color: colors.textMuted }]}>Language</Text>
+                          <Text style={[styles.aboutDetailValue, { color: colors.text }]}>{course.course_language}</Text>
+                        </View>
+                      </View>
+                    ) : null}
+                    {course.teacher_name ? (
+                      <View style={styles.aboutDetailItem}>
+                        <Ionicons name="person" size={16} color={Colors.light.textMuted} />
+                        <View>
+                          <Text style={[styles.aboutDetailLabel, { color: colors.textMuted }]}>Instructor</Text>
+                          <Text style={[styles.aboutDetailValue, { color: colors.text }]}>{course.teacher_name}</Text>
+                        </View>
+                      </View>
+                    ) : null}
+                    {course.end_date ? (
                       <View style={styles.aboutDetailItem}>
                         <Ionicons name="calendar-outline" size={16} color={Colors.light.textMuted} />
                         <View>
-                          <Text style={styles.aboutDetailLabel}>End Date</Text>
-                          <Text style={styles.aboutDetailValue}>{course.end_date}</Text>
+                          <Text style={[styles.aboutDetailLabel, { color: colors.textMuted }]}>End Date</Text>
+                          <Text style={[styles.aboutDetailValue, { color: colors.text }]}>{course.end_date}</Text>
                         </View>
                       </View>
+                    ) : null}
+                    {course.validity_months != null && String(course.validity_months).trim() !== "" ? (
+                      <View style={styles.aboutDetailItem}>
+                        <Ionicons name="time" size={16} color={Colors.light.textMuted} />
+                        <View>
+                          <Text style={[styles.aboutDetailLabel, { color: colors.textMuted }]}>Validity</Text>
+                          <Text style={[styles.aboutDetailValue, { color: colors.text }]}>{course.validity_months} months</Text>
+                        </View>
+                      </View>
+                    ) : null}
+                  </>
+                ) : (
+                  <>
+                    <View style={styles.aboutDetailItem}>
+                      <Ionicons name="person" size={16} color={Colors.light.textMuted} />
+                      <View>
+                        <Text style={[styles.aboutDetailLabel, { color: colors.textMuted }]}>Instructor</Text>
+                        <Text style={[styles.aboutDetailValue, { color: colors.text }]}>{course.teacher_name}</Text>
+                      </View>
+                    </View>
+                    <View style={styles.aboutDetailItem}>
+                      <Ionicons name="bar-chart" size={16} color={Colors.light.textMuted} />
+                      <View>
+                        <Text style={[styles.aboutDetailLabel, { color: colors.textMuted }]}>Level</Text>
+                        <Text style={[styles.aboutDetailValue, { color: colors.text }]}>{course.level}</Text>
+                      </View>
+                    </View>
+                    <View style={styles.aboutDetailItem}>
+                      <Ionicons name="time" size={16} color={Colors.light.textMuted} />
+                      <View>
+                        <Text style={[styles.aboutDetailLabel, { color: colors.textMuted }]}>Duration</Text>
+                        <Text style={[styles.aboutDetailValue, { color: colors.text }]}>{course.duration_hours}h total</Text>
+                      </View>
+                    </View>
+                    {(course.course_type || "live") === "live" && (course.start_date || course.end_date) && (
+                      <>
+                        {course.start_date && (
+                          <View style={styles.aboutDetailItem}>
+                            <Ionicons name="calendar" size={16} color={Colors.light.textMuted} />
+                            <View>
+                              <Text style={styles.aboutDetailLabel}>Start Date</Text>
+                              <Text style={styles.aboutDetailValue}>{course.start_date}</Text>
+                            </View>
+                          </View>
+                        )}
+                        {course.end_date && (
+                          <View style={styles.aboutDetailItem}>
+                            <Ionicons name="calendar-outline" size={16} color={Colors.light.textMuted} />
+                            <View>
+                              <Text style={styles.aboutDetailLabel}>End Date</Text>
+                              <Text style={styles.aboutDetailValue}>{course.end_date}</Text>
+                            </View>
+                          </View>
+                        )}
+                      </>
                     )}
                   </>
                 )}
@@ -1909,7 +2024,7 @@ const styles = StyleSheet.create({
   errorText: { fontSize: 16, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" },
   header: { paddingHorizontal: 20, paddingBottom: 20, gap: 8, overflow: "hidden" },
   headerCompact: { paddingBottom: 12, gap: 6 },
-  headerThumbnail: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, opacity: 0.35 },
+  headerThumbnail: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, opacity: 0.10 },
   headerTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   backBtn: { width: 38, height: 38, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" },
   headerBadges: { flexDirection: "row", gap: 8 },

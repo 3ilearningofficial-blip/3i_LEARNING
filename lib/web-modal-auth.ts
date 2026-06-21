@@ -21,8 +21,8 @@ export function notifyWebModalAuthSuccess(next: string, authUser: StoredAuthUser
   window.setTimeout(send, 360);
 
   // Mobile browsers can occasionally miss iframe postMessage delivery. Students
-  // already use durable web storage for the 7-day session, so a temporary
-  // same-origin signal is safe. Admin tokens must not touch localStorage.
+  // use a temporary same-origin signal for the parent welcome page. Admin auth
+  // is persisted via storeAuthUser (durable localStorage); skip the extra signal.
   if (authUser.role !== "admin") {
     try {
       window.localStorage.setItem(WEB_AUTH_SUCCESS_STORAGE_KEY, JSON.stringify({ ...payload, ts: Date.now() }));

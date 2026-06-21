@@ -1,17 +1,17 @@
 import React, { useState } from "react";
 import {
   View, Text, StyleSheet, TextInput, Pressable, ScrollView,
-  Platform, ActivityIndicator, Alert, Image, KeyboardAvoidingView,
+  Platform, ActivityIndicator, Alert, KeyboardAvoidingView,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import * as ImagePicker from "expo-image-picker";
+import { SquareImageCropPicker } from "@/components/SquareImageCropPicker";
+import { uploadToR2 } from "@/lib/r2-upload";
 import { apiRequest } from "@/lib/query-client";
 import { getInstallationId } from "@/lib/installation-id";
-import { uploadToR2 } from "@/lib/r2-upload";
 import {
   PROFILE_PERMANENT_FIELDS_NOTICE,
   PROFILE_POST_SAVE_SUCCESS_MESSAGE,
@@ -46,53 +46,9 @@ export default function ProfileSetupScreen() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
-  const [photoUploading, setPhotoUploading] = useState(false);
 
   const topPadding = insets.top;
   const bottomPadding = insets.bottom;
-
-  const handlePickPhoto = async () => {
-    if (Platform.OS === "web") {
-      const input = document.createElement("input");
-      input.type = "file";
-      input.accept = "image/*";
-      input.onchange = async (e: any) => {
-        const file = e.target.files?.[0];
-        if (file) {
-          setPhotoUploading(true);
-          try {
-            const blobUrl = URL.createObjectURL(file);
-            const { publicUrl } = await uploadToR2(blobUrl, file.name, file.type || "image/jpeg", "images", undefined, "/api/upload/presign-profile");
-            URL.revokeObjectURL(blobUrl);
-            setPhotoUri(publicUrl);
-            setPhotoUploading(false);
-          } catch { setPhotoUploading(false); Alert.alert("Upload Failed"); }
-        }
-      };
-      input.click();
-      return;
-    }
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== "granted") {
-      Alert.alert("Permission needed", "Please allow access to your photo library.");
-      return;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.7,
-    });
-    if (!result.canceled && result.assets[0]) {
-      const asset = result.assets[0];
-      setPhotoUploading(true);
-      try {
-        const { publicUrl } = await uploadToR2(asset.uri, asset.fileName || `profile-${Date.now()}.jpg`, asset.mimeType || "image/jpeg", "images", undefined, "/api/upload/presign-profile");
-        setPhotoUri(publicUrl);
-      } catch { Alert.alert("Upload Failed"); }
-      setPhotoUploading(false);
-    }
-  };
 
   const formatDob = (text: string) => {
     // Auto-format as DD/MM/YYYY
@@ -227,19 +183,28 @@ export default function ProfileSetupScreen() {
 
           {/* Photo picker — centered at top */}
           <View style={styles.photoSection}>
-            <Pressable style={styles.photoWrapper} onPress={handlePickPhoto}>
-              {photoUri ? (
-                <Image source={{ uri: photoUri }} style={styles.photoImage} />
-              ) : (
-                <View style={styles.photoPlaceholder}>
-                  <Ionicons name="person" size={44} color="rgba(255,255,255,0.4)" />
-                </View>
-              )}
-              <View style={styles.photoEditBadge}>
-                <Ionicons name="camera" size={14} color="#fff" />
-              </View>
-            </Pressable>
-            <Text style={styles.photoHint}>Tap to add photo (optional)</Text>
+            <SquareImageCropPicker
+              value={photoUri || ""}
+              onChange={(url) => setPhotoUri(url || null)}
+              size={100}
+              shape="circle"
+              hint="Tap to add photo (optional)"
+              changeLabel="Add photo"
+              onUpload={async (uri, opts) => {
+                const { publicUrl } = await uploadToR2(
+                  uri,
+                  `profile-${Date.now()}.jpg`,
+                  "image/jpeg",
+                  "images",
+                  {
+                    signal: opts?.signal,
+                    onProgress: opts?.onProgress,
+                  },
+                  "/api/upload/presign-profile",
+                );
+                return publicUrl;
+              }}
+            />
           </View>
 
           {/* Form card */}

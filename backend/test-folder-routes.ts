@@ -3,6 +3,7 @@ import {
   assertNativePaidPurchaseInstallation,
   finalizeInstallationBindAfterPurchase,
 } from "./native-device-binding";
+import { notifyAdminsBuyNowTap, notifyAdminsPurchase } from "./notification-utils";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -193,6 +194,15 @@ export function registerTestFolderRoutes({
         },
       });
 
+      const buyerName = String(user.name || user.phone || user.email || "A student");
+      await notifyAdminsBuyNowTap(db, {
+        kind: "folder",
+        buyerName,
+        itemTitle: String(folder.name || "a test series folder"),
+        userId: Number(user.id),
+        itemId: folderId,
+      }).catch((err) => console.error("[TestFolder] admin buy-now notify failed:", err));
+
       return res.json({
         orderId: order.id,
         amount: order.amount,
@@ -231,6 +241,18 @@ export function registerTestFolderRoutes({
       );
       await finalizeInstallationBindAfterPurchase(db, user.id, req);
 
+      const [folderInfo, userInfo] = await Promise.all([
+        db.query("SELECT name FROM standalone_folders WHERE id = $1", [parsedFolderId]).catch(() => ({ rows: [] as any[] })),
+        db.query("SELECT name, phone, email FROM users WHERE id = $1", [user.id]).catch(() => ({ rows: [] as any[] })),
+      ]);
+      await notifyAdminsPurchase(db, {
+        kind: "folder",
+        buyerName: String(userInfo.rows[0]?.name || userInfo.rows[0]?.phone || userInfo.rows[0]?.email || "A student"),
+        itemTitle: String(folderInfo.rows[0]?.name || "a test series folder"),
+        userId: Number(user.id),
+        itemId: parsedFolderId,
+      }).catch((err) => console.error("[TestFolder] admin purchase notify failed:", err));
+
       return res.json({ success: true });
     } catch (err) {
       console.error("Test folder verify-payment error:", err);
@@ -267,6 +289,18 @@ export function registerTestFolderRoutes({
         [userId, folderId, null, razorpay_payment_id, Date.now()]
       );
       await finalizeInstallationBindAfterPurchase(db, userId, req);
+
+      const [folderInfo, userInfo] = await Promise.all([
+        db.query("SELECT name FROM standalone_folders WHERE id = $1", [folderId]).catch(() => ({ rows: [] as any[] })),
+        db.query("SELECT name, phone, email FROM users WHERE id = $1", [userId]).catch(() => ({ rows: [] as any[] })),
+      ]);
+      await notifyAdminsPurchase(db, {
+        kind: "folder",
+        buyerName: String(userInfo.rows[0]?.name || userInfo.rows[0]?.phone || userInfo.rows[0]?.email || "A student"),
+        itemTitle: String(folderInfo.rows[0]?.name || "a test series folder"),
+        userId,
+        itemId: folderId,
+      }).catch((err) => console.error("[TestFolder] admin purchase notify failed:", err));
 
       return res.redirect(`${frontendBase}/test-folder/${folderId}?payment=success`);
     } catch (err) {

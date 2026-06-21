@@ -10,6 +10,7 @@ import { notificationsQueryKey } from "@/lib/query-keys";
 import Colors from "@/constants/colors";
 import { useAppTheme } from "@/context/AppThemeContext";
 import { useAuth } from "@/context/AuthContext";
+import { ensurePushRegisteredWithGesture } from "@/lib/pushNotifications";
 
 interface Notification {
   id: number;
@@ -51,7 +52,12 @@ export default function NotificationsScreen() {
     },
   });
 
+  const isAdmin = user?.role === "admin";
   const unread = notifications.filter((n) => !n.is_read).length;
+
+  React.useEffect(() => {
+    if (isAdmin) ensurePushRegisteredWithGesture().catch(() => {});
+  }, [isAdmin]);
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -63,7 +69,7 @@ export default function NotificationsScreen() {
           }}>
             <Ionicons name="arrow-back" size={22} color="#fff" />
           </Pressable>
-          <Text style={styles.headerTitle}>Notifications</Text>
+          <Text style={styles.headerTitle}>{isAdmin ? "Admin Alerts" : "Notifications"}</Text>
           {unread > 0 && (
             <View style={styles.badge}>
               <Text style={styles.badgeText}>{unread}</Text>
@@ -79,14 +85,24 @@ export default function NotificationsScreen() {
         ) : notifications.length === 0 ? (
           <View style={styles.empty}>
             <Ionicons name="notifications-off-outline" size={48} color={colors.textMuted} />
-            <Text style={[styles.emptyTitle, { color: colors.text }]}>No notifications yet</Text>
-            <Text style={[styles.emptySub, { color: colors.textMuted }]}>You'll see updates from your courses here</Text>
+            <Text style={[styles.emptyTitle, { color: colors.text }]}>
+              {isAdmin ? "No operational alerts yet" : "No notifications yet"}
+            </Text>
+            <Text style={[styles.emptySub, { color: colors.textMuted }]}>
+              {isAdmin
+                ? "You'll see registrations, purchases, support messages, and other admin alerts here."
+                : "You'll see updates from your courses here"}
+            </Text>
           </View>
         ) : (
           notifications.map((n) => (
             <Pressable
               key={n.id}
-              style={[styles.notifCard, { backgroundColor: colors.card, shadowColor: colors.shadow }, !n.is_read && styles.notifCardUnread]}
+              style={[
+                styles.notifCard,
+                { backgroundColor: colors.card, shadowColor: colors.shadow, opacity: n.is_read && isAdmin ? 0.72 : 1 },
+                !n.is_read && styles.notifCardUnread,
+              ]}
               onPress={() => { if (!n.is_read) markReadMutation.mutate(n.id); }}
             >
               <View style={[styles.notifIcon, { backgroundColor: n.type === "info" ? "#EFF6FF" : "#FEF3C7" }]}>

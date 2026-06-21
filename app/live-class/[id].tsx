@@ -26,6 +26,12 @@ import ClassroomLiveOverlays from "@/components/classroom/ClassroomLiveOverlays"
 import ClassroomHeaderActivityTimer from "@/components/classroom/ClassroomHeaderActivityTimer";
 import { useLiveEngagementSse } from "@/lib/useLiveEngagementSse";
 import { useHandRaiseChime } from "@/lib/useHandRaiseChime";
+import {
+  handlePlaybackFullscreenMessage,
+  lockLandscapeForPlayback,
+  restorePortraitAfterPlayback,
+  useVideoPlaybackOrientation,
+} from "@/lib/video-playback-orientation";
 
 const mediaTokenCache = new Map<string, { token: string; expiresAt: number; readUrl?: string }>();
 const MEDIA_READ_URL_MIN_TTL_MS = 15 * 1000;
@@ -516,6 +522,7 @@ function useVoiceInput(onResult: (text: string) => void) {
 
 export default function LiveClassScreen() {
   useScreenProtection(true);
+  useVideoPlaybackOrientation();
   const { id, videoUrl: paramVideoUrl, title: paramTitle, listIsLive } = useLocalSearchParams<{
     id: string;
     videoUrl?: string;
@@ -1162,8 +1169,10 @@ export default function LiveClassScreen() {
   }, [handRaised, canSendChat]);
 
   const handleWebViewMessage = useCallback((event: any) => {
+    const raw = event.nativeEvent.data;
+    if (typeof raw === "string" && handlePlaybackFullscreenMessage(raw)) return;
     try {
-      const data = JSON.parse(event.nativeEvent.data);
+      const data = JSON.parse(raw);
       if (data.event === 'play') {
         markPlayed();
       } else if (data.event === 'timeupdate' && typeof data.currentTime === 'number' && liveClassData?.is_completed) {
@@ -1185,6 +1194,21 @@ export default function LiveClassScreen() {
       }
     }
   }, [liveClassData?.is_completed, markPlayed, persistRecordingPosition]);
+
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof document === "undefined") return;
+    const onFs = () => {
+      const fs = document.fullscreenElement || (document as Document & { webkitFullscreenElement?: Element }).webkitFullscreenElement;
+      if (fs && fs.tagName === "VIDEO") void lockLandscapeForPlayback();
+      else if (!fs) void restorePortraitAfterPlayback();
+    };
+    document.addEventListener("fullscreenchange", onFs);
+    document.addEventListener("webkitfullscreenchange", onFs as EventListener);
+    return () => {
+      document.removeEventListener("fullscreenchange", onFs);
+      document.removeEventListener("webkitfullscreenchange", onFs as EventListener);
+    };
+  }, []);
 
   useEffect(() => {
     if (Platform.OS !== "web" || typeof window === "undefined") return;

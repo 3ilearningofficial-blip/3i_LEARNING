@@ -81,6 +81,11 @@ export async function registerPushForCurrentUser(): Promise<string | null> {
   return token;
 }
 
+/** Call from a user gesture so iOS/Android can show the notification permission prompt. */
+export async function ensurePushRegisteredWithGesture(): Promise<string | null> {
+  return registerPushForCurrentUser();
+}
+
 export async function unregisterPushForCurrentUser(): Promise<void> {
   try {
     if (currentToken) {

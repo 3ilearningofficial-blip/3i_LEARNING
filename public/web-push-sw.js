@@ -18,16 +18,35 @@ self.addEventListener("push", (event) => {
   event.waitUntil(self.registration.showNotification(title, options));
 });
 
+function adminOpsPath(data) {
+  const type = String(data.type || "");
+  if (type === "support_message") return "/admin";
+  if (
+    type === "new_user_registration" ||
+    type === "student_login_new_device" ||
+    type === "new_purchase" ||
+    type === "buy_now_abandoned" ||
+    type === "app_install" ||
+    type === "capture_attempt" ||
+    type === "live_class_completed" ||
+    (type && type.includes("admin"))
+  ) {
+    return "/admin";
+  }
+  return null;
+}
+
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const data = event.notification.data || {};
-  let path = "/";
-  if (data.liveClassId) path = `/live-class/${data.liveClassId}`;
-  else if (data.courseId) path = `/course/${data.courseId}`;
-  else if (data.materialId) path = `/material/${data.materialId}`;
-  else if (data.testId) path = `/test/${data.testId}`;
-  else if (data.type && String(data.type).includes("admin")) path = "/admin";
-  else if (data.type === "support_message") path = "/admin";
+  let path = adminOpsPath(data);
+  if (!path) {
+    if (data.liveClassId) path = `/live-class/${data.liveClassId}`;
+    else if (data.courseId) path = `/course/${data.courseId}`;
+    else if (data.materialId) path = `/material/${data.materialId}`;
+    else if (data.testId) path = `/test/${data.testId}`;
+    else path = "/";
+  }
 
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {

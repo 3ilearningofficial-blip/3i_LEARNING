@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { Platform } from "react-native";
+import { reportCaptureAttempt } from "./report-admin-ops";
 
 /**
  * Prevents screenshots and screen recording.
@@ -7,21 +8,32 @@ import { Platform } from "react-native";
  * - Web: Adds CSS to black out content during print/screen capture attempts,
  *   disables right-click, and blocks common screenshot shortcuts
  */
-export function useScreenProtection(enabled: boolean = true) {
+export function useScreenProtection(enabled: boolean = true, context?: string) {
   useEffect(() => {
     if (!enabled) return;
 
     if (Platform.OS !== "web") {
       // Native: use expo-screen-capture
       let cleanup: (() => void) | undefined;
+      let screenshotSub: { remove: () => void } | null = null;
       import("expo-screen-capture").then((ScreenCapture) => {
         ScreenCapture.preventScreenCaptureAsync();
         cleanup = () => {
           ScreenCapture.allowScreenCaptureAsync();
         };
+        if (typeof ScreenCapture.addScreenshotListener === "function") {
+          screenshotSub = ScreenCapture.addScreenshotListener(() => {
+            void reportCaptureAttempt({ kind: "screenshot", context });
+          });
+        }
       }).catch(() => {});
-      return () => { cleanup?.(); };
+      return () => {
+        screenshotSub?.remove();
+        cleanup?.();
+      };
     }
+
+    const ctx = context || "protected content";
 
     // Web: add protections
     // 1. CSS to black out on print / screen capture
@@ -43,10 +55,12 @@ export function useScreenProtection(enabled: boolean = true) {
         e.preventDefault();
         document.body.style.filter = "blur(30px)";
         setTimeout(() => { document.body.style.filter = ""; }, 1500);
+        void reportCaptureAttempt({ kind: "screenshot", context: ctx });
       }
       // Ctrl+Shift+S (screenshot tools)
       if (e.ctrlKey && e.shiftKey && (e.key === "S" || e.key === "s")) {
         e.preventDefault();
+        void reportCaptureAttempt({ kind: "screenshot", context: ctx });
       }
       // Ctrl+P (print)
       if (e.ctrlKey && (e.key === "P" || e.key === "p")) {
@@ -73,5 +87,5 @@ export function useScreenProtection(enabled: boolean = true) {
       document.removeEventListener("visibilitychange", onVisibilityChange);
       document.body.style.filter = "";
     };
-  }, [enabled]);
+  }, [enabled, context]);
 }

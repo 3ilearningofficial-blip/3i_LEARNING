@@ -1633,11 +1633,12 @@ async function notifyUsersInAppAndPush(db2, userIds, opts) {
   if (!recipientIds.length) return;
   const now = opts.now ?? Date.now();
   const expiresAt = opts.expiresAt === void 0 ? autoNotificationExpiresAt(now) : opts.expiresAt;
+  const source = opts.source ?? null;
   await db2.query(
-    `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
-       SELECT u, $2::text, $3::text, $4::text, $5::bigint, $6::bigint
+    `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at, source)
+       SELECT u, $2::text, $3::text, $4::text, $5::bigint, $6::bigint, $7::text
        FROM unnest($1::int[]) AS u`,
-    [recipientIds, opts.title, opts.message, opts.type ?? "info", now, expiresAt]
+    [recipientIds, opts.title, opts.message, opts.type ?? "info", now, expiresAt, source]
   ).catch(() => {
   });
   await sendPushToUsers(db2, recipientIds, {
@@ -1649,7 +1650,91 @@ async function notifyUsersInAppAndPush(db2, userIds, opts) {
 async function notifyAdminsInAppAndPush(db2, opts) {
   const adminIds = await getAdminIds(db2);
   if (!adminIds.length) return;
-  await notifyUsersInAppAndPush(db2, adminIds, { ...opts, expiresAt: null });
+  const now = Date.now();
+  await db2.query(
+    `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at, source)
+       SELECT u, $2::text, $3::text, 'info', $4::bigint, NULL::bigint, $5::text
+       FROM unnest($1::int[]) AS u`,
+    [adminIds, opts.title, opts.message, now, ADMIN_OPS_SOURCE]
+  ).catch((err) => console.error("[AdminNotify] in-app insert failed:", err));
+  const pushResult = await sendPushToUsers(db2, adminIds, {
+    title: opts.title,
+    body: opts.message,
+    data: opts.pushData || {}
+  }).catch((err) => {
+    console.error("[AdminNotify] push failed:", err);
+    return { sent: 0, tokens: 0, webSent: 0, webSubscriptions: 0 };
+  });
+  console.log(
+    `[AdminNotify] "${opts.title}" \u2014 admins=${adminIds.length} expoSent=${pushResult.sent}/${pushResult.tokens} webSent=${pushResult.webSent}/${pushResult.webSubscriptions}`
+  );
+}
+async function dedupAdminEvent(db2, dedupKey2, actorUserId) {
+  const inserted = await db2.query(
+    `INSERT INTO notifications_sent (class_id, user_id, type, sent_at)
+       VALUES (0, $1, $2, $3)
+       ON CONFLICT (class_id, user_id, type) DO NOTHING
+       RETURNING user_id`,
+    [actorUserId, dedupKey2, Date.now()]
+  ).catch(() => ({ rows: [] }));
+  return inserted.rows.length > 0;
+}
+async function notifyAdminsNewDeviceLogin(db2, opts) {
+  const name = opts.userName.trim() || `Student #${opts.userId}`;
+  const platform = opts.platform?.trim() || "unknown";
+  await notifyAdminsInAppAndPush(db2, {
+    title: "\u{1F511} Student Login (New Device)",
+    message: `${name} signed in from a new device (${platform}).`,
+    pushData: { type: "student_login_new_device", userId: opts.userId }
+  });
+}
+async function notifyAdminsPurchase(db2, opts) {
+  const buyer = opts.buyerName.trim() || `Student #${opts.userId}`;
+  const item = opts.itemTitle.trim() || "an item";
+  const kindLabel = opts.kind === "course" ? "Course" : opts.kind === "book" ? "Book" : opts.kind === "folder" ? "Test Series Folder" : "Test";
+  await notifyAdminsInAppAndPush(db2, {
+    title: `\u{1F4B0} New ${kindLabel} Purchase`,
+    message: `${buyer} purchased ${item}.`,
+    pushData: { type: "new_purchase", purchaseKind: opts.kind, userId: opts.userId, itemId: opts.itemId }
+  });
+}
+async function notifyAdminsBuyNowTap(db2, opts) {
+  const dedupKey2 = `admin_buy_now_${opts.kind}_${opts.itemId}`;
+  const isNew = await dedupAdminEvent(db2, dedupKey2, opts.userId);
+  if (!isNew) return;
+  const buyer = opts.buyerName.trim() || `Student #${opts.userId}`;
+  const item = opts.itemTitle.trim() || "an item";
+  await notifyAdminsInAppAndPush(db2, {
+    title: "\u{1F6D2} Buy Now \u2014 Not Purchased",
+    message: `${buyer} tapped Buy Now for ${item} but did not complete payment.`,
+    pushData: { type: "buy_now_abandoned", purchaseKind: opts.kind, userId: opts.userId, itemId: opts.itemId }
+  });
+}
+async function notifyAdminsAppInstall(db2, opts) {
+  const dedupKey2 = `admin_app_install_${opts.platform}_${opts.isPwa ? "pwa" : "native"}`;
+  const isNew = await dedupAdminEvent(db2, dedupKey2, opts.userId);
+  if (!isNew) return;
+  const name = opts.userName.trim() || `Student #${opts.userId}`;
+  const label = opts.isPwa ? "web app (home screen)" : "mobile app";
+  await notifyAdminsInAppAndPush(db2, {
+    title: "\u{1F4F2} New App Install",
+    message: `${name} added the ${label} on ${opts.platform}.`,
+    pushData: { type: "app_install", userId: opts.userId, platform: opts.platform, isPwa: !!opts.isPwa }
+  });
+}
+async function notifyAdminsCaptureAttempt(db2, opts) {
+  const now = Date.now();
+  const last = captureAttemptLastAt.get(opts.userId) || 0;
+  if (now - last < CAPTURE_ATTEMPT_COOLDOWN_MS) return;
+  captureAttemptLastAt.set(opts.userId, now);
+  const name = opts.userName.trim() || `Student #${opts.userId}`;
+  const action = opts.kind === "recording" ? "screen recording" : "screenshot";
+  const ctx = opts.context.trim() || "protected content";
+  await notifyAdminsInAppAndPush(db2, {
+    title: `\u26A0\uFE0F ${opts.kind === "recording" ? "Screen Recording" : "Screenshot"} Attempt`,
+    message: `${name} may have tried ${action} during ${ctx}.`,
+    pushData: { type: "capture_attempt", userId: opts.userId, kind: opts.kind }
+  });
 }
 async function notifyAdminsLiveClassCompleted(db2, liveClass) {
   const liveClassId = Number(liveClass.id);
@@ -1670,10 +1755,9 @@ async function notifyAdminsLiveClassCompleted(db2, liveClass) {
   }
   if (!newlyNotified.length) return;
   const title = String(liveClass.title || "Live class").trim();
-  await notifyUsersInAppAndPush(db2, newlyNotified, {
+  await notifyAdminsInAppAndPush(db2, {
     title: "\u2705 Live Class Completed",
     message: `"${title}" has ended.`,
-    expiresAt: null,
     pushData: {
       type: "live_class_completed",
       liveClassId,
@@ -1720,11 +1804,29 @@ async function notifyStandaloneMissionAdded(db2, opts) {
     pushData: { type: "standalone_mission_added", missionId: opts.missionId }
   });
 }
+async function maybeNotifyAdminsStudentNewDeviceLogin(db2, opts) {
+  if (opts.role !== "student") return;
+  const deviceId = String(opts.deviceId || "").trim();
+  if (!deviceId) return;
+  const prev = await db2.query("SELECT device_id FROM users WHERE id = $1", [opts.userId]).catch(() => ({ rows: [] }));
+  const prevDevice = String(prev.rows[0]?.device_id || "").trim();
+  if (!prevDevice || prevDevice === deviceId) return;
+  await notifyAdminsNewDeviceLogin(db2, {
+    userId: opts.userId,
+    userName: opts.userName,
+    deviceId,
+    platform: opts.platform
+  }).catch((err) => console.error("[Auth] admin new-device login notify failed:", err));
+}
+var ADMIN_OPS_SOURCE, captureAttemptLastAt, CAPTURE_ATTEMPT_COOLDOWN_MS;
 var init_notification_utils = __esm({
   "backend/notification-utils.ts"() {
     "use strict";
     init_auto_notification_expiry();
     init_push_notifications();
+    ADMIN_OPS_SOURCE = "admin_ops";
+    captureAttemptLastAt = /* @__PURE__ */ new Map();
+    CAPTURE_ATTEMPT_COOLDOWN_MS = 5 * 60 * 1e3;
   }
 });
 
@@ -2010,6 +2112,13 @@ function registerAuthRoutes({
     }
     const sessionToken = generateSecureToken2();
     const normalizedDeviceId = deviceId || null;
+    await maybeNotifyAdminsStudentNewDeviceLogin(db2, {
+      userId: Number(user.id),
+      role: String(user.role || "student"),
+      userName: String(user.name || user.phone || user.email || ""),
+      deviceId: normalizedDeviceId,
+      platform: req ? getClientPlatform(req) ?? void 0 : void 0
+    });
     await persistLoginSession(db2, user, sessionToken, normalizedDeviceId, {
       clearOtp,
       req
@@ -3543,10 +3652,12 @@ function registerPaymentRoutes({
       if (!user) return res.json({ ok: true });
       const { courseId } = req.body;
       if (!courseId) return res.json({ ok: true });
-      const course = await db2.query("SELECT price FROM courses WHERE id = $1", [courseId]);
+      const course = await db2.query("SELECT title, price FROM courses WHERE id = $1", [courseId]);
       const price = course.rows[0]?.price || 0;
+      const courseTitle = String(course.rows[0]?.title || "a course");
       const pricePaisa = Math.round(parseFloat(String(price)) * 100);
       const now = Date.now();
+      let shouldNotifyBuyNow = false;
       await runInTransaction2(async (tx) => {
         const existing = await tx.query(
           `SELECT id, status FROM payments
@@ -3566,6 +3677,7 @@ function registerPaymentRoutes({
                WHERE id = $1`,
               [row.id]
             );
+            shouldNotifyBuyNow = true;
           }
         } else {
           await tx.query(
@@ -3573,8 +3685,19 @@ function registerPaymentRoutes({
              VALUES ($1, $2, $3, 'created', 1, $4)`,
             [user.id, courseId, pricePaisa, now]
           );
+          shouldNotifyBuyNow = true;
         }
       });
+      if (shouldNotifyBuyNow) {
+        const buyerName = String(user.name || user.phone || user.email || "A student");
+        await notifyAdminsBuyNowTap(db2, {
+          kind: "course",
+          buyerName,
+          itemTitle: courseTitle,
+          userId: Number(user.id),
+          itemId: Number(courseId)
+        }).catch((err) => console.error("[Payment] admin buy-now notify failed:", err));
+      }
       res.json({ ok: true });
     } catch {
       res.json({ ok: true });
@@ -3674,10 +3797,12 @@ function registerPaymentRoutes({
           ]);
           const courseTitle = String(courseInfo.rows[0]?.title || "a course");
           const buyerName = String(userInfo.rows[0]?.name || userInfo.rows[0]?.phone || userInfo.rows[0]?.email || "A student");
-          await notifyAdminsInAppAndPush(db2, {
-            title: "\u{1F4B0} New Course Purchase",
-            message: `${buyerName} purchased ${courseTitle}.`,
-            pushData: { type: "new_purchase", userId: result.userId, courseId: result.courseId }
+          await notifyAdminsPurchase(db2, {
+            kind: "course",
+            buyerName,
+            itemTitle: courseTitle,
+            userId: result.userId,
+            itemId: result.courseId
           }).catch((err) => console.error("[Payment] admin purchase notify failed:", err));
           console.log("[Payments] verify success");
           return { statusCode: 200, body: { success: true, message: "Payment verified and enrolled successfully" } };
@@ -3841,6 +3966,14 @@ function registerPaymentRoutes({
           receipt: `test_${testId}_user_${user.id}_${Date.now()}`,
           notes: { testId: String(testId), userId: String(user.id), kind: "test" }
         });
+        const buyerName = String(user.name || user.phone || user.email || "A student");
+        await notifyAdminsBuyNowTap(db2, {
+          kind: "test",
+          buyerName,
+          itemTitle: String(test.title || "a test"),
+          userId: Number(user.id),
+          itemId: Number(testId)
+        }).catch((err) => console.error("[Tests] admin buy-now notify failed:", err));
         return {
           statusCode: 200,
           body: { orderId: order.id, amount, currency: "INR", keyId: process.env.RAZORPAY_KEY_ID, testName: test.title }
@@ -3886,6 +4019,17 @@ function registerPaymentRoutes({
         [userId, testId, razorpay_order_id, razorpay_payment_id, Date.now()]
       );
       await finalizeInstallationBindAfterPurchase(db2, userId, req);
+      const [testInfo, userInfo] = await Promise.all([
+        db2.query("SELECT title FROM tests WHERE id = $1", [testId]).catch(() => ({ rows: [] })),
+        db2.query("SELECT name, phone, email FROM users WHERE id = $1", [userId]).catch(() => ({ rows: [] }))
+      ]);
+      await notifyAdminsPurchase(db2, {
+        kind: "test",
+        buyerName: String(userInfo.rows[0]?.name || userInfo.rows[0]?.phone || userInfo.rows[0]?.email || "A student"),
+        itemTitle: String(testInfo.rows[0]?.title || "a test"),
+        userId,
+        itemId: testId
+      }).catch((err) => console.error("[Tests] admin purchase notify failed:", err));
       return res.redirect(`${frontendBase}/test-series?payment=success&testId=${testId}`);
     } catch (err) {
       console.error("[Tests] verify-redirect failed:", err);
@@ -3923,6 +4067,15 @@ function registerPaymentRoutes({
             [user.id, parsedTestId, razorpay_order_id, razorpay_payment_id, Date.now()]
           );
           await finalizeInstallationBindAfterPurchase(db2, user.id, req);
+          const testTitle = String(testResult.rows[0]?.title || "a test");
+          const buyerName = String(user.name || user.phone || user.email || "A student");
+          await notifyAdminsPurchase(db2, {
+            kind: "test",
+            buyerName,
+            itemTitle: testTitle,
+            userId: Number(user.id),
+            itemId: parsedTestId
+          }).catch((err) => console.error("[Tests] admin purchase notify failed:", err));
           return { statusCode: 200, body: { success: true } };
         });
         return res.status(out.statusCode).json(out.body);
@@ -8897,6 +9050,54 @@ var init_admin_content_export_routes = __esm({
   }
 });
 
+// backend/admin-ops-routes.ts
+function registerAdminOpsRoutes({ app: app2, db: db2, getAuthUser: getAuthUser2 }) {
+  app2.post("/api/analytics/app-install", async (req, res) => {
+    try {
+      const user = await getAuthUser2(req);
+      if (!user) return res.json({ ok: true });
+      if (String(user.role || "") !== "student") return res.json({ ok: true });
+      const platform = String(req.body?.platform || "unknown").trim().slice(0, 32);
+      const isPwa = req.body?.isPwa === true || req.body?.isPwa === "true";
+      const userName = String(user.name || user.phone || user.email || `Student #${user.id}`);
+      await notifyAdminsAppInstall(db2, {
+        userId: Number(user.id),
+        userName,
+        platform,
+        isPwa
+      }).catch((err) => console.error("[AppInstall] admin notify failed:", err));
+      res.json({ ok: true });
+    } catch {
+      res.json({ ok: true });
+    }
+  });
+  app2.post("/api/security/capture-attempt", async (req, res) => {
+    try {
+      const user = await getAuthUser2(req);
+      if (!user) return res.json({ ok: true });
+      if (String(user.role || "") === "admin") return res.json({ ok: true });
+      const kind = req.body?.kind === "recording" ? "recording" : "screenshot";
+      const context = String(req.body?.context || "protected content").trim().slice(0, 120);
+      const userName = String(user.name || user.phone || user.email || `Student #${user.id}`);
+      await notifyAdminsCaptureAttempt(db2, {
+        userId: Number(user.id),
+        userName,
+        context,
+        kind
+      }).catch((err) => console.error("[CaptureAttempt] admin notify failed:", err));
+      res.json({ ok: true });
+    } catch {
+      res.json({ ok: true });
+    }
+  });
+}
+var init_admin_ops_routes = __esm({
+  "backend/admin-ops-routes.ts"() {
+    "use strict";
+    init_notification_utils();
+  }
+});
+
 // backend/admin-notification-routes.ts
 function registerAdminNotificationRoutes({
   app: app2,
@@ -9039,7 +9240,7 @@ function registerAdminCourseCrudRoutes({
 }) {
   app2.post("/api/admin/courses", requireAdmin2, async (req, res) => {
     try {
-      const { title, description, teacherName, price, originalPrice, category, isFree, level, durationHours, courseType, subject, startDate, endDate, validityMonths, thumbnail, coverColor, teacherBio, teacherImageUrl, teacherDetailsJson, multiSubjectConfig, courseLanguage, batchStatus } = req.body;
+      const { title, description, teacherName, price, originalPrice, category, isFree, level, durationHours, courseType, subject, exam, startDate, endDate, validityMonths, thumbnail, coverColor, teacherBio, teacherImageUrl, teacherDetailsJson, multiSubjectConfig, courseLanguage, batchStatus } = req.body;
       const COVER_COLORS = ["#1A56DB", "#7C3AED", "#DC2626", "#059669", "#D97706", "#0891B2", "#DB2777", "#EA580C"];
       const autoColor = COVER_COLORS[Math.floor(Math.random() * COVER_COLORS.length)];
       const normalizedCourseType = courseType || "live";
@@ -9053,9 +9254,9 @@ function registerAdminCourseCrudRoutes({
       ]);
       const teacherDetails = normalizeJsonValue(teacherDetailsJson, []);
       const result = await db2.query(
-        `INSERT INTO courses (title, description, teacher_name, price, original_price, category, is_free, level, duration_hours, course_type, subject, start_date, end_date, validity_months, thumbnail, cover_color, teacher_bio, teacher_image_url, teacher_details_json, multi_subject_config, course_language, batch_status, is_published, created_at) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19::jsonb, $20::jsonb, $21, $22, TRUE, $23) RETURNING *`,
-        [title, description, teacherName || "3i Learning", price || 0, originalPrice || 0, category || "Mathematics", isFree || false, level || "Beginner", durationHours || 0, normalizedCourseType, subject || "", startDate || null, endDate || null, vm, thumbnail || null, resolvedCoverColor, teacherBio || null, teacherImageUrl || null, JSON.stringify(teacherDetails), JSON.stringify(normalizedCourseType === "multi_subject" ? subjects : normalizeJsonArray(multiSubjectConfig)), courseLanguage || "HINGLISH", normalizedCourseType === "multi_subject" ? normalizeBatchStatus(batchStatus) : null, Date.now()]
+        `INSERT INTO courses (title, description, teacher_name, price, original_price, category, is_free, level, duration_hours, course_type, subject, exam, start_date, end_date, validity_months, thumbnail, cover_color, teacher_bio, teacher_image_url, teacher_details_json, multi_subject_config, course_language, batch_status, is_published, created_at) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20::jsonb, $21::jsonb, $22, $23, TRUE, $24) RETURNING *`,
+        [title, description, teacherName || "3i Learning", price || 0, originalPrice || 0, category || "Mathematics", isFree || false, level || "Beginner", durationHours || 0, normalizedCourseType, subject || "", exam || "", startDate || null, endDate || null, vm, thumbnail || null, resolvedCoverColor, teacherBio || null, teacherImageUrl || null, JSON.stringify(teacherDetails), JSON.stringify(normalizedCourseType === "multi_subject" ? subjects : normalizeJsonArray(multiSubjectConfig)), courseLanguage || "HINGLISH", normalizedCourseType === "multi_subject" ? normalizeBatchStatus(batchStatus) : null, Date.now()]
       );
       if (normalizedCourseType !== "test_series") {
         const course = result.rows[0];
@@ -9088,13 +9289,13 @@ function registerAdminCourseCrudRoutes({
   });
   app2.put("/api/admin/courses/:id", requireAdmin2, async (req, res) => {
     try {
-      const { title, description, teacherName, price, originalPrice, category, isFree, level, durationHours, isPublished, totalTests, subject, courseType, startDate, endDate, validityMonths, thumbnail, coverColor, teacherBio, teacherImageUrl, teacherDetailsJson, multiSubjectConfig, courseLanguage, batchStatus } = req.body;
+      const { title, description, teacherName, price, originalPrice, category, isFree, level, durationHours, isPublished, totalTests, subject, exam, courseType, startDate, endDate, validityMonths, thumbnail, coverColor, teacherBio, teacherImageUrl, teacherDetailsJson, multiSubjectConfig, courseLanguage, batchStatus } = req.body;
       const vm = validityMonths != null && String(validityMonths).trim() !== "" ? Math.max(0, parseFloat(String(validityMonths)) || 0) || null : null;
       const teacherDetails = normalizeJsonValue(teacherDetailsJson, []);
       const subjects = normalizeJsonArray(multiSubjectConfig);
       await db2.query(
-        `UPDATE courses SET title=$1, description=$2, teacher_name=$3, price=$4, original_price=$5, category=$6, is_free=$7, level=$8, duration_hours=$9, is_published=$10, total_tests=COALESCE($11, total_tests), subject=COALESCE($12, subject), course_type=COALESCE($13, course_type), start_date=COALESCE($14, start_date), end_date=COALESCE($15, end_date), validity_months=COALESCE($16, validity_months), thumbnail=COALESCE($17, thumbnail), cover_color=COALESCE($18, cover_color), teacher_bio=COALESCE($19, teacher_bio), teacher_image_url=COALESCE($20, teacher_image_url), teacher_details_json=COALESCE($21::jsonb, teacher_details_json), multi_subject_config=COALESCE($22::jsonb, multi_subject_config), course_language=COALESCE($23, course_language), batch_status=COALESCE($24, batch_status) WHERE id=$25`,
-        [title, description, teacherName, price, originalPrice, category, isFree, level, durationHours, isPublished, totalTests, subject, courseType, startDate, endDate, vm, thumbnail ?? null, coverColor ?? null, teacherBio ?? null, teacherImageUrl ?? null, teacherDetailsJson !== void 0 ? JSON.stringify(teacherDetails) : null, multiSubjectConfig !== void 0 ? JSON.stringify(subjects) : null, courseLanguage ?? null, batchStatus !== void 0 ? normalizeBatchStatus(batchStatus) : null, req.params.id]
+        `UPDATE courses SET title=$1, description=$2, teacher_name=$3, price=$4, original_price=$5, category=$6, is_free=$7, level=$8, duration_hours=$9, is_published=$10, total_tests=COALESCE($11, total_tests), subject=COALESCE($12, subject), exam=COALESCE($13, exam), course_type=COALESCE($14, course_type), start_date=COALESCE($15, start_date), end_date=COALESCE($16, end_date), validity_months=COALESCE($17, validity_months), thumbnail=COALESCE($18, thumbnail), cover_color=COALESCE($19, cover_color), teacher_bio=COALESCE($20, teacher_bio), teacher_image_url=COALESCE($21, teacher_image_url), teacher_details_json=COALESCE($22::jsonb, teacher_details_json), multi_subject_config=COALESCE($23::jsonb, multi_subject_config), course_language=COALESCE($24, course_language), batch_status=COALESCE($25, batch_status) WHERE id=$26`,
+        [title, description, teacherName, price, originalPrice, category, isFree, level, durationHours, isPublished, totalTests, subject, exam, courseType, startDate, endDate, vm, thumbnail ?? null, coverColor ?? null, teacherBio ?? null, teacherImageUrl ?? null, teacherDetailsJson !== void 0 ? JSON.stringify(teacherDetails) : null, multiSubjectConfig !== void 0 ? JSON.stringify(subjects) : null, courseLanguage ?? null, batchStatus !== void 0 ? normalizeBatchStatus(batchStatus) : null, req.params.id]
       );
       res.json({ success: true });
     } catch {
@@ -9232,7 +9433,7 @@ function registerBookRoutes({
       if (!bookId) return res.json({ ok: true });
       const purchased = await db2.query("SELECT id FROM book_purchases WHERE user_id = $1 AND book_id = $2", [user.id, bookId]);
       if (purchased.rows.length > 0) return res.json({ ok: true });
-      const result = await db2.query(
+      await db2.query(
         `
         INSERT INTO book_click_tracking (user_id, book_id, click_count, created_at)
         VALUES ($1, $2, 1, $3)
@@ -9241,6 +9442,15 @@ function registerBookRoutes({
       `,
         [user.id, bookId, Date.now()]
       );
+      const bookInfo = await db2.query("SELECT title FROM books WHERE id = $1", [bookId]).catch(() => ({ rows: [] }));
+      const buyerName = String(user.name || user.phone || user.email || "A student");
+      await notifyAdminsBuyNowTap(db2, {
+        kind: "book",
+        buyerName,
+        itemTitle: String(bookInfo.rows[0]?.title || "a book"),
+        userId: Number(user.id),
+        itemId: Number(bookId)
+      }).catch((err) => console.error("[Book] admin buy-now notify failed:", err));
       console.log("[BookClick] tracked");
       res.json({ ok: true });
     } catch (err) {
@@ -9308,6 +9518,17 @@ function registerBookRoutes({
       await finalizeInstallationBindAfterPurchase(db2, userId, req);
       await db2.query("DELETE FROM book_click_tracking WHERE user_id = $1 AND book_id = $2", [userId, bookId]).catch(() => {
       });
+      const [bookInfo, userInfo] = await Promise.all([
+        db2.query("SELECT title FROM books WHERE id = $1", [bookId]).catch(() => ({ rows: [] })),
+        db2.query("SELECT name, phone, email FROM users WHERE id = $1", [userId]).catch(() => ({ rows: [] }))
+      ]);
+      await notifyAdminsPurchase(db2, {
+        kind: "book",
+        buyerName: String(userInfo.rows[0]?.name || userInfo.rows[0]?.phone || userInfo.rows[0]?.email || "A student"),
+        itemTitle: String(bookInfo.rows[0]?.title || "a book"),
+        userId,
+        itemId: bookId
+      }).catch((err) => console.error("[Book] admin purchase notify failed:", err));
       return res.redirect(`${frontendBase}/store?payment=success&bookId=${bookId}`);
     } catch (err) {
       console.error("Book verify-redirect error:", err);
@@ -9332,6 +9553,15 @@ function registerBookRoutes({
       await finalizeInstallationBindAfterPurchase(db2, user.id, req);
       await db2.query("DELETE FROM book_click_tracking WHERE user_id = $1 AND book_id = $2", [user.id, parsedBookId]).catch(() => {
       });
+      const bookInfo = await db2.query("SELECT title FROM books WHERE id = $1", [parsedBookId]).catch(() => ({ rows: [] }));
+      const buyerName = String(user.name || user.phone || user.email || "A student");
+      await notifyAdminsPurchase(db2, {
+        kind: "book",
+        buyerName,
+        itemTitle: String(bookInfo.rows[0]?.title || "a book"),
+        userId: Number(user.id),
+        itemId: parsedBookId
+      }).catch((err) => console.error("[Book] admin purchase notify failed:", err));
       res.json({ success: true });
     } catch (err) {
       console.error("Book verify-payment error:", err);
@@ -9343,6 +9573,7 @@ var init_book_routes = __esm({
   "backend/book-routes.ts"() {
     "use strict";
     init_native_device_binding();
+    init_notification_utils();
   }
 });
 
@@ -10142,18 +10373,25 @@ function registerDoubtNotificationRoutes({
       const user = await getAuthUser2(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const now = Date.now();
-      const result = await db2.query(
+      const isAdmin = String(user.role || "") === "admin";
+      const result = isAdmin ? await db2.query(
         `SELECT * FROM notifications WHERE user_id = $1
-         AND (source IS NULL OR source != 'support')
-         AND (is_hidden IS NOT TRUE)
-         AND (
-           admin_notif_id IS NOT NULL
-           OR is_read IS NOT TRUE
-           OR (hide_after_at IS NOT NULL AND hide_after_at > $2)
-         )
-         AND title NOT ILIKE 'New message from%'
-         AND title NOT ILIKE 'New reply from Support%'
-         ORDER BY created_at DESC LIMIT 50`,
+             AND source = 'admin_ops'
+             AND (is_hidden IS NOT TRUE)
+             ORDER BY created_at DESC LIMIT 100`,
+        [user.id]
+      ) : await db2.query(
+        `SELECT * FROM notifications WHERE user_id = $1
+             AND (source IS NULL OR source != 'support')
+             AND (is_hidden IS NOT TRUE)
+             AND (
+               admin_notif_id IS NOT NULL
+               OR is_read IS NOT TRUE
+               OR (hide_after_at IS NOT NULL AND hide_after_at > $2)
+             )
+             AND title NOT ILIKE 'New message from%'
+             AND title NOT ILIKE 'New reply from Support%'
+             ORDER BY created_at DESC LIMIT 50`,
         [user.id, now]
       );
       res.json(result.rows);
@@ -10167,18 +10405,20 @@ function registerDoubtNotificationRoutes({
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const now = Date.now();
       const existing = await db2.query(
-        "SELECT id, admin_notif_id, expires_at, is_read FROM notifications WHERE id = $1 AND user_id = $2",
+        "SELECT id, admin_notif_id, expires_at, is_read, source FROM notifications WHERE id = $1 AND user_id = $2",
         [req.params.id, user.id]
       );
       if (existing.rows.length === 0) {
         return res.status(404).json({ message: "Notification not found" });
       }
       const row = existing.rows[0];
-      const hideAfterAt = row.admin_notif_id != null ? null : computeAutoNotificationHideAfterAt(now, row.expires_at != null ? Number(row.expires_at) : null);
+      const isAdminOps = row.source === "admin_ops";
+      const hideAfterAt = isAdminOps ? null : row.admin_notif_id != null ? null : computeAutoNotificationHideAfterAt(now, row.expires_at != null ? Number(row.expires_at) : null);
       await db2.query(
         `UPDATE notifications
          SET is_read = TRUE,
              hide_after_at = CASE
+               WHEN source = 'admin_ops' THEN hide_after_at
                WHEN admin_notif_id IS NOT NULL THEN hide_after_at
                WHEN $3::bigint IS NOT NULL THEN $3::bigint
                ELSE hide_after_at
@@ -10888,6 +11128,14 @@ function registerTestFolderRoutes({
           kind: "test_folder"
         }
       });
+      const buyerName = String(user.name || user.phone || user.email || "A student");
+      await notifyAdminsBuyNowTap(db2, {
+        kind: "folder",
+        buyerName,
+        itemTitle: String(folder.name || "a test series folder"),
+        userId: Number(user.id),
+        itemId: folderId
+      }).catch((err) => console.error("[TestFolder] admin buy-now notify failed:", err));
       return res.json({
         orderId: order.id,
         amount: order.amount,
@@ -10920,6 +11168,17 @@ function registerTestFolderRoutes({
         [user.id, parsedFolderId, null, razorpay_payment_id, Date.now()]
       );
       await finalizeInstallationBindAfterPurchase(db2, user.id, req);
+      const [folderInfo, userInfo] = await Promise.all([
+        db2.query("SELECT name FROM standalone_folders WHERE id = $1", [parsedFolderId]).catch(() => ({ rows: [] })),
+        db2.query("SELECT name, phone, email FROM users WHERE id = $1", [user.id]).catch(() => ({ rows: [] }))
+      ]);
+      await notifyAdminsPurchase(db2, {
+        kind: "folder",
+        buyerName: String(userInfo.rows[0]?.name || userInfo.rows[0]?.phone || userInfo.rows[0]?.email || "A student"),
+        itemTitle: String(folderInfo.rows[0]?.name || "a test series folder"),
+        userId: Number(user.id),
+        itemId: parsedFolderId
+      }).catch((err) => console.error("[TestFolder] admin purchase notify failed:", err));
       return res.json({ success: true });
     } catch (err) {
       console.error("Test folder verify-payment error:", err);
@@ -10951,6 +11210,17 @@ function registerTestFolderRoutes({
         [userId, folderId, null, razorpay_payment_id, Date.now()]
       );
       await finalizeInstallationBindAfterPurchase(db2, userId, req);
+      const [folderInfo, userInfo] = await Promise.all([
+        db2.query("SELECT name FROM standalone_folders WHERE id = $1", [folderId]).catch(() => ({ rows: [] })),
+        db2.query("SELECT name, phone, email FROM users WHERE id = $1", [userId]).catch(() => ({ rows: [] }))
+      ]);
+      await notifyAdminsPurchase(db2, {
+        kind: "folder",
+        buyerName: String(userInfo.rows[0]?.name || userInfo.rows[0]?.phone || userInfo.rows[0]?.email || "A student"),
+        itemTitle: String(folderInfo.rows[0]?.name || "a test series folder"),
+        userId,
+        itemId: folderId
+      }).catch((err) => console.error("[TestFolder] admin purchase notify failed:", err));
       return res.redirect(`${frontendBase}/test-folder/${folderId}?payment=success`);
     } catch (err) {
       console.error("Test folder verify-redirect error:", err);
@@ -10963,6 +11233,7 @@ var init_test_folder_routes = __esm({
   "backend/test-folder-routes.ts"() {
     "use strict";
     init_native_device_binding();
+    init_notification_utils();
     STANDALONE_FOLDER_SELECT3 = `
   WITH RECURSIVE folder_tree AS (
     SELECT
@@ -15207,7 +15478,7 @@ var init_schema_readiness_contract = __esm({
       ],
       notifications: ["source", "expires_at", "is_hidden", "admin_notif_id", "image_url", "hide_after_at"],
       web_push_subscriptions: ["endpoint", "p256dh", "auth", "is_active", "last_seen_at"],
-      courses: ["subject", "cover_color", "pyq_count", "mock_count", "practice_count", "teacher_bio", "teacher_image_url", "teacher_details_json", "multi_subject_config", "course_language", "batch_status"],
+      courses: ["subject", "exam", "cover_color", "pyq_count", "mock_count", "practice_count", "teacher_bio", "teacher_image_url", "teacher_details_json", "multi_subject_config", "course_language", "batch_status"],
       lectures: [
         "download_allowed",
         "section_title",
@@ -16339,6 +16610,11 @@ async function registerRoutes(app2) {
     verifyFirebaseToken,
     runInTransaction
   });
+  registerAdminOpsRoutes({
+    app: app2,
+    db,
+    getAuthUser
+  });
   registerPaymentRoutes({
     app: app2,
     db,
@@ -16783,6 +17059,7 @@ var init_routes = __esm({
     init_admin_test_management_routes();
     init_admin_daily_mission_routes();
     init_admin_content_export_routes();
+    init_admin_ops_routes();
     init_admin_notification_routes();
     init_admin_course_crud_routes();
     init_book_routes();

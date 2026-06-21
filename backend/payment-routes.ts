@@ -1,6 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { computeEnrollmentValidUntil, isEnrollmentExpired } from "./course-access-utils";
-import { notifyAdminsInAppAndPush } from "./notification-utils";
+import { notifyAdminsBuyNowTap, notifyAdminsPurchase } from "./notification-utils";
 import {
   assertNativePaidPurchaseInstallation,
   finalizeInstallationBindAfterPurchase,
@@ -260,10 +260,12 @@ export function registerPaymentRoutes({
       if (!user) return res.json({ ok: true });
       const { courseId } = req.body;
       if (!courseId) return res.json({ ok: true });
-      const course = await db.query("SELECT price FROM courses WHERE id = $1", [courseId]);
+      const course = await db.query("SELECT title, price FROM courses WHERE id = $1", [courseId]);
       const price = course.rows[0]?.price || 0;
+      const courseTitle = String(course.rows[0]?.title || "a course");
       const pricePaisa = Math.round(parseFloat(String(price)) * 100);
       const now = Date.now();
+      let shouldNotifyBuyNow = false;
 
       await runInTransaction(async (tx) => {
         // Lock existing click-tracking or paid row to prevent concurrent double-insert.
@@ -286,6 +288,7 @@ export function registerPaymentRoutes({
                WHERE id = $1`,
               [row.id]
             );
+            shouldNotifyBuyNow = true;
           }
         } else {
           // No row at all — safe to insert now that we hold no conflicting lock.
@@ -294,8 +297,19 @@ export function registerPaymentRoutes({
              VALUES ($1, $2, $3, 'created', 1, $4)`,
             [user.id, courseId, pricePaisa, now]
           );
+          shouldNotifyBuyNow = true;
         }
       });
+      if (shouldNotifyBuyNow) {
+        const buyerName = String((user as any).name || (user as any).phone || (user as any).email || "A student");
+        await notifyAdminsBuyNowTap(db, {
+          kind: "course",
+          buyerName,
+          itemTitle: courseTitle,
+          userId: Number(user.id),
+          itemId: Number(courseId),
+        }).catch((err) => console.error("[Payment] admin buy-now notify failed:", err));
+      }
       res.json({ ok: true });
     } catch {
       res.json({ ok: true });
@@ -407,10 +421,12 @@ export function registerPaymentRoutes({
         ]);
         const courseTitle = String(courseInfo.rows[0]?.title || "a course");
         const buyerName = String(userInfo.rows[0]?.name || userInfo.rows[0]?.phone || userInfo.rows[0]?.email || "A student");
-        await notifyAdminsInAppAndPush(db, {
-          title: "💰 New Course Purchase",
-          message: `${buyerName} purchased ${courseTitle}.`,
-          pushData: { type: "new_purchase", userId: result.userId, courseId: result.courseId },
+        await notifyAdminsPurchase(db, {
+          kind: "course",
+          buyerName,
+          itemTitle: courseTitle,
+          userId: result.userId,
+          itemId: result.courseId,
         }).catch((err) => console.error("[Payment] admin purchase notify failed:", err));
         console.log("[Payments] verify success");
         return { statusCode: 200, body: { success: true, message: "Payment verified and enrolled successfully" } as any };
@@ -585,6 +601,14 @@ export function registerPaymentRoutes({
           receipt: `test_${testId}_user_${user.id}_${Date.now()}`,
           notes: { testId: String(testId), userId: String(user.id), kind: "test" },
         });
+        const buyerName = String((user as any).name || (user as any).phone || (user as any).email || "A student");
+        await notifyAdminsBuyNowTap(db, {
+          kind: "test",
+          buyerName,
+          itemTitle: String(test.title || "a test"),
+          userId: Number(user.id),
+          itemId: Number(testId),
+        }).catch((err) => console.error("[Tests] admin buy-now notify failed:", err));
         return {
           statusCode: 200,
           body: { orderId: order.id, amount, currency: "INR", keyId: process.env.RAZORPAY_KEY_ID, testName: test.title } as any,
@@ -632,6 +656,17 @@ export function registerPaymentRoutes({
         [userId, testId, razorpay_order_id, razorpay_payment_id, Date.now()]
       );
       await finalizeInstallationBindAfterPurchase(db, userId, req);
+      const [testInfo, userInfo] = await Promise.all([
+        db.query("SELECT title FROM tests WHERE id = $1", [testId]).catch(() => ({ rows: [] as any[] })),
+        db.query("SELECT name, phone, email FROM users WHERE id = $1", [userId]).catch(() => ({ rows: [] as any[] })),
+      ]);
+      await notifyAdminsPurchase(db, {
+        kind: "test",
+        buyerName: String(userInfo.rows[0]?.name || userInfo.rows[0]?.phone || userInfo.rows[0]?.email || "A student"),
+        itemTitle: String(testInfo.rows[0]?.title || "a test"),
+        userId,
+        itemId: testId,
+      }).catch((err) => console.error("[Tests] admin purchase notify failed:", err));
       return res.redirect(`${frontendBase}/test-series?payment=success&testId=${testId}`);
     } catch (err) {
       console.error("[Tests] verify-redirect failed:", err);
@@ -670,6 +705,15 @@ export function registerPaymentRoutes({
           [user.id, parsedTestId, razorpay_order_id, razorpay_payment_id, Date.now()]
         );
         await finalizeInstallationBindAfterPurchase(db, user.id, req);
+        const testTitle = String(testResult.rows[0]?.title || "a test");
+        const buyerName = String((user as any).name || (user as any).phone || (user as any).email || "A student");
+        await notifyAdminsPurchase(db, {
+          kind: "test",
+          buyerName,
+          itemTitle: testTitle,
+          userId: Number(user.id),
+          itemId: parsedTestId,
+        }).catch((err) => console.error("[Tests] admin purchase notify failed:", err));
         return { statusCode: 200, body: { success: true } as any };
       });
       return res.status(out.statusCode).json(out.body as any);

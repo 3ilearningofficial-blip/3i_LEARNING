@@ -21,6 +21,13 @@ import { VideoWatermark } from "@/components/VideoWatermark";
 import { buildYouTubePhoneWebSrcDoc } from "@/lib/buildYouTubePhoneWebSrcDoc";
 import { buildCfHlsPlayerHtml } from "@/lib/buildCfHlsPlayerHtml";
 import { extractMediaFileKey } from "@/lib/media-key";
+import { fullscreenLandscapeScript } from "@/lib/fullscreen-landscape-html";
+import {
+  handlePlaybackFullscreenMessage,
+  lockLandscapeForPlayback,
+  restorePortraitAfterPlayback,
+  useVideoPlaybackOrientation,
+} from "@/lib/video-playback-orientation";
 
 const mediaTokenCache = new Map<string, { token: string; expiresAt: number; readUrl?: string }>();
 const MEDIA_TOKEN_REFRESH_SKEW_MS = 60 * 1000;
@@ -329,6 +336,7 @@ document.addEventListener('contextmenu', function(e) { e.preventDefault(); });
   var p = v.play();
   if (p && p.then) p.then(tryUnmute).catch(function() { v.muted = true; v.play().catch(function() {}); });
 })();
+${fullscreenLandscapeScript()}
 </script>
 </body>
 </html>`;
@@ -396,6 +404,7 @@ html,body{width:100%;height:100%;background:#000;overflow:hidden;-webkit-user-se
 <button class="cb sm" ontouchend="fwd(10)"><svg viewBox="0 0 24 24"><path d="M18 13c0 3.31-2.69 6-6 6s-6-2.69-6-6h-2c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8V1l-5 5 5 5V7c3.31 0 6 2.69 6 6z"/></svg></button>
 <button class="cb sm" id="vb" ontouchend="tm()"><svg viewBox="0 0 24 24" id="vi"><path d="M16.5 12A4.5 4.5 0 0014 8v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51A8.8 8.8 0 0021 12c0-4.28-3-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06a8.99 8.99 0 003.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></svg></button>
 <div class="sp"></div>
+<button class="cb sm" ontouchend="tfs()"><svg viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg></button>
 <button class="cb sm" ontouchend="tsp()"><svg viewBox="0 0 24 24"><text x="12" y="17" font-size="12" fill="#fff" text-anchor="middle" font-weight="bold" font-family="sans-serif" id="spt">1x</text></svg></button>
 </div></div></div>
 <script>
@@ -436,7 +445,15 @@ if(Math.abs(ct-lastSavedTime)>=10&&window.ReactNativeWebView){lastSavedTime=ct;w
 if(p.getPlayerState()===1)setTimeout(tickPos,5000);}
 function sc(){document.getElementById('ctl').className='ctl';clearTimeout(ht);
 ht=setTimeout(function(){if(p&&p.getPlayerState()===1)document.getElementById('ctl').className='ctl h';},4000);}
+function tfs(){
+  var pw=document.getElementById('pw');
+  if(!pw)return;
+  var fn=pw.requestFullscreen||pw.webkitRequestFullscreen||pw.webkitRequestFullScreen;
+  if(fn){var pr=fn.call(pw);if(pr&&pr.then)pr.then(function(){try{if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify({event:'fullscreen',active:true}));}catch(_){}}).catch(function(){try{if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify({event:'fullscreen',active:true}));}catch(_){}});}
+  else{try{if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify({event:'fullscreen',active:true}));}catch(_){}}
+}
 document.addEventListener('contextmenu',function(e){e.preventDefault();});
+${fullscreenLandscapeScript()}
 </script>
 </body>
 </html>`;
@@ -486,6 +503,24 @@ function WebDirectVideoPlayer({
   useEffect(() => {
     didAutoplay.current = false;
     didSeekRef.current = false;
+  }, [url]);
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof document === "undefined") return;
+    const v = videoRef.current;
+    if (!v) return;
+    const onFs = () => {
+      const active =
+        document.fullscreenElement === v ||
+        (document as Document & { webkitFullscreenElement?: Element }).webkitFullscreenElement === v;
+      if (active) void lockLandscapeForPlayback();
+      else void restorePortraitAfterPlayback();
+    };
+    document.addEventListener("fullscreenchange", onFs);
+    document.addEventListener("webkitfullscreenchange", onFs as EventListener);
+    return () => {
+      document.removeEventListener("fullscreenchange", onFs);
+      document.removeEventListener("webkitfullscreenchange", onFs as EventListener);
+    };
   }, [url]);
   useEffect(() => {
     if (!calledRef.current) {
@@ -559,6 +594,7 @@ function WebDirectVideoPlayer({
 
 export default function LectureScreen() {
   useScreenProtection(true);
+  useVideoPlaybackOrientation();
   const { colors } = useAppTheme();
   // Apply enhanced video protection only for local video playback
   const { id, courseId, videoUrl: paramVideoUrl, title: paramTitle, isLocal } = useLocalSearchParams<{
@@ -980,6 +1016,7 @@ export default function LectureScreen() {
   `;
 
   const handlePlaybackHostMessage = useCallback((rawData: unknown) => {
+    if (typeof rawData === "string" && handlePlaybackFullscreenMessage(rawData)) return;
     try {
       const data: any = typeof rawData === "string" ? JSON.parse(rawData) : rawData;
       if (!data || typeof data !== "object") return;
@@ -1156,7 +1193,7 @@ export default function LectureScreen() {
             onLoad={() => { setIsLoading(false); setIsVideoPlaying(true); }}
             onError={handlePlaybackError}
             onMessage={handleWebViewMessage}
-            allowsFullscreenVideo={false}
+            allowsFullscreenVideo
             mediaPlaybackRequiresUserAction={false}
             injectedJavaScript={preventScreenCapture}
             allowsInlineMediaPlayback

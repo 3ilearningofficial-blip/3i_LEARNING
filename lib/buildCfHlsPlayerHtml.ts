@@ -2,6 +2,7 @@
  * Shared HLS player HTML for WebView / iframe (lectures + live Cloudflare HLS).
  * Optional live-stream tuning + quality picker when hls.js exposes multiple levels.
  */
+import { fullscreenLandscapeScript } from "./fullscreen-landscape-html";
 export type CfHlsPlayerOptions = {
   liveStream?: boolean;
   startAt?: number;
@@ -283,6 +284,7 @@ function tryLoad() {
 }
 tryLoad();
 document.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+${fullscreenLandscapeScript()}
 </script>
 </body>
 </html>`;
@@ -469,6 +471,7 @@ window.addEventListener('focus', softResume);
 window.addEventListener('online', softResume);
 tryLoad();
 document.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+${fullscreenLandscapeScript()}
 </script>
 </body>
 </html>`;

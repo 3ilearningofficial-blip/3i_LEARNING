@@ -1,5 +1,5 @@
 import type { Express, Request, Response } from "express";
-import { notifyAdminsInAppAndPush } from "./notification-utils";
+import { maybeNotifyAdminsStudentNewDeviceLogin, notifyAdminsInAppAndPush } from "./notification-utils";
 import { hashPassword, isScryptHash, verifyLegacySha256, verifyPassword } from "./password-utils";
 import {
   GENERIC_LOGIN_ERROR,
@@ -92,6 +92,13 @@ export function registerAuthRoutes({
 
     const sessionToken = generateSecureToken();
     const normalizedDeviceId = deviceId || null;
+    await maybeNotifyAdminsStudentNewDeviceLogin(db, {
+      userId: Number(user.id),
+      role: String(user.role || "student"),
+      userName: String(user.name || user.phone || user.email || ""),
+      deviceId: normalizedDeviceId,
+      platform: req ? (getClientPlatform(req) ?? undefined) : undefined,
+    });
     await persistLoginSession(db, user as { id: number; role: string }, sessionToken, normalizedDeviceId, {
       clearOtp,
       req,

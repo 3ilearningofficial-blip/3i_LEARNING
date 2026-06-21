@@ -30,6 +30,7 @@ import { registerAdminUsersAndContentRoutes } from "./admin-users-and-content-ro
 import { registerAdminTestManagementRoutes } from "./admin-test-management-routes";
 import { registerAdminDailyMissionRoutes } from "./admin-daily-mission-routes";
 import { registerAdminContentExportRoutes } from "./admin-content-export-routes";
+import { registerAdminOpsRoutes } from "./admin-ops-routes";
 import { registerAdminNotificationRoutes } from "./admin-notification-routes";
 import { registerAdminCourseCrudRoutes } from "./admin-course-crud-routes";
 import { registerBookRoutes } from "./book-routes";
@@ -421,6 +422,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     sendOTPviaSMS,
     verifyFirebaseToken,
     runInTransaction,
+  });
+
+  registerAdminOpsRoutes({
+    app,
+    db,
+    getAuthUser,
   });
 
   registerPaymentRoutes({

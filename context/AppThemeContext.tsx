@@ -52,9 +52,16 @@ type AppThemeContextValue = {
 
 const AppThemeContext = createContext<AppThemeContextValue | null>(null);
 
-function readWebDarkMode(): boolean {
-  if (Platform.OS !== "web" || typeof localStorage === "undefined") return false;
-  return localStorage.getItem(APP_DARK_MODE_KEY) === "1";
+async function readPersistedDarkMode(): Promise<boolean> {
+  try {
+    if (Platform.OS === "web" && typeof localStorage !== "undefined") {
+      return localStorage.getItem(APP_DARK_MODE_KEY) === "1";
+    }
+    const value = await AsyncStorage.getItem(APP_DARK_MODE_KEY);
+    return value === "1";
+  } catch {
+    return false;
+  }
 }
 
 async function persistDarkMode(enabled: boolean) {
@@ -66,14 +73,13 @@ async function persistDarkMode(enabled: boolean) {
 }
 
 export function AppThemeProvider({ children }: { children: React.ReactNode }) {
-  const [isDarkMode, setIsDarkMode] = useState(readWebDarkMode);
+  const [isDarkMode, setIsDarkMode] = useState(false);
 
   useEffect(() => {
-    if (Platform.OS === "web") return;
     let cancelled = false;
-    AsyncStorage.getItem(APP_DARK_MODE_KEY)
-      .then((value) => {
-        if (!cancelled) setIsDarkMode(value === "1");
+    readPersistedDarkMode()
+      .then((enabled) => {
+        if (!cancelled) setIsDarkMode(enabled);
       })
       .catch(() => {});
     return () => {

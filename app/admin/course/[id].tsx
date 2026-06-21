@@ -28,7 +28,7 @@ import AdminLectureAddBody, { type AddContentMode } from "@/components/admin/Adm
 import AdminMaterialAddBody from "@/components/admin/AdminMaterialAddBody";
 import { computeBaseOrderIndex } from "@/lib/bulk-upload-utils";
 import AdminBannerPreview from "@/components/admin/AdminBannerPreview";
-import CourseBannerImage from "@/components/CourseBannerImage";
+import AboutTeacherPhotoField from "@/components/admin/AboutTeacherPhotoField";
 import { AdminImageBoxInline } from "@/app/admin/components/AdminImageBoxInline";
 import {
   type AboutTeacher,
@@ -1292,13 +1292,14 @@ export default function AdminCourseScreen() {
 
   const editCourseMutation = useMutation({
     mutationFn: async (data: EditCourseForm) => {
+      const isTestSeriesEdit = course?.course_type === "test_series";
       await apiRequest("PUT", `/api/admin/courses/${id}`, {
         title: data.title,
         description: data.description,
         teacherName: data.teacherName,
         price: parseFloat(data.price) || 0,
         originalPrice: parseFloat(data.originalPrice) || 0,
-        category: data.category,
+        category: data.category || (isTestSeriesEdit ? "Test Series" : course?.category || "Course"),
         subject: data.subject,
         exam: data.exam,
         isFree: data.isFree,
@@ -1337,17 +1338,19 @@ export default function AdminCourseScreen() {
         .map((feature) => feature.trim())
         .filter(Boolean);
       const primaryTeacher = teachers[0] || { name: "", imageUrl: "", bio: "" };
+      const c = course!;
+      const isTestSeriesCourse = c.course_type === "test_series";
       await apiRequest("PUT", `/api/admin/courses/${id}`, {
-        title: course?.title || editForm.title,
+        title: c.title,
         description: data.description,
-        teacherName: primaryTeacher.name || course?.teacher_name || "3i Learning",
-        price: editForm.price || course?.price || 0,
-        originalPrice: editForm.originalPrice || course?.original_price || 0,
-        category: editForm.category || course?.category || "Course",
-        isFree: editForm.isFree ?? course?.is_free,
-        level: editForm.level || course?.level || "Beginner",
-        durationHours: editForm.durationHours || course?.duration_hours || 0,
-        isPublished: editForm.isPublished ?? course?.is_published,
+        teacherName: primaryTeacher.name || c.teacher_name || "3i Learning",
+        price: parseFloat(String(c.price)) || 0,
+        originalPrice: parseFloat(String(c.original_price)) || 0,
+        category: c.category || (isTestSeriesCourse ? "Test Series" : "Course"),
+        isFree: c.is_free,
+        level: c.level || "Beginner",
+        durationHours: parseFloat(String(c.duration_hours)) || 0,
+        isPublished: c.is_published !== false,
         teacherBio: primaryTeacher.bio || null,
         teacherImageUrl: primaryTeacher.imageUrl || null,
         teacherDetailsJson: { features, teachers },
@@ -1605,14 +1608,6 @@ export default function AdminCourseScreen() {
                       <Text style={{ flex: 1, fontSize: 13, fontFamily: "Inter_500Medium", color: Colors.light.text }}>{row.value}</Text>
                     </View>
                   ))}
-                  {(course as any).thumbnail ? (
-                    <View style={{ marginTop: 6 }}>
-                      <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.textMuted, marginBottom: 8 }}>Banner</Text>
-                      <View style={{ borderRadius: 12, overflow: "hidden", borderWidth: 1, borderColor: Colors.light.border }}>
-                        <CourseBannerImage uri={(course as any).thumbnail} backgroundColor="#F8FAFC" />
-                      </View>
-                    </View>
-                  ) : null}
                 </View>
               </View>
             ) : null}
@@ -1682,23 +1677,10 @@ export default function AdminCourseScreen() {
                       </Pressable>
                     ) : null}
                     <View style={styles.aboutTeacherBodyCol}>
-                      <View style={{ position: "relative", alignSelf: "center" }}>
-                        {teacher.imageUrl ? (
-                          <>
-                            <Image source={{ uri: teacher.imageUrl }} style={styles.aboutTeacherAvatar} />
-                            <Pressable
-                              style={styles.aboutTeacherClearBtn}
-                              onPress={() => setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, imageUrl: "" } : t) }))}
-                            >
-                              <Ionicons name="close" size={13} color="#fff" />
-                            </Pressable>
-                          </>
-                        ) : (
-                          <View style={styles.aboutTeacherAvatarFallback}>
-                            <Ionicons name="person" size={30} color={Colors.light.primary} />
-                          </View>
-                        )}
-                      </View>
+                      <AboutTeacherPhotoField
+                        imageUrl={teacher.imageUrl}
+                        onChange={(url) => setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, imageUrl: url } : t) }))}
+                      />
                         <FormField
                           label={`Teacher ${index + 1} Name`}
                           placeholder="Teacher name"
@@ -1713,22 +1695,6 @@ export default function AdminCourseScreen() {
                           multiline
                           tall
                         />
-                        <FormField
-                          label="Teacher Photo URL"
-                          placeholder="Paste URL or upload to R2"
-                          value={teacher.imageUrl}
-                          onChangeText={(v) => setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, imageUrl: v } : t) }))}
-                        />
-                        <Pressable
-                          style={[styles.aboutUploadBtn, { opacity: uploading ? 0.6 : 1 }]}
-                          disabled={uploading}
-                          onPress={() => pickFileAndUpload("images", "image/*", (url) => {
-                            setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, imageUrl: url } : t) }));
-                          })}
-                        >
-                          {uploading ? <ActivityIndicator size="small" color={Colors.light.primary} /> : <Ionicons name="cloud-upload-outline" size={17} color={Colors.light.primary} />}
-                          <Text style={styles.aboutUploadBtnText}>{uploading ? "Uploading..." : "Upload Teacher Photo to R2"}</Text>
-                        </Pressable>
                     </View>
                   </View>
                 ))}
@@ -1760,23 +1726,10 @@ export default function AdminCourseScreen() {
                       <Ionicons name="trash-outline" size={16} color="#EF4444" />
                     </Pressable>
                     <View style={styles.aboutTeacherBodyCol}>
-                      <View style={{ position: "relative", alignSelf: "center" }}>
-                        {teacher.imageUrl ? (
-                          <>
-                            <Image source={{ uri: teacher.imageUrl }} style={styles.aboutTeacherAvatar} />
-                            <Pressable
-                              style={styles.aboutTeacherClearBtn}
-                              onPress={() => setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, imageUrl: "" } : t) }))}
-                            >
-                              <Ionicons name="close" size={13} color="#fff" />
-                            </Pressable>
-                          </>
-                        ) : (
-                          <View style={styles.aboutTeacherAvatarFallback}>
-                            <Ionicons name="person" size={30} color={Colors.light.primary} />
-                          </View>
-                        )}
-                      </View>
+                      <AboutTeacherPhotoField
+                        imageUrl={teacher.imageUrl}
+                        onChange={(url) => setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, imageUrl: url } : t) }))}
+                      />
                         <FormField
                           label={`Teacher ${index + 1} Name`}
                           placeholder="Teacher name"
@@ -1791,22 +1744,6 @@ export default function AdminCourseScreen() {
                           multiline
                           tall
                         />
-                        <FormField
-                          label="Teacher Photo URL"
-                          placeholder="Paste URL or upload to R2"
-                          value={teacher.imageUrl}
-                          onChangeText={(v) => setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, imageUrl: v } : t) }))}
-                        />
-                        <Pressable
-                          style={[styles.aboutUploadBtn, { opacity: uploading ? 0.6 : 1 }]}
-                          disabled={uploading}
-                          onPress={() => pickFileAndUpload("images", "image/*", (url) => {
-                            setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, imageUrl: url } : t) }));
-                          })}
-                        >
-                          {uploading ? <ActivityIndicator size="small" color={Colors.light.primary} /> : <Ionicons name="cloud-upload-outline" size={17} color={Colors.light.primary} />}
-                          <Text style={styles.aboutUploadBtnText}>{uploading ? "Uploading..." : "Upload Teacher Photo to R2"}</Text>
-                        </Pressable>
                     </View>
                   </View>
                 ))}
@@ -1822,23 +1759,10 @@ export default function AdminCourseScreen() {
                       <Ionicons name="trash-outline" size={16} color="#EF4444" />
                     </Pressable>
                     <View style={styles.aboutTeacherBodyCol}>
-                      <View style={{ position: "relative", alignSelf: "center" }}>
-                        {teacher.imageUrl ? (
-                          <>
-                            <Image source={{ uri: teacher.imageUrl }} style={styles.aboutTeacherAvatar} />
-                            <Pressable
-                              style={styles.aboutTeacherClearBtn}
-                              onPress={() => setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, imageUrl: "" } : t) }))}
-                            >
-                              <Ionicons name="close" size={13} color="#fff" />
-                            </Pressable>
-                          </>
-                        ) : (
-                          <View style={styles.aboutTeacherAvatarFallback}>
-                            <Ionicons name="person" size={30} color={Colors.light.primary} />
-                          </View>
-                        )}
-                      </View>
+                      <AboutTeacherPhotoField
+                        imageUrl={teacher.imageUrl}
+                        onChange={(url) => setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, imageUrl: url } : t) }))}
+                      />
                         <FormField
                           label={`Teacher ${index + 1} Name`}
                           placeholder="Teacher name"
@@ -1853,22 +1777,6 @@ export default function AdminCourseScreen() {
                           multiline
                           tall
                         />
-                        <FormField
-                          label="Teacher Photo URL"
-                          placeholder="Paste URL or upload to R2"
-                          value={teacher.imageUrl}
-                          onChangeText={(v) => setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, imageUrl: v } : t) }))}
-                        />
-                        <Pressable
-                          style={[styles.aboutUploadBtn, { opacity: uploading ? 0.6 : 1 }]}
-                          disabled={uploading}
-                          onPress={() => pickFileAndUpload("images", "image/*", (url) => {
-                            setAboutForm((p) => ({ ...p, teachers: p.teachers.map((t, i) => i === index ? { ...t, imageUrl: url } : t) }));
-                          })}
-                        >
-                          {uploading ? <ActivityIndicator size="small" color={Colors.light.primary} /> : <Ionicons name="cloud-upload-outline" size={17} color={Colors.light.primary} />}
-                          <Text style={styles.aboutUploadBtnText}>{uploading ? "Uploading..." : "Upload Teacher Photo to R2"}</Text>
-                        </Pressable>
                     </View>
                   </View>
                 ))}

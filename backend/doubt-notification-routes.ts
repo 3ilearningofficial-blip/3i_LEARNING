@@ -558,20 +558,29 @@ export function registerDoubtNotificationRoutes({
       const user = await getAuthUser(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const now = Date.now();
-      const result = await db.query(
-        `SELECT * FROM notifications WHERE user_id = $1
-         AND (source IS NULL OR source != 'support')
-         AND (is_hidden IS NOT TRUE)
-         AND (
-           admin_notif_id IS NOT NULL
-           OR is_read IS NOT TRUE
-           OR (hide_after_at IS NOT NULL AND hide_after_at > $2)
-         )
-         AND title NOT ILIKE 'New message from%'
-         AND title NOT ILIKE 'New reply from Support%'
-         ORDER BY created_at DESC LIMIT 50`,
-        [user.id, now]
-      );
+      const isAdmin = String(user.role || "") === "admin";
+      const result = isAdmin
+        ? await db.query(
+            `SELECT * FROM notifications WHERE user_id = $1
+             AND source = 'admin_ops'
+             AND (is_hidden IS NOT TRUE)
+             ORDER BY created_at DESC LIMIT 100`,
+            [user.id]
+          )
+        : await db.query(
+            `SELECT * FROM notifications WHERE user_id = $1
+             AND (source IS NULL OR source != 'support')
+             AND (is_hidden IS NOT TRUE)
+             AND (
+               admin_notif_id IS NOT NULL
+               OR is_read IS NOT TRUE
+               OR (hide_after_at IS NOT NULL AND hide_after_at > $2)
+             )
+             AND title NOT ILIKE 'New message from%'
+             AND title NOT ILIKE 'New reply from Support%'
+             ORDER BY created_at DESC LIMIT 50`,
+            [user.id, now]
+          );
       res.json(result.rows);
     } catch {
       res.status(500).json({ message: "Failed to fetch notifications" });
@@ -584,7 +593,7 @@ export function registerDoubtNotificationRoutes({
       if (!user) return res.status(401).json({ message: "Not authenticated" });
       const now = Date.now();
       const existing = await db.query(
-        "SELECT id, admin_notif_id, expires_at, is_read FROM notifications WHERE id = $1 AND user_id = $2",
+        "SELECT id, admin_notif_id, expires_at, is_read, source FROM notifications WHERE id = $1 AND user_id = $2",
         [req.params.id, user.id]
       );
       if (existing.rows.length === 0) {
@@ -594,15 +603,19 @@ export function registerDoubtNotificationRoutes({
         admin_notif_id: number | null;
         expires_at: number | null;
         is_read: boolean;
+        source: string | null;
       };
-      const hideAfterAt =
-        row.admin_notif_id != null
+      const isAdminOps = row.source === "admin_ops";
+      const hideAfterAt = isAdminOps
+        ? null
+        : row.admin_notif_id != null
           ? null
           : computeAutoNotificationHideAfterAt(now, row.expires_at != null ? Number(row.expires_at) : null);
       await db.query(
         `UPDATE notifications
          SET is_read = TRUE,
              hide_after_at = CASE
+               WHEN source = 'admin_ops' THEN hide_after_at
                WHEN admin_notif_id IS NOT NULL THEN hide_after_at
                WHEN $3::bigint IS NOT NULL THEN $3::bigint
                ELSE hide_after_at

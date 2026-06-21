@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { Platform } from "react-native";
+import { reportCaptureAttempt } from "./report-admin-ops";
 
 /**
  * Enhanced screen protection specifically for video playback.
@@ -7,11 +8,12 @@ import { Platform } from "react-native";
  * 
  * @param enabled - Whether to enable protection (should be true only during local video playback)
  */
-export function useVideoScreenProtection(enabled: boolean = false) {
+export function useVideoScreenProtection(enabled: boolean = false, context: string = "video playback") {
   useEffect(() => {
     if (!enabled || Platform.OS === "web") return;
 
     let cleanupFunctions: (() => void)[] = [];
+    let screenshotSub: { remove: () => void } | null = null;
 
     // iOS: Use expo-screen-capture
     if (Platform.OS === "ios") {
@@ -21,6 +23,11 @@ export function useVideoScreenProtection(enabled: boolean = false) {
           cleanupFunctions.push(() => {
             ScreenCapture.allowScreenCaptureAsync();
           });
+          if (typeof ScreenCapture.addScreenshotListener === "function") {
+            screenshotSub = ScreenCapture.addScreenshotListener(() => {
+              void reportCaptureAttempt({ kind: "screenshot", context });
+            });
+          }
         })
         .catch((err) => {
           console.warn("[VideoScreenProtection] Failed to load expo-screen-capture:", err);
@@ -43,7 +50,8 @@ export function useVideoScreenProtection(enabled: boolean = false) {
 
     // Cleanup function
     return () => {
+      screenshotSub?.remove();
       cleanupFunctions.forEach((cleanup) => cleanup());
     };
-  }, [enabled]);
+  }, [enabled, context]);
 }

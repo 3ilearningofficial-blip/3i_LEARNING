@@ -4,6 +4,8 @@
  * fs=0 + requestFullscreen(.wrapper) keeps black bars visible in fullscreen on Android Chrome.
  */
 
+import { fullscreenLandscapeScript } from "./fullscreen-landscape-html";
+
 export type BuildYouTubePhoneWebSrcDocOpts = {
   videoId: string;
   /** Query string without "?" (e.g. autoplay=1&mute=1&…) — fs is forced to 0 here. */
@@ -94,7 +96,21 @@ document.addEventListener('contextmenu', function(e) { e.preventDefault(); });
     var fn = el.requestFullscreen || el.webkitRequestFullscreen || el.webkitRequestFullScreen || el.msRequestFullscreen;
     if (!fn) return;
     var p = fn.call(el);
-    if (p && p.catch) p.catch(function(){});
+    if (p && p.then) {
+      p.then(function() {
+        try {
+          var o = screen.orientation;
+          if (o && o.lock) {
+            var lp = o.lock('landscape-primary');
+            if (lp && lp.catch) lp.catch(function(){ o.lock('landscape').catch(function(){}); });
+          }
+        } catch (_) {}
+        try {
+          var msg = JSON.stringify({ event: 'fullscreen', active: true });
+          if (window.parent && window.parent !== window) window.parent.postMessage(msg, '*');
+        } catch (_) {}
+      }).catch(function(){});
+    }
   }
   b.addEventListener('click', function(e) {
     e.preventDefault();
@@ -102,6 +118,7 @@ document.addEventListener('contextmenu', function(e) { e.preventDefault(); });
     goFs(w);
   });
 })();
+${fullscreenLandscapeScript()}
 </script>
 </body>
 </html>`;

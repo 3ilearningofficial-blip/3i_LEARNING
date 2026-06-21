@@ -20,12 +20,13 @@ import { AppThemeProvider, useAppTheme } from "@/context/AppThemeContext";
 import { WebDownloadHud } from "@/components/WebDownloadHud";
 import { WebAppHeader } from "@/components/WebAppHeader";
 import { StatusBar } from "expo-status-bar";
-import * as ScreenOrientation from "expo-screen-orientation";
+import { lockDefaultPortrait } from "@/lib/video-playback-orientation";
 import { Platform, AppState, AppStateStatus } from "react-native";
 import { DownloadManagerProvider, useDownloadManager } from "@/lib/useDownloadManager";
 import { listWebOfflineKeys, removeWebOffline } from "@/lib/web-offline-store";
 import { getStoredAuthUser } from "@/lib/auth-storage";
 import { clearWebPostLoginHomeGrace, getWebPostLoginHomeGraceRemainingMs } from "@/lib/web-post-login-grace";
+import { reportAppInstallOnce, setupPwaInstallListener } from "@/lib/report-admin-ops";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -41,20 +42,6 @@ function getCurrentWebTopSegment(): string {
   return window.location.pathname.split("/").filter(Boolean)[0] || "";
 }
 
-// Lock to portrait on mobile (native)
-if (Platform.OS !== "web") {
-  ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
-}
-// Lock to portrait on mobile web (phone browsers)
-if (Platform.OS === "web" && typeof window !== "undefined" && typeof screen !== "undefined") {
-  try {
-    const lockOrientation = (screen as any).orientation?.lock;
-    if (lockOrientation && window.innerWidth < 768) {
-      (screen as any).orientation.lock("portrait-primary").catch(() => {});
-    }
-  } catch {}
-}
-
 function RootLayoutNav() {
   const { user, isLoading, refreshUser } = useAuth();
   const segments = useSegments();
@@ -67,12 +54,22 @@ function RootLayoutNav() {
   const incompleteSplashNavDoneRef = useRef(false);
 
   useEffect(() => {
+    void lockDefaultPortrait();
+  }, []);
+
+  useEffect(() => {
     if (!user || user.profileComplete) incompleteSplashNavDoneRef.current = false;
   }, [user?.id, user?.profileComplete]);
 
   useEffect(() => {
     if (Platform.OS === "web" && user?.id) clearWebPostLoginHomeGrace();
   }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id || user.role === "admin") return;
+    void reportAppInstallOnce();
+    return setupPwaInstallListener();
+  }, [user?.id, user?.role]);
 
   useEffect(() => {
     const currentSegmentName = String(segments[0] || "");
