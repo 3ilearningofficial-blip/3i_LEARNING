@@ -17,7 +17,7 @@ import {
   serializeWelcomeBannerUrls,
   validateWelcomeBannerJsonForSave,
 } from "@/lib/welcome-banners";
-import { COURSE_BANNER_RECOMMENDED } from "@/constants/courseBanner";
+import { WELCOME_BANNER_RECOMMENDED } from "@/constants/courseBanner";
 import WelcomeBannerPreview from "@/components/admin/WelcomeBannerPreview";
 import Colors from "@/constants/colors";
 import { useAppTheme } from "@/context/AppThemeContext";
@@ -413,7 +413,7 @@ export function WelcomeSettingsTab() {
       <View style={{ backgroundColor: colors.card, borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: colors.border }}>
         <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: colors.text }}>Homepage banner carousel</Text>
         <Text style={{ fontSize: 12, color: colors.textMuted, fontFamily: "Inter_400Regular", lineHeight: 17 }}>
-          Promotional banners appear on the welcome page directly under the header. Upload {COURSE_BANNER_RECOMMENDED} (8:3). The full image is shown — nothing is cropped. Leave empty to hide the carousel.
+          Promotional banners appear on the welcome page directly under the header. Upload {WELCOME_BANNER_RECOMMENDED} (3:1). Banners fill edge-to-edge; keep important content centered — may crop slightly on wide screens. Leave empty to hide the carousel.
         </Text>
         {bannerSlotRows.map((url, index) => {
           const uploadingHere = bannerUpload?.slot === index;

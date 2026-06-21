@@ -1,8 +1,8 @@
-import React from "react";
-import { View, Pressable, Text, StyleSheet } from "react-native";
+import React, { useState } from "react";
+import { View, Pressable, Text, StyleSheet, LayoutChangeEvent } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import CourseBannerImage from "@/components/CourseBannerImage";
-import { COURSE_BANNER_RECOMMENDED } from "@/constants/courseBanner";
+import { WelcomeBannerSlide } from "@/components/WelcomeBannerCarousel";
+import { WELCOME_BANNER_ASPECT, WELCOME_BANNER_RECOMMENDED } from "@/constants/courseBanner";
 import Colors from "@/constants/colors";
 
 type Props = {
@@ -11,19 +11,32 @@ type Props = {
   showHint?: boolean;
 };
 
-/** Welcome carousel preview — full image visible (contain), same 8:3 frame as public carousel. */
+/** Welcome carousel preview — same 3:1 cover frame as public carousel. */
 export default function WelcomeBannerPreview({ uri, onClear, showHint = true }: Props) {
+  const [previewWidth, setPreviewWidth] = useState(320);
+  const previewHeight = previewWidth / WELCOME_BANNER_ASPECT;
+
+  const onPreviewLayout = (e: LayoutChangeEvent) => {
+    const w = e.nativeEvent.layout.width;
+    if (w > 0 && Math.abs(w - previewWidth) > 1) setPreviewWidth(w);
+  };
+
   return (
     <View style={styles.wrap}>
-      <View style={styles.previewBox}>
-        <CourseBannerImage uri={uri} backgroundColor="#F8FAFC" />
+      <View style={styles.previewBox} onLayout={onPreviewLayout}>
+        <WelcomeBannerSlide
+          uri={uri}
+          width={previewWidth}
+          height={previewHeight}
+          backgroundColor="#F8FAFC"
+        />
         <Pressable style={styles.clearBtn} onPress={onClear} hitSlop={8}>
           <Ionicons name="close" size={14} color="#fff" />
         </Pressable>
       </View>
       {showHint ? (
         <Text style={styles.hint}>
-          Recommended: {COURSE_BANNER_RECOMMENDED} (8:3). Full image shown on welcome page — nothing cropped.
+          Recommended: {WELCOME_BANNER_RECOMMENDED} (3:1). Banner fills edge-to-edge; keep key content centered — may crop slightly on wide screens.
         </Text>
       ) : null}
     </View>
@@ -33,6 +46,8 @@ export default function WelcomeBannerPreview({ uri, onClear, showHint = true }: 
 const styles = StyleSheet.create({
   wrap: { marginBottom: 8 },
   previewBox: {
+    width: "100%",
+    aspectRatio: WELCOME_BANNER_ASPECT,
     borderRadius: 12,
     overflow: "hidden",
     borderWidth: 1,

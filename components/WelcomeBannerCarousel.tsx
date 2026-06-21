@@ -13,7 +13,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import {
-  COURSE_BANNER_ASPECT,
+  WELCOME_BANNER_ASPECT,
   WELCOME_BANNER_MAX_HEIGHT,
   WELCOME_BANNER_WIDE_BREAKPOINT,
 } from "@/constants/courseBanner";
@@ -25,7 +25,7 @@ type Props = {
   backgroundColor?: string;
 };
 
-function BannerSlide({
+export function WelcomeBannerSlide({
   uri,
   width,
   height,
@@ -47,7 +47,7 @@ function BannerSlide({
             width: "100%",
             height: "100%",
             display: "block",
-            objectFit: "contain",
+            objectFit: "cover",
             objectPosition: "center center",
           },
           loading: "lazy",
@@ -59,7 +59,7 @@ function BannerSlide({
 
   return (
     <View style={[styles.slide, { width, height, backgroundColor }]}>
-      <Image source={{ uri }} style={styles.slideImage} resizeMode="contain" />
+      <Image source={{ uri }} style={styles.slideImage} resizeMode="cover" />
     </View>
   );
 }
@@ -78,7 +78,7 @@ export default function WelcomeBannerCarousel({
     .filter(Boolean);
 
   const slideWidth = screenWidth;
-  const naturalHeight = slideWidth / COURSE_BANNER_ASPECT;
+  const naturalHeight = slideWidth / WELCOME_BANNER_ASPECT;
   const slideHeight =
     screenWidth >= WELCOME_BANNER_WIDE_BREAKPOINT
       ? Math.min(naturalHeight, WELCOME_BANNER_MAX_HEIGHT)
@@ -120,7 +120,7 @@ export default function WelcomeBannerCarousel({
           scrollEventThrottle={16}
         >
           {slides.map((uri, i) => (
-            <BannerSlide
+            <WelcomeBannerSlide
               key={`${uri}-${i}`}
               uri={uri}
               width={slideWidth}
@@ -169,11 +169,7 @@ export default function WelcomeBannerCarousel({
 const styles = StyleSheet.create({
   wrap: { width: "100%" },
   carouselFrame: { position: "relative", overflow: "hidden" },
-  slide: {
-    justifyContent: "center",
-    alignItems: "center",
-    overflow: "hidden",
-  },
+  slide: { overflow: "hidden" },
   slideImage: { width: "100%", height: "100%" },
   arrowBtn: {
     position: "absolute",
