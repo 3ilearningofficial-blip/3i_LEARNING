@@ -14,6 +14,20 @@ type RegisterAdminEnrollmentRoutesDeps = {
   runInTransaction: <T>(fn: (tx: DbClient) => Promise<T>) => Promise<T>;
 };
 
+/** Optional DELETE inside a transaction — failed statements abort PG tx unless rolled back to savepoint. */
+async function txQueryOptional(tx: DbClient, savepoint: string, sql: string, params?: unknown[]): Promise<void> {
+  const sp = `sp_${savepoint}`;
+  await tx.query(`SAVEPOINT ${sp}`);
+  try {
+    await tx.query(sql, params);
+    await tx.query(`RELEASE SAVEPOINT ${sp}`);
+  } catch (err) {
+    await tx.query(`ROLLBACK TO SAVEPOINT ${sp}`);
+    await tx.query(`RELEASE SAVEPOINT ${sp}`);
+    console.warn(`[EnrollmentDelete] optional step skipped (${savepoint}):`, err);
+  }
+}
+
 /** Write a non-blocking audit entry. Never throws — audit failure must not break the main operation. */
 async function writeEnrollmentAuditLog(
   db: DbClient,
@@ -29,11 +43,95 @@ async function writeEnrollmentAuditLog(
       [adminUserId, action, enrollmentId, JSON.stringify(meta), Date.now()]
     );
   } catch {
-    // Audit table may not exist yet (migration pending) — non-fatal. Log for ops visibility.
-    // Run migration: CREATE TABLE IF NOT EXISTS admin_audit_log (id BIGSERIAL PRIMARY KEY,
-    //   admin_user_id INT, action TEXT, target_type TEXT, target_id TEXT,
-    //   meta JSONB, created_at BIGINT);
+    // Audit table may not exist yet (migration pending) — non-fatal.
   }
+}
+
+async function purgeEnrollmentRelatedRows(
+  tx: DbClient,
+  userId: number,
+  courseId: number,
+  enrollmentId: string
+): Promise<void> {
+  await tx.query(
+    `DELETE FROM user_downloads
+     WHERE user_id = $1
+       AND (
+         (item_type = 'lecture' AND item_id IN (SELECT id FROM lectures WHERE course_id = $2))
+         OR (item_type = 'material' AND item_id IN (SELECT id FROM study_materials WHERE course_id = $2))
+       )`,
+    [userId, courseId]
+  );
+
+  await txQueryOptional(
+    tx,
+    "download_tokens",
+    `DELETE FROM download_tokens WHERE user_id = $1 AND course_id = $2`,
+    [userId, courseId]
+  );
+
+  await tx.query(
+    `DELETE FROM media_tokens
+     WHERE user_id = $1
+       AND file_key IN (
+         SELECT file_url FROM study_materials WHERE course_id = $2 AND file_url IS NOT NULL
+         UNION ALL
+         SELECT video_url FROM lectures WHERE course_id = $2 AND video_url IS NOT NULL
+         UNION ALL
+         SELECT pdf_url FROM lectures WHERE course_id = $2 AND pdf_url IS NOT NULL
+         UNION ALL
+         SELECT recording_url FROM live_classes WHERE course_id = $2 AND recording_url IS NOT NULL
+       )`,
+    [userId, courseId]
+  );
+
+  await tx.query(
+    `DELETE FROM lecture_progress
+     WHERE user_id = $1
+       AND lecture_id IN (SELECT id FROM lectures WHERE course_id = $2)`,
+    [userId, courseId]
+  );
+
+  await txQueryOptional(
+    tx,
+    "live_recording_progress",
+    `DELETE FROM live_class_recording_progress
+     WHERE user_id = $1
+       AND live_class_id IN (SELECT id FROM live_classes WHERE course_id = $2)`,
+    [userId, courseId]
+  );
+
+  await txQueryOptional(
+    tx,
+    "live_class_viewers",
+    `DELETE FROM live_class_viewers
+     WHERE user_id = $1
+       AND live_class_id IN (SELECT id FROM live_classes WHERE course_id = $2)`,
+    [userId, courseId]
+  );
+
+  await tx.query(
+    `DELETE FROM test_attempts
+     WHERE user_id = $1
+       AND test_id IN (SELECT id FROM tests WHERE course_id = $2)`,
+    [userId, courseId]
+  );
+
+  await txQueryOptional(
+    tx,
+    "user_missions",
+    `DELETE FROM user_missions
+     WHERE user_id = $1
+       AND mission_id IN (SELECT id FROM daily_missions WHERE course_id = $2)`,
+    [userId, courseId]
+  );
+
+  await tx.query(`DELETE FROM enrollments WHERE id = $1`, [enrollmentId]);
+
+  await tx.query(
+    `UPDATE courses SET total_students = GREATEST(0, COALESCE(total_students, 0) - 1) WHERE id = $1`,
+    [courseId]
+  );
 }
 
 export function registerAdminEnrollmentRoutes({
@@ -129,9 +227,8 @@ export function registerAdminEnrollmentRoutes({
         return res.json({ success: true });
       }
       const { user_id, course_id } = enrollment.rows[0];
+      const enrollmentId = String(req.params.id);
 
-      // R2 / IndexedDB offline downloads are external state — run before the DB
-      // transaction so a storage failure doesn't block the DB cleanup.
       try {
         await deleteDownloadsForUser(Number(user_id), Number(course_id));
       } catch (cleanupErr) {
@@ -139,58 +236,10 @@ export function registerAdminEnrollmentRoutes({
       }
 
       await runInTransaction(async (tx) => {
-        // Invalidate active media tokens the student holds for this course's content
-        await tx.query(
-          `DELETE FROM media_tokens
-           WHERE user_id = $1
-             AND file_key IN (
-               SELECT file_url FROM study_materials WHERE course_id = $2 AND file_url IS NOT NULL
-               UNION ALL
-               SELECT video_url FROM lectures        WHERE course_id = $2 AND video_url IS NOT NULL
-               UNION ALL
-               SELECT pdf_url   FROM lectures        WHERE course_id = $2 AND pdf_url IS NOT NULL
-               UNION ALL
-               SELECT recording_url FROM live_classes WHERE course_id = $2 AND recording_url IS NOT NULL
-             )`,
-          [user_id, course_id]
-        );
-
-        // Download tokens for this user+course (table added in 0034; tolerate absence)
-        await tx
-          .query(`DELETE FROM download_tokens WHERE user_id = $1 AND course_id = $2`, [user_id, course_id])
-          .catch(() => {});
-
-        // Lecture progress for any lecture in this course
-        await tx.query(
-          `DELETE FROM lecture_progress
-           WHERE user_id = $1
-             AND lecture_id IN (SELECT id FROM lectures WHERE course_id = $2)`,
-          [user_id, course_id]
-        );
-
-        // Test attempts for any test in this course
-        await tx.query(
-          `DELETE FROM test_attempts
-           WHERE user_id = $1
-             AND test_id IN (SELECT id FROM tests WHERE course_id = $2)`,
-          [user_id, course_id]
-        );
-
-        // Daily mission attempts for this user on this course's missions (table from 0035; tolerate absence)
-        await tx
-          .query(
-            `DELETE FROM user_missions
-             WHERE user_id = $1
-               AND mission_id IN (SELECT id FROM daily_missions WHERE course_id = $2)`,
-            [user_id, course_id]
-          )
-          .catch(() => {});
-
-        // Hard-delete the enrollment row last so the cascade above is atomic
-        await tx.query(`DELETE FROM enrollments WHERE id = $1`, [req.params.id]);
+        await purgeEnrollmentRelatedRows(tx, Number(user_id), Number(course_id), enrollmentId);
       });
 
-      void writeEnrollmentAuditLog(db, adminUserId, "deleted", String(req.params.id), {
+      void writeEnrollmentAuditLog(db, adminUserId, "deleted", enrollmentId, {
         user_id,
         course_id,
         hard_delete: true,
@@ -211,11 +260,7 @@ export function registerAdminEnrollmentRoutes({
 
       await deleteDownloadsForCourse(parseInt(Array.isArray(courseId) ? courseId[0] : courseId));
 
-      // R2/storage is already cleared; DB deletes are atomic so we do not leave a half-deleted course row graph.
       await runInTransaction(async (tx) => {
-        // Invalidate all media tokens for this course's content BEFORE deleting the
-        // content rows. Tokens that survive deletion stay valid until their TTL expires,
-        // allowing access to deleted content — this prevents that.
         await tx.query(
           `DELETE FROM media_tokens
            WHERE file_key IN (
@@ -247,3 +292,5 @@ export function registerAdminEnrollmentRoutes({
   });
 }
 
+/** Exported for unit tests. */
+export { purgeEnrollmentRelatedRows, txQueryOptional };

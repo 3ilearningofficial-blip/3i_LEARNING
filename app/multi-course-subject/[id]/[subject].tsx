@@ -5,7 +5,8 @@ import { useFocusEffect } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useQuery } from "@tanstack/react-query";
-import { authFetch, getApiUrl, apiRequest } from "@/lib/query-client";
+import { authFetch, getApiUrl } from "@/lib/query-client";
+import { repairEnrollmentAccess } from "@/lib/enrollment-repair";
 import { myAttemptsSummaryQueryKey } from "@/lib/query-keys";
 import { DownloadButton } from "@/components/DownloadButton";
 import { useAuth } from "@/context/AuthContext";
@@ -55,7 +56,7 @@ async function fetchCourse(id: string) {
 export default function MultiCourseSubjectScreen() {
   const { id, subject } = useLocalSearchParams<{ id: string; subject: string }>();
   const { colors } = useAppTheme();
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, isLoading: authLoading } = useAuth();
   const insets = useSafeAreaInsets();
   const [section, setSection] = useState<(typeof SECTIONS)[number]>("Lecture");
   const subjectKey = String(subject || "").toLowerCase();
@@ -63,7 +64,7 @@ export default function MultiCourseSubjectScreen() {
   const { data: course, isLoading, refetch } = useQuery({
     queryKey: ["/api/courses", String(id), String(user?.id ?? "guest")],
     queryFn: () => fetchCourse(String(id)),
-    enabled: !!id,
+    enabled: !!id && !authLoading,
     staleTime: 0,
   });
   const courseIdNum = Number(id);
@@ -76,11 +77,11 @@ export default function MultiCourseSubjectScreen() {
   });
 
   useEffect(() => {
-    if (!user?.id || !Number.isFinite(courseIdNum) || courseIdNum <= 0) return;
-    apiRequest("POST", "/api/payments/sync-enrollment", { courseId: courseIdNum })
-      .then(() => refetch())
+    if (!user?.id || !Number.isFinite(courseIdNum) || courseIdNum <= 0 || course?.isEnrolled) return;
+    repairEnrollmentAccess(courseIdNum)
+      .then(({ fixed }) => { if (fixed) void refetch(); })
       .catch(() => {});
-  }, [user?.id, courseIdNum, refetch]);
+  }, [user?.id, courseIdNum, course?.isEnrolled, refetch]);
 
   useFocusEffect(
     React.useCallback(() => {

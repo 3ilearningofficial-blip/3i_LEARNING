@@ -4,7 +4,8 @@ import { router, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useQuery } from "@tanstack/react-query";
-import { authFetch, getApiUrl, apiRequest } from "@/lib/query-client";
+import { authFetch, getApiUrl } from "@/lib/query-client";
+import { repairEnrollmentAccess } from "@/lib/enrollment-repair";
 import Colors from "@/constants/colors";
 import { useAppTheme } from "@/context/AppThemeContext";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -51,7 +52,7 @@ async function fetchJson(path: string) {
 export default function MultiCourseLayout() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { colors } = useAppTheme();
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, isLoading: authLoading } = useAuth();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const isWebGrid = width >= 768;
@@ -59,7 +60,7 @@ export default function MultiCourseLayout() {
   const { data: course, isLoading, refetch } = useQuery({
     queryKey: ["/api/courses", String(id), String(user?.id ?? "guest")],
     queryFn: () => fetchJson(`/api/courses/${id}`),
-    enabled: !!id,
+    enabled: !!id && !authLoading,
     staleTime: 0,
   });
   const { data: liveClasses = [] } = useQuery({
@@ -78,11 +79,11 @@ export default function MultiCourseLayout() {
   });
 
   useEffect(() => {
-    if (!user?.id || !Number.isFinite(courseIdNum) || courseIdNum <= 0) return;
-    apiRequest("POST", "/api/payments/sync-enrollment", { courseId: courseIdNum })
-      .then(() => refetch())
+    if (!user?.id || !Number.isFinite(courseIdNum) || courseIdNum <= 0 || course?.isEnrolled) return;
+    repairEnrollmentAccess(courseIdNum)
+      .then(({ fixed }) => { if (fixed) void refetch(); })
       .catch(() => {});
-  }, [user?.id, courseIdNum, refetch]);
+  }, [user?.id, courseIdNum, course?.isEnrolled, refetch]);
 
   const locked = !isAdmin && !course?.isEnrolled;
   const promptLocked = (onProceed?: () => void) => {

@@ -1,8 +1,6 @@
 import React, { useRef, useState, useCallback } from "react";
 import {
   View,
-  Text,
-  Image,
   ScrollView,
   Pressable,
   StyleSheet,
@@ -10,17 +8,20 @@ import {
   useWindowDimensions,
   NativeSyntheticEvent,
   NativeScrollEvent,
+  Image,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import {
   WELCOME_BANNER_ASPECT,
+  WELCOME_BANNER_DESKTOP_ASPECT,
   WELCOME_BANNER_MAX_HEIGHT,
   WELCOME_BANNER_WIDE_BREAKPOINT,
 } from "@/constants/courseBanner";
+import type { WelcomeBannerSlideUrls } from "@/lib/welcome-banners";
 import Colors from "@/constants/colors";
 
 type Props = {
-  urls: string[];
+  slides: WelcomeBannerSlideUrls[];
   resolveUrl?: (raw: string) => string;
   backgroundColor?: string;
 };
@@ -64,8 +65,20 @@ export function WelcomeBannerSlide({
   );
 }
 
+function resolveSlideUri(
+  slide: WelcomeBannerSlideUrls,
+  isWide: boolean,
+  resolveUrl?: (raw: string) => string,
+): string {
+  const pick = isWide
+    ? slide.desktop.trim() || slide.mobile.trim()
+    : slide.mobile.trim() || slide.desktop.trim();
+  const raw = pick.trim();
+  return resolveUrl ? resolveUrl(raw) : raw;
+}
+
 export default function WelcomeBannerCarousel({
-  urls,
+  slides,
   resolveUrl,
   backgroundColor = "#F8FAFC",
 }: Props) {
@@ -73,18 +86,22 @@ export default function WelcomeBannerCarousel({
   const scrollRef = useRef<ScrollView>(null);
   const [activeIndex, setActiveIndex] = useState(0);
 
-  const slides = urls
-    .map((raw) => (resolveUrl ? resolveUrl(raw) : raw).trim())
-    .filter(Boolean);
+  const isWide = screenWidth >= WELCOME_BANNER_WIDE_BREAKPOINT;
+  const frameAspect = isWide ? WELCOME_BANNER_DESKTOP_ASPECT : WELCOME_BANNER_ASPECT;
+
+  const resolvedSlides = slides
+    .map((slide) => ({
+      key: `${slide.mobile}|${slide.desktop}`,
+      uri: resolveSlideUri(slide, isWide, resolveUrl),
+    }))
+    .filter((s) => s.uri);
 
   const slideWidth = screenWidth;
-  const naturalHeight = slideWidth / WELCOME_BANNER_ASPECT;
-  const slideHeight =
-    screenWidth >= WELCOME_BANNER_WIDE_BREAKPOINT
-      ? Math.min(naturalHeight, WELCOME_BANNER_MAX_HEIGHT)
-      : naturalHeight;
-  const isWide = screenWidth >= WELCOME_BANNER_WIDE_BREAKPOINT;
-  const lastIndex = slides.length - 1;
+  const naturalHeight = slideWidth / frameAspect;
+  const slideHeight = isWide
+    ? Math.min(naturalHeight, WELCOME_BANNER_MAX_HEIGHT)
+    : naturalHeight;
+  const lastIndex = resolvedSlides.length - 1;
 
   const scrollToIndex = useCallback(
     (index: number) => {
@@ -101,9 +118,9 @@ export default function WelcomeBannerCarousel({
     setActiveIndex(Math.max(0, Math.min(lastIndex, i)));
   };
 
-  if (slides.length === 0) return null;
+  if (resolvedSlides.length === 0) return null;
 
-  const showControls = slides.length > 1;
+  const showControls = resolvedSlides.length > 1;
 
   return (
     <View style={styles.wrap}>
@@ -119,10 +136,10 @@ export default function WelcomeBannerCarousel({
           onMomentumScrollEnd={onScrollEnd}
           scrollEventThrottle={16}
         >
-          {slides.map((uri, i) => (
+          {resolvedSlides.map((slide, i) => (
             <WelcomeBannerSlide
-              key={`${uri}-${i}`}
-              uri={uri}
+              key={`${slide.key}-${i}`}
+              uri={slide.uri}
               width={slideWidth}
               height={slideHeight}
               backgroundColor={backgroundColor}
@@ -154,7 +171,7 @@ export default function WelcomeBannerCarousel({
 
       {showControls ? (
         <View style={[styles.dotsRow, isWide && styles.dotsRowWide]}>
-          {slides.map((_, i) => (
+          {resolvedSlides.map((_, i) => (
             <View
               key={`dot-${i}`}
               style={[styles.dot, i === activeIndex ? styles.dotActive : null]}

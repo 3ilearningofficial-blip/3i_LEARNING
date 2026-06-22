@@ -10,6 +10,7 @@ import { generateSecureToken, hashOtpValue, verifyOtpValue } from "./security-ut
 import { getAuthUserFromRequest } from "./auth-utils";
 import { createRequireAdmin } from "./require-admin";
 import { assertActiveSessionPlatformMatches, enforceInstallationBinding } from "./native-device-binding";
+import { setAuthFailure } from "./auth-failure-utils";
 import { registerAuthRoutes } from "./auth-routes";
 import { registerPdfRoutes } from "./pdf-routes";
 import { registerPaymentRoutes } from "./payment-routes";
@@ -287,8 +288,13 @@ async function getAuthUser(req: Request): Promise<AuthUserResolved> {
       const platOk = await assertActiveSessionPlatformMatches(db, req, user.id, user.role);
       if (!platOk.ok) {
         (req.session as any).user = null;
+        setAuthFailure(req, {
+          code: "SESSION_PLATFORM_MISMATCH",
+          activePlatform: platOk.activePlatform,
+        });
         return null;
       }
+      setAuthFailure(req, null);
       return user;
     })();
     r[authUserLazyKey] = p;

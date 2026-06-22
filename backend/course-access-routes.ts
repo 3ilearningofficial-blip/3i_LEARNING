@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from "express";
-import { computeEnrollmentValidUntil, isEnrollmentExpired } from "./course-access-utils";
+import { computeEnrollmentValidUntil, isEnrollmentExpired, repairCourseEnrollmentAccess } from "./course-access-utils";
+import { respondAuthFailureIfAny } from "./auth-failure-utils";
 import { canonicalMediaKey, mediaKeyMatchVariants } from "./media-key-utils";
 import { presignR2GetObject } from "./r2-presign-read";
 import { sanitizeLectureRowForClient } from "./lecture-payload-utils";
@@ -432,6 +433,7 @@ export function registerCourseAccessRoutes({
   app.get("/api/courses/:id", async (req: Request, res: Response) => {
     try {
       const user = await getAuthUser(req);
+      if (respondAuthFailureIfAny(req, res)) return;
       const courseIdParam = String(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id);
       const courseResult = await db.query("SELECT * FROM courses WHERE id = $1", [courseIdParam]);
       if (courseResult.rows.length === 0) return res.status(404).json({ message: "Course not found" });
@@ -555,6 +557,7 @@ export function registerCourseAccessRoutes({
     try {
       const requester = await getAuthUser(req);
       if (!requester) return res.status(401).json({ message: "Not authenticated" });
+      if (respondAuthFailureIfAny(req, res)) return;
       let user = requester;
 
       const isAdminGrant = requester?.role === "admin" && req.body.userId && requester.id !== parseInt(req.body.userId);
@@ -571,11 +574,24 @@ export function registerCourseAccessRoutes({
       const courseRow = courseResult.rows[0];
       if (!courseRow.is_free && !isAdminGrant) return res.status(403).json({ message: "This course requires payment" });
 
-      const existing = await db.query("SELECT id, status FROM enrollments WHERE user_id = $1 AND course_id = $2", [user.id, req.params.id]);
+      const existing = await db.query(
+        "SELECT id, status, valid_until FROM enrollments WHERE user_id = $1 AND course_id = $2",
+        [user.id, req.params.id]
+      );
       if (existing.rows.length > 0) {
-        if (existing.rows[0].status === "inactive" && isAdminGrant) {
-          await db.query("UPDATE enrollments SET status = 'active' WHERE id = $1", [existing.rows[0].id]);
-          return res.json({ success: true, reactivated: true });
+        const row = existing.rows[0];
+        if (isAdminGrant) {
+          const inactive = row.status === "inactive";
+          const expired = isEnrollmentExpired(row);
+          if (inactive || expired) {
+            const at = Date.now();
+            const vu = computeEnrollmentValidUntil(courseRow, at);
+            await db.query(
+              `UPDATE enrollments SET status = 'active', enrolled_at = $1, valid_until = $2 WHERE id = $3`,
+              [at, vu, row.id]
+            );
+            return res.json({ success: true, reactivated: inactive, renewed: expired });
+          }
         }
         return res.json({ success: true, alreadyEnrolled: true });
       }
@@ -598,6 +614,25 @@ export function registerCourseAccessRoutes({
       res.status(500).json({ message: "Failed to enroll" });
     }
   });
+
+  const handleRepairEnrollmentAccess = async (req: Request, res: Response) => {
+    try {
+      const user = await getAuthUser(req);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+      if (respondAuthFailureIfAny(req, res)) return;
+      const courseId = Number((req.body as { courseId?: number })?.courseId);
+      if (!Number.isFinite(courseId)) {
+        return res.status(400).json({ message: "courseId is required" });
+      }
+      const result = await repairCourseEnrollmentAccess(db, user.id, courseId);
+      return res.json({ ok: true, fixed: result.fixed, reason: result.reason });
+    } catch (err) {
+      console.error("repair-access error:", err);
+      res.status(500).json({ message: "Failed to repair enrollment access" });
+    }
+  };
+
+  app.post("/api/enrollments/repair-access", handleRepairEnrollmentAccess);
 
   app.get("/api/my-courses", async (req: Request, res: Response) => {
     try {

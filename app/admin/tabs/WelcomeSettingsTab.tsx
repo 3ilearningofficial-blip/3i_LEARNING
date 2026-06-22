@@ -13,11 +13,16 @@ import {
 } from "@/lib/welcome-image-sizes";
 import {
   MAX_WELCOME_BANNERS,
-  parseWelcomeBannerUrls,
-  serializeWelcomeBannerUrls,
+  parseWelcomeBannerSlides,
+  serializeWelcomeBannerSlides,
   validateWelcomeBannerJsonForSave,
+  type WelcomeBannerSlideUrls,
+  isWelcomeBannerSlideEmpty,
 } from "@/lib/welcome-banners";
-import { WELCOME_BANNER_RECOMMENDED } from "@/constants/courseBanner";
+import {
+  WELCOME_BANNER_MOBILE_RECOMMENDED,
+  WELCOME_BANNER_DESKTOP_RECOMMENDED,
+} from "@/constants/courseBanner";
 import WelcomeBannerPreview from "@/components/admin/WelcomeBannerPreview";
 import Colors from "@/constants/colors";
 import { useAppTheme } from "@/context/AppThemeContext";
@@ -34,8 +39,8 @@ export function WelcomeSettingsTab() {
   const [loaded, setLoaded] = React.useState(false);
   const [saveMsg, setSaveMsg] = React.useState("");
   const [welcomeUploadProgress, setWelcomeUploadProgress] = React.useState<{ key: string; pct: number } | null>(null);
-  const [bannerSlots, setBannerSlots] = React.useState<string[]>([]);
-  const [bannerUpload, setBannerUpload] = React.useState<{ slot: number; pct: number } | null>(null);
+  const [bannerSlots, setBannerSlots] = React.useState<WelcomeBannerSlideUrls[]>([]);
+  const [bannerUpload, setBannerUpload] = React.useState<{ slot: number; variant: "mobile" | "desktop"; pct: number } | null>(null);
   const welcomeAbortRef = React.useRef<AbortController | null>(null);
   const bannerAbortRef = React.useRef<AbortController | null>(null);
 
@@ -79,7 +84,7 @@ export function WelcomeSettingsTab() {
           const data = await res.json();
           const merged = { ...defaults, ...data };
           setSettings(merged);
-          setBannerSlots(parseWelcomeBannerUrls(merged.welcome_banner_images_json));
+          setBannerSlots(parseWelcomeBannerSlides(merged.welcome_banner_images_json));
         } else {
           setSettings({ ...defaults });
           setBannerSlots([]);
@@ -107,7 +112,7 @@ export function WelcomeSettingsTab() {
     try {
       const payload = {
         ...settings,
-        welcome_banner_images_json: serializeWelcomeBannerUrls(bannerSlots),
+        welcome_banner_images_json: serializeWelcomeBannerSlides(bannerSlots),
       };
       await apiRequest("PUT", "/api/admin/site-settings", { settings: payload });
       await qc.invalidateQueries({ queryKey: ["/api/site-settings"] });
@@ -167,20 +172,27 @@ export function WelcomeSettingsTab() {
     }
   };
 
-  const runBannerUpload = async (slotIndex: number, fileUri: string, fileName: string, mimeType: string, contentLength?: number) => {
+  const runBannerUpload = async (
+    slotIndex: number,
+    variant: "mobile" | "desktop",
+    fileUri: string,
+    fileName: string,
+    mimeType: string,
+    contentLength?: number,
+  ) => {
     const controller = new AbortController();
     bannerAbortRef.current = controller;
-    setBannerUpload({ slot: slotIndex, pct: 0 });
+    setBannerUpload({ slot: slotIndex, variant, pct: 0 });
     try {
       const { publicUrl } = await uploadToR2(fileUri, fileName, mimeType, "images", {
-        onProgress: (pct) => setBannerUpload({ slot: slotIndex, pct }),
+        onProgress: (pct) => setBannerUpload({ slot: slotIndex, variant, pct }),
         signal: controller.signal,
         contentLength,
       });
       setBannerSlots((prev) => {
         const next = [...prev];
-        while (next.length <= slotIndex) next.push("");
-        next[slotIndex] = publicUrl;
+        while (next.length <= slotIndex) next.push({ mobile: "", desktop: "" });
+        next[slotIndex] = { ...next[slotIndex], [variant]: publicUrl };
         return next;
       });
     } catch (err: any) {
@@ -238,7 +250,7 @@ export function WelcomeSettingsTab() {
     }
   };
 
-  const pickBannerForSlot = async (slotIndex: number) => {
+  const pickBannerForSlot = async (slotIndex: number, variant: "mobile" | "desktop") => {
     if (Platform.OS === "web") {
       const input = document.createElement("input");
       input.type = "file";
@@ -248,7 +260,7 @@ export function WelcomeSettingsTab() {
         if (!file) return;
         const blobUrl = URL.createObjectURL(file);
         try {
-          await runBannerUpload(slotIndex, blobUrl, file.name, file.type || "image/jpeg", file.size);
+          await runBannerUpload(slotIndex, variant, blobUrl, file.name, file.type || "image/jpeg", file.size);
         } finally {
           URL.revokeObjectURL(blobUrl);
         }
@@ -271,8 +283,9 @@ export function WelcomeSettingsTab() {
         const asset = result.assets[0];
         await runBannerUpload(
           slotIndex,
+          variant,
           asset.uri,
-          asset.fileName || `welcome-banner-${Date.now()}.jpg`,
+          asset.fileName || `welcome-banner-${variant}-${Date.now()}.jpg`,
           asset.mimeType || "image/jpeg",
           asset.fileSize,
         );
@@ -283,11 +296,11 @@ export function WelcomeSettingsTab() {
     }
   };
 
-  const updateBannerSlot = (index: number, url: string) => {
+  const updateBannerSlotField = (index: number, variant: "mobile" | "desktop", url: string) => {
     setBannerSlots((prev) => {
       const next = [...prev];
-      while (next.length <= index) next.push("");
-      next[index] = url;
+      while (next.length <= index) next.push({ mobile: "", desktop: "" });
+      next[index] = { ...next[index], [variant]: url };
       return next;
     });
   };
@@ -298,12 +311,12 @@ export function WelcomeSettingsTab() {
 
   const addBannerSlot = () => {
     setBannerSlots((prev) => {
-      const filled = prev.filter((u) => u.trim()).length;
+      const filled = prev.filter((s) => !isWelcomeBannerSlideEmpty(s)).length;
       if (filled >= MAX_WELCOME_BANNERS) {
         Alert.alert("Limit reached", `Maximum ${MAX_WELCOME_BANNERS} banner images allowed.`);
         return prev;
       }
-      return [...prev, ""];
+      return [...prev, { mobile: "", desktop: "" }];
     });
   };
 
@@ -413,63 +426,83 @@ export function WelcomeSettingsTab() {
       <View style={{ backgroundColor: colors.card, borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: colors.border }}>
         <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: colors.text }}>Homepage banner carousel</Text>
         <Text style={{ fontSize: 12, color: colors.textMuted, fontFamily: "Inter_400Regular", lineHeight: 17 }}>
-          Promotional banners appear on the welcome page directly under the header. Upload {WELCOME_BANNER_RECOMMENDED} (3:1). Banners fill edge-to-edge; keep important content centered — may crop slightly on wide screens. Leave empty to hide the carousel.
+          Promotional banners appear on the welcome page directly under the header. Upload mobile ({WELCOME_BANNER_MOBILE_RECOMMENDED}, 3:1) and desktop ({WELCOME_BANNER_DESKTOP_RECOMMENDED}, wide strip) images per slide. Leave both empty to hide that slide.
         </Text>
-        {bannerSlotRows.map((url, index) => {
-          const uploadingHere = bannerUpload?.slot === index;
-          const pct = uploadingHere ? Math.max(0, Math.min(100, bannerUpload!.pct)) : 0;
+        {bannerSlotRows.map((slot, index) => {
+          const uploadingMobile = bannerUpload?.slot === index && bannerUpload.variant === "mobile";
+          const uploadingDesktop = bannerUpload?.slot === index && bannerUpload.variant === "desktop";
           const busyBannerUpload = bannerUpload != null;
-          return (
-            <View key={`banner-slot-${index}`} style={{ gap: 8, paddingBottom: 12, borderBottomWidth: index < bannerSlotRows.length - 1 ? 1 : 0, borderBottomColor: colors.border }}>
-              <Text style={labelStyle}>Banner {index + 1}</Text>
-              {url.trim() ? (
-                <WelcomeBannerPreview uri={url.trim()} onClear={() => updateBannerSlot(index, "")} showHint={false} />
-              ) : null}
-              {uploadingHere ? (
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 8, padding: 10, borderRadius: 10, backgroundColor: "#EEF2FF", borderWidth: 1, borderColor: "#C7D2FE" }}>
-                  <ActivityIndicator size="small" color={Colors.light.primary} />
-                  <Text style={{ flex: 1, fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>Uploading… {pct}%</Text>
-                  <Pressable onPress={cancelBannerUpload} hitSlop={8}>
-                    <Ionicons name="close-circle" size={22} color="#EF4444" />
+
+          const renderVariant = (variant: "mobile" | "desktop") => {
+            const url = variant === "mobile" ? slot.mobile : slot.desktop;
+            const uploadingHere = variant === "mobile" ? uploadingMobile : uploadingDesktop;
+            const pct = uploadingHere ? Math.max(0, Math.min(100, bannerUpload!.pct)) : 0;
+            return (
+              <View key={`${index}-${variant}`} style={{ flex: 1, minWidth: 0, gap: 6 }}>
+                <WelcomeBannerPreview
+                  uri={url}
+                  variant={variant}
+                  onClear={() => updateBannerSlotField(index, variant, "")}
+                  showHint={false}
+                />
+                {uploadingHere ? (
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6, padding: 8, borderRadius: 8, backgroundColor: "#EEF2FF", borderWidth: 1, borderColor: "#C7D2FE" }}>
+                    <ActivityIndicator size="small" color={Colors.light.primary} />
+                    <Text style={{ flex: 1, fontSize: 11, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>{pct}%</Text>
+                    <Pressable onPress={cancelBannerUpload} hitSlop={8}>
+                      <Ionicons name="close-circle" size={20} color="#EF4444" />
+                    </Pressable>
+                  </View>
+                ) : null}
+                <View style={{ flexDirection: "row", gap: 6, alignItems: "center" }}>
+                  <TextInput
+                    style={[inputStyle, { flex: 1, fontSize: 12, paddingVertical: 8 }]}
+                    value={url}
+                    onChangeText={(v) => updateBannerSlotField(index, variant, v)}
+                    placeholder="https://..."
+                    autoCapitalize="none"
+                    editable={!uploadingHere}
+                  />
+                  <Pressable
+                    onPress={() => pickBannerForSlot(index, variant)}
+                    disabled={busyBannerUpload}
+                    style={{
+                      backgroundColor: busyBannerUpload && !uploadingHere ? Colors.light.border : Colors.light.secondary,
+                      paddingHorizontal: 10,
+                      paddingVertical: 8,
+                      borderRadius: 8,
+                      opacity: busyBannerUpload && !uploadingHere ? 0.6 : 1,
+                    }}
+                  >
+                    <Text style={{ fontSize: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>{uploadingHere ? "…" : "Up"}</Text>
                   </Pressable>
                 </View>
-              ) : null}
-              <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
-                <TextInput
-                  style={[inputStyle, { flex: 1 }]}
-                  value={url}
-                  onChangeText={(v) => updateBannerSlot(index, v)}
-                  placeholder="https://..."
-                  autoCapitalize="none"
-                  editable={!uploadingHere}
-                />
-                <Pressable
-                  onPress={() => pickBannerForSlot(index)}
-                  disabled={busyBannerUpload}
-                  style={{
-                    backgroundColor: busyBannerUpload && !uploadingHere ? Colors.light.border : Colors.light.secondary,
-                    paddingHorizontal: 12,
-                    paddingVertical: 10,
-                    borderRadius: 10,
-                    opacity: busyBannerUpload && !uploadingHere ? 0.6 : 1,
-                  }}
-                >
-                  <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>{uploadingHere ? "…" : "Upload"}</Text>
-                </Pressable>
+              </View>
+            );
+          };
+
+          return (
+            <View key={`banner-slot-${index}`} style={{ gap: 8, paddingBottom: 12, borderBottomWidth: index < bannerSlotRows.length - 1 ? 1 : 0, borderBottomColor: colors.border }}>
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                <Text style={labelStyle}>Banner {index + 1}</Text>
                 <Pressable
                   onPress={() => removeBannerSlot(index)}
                   disabled={busyBannerUpload}
-                  style={{ padding: 8, opacity: busyBannerUpload ? 0.5 : 1 }}
+                  style={{ padding: 4, opacity: busyBannerUpload ? 0.5 : 1 }}
                 >
-                  <Ionicons name="trash-outline" size={20} color="#EF4444" />
+                  <Ionicons name="trash-outline" size={18} color="#EF4444" />
                 </Pressable>
+              </View>
+              <View style={{ flexDirection: "row", gap: 10, alignItems: "flex-start" }}>
+                {renderVariant("mobile")}
+                {renderVariant("desktop")}
               </View>
             </View>
           );
         })}
         <Pressable
           onPress={addBannerSlot}
-          disabled={bannerUpload != null || bannerSlots.filter((u) => u.trim()).length >= MAX_WELCOME_BANNERS}
+          disabled={bannerUpload != null || bannerSlots.filter((s) => !isWelcomeBannerSlideEmpty(s)).length >= MAX_WELCOME_BANNERS}
           style={{
             borderWidth: 1.5,
             borderColor: Colors.light.primary,

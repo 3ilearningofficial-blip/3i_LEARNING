@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from "express";
-import { computeEnrollmentValidUntil, isEnrollmentExpired } from "./course-access-utils";
+import { computeEnrollmentValidUntil, isEnrollmentExpired, repairCourseEnrollmentAccess } from "./course-access-utils";
+import { respondAuthFailureIfAny } from "./auth-failure-utils";
 import { notifyAdminsBuyNowTap, notifyAdminsPurchase } from "./notification-utils";
 import {
   assertNativePaidPurchaseInstallation,
@@ -453,30 +454,21 @@ export function registerPaymentRoutes({
     }
   );
 
-  // Self-service repair: paid in DB but enrollment row missing (legacy bug / partial failure). Idempotent.
   app.post("/api/payments/sync-enrollment", async (req: Request, res: Response) => {
     try {
       const user = await getAuthUser(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
+      if (respondAuthFailureIfAny(req, res)) return;
       const courseId = Number((req.body as { courseId?: number })?.courseId);
       if (!Number.isFinite(courseId)) {
         return res.status(400).json({ message: "courseId is required" });
       }
-      const pay = await db.query(
-        "SELECT * FROM payments WHERE user_id = $1 AND course_id = $2 AND status = 'paid' ORDER BY created_at DESC LIMIT 1",
-        [user.id, courseId]
-      );
-      if (pay.rows.length === 0) {
-        return res.json({ ok: true, fixed: false, message: "No paid order for this course" });
-      }
-      // Wrap in a transaction so the SELECT FOR UPDATE inside ensureCourseEnrollment
-      // actually holds its lock across the existence check and INSERT.
-      // Without a transaction, the lock is released immediately after the SELECT
-      // and concurrent calls can race to create duplicate enrollment rows.
-      await runInTransaction(async (tx) => {
-        await ensureCourseEnrollment(tx, pay.rows[0]);
+      const result = await repairCourseEnrollmentAccess(db, user.id, courseId);
+      return res.json({
+        ok: true,
+        fixed: result.fixed,
+        message: result.fixed ? "Enrollment synced" : result.reason,
       });
-      return res.json({ ok: true, fixed: true, message: "Enrollment synced" });
     } catch (err) {
       console.error("sync-enrollment error:", err);
       res.status(500).json({ message: "Failed to sync enrollment" });

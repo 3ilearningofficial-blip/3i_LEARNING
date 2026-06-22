@@ -97,6 +97,9 @@ interface EnrolledStudent {
   phone?: string;
   enrolled_at: string;
   progress_percent: number;
+  status?: string;
+  access_state?: "active" | "inactive" | "expired";
+  valid_until?: number | null;
 }
 
 interface CourseDetail {
@@ -2402,10 +2405,22 @@ export default function AdminCourseScreen() {
                       <Text style={styles.itemTitle}>{student.name || "Unknown"}</Text>
                       <Text style={styles.itemMeta}>{student.email || student.phone || ""}</Text>
                       <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 2 }}>
-                        <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: (student as any).status === "inactive" ? "#EF4444" : "#22C55E" }} />
-                        <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: (student as any).status === "inactive" ? "#EF4444" : "#22C55E" }}>
-                          {(student as any).status === "inactive" ? "Inactive" : "Active"}
-                        </Text>
+                        {(() => {
+                          const access = (student as EnrolledStudent).access_state
+                            || ((student as any).status === "inactive" ? "inactive" : "active");
+                          const dotColor =
+                            access === "inactive" ? "#EF4444" : access === "expired" ? "#F59E0B" : "#22C55E";
+                          const label =
+                            access === "inactive" ? "Inactive" : access === "expired" ? "Expired" : "Active";
+                          return (
+                            <>
+                              <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: dotColor }} />
+                              <Text style={{ fontSize: 11, fontFamily: "Inter_500Medium", color: dotColor }}>
+                                {label}
+                              </Text>
+                            </>
+                          );
+                        })()}
                       </View>
                       <Text style={{ fontSize: 11, color: Colors.light.primary, fontFamily: "Inter_500Medium", marginTop: 4 }}>View lecture and test progress →</Text>
                     </View>

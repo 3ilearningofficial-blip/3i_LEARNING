@@ -306,6 +306,7 @@ export function registerAdminAnalyticsRoutes({
 
   app.get("/api/admin/courses/:id/enrollments", requireAdmin, async (req: Request, res: Response) => {
     try {
+      const nowMs = Date.now();
       const result = await db.query(
         `SELECT
            e.id,
@@ -314,7 +315,13 @@ export function registerAdminAnalyticsRoutes({
            u.phone AS user_phone,
            u.email AS user_email,
            e.enrolled_at,
+           e.valid_until,
            COALESCE(e.status, 'active') AS status,
+           CASE
+             WHEN COALESCE(e.status, 'active') = 'inactive' THEN 'inactive'
+             WHEN e.valid_until IS NOT NULL AND e.valid_until < $2 THEN 'expired'
+             ELSE 'active'
+           END AS access_state,
            CASE
              WHEN (COALESCE(tl.total_lectures, 0) + COALESCE(tt.total_tests, 0)) <= 0 THEN 0
              ELSE LEAST(
@@ -377,7 +384,7 @@ export function registerAdminAnalyticsRoutes({
          ) tp ON true
          WHERE e.course_id = $1
          ORDER BY e.enrolled_at DESC`,
-        [req.params.id]
+        [req.params.id, nowMs]
       );
       res.json(result.rows);
     } catch {

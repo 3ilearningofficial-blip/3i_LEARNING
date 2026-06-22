@@ -9,6 +9,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { repairEnrollmentAccess, isSessionPlatformMismatchError } from "@/lib/enrollment-repair";
 import { invalidateAccessCaches } from "@/lib/invalidate-access-caches";
 import * as Haptics from "expo-haptics";
 import { apiRequest, getApiUrl, getBaseUrl, authFetch } from "@/lib/query-client";
@@ -117,6 +118,7 @@ interface CourseDetail {
   level: string;
   duration_hours: string;
   isEnrolled: boolean;
+  accessExpired?: boolean;
   progress: number;
   lectures: Lecture[];
   tests: CourseTest[];
@@ -158,7 +160,7 @@ export default function CourseDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
   const qc = useQueryClient();
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, isLoading: authLoading } = useAuth();
   const { colors, isDarkMode } = useAppTheme();
   const tabVisible = useDocumentVisibility();
   const [activeTab, setActiveTab] = useState("Live");
@@ -236,9 +238,16 @@ export default function CourseDetailScreen() {
       const url = new URL(`/api/courses/${id}`, baseUrl);
       if (user?.id) url.searchParams.set("_uid", String(user.id));
       const res = await authFetch(url.toString());
+      if (res.status === 403) {
+        const body = await res.json().catch(() => ({}));
+        if (body?.code === "SESSION_PLATFORM_MISMATCH") {
+          throw new Error("SESSION_PLATFORM_MISMATCH");
+        }
+      }
       if (!res.ok) throw new Error("Failed to load course");
       return res.json();
     },
+    enabled: !!id && id !== "undefined" && !authLoading,
     staleTime: 20 * 1000,
     gcTime: 15 * 60 * 1000,
     refetchInterval: tabVisible ? 60_000 : 5 * 60_000,
@@ -253,22 +262,20 @@ export default function CourseDetailScreen() {
     }, [refetchCourse]),
   );
 
-  // Repair paid-but-not-enrolled (legacy server bug). Idempotent; no-op if no paid row.
+  // Repair missing/expired enrollment access (paid sync + admin-granted renew). Idempotent.
   useEffect(() => {
-    if (!user || !course || course.isEnrolled || isAdmin) return;
+    if (!user || !course || course.isEnrolled || course.accessExpired || isAdmin) return;
     if (enrollmentSyncAttempted.current) return;
     enrollmentSyncAttempted.current = true;
-    apiRequest("POST", "/api/payments/sync-enrollment", { courseId: courseIdNum })
-      .then(async (res) => {
-        if (!res.ok) return;
-        const j = await res.json();
-        if (j?.fixed) {
+    repairEnrollmentAccess(courseIdNum)
+      .then(async ({ fixed }) => {
+        if (fixed) {
           qc.invalidateQueries({ queryKey: ["/api/courses", String(id)] });
           qc.invalidateQueries({ queryKey: ["/api/courses"] });
         }
       })
       .catch(() => {});
-  }, [user?.id, course?.isEnrolled, courseIdNum, isAdmin, id, qc, course]);
+  }, [user?.id, course?.isEnrolled, course?.accessExpired, courseIdNum, isAdmin, id, qc, course]);
 
   const { data: liveClasses = [], isPending: liveClassesPending } = useQuery<LiveClass[]>({
     queryKey: liveClassesForCourseQueryKey(id),
@@ -699,7 +706,7 @@ setTimeout(function() {
     });
   };
 
-  if (isLoading) {
+  if (isLoading || authLoading) {
     return (
       <View style={[styles.centered, { paddingTop: topPadding, backgroundColor: colors.background }]}>
         <ActivityIndicator size="large" color={Colors.light.primary} />
@@ -708,9 +715,19 @@ setTimeout(function() {
   }
 
   if (!course) {
+    const platformMismatch = isSessionPlatformMismatchError(courseQueryError);
     return (
-      <View style={[styles.centered, { paddingTop: topPadding, backgroundColor: colors.background }]}>
-        <Text style={[styles.errorText, { color: colors.textMuted }]}>Course not found</Text>
+      <View style={[styles.centered, { paddingTop: topPadding, backgroundColor: colors.background, paddingHorizontal: 24, gap: 12 }]}>
+        <Text style={[styles.errorText, { color: colors.textMuted, textAlign: "center" }]}>
+          {platformMismatch
+            ? "Please log in again on this browser or app to access your courses."
+            : "Course not found"}
+        </Text>
+        {platformMismatch ? (
+          <Pressable onPress={() => router.push("/(auth)/login")} style={{ paddingVertical: 10, paddingHorizontal: 16, borderRadius: 10, backgroundColor: Colors.light.primary }}>
+            <Text style={{ color: "#fff", fontFamily: "Inter_600SemiBold" }}>Go to Login</Text>
+          </Pressable>
+        ) : null}
       </View>
     );
   }
@@ -1855,6 +1872,17 @@ setTimeout(function() {
 
       {!isAdmin && !course.isEnrolled && !enrollSuccess && (
         <View style={[styles.enrollBar, { paddingBottom: bottomPadding + 12 }]}>
+          {course.accessExpired ? (
+            <View style={{ flex: 1, gap: 8 }}>
+              <Text style={{ fontSize: 15, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>
+                Course access has expired
+              </Text>
+              <Text style={{ fontSize: 13, fontFamily: "Inter_400Regular", color: Colors.light.textMuted }}>
+                Contact support or your admin to renew access to this course.
+              </Text>
+            </View>
+          ) : (
+            <>
           {!!enrollError && (
             <View style={{ backgroundColor: "#FEE2E2", borderRadius: 8, padding: 8, marginBottom: 8, flexDirection: "row", alignItems: "center", gap: 6 }}>
               <Ionicons name="alert-circle-outline" size={14} color="#DC2626" />
@@ -1891,6 +1919,8 @@ setTimeout(function() {
               )}
             </LinearGradient>
           </Pressable>
+            </>
+          )}
         </View>
       )}
 
