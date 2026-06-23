@@ -26,6 +26,34 @@ export async function exportClassroomBoardPng(
   return pages[pages.length - 1]?.blob ?? null;
 }
 
+async function linkBoardPdfToCourseMaterials(opts: {
+  liveTitle: string;
+  boardPdfUrl: string;
+  pageCount: number;
+  courseId: number;
+}): Promise<string | undefined> {
+  const body = {
+    title: `${opts.liveTitle} — Board notes`,
+    description: `Whiteboard export from interactive classroom — ${opts.pageCount} page(s), ${new Date().toLocaleString()}.`,
+    fileUrl: opts.boardPdfUrl,
+    fileType: "pdf",
+    courseId: opts.courseId,
+    isFree: false,
+    sectionTitle: null,
+    downloadAllowed: false,
+  };
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await apiRequest("POST", "/api/admin/study-materials", body);
+      if (res.ok) return opts.boardPdfUrl;
+    } catch (e) {
+      if (attempt === 1) console.warn("[Classroom] board PDF material link failed:", e);
+    }
+  }
+  return undefined;
+}
+
 export async function finalizeClassroomLiveSession(
   liveClassId: string,
   liveClass: LiveClassRecordingMeta,
@@ -42,6 +70,7 @@ export async function finalizeClassroomLiveSession(
   boardSnapshotUrl?: string;
   boardMaterialUrl?: string;
   boardPdfUrl?: string;
+  boardMaterialSaveFailed?: boolean;
   lectureIds?: number[];
 }> {
   const subfolder = String(liveClass.lecture_subfolder_title || "").trim() || undefined;
@@ -56,28 +85,30 @@ export async function finalizeClassroomLiveSession(
   const liveTitle = String(liveClass.title || "Live class").trim();
 
   let boardMaterialUrl: string | undefined;
+  let boardMaterialSaveFailed = false;
   if (courseId > 0) {
     if (opts?.boardArchive?.boardPdfUrl) {
-      try {
-        const pageCount = opts.boardArchive.boardPageUrls?.length ?? 0;
-        const res = await apiRequest("POST", "/api/admin/study-materials", {
-          title: `${liveTitle} — Board notes`,
-          description: `Whiteboard export from interactive classroom — ${pageCount} page(s), ${new Date().toLocaleString()}.`,
-          fileUrl: opts.boardArchive.boardPdfUrl,
-          fileType: "pdf",
-          courseId,
-          isFree: false,
-          sectionTitle: null,
-          downloadAllowed: false,
-        });
-        if (res.ok) {
-          const row = await res.json();
-          boardMaterialUrl = opts.boardArchive.boardPdfUrl;
-          void row;
+      const pageCount = opts.boardArchive.boardPageUrls?.length ?? 0;
+      boardMaterialUrl = await linkBoardPdfToCourseMaterials({
+        liveTitle,
+        boardPdfUrl: opts.boardArchive.boardPdfUrl,
+        pageCount,
+        courseId,
+      });
+      if (!boardMaterialUrl && editor) {
+        try {
+          const material = await saveClassroomBoardToCourseMaterials({
+            courseId,
+            liveClassTitle: liveTitle,
+            editor,
+            boardEl: opts?.boardEl ?? null,
+          });
+          boardMaterialUrl = material?.fileUrl;
+        } catch (e) {
+          console.warn("[Classroom] board PDF material fallback save failed:", e);
         }
-      } catch (e) {
-        console.warn("[Classroom] board PDF material link failed:", e);
       }
+      if (!boardMaterialUrl) boardMaterialSaveFailed = true;
     } else if (editor) {
       try {
         const material = await saveClassroomBoardToCourseMaterials({
@@ -87,8 +118,10 @@ export async function finalizeClassroomLiveSession(
           boardEl: opts?.boardEl ?? null,
         });
         boardMaterialUrl = material?.fileUrl;
+        if (!boardMaterialUrl) boardMaterialSaveFailed = true;
       } catch (e) {
         console.warn("[Classroom] board PDF material save failed:", e);
+        boardMaterialSaveFailed = true;
       }
     }
   }
@@ -165,6 +198,7 @@ export async function finalizeClassroomLiveSession(
     boardSnapshotUrl: data.boardSnapshotUrl || boardSnapshotUrl || undefined,
     boardMaterialUrl,
     boardPdfUrl: data.boardPdfUrl || opts?.boardArchive?.boardPdfUrl,
+    boardMaterialSaveFailed,
     lectureIds: data.lectureIds,
   };
 }

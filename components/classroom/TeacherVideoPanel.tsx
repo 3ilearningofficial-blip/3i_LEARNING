@@ -16,9 +16,10 @@ type Props = {
   editor?: Editor | null;
   onRoomReady?: (room: Room | null) => void;
   onCompositeStream?: (stream: MediaStream | null) => void;
+  onBoardStreamingChange?: (streaming: boolean) => void;
 };
 
-const videoStyle = { width: "100%", height: "100%", objectFit: "contain" as const, backgroundColor: "#000" };
+const videoStyle = { width: "100%", height: "100%", objectFit: "cover" as const, backgroundColor: "#000" };
 
 export default function TeacherVideoPanel({
   liveClassId,
@@ -27,6 +28,7 @@ export default function TeacherVideoPanel({
   editor = null,
   onRoomReady,
   onCompositeStream,
+  onBoardStreamingChange,
 }: Props) {
   const { data: tokenPayload, isLoading, error: tokenError } = useClassroomToken(liveClassId, enabled);
   const {
@@ -35,6 +37,7 @@ export default function TeacherVideoPanel({
     micEnabled,
     camEnabled,
     compositeStream,
+    boardStreaming,
     setLocalVideoEl,
     toggleMic,
     toggleCam,
@@ -46,15 +49,7 @@ export default function TeacherVideoPanel({
     if (Platform.OS === "web" && videoRef.current && connected && camEnabled) {
       setLocalVideoEl(videoRef.current);
     }
-  }, [setLocalVideoEl, connected, compositeStream, camEnabled]);
-
-  useEffect(() => {
-    if (Platform.OS !== "web" || !camEnabled) return;
-    const el = videoRef.current;
-    if (!el || !compositeStream) return;
-    el.srcObject = compositeStream;
-    void el.play().catch(() => {});
-  }, [camEnabled, compositeStream]);
+  }, [setLocalVideoEl, connected, camEnabled, boardStreaming]);
 
   useEffect(() => {
     onRoomReady?.(connected ? room.current : null);
@@ -64,6 +59,10 @@ export default function TeacherVideoPanel({
   useEffect(() => {
     onCompositeStream?.(compositeStream);
   }, [compositeStream, onCompositeStream]);
+
+  useEffect(() => {
+    onBoardStreamingChange?.(boardStreaming);
+  }, [boardStreaming, onBoardStreamingChange]);
 
   if (Platform.OS !== "web") {
     return (
@@ -75,6 +74,7 @@ export default function TeacherVideoPanel({
 
   return (
     <View style={styles.wrap}>
+      <Text style={styles.cameraLabel}>Camera</Text>
       <View style={styles.videoBox}>
         {isLoading ? (
           <ActivityIndicator color={Colors.light.primary} />
@@ -113,7 +113,16 @@ export default function TeacherVideoPanel({
 }
 
 const styles = StyleSheet.create({
-  wrap: { height: 160, backgroundColor: "#111827", borderRadius: 10, overflow: "hidden", marginBottom: 8 },
+  wrap: { height: 176, backgroundColor: "#111827", borderRadius: 10, overflow: "hidden", marginBottom: 8 },
+  cameraLabel: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: "#9CA3AF",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    paddingHorizontal: 10,
+    paddingTop: 6,
+  },
   videoBox: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#000" },
   muted: { color: "#9CA3AF", fontSize: 12, padding: 12 },
   error: { color: "#FCA5A5", fontSize: 11, padding: 8, textAlign: "center" },

@@ -1,4 +1,5 @@
 import { buildRecordingLectureSectionTitle } from "../shared/recordingSection";
+import { pickVideoRecordingUrlFromRow } from "../shared/recordingUrl";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -12,9 +13,7 @@ function inferVideoType(url: string): "youtube" | "cloudflare" | "r2" {
 }
 
 function pickRecordingUrl(row: Record<string, unknown>, fallback?: Record<string, unknown>): string {
-  const from = (r: Record<string, unknown>) =>
-    String(r.recording_url || r.cf_playback_hls || r.youtube_url || r.board_snapshot_url || "").trim();
-  return from(row) || (fallback ? from(fallback) : "");
+  return pickVideoRecordingUrlFromRow(row, fallback);
 }
 
 function durationMinutes(peer: Record<string, unknown>, anchor: Record<string, unknown>): number {

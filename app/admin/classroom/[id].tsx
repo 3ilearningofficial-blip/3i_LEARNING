@@ -13,7 +13,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import type { Room } from "livekit-client";
-import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
+import { authFetch, getApiUrl } from "@/lib/query-client";
 import { liveClassQueryKey, liveClassesQueryKey } from "@/lib/query-keys";
 import TldrawClassroom from "@/components/classroom/TldrawClassroom";
 import type { TldrawClassroomHandle } from "@/components/classroom/TldrawClassroom.types";
@@ -30,7 +30,6 @@ import { useClassroomBoardCheckpoint } from "@/lib/classroom/useClassroomBoardCh
 import type { Editor } from "tldraw";
 import { useClassroomSessionRecorder } from "@/lib/classroom/useClassroomSessionRecorder";
 import { uploadToR2 } from "@/lib/r2-upload";
-import { buildRecordingLectureSectionTitle } from "@shared/recordingSection";
 import { getAdminCoursesSectionRoute } from "@/lib/admin/courseAdminRoutes";
 import TeacherVideoPanel from "@/components/classroom/TeacherVideoPanel";
 import LiveClassRecordingTimer from "@/components/LiveClassRecordingTimer";
@@ -51,6 +50,7 @@ export default function AdminClassroomPage() {
   const [boardEl, setBoardEl] = useState<HTMLElement | null>(null);
   const [editor, setEditor] = useState<Editor | null>(null);
   const [compositeStream, setCompositeStream] = useState<MediaStream | null>(null);
+  const [boardStreaming, setBoardStreaming] = useState(false);
   const boardRef = useRef<TldrawClassroomHandle>(null);
   const slideShellRef = useRef<ClassroomSlideShellHandle>(null);
   const liveKitRoomRef = useRef<Room | null>(null);
@@ -182,9 +182,20 @@ export default function AdminClassroomPage() {
       setIsEnding(true);
       let videoRecordingUrl: string | undefined;
       let checkpointUrl: string | undefined;
+      let recordingStopError: string | null = null;
 
       try {
-        const blob = await sessionRecorder.stopAndGetBlob();
+        let blob: Blob | null = null;
+        try {
+          blob = await sessionRecorder.stopAndGetBlob();
+        } catch (e: unknown) {
+          recordingStopError =
+            e instanceof Error ? e.message : "Session recorder failed to stop";
+          console.warn("[Classroom] stopAndGetBlob failed:", e);
+        }
+        if (sessionRecorder.error) {
+          recordingStopError = recordingStopError || sessionRecorder.error;
+        }
         if (!blob || blob.size === 0) {
           console.warn("[Classroom] session recording was empty — check composite stream / LiveKit publish");
         }
@@ -203,14 +214,6 @@ export default function AdminClassroomPage() {
               subfolder
             );
             videoRecordingUrl = publicUrl;
-            const sectionTitle = buildRecordingLectureSectionTitle(
-              liveClass?.lecture_section_title,
-              liveClass?.lecture_subfolder_title
-            );
-            await apiRequest("POST", `/api/admin/live-classes/${liveClassId}/recording`, {
-              recordingUrl: publicUrl,
-              sectionTitle,
-            });
           } finally {
             URL.revokeObjectURL(fileUri);
           }
@@ -262,14 +265,22 @@ export default function AdminClassroomPage() {
         const lines: string[] = ["Class ended."];
         if (!videoRecordingUrl && !result.recordingUrl) {
           lines.push(
-            "No session video was recorded (stream may not have started). Board checkpoint and snapshots were saved when available."
+            "No session video was saved. The lecture will not show a recording (board snapshot PNG is never used as video). Board checkpoint and snapshots were saved when available."
           );
+          if (recordingStopError) {
+            lines.push(`Recording error: ${recordingStopError}`);
+          }
         }
         if (result.recordingUrl) lines.push(`Video (R2): ${result.recordingUrl}`);
         if (result.boardPdfUrl || archive?.boardPdfUrl) {
           lines.push(`Board PDF (R2): ${result.boardPdfUrl || archive?.boardPdfUrl}`);
         }
         if (result.boardMaterialUrl) lines.push("Board PDF linked in Course → Materials.");
+        if (result.boardMaterialSaveFailed) {
+          lines.push(
+            "Board PDF uploaded to R2 but could not be linked in Materials — add it manually from the PDF URL above."
+          );
+        }
         if (result.boardSnapshotUrl) lines.push(`Board snapshot: ${result.boardSnapshotUrl}`);
         const msg = lines.join("\n");
         if (Platform.OS === "web") window.alert(msg);
@@ -342,6 +353,24 @@ export default function AdminClassroomPage() {
                 sessionActive={!!sessionActive}
               />
             ) : null}
+            {isLive && !isRecordingMode ? (
+              <View
+                style={[
+                  styles.boardStreamPill,
+                  boardStreaming ? styles.boardStreamPillOn : styles.boardStreamPillOff,
+                ]}
+              >
+                <View
+                  style={[
+                    styles.boardStreamDot,
+                    { backgroundColor: boardStreaming ? "#4ADE80" : "#F87171" },
+                  ]}
+                />
+                <Text style={styles.boardStreamText}>
+                  {boardStreaming ? "Board live" : "Board off"}
+                </Text>
+              </View>
+            ) : null}
           </View>
         ) : null}
         <Pressable style={styles.endBtn} onPress={handleEndClass} disabled={isEnding}>
@@ -396,6 +425,7 @@ export default function AdminClassroomPage() {
             editor={editor}
             onRoomReady={handleRoomReady}
             onCompositeStream={setCompositeStream}
+            onBoardStreamingChange={setBoardStreaming}
           />
 
           {/* Recording mode is a clean lecture recorder: no chat, polls, quiz, hands, or student list. */}
@@ -459,6 +489,18 @@ const styles = StyleSheet.create({
   },
   liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: "#fff" },
   liveText: { fontSize: 11, fontWeight: "800", color: "#fff" },
+  boardStreamPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  boardStreamPillOn: { backgroundColor: "rgba(22,101,52,0.45)" },
+  boardStreamPillOff: { backgroundColor: "rgba(127,29,29,0.45)" },
+  boardStreamDot: { width: 6, height: 6, borderRadius: 3 },
+  boardStreamText: { fontSize: 10, fontWeight: "700", color: "#fff" },
   endBtn: {
     backgroundColor: "#7F1D1D",
     paddingHorizontal: 14,

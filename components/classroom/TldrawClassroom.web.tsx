@@ -17,7 +17,7 @@ import {
 } from "@/lib/classroom/classroomSlideEditor";
 import {
   classroomTeachingComponents,
-  classroomTeachingOverrides,
+  getClassroomTeachingOverrides,
 } from "@/lib/classroom/tldrawTeachingUi";
 import { restoreClassroomBoardCheckpoint } from "@/lib/classroom/useClassroomBoardCheckpoint";
 import Colors from "@/constants/colors";
@@ -78,6 +78,10 @@ function TldrawClassroomConnected({
   editorRef: React.MutableRefObject<Editor | null>;
   onEditorReady?: (editor: Editor | null) => void;
 }) {
+  const lockViewport = !readonly && !preview;
+  const teachingOverrides = lockViewport
+    ? getClassroomTeachingOverrides(true)
+    : getClassroomTeachingOverrides(false);
   const [slowConnect, setSlowConnect] = useState(false);
   const [mountedEditor, setMountedEditor] = useState<Editor | null>(null);
   const assets: TLAssetStore = React.useMemo(
@@ -158,12 +162,12 @@ function TldrawClassroomConnected({
         {...(TLDRAW_LICENSE_KEY ? { licenseKey: TLDRAW_LICENSE_KEY } : {})}
         store={store.store}
         hideUi={readonly}
-        overrides={readonly ? undefined : classroomTeachingOverrides}
+        overrides={readonly ? undefined : teachingOverrides}
         components={readonly ? undefined : classroomTeachingComponents}
         onMount={(editor: Editor) => {
           editorRef.current = editor;
           setMountedEditor(editor);
-          setupClassroomSlideEditor(editor, !!readonly);
+          setupClassroomSlideEditor(editor, !!readonly, { lockViewport });
           onEditorReady?.(editor);
         }}
       />

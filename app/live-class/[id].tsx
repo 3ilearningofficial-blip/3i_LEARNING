@@ -32,6 +32,7 @@ import {
   restorePortraitAfterPlayback,
   useVideoPlaybackOrientation,
 } from "@/lib/video-playback-orientation";
+import { useVoiceInput } from "@/lib/useVoiceInput";
 
 const mediaTokenCache = new Map<string, { token: string; expiresAt: number; readUrl?: string }>();
 const MEDIA_READ_URL_MIN_TTL_MS = 15 * 1000;
@@ -479,45 +480,6 @@ function WebYouTubePlayer({
       allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
     />
   );
-}
-
-// Voice input hook — web Speech API only
-function useVoiceInput(onResult: (text: string) => void) {
-  const [isListening, setIsListening] = useState(false);
-  const recognitionRef = useRef<any>(null);
-
-  const startListening = useCallback(() => {
-    if (Platform.OS !== "web") return; // silently ignore on native
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      window.alert("Voice input not supported in this browser. Use Chrome.");
-      return;
-    }
-    try {
-      const recognition = new SpeechRecognition();
-      recognition.lang = "en-IN";
-      recognition.interimResults = false;
-      recognition.maxAlternatives = 1;
-      recognition.onresult = (e: any) => {
-        const transcript = e.results[0][0].transcript;
-        onResult(transcript);
-      };
-      recognition.onend = () => setIsListening(false);
-      recognition.onerror = () => setIsListening(false);
-      recognitionRef.current = recognition;
-      recognition.start();
-      setIsListening(true);
-    } catch (e) {
-      setIsListening(false);
-    }
-  }, [onResult]);
-
-  const stopListening = useCallback(() => {
-    recognitionRef.current?.stop();
-    setIsListening(false);
-  }, []);
-
-  return { isListening, startListening, stopListening };
 }
 
 export default function LiveClassScreen() {

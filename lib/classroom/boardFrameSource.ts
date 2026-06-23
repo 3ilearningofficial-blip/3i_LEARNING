@@ -18,6 +18,8 @@ import { getCurrentPageExportBounds } from "./exportClassroomBoardViewport";
 export type BoardFrameSource = {
   /** Latest rasterized board image, or null when the page is empty / not ready. */
   getFrame: () => CanvasImageSource | null;
+  /** Resolves after the first rasterize attempt (empty page counts as ready). */
+  firstFrameReady: Promise<void>;
   stop: () => void;
 };
 
@@ -30,8 +32,8 @@ type Opts = {
   safetyIntervalMs?: number;
 };
 
-const DEFAULT_MIN_INTERVAL = 250;
-const DEFAULT_DEBOUNCE = 180;
+const DEFAULT_MIN_INTERVAL = 200;
+const DEFAULT_DEBOUNCE = 100;
 const DEFAULT_SAFETY = 1000;
 
 export function createBoardFrameSource(
@@ -50,6 +52,16 @@ export function createBoardFrameSource(
   let stopped = false;
   let warned = false;
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  let firstFrameResolved = false;
+  let resolveFirstFrame: (() => void) | null = null;
+  const firstFrameReady = new Promise<void>((resolve) => {
+    resolveFirstFrame = resolve;
+  });
+  const markFirstFrameReady = () => {
+    if (firstFrameResolved) return;
+    firstFrameResolved = true;
+    resolveFirstFrame?.();
+  };
 
   const setFrame = (img: HTMLImageElement | null, url: string | null) => {
     const prevUrl = currentUrl;
@@ -69,6 +81,7 @@ export function createBoardFrameSource(
       if (shapeIds.length === 0) {
         // Empty page: clear the frame so the composite shows its slide background.
         setFrame(null, null);
+        markFirstFrameReady();
         return;
       }
       const bounds = getCurrentPageExportBounds(editor, boardEl);
@@ -80,7 +93,10 @@ export function createBoardFrameSource(
         pixelRatio: 1,
         padding: 0,
       });
-      if (stopped || !blob) return;
+      if (stopped || !blob) {
+        markFirstFrameReady();
+        return;
+      }
 
       const url = URL.createObjectURL(blob);
       const img = new Image();
@@ -91,14 +107,17 @@ export function createBoardFrameSource(
       });
       if (stopped) {
         URL.revokeObjectURL(url);
+        markFirstFrameReady();
         return;
       }
       setFrame(img, url);
+      markFirstFrameReady();
     } catch (e) {
       if (!warned) {
         warned = true;
         console.warn("[Classroom] board frame rasterize failed:", e);
       }
+      markFirstFrameReady();
     } finally {
       inFlight = false;
     }
@@ -112,8 +131,19 @@ export function createBoardFrameSource(
 
   // First frame as soon as possible.
   void rasterize();
+  if (!editor) markFirstFrameReady();
 
-  const unsub = editor?.store.listen(scheduleDebounced, { scope: "document" });
+  let lastPageId = editor?.getCurrentPageId();
+  const unsub = editor?.store.listen(() => {
+    scheduleDebounced();
+    if (!editor) return;
+    const pageId = editor.getCurrentPageId();
+    if (pageId !== lastPageId) {
+      lastPageId = pageId;
+      if (debounceTimer) clearTimeout(debounceTimer);
+      void rasterize();
+    }
+  }, { scope: "document" });
   const safety = setInterval(() => void rasterize(), safetyIntervalMs);
 
   const stop = () => {
@@ -130,6 +160,7 @@ export function createBoardFrameSource(
 
   return {
     getFrame: () => current,
+    firstFrameReady,
     stop,
   };
 }

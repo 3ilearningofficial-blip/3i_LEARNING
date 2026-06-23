@@ -261,14 +261,27 @@ export async function startClassroomPublishBundle(
   const recordingReady = new Promise<void>((resolve) => {
     resolveRecordingReady = resolve;
   });
+  const tryResolveRecordingReady = () => {
+    if (hasResolvedRecordingReady) return;
+    if (!boardFrameIsReady || cameraVideo.readyState < 2) return;
+    hasResolvedRecordingReady = true;
+    resolveRecordingReady?.();
+  };
+  let boardFrameIsReady = false;
+  void boardFrame.firstFrameReady
+    .then(() => {
+      boardFrameIsReady = true;
+      tryResolveRecordingReady();
+    })
+    .catch(() => {
+      boardFrameIsReady = true;
+      tryResolveRecordingReady();
+    });
   let recRaf = 0;
   const recPaint = () => {
     drawBoardLayer(recCtx, boardFrame.getFrame());
     drawPipLayer(recCtx, cameraVideo, !!opts.greenScreen, chromaCanvas, chromaCtx, pipX, pipY);
-    if (!hasResolvedRecordingReady && cameraVideo.readyState >= 2) {
-      hasResolvedRecordingReady = true;
-      resolveRecordingReady?.();
-    }
+    tryResolveRecordingReady();
     recRaf = requestAnimationFrame(recPaint);
   };
   const recStream = recCanvas.captureStream(fps);
@@ -282,7 +295,7 @@ export async function startClassroomPublishBundle(
       hasResolvedRecordingReady = true;
       resolveRecordingReady?.();
     }
-  }, 1500);
+  }, 2000);
 
   const recPreviewEl = document.createElement("video");
   recPreviewEl.muted = true;

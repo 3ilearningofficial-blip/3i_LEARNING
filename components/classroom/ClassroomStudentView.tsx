@@ -13,12 +13,15 @@ import {
 } from "react-native";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import * as WebBrowser from "expo-web-browser";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
+import { apiRequest, authFetch, getApiUrl, getWebUrl } from "@/lib/query-client";
 import { useAuth } from "@/context/AuthContext";
 import { filterChatMessages } from "@/lib/chat-utils";
+import { useVoiceInput } from "@/lib/useVoiceInput";
 import ClassroomCompositePlayer from "@/components/classroom/ClassroomCompositePlayer";
 import ClassroomLiveOverlays from "@/components/classroom/ClassroomLiveOverlays";
+import ClassroomStudentPortraitShell from "@/components/classroom/ClassroomStudentPortraitShell";
 import LiveClassRecordingTimer from "@/components/LiveClassRecordingTimer";
 import ClassroomHeaderActivityTimer from "@/components/classroom/ClassroomHeaderActivityTimer";
 import { useLiveEngagementSse } from "@/lib/useLiveEngagementSse";
@@ -47,6 +50,46 @@ type Props = {
   bottomPadding: number;
 };
 
+function NativeClassroomGate({
+  liveClassId,
+  title,
+  topPadding,
+}: {
+  liveClassId: string;
+  title: string;
+  topPadding: number;
+}) {
+  const openInBrowser = useCallback(async () => {
+    const url = `${getWebUrl()}/live-class/${liveClassId}`;
+    try {
+      await WebBrowser.openBrowserAsync(url, {
+        presentationStyle: WebBrowser.WebBrowserPresentationStyle.FULL_SCREEN,
+        enableBarCollapsing: true,
+      });
+    } catch {
+      const { Linking } = await import("react-native");
+      void Linking.openURL(url);
+    }
+  }, [liveClassId]);
+
+  return (
+    <View style={[styles.nativeGate, { paddingTop: topPadding }]}>
+      <Pressable style={styles.backBtn} onPress={() => router.back()}>
+        <Ionicons name="arrow-back" size={20} color="#fff" />
+      </Pressable>
+      <Text style={styles.nativeTitle}>{title}</Text>
+      <Text style={styles.nativeText}>
+        Interactive classroom runs in your mobile browser for reliable live video and chat. Open the
+        class below to use the full portrait experience.
+      </Text>
+      <Pressable style={styles.nativeOpenBtn} onPress={() => void openInBrowser()}>
+        <Ionicons name="open-outline" size={18} color="#fff" />
+        <Text style={styles.nativeOpenBtnText}>Open in browser</Text>
+      </Pressable>
+    </View>
+  );
+}
+
 export default function ClassroomStudentView({
   liveClassId,
   title,
@@ -65,12 +108,12 @@ export default function ClassroomStudentView({
   const [chatOpen, setChatOpen] = useState(false);
   const [chatMsg, setChatMsg] = useState("");
   const [handRaised, setHandRaised] = useState(false);
-  const listRef = useRef<FlatList>(null);
+  const listRef = useRef<FlatList<ChatMsg>>(null);
   const chatInputRef = useRef<TextInput>(null);
   const prevIsLiveRef = useRef(false);
 
-  const isLandscape = width > height;
-  const isWide = width >= 768 || isLandscape;
+  const isPhonePortrait = height > width && width < 768;
+  const isWideLayout = !isPhonePortrait && (width >= 768 || width > height);
   const classIsLive = isTruthyDbFlag(isLive) || isLive === true;
   const canChat = classIsLive && !isCompleted;
   const showLiveHeader = (showAsLiveUI || classIsLive) && !isCompleted;
@@ -82,13 +125,18 @@ export default function ClassroomStudentView({
     isAdmin: false,
   });
 
+  const appendVoiceText = useCallback((text: string) => {
+    setChatMsg((prev) => (prev ? `${prev} ${text}` : text));
+  }, []);
+  const { isListening, startListening, stopListening } = useVoiceInput(appendVoiceText);
+
   useEffect(() => {
-    if (!chatOpen || Platform.OS !== "web") return;
+    if (!chatOpen || Platform.OS !== "web" || isPhonePortrait) return;
     const t = requestAnimationFrame(() => {
       chatInputRef.current?.focus();
     });
     return () => cancelAnimationFrame(t);
-  }, [chatOpen]);
+  }, [chatOpen, isPhonePortrait]);
 
   const { data: messages = [] } = useQuery<ChatMsg[]>({
     queryKey: [`/api/live-classes/${liveClassId}/chat`],
@@ -105,7 +153,7 @@ export default function ClassroomStudentView({
     messages,
     user?.id ?? 0,
     false,
-    (chatMode as "public" | "private") || "public"
+    (chatMode as "public" | "private") || "public",
   );
 
   const sendMutation = useMutation({
@@ -139,7 +187,7 @@ export default function ClassroomStudentView({
     }
     const sendHeartbeat = () => {
       void apiRequest("POST", `/api/live-classes/${liveClassId}/viewers/heartbeat`, {}).catch(
-        () => {}
+        () => {},
       );
     };
     sendHeartbeat();
@@ -167,12 +215,38 @@ export default function ClassroomStudentView({
     sendMutation.mutate(t);
   }, [chatMsg, canChat, sendMutation]);
 
-  const renderChatPanel = () => (
+  const renderVideoStage = (layout: "default" | "portraitTop") => (
+    <View style={layout === "portraitTop" ? styles.stagePortraitSlot : styles.stageWideSlot}>
+      {!showAsLiveUI && !isCompleted ? (
+        <View style={styles.waiting}>
+          <ActivityIndicator color={Colors.light.primary} />
+          <Text style={styles.waitingText}>Waiting for teacher to start…</Text>
+        </View>
+      ) : watchComposite ? (
+        <>
+          <ClassroomCompositePlayer
+            liveClassId={liveClassId}
+            enabled
+            pipPosition={pipPosition}
+            layout={layout}
+          />
+          <ClassroomLiveOverlays liveClassId={liveClassId} sessionActive={isLive} />
+        </>
+      ) : showAsLiveUI || isCompleted ? (
+        <View style={styles.waiting}>
+          <ActivityIndicator color={Colors.light.primary} />
+          <Text style={styles.waitingText}>Connecting to class…</Text>
+        </View>
+      ) : null}
+    </View>
+  );
+
+  const renderWideChatPanel = () => (
     <View
       style={[
         styles.chatPanel,
-        isWide ? styles.chatPanelSide : styles.chatPanelPortrait,
-        { paddingBottom: isWide ? bottomPadding : bottomPadding },
+        isWideLayout ? styles.chatPanelSide : styles.chatPanelPortrait,
+        { paddingBottom: bottomPadding },
       ]}
     >
       <View style={styles.chatSheetHeader}>
@@ -214,10 +288,23 @@ export default function ClassroomStudentView({
           autoFocus={chatOpen}
           enterKeyHint="send"
         />
+        {Platform.OS === "web" ? (
+          <Pressable
+            style={[styles.micBtn, isListening && styles.micBtnActive]}
+            onPress={isListening ? stopListening : startListening}
+            disabled={!canChat}
+          >
+            <Ionicons
+              name={isListening ? "mic" : "mic-outline"}
+              size={18}
+              color={isListening ? "#EF4444" : Colors.light.textMuted}
+            />
+          </Pressable>
+        ) : null}
         <Pressable
           style={[styles.sendBtn, !chatMsg.trim() && styles.sendDisabled]}
           onPress={handleSend}
-          disabled={!canChat || !chatMsg.trim()}
+          disabled={!canChat || !chatMsg.trim() || sendMutation.isPending}
         >
           <Ionicons name="send" size={18} color="#fff" />
         </Pressable>
@@ -227,15 +314,34 @@ export default function ClassroomStudentView({
 
   if (Platform.OS !== "web") {
     return (
-      <View style={[styles.nativeGate, { paddingTop: topPadding }]}>
-        <Pressable style={styles.backBtn} onPress={() => router.back()}>
-          <Ionicons name="arrow-back" size={20} color="#fff" />
-        </Pressable>
-        <Text style={styles.nativeTitle}>{title}</Text>
-        <Text style={styles.nativeText}>
-          Interactive classroom is available in the mobile browser. Open this class on 3i Learning web to watch the live lesson.
-        </Text>
-      </View>
+      <NativeClassroomGate liveClassId={liveClassId} title={title} topPadding={topPadding} />
+    );
+  }
+
+  if (isPhonePortrait) {
+    return (
+      <ClassroomStudentPortraitShell
+        title={title}
+        liveClassId={liveClassId}
+        topPadding={topPadding}
+        bottomPadding={bottomPadding}
+        showLiveHeader={showLiveHeader}
+        isLive={isLive}
+        startedAt={startedAt}
+        canChat={canChat}
+        handRaised={handRaised}
+        onHandRaise={() => handMutation.mutate(!handRaised)}
+        chatMsg={chatMsg}
+        onChatMsgChange={setChatMsg}
+        onSend={handleSend}
+        sendPending={sendMutation.isPending}
+        displayMessages={displayMessages}
+        listRef={listRef}
+        chatInputRef={chatInputRef}
+        isListening={isListening}
+        onMicPress={isListening ? stopListening : startListening}
+        videoSlot={renderVideoStage("portraitTop")}
+      />
     );
   }
 
@@ -264,28 +370,13 @@ export default function ClassroomStudentView({
         ) : null}
       </View>
 
-      <View style={[styles.body, isWide && chatOpen && styles.bodyRow]}>
-        <View style={[styles.stage, isWide && chatOpen && styles.stageWithChat]}>
-          {!showAsLiveUI && !isCompleted ? (
-            <View style={styles.waiting}>
-              <ActivityIndicator color={Colors.light.primary} />
-              <Text style={styles.waitingText}>Waiting for teacher to start…</Text>
-            </View>
-          ) : watchComposite ? (
-            <>
-              <ClassroomCompositePlayer liveClassId={liveClassId} enabled pipPosition={pipPosition} />
-              <ClassroomLiveOverlays liveClassId={liveClassId} sessionActive={isLive} />
-              {!isWide && chatOpen ? renderChatPanel() : null}
-            </>
-          ) : showAsLiveUI || isCompleted ? (
-            <View style={styles.waiting}>
-              <ActivityIndicator color={Colors.light.primary} />
-              <Text style={styles.waitingText}>Connecting to class…</Text>
-            </View>
-          ) : null}
+      <View style={[styles.body, isWideLayout && chatOpen && styles.bodyRow]}>
+        <View style={[styles.stage, isWideLayout && chatOpen && styles.stageWithChat]}>
+          {renderVideoStage("default")}
+          {!isWideLayout && chatOpen ? renderWideChatPanel() : null}
         </View>
 
-        {isWide && chatOpen ? renderChatPanel() : null}
+        {isWideLayout && chatOpen ? renderWideChatPanel() : null}
       </View>
 
       {!chatOpen ? (
@@ -301,9 +392,7 @@ export default function ClassroomStudentView({
             style={styles.fab}
             onPress={() => {
               setChatOpen(true);
-              if (Platform.OS === "web") {
-                requestAnimationFrame(() => chatInputRef.current?.focus());
-              }
+              requestAnimationFrame(() => chatInputRef.current?.focus());
             }}
           >
             <Ionicons name="chatbubbles" size={22} color="#fff" />
@@ -350,6 +439,21 @@ const styles = StyleSheet.create({
   bodyRow: { flexDirection: "row" },
   stage: {
     flex: 1,
+    position: "relative",
+    minHeight: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#000",
+  },
+  stagePortraitSlot: {
+    width: "100%",
+    height: "100%",
+    position: "relative",
+    backgroundColor: "#000",
+  },
+  stageWideSlot: {
+    flex: 1,
+    width: "100%",
     position: "relative",
     minHeight: 0,
     alignItems: "center",
@@ -428,7 +532,14 @@ const styles = StyleSheet.create({
   bubbleName: { fontSize: 11, fontWeight: "700", color: Colors.light.primary, marginBottom: 2 },
   bubbleText: { fontSize: 14, color: Colors.light.text },
   emptyChat: { textAlign: "center", color: Colors.light.textMuted, marginTop: 24 },
-  chatInputRow: { flexDirection: "row", gap: 8, padding: 12, borderTopWidth: 1, borderTopColor: "#E5E7EB" },
+  chatInputRow: {
+    flexDirection: "row",
+    gap: 8,
+    padding: 12,
+    borderTopWidth: 1,
+    borderTopColor: "#E5E7EB",
+    alignItems: "center",
+  },
   chatInput: {
     flex: 1,
     backgroundColor: "#F3F4F6",
@@ -437,6 +548,15 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     fontSize: 14,
   },
+  micBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: Colors.light.secondary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  micBtnActive: { backgroundColor: "#FEE2E2" },
   sendBtn: {
     width: 40,
     height: 40,
@@ -449,4 +569,16 @@ const styles = StyleSheet.create({
   nativeGate: { flex: 1, backgroundColor: "#0A1628", padding: 20 },
   nativeTitle: { fontSize: 18, fontWeight: "700", color: "#fff", marginTop: 16 },
   nativeText: { fontSize: 14, color: "#9CA3AF", marginTop: 12, lineHeight: 20 },
+  nativeOpenBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    marginTop: 24,
+    backgroundColor: Colors.light.primary,
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+  },
+  nativeOpenBtnText: { fontSize: 15, fontWeight: "700", color: "#fff" },
 });

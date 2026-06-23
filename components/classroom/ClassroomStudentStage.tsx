@@ -7,6 +7,8 @@ type Props = {
   cameraVideoRef: React.RefObject<HTMLVideoElement | null>;
   /** Corner where the teacher PiP sits; matches the recording composite. */
   pipPosition?: ClassroomPipPosition;
+  /** When false, PiP uses minimal bottom inset (portrait shell has controls below video). */
+  controlsOnVideo?: boolean;
 };
 
 const boardStyle = {
@@ -28,13 +30,15 @@ const pipBaseStyle: React.CSSProperties = {
   backgroundColor: "transparent",
 };
 
-function getPipStyleFor(position: ClassroomPipPosition): React.CSSProperties {
-  // Narrow phones get a larger bottom inset so the PiP clears the on-screen
-  // controls; the chosen corner (top vs bottom) always matches the recording.
+function getPipStyleFor(
+  position: ClassroomPipPosition,
+  opts?: { controlsOnVideo?: boolean },
+): React.CSSProperties {
   const narrow =
     Platform.OS === "web" && typeof window !== "undefined" && window.innerWidth < 768;
+  const bottomInset = opts?.controlsOnVideo !== false && narrow ? 72 : 12;
   if (position === "bottom-right") {
-    return { ...pipBaseStyle, right: 12, bottom: narrow ? 72 : 12 };
+    return { ...pipBaseStyle, right: 12, bottom: bottomInset };
   }
   return { ...pipBaseStyle, right: 12, top: 12 };
 }
@@ -44,16 +48,19 @@ export default function ClassroomStudentStage({
   boardVideoRef,
   cameraVideoRef,
   pipPosition = DEFAULT_PIP_POSITION,
+  controlsOnVideo = true,
 }: Props) {
-  const [pipStyle, setPipStyle] = useState<React.CSSProperties>(() => getPipStyleFor(pipPosition));
+  const [pipStyle, setPipStyle] = useState<React.CSSProperties>(() =>
+    getPipStyleFor(pipPosition, { controlsOnVideo }),
+  );
 
   useEffect(() => {
     if (Platform.OS !== "web" || typeof window === "undefined") {
-      setPipStyle(getPipStyleFor(pipPosition));
+      setPipStyle(getPipStyleFor(pipPosition, { controlsOnVideo }));
       return;
     }
 
-    const update = () => setPipStyle(getPipStyleFor(pipPosition));
+    const update = () => setPipStyle(getPipStyleFor(pipPosition, { controlsOnVideo }));
 
     update();
     window.addEventListener("resize", update);
@@ -63,7 +70,7 @@ export default function ClassroomStudentStage({
       window.removeEventListener("resize", update);
       mq.removeEventListener("change", update);
     };
-  }, [pipPosition]);
+  }, [pipPosition, controlsOnVideo]);
 
   if (Platform.OS !== "web") return null;
 

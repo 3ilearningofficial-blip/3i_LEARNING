@@ -1,23 +1,31 @@
 import type { Editor, TLPageId } from "tldraw";
 import { getSlideBounds, SLIDE_LOGICAL_H, SLIDE_LOGICAL_W } from "./slideConstants";
 
-export function fitEditorToSlide(editor: Editor) {
+export function fitEditorToSlide(editor: Editor, opts?: { lock?: boolean }) {
   const bounds = getSlideBounds();
   try {
     editor.zoomToBounds(bounds, { inset: 16, animation: { duration: 0 } });
   } catch {
     editor.setCamera({ x: SLIDE_LOGICAL_W / 2, y: SLIDE_LOGICAL_H / 2, z: 1 });
   }
+  if (opts?.lock) {
+    editor.setCameraOptions({ isLocked: true });
+  }
 }
 
-export function setupClassroomSlideEditor(editor: Editor, readonly: boolean) {
+export function setupClassroomSlideEditor(
+  editor: Editor,
+  readonly: boolean,
+  opts?: { lockViewport?: boolean },
+) {
   editor.user.updateUserPreferences({ colorScheme: "dark" });
   if (readonly) {
     editor.updateInstanceState({ isReadonly: true });
     editor.setCameraOptions({ isLocked: true });
     return;
   }
-  fitEditorToSlide(editor);
+  const lockViewport = !!opts?.lockViewport;
+  fitEditorToSlide(editor, { lock: lockViewport });
 }
 
 export function getPageCount(editor: Editor | null): number {
@@ -38,8 +46,12 @@ export function goToPageIndex(editor: Editor | null, index: number) {
   const pages = editor.getPages();
   const page = pages[index];
   if (!page) return;
+  const wasLocked = editor.getCameraOptions().isLocked;
   editor.setCurrentPage(page.id as TLPageId);
   fitEditorToSlide(editor);
+  if (wasLocked) {
+    editor.setCameraOptions({ isLocked: true });
+  }
 }
 
 export function addClassroomPage(editor: Editor | null): number {
@@ -49,8 +61,10 @@ export function addClassroomPage(editor: Editor | null): number {
   const pages = editor.getPages();
   const newPage = pages[pages.length - 1];
   if (newPage) {
+    const wasLocked = editor.getCameraOptions().isLocked;
     editor.setCurrentPage(newPage.id as TLPageId);
     fitEditorToSlide(editor);
+    if (wasLocked) editor.setCameraOptions({ isLocked: true });
   }
   return getPageIndex(editor);
 }
@@ -60,8 +74,10 @@ export function removeClassroomPage(editor: Editor | null): boolean {
   const pages = editor.getPages();
   if (pages.length <= 1) return false;
   const currentId = editor.getCurrentPageId();
+  const wasLocked = editor.getCameraOptions().isLocked;
   editor.deletePage(currentId as TLPageId);
   fitEditorToSlide(editor);
+  if (wasLocked) editor.setCameraOptions({ isLocked: true });
   return true;
 }
 

@@ -11,10 +11,17 @@ type Props = {
   enabled?: boolean;
   /** Teacher PiP corner chosen by the admin; defaults to top-right. */
   pipPosition?: string;
+  /** portraitTop fills a fixed 16:9 slot; default centers in flex stage. */
+  layout?: "default" | "portraitTop";
 };
 
 /** Full-area LiveKit player for students (board + responsive teacher PiP + audio). */
-export default function ClassroomCompositePlayer({ liveClassId, enabled = true, pipPosition }: Props) {
+export default function ClassroomCompositePlayer({
+  liveClassId,
+  enabled = true,
+  pipPosition,
+  layout = "default",
+}: Props) {
   const { data: tokenPayload, isLoading } = useClassroomToken(liveClassId, enabled);
   const { setRemoteBoardEl, setRemoteCameraEl, setRemoteAudioEl, connected, reconnecting, error } =
     useLiveKitRoom(tokenPayload, enabled && Platform.OS === "web");
@@ -50,15 +57,16 @@ export default function ClassroomCompositePlayer({ liveClassId, enabled = true, 
 
   if (Platform.OS !== "web") return null;
 
+  const isPortraitTop = layout === "portraitTop";
+
   return (
-    <View style={styles.wrap}>
-      <View style={styles.frame}>
-        {/* Keep the stage mounted across reconnects so the last frame and the
-            <video>/<audio> elements persist instead of flashing to black. */}
+    <View style={[styles.wrap, isPortraitTop && styles.wrapPortraitTop]}>
+      <View style={[styles.frame, isPortraitTop && styles.framePortraitTop]}>
         <ClassroomStudentStage
           boardVideoRef={boardRef}
           cameraVideoRef={cameraRef}
           pipPosition={normalizePipPosition(pipPosition)}
+          controlsOnVideo={!isPortraitTop}
         />
         <audio ref={audioRef as React.RefObject<HTMLAudioElement>} autoPlay />
 
@@ -96,6 +104,18 @@ const styles = StyleSheet.create({
     maxWidth: "100%",
     position: "relative",
     backgroundColor: "#000",
+  },
+  wrapPortraitTop: {
+    flex: 1,
+    width: "100%",
+    height: "100%",
+    minHeight: 0,
+  },
+  framePortraitTop: {
+    width: "100%",
+    height: "100%",
+    maxHeight: "100%",
+    aspectRatio: undefined,
   },
   loading: {
     ...StyleSheet.absoluteFillObject,
