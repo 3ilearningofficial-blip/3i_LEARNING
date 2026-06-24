@@ -18,6 +18,7 @@ import { useAppTheme } from "@/context/AppThemeContext";
 import { fetch } from "expo/fetch";
 import BulkUploadModal from "@/components/BulkUploadModal";
 import { buildRecordingLectureSectionTitle, DEFAULT_LIVE_RECORDING_SECTION, getContentFolderRootName } from "@shared/recordingSection";
+import { sortFolderNamesByOrder as sortFolderNamesByOrderShared } from "@shared/courseFolderOrder";
 import { useDocumentVisibility } from "@/lib/useDocumentVisibility";
 import SortableList from "@/components/admin/SortableList";
 import SortableItem from "@/components/admin/SortableItem";
@@ -1122,13 +1123,7 @@ export default function AdminCourseScreen() {
    * saved. Web-only drag; native keeps the order it reads back from the server.
    */
   const sortFolderNamesByOrder = (names: string[], type: "lecture" | "test" | "material"): string[] =>
-    [...names].sort((a, b) => {
-      const fa = findFolderByPath(a, type);
-      const fb = findFolderByPath(b, type);
-      const oa = fa?.order_index ?? Number.MAX_SAFE_INTEGER;
-      const ob = fb?.order_index ?? Number.MAX_SAFE_INTEGER;
-      return oa - ob;
-    });
+    sortFolderNamesByOrderShared(names, type, safeFolders);
 
   const reorderFoldersByDrag = async (
     type: "lecture" | "test" | "material",

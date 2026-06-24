@@ -28,6 +28,7 @@ import { useAuth } from "@/context/AuthContext";
 import { WebView } from "react-native-webview";
 import { DownloadButton } from "@/components/DownloadButton";
 import { DEFAULT_LIVE_RECORDING_SECTION, getContentFolderRootName } from "@shared/recordingSection";
+import { sortFolderNamesByOrder } from "@shared/courseFolderOrder";
 import { getCourseAccentColor } from "@shared/courseTheme";
 import { COURSE_BANNER_ASPECT } from "@/constants/courseBanner";
 import { useDocumentVisibility } from "@/lib/useDocumentVisibility";
@@ -1316,7 +1317,8 @@ setTimeout(function() {
                     const rootName = getContentFolderRootName(folderFullName(f));
                     if (!folderMap.has(rootName)) folderMap.set(rootName, []);
                   }
-                  const folders = Array.from(folderMap.entries());
+                  const folderNames = sortFolderNamesByOrder(Array.from(folderMap.keys()), "lecture", courseFolders);
+                  const folders = folderNames.map((name) => [name, folderMap.get(name)!] as const);
                   return (
                     <>
                       {folders.map(([folderKey, lectures]) => {
@@ -1418,7 +1420,8 @@ setTimeout(function() {
                     ...(testsForTestsTab || []).map((t: any) => getContentFolderRootName(t.folder_name)).filter(Boolean),
                     ...courseFolders.filter((f: any) => f.type === "test" && !f.parent_id).map(folderFullName),
                   ]);
-                  return Array.from(testFolderNames).map((folderName: any) => {
+                  const sortedTestFolders = sortFolderNamesByOrder(Array.from(testFolderNames), "test", courseFolders);
+                  return sortedTestFolders.map((folderName: any) => {
                     const folderTests = (testsForTestsTab || []).filter((t: any) => t.folder_name === folderName || String(t.folder_name || "").startsWith(`${folderName} /`));
                     if (folderTests.length === 0) return null;
                     const isLocked = !isAdmin && !course.isEnrolled;
@@ -1605,7 +1608,8 @@ setTimeout(function() {
                     const rootName = getContentFolderRootName(folderFullName(f));
                     if (!folderMap.has(rootName)) folderMap.set(rootName, []);
                   }
-                  const folders = Array.from(folderMap.entries());
+                  const folderNames = sortFolderNamesByOrder(Array.from(folderMap.keys()), "material", courseFolders);
+                  const folders = folderNames.map((name) => [name, folderMap.get(name)!] as const);
                   return (
                     <>
                       {folders.map(([folderKey, materials]) => {

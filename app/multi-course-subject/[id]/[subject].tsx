@@ -15,6 +15,7 @@ import { useAppTheme } from "@/context/AppThemeContext";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCoursePurchase } from "@/lib/use-course-purchase";
 import { SUBJECT_LABELS, getSubjectMeta } from "@/constants/multiSubjects";
+import { sortCourseFolderRows } from "@shared/courseFolderOrder";
 // Lectures -> Tests -> PYQs -> Mock -> Missions -> Materials.
 const SECTIONS = ["Lecture", "Test", "PYQs", "Mock", "Missions", "Study Material"] as const;
 
@@ -192,7 +193,7 @@ export default function MultiCourseSubjectScreen() {
       return sec === name || sec.startsWith(`${name} /`);
     }).length;
   };
-  const visibleRootFolders = rootFolders.filter((folder: any) => folderItemCount(folder) > 0);
+  const visibleRootFolders = sortCourseFolderRows(rootFolders.filter((folder: any) => folderItemCount(folder) > 0));
 
   const noun = section === "Lecture" ? "videos" : section === "Study Material" ? "files" : section === "Missions" ? "missions" : "tests";
 

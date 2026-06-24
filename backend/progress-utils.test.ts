@@ -60,6 +60,31 @@ describe("updateCourseProgress", () => {
     expect(progressPercent).toBe(100);
   });
 
+  it("returns 100% when lecture complete and published tests have zero questions", async () => {
+    let progressPercent: number | null = null;
+    const db = {
+      query: async (sql: string, params?: unknown[]) => {
+        if (sql.includes("FROM courses")) {
+          return { rows: [{ course_type: "multi_subject" }] };
+        }
+        if (sql.includes("FROM lecture_progress")) {
+          return { rows: [{ lec: 1, tests: 0, missions: 0 }] };
+        }
+        if (sql.includes("FROM lectures WHERE course_id")) {
+          return { rows: [{ lec: 1, tests: 0, missions: 0 }] };
+        }
+        if (sql.startsWith("UPDATE enrollments SET progress_percent")) {
+          progressPercent = Number(params?.[0]);
+          return { rows: [] };
+        }
+        return { rows: [] };
+      },
+    };
+
+    await updateCourseProgress(db, 5, 10);
+    expect(progressPercent).toBe(100);
+  });
+
   it("returns 50% when one lecture is complete out of lecture + test", async () => {
     let progressPercent: number | null = null;
     const db = {

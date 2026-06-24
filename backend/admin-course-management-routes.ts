@@ -167,22 +167,6 @@ export function registerAdminCourseManagementRoutes({
     }
   });
 
-  app.get("/api/admin/courses/:id/progress-breakdown", requireAdmin, async (req: Request, res: Response) => {
-    try {
-      const courseId = Number(req.params.id);
-      if (!Number.isFinite(courseId) || courseId <= 0) {
-        return res.status(400).json({ message: "Invalid course id" });
-      }
-      const courseCheck = await db.query("SELECT id FROM courses WHERE id = $1 LIMIT 1", [courseId]);
-      if (courseCheck.rows.length === 0) return res.status(404).json({ message: "Course not found" });
-      const breakdown = await getCourseProgressBreakdown(db, courseId);
-      res.json(breakdown);
-    } catch (err) {
-      console.error("[Progress] breakdown failed:", err);
-      res.status(500).json({ message: "Failed to fetch progress breakdown" });
-    }
-  });
-
   app.get("/api/admin/courses/:id/folders", requireAdmin, async (req: Request, res: Response) => {
     try {
       const result = await db.query(

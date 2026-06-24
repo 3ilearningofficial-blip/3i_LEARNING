@@ -1,4 +1,4 @@
-import React from "react";
+﻿import React from "react";
 import { View, Text, Pressable, StyleSheet, Platform } from "react-native";
 import { useSegments } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -18,7 +18,7 @@ export default function AdminPushSetupBanner() {
   const isAdmin = user?.role === "admin";
   const enabled = isAdminRoute && isAdmin;
 
-  const { webPushStatus, enabling, showBanner, showConnected, enablePush } =
+  const { webPushStatus, enabling, showBanner, showConnected, enablePush, dismissConnectedBanner } =
     useAdminPushRegistration(enabled);
 
   if (Platform.OS !== "web" || !enabled) return null;
@@ -54,7 +54,7 @@ export default function AdminPushSetupBanner() {
             disabled={enabling}
             style={[styles.enableBtn, enabling && { opacity: 0.6 }]}
           >
-            <Text style={styles.enableBtnText}>{enabling ? "…" : "Enable"}</Text>
+            <Text style={styles.enableBtnText}>{enabling ? "..." : "Enable"}</Text>
           </Pressable>
         </View>
       ) : null}
@@ -69,7 +69,15 @@ export default function AdminPushSetupBanner() {
           ]}
         >
           <Ionicons name="checkmark-circle" size={16} color="#16A34A" />
-          <Text style={styles.okText}>Browser push connected</Text>
+          <Text style={[styles.okText, { flex: 1 }]}>Browser push connected</Text>
+          <Pressable
+            onPress={dismissConnectedBanner}
+            hitSlop={8}
+            style={styles.closeBtn}
+            accessibilityLabel="Dismiss"
+          >
+            <Ionicons name="close" size={18} color="#16A34A" />
+          </Pressable>
         </View>
       ) : null}
     </View>
@@ -121,4 +129,5 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   okText: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: "#16A34A" },
+  closeBtn: { padding: 2 },
 });

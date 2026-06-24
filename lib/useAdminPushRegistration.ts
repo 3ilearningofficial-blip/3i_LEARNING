@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+﻿import { useCallback, useEffect, useRef, useState } from "react";
 import { Platform } from "react-native";
 import {
   ensurePushRegisteredWithGesture,
@@ -7,6 +7,9 @@ import {
   type WebPushConnectionStatus,
 } from "@/lib/pushNotifications";
 
+const DISMISS_KEY = "admin_push_connected_banner_dismissed";
+const AUTO_HIDE_MS = 3000;
+
 export type AdminPushRegistration = {
   webPushStatus: WebPushConnectionStatus | null;
   enabling: boolean;
@@ -14,7 +17,27 @@ export type AdminPushRegistration = {
   showConnected: boolean;
   refreshStatus: () => Promise<void>;
   enablePush: () => Promise<void>;
+  dismissConnectedBanner: () => void;
 };
+
+function readDismissed(): boolean {
+  if (Platform.OS !== "web" || typeof localStorage === "undefined") return false;
+  try {
+    return localStorage.getItem(DISMISS_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeDismissed(dismissed: boolean): void {
+  if (Platform.OS !== "web" || typeof localStorage === "undefined") return;
+  try {
+    if (dismissed) localStorage.setItem(DISMISS_KEY, "1");
+    else localStorage.removeItem(DISMISS_KEY);
+  } catch {
+    /* ignore */
+  }
+}
 
 /**
  * Admin push setup: native registers on mount; web requires a user gesture (Enable button).
@@ -22,7 +45,19 @@ export type AdminPushRegistration = {
 export function useAdminPushRegistration(enabled: boolean): AdminPushRegistration {
   const [webPushStatus, setWebPushStatus] = useState<WebPushConnectionStatus | null>(null);
   const [enabling, setEnabling] = useState(false);
+  const [connectedBannerDismissed, setConnectedBannerDismissed] = useState(() => readDismissed());
   const nativeRegisteredRef = useRef(false);
+  const autoHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevConnectedRef = useRef(false);
+
+  const dismissConnectedBanner = useCallback(() => {
+    setConnectedBannerDismissed(true);
+    writeDismissed(true);
+    if (autoHideTimerRef.current) {
+      clearTimeout(autoHideTimerRef.current);
+      autoHideTimerRef.current = null;
+    }
+  }, []);
 
   const refreshStatus = useCallback(async () => {
     if (!enabled) {
@@ -52,6 +87,37 @@ export function useAdminPushRegistration(enabled: boolean): AdminPushRegistratio
     });
   }, [enabled]);
 
+  useEffect(() => {
+    if (!enabled || Platform.OS !== "web") return;
+    const connected = !!webPushStatus?.connected;
+    if (!connected && prevConnectedRef.current) {
+      setConnectedBannerDismissed(false);
+      writeDismissed(false);
+    }
+    prevConnectedRef.current = connected;
+  }, [enabled, webPushStatus?.connected]);
+
+  useEffect(() => {
+    if (!enabled || Platform.OS !== "web") return;
+    if (!webPushStatus?.connected || connectedBannerDismissed) {
+      if (autoHideTimerRef.current) {
+        clearTimeout(autoHideTimerRef.current);
+        autoHideTimerRef.current = null;
+      }
+      return;
+    }
+    autoHideTimerRef.current = setTimeout(() => {
+      dismissConnectedBanner();
+      autoHideTimerRef.current = null;
+    }, AUTO_HIDE_MS);
+    return () => {
+      if (autoHideTimerRef.current) {
+        clearTimeout(autoHideTimerRef.current);
+        autoHideTimerRef.current = null;
+      }
+    };
+  }, [enabled, webPushStatus?.connected, connectedBannerDismissed, dismissConnectedBanner]);
+
   const enablePush = useCallback(async () => {
     if (!enabled) return;
     setEnabling(true);
@@ -74,7 +140,7 @@ export function useAdminPushRegistration(enabled: boolean): AdminPushRegistratio
     (webPushStatus.permission !== "granted" || !webPushStatus.connected);
 
   const showConnected =
-    enabled && Platform.OS === "web" && !!webPushStatus?.connected;
+    enabled && Platform.OS === "web" && !!webPushStatus?.connected && !connectedBannerDismissed;
 
   return {
     webPushStatus,
@@ -83,5 +149,6 @@ export function useAdminPushRegistration(enabled: boolean): AdminPushRegistratio
     showConnected,
     refreshStatus,
     enablePush,
+    dismissConnectedBanner,
   };
 }

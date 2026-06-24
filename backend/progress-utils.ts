@@ -13,15 +13,19 @@ const VISIBLE_LECTURE_L = `(l.visible_after_at IS NULL OR l.visible_after_at <= 
 /** Missions with no questions are admin shells and must not affect progress. */
 const REAL_MISSION = `jsonb_array_length(COALESCE(questions, '[]'::jsonb)) > 0`;
 const REAL_MISSION_DM = `jsonb_array_length(COALESCE(dm.questions, '[]'::jsonb)) > 0`;
+/** Published tests with no questions are admin shells and must not affect progress. */
+const REAL_TEST = `COALESCE(total_questions, 0) > 0`;
+const REAL_TEST_T = `COALESCE(t.total_questions, 0) > 0`;
 
 /** Published tests that count toward progress for the given course type. */
 function progressTestWhere(courseType: string, alias = ""): string {
   const p = alias ? `${alias}.` : "";
   const pub = `${p}is_published = TRUE`;
+  const real = alias ? REAL_TEST_T : REAL_TEST;
   if (String(courseType).toLowerCase() === "multi_subject") {
-    return pub;
+    return `${pub} AND ${real}`;
   }
-  return `${pub} AND COALESCE(LOWER(${p}test_type), 'practice') <> 'pyq'`;
+  return `${pub} AND ${real} AND COALESCE(LOWER(${p}test_type), 'practice') <> 'pyq'`;
 }
 
 async function getCourseType(db: DbClient, courseId: number): Promise<string> {

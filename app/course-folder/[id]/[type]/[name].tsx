@@ -21,6 +21,7 @@ import { useAuth } from "@/context/AuthContext";
 import { DownloadButton } from "@/components/DownloadButton";
 import { LectureListPreview } from "@/components/LectureListPreview";
 import { DEFAULT_LIVE_RECORDING_SECTION, getContentFolderChildDisplayName } from "@shared/recordingSection";
+import { sortFolderNamesByOrder } from "@shared/courseFolderOrder";
 import { useDocumentVisibility } from "@/lib/useDocumentVisibility";
 
 type FolderType = "lectures" | "materials" | "live" | "tests";
@@ -411,9 +412,13 @@ export default function CourseFolderScreen() {
       : (items.length === 1 ? "class" : "classes");
 
   // Show direct child folders first, then leaf items at the current folder level.
-  const subfolders = type === "lectures"
-    ? getDirectSubfolders(folderName).map(folderFullName)
-    : getDirectSubfolders(folderName).map(folderFullName);
+  const subfolderNames = sortFolderNamesByOrder(
+    getDirectSubfolders(folderName).map(folderFullName),
+    activeFolderType as "lecture" | "test" | "material",
+    scopedCourseFolders,
+    subjectKey ? { subjectKey } : undefined
+  );
+  const subfolders = subfolderNames;
   const leafLectures = type === "lectures"
     ? items.filter((l: any) => l.section_title === folderName)
     : [];

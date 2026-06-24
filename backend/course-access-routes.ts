@@ -481,7 +481,15 @@ export function registerCourseAccessRoutes({
         (course as any).accessExpired = accessExpired || false;
         (course as any).enrollmentValidUntil = row && row.valid_until != null ? row.valid_until : null;
 
-        const progressRow = row;
+        let progressRow = row;
+        if ((course as any).isEnrolled && !accessExpired) {
+          await updateCourseProgress(user.id, Number(courseIdParam)).catch(() => {});
+          const refreshed = await db.query(
+            "SELECT progress_percent, last_lecture_id FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)",
+            [user.id, courseIdParam]
+          );
+          if (refreshed.rows[0]) progressRow = refreshed.rows[0];
+        }
         (course as any).progress = progressRow && !accessExpired ? (progressRow?.progress_percent || 0) : 0;
         (course as any).lastLectureId = progressRow && !accessExpired ? progressRow?.last_lecture_id : null;
 
