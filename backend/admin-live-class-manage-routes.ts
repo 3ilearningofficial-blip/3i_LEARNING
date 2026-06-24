@@ -1,6 +1,7 @@
 import type { Express, Request, Response } from "express";
 import { purgeUserDownloadsForItem } from "./download-access-utils";
 import { buildRecordingLectureSectionTitle } from "../shared/recordingSection";
+import { normalizePipPosition } from "../shared/classroomPipPosition";
 import { autoNotificationExpiresAt } from "./auto-notification-expiry";
 import { notifyAdminsLiveClassCompleted } from "./notification-utils";
 import { sendPushToUsers } from "./push-notifications";
@@ -72,7 +73,7 @@ export function registerAdminLiveClassManageRoutes({
       const wasCompleted = prevRow.rows[0]?.is_completed === true;
       const { isLive, isCompleted, youtubeUrl, title, description, convertToLecture, sectionTitle, scheduledAt, notifyEmail, notifyBell, isFreePreview, streamType, chatMode, showViewerCount, recordingUrl, cfStreamUid, lectureSectionTitle, lectureSubfolderTitle, pipPosition, subjectKey } = req.body;
       const normalizedPipPosition =
-        pipPosition === undefined ? undefined : pipPosition === "bottom-right" ? "bottom-right" : "top-right";
+        pipPosition === undefined ? undefined : normalizePipPosition(pipPosition);
       const updates: string[] = [];
       const params: unknown[] = [];
       const add = (col: string, val: unknown) => {

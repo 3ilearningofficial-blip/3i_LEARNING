@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { getCourseProgressBreakdown } from "./progress-utils";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -146,6 +147,39 @@ export function registerAdminCourseManagementRoutes({
       res.json(result.rows);
     } catch {
       res.status(500).json({ message: "Failed to fetch tests" });
+    }
+  });
+
+  app.get("/api/admin/courses/:id/progress-breakdown", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const courseId = Number(req.params.id);
+      if (!Number.isFinite(courseId) || courseId <= 0) {
+        return res.status(400).json({ message: "Invalid course id" });
+      }
+      const courseCheck = await db.query("SELECT id FROM courses WHERE id = $1 LIMIT 1", [courseId]);
+      if (courseCheck.rows.length === 0) return res.status(404).json({ message: "Course not found" });
+      const breakdown = await getCourseProgressBreakdown(db, courseId);
+      if (!breakdown) return res.status(400).json({ message: "Invalid course id" });
+      res.json(breakdown);
+    } catch (err) {
+      console.error("[Progress] breakdown failed:", err);
+      res.status(500).json({ message: "Failed to fetch progress breakdown" });
+    }
+  });
+
+  app.get("/api/admin/courses/:id/progress-breakdown", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const courseId = Number(req.params.id);
+      if (!Number.isFinite(courseId) || courseId <= 0) {
+        return res.status(400).json({ message: "Invalid course id" });
+      }
+      const courseCheck = await db.query("SELECT id FROM courses WHERE id = $1 LIMIT 1", [courseId]);
+      if (courseCheck.rows.length === 0) return res.status(404).json({ message: "Course not found" });
+      const breakdown = await getCourseProgressBreakdown(db, courseId);
+      res.json(breakdown);
+    } catch (err) {
+      console.error("[Progress] breakdown failed:", err);
+      res.status(500).json({ message: "Failed to fetch progress breakdown" });
     }
   });
 

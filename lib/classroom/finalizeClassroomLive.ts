@@ -11,6 +11,7 @@ export type LiveClassRecordingMeta = {
   id: number | string;
   title?: string | null;
   course_id?: number | null;
+  subject_key?: string | null;
   lecture_section_title?: string | null;
   lecture_subfolder_title?: string | null;
   recording_url?: string | null;
@@ -31,7 +32,12 @@ async function linkBoardPdfToCourseMaterials(opts: {
   boardPdfUrl: string;
   pageCount: number;
   courseId: number;
+  subjectKey?: string | null;
 }): Promise<string | undefined> {
+  const normalizedSubjectKey =
+    typeof opts.subjectKey === "string" && opts.subjectKey.trim()
+      ? opts.subjectKey.trim().toLowerCase()
+      : undefined;
   const body = {
     title: `${opts.liveTitle} — Board notes`,
     description: `Whiteboard export from interactive classroom — ${opts.pageCount} page(s), ${new Date().toLocaleString()}.`,
@@ -41,6 +47,7 @@ async function linkBoardPdfToCourseMaterials(opts: {
     isFree: false,
     sectionTitle: null,
     downloadAllowed: false,
+    ...(normalizedSubjectKey ? { subjectKey: normalizedSubjectKey } : {}),
   };
 
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -83,6 +90,7 @@ export async function finalizeClassroomLiveSession(
   const existingBoard = String(liveClass.board_snapshot_url || "").trim();
   const courseId = Number(liveClass.course_id || 0);
   const liveTitle = String(liveClass.title || "Live class").trim();
+  const subjectKey = String(liveClass.subject_key || "").trim() || undefined;
 
   let boardMaterialUrl: string | undefined;
   let boardMaterialSaveFailed = false;
@@ -94,6 +102,7 @@ export async function finalizeClassroomLiveSession(
         boardPdfUrl: opts.boardArchive.boardPdfUrl,
         pageCount,
         courseId,
+        subjectKey,
       });
       if (!boardMaterialUrl && editor) {
         try {
@@ -102,6 +111,7 @@ export async function finalizeClassroomLiveSession(
             liveClassTitle: liveTitle,
             editor,
             boardEl: opts?.boardEl ?? null,
+            subjectKey,
           });
           boardMaterialUrl = material?.fileUrl;
         } catch (e) {
@@ -116,6 +126,7 @@ export async function finalizeClassroomLiveSession(
           liveClassTitle: liveTitle,
           editor,
           boardEl: opts?.boardEl ?? null,
+          subjectKey,
         });
         boardMaterialUrl = material?.fileUrl;
         if (!boardMaterialUrl) boardMaterialSaveFailed = true;

@@ -17,6 +17,7 @@ export async function saveClassroomBoardToCourseMaterials(opts: {
   liveClassTitle: string;
   editor: Editor | null;
   boardEl: HTMLElement | null;
+  subjectKey?: string | null;
 }): Promise<SaveBoardMaterialResult | null> {
   const courseId = Number(opts.courseId);
   if (!Number.isFinite(courseId) || courseId <= 0) return null;
@@ -40,6 +41,10 @@ export async function saveClassroomBoardToCourseMaterials(opts: {
       "materials"
     );
 
+    const normalizedSubjectKey =
+      typeof opts.subjectKey === "string" && opts.subjectKey.trim()
+        ? opts.subjectKey.trim().toLowerCase()
+        : undefined;
     const res = await apiRequest("POST", "/api/admin/study-materials", {
       title: `${safeTitle} — Board notes`,
       description: `Whiteboard export from interactive classroom — ${pageCount} page(s), ${new Date().toLocaleString()}. Each board page is one PDF page. Edit to merge or move into a folder.`,
@@ -49,6 +54,7 @@ export async function saveClassroomBoardToCourseMaterials(opts: {
       isFree: false,
       sectionTitle: null,
       downloadAllowed: false,
+      ...(normalizedSubjectKey ? { subjectKey: normalizedSubjectKey } : {}),
     });
 
     if (!res.ok) {

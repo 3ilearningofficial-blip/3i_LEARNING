@@ -246,6 +246,7 @@ export default function AdminClassroomPage() {
             id: liveClassId,
             title: liveClass?.title,
             course_id: liveClass?.course_id,
+            subject_key: liveClass?.subject_key,
             lecture_section_title: liveClass?.lecture_section_title,
             lecture_subfolder_title: liveClass?.lecture_subfolder_title,
             recording_url: videoRecordingUrl || liveClass?.recording_url,

@@ -32,9 +32,12 @@ type Opts = {
   safetyIntervalMs?: number;
 };
 
-const DEFAULT_MIN_INTERVAL = 200;
-const DEFAULT_DEBOUNCE = 100;
-const DEFAULT_SAFETY = 1000;
+// ~30fps cap with faster ink during active drawing.
+const DEFAULT_MIN_INTERVAL = 33;
+// Removed 100ms debounce so rasterization starts immediately on each store change.
+const DEFAULT_DEBOUNCE = 0;
+// Safety refresh reduced from 1000ms → 400ms to keep students in sync on slow canvases.
+const DEFAULT_SAFETY = 400;
 
 export function createBoardFrameSource(
   editor: Editor | null,
@@ -85,12 +88,14 @@ export function createBoardFrameSource(
         return;
       }
       const bounds = getCurrentPageExportBounds(editor, boardEl);
+      // "jpeg" encodes ~3× faster than "png" for the same content; pixelRatio 0.75
+      // reduces the blob size without visible quality loss on a 1920-wide canvas.
       const { blob } = await editor.toImage(shapeIds, {
-        format: "png",
+        format: "jpeg",
         bounds: Box.From(bounds),
         background: true,
         scale: 1,
-        pixelRatio: 1,
+        pixelRatio: 0.75,
         padding: 0,
       });
       if (stopped || !blob) {

@@ -21,7 +21,7 @@ import { MULTI_SUBJECTS, SubjectIcon } from "@/constants/multiSubjects";
 import BulkUploadModal from "@/components/BulkUploadModal";
 import { parseMissionQuestionsPdf } from "@/lib/mission-bulk-parse";
 import { downloadAdminContent } from "@/lib/admin-export";
-import { registerPushForCurrentUser, ensurePushRegisteredWithGesture } from "@/lib/pushNotifications";
+import { ensurePushRegisteredWithGesture } from "@/lib/pushNotifications";
 import { AdminExportDownloadButton } from "@/components/admin/AdminExportDownloadButton";
 import SortableList from "@/components/admin/SortableList";
 import SortableItem from "@/components/admin/SortableItem";
@@ -312,11 +312,6 @@ export default function AdminDashboard() {
     const valid: AdminTab[] = ["welcome", "courses", "tests", "materials", "missions", "notifications", "aiTutor", "books", "support", "analytics", "users"];
     if (valid.includes(t as AdminTab)) setActiveTab(t as AdminTab);
   }, [adminTabParam]);
-
-  useEffect(() => {
-    if (Platform.OS !== "web" || !isAdmin) return;
-    registerPushForCurrentUser().catch(() => {});
-  }, [isAdmin]);
 
   const openAdminAlerts = () => {
     ensurePushRegisteredWithGesture().catch(() => {});

@@ -67,13 +67,6 @@ export default function NotificationsScreen() {
   }, [isAdmin]);
 
   React.useEffect(() => {
-    if (!isAdmin) return;
-    ensurePushRegisteredWithGesture()
-      .then(() => refreshWebPushStatus())
-      .catch(() => {});
-  }, [isAdmin, refreshWebPushStatus]);
-
-  React.useEffect(() => {
     void refreshWebPushStatus();
   }, [refreshWebPushStatus]);
 

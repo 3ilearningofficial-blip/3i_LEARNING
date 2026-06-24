@@ -19,7 +19,9 @@ type Props = {
   onBoardStreamingChange?: (streaming: boolean) => void;
 };
 
-const videoStyle = { width: "100%", height: "100%", objectFit: "cover" as const, backgroundColor: "#000" };
+// "contain" shows the full teacher (not cropped) in the admin preview panel.
+// This matches what students receive: a full-body view or a full-board green-screen overlay.
+const videoStyle = { width: "100%", height: "100%", objectFit: "contain" as const, backgroundColor: "#000" };
 
 export default function TeacherVideoPanel({
   liveClassId,
@@ -113,7 +115,8 @@ export default function TeacherVideoPanel({
 }
 
 const styles = StyleSheet.create({
-  wrap: { height: 176, backgroundColor: "#111827", borderRadius: 10, overflow: "hidden", marginBottom: 8 },
+  // Increased from 176px → 260px so full-body teacher is visible in admin preview.
+  wrap: { height: 260, backgroundColor: "#111827", borderRadius: 10, overflow: "hidden", marginBottom: 8 },
   cameraLabel: {
     fontSize: 10,
     fontWeight: "700",

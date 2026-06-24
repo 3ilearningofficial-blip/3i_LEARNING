@@ -110,10 +110,15 @@ export default function MultiCourseLayout() {
   };
 
   const subjects = useMemo(() => buildSubjectList(course, liveClasses), [course, liveClasses]);
-  const upcomingLive = useMemo(
-    () => (Array.isArray(liveClasses) ? liveClasses.filter((lc: any) => !lc.is_completed) : []),
-    [liveClasses],
-  );
+  const upcomingLive = useMemo(() => {
+    if (!Array.isArray(liveClasses)) return [];
+    return liveClasses.filter((lc: any) => {
+      if (lc.is_completed) return false;
+      if (lc.is_live) return true;
+      const scheduled = Number(lc.scheduled_at || 0);
+      return Number.isFinite(scheduled) && scheduled > 0;
+    });
+  }, [liveClasses]);
 
   if (isLoading) return <View style={[styles.center, { backgroundColor: colors.background }]}><ActivityIndicator color={Colors.light.primary} /></View>;
 
@@ -139,7 +144,12 @@ export default function MultiCourseLayout() {
               return (
                 <Pressable
                   key={lc.id}
-                  style={({ pressed }) => [styles.liveCardHorizontal, { backgroundColor: colors.card, borderColor: colors.border }, pressed && { opacity: 0.85 }]}
+                  style={({ pressed }) => [
+                    styles.liveCardHorizontal,
+                    upcomingLive.length === 1 && styles.liveCardHorizontalSingle,
+                    { backgroundColor: colors.card, borderColor: colors.border },
+                    pressed && { opacity: 0.85 },
+                  ]}
                   onPress={() => promptLocked(() => router.push(`/live-class/${lc.id}` as any))}
                 >
                   <LinearGradient colors={badgeColors} style={styles.liveStatusBadge}>
@@ -257,6 +267,11 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: 12,
     gap: 8,
+  },
+  liveCardHorizontalSingle: {
+    minWidth: 280,
+    maxWidth: "100%",
+    flexGrow: 1,
   },
   liveStatusBadge: { width: 40, height: 40, borderRadius: 12, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 3, alignSelf: "flex-start" },
   liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: "#fff" },

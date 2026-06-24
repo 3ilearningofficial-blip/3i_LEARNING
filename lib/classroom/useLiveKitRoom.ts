@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Room, RoomEvent, Track } from "livekit-client";
 import type { Editor } from "tldraw";
 import type { ClassroomTokenPayload } from "./useClassroomToken";
-import { loadClassroomMediaDevices } from "./mediaDevices";
+import { loadClassroomMediaDevices, normalizePipPosition, parseClassroomTeacherStreamMeta, serializeClassroomTeacherStreamMeta, type ClassroomTeacherStreamMeta } from "./mediaDevices";
 import {
   CLASSROOM_SPLIT_STREAM,
   isClassroomBoardCaptureReady,
@@ -11,6 +11,7 @@ import {
   type ClassroomPublishBundle,
   type ClassroomCompositeHandle,
 } from "./classroomCompositeStream";
+import { LIVEKIT_PARTICIPANT_METADATA_CHANGED, publishTeacherStreamMeta, readParticipantMeta } from "./livekitParticipantMeta";
 
 type LocalPublisher = {
   publishTrack(
@@ -55,6 +56,20 @@ export function useLiveKitRoom(
   /** Recording composite only — not for teacher sidebar preview. */
   const [compositeStream, setCompositeStream] = useState<MediaStream | null>(null);
   const [boardStreaming, setBoardStreaming] = useState(false);
+  const [teacherStreamMeta, setTeacherStreamMeta] = useState<ClassroomTeacherStreamMeta>({});
+
+  const syncTeacherStreamMeta = useCallback(() => {
+    const room = roomRef.current;
+    if (!room || tokenPayload?.canPublish) return;
+    for (const participant of room.remoteParticipants.values()) {
+      const hasBoard = participant.getTrackPublication(Track.Source.ScreenShare);
+      const hasCam = participant.getTrackPublication(Track.Source.Camera);
+      if (hasBoard || hasCam) {
+        setTeacherStreamMeta(parseClassroomTeacherStreamMeta(readParticipantMeta(participant)));
+        return;
+      }
+    }
+  }, [tokenPayload?.canPublish]);
 
   const attachLocalCameraPreview = useCallback(() => {
     const el = localVideoRef.current;
@@ -93,9 +108,12 @@ export function useLiveKitRoom(
         micTrack.attach(remoteAudioRef.current);
       }
 
-      if (screenTrack || camTrack || micTrack) return;
+      if (screenTrack || camTrack || micTrack) {
+        syncTeacherStreamMeta();
+        return;
+      }
     }
-  }, []);
+  }, [syncTeacherStreamMeta]);
 
   const unpublishCompositeTracks = useCallback(async () => {
     const room = roomRef.current;
@@ -123,7 +141,7 @@ export function useLiveKitRoom(
     const room = roomRef.current;
     const bundle = publishBundleRef.current;
     if (!room || !bundle || !CLASSROOM_SPLIT_STREAM) return false;
-    const cameraTrack = bundle.camera.stream.getVideoTracks()[0];
+    const cameraTrack = bundle.camera.livePublishTrack;
     if (!cameraTrack || cameraTrack.readyState !== "live") return false;
     const localParticipant = room.localParticipant as unknown as LocalPublisher;
     if (publishedTracksRef.current.camera) {
@@ -180,7 +198,7 @@ export function useLiveKitRoom(
         setCompositeStream(bundle.recording.stream);
 
         const boardTrack = bundle.board.stream.getVideoTracks()[0];
-        const cameraTrack = bundle.camera.stream.getVideoTracks()[0];
+        const cameraTrack = bundle.camera.livePublishTrack;
         if (!boardTrack || !cameraTrack) throw new Error("Missing publish tracks");
 
         await localParticipant.publishTrack(boardTrack, {
@@ -193,6 +211,13 @@ export function useLiveKitRoom(
           simulcast: true,
         });
         publishedTracksRef.current = { board: boardTrack, camera: cameraTrack };
+        await publishTeacherStreamMeta(
+          room,
+          serializeClassroomTeacherStreamMeta({
+            pipPosition: normalizePipPosition(prefs.pipPosition),
+            greenScreen: !!prefs.greenScreenEnabled,
+          })
+        );
         setBoardStreaming(true);
       } else {
         const handle = await startClassroomRecordingComposite({
@@ -211,6 +236,13 @@ export function useLiveKitRoom(
           simulcast: true,
         });
         publishedTracksRef.current = { legacy: videoTrack };
+        await publishTeacherStreamMeta(
+          room,
+          serializeClassroomTeacherStreamMeta({
+            pipPosition: normalizePipPosition(prefs.pipPosition),
+            greenScreen: !!prefs.greenScreenEnabled,
+          })
+        );
         setBoardStreaming(true);
       }
 
@@ -282,6 +314,7 @@ export function useLiveKitRoom(
     roomRef.current = room;
 
     const onRemoteSubscribed = () => attachRemoteTeacher();
+    const onParticipantMetadataChanged = () => syncTeacherStreamMeta();
 
     // LiveKit's own ICE-restart recovery (transient blips).
     const onReconnecting = () => {
@@ -308,6 +341,7 @@ export function useLiveKitRoom(
     };
 
     room.on(RoomEvent.TrackSubscribed, onRemoteSubscribed);
+    room.on(LIVEKIT_PARTICIPANT_METADATA_CHANGED as RoomEvent, onParticipantMetadataChanged);
     room.on(RoomEvent.Reconnecting, onReconnecting);
     room.on(RoomEvent.Reconnected, onReconnected);
     room.on(RoomEvent.Disconnected, onDisconnected);
@@ -368,6 +402,7 @@ export function useLiveKitRoom(
         reconnectTimerRef.current = null;
       }
       room.off(RoomEvent.TrackSubscribed, onRemoteSubscribed);
+      room.off(LIVEKIT_PARTICIPANT_METADATA_CHANGED as RoomEvent, onParticipantMetadataChanged);
       room.off(RoomEvent.Reconnecting, onReconnecting);
       room.off(RoomEvent.Reconnected, onReconnected);
       room.off(RoomEvent.Disconnected, onDisconnected);
@@ -441,6 +476,7 @@ export function useLiveKitRoom(
     camEnabled,
     compositeStream,
     boardStreaming,
+    teacherStreamMeta,
     setLocalVideoEl,
     setRemoteVideoEl,
     setRemoteBoardEl,

@@ -19,6 +19,7 @@ import { WebDownloadJobsProvider } from "@/context/WebDownloadJobsContext";
 import { AppThemeProvider, useAppTheme } from "@/context/AppThemeContext";
 import { WebDownloadHud } from "@/components/WebDownloadHud";
 import { WebAppHeader } from "@/components/WebAppHeader";
+import AdminPushSetupBanner from "@/components/admin/AdminPushSetupBanner";
 import { StatusBar } from "expo-status-bar";
 import { lockDefaultPortrait } from "@/lib/video-playback-orientation";
 import { Platform, AppState, AppStateStatus } from "react-native";
@@ -326,7 +327,9 @@ function RootLayoutNav() {
     : { headerShown: false };
 
   return (
-    <Stack screenOptions={webHeaderScreenOptions}>
+    <>
+      <AdminPushSetupBanner />
+      <Stack screenOptions={webHeaderScreenOptions}>
       <Stack.Screen name="(tabs)" options={{ headerShown: showWebAppHeader }} />
       <Stack.Screen name="home" options={{ headerShown: showWebAppHeader }} />
       <Stack.Screen name="(auth)" options={{ headerShown: false }} />
@@ -349,6 +352,7 @@ function RootLayoutNav() {
       <Stack.Screen name="admin/course/[id]" options={{ headerShown: false }} />
       <Stack.Screen name="admin/course/[id]/student/[userId]" options={{ headerShown: false }} />
     </Stack>
+    </>
   );
 }
 

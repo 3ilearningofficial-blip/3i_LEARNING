@@ -306,14 +306,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!user) return;
-    registerPushForCurrentUser().catch((err) => {
-      console.warn("[Push] register failed:", err);
-    });
+    const isWebAdmin = Platform.OS === "web" && user.role === "admin";
+    if (!isWebAdmin) {
+      registerPushForCurrentUser().catch((err) => {
+        console.warn("[Push] register failed:", err);
+      });
+    }
     if (Platform.OS === "web") startWebPushVisibilityWatcher();
     return () => {
       if (Platform.OS === "web") stopWebPushVisibilityWatcher();
     };
-  }, [user?.id]);
+  }, [user?.id, user?.role]);
 
   // Periodic background session keep-alive.
   // After 1-1.5 hours without a re-validation (e.g. during a live class where

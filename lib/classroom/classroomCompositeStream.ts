@@ -6,18 +6,26 @@ import { normalizePipPosition, type ClassroomPipPosition } from "./mediaDevices"
 
 export { COMPOSITE_WIDTH, COMPOSITE_HEIGHT };
 
-const PIP_WIDTH = Math.round(COMPOSITE_WIDTH * 0.16);
-const PIP_HEIGHT = Math.round(PIP_WIDTH * (4 / 3));
+// PiP dimensions for non-green-screen mode (small corner overlay).
+const PIP_WIDTH = Math.round(COMPOSITE_WIDTH * 0.22);
+const PIP_HEIGHT = Math.round(PIP_WIDTH * (3 / 4)); // portrait 3:4 so full body shows
 const PIP_MARGIN = 16;
 const DEFAULT_FPS = 30;
 
+// Camera canvas dimensions when green screen is ON:
+// Full board size lets the teacher stand / move anywhere; the chroma key
+// makes the green background transparent so only the body shows.
+const GS_CAM_WIDTH = COMPOSITE_WIDTH;
+const GS_CAM_HEIGHT = COMPOSITE_HEIGHT;
+
 export const CLASSROOM_SPLIT_STREAM = true;
 
-/** Top-left corner of the PiP rectangle for the chosen corner (always right-aligned). */
+/** Top-left corner of the PiP rectangle for the chosen corner. */
 export function computePipOrigin(position: ClassroomPipPosition): { pipX: number; pipY: number } {
-  const pipX = COMPOSITE_WIDTH - PIP_WIDTH - PIP_MARGIN;
-  const pipY =
-    position === "bottom-right" ? COMPOSITE_HEIGHT - PIP_HEIGHT - PIP_MARGIN : PIP_MARGIN;
+  const onLeft = position === "top-left" || position === "bottom-left";
+  const onBottom = position === "bottom-right" || position === "bottom-left";
+  const pipX = onLeft ? PIP_MARGIN : COMPOSITE_WIDTH - PIP_WIDTH - PIP_MARGIN;
+  const pipY = onBottom ? COMPOSITE_HEIGHT - PIP_HEIGHT - PIP_MARGIN : PIP_MARGIN;
   return { pipX, pipY };
 }
 
@@ -38,6 +46,8 @@ export type BoardStreamHandle = {
 export type CameraStreamHandle = {
   stream: MediaStream;
   previewEl: HTMLVideoElement;
+  /** LiveKit publish track (raw camera when green screen so students can key locally). */
+  livePublishTrack: MediaStreamTrack;
   stop: () => void;
 };
 
@@ -158,6 +168,18 @@ function drawPipLayer(
   outCtx.restore();
 }
 
+/** Green-screen recording: full-board keyed teacher (not corner PiP). */
+function drawFullBoardTeacherLayer(
+  outCtx: CanvasRenderingContext2D,
+  cameraVideo: HTMLVideoElement,
+  chromaCanvas: HTMLCanvasElement,
+  chromaCtx: CanvasRenderingContext2D
+) {
+  if (cameraVideo.readyState < 2) return;
+  drawVideoWithChromaKey(cameraVideo, chromaCanvas, chromaCtx);
+  drawCameraCover(outCtx, chromaCanvas, 0, 0, COMPOSITE_WIDTH, COMPOSITE_HEIGHT);
+}
+
 async function openCameraVideo(cameraId?: string): Promise<HTMLVideoElement> {
   const cameraStream = await navigator.mediaDevices.getUserMedia({
     video: cameraId ? { deviceId: { exact: cameraId } } : true,
@@ -220,20 +242,28 @@ export async function startClassroomPublishBundle(
   const boardTrack = boardStream.getVideoTracks()[0];
   if (!boardTrack) throw new Error("Could not create board video track");
 
+  // When green screen is enabled, capture the camera at full board dimensions so
+  // the teacher can stand / walk anywhere across the stage. The chroma key makes
+  // the green background transparent; students receive a full-size RGBA stream
+  // and only see the teacher's body overlaid on the board.
+  const camW = opts.greenScreen ? GS_CAM_WIDTH : PIP_WIDTH;
+  const camH = opts.greenScreen ? GS_CAM_HEIGHT : PIP_HEIGHT;
+
   const camCanvas = document.createElement("canvas");
-  camCanvas.width = PIP_WIDTH;
-  camCanvas.height = PIP_HEIGHT;
+  camCanvas.width = camW;
+  camCanvas.height = camH;
   const camCtx = camCanvas.getContext("2d");
   if (!camCtx) throw new Error("Canvas not supported");
   let camRaf = 0;
   const camPaint = () => {
-    camCtx.clearRect(0, 0, PIP_WIDTH, PIP_HEIGHT);
+    camCtx.clearRect(0, 0, camW, camH);
     if (cameraVideo.readyState >= 2) {
       if (opts.greenScreen && chromaCanvas && chromaCtx) {
         drawVideoWithChromaKey(cameraVideo, chromaCanvas, chromaCtx);
-        drawCameraCover(camCtx, chromaCanvas, 0, 0, PIP_WIDTH, PIP_HEIGHT);
+        // Draw the keyed teacher image centered / cover-fitted in the full-board canvas.
+        drawCameraCover(camCtx, chromaCanvas, 0, 0, camW, camH);
       } else {
-        drawCameraCover(camCtx, cameraVideo, 0, 0, PIP_WIDTH, PIP_HEIGHT);
+        drawCameraCover(camCtx, cameraVideo, 0, 0, camW, camH);
       }
     }
     camRaf = requestAnimationFrame(camPaint);
@@ -242,6 +272,9 @@ export async function startClassroomPublishBundle(
   const camStream = camCanvas.captureStream(fps);
   const camTrack = camStream.getVideoTracks()[0];
   if (!camTrack) throw new Error("Could not create camera video track");
+  const rawCamTrack = cameraStream.getVideoTracks()[0];
+  const livePublishTrack =
+    opts.greenScreen && rawCamTrack?.readyState === "live" ? rawCamTrack : camTrack;
 
   const camPreviewEl = document.createElement("video");
   camPreviewEl.muted = true;
@@ -280,7 +313,11 @@ export async function startClassroomPublishBundle(
   let recRaf = 0;
   const recPaint = () => {
     drawBoardLayer(recCtx, boardFrame.getFrame());
-    drawPipLayer(recCtx, cameraVideo, !!opts.greenScreen, chromaCanvas, chromaCtx, pipX, pipY);
+    if (opts.greenScreen && chromaCanvas && chromaCtx) {
+      drawFullBoardTeacherLayer(recCtx, cameraVideo, chromaCanvas, chromaCtx);
+    } else {
+      drawPipLayer(recCtx, cameraVideo, false, null, null, pipX, pipY);
+    }
     tryResolveRecordingReady();
     recRaf = requestAnimationFrame(recPaint);
   };
@@ -319,7 +356,7 @@ export async function startClassroomPublishBundle(
 
   return {
     board: { stream: boardStream, stop: () => boardTrack.stop() },
-    camera: { stream: camStream, previewEl: camPreviewEl, stop: () => camTrack.stop() },
+    camera: { stream: camStream, previewEl: camPreviewEl, livePublishTrack, stop: () => camTrack.stop() },
     recording: { stream: recStream, previewEl: recPreviewEl, ready: recordingReady, stop: () => recTrack.stop() },
     stop,
   };
@@ -364,21 +401,25 @@ export async function startClassroomCameraStream(opts: {
   const chromaCanvas = opts.greenScreen ? document.createElement("canvas") : null;
   const chromaCtx = chromaCanvas?.getContext("2d", { willReadFrequently: true }) ?? null;
 
+  // Green screen mode: full-board canvas so the teacher can move across the stage.
+  const outW = opts.greenScreen ? GS_CAM_WIDTH : PIP_WIDTH;
+  const outH = opts.greenScreen ? GS_CAM_HEIGHT : PIP_HEIGHT;
+
   const outCanvas = document.createElement("canvas");
-  outCanvas.width = PIP_WIDTH;
-  outCanvas.height = PIP_HEIGHT;
+  outCanvas.width = outW;
+  outCanvas.height = outH;
   const outCtx = outCanvas.getContext("2d");
   if (!outCtx) throw new Error("Canvas not supported");
 
   let raf = 0;
   const paint = () => {
-    outCtx.clearRect(0, 0, PIP_WIDTH, PIP_HEIGHT);
+    outCtx.clearRect(0, 0, outW, outH);
     if (cameraVideo.readyState >= 2) {
       if (opts.greenScreen && chromaCanvas && chromaCtx) {
         drawVideoWithChromaKey(cameraVideo, chromaCanvas, chromaCtx);
-        drawCameraCover(outCtx, chromaCanvas, 0, 0, PIP_WIDTH, PIP_HEIGHT);
+        drawCameraCover(outCtx, chromaCanvas, 0, 0, outW, outH);
       } else {
-        drawCameraCover(outCtx, cameraVideo, 0, 0, PIP_WIDTH, PIP_HEIGHT);
+        drawCameraCover(outCtx, cameraVideo, 0, 0, outW, outH);
       }
     }
     raf = requestAnimationFrame(paint);
@@ -388,6 +429,10 @@ export async function startClassroomCameraStream(opts: {
   const outputStream = outCanvas.captureStream(fps);
   const outputTrack = outputStream.getVideoTracks()[0];
   if (!outputTrack) throw new Error("Could not create camera video track");
+  const rawTrack = cameraVideo.srcObject as MediaStream;
+  const rawCamTrack = rawTrack?.getVideoTracks()[0];
+  const livePublishTrack =
+    opts.greenScreen && rawCamTrack?.readyState === "live" ? rawCamTrack : outputTrack;
 
   const previewEl = document.createElement("video");
   previewEl.muted = true;
@@ -405,7 +450,7 @@ export async function startClassroomCameraStream(opts: {
     previewEl.srcObject = null;
   };
 
-  return { stream: outputStream, previewEl, stop };
+  return { stream: outputStream, previewEl, livePublishTrack, stop };
 }
 
 /** Full composite (board + top-right PiP) for session recording and teacher preview. */

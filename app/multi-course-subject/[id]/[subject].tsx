@@ -15,13 +15,12 @@ import { useAppTheme } from "@/context/AppThemeContext";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCoursePurchase } from "@/lib/use-course-purchase";
 import { SUBJECT_LABELS, getSubjectMeta } from "@/constants/multiSubjects";
-// Live -> Lectures -> Tests -> PYQs -> Mock -> Missions -> Materials.
-const SECTIONS = ["Live", "Lecture", "Test", "PYQs", "Mock", "Missions", "Study Material"] as const;
+// Lectures -> Tests -> PYQs -> Mock -> Missions -> Materials.
+const SECTIONS = ["Lecture", "Test", "PYQs", "Mock", "Missions", "Study Material"] as const;
 
 // Per-section accent colors mirror the normal course screen (lectures blue, materials red,
 // tests green, pyq amber, mock red, live red).
 const SECTION_COLORS: Record<(typeof SECTIONS)[number], string> = {
-  Live: "#DC2626",
   Lecture: "#1A56DB",
   "Study Material": "#DC2626",
   Test: "#059669",
@@ -34,11 +33,6 @@ const EMPTY_SECTION_COPY: Record<
   (typeof SECTIONS)[number],
   { icon: keyof typeof Ionicons.glyphMap; title: string; subtitle?: string }
 > = {
-  Live: {
-    icon: "videocam-outline",
-    title: "No upcoming or live sessions",
-    subtitle: "Recordings from ended classes are under Lectures → Live Class Recordings",
-  },
   Lecture: { icon: "videocam-outline", title: "No lectures added yet" },
   Test: { icon: "document-text-outline", title: "No tests added yet" },
   PYQs: { icon: "school-outline", title: "No PYQs added yet" },
@@ -111,16 +105,6 @@ export default function MultiCourseSubjectScreen() {
     enabled: !!id,
     staleTime: 30_000,
   });
-  const { data: liveClasses = [] } = useQuery<any[]>({
-    queryKey: ["/api/live-classes", id, subjectKey],
-    queryFn: async () => {
-      const res = await authFetch(new URL(`/api/live-classes?courseId=${id}`, getApiUrl()).toString());
-      if (!res.ok) return [];
-      return res.json();
-    },
-    enabled: !!id,
-    staleTime: 30_000,
-  });
   const { data: attemptSummary = {} } = useQuery<Record<number, any>>({
     queryKey: user?.id ? myAttemptsSummaryQueryKey(user.id) : ["/api/my-attempts/summary", "guest"],
     queryFn: async () => {
@@ -131,15 +115,6 @@ export default function MultiCourseSubjectScreen() {
     enabled: !!user?.id,
     staleTime: 30_000,
   });
-
-  const liveRowsForTab = useMemo(() => {
-    return (liveClasses || []).filter((lc: any) => {
-      if (String(lc.subject_key || "").toLowerCase() !== subjectKey) return false;
-      if (lc.is_live) return true;
-      if (lc.is_completed) return false;
-      return true;
-    });
-  }, [liveClasses, subjectKey]);
 
   const subjectContent = useMemo(() => {
     const matches = (row: any) => String(row?.subject_key || "").toLowerCase() === subjectKey;
@@ -187,7 +162,6 @@ export default function MultiCourseSubjectScreen() {
     .filter((folder: any) => !folder.parent_id);
 
   const allRows =
-    section === "Live" ? liveRowsForTab :
     section === "Lecture" ? subjectContent.lectures :
     section === "Study Material" ? subjectContent.materials :
     section === "Missions" ? courseMissions :
@@ -220,7 +194,7 @@ export default function MultiCourseSubjectScreen() {
   };
   const visibleRootFolders = rootFolders.filter((folder: any) => folderItemCount(folder) > 0);
 
-  const noun = section === "Lecture" ? "videos" : section === "Study Material" ? "files" : section === "Live" ? "classes" : section === "Missions" ? "missions" : "tests";
+  const noun = section === "Lecture" ? "videos" : section === "Study Material" ? "files" : section === "Missions" ? "missions" : "tests";
 
   const renderFolder = (folder: any) => {
     const name = folderFullName(folder);
@@ -246,39 +220,7 @@ export default function MultiCourseSubjectScreen() {
     );
   };
 
-  const renderLiveRow = (item: any) => {
-    const isLive = !!item.is_live;
-    const isCompleted = !!item.is_completed;
-    const badgeColors: [string, string] = isLive ? ["#DC2626", "#EF4444"] : isCompleted ? ["#1A56DB", "#3B82F6"] : ["#6B7280", "#9CA3AF"];
-    const time = item.scheduled_at
-      ? `${new Date(Number(item.scheduled_at)).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })} · ${new Date(Number(item.scheduled_at)).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`
-      : "Not scheduled";
-    return (
-      <Pressable
-        key={`live-${item.id}`}
-        style={({ pressed }) => [styles.liveClassItem, { backgroundColor: colors.card, borderBottomColor: colors.border }, pressed && { opacity: 0.85 }]}
-        onPress={() => { if (!requireAccess()) return; router.push(`/live-class/${item.id}` as any); }}
-      >
-        <LinearGradient colors={badgeColors} style={styles.liveStatusBadge}>
-          {isLive ? (
-            <><View style={styles.liveDot} /><Text style={styles.liveStatusText}>LIVE</Text></>
-          ) : isCompleted ? (
-            <Ionicons name="play" size={14} color="#fff" />
-          ) : (
-            <Ionicons name="time" size={14} color="#fff" />
-          )}
-        </LinearGradient>
-        <View style={styles.liveClassInfo}>
-          <Text style={[styles.liveClassTitle, { color: colors.text }]} numberOfLines={2}>{item.title}</Text>
-          <Text style={[styles.liveClassTime, { color: colors.textMuted }]}>{isLive ? "Happening now" : time}</Text>
-        </View>
-        <Ionicons name={locked ? "lock-closed" : isLive || isCompleted ? "play-circle" : "calendar"} size={22} color={isLive ? "#DC2626" : isCompleted ? Colors.light.primary : colors.textMuted} />
-      </Pressable>
-    );
-  };
-
   const renderRow = (item: any) => {
-    if (section === "Live") return renderLiveRow(item);
     if (section === "Missions") {
       return (
         <View key={`mission-${item.id}`} style={[styles.itemCard, { backgroundColor: colors.card, borderBottomColor: colors.border }, locked && { opacity: 0.6 }]}>
@@ -358,7 +300,7 @@ export default function MultiCourseSubjectScreen() {
   if (isLoading) return <View style={[styles.center, { backgroundColor: colors.background }]}><ActivityIndicator color={Colors.light.primary} /></View>;
 
   const emptyCopy = EMPTY_SECTION_COPY[section];
-  const showEmptyState = rows.length === 0 && (section === "Live" || visibleRootFolders.length === 0);
+  const showEmptyState = rows.length === 0 && visibleRootFolders.length === 0;
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -386,7 +328,7 @@ export default function MultiCourseSubjectScreen() {
       </ScrollView>
 
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 16, gap: 12, paddingBottom: insets.bottom + 24 }}>
-        {section !== "Live" && section !== "Missions" ? visibleRootFolders.map(renderFolder) : null}
+        {section !== "Missions" ? visibleRootFolders.map(renderFolder) : null}
         {rows.length > 0 ? rows.map(renderRow) : showEmptyState ? (
           <View style={styles.emptyState}>
             <Ionicons name={emptyCopy.icon} size={40} color={colors.textMuted} />
@@ -440,15 +382,6 @@ const styles = StyleSheet.create({
   itemMeta: { fontSize: 12, fontFamily: "Inter_400Regular" },
   attemptBadge: { flexDirection: "row", alignItems: "center", gap: 3, backgroundColor: "#DCFCE7", borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
   attemptBadgeText: { fontSize: 10, fontFamily: "Inter_700Bold", color: "#16A34A" },
-
-  // Live row (matches liveClassItem)
-  liveClassItem: { flexDirection: "row", alignItems: "center", gap: 12, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 12, borderBottomWidth: 1 },
-  liveStatusBadge: { width: 40, height: 40, borderRadius: 12, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 3 },
-  liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: "#fff" },
-  liveStatusText: { fontSize: 9, fontFamily: "Inter_700Bold", color: "#fff" },
-  liveClassInfo: { flex: 1 },
-  liveClassTitle: { fontSize: 14, fontFamily: "Inter_600SemiBold", marginBottom: 2 },
-  liveClassTime: { fontSize: 12, fontFamily: "Inter_400Regular" },
 
   emptyState: { paddingVertical: 48, alignItems: "center", gap: 8 },
   emptyText: { fontSize: 15, fontFamily: "Inter_400Regular", textAlign: "center" },

@@ -1,13 +1,16 @@
 const STORAGE_KEY = "classroom_media_devices";
 
 /** Corner where the teacher PiP sits over the board (student view + recording). */
-export type ClassroomPipPosition = "top-right" | "bottom-right";
+export type ClassroomPipPosition = "top-right" | "bottom-right" | "top-left" | "bottom-left";
 
-export const DEFAULT_PIP_POSITION: ClassroomPipPosition = "top-right";
+export const DEFAULT_PIP_POSITION: ClassroomPipPosition = "bottom-left";
 
-export function normalizePipPosition(value: unknown): ClassroomPipPosition {
-  return value === "bottom-right" ? "bottom-right" : DEFAULT_PIP_POSITION;
-}
+export {
+  normalizePipPosition,
+  parseClassroomTeacherStreamMeta,
+  serializeClassroomTeacherStreamMeta,
+  type ClassroomTeacherStreamMeta,
+} from "../../shared/classroomPipPosition";
 
 export type ClassroomMediaDevices = {
   cameraId?: string;

@@ -10,6 +10,9 @@ type DbClient = {
 
 const VISIBLE_LECTURE = `(visible_after_at IS NULL OR visible_after_at <= EXTRACT(EPOCH FROM NOW()) * 1000)`;
 const VISIBLE_LECTURE_L = `(l.visible_after_at IS NULL OR l.visible_after_at <= EXTRACT(EPOCH FROM NOW()) * 1000)`;
+/** Missions with no questions are admin shells and must not affect progress. */
+const REAL_MISSION = `jsonb_array_length(COALESCE(questions, '[]'::jsonb)) > 0`;
+const REAL_MISSION_DM = `jsonb_array_length(COALESCE(dm.questions, '[]'::jsonb)) > 0`;
 
 /** Published tests that count toward progress for the given course type. */
 function progressTestWhere(courseType: string, alias = ""): string {
@@ -27,6 +30,56 @@ async function getCourseType(db: DbClient, courseId: number): Promise<string> {
     [courseId]
   );
   return String(r.rows[0]?.course_type || "live").toLowerCase();
+}
+
+export type CourseProgressBreakdown = {
+  courseId: number;
+  courseType: string;
+  lectures: { total: number };
+  tests: { total: number; practice: number; pyq: number; mock: number };
+  missions: { total: number; emptyShells: number };
+  totals: { items: number };
+};
+
+/** Admin/debug: per-type counts that make up the progress denominator. */
+export async function getCourseProgressBreakdown(
+  db: DbClient,
+  courseId: number | string
+): Promise<CourseProgressBreakdown | null> {
+  const cid = Number(courseId);
+  if (!Number.isFinite(cid) || cid <= 0) return null;
+
+  const courseType = await getCourseType(db, cid);
+  const testWhere = progressTestWhere(courseType);
+
+  const result = await db.query(
+    `SELECT
+       (SELECT COUNT(*)::int FROM lectures WHERE course_id = $1::int AND ${VISIBLE_LECTURE}) AS lec,
+       (SELECT COUNT(*)::int FROM tests WHERE course_id = $1::int AND ${testWhere}) AS tests_total,
+       (SELECT COUNT(*)::int FROM tests WHERE course_id = $1::int AND is_published = TRUE AND COALESCE(LOWER(test_type), 'practice') = 'practice') AS tests_practice,
+       (SELECT COUNT(*)::int FROM tests WHERE course_id = $1::int AND is_published = TRUE AND LOWER(test_type) = 'pyq') AS tests_pyq,
+       (SELECT COUNT(*)::int FROM tests WHERE course_id = $1::int AND is_published = TRUE AND LOWER(test_type) = 'mock') AS tests_mock,
+       (SELECT COUNT(*)::int FROM daily_missions WHERE course_id = $1::int AND ${REAL_MISSION}) AS missions,
+       (SELECT COUNT(*)::int FROM daily_missions WHERE course_id = $1::int AND NOT (${REAL_MISSION})) AS mission_shells`,
+    [cid]
+  );
+  const row = result.rows[0] || {};
+  const lec = Number(row.lec || 0);
+  const testsTotal = Number(row.tests_total || 0);
+  const missions = Number(row.missions || 0);
+  return {
+    courseId: cid,
+    courseType,
+    lectures: { total: lec },
+    tests: {
+      total: testsTotal,
+      practice: Number(row.tests_practice || 0),
+      pyq: Number(row.tests_pyq || 0),
+      mock: Number(row.tests_mock || 0),
+    },
+    missions: { total: missions, emptyShells: Number(row.mission_shells || 0) },
+    totals: { items: lec + testsTotal + missions },
+  };
 }
 
 export async function updateCourseTestCounts(
@@ -78,7 +131,7 @@ export async function updateCourseProgress(
       `SELECT
          (SELECT COUNT(*)::int FROM lectures WHERE course_id = $1::int AND ${VISIBLE_LECTURE}) AS lec,
          (SELECT COUNT(*)::int FROM tests WHERE course_id = $1::int AND ${testWhere}) AS tests,
-         (SELECT COUNT(*)::int FROM daily_missions WHERE course_id = $1::int) AS missions`,
+         (SELECT COUNT(*)::int FROM daily_missions WHERE course_id = $1::int AND ${REAL_MISSION}) AS missions`,
       [cid]
     );
     const done = await client.query(
@@ -90,7 +143,7 @@ export async function updateCourseProgress(
           JOIN tests t ON ta.test_id = t.id AND t.course_id = $1::int AND ${testWhereT}
           WHERE ta.user_id = $2 AND ta.status = 'completed') AS tests,
          (SELECT COUNT(*)::int FROM user_missions um
-          JOIN daily_missions dm ON dm.id = um.mission_id AND dm.course_id = $1::int
+          JOIN daily_missions dm ON dm.id = um.mission_id AND dm.course_id = $1::int AND ${REAL_MISSION_DM}
           WHERE um.user_id = $2 AND um.is_completed = TRUE) AS missions`,
       [cid, userId]
     );
@@ -147,7 +200,7 @@ export async function recomputeAllEnrollmentsProgressForCourse(
            WHERE course_id = $1::int AND ${testWhere}
          ),
          total_missions AS (
-           SELECT COUNT(*)::bigint AS n FROM daily_missions WHERE course_id = $1::int
+           SELECT COUNT(*)::bigint AS n FROM daily_missions WHERE course_id = $1::int AND ${REAL_MISSION}
          ),
          lec_done AS (
            SELECT lp.user_id, COUNT(*)::bigint AS n
@@ -166,7 +219,7 @@ export async function recomputeAllEnrollmentsProgressForCourse(
          missions_done AS (
            SELECT um.user_id, COUNT(*)::bigint AS n
            FROM user_missions um
-           JOIN daily_missions dm ON dm.id = um.mission_id AND dm.course_id = $1::int
+           JOIN daily_missions dm ON dm.id = um.mission_id AND dm.course_id = $1::int AND ${REAL_MISSION_DM}
            WHERE um.is_completed = TRUE
            GROUP BY um.user_id
          )

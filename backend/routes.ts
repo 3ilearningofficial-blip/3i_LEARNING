@@ -650,7 +650,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ==================== ADMIN ROUTES ====================
 
-  // Admin debug endpoint: inspect push-token registration health.
+  // Admin debug endpoint: inspect push-token and web-push registration health.
   app.get("/api/admin/push-tokens", requireAdmin, async (req: Request, res: Response) => {
     try {
       const userIdRaw = String(req.query.userId || "").trim();
@@ -662,53 +662,114 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!Number.isFinite(userId) || userId <= 0) {
           return res.status(400).json({ message: "Invalid userId" });
         }
-        const detail = await db.query(
-          `SELECT t.user_id, u.name AS user_name, u.phone AS user_phone, t.expo_push_token, t.platform, t.is_active, t.created_at, t.last_seen_at
-           FROM user_push_tokens t
-           LEFT JOIN users u ON u.id = t.user_id
-           WHERE t.user_id = $1
-           ${activeOnly ? "AND t.is_active = TRUE" : ""}
-           ORDER BY t.last_seen_at DESC`,
-          [userId]
-        );
+        const [expoDetail, webDetail] = await Promise.all([
+          db.query(
+            `SELECT t.user_id, u.name AS user_name, u.phone AS user_phone, t.expo_push_token, t.platform, t.is_active, t.created_at, t.last_seen_at
+             FROM user_push_tokens t
+             LEFT JOIN users u ON u.id = t.user_id
+             WHERE t.user_id = $1
+             ${activeOnly ? "AND t.is_active = TRUE" : ""}
+             ORDER BY t.last_seen_at DESC`,
+            [userId]
+          ),
+          db.query(
+            `SELECT w.id, w.user_id, u.name AS user_name, w.endpoint, w.user_agent, w.is_active, w.created_at, w.last_seen_at
+             FROM web_push_subscriptions w
+             LEFT JOIN users u ON u.id = w.user_id
+             WHERE w.user_id = $1
+             ${activeOnly ? "AND w.is_active = TRUE" : ""}
+             ORDER BY w.last_seen_at DESC`,
+            [userId]
+          ),
+        ]);
         return res.json({
           summary: {
             userId,
-            total: detail.rows.length,
-            active: detail.rows.filter((r: any) => r.is_active === true).length,
+            expoTotal: expoDetail.rows.length,
+            expoActive: expoDetail.rows.filter((r: any) => r.is_active === true).length,
+            webTotal: webDetail.rows.length,
+            webActive: webDetail.rows.filter((r: any) => r.is_active === true).length,
           },
-          tokens: detail.rows,
+          expoTokens: expoDetail.rows,
+          webSubscriptions: webDetail.rows.map((r: any) => ({
+            ...r,
+            endpoint: String(r.endpoint || "").slice(0, 80) + (String(r.endpoint || "").length > 80 ? "…" : ""),
+          })),
         });
       }
 
-      const summary = await db.query(
-        `SELECT
-           COUNT(*)::int AS total_tokens,
-           COUNT(*) FILTER (WHERE is_active = TRUE)::int AS active_tokens,
-           COUNT(DISTINCT user_id)::int AS total_users,
-           COUNT(DISTINCT user_id) FILTER (WHERE is_active = TRUE)::int AS users_with_active_tokens
-         FROM user_push_tokens`
-      );
-      const recent = await db.query(
-        `SELECT t.user_id, u.name AS user_name, u.phone AS user_phone, t.platform, t.is_active, t.last_seen_at
-         FROM user_push_tokens t
-         LEFT JOIN users u ON u.id = t.user_id
-         ${activeOnly ? "WHERE t.is_active = TRUE" : ""}
-         ORDER BY t.last_seen_at DESC
-         LIMIT 200`
-      );
+      const [expoSummary, webSummary, recentExpo, recentWeb] = await Promise.all([
+        db.query(
+          `SELECT
+             COUNT(*)::int AS total_tokens,
+             COUNT(*) FILTER (WHERE is_active = TRUE)::int AS active_tokens,
+             COUNT(DISTINCT user_id)::int AS total_users,
+             COUNT(DISTINCT user_id) FILTER (WHERE is_active = TRUE)::int AS users_with_active_tokens
+           FROM user_push_tokens`
+        ),
+        db.query(
+          `SELECT
+             COUNT(*)::int AS total_subscriptions,
+             COUNT(*) FILTER (WHERE is_active = TRUE)::int AS active_subscriptions,
+             COUNT(DISTINCT user_id)::int AS total_users,
+             COUNT(DISTINCT user_id) FILTER (WHERE is_active = TRUE)::int AS users_with_active_subscriptions
+           FROM web_push_subscriptions`
+        ),
+        db.query(
+          `SELECT t.user_id, u.name AS user_name, u.phone AS user_phone, u.role, t.platform, t.is_active, t.last_seen_at
+           FROM user_push_tokens t
+           LEFT JOIN users u ON u.id = t.user_id
+           ${activeOnly ? "WHERE t.is_active = TRUE" : ""}
+           ORDER BY t.last_seen_at DESC
+           LIMIT 200`
+        ),
+        db.query(
+          `SELECT w.user_id, u.name AS user_name, u.role, w.is_active, w.last_seen_at, LEFT(w.endpoint, 64) AS endpoint_prefix
+           FROM web_push_subscriptions w
+           LEFT JOIN users u ON u.id = w.user_id
+           ${activeOnly ? "WHERE w.is_active = TRUE" : ""}
+           ORDER BY w.last_seen_at DESC
+           LIMIT 200`
+        ),
+      ]);
       return res.json({
-        summary: summary.rows[0] || {
+        expo: expoSummary.rows[0] || {
           total_tokens: 0,
           active_tokens: 0,
           total_users: 0,
           users_with_active_tokens: 0,
         },
-        recentTokens: recent.rows,
+        web: webSummary.rows[0] || {
+          total_subscriptions: 0,
+          active_subscriptions: 0,
+          total_users: 0,
+          users_with_active_subscriptions: 0,
+        },
+        recentExpoTokens: recentExpo.rows,
+        recentWebSubscriptions: recentWeb.rows,
       });
     } catch (err) {
       console.error("[Push Debug] failed:", err);
       return res.status(500).json({ message: "Failed to fetch push token stats" });
+    }
+  });
+
+  app.post("/api/admin/push/test", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user;
+      const userId = Number(user?.id);
+      if (!Number.isFinite(userId) || userId <= 0) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      const result = await sendPushToUsers(db, [userId], {
+        title: "3i Learning — test push",
+        body: "If you see this, admin push delivery is working.",
+        data: { type: "admin_push_test" },
+      });
+      return res.json({ success: true, ...result });
+    } catch (err) {
+      console.error("[Push Test] failed:", err);
+      return res.status(500).json({ message: "Failed to send test push" });
     }
   });
 

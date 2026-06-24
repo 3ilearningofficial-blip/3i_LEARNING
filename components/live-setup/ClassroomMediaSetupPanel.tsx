@@ -20,7 +20,7 @@ type Props = {
 
 export default function ClassroomMediaSetupPanel({ webrtc, livekitConfigured }: Props) {
   const [greenScreen, setGreenScreen] = useState(false);
-  const [pipPosition, setPipPosition] = useState<ClassroomPipPosition>("top-right");
+  const [pipPosition, setPipPosition] = useState<ClassroomPipPosition>("bottom-left");
 
   useEffect(() => {
     const prefs = loadClassroomMediaDevices();
@@ -100,36 +100,28 @@ export default function ClassroomMediaSetupPanel({ webrtc, livekitConfigured }: 
           <Ionicons name="person-circle-outline" size={18} color={Colors.light.primary} />
           <Text style={styles.toggleLabel}>Teacher video corner</Text>
         </View>
-        <View style={styles.segment}>
-          <Pressable
-            style={[styles.segmentBtn, pipPosition === "top-right" && styles.segmentBtnOn]}
-            onPress={() => selectPipPosition("top-right")}
-          >
-            <Ionicons
-              name="arrow-up"
-              size={14}
-              color={pipPosition === "top-right" ? "#fff" : Colors.light.textMuted}
-            />
-            <Text style={[styles.segmentText, pipPosition === "top-right" && styles.segmentTextOn]}>
-              Top right
-            </Text>
-          </Pressable>
-          <Pressable
-            style={[styles.segmentBtn, pipPosition === "bottom-right" && styles.segmentBtnOn]}
-            onPress={() => selectPipPosition("bottom-right")}
-          >
-            <Ionicons
-              name="arrow-down"
-              size={14}
-              color={pipPosition === "bottom-right" ? "#fff" : Colors.light.textMuted}
-            />
-            <Text style={[styles.segmentText, pipPosition === "bottom-right" && styles.segmentTextOn]}>
-              Bottom right
-            </Text>
-          </Pressable>
+        <View style={[styles.segment, { flexWrap: "wrap" }]}>
+          {(
+            [
+              { pos: "top-left" as const, label: "Top left", icon: "arrow-up-circle-outline" },
+              { pos: "top-right" as const, label: "Top right", icon: "arrow-up-circle-outline" },
+              { pos: "bottom-left" as const, label: "Bottom left", icon: "arrow-down-circle-outline" },
+              { pos: "bottom-right" as const, label: "Bottom right", icon: "arrow-down-circle-outline" },
+            ] as const
+          ).map(({ pos, label }) => (
+            <Pressable
+              key={pos}
+              style={[styles.segmentBtn, pipPosition === pos && styles.segmentBtnOn]}
+              onPress={() => selectPipPosition(pos)}
+            >
+              <Text style={[styles.segmentText, pipPosition === pos && styles.segmentTextOn]}>
+                {label}
+              </Text>
+            </Pressable>
+          ))}
         </View>
         <Text style={styles.hint}>
-          Where you appear over the board for students and in the recording.
+          Corner where you appear for students. With green screen, you appear as a full overlay — position is ignored.
         </Text>
       </View>
     </View>
