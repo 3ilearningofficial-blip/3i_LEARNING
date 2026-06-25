@@ -32,17 +32,32 @@ export function registerAdminDailyMissionRoutes({
 }: RegisterAdminDailyMissionRoutesDeps): void {
   app.post("/api/admin/daily-missions", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { title, description, questions, missionDate, xpReward, missionType, courseId, folderName } = req.body;
+      const { title, description, questions, missionDate, xpReward, missionType, courseId, folderName, subjectKey } = req.body;
       if (!title || !questions || !Array.isArray(questions) || questions.length === 0) {
         return res.status(400).json({ message: "Title and questions are required" });
+      }
+      const parsedCourseId = courseId != null && courseId !== "" ? Number(courseId) : null;
+      let normalizedSubjectKey: string | null = null;
+      if (typeof subjectKey === "string" && subjectKey.trim()) {
+        normalizedSubjectKey = subjectKey.trim().toLowerCase();
+      }
+      if (parsedCourseId && Number.isFinite(parsedCourseId)) {
+        const courseRow = await db.query(
+          `SELECT COALESCE(course_type, 'live') AS course_type FROM courses WHERE id = $1 LIMIT 1`,
+          [parsedCourseId]
+        );
+        const courseType = String(courseRow.rows[0]?.course_type || "").toLowerCase();
+        if (courseType === "multi_subject" && !normalizedSubjectKey) {
+          return res.status(400).json({ message: "Subject is required for multisubject course missions" });
+        }
       }
       // Normalise folder_name: trim and store NULL for empty/omitted values so
       // "ungrouped" missions have a consistent NULL rather than empty string.
       const folderNameNorm = typeof folderName === "string" && folderName.trim() ? folderName.trim() : null;
       const result = await db.query(
-        `INSERT INTO daily_missions (title, description, questions, mission_date, xp_reward, mission_type, course_id, folder_name)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-        [title, description || "", JSON.stringify(questions), missionDate || new Date().toISOString().split("T")[0], xpReward || 50, missionType || "daily_drill", courseId || null, folderNameNorm]
+        `INSERT INTO daily_missions (title, description, questions, mission_date, xp_reward, mission_type, course_id, folder_name, subject_key)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+        [title, description || "", JSON.stringify(questions), missionDate || new Date().toISOString().split("T")[0], xpReward || 50, missionType || "daily_drill", parsedCourseId, folderNameNorm, normalizedSubjectKey]
       );
       const row = result.rows[0];
       const cid = courseId != null && courseId !== "" ? String(courseId) : "";
@@ -90,11 +105,26 @@ export function registerAdminDailyMissionRoutes({
 
   app.put("/api/admin/daily-missions/:id", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { title, description, questions, missionDate, xpReward, missionType, courseId, folderName } = req.body;
+      const { title, description, questions, missionDate, xpReward, missionType, courseId, folderName, subjectKey } = req.body;
       const folderNameNorm = typeof folderName === "string" && folderName.trim() ? folderName.trim() : null;
+      const parsedCourseId = courseId != null && courseId !== "" ? Number(courseId) : null;
+      let normalizedSubjectKey: string | null = null;
+      if (typeof subjectKey === "string" && subjectKey.trim()) {
+        normalizedSubjectKey = subjectKey.trim().toLowerCase();
+      }
+      if (parsedCourseId && Number.isFinite(parsedCourseId)) {
+        const courseRow = await db.query(
+          `SELECT COALESCE(course_type, 'live') AS course_type FROM courses WHERE id = $1 LIMIT 1`,
+          [parsedCourseId]
+        );
+        const courseType = String(courseRow.rows[0]?.course_type || "").toLowerCase();
+        if (courseType === "multi_subject" && !normalizedSubjectKey) {
+          return res.status(400).json({ message: "Subject is required for multisubject course missions" });
+        }
+      }
       await db.query(
-        `UPDATE daily_missions SET title=$1, description=$2, questions=$3, mission_date=$4, xp_reward=$5, mission_type=$6, course_id=$7, folder_name=$8 WHERE id=$9`,
-        [title, description || "", JSON.stringify(questions), missionDate, xpReward || 50, missionType, courseId || null, folderNameNorm, req.params.id]
+        `UPDATE daily_missions SET title=$1, description=$2, questions=$3, mission_date=$4, xp_reward=$5, mission_type=$6, course_id=$7, folder_name=$8, subject_key=$9 WHERE id=$10`,
+        [title, description || "", JSON.stringify(questions), missionDate, xpReward || 50, missionType, parsedCourseId, folderNameNorm, normalizedSubjectKey, req.params.id]
       );
       await recomputeMissionCourseProgress(db, recomputeAllEnrollmentsProgressForCourse, courseId);
       res.json({ success: true });

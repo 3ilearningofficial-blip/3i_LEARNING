@@ -10,9 +10,16 @@ type DbClient = {
 
 const VISIBLE_LECTURE = `(visible_after_at IS NULL OR visible_after_at <= EXTRACT(EPOCH FROM NOW()) * 1000)`;
 const VISIBLE_LECTURE_L = `(l.visible_after_at IS NULL OR l.visible_after_at <= EXTRACT(EPOCH FROM NOW()) * 1000)`;
-/** Missions with no questions are admin shells and must not affect progress. */
-const REAL_MISSION = `jsonb_array_length(COALESCE(questions, '[]'::jsonb)) > 0`;
-const REAL_MISSION_DM = `jsonb_array_length(COALESCE(dm.questions, '[]'::jsonb)) > 0`;
+/** Missions with no real question text are admin shells and must not affect progress. */
+export const REAL_MISSION_SQL = `EXISTS (
+  SELECT 1 FROM jsonb_array_elements(COALESCE(questions, '[]'::jsonb)) q
+  WHERE length(trim(COALESCE(q->>'question', ''))) > 0
+)`;
+const REAL_MISSION = REAL_MISSION_SQL;
+const REAL_MISSION_DM = `EXISTS (
+  SELECT 1 FROM jsonb_array_elements(COALESCE(dm.questions, '[]'::jsonb)) q
+  WHERE length(trim(COALESCE(q->>'question', ''))) > 0
+)`;
 /** Published tests with no questions are admin shells and must not affect progress. */
 const REAL_TEST = `COALESCE(total_questions, 0) > 0`;
 const REAL_TEST_T = `COALESCE(t.total_questions, 0) > 0`;

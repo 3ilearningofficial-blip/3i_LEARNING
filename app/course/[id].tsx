@@ -28,6 +28,7 @@ import { useAuth } from "@/context/AuthContext";
 import { WebView } from "react-native-webview";
 import { DownloadButton } from "@/components/DownloadButton";
 import { DEFAULT_LIVE_RECORDING_SECTION, getContentFolderRootName } from "@shared/recordingSection";
+import { isMissionCompleted } from "@/lib/mission-types";
 import { sortFolderNamesByOrder } from "@shared/courseFolderOrder";
 import { getCourseAccentColor } from "@shared/courseTheme";
 import { COURSE_BANNER_ASPECT } from "@/constants/courseBanner";
@@ -341,6 +342,42 @@ export default function CourseDetailScreen() {
     enabled: !!id && id !== "undefined",
   });
 
+  const { data: courseMissions = [] } = useQuery<any[]>({
+    queryKey: ["/api/daily-missions", "course", String(id)],
+    queryFn: async () => {
+      const res = await authFetch(new URL("/api/daily-missions?type=all", getApiUrl()).toString());
+      if (!res.ok) return [];
+      const rows = await res.json();
+      if (!Array.isArray(rows)) return [];
+      return rows.filter((m: any) => Number(m.course_id) === courseIdNum);
+    },
+    enabled: !!id && id !== "undefined" && !!user?.id && course?.course_type !== "test_series",
+    staleTime: 0,
+  });
+
+  const realCourseMissions = useMemo(
+    () =>
+      (courseMissions || []).filter((m: any) => {
+        const qs = Array.isArray(m.questions) ? m.questions : [];
+        return qs.some((q: any) => String(q?.question || "").trim().length > 0);
+      }),
+    [courseMissions],
+  );
+
+  const missionFolderNames = useMemo(() => {
+    const names = new Set<string>();
+    realCourseMissions.forEach((m: any) => {
+      const root = getContentFolderRootName(m.folder_name);
+      if (root) names.add(root);
+    });
+    return Array.from(names);
+  }, [realCourseMissions]);
+
+  const ungroupedCourseMissions = useMemo(
+    () => realCourseMissions.filter((m: any) => !getContentFolderRootName(m.folder_name)),
+    [realCourseMissions],
+  );
+
   const folderFullName = (folder: any): string => String(folder?.full_name || folder?.name || "").trim();
   const folderLocalName = (folder: any): string => String(folder?.name || folder?.full_name || "").trim();
 
@@ -413,6 +450,20 @@ export default function CourseDetailScreen() {
         color: next.color,
         ...(next.testType ? { testType: next.testType } : {}),
       },
+    } as any);
+  };
+
+  const openCourseMission = (missionId: number) => {
+    router.push({
+      pathname: "/course-mission/[id]",
+      params: { id: String(missionId), courseId: String(id) },
+    } as any);
+  };
+
+  const openCourseMissionFolder = (folderName: string) => {
+    router.push({
+      pathname: "/course-mission-folder/[courseId]/[name]",
+      params: { courseId: String(id), name: encodeURIComponent(folderName) },
     } as any);
   };
 
@@ -818,11 +869,12 @@ setTimeout(function() {
     ? course.tests.filter((t) => String(t.test_type || "").toLowerCase() === "pyq")
     : [];
   const testsForMockTab = course.tests.filter((t) => isMockTestType(t));
+  const missionTab = realCourseMissions.length > 0 ? ["Missions"] as const : [];
   const TABS = isTestSeriesCourse
     ? (isAdmin ? ["About", "Practice", "Tests", "PYQs", "Mock Tests", "Enrolled"] : ["About", "Practice", "Tests", "PYQs", "Mock Tests"])
     : isAdmin
-    ? ["Live", "Lectures", "Tests", "Mock Tests", "Materials", "Enrolled"]
-    : ["Live", "Lectures", "Tests", "Mock Tests", "Materials"];
+    ? ["Live", "Lectures", ...missionTab, "Tests", "Mock Tests", "Materials", "Enrolled"]
+    : ["Live", "Lectures", ...missionTab, "Tests", "Mock Tests", "Materials"];
 
   const renderTestSeriesTabList = (
     tabTests: CourseTest[],
@@ -1382,6 +1434,95 @@ setTimeout(function() {
                     </>
                   );
                 })()}
+              </View>
+            )}
+          </View>
+        )}
+
+        {currentActiveTab === "Missions" && (
+          <View style={styles.list}>
+            {realCourseMissions.length === 0 ? (
+              <View style={styles.emptyState}>
+                <Ionicons name="flag-outline" size={40} color={Colors.light.textMuted} />
+                <Text style={styles.emptyText}>No daily missions for this course yet</Text>
+              </View>
+            ) : (
+              <View style={{ gap: 12, padding: 16 }}>
+                {missionFolderNames.map((folderName) => {
+                  const folderMissions = realCourseMissions.filter((m: any) => {
+                    const root = getContentFolderRootName(m.folder_name);
+                    return root === folderName && (m.folder_name === folderName || String(m.folder_name || "").startsWith(`${folderName} /`));
+                  });
+                  if (folderMissions.length === 0) return null;
+                  const isLocked = !isAdmin && !course.isEnrolled;
+                  const missionColor = "#0F766E";
+                  const completedInFolder = folderMissions.filter((m: any) => isMissionCompleted(m)).length;
+                  return (
+                    <Pressable
+                      key={`mission_folder_${folderName}`}
+                      style={[styles.testSectionCard, { backgroundColor: colors.card, shadowColor: colors.shadow, borderLeftColor: missionColor }]}
+                      onPress={() => {
+                        if (isLocked) {
+                          promptLockedCourseContent();
+                          return;
+                        }
+                        openCourseMissionFolder(folderName);
+                      }}
+                    >
+                      <View style={[styles.testSectionIconWrap, { backgroundColor: missionColor + "18" }]}>
+                        <Ionicons name="folder" size={22} color={missionColor} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.testSectionTitle}>{folderName}</Text>
+                        <Text style={styles.testSectionCount}>
+                          {folderMissions.length} {folderMissions.length === 1 ? "mission" : "missions"}
+                          {completedInFolder > 0 ? ` · ${completedInFolder} done` : ""}
+                        </Text>
+                      </View>
+                      {isLocked ? <Ionicons name="lock-closed" size={20} color={Colors.light.textMuted} /> : <Ionicons name="chevron-forward" size={20} color={Colors.light.textMuted} />}
+                    </Pressable>
+                  );
+                })}
+                {ungroupedCourseMissions.map((mission: any) => {
+                  const qCount = Array.isArray(mission.questions)
+                    ? mission.questions.filter((q: any) => String(q?.question || "").trim()).length
+                    : 0;
+                  const isLocked = !isAdmin && !course.isEnrolled;
+                  const missionColor = "#0F766E";
+                  const done = isMissionCompleted(mission);
+                  return (
+                    <View key={`mission-${mission.id}`} style={[styles.testCard, { backgroundColor: colors.card, borderBottomColor: colors.border, flexDirection: "row", alignItems: "center" }, isLocked && { opacity: 0.6 }]}>
+                      <Pressable
+                        style={{ flex: 1, flexDirection: "row", alignItems: "center" }}
+                        onPress={() => {
+                          if (isLocked) {
+                            promptLockedCourseContent();
+                            return;
+                          }
+                          openCourseMission(mission.id);
+                        }}
+                      >
+                        <View style={[styles.testColorBar, { backgroundColor: missionColor }]} />
+                        <View style={styles.testItemIcon}><Ionicons name="flag" size={22} color={missionColor} /></View>
+                        <View style={styles.testItemInfo}>
+                          <Text style={styles.testItemTitle}>{mission.title}</Text>
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                            <Text style={styles.testItemMeta}>{qCount} {qCount === 1 ? "question" : "questions"} · {mission.xp_reward || 50} XP</Text>
+                            {done ? (
+                              <View style={{ flexDirection: "row", alignItems: "center", gap: 3, backgroundColor: "#DCFCE7", borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 }}>
+                                <Ionicons name="checkmark-circle" size={11} color="#16A34A" />
+                                <Text style={{ fontSize: 10, fontFamily: "Inter_700Bold", color: "#16A34A" }}>
+                                  {mission.userScore ?? 0}/{qCount}
+                                </Text>
+                              </View>
+                            ) : null}
+                          </View>
+                        </View>
+                        {isLocked ? <Ionicons name="lock-closed" size={18} color={Colors.light.textMuted} /> : done ? <Ionicons name="bar-chart" size={18} color={Colors.light.primary} /> : <Ionicons name="chevron-forward" size={18} color={Colors.light.textMuted} />}
+                      </Pressable>
+                    </View>
+                  );
+                })}
               </View>
             )}
           </View>

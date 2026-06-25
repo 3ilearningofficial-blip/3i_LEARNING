@@ -109,4 +109,29 @@ describe("updateCourseProgress", () => {
     await updateCourseProgress(db, 5, 10);
     expect(progressPercent).toBe(50);
   });
+
+  it("returns 100% when mission rows have only empty question objects", async () => {
+    let progressPercent: number | null = null;
+    const db = {
+      query: async (sql: string, params?: unknown[]) => {
+        if (sql.includes("FROM courses")) {
+          return { rows: [{ course_type: "multi_subject" }] };
+        }
+        if (sql.includes("FROM lecture_progress")) {
+          return { rows: [{ lec: 1, tests: 0, missions: 0 }] };
+        }
+        if (sql.includes("FROM lectures WHERE course_id") || sql.includes("daily_missions")) {
+          return { rows: [{ lec: 1, tests: 0, missions: 0 }] };
+        }
+        if (sql.startsWith("UPDATE enrollments SET progress_percent")) {
+          progressPercent = Number(params?.[0]);
+          return { rows: [] };
+        }
+        return { rows: [] };
+      },
+    };
+
+    await updateCourseProgress(db, 5, 10);
+    expect(progressPercent).toBe(100);
+  });
 });

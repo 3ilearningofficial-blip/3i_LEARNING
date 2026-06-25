@@ -403,6 +403,7 @@ export default function AdminDashboard() {
   const [missionXP, setMissionXP] = useState("50");
   const [missionQuestions, setMissionQuestions] = useState<{ question: string; options: string[]; correct: string; topic: string; subtopic: string; marks: string; solution: string; image_url: string; solution_image_url: string }[]>([]);
   const [missionCourseId, setMissionCourseId] = useState<number | null>(null);
+  const [missionSubjectKey, setMissionSubjectKey] = useState("");
   const [showMissionBulkUpload, setShowMissionBulkUpload] = useState(false);
   const [missionBulkText, setMissionBulkText] = useState("");
   const [missionBulkMode, setMissionBulkMode] = useState<"text" | "pdf">("text");
@@ -1029,7 +1030,7 @@ export default function AdminDashboard() {
       qc.invalidateQueries({ queryKey: ["/api/admin/daily-missions"] });
       setShowAddMission(false);
       setMissionTitle(""); setMissionDesc(""); setMissionFolder(""); setMissionQuestions([]);
-      setMissionXP("50"); setMissionType("free_practice"); setMissionCourseId(null); setMissionBulkText("");
+      setMissionXP("50"); setMissionType("free_practice"); setMissionCourseId(null); setMissionSubjectKey(""); setMissionBulkText("");
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       Alert.alert("Success", "Mission created!");
     },
@@ -4621,7 +4622,7 @@ export default function AdminDashboard() {
                       <Pressable
                         key={c.id}
                         style={[{ flexDirection: "row", alignItems: "center", gap: 10, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: missionCourseId === c.id ? Colors.light.primary : Colors.light.border, backgroundColor: missionCourseId === c.id ? Colors.light.secondary : "#fff" }]}
-                        onPress={() => setMissionCourseId(c.id)}
+                        onPress={() => { setMissionCourseId(c.id); setMissionSubjectKey(""); }}
                       >
                         <Ionicons name="book-outline" size={18} color={missionCourseId === c.id ? Colors.light.primary : Colors.light.textMuted} />
                         <View style={{ flex: 1 }}>
@@ -4634,6 +4635,35 @@ export default function AdminDashboard() {
                   </View>
                 </View>
               )}
+              {missionType === "daily_drill" && missionCourseId != null && courses.some((c) => c.id === missionCourseId && c.course_type === "multi_subject") ? (
+                <View style={styles.formField}>
+                  <Text style={styles.formLabel}>Subject (required)</Text>
+                  <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
+                    {MULTI_SUBJECTS.map((subject) => (
+                      <Pressable
+                        key={subject.key}
+                        style={[{
+                          flexDirection: "row",
+                          alignItems: "center",
+                          gap: 6,
+                          paddingHorizontal: 12,
+                          paddingVertical: 8,
+                          borderRadius: 10,
+                          borderWidth: 1,
+                          borderColor: missionSubjectKey === subject.key ? Colors.light.primary : Colors.light.border,
+                          backgroundColor: missionSubjectKey === subject.key ? Colors.light.secondary : "#fff",
+                        }]}
+                        onPress={() => setMissionSubjectKey(subject.key)}
+                      >
+                        <SubjectIcon subject={subject} size={16} />
+                        <Text style={{ fontSize: 13, fontFamily: missionSubjectKey === subject.key ? "Inter_700Bold" : "Inter_500Medium", color: missionSubjectKey === subject.key ? Colors.light.primary : Colors.light.text }}>
+                          {subject.label}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                </View>
+              ) : null}
               <View style={styles.formField}>
                 <Text style={styles.formLabel}>Questions ({missionQuestions.length})</Text>
                 {missionQuestions.map((q, idx) => (
@@ -4729,8 +4759,22 @@ export default function AdminDashboard() {
               style={[styles.createBtn, (!missionTitle || missionQuestions.length === 0) && styles.createBtnDisabled]}
               disabled={!missionTitle || missionQuestions.length === 0 || addMissionMutation.isPending}
               onPress={() => {
+                const linked = courses.find((c) => c.id === missionCourseId);
+                if (linked?.course_type === "multi_subject" && !missionSubjectKey.trim()) {
+                  Alert.alert("Subject required", "Select a subject for this multisubject course mission.");
+                  return;
+                }
                 const questions = missionQuestions.map((q, i) => ({ id: i + 1, ...q, marks: q.marks ? parseFloat(q.marks) : undefined }));
-                addMissionMutation.mutate({ title: missionTitle, description: missionDesc, questions, missionType, missionDate: new Date().toISOString().split("T")[0], courseId: missionCourseId, folderName: missionFolder.trim() || null });
+                addMissionMutation.mutate({
+                  title: missionTitle,
+                  description: missionDesc,
+                  questions,
+                  missionType,
+                  missionDate: new Date().toISOString().split("T")[0],
+                  courseId: missionCourseId,
+                  folderName: missionFolder.trim() || null,
+                  subjectKey: missionSubjectKey.trim() || null,
+                });
               }}>
               <LinearGradient colors={[Colors.light.primary, Colors.light.primaryDark]} style={styles.createBtnGrad}>
                 {addMissionMutation.isPending ? <ActivityIndicator color="#fff" /> : <Text style={styles.createBtnText}>Create Mission</Text>}
@@ -6861,7 +6905,7 @@ export default function AdminDashboard() {
                   <View style={{ marginTop: 6, gap: 6 }}>
                     <Pressable
                       style={[{ flexDirection: "row", alignItems: "center", gap: 10, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: !editMission?.course_id ? Colors.light.primary : Colors.light.border, backgroundColor: !editMission?.course_id ? Colors.light.secondary : "#fff" }]}
-                      onPress={() => setEditMission((p: any) => ({ ...p, course_id: null }))}
+                      onPress={() => setEditMission((p: any) => ({ ...p, course_id: null, subject_key: null }))}
                     >
                       <Ionicons name="globe-outline" size={18} color={!editMission?.course_id ? Colors.light.primary : Colors.light.textMuted} />
                       <Text style={{ fontSize: 14, fontFamily: !editMission?.course_id ? "Inter_600SemiBold" : "Inter_400Regular", color: !editMission?.course_id ? Colors.light.primary : Colors.light.text }}>Any Course</Text>
@@ -6871,7 +6915,7 @@ export default function AdminDashboard() {
                       <Pressable
                         key={c.id}
                         style={[{ flexDirection: "row", alignItems: "center", gap: 10, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: editMission?.course_id === c.id ? Colors.light.primary : Colors.light.border, backgroundColor: editMission?.course_id === c.id ? Colors.light.secondary : "#fff" }]}
-                        onPress={() => setEditMission((p: any) => ({ ...p, course_id: c.id }))}
+                        onPress={() => setEditMission((p: any) => ({ ...p, course_id: c.id, subject_key: c.course_type === "multi_subject" ? p.subject_key : null }))}
                       >
                         <Ionicons name="book-outline" size={18} color={editMission?.course_id === c.id ? Colors.light.primary : Colors.light.textMuted} />
                         <View style={{ flex: 1 }}>
@@ -6884,6 +6928,35 @@ export default function AdminDashboard() {
                   </View>
                 </View>
               )}
+              {editMission?.mission_type === "daily_drill" && editMission?.course_id != null && courses.some((c) => c.id === editMission.course_id && c.course_type === "multi_subject") ? (
+                <View style={styles.formField}>
+                  <Text style={styles.formLabel}>Subject (required)</Text>
+                  <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
+                    {MULTI_SUBJECTS.map((subject) => (
+                      <Pressable
+                        key={subject.key}
+                        style={[{
+                          flexDirection: "row",
+                          alignItems: "center",
+                          gap: 6,
+                          paddingHorizontal: 12,
+                          paddingVertical: 8,
+                          borderRadius: 10,
+                          borderWidth: 1,
+                          borderColor: editMission?.subject_key === subject.key ? Colors.light.primary : Colors.light.border,
+                          backgroundColor: editMission?.subject_key === subject.key ? Colors.light.secondary : "#fff",
+                        }]}
+                        onPress={() => setEditMission((p: any) => ({ ...p, subject_key: subject.key }))}
+                      >
+                        <SubjectIcon subject={subject} size={16} />
+                        <Text style={{ fontSize: 13, fontFamily: editMission?.subject_key === subject.key ? "Inter_700Bold" : "Inter_500Medium", color: editMission?.subject_key === subject.key ? Colors.light.primary : Colors.light.text }}>
+                          {subject.label}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                </View>
+              ) : null}
               <View style={styles.formField}>
                 <Text style={styles.formLabel}>Questions ({editMission?.questions?.length || 0})</Text>
                 {(editMission?.questions || []).map((q: any, idx: number) => (
@@ -6985,8 +7058,23 @@ export default function AdminDashboard() {
               style={[styles.createBtn, (!editMission?.title || !editMission?.questions?.length) && styles.createBtnDisabled]}
               disabled={!editMission?.title || !editMission?.questions?.length || updateMissionMutation.isPending}
               onPress={() => {
+                const linked = courses.find((c) => c.id === editMission.course_id);
+                if (linked?.course_type === "multi_subject" && !String(editMission?.subject_key || "").trim()) {
+                  Alert.alert("Subject required", "Select a subject for this multisubject course mission.");
+                  return;
+                }
                 const questions = (editMission.questions || []).map((q: any, i: number) => ({ id: i + 1, ...q, marks: q.marks ? parseFloat(q.marks) : undefined }));
-                updateMissionMutation.mutate({ id: editMission.id, title: editMission.title, description: editMission.description, questions, missionDate: editMission.mission_date, missionType: editMission.mission_type, courseId: editMission.course_id || null, folderName: editMission.folder_name?.trim() || null });
+                updateMissionMutation.mutate({
+                  id: editMission.id,
+                  title: editMission.title,
+                  description: editMission.description,
+                  questions,
+                  missionDate: editMission.mission_date,
+                  missionType: editMission.mission_type,
+                  courseId: editMission.course_id || null,
+                  folderName: editMission.folder_name?.trim() || null,
+                  subjectKey: String(editMission?.subject_key || "").trim() || null,
+                });
               }}>
               <LinearGradient colors={[Colors.light.primary, Colors.light.primaryDark]} style={styles.createBtnGrad}>
                 {updateMissionMutation.isPending ? <ActivityIndicator color="#fff" /> : <Text style={styles.createBtnText}>Save Changes</Text>}

@@ -1,6 +1,7 @@
 import type { Express, Request, Response } from "express";
 import { computeEnrollmentValidUntil, isEnrollmentExpired, repairCourseEnrollmentAccess } from "./course-access-utils";
 import { respondAuthFailureIfAny } from "./auth-failure-utils";
+import { REAL_MISSION_SQL } from "./progress-utils";
 import { canonicalMediaKey, mediaKeyMatchVariants } from "./media-key-utils";
 import { presignR2GetObject } from "./r2-presign-read";
 import { sanitizeLectureRowForClient } from "./lecture-payload-utils";
@@ -333,7 +334,7 @@ export function registerCourseAccessRoutes({
              FROM courses c
              LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM tests WHERE is_published = TRUE GROUP BY 1) t_agg ON t_agg.course_id = c.id
              LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM study_materials GROUP BY 1) m_agg ON m_agg.course_id = c.id
-             LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM daily_missions WHERE course_id IS NOT NULL GROUP BY 1) dm_agg ON dm_agg.course_id = c.id
+             LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM daily_missions WHERE course_id IS NOT NULL AND ${REAL_MISSION_SQL} GROUP BY 1) dm_agg ON dm_agg.course_id = c.id
              WHERE 1=1`
           : `SELECT c.*,
                COALESCE(t_agg.cnt, 0) AS total_tests,
@@ -342,7 +343,7 @@ export function registerCourseAccessRoutes({
              FROM courses c
              LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM tests WHERE is_published = TRUE GROUP BY 1) t_agg ON t_agg.course_id = c.id
              LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM study_materials GROUP BY 1) m_agg ON m_agg.course_id = c.id
-             LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM daily_missions WHERE course_id IS NOT NULL GROUP BY 1) dm_agg ON dm_agg.course_id = c.id
+             LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM daily_missions WHERE course_id IS NOT NULL AND ${REAL_MISSION_SQL} GROUP BY 1) dm_agg ON dm_agg.course_id = c.id
              WHERE c.is_published = TRUE`;
       const params: unknown[] = [];
 
@@ -364,8 +365,19 @@ export function registerCourseAccessRoutes({
           "SELECT course_id, progress_percent, valid_until FROM enrollments WHERE user_id = $1 AND (status = 'active' OR status IS NULL) AND (valid_until IS NULL OR valid_until > $2)",
           [user.id, Date.now()]
         );
+        await Promise.all(
+          enrollResult.rows.map((e: { course_id: number }) =>
+            updateCourseProgress(user.id, Number(e.course_id)).catch(() => {})
+          )
+        );
+        const refreshedEnroll = enrollResult.rows.length > 0
+          ? await db.query(
+              "SELECT course_id, progress_percent, valid_until FROM enrollments WHERE user_id = $1 AND (status = 'active' OR status IS NULL) AND (valid_until IS NULL OR valid_until > $2)",
+              [user.id, Date.now()]
+            )
+          : enrollResult;
         const enrollMap = new Map<number, { progress: number; validUntil: number | null }>();
-        enrollResult.rows.forEach((e: { course_id: number; progress_percent: number; valid_until?: number | null }) => {
+        refreshedEnroll.rows.forEach((e: { course_id: number; progress_percent: number; valid_until?: number | null }) => {
           enrollMap.set(Number(e.course_id), {
             progress: Number(e.progress_percent) || 0,
             validUntil: e.valid_until != null ? Number(e.valid_until) : null,
@@ -462,7 +474,7 @@ export function registerCourseAccessRoutes({
             ),
         db.query("SELECT * FROM tests WHERE course_id = $1 AND is_published = TRUE ORDER BY COALESCE(order_index, 0) ASC, created_at ASC, id ASC", [courseIdParam]),
         db.query("SELECT * FROM study_materials WHERE course_id = $1 ORDER BY COALESCE(order_index, 0) ASC, created_at ASC, id ASC", [courseIdParam]),
-        db.query("SELECT COUNT(*)::int AS cnt FROM daily_missions WHERE course_id = $1 AND course_id IS NOT NULL", [courseIdParam]),
+        db.query(`SELECT COUNT(*)::int AS cnt FROM daily_missions WHERE course_id = $1 AND course_id IS NOT NULL AND ${REAL_MISSION_SQL}`, [courseIdParam]),
       ]);
       const fullLectures = lecturesResult.rows;
       const fullMaterials = materialsResult.rows;

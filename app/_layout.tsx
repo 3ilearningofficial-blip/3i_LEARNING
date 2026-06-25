@@ -199,6 +199,8 @@ function RootLayoutNav() {
       "material",
       "material-folder",
       "mission-folder",
+      "course-mission",
+      "course-mission-folder",
       "live-class",
       "notifications",
       "downloads",
@@ -344,6 +346,8 @@ function RootLayoutNav() {
       <Stack.Screen name="course-folder/[id]/[type]/[name]" options={{ headerShown: showWebAppHeader }} />
       <Stack.Screen name="lecture/[id]" options={{ headerShown: showWebAppHeader }} />
       <Stack.Screen name="test/[id]" options={{ headerShown: showWebAppHeader }} />
+      <Stack.Screen name="course-mission/[id]" options={{ headerShown: showWebAppHeader }} />
+      <Stack.Screen name="course-mission-folder/[courseId]/[name]" options={{ headerShown: showWebAppHeader }} />
       <Stack.Screen name="test-result/[id]" options={{ headerShown: showWebAppHeader }} />
       <Stack.Screen name="test-folder/[id]" options={{ headerShown: showWebAppHeader }} />
       <Stack.Screen name="mission-folder/[name]" options={{ headerShown: showWebAppHeader }} />

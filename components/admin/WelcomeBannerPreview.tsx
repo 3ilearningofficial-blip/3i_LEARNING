@@ -56,7 +56,7 @@ export default function WelcomeBannerPreview({ uri, variant, onClear, showHint =
       </View>
       {showHint ? (
         <Text style={styles.hint}>
-          {recommended} ({variant === "desktop" ? "wide strip" : "3:1"}). Edge-to-edge on welcome page.
+          {recommended}. Edge-to-edge on welcome page{variant === "desktop" ? " (max 230px tall)" : " (~27% of screen width)"}.
         </Text>
       ) : null}
     </View>

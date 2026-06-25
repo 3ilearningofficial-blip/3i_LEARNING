@@ -16,12 +16,15 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCoursePurchase } from "@/lib/use-course-purchase";
 import { SUBJECT_LABELS, getSubjectMeta } from "@/constants/multiSubjects";
 import { sortCourseFolderRows } from "@shared/courseFolderOrder";
-// Lectures -> Tests -> PYQs -> Mock -> Missions -> Materials.
-const SECTIONS = ["Lecture", "Test", "PYQs", "Mock", "Missions", "Study Material"] as const;
+import { getContentFolderRootName } from "@shared/recordingSection";
+import { isMissionCompleted } from "@/lib/mission-types";
+// Lecture -> Missions (if any) -> Tests -> PYQs -> Mock -> Materials.
+const ALL_SECTIONS = ["Lecture", "Missions", "Test", "PYQs", "Mock", "Study Material"] as const;
+type SubjectSection = (typeof ALL_SECTIONS)[number];
 
 // Per-section accent colors mirror the normal course screen (lectures blue, materials red,
 // tests green, pyq amber, mock red, live red).
-const SECTION_COLORS: Record<(typeof SECTIONS)[number], string> = {
+const SECTION_COLORS: Record<SubjectSection, string> = {
   Lecture: "#1A56DB",
   "Study Material": "#DC2626",
   Test: "#059669",
@@ -31,7 +34,7 @@ const SECTION_COLORS: Record<(typeof SECTIONS)[number], string> = {
 };
 
 const EMPTY_SECTION_COPY: Record<
-  (typeof SECTIONS)[number],
+  SubjectSection,
   { icon: keyof typeof Ionicons.glyphMap; title: string; subtitle?: string }
 > = {
   Lecture: { icon: "videocam-outline", title: "No lectures added yet" },
@@ -53,7 +56,7 @@ export default function MultiCourseSubjectScreen() {
   const { colors } = useAppTheme();
   const { user, isAdmin, isLoading: authLoading } = useAuth();
   const insets = useSafeAreaInsets();
-  const [section, setSection] = useState<(typeof SECTIONS)[number]>("Lecture");
+  const [section, setSection] = useState<SubjectSection>("Lecture");
   const subjectKey = String(subject || "").toLowerCase();
   const sectionColor = SECTION_COLORS[section];
   const { data: course, isLoading, refetch } = useQuery({
@@ -117,6 +120,43 @@ export default function MultiCourseSubjectScreen() {
     staleTime: 30_000,
   });
 
+  const subjectMissions = useMemo(
+    () =>
+      (courseMissions || []).filter((m: any) => {
+        if (String(m?.subject_key || "").toLowerCase() !== subjectKey) return false;
+        const qs = Array.isArray(m.questions) ? m.questions : [];
+        return qs.some((q: any) => String(q?.question || "").trim().length > 0);
+      }),
+    [courseMissions, subjectKey],
+  );
+
+  const missionFolderNames = useMemo(() => {
+    const names = new Set<string>();
+    subjectMissions.forEach((m: any) => {
+      const root = getContentFolderRootName(m.folder_name);
+      if (root) names.add(root);
+    });
+    return Array.from(names);
+  }, [subjectMissions]);
+
+  const ungroupedSubjectMissions = useMemo(
+    () => subjectMissions.filter((m: any) => !getContentFolderRootName(m.folder_name)),
+    [subjectMissions],
+  );
+
+  const visibleSections = useMemo(() => {
+    const tabs: SubjectSection[] = ["Lecture"];
+    if (subjectMissions.length > 0) tabs.push("Missions");
+    tabs.push("Test", "PYQs", "Mock", "Study Material");
+    return tabs;
+  }, [subjectMissions.length]);
+
+  useEffect(() => {
+    if (!visibleSections.includes(section)) {
+      setSection(visibleSections[0] || "Lecture");
+    }
+  }, [visibleSections, section]);
+
   const subjectContent = useMemo(() => {
     const matches = (row: any) => String(row?.subject_key || "").toLowerCase() === subjectKey;
     const lectures = Array.isArray(course?.lectures) ? course.lectures.filter(matches) : [];
@@ -165,14 +205,17 @@ export default function MultiCourseSubjectScreen() {
   const allRows =
     section === "Lecture" ? subjectContent.lectures :
     section === "Study Material" ? subjectContent.materials :
-    section === "Missions" ? courseMissions :
+    section === "Missions" ? subjectMissions :
     section === "PYQs" ? subjectContent.pyqs :
     section === "Mock" ? subjectContent.mocks :
     subjectContent.tests;
-  const rows = allRows.filter((item: any) => {
-    if (section === "Lecture" || section === "Study Material") return !item.section_title;
-    return !item.folder_name;
-  });
+  const rows =
+    section === "Missions"
+      ? ungroupedSubjectMissions
+      : allRows.filter((item: any) => {
+          if (section === "Lecture" || section === "Study Material") return !item.section_title;
+          return !item.folder_name;
+        });
 
   const folderItemCount = (folder: any) => {
     const name = folderFullName(folder);
@@ -196,6 +239,40 @@ export default function MultiCourseSubjectScreen() {
   const visibleRootFolders = sortCourseFolderRows(rootFolders.filter((folder: any) => folderItemCount(folder) > 0));
 
   const noun = section === "Lecture" ? "videos" : section === "Study Material" ? "files" : section === "Missions" ? "missions" : "tests";
+
+  const renderMissionFolder = (folderName: string) => {
+    const folderMissions = subjectMissions.filter((m: any) => {
+      const root = getContentFolderRootName(m.folder_name);
+      return root === folderName && (m.folder_name === folderName || String(m.folder_name || "").startsWith(`${folderName} /`));
+    });
+    const count = folderMissions.length;
+    const completedInFolder = folderMissions.filter((m: any) => isMissionCompleted(m)).length;
+    return (
+      <Pressable
+        key={`mission-folder-${folderName}`}
+        style={[styles.sectionCard, { backgroundColor: colors.card, shadowColor: colors.shadow, borderLeftColor: sectionColor }]}
+        onPress={() => {
+          if (!requireAccess()) return;
+          router.push({
+            pathname: "/course-mission-folder/[courseId]/[name]",
+            params: { courseId: String(id), name: encodeURIComponent(folderName), subjectKey },
+          } as any);
+        }}
+      >
+        <View style={[styles.sectionIconWrap, { backgroundColor: sectionColor + "18" }]}>
+          <Ionicons name="folder" size={22} color={sectionColor} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.sectionCardTitle, { color: colors.text }]} numberOfLines={2}>{folderName}</Text>
+          <Text style={[styles.sectionCardCount, { color: colors.textMuted }]}>
+            {count} {count === 1 ? "mission" : "missions"}
+            {completedInFolder > 0 ? ` · ${completedInFolder} done` : ""}
+          </Text>
+        </View>
+        <Ionicons name={locked ? "lock-closed" : "chevron-forward"} size={20} color={colors.textMuted} />
+      </Pressable>
+    );
+  };
 
   const renderFolder = (folder: any) => {
     const name = folderFullName(folder);
@@ -223,13 +300,20 @@ export default function MultiCourseSubjectScreen() {
 
   const renderRow = (item: any) => {
     if (section === "Missions") {
+      const qCount = Array.isArray(item.questions)
+        ? item.questions.filter((q: any) => String(q?.question || "").trim()).length
+        : 0;
+      const done = isMissionCompleted(item);
       return (
         <View key={`mission-${item.id}`} style={[styles.itemCard, { backgroundColor: colors.card, borderBottomColor: colors.border }, locked && { opacity: 0.6 }]}>
           <Pressable
             style={{ flex: 1, flexDirection: "row", alignItems: "center" }}
             onPress={() => {
               if (!requireAccess()) return;
-              router.push(`/(tabs)/daily-mission` as any);
+              router.push({
+                pathname: "/course-mission/[id]",
+                params: { id: String(item.id), courseId: String(id) },
+              } as any);
             }}
           >
             <View style={[styles.itemColorBar, { backgroundColor: sectionColor }]} />
@@ -238,11 +322,19 @@ export default function MultiCourseSubjectScreen() {
             </View>
             <View style={styles.itemInfo}>
               <Text style={[styles.itemTitle, { color: colors.text }]} numberOfLines={2}>{item.title}</Text>
-              <Text style={[styles.itemMeta, { color: colors.textMuted }]}>
-                {Array.isArray(item.questions) ? item.questions.length : 0} questions · {item.xp_reward || 50} XP
-              </Text>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <Text style={[styles.itemMeta, { color: colors.textMuted }]}>
+                  {qCount} {qCount === 1 ? "question" : "questions"} · {item.xp_reward || 50} XP
+                </Text>
+                {done ? (
+                  <View style={styles.attemptBadge}>
+                    <Ionicons name="checkmark-circle" size={11} color="#16A34A" />
+                    <Text style={styles.attemptBadgeText}>{item.userScore ?? 0}/{qCount}</Text>
+                  </View>
+                ) : null}
+              </View>
             </View>
-            {locked ? <Ionicons name="lock-closed" size={18} color={colors.textMuted} /> : <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />}
+            {locked ? <Ionicons name="lock-closed" size={18} color={colors.textMuted} /> : done ? <Ionicons name="bar-chart" size={18} color={Colors.light.primary} /> : <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />}
           </Pressable>
         </View>
       );
@@ -301,7 +393,10 @@ export default function MultiCourseSubjectScreen() {
   if (isLoading) return <View style={[styles.center, { backgroundColor: colors.background }]}><ActivityIndicator color={Colors.light.primary} /></View>;
 
   const emptyCopy = EMPTY_SECTION_COPY[section];
-  const showEmptyState = rows.length === 0 && visibleRootFolders.length === 0;
+  const showEmptyState =
+    section === "Missions"
+      ? rows.length === 0 && missionFolderNames.length === 0
+      : rows.length === 0 && visibleRootFolders.length === 0;
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -321,7 +416,7 @@ export default function MultiCourseSubjectScreen() {
         style={[styles.tabBarScroll, { backgroundColor: colors.card, borderBottomColor: colors.border }]}
         contentContainerStyle={styles.tabBarContent}
       >
-        {SECTIONS.map((name) => (
+        {visibleSections.map((name) => (
           <Pressable key={name} style={[styles.tabItem, section === name && styles.tabItemActive]} onPress={() => setSection(name)}>
             <Text style={[styles.tabText, { color: colors.textSecondary }, section === name && styles.tabTextActive]}>{name}</Text>
           </Pressable>
@@ -329,7 +424,7 @@ export default function MultiCourseSubjectScreen() {
       </ScrollView>
 
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 16, gap: 12, paddingBottom: insets.bottom + 24 }}>
-        {section !== "Missions" ? visibleRootFolders.map(renderFolder) : null}
+        {section === "Missions" ? missionFolderNames.map(renderMissionFolder) : visibleRootFolders.map(renderFolder)}
         {rows.length > 0 ? rows.map(renderRow) : showEmptyState ? (
           <View style={styles.emptyState}>
             <Ionicons name={emptyCopy.icon} size={40} color={colors.textMuted} />

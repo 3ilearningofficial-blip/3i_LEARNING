@@ -426,7 +426,7 @@ export function WelcomeSettingsTab() {
       <View style={{ backgroundColor: colors.card, borderRadius: 16, padding: 18, gap: 14, borderWidth: 1, borderColor: colors.border }}>
         <Text style={{ fontSize: 16, fontFamily: "Inter_700Bold", color: colors.text }}>Homepage banner carousel</Text>
         <Text style={{ fontSize: 12, color: colors.textMuted, fontFamily: "Inter_400Regular", lineHeight: 17 }}>
-          Promotional banners appear on the welcome page directly under the header. Upload mobile ({WELCOME_BANNER_MOBILE_RECOMMENDED}, 3:1) and desktop ({WELCOME_BANNER_DESKTOP_RECOMMENDED}, wide strip) images per slide. Leave both empty to hide that slide.
+          Promotional banners appear on the welcome page directly under the header. Upload mobile ({WELCOME_BANNER_MOBILE_RECOMMENDED}) and desktop ({WELCOME_BANNER_DESKTOP_RECOMMENDED}) images per slide. Display: phone web full-width strip (~27% of width); laptop web up to 230px tall. Carousel auto-advances every 2s; arrows on laptop web only (phone uses swipe + dots). Leave both empty to hide that slide.
         </Text>
         {bannerSlotRows.map((slot, index) => {
           const uploadingMobile = bannerUpload?.slot === index && bannerUpload.variant === "mobile";

@@ -1,4 +1,4 @@
-import React, { useRef, useState, useCallback } from "react";
+import React, { useRef, useState, useCallback, useEffect } from "react";
 import {
   View,
   ScrollView,
@@ -16,6 +16,7 @@ import {
   WELCOME_BANNER_DESKTOP_ASPECT,
   WELCOME_BANNER_MAX_HEIGHT,
   WELCOME_BANNER_WIDE_BREAKPOINT,
+  WELCOME_BANNER_AUTO_ADVANCE_MS,
 } from "@/constants/courseBanner";
 import type { WelcomeBannerSlideUrls } from "@/lib/welcome-banners";
 import Colors from "@/constants/colors";
@@ -25,6 +26,8 @@ type Props = {
   resolveUrl?: (raw: string) => string;
   backgroundColor?: string;
 };
+
+const MANUAL_PAUSE_MS = 4000;
 
 export function WelcomeBannerSlide({
   uri,
@@ -85,9 +88,13 @@ export default function WelcomeBannerCarousel({
   const { width: screenWidth } = useWindowDimensions();
   const scrollRef = useRef<ScrollView>(null);
   const [activeIndex, setActiveIndex] = useState(0);
+  const pauseAutoUntilRef = useRef(0);
+  const isDraggingRef = useRef(false);
+  const activeIndexRef = useRef(0);
 
   const isWide = screenWidth >= WELCOME_BANNER_WIDE_BREAKPOINT;
   const frameAspect = isWide ? WELCOME_BANNER_DESKTOP_ASPECT : WELCOME_BANNER_ASPECT;
+  const isPhoneWeb = Platform.OS === "web" && !isWide;
 
   const resolvedSlides = slides
     .map((slide) => ({
@@ -101,26 +108,70 @@ export default function WelcomeBannerCarousel({
   const slideHeight = isWide
     ? Math.min(naturalHeight, WELCOME_BANNER_MAX_HEIGHT)
     : naturalHeight;
-  const lastIndex = resolvedSlides.length - 1;
+  const slideCount = resolvedSlides.length;
 
-  const scrollToIndex = useCallback(
+  const wrapIndex = useCallback(
     (index: number) => {
-      const next = Math.max(0, Math.min(lastIndex, index));
-      scrollRef.current?.scrollTo({ x: next * slideWidth, animated: true });
-      setActiveIndex(next);
+      if (slideCount <= 0) return 0;
+      return ((index % slideCount) + slideCount) % slideCount;
     },
-    [lastIndex, slideWidth],
+    [slideCount],
   );
 
-  const onScrollEnd = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const x = e.nativeEvent.contentOffset.x;
-    const i = Math.round(x / Math.max(slideWidth, 1));
-    setActiveIndex(Math.max(0, Math.min(lastIndex, i)));
+  const scrollToIndex = useCallback(
+    (index: number, animated = true) => {
+      if (slideCount <= 0) return;
+      const next = wrapIndex(index);
+      scrollRef.current?.scrollTo({ x: next * slideWidth, animated });
+      activeIndexRef.current = next;
+      setActiveIndex(next);
+    },
+    [slideCount, slideWidth, wrapIndex],
+  );
+
+  const pauseAutoAdvance = useCallback(() => {
+    pauseAutoUntilRef.current = Date.now() + MANUAL_PAUSE_MS;
+  }, []);
+
+  const syncIndexFromOffset = useCallback(
+    (x: number) => {
+      if (slideCount <= 0) return;
+      const i = wrapIndex(Math.round(x / Math.max(slideWidth, 1)));
+      if (i !== activeIndexRef.current) {
+        activeIndexRef.current = i;
+        setActiveIndex(i);
+      }
+    },
+    [slideCount, slideWidth, wrapIndex],
+  );
+
+  const onScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    syncIndexFromOffset(e.nativeEvent.contentOffset.x);
   };
+
+  const onScrollEnd = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    isDraggingRef.current = false;
+    syncIndexFromOffset(e.nativeEvent.contentOffset.x);
+  };
+
+  useEffect(() => {
+    activeIndexRef.current = activeIndex;
+  }, [activeIndex]);
+
+  useEffect(() => {
+    if (slideCount <= 1) return;
+    const timer = setInterval(() => {
+      if (isDraggingRef.current) return;
+      if (Date.now() < pauseAutoUntilRef.current) return;
+      scrollToIndex(activeIndexRef.current + 1);
+    }, WELCOME_BANNER_AUTO_ADVANCE_MS);
+    return () => clearInterval(timer);
+  }, [slideCount, scrollToIndex]);
 
   if (resolvedSlides.length === 0) return null;
 
   const showControls = resolvedSlides.length > 1;
+  const showArrows = showControls && !isPhoneWeb;
 
   return (
     <View style={styles.wrap}>
@@ -133,7 +184,13 @@ export default function WelcomeBannerCarousel({
           decelerationRate="fast"
           snapToInterval={slideWidth}
           snapToAlignment="start"
+          onScroll={onScroll}
           onMomentumScrollEnd={onScrollEnd}
+          onScrollBeginDrag={() => {
+            isDraggingRef.current = true;
+            pauseAutoAdvance();
+          }}
+          onScrollEndDrag={onScrollEnd}
           scrollEventThrottle={16}
         >
           {resolvedSlides.map((slide, i) => (
@@ -147,23 +204,27 @@ export default function WelcomeBannerCarousel({
           ))}
         </ScrollView>
 
-        {showControls ? (
+        {showArrows ? (
           <>
             <Pressable
-              style={[styles.arrowBtn, styles.arrowLeft, activeIndex <= 0 && styles.arrowDisabled]}
-              onPress={() => scrollToIndex(activeIndex - 1)}
-              disabled={activeIndex <= 0}
+              style={[styles.arrowBtn, styles.arrowLeft]}
+              onPress={() => {
+                pauseAutoAdvance();
+                scrollToIndex(activeIndex - 1);
+              }}
               accessibilityLabel="Previous banner"
             >
-              <Ionicons name="chevron-back" size={22} color={activeIndex <= 0 ? "#CBD5E1" : Colors.light.text} />
+              <Ionicons name="chevron-back" size={22} color={Colors.light.text} />
             </Pressable>
             <Pressable
-              style={[styles.arrowBtn, styles.arrowRight, activeIndex >= lastIndex && styles.arrowDisabled]}
-              onPress={() => scrollToIndex(activeIndex + 1)}
-              disabled={activeIndex >= lastIndex}
+              style={[styles.arrowBtn, styles.arrowRight]}
+              onPress={() => {
+                pauseAutoAdvance();
+                scrollToIndex(activeIndex + 1);
+              }}
               accessibilityLabel="Next banner"
             >
-              <Ionicons name="chevron-forward" size={22} color={activeIndex >= lastIndex ? "#CBD5E1" : Colors.light.text} />
+              <Ionicons name="chevron-forward" size={22} color={Colors.light.text} />
             </Pressable>
           </>
         ) : null}
@@ -172,10 +233,17 @@ export default function WelcomeBannerCarousel({
       {showControls ? (
         <View style={[styles.dotsRow, isWide && styles.dotsRowWide]}>
           {resolvedSlides.map((_, i) => (
-            <View
+            <Pressable
               key={`dot-${i}`}
-              style={[styles.dot, i === activeIndex ? styles.dotActive : null]}
-            />
+              onPress={() => {
+                pauseAutoAdvance();
+                scrollToIndex(i);
+              }}
+              hitSlop={8}
+              accessibilityLabel={`Go to banner ${i + 1}`}
+            >
+              <View style={[styles.dot, i === activeIndex ? styles.dotActive : null]} />
+            </Pressable>
           ))}
         </View>
       ) : null}
@@ -206,7 +274,6 @@ const styles = StyleSheet.create({
   },
   arrowLeft: { left: 12 },
   arrowRight: { right: 12 },
-  arrowDisabled: { opacity: 0.45 },
   dotsRow: {
     flexDirection: "row",
     justifyContent: "center",

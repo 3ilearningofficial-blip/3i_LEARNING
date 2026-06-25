@@ -241,6 +241,68 @@ export function registerStudentMissionMaterialRoutes({
     }
   });
 
+  app.get("/api/daily-missions/:id", async (req: Request, res: Response) => {
+    try {
+      const user = await getAuthUser(req);
+      const missionId = Number(req.params.id);
+      if (!Number.isFinite(missionId) || missionId <= 0) {
+        return res.status(400).json({ message: "Invalid mission id" });
+      }
+      const result = await db.query(
+        `SELECT dm.*, c.title AS course_title
+         FROM daily_missions dm
+         LEFT JOIN courses c ON c.id = dm.course_id
+         WHERE dm.id = $1
+         LIMIT 1`,
+        [missionId],
+      );
+      if (result.rows.length === 0) return res.status(404).json({ message: "Mission not found" });
+      const mission = result.rows[0];
+
+      if (user) {
+        const um = await db.query(
+          "SELECT * FROM user_missions WHERE user_id = $1 AND mission_id = $2 LIMIT 1",
+          [user.id, missionId],
+        );
+        const row = um.rows[0];
+        mission.isCompleted = !!row?.is_completed;
+        mission.userScore = row?.score || 0;
+        mission.userTimeTaken = row?.time_taken || 0;
+        mission.userAnswers = row?.answers || {};
+        mission.userIncorrect = row?.incorrect || 0;
+        mission.userSkipped = row?.skipped || 0;
+
+        let isAccessible = mission.mission_type === "free_practice" || user.role === "admin";
+        if (!isAccessible && mission.folder_name) {
+          const freeRows = await db.query(
+            `${STANDALONE_FOLDER_SELECT}
+             SELECT full_name FROM folder_tree
+             WHERE type = 'mission' AND is_free = TRUE AND full_name = $1
+             LIMIT 1`,
+            [String(mission.folder_name)],
+          );
+          if (freeRows.rows.length > 0) isAccessible = true;
+        }
+        if (!isAccessible) {
+          isAccessible = await canAccessMission(user, mission);
+        }
+        mission.isAccessible = isAccessible;
+        if (user.role !== "admin" && !isAccessible) {
+          return res.status(403).json({ message: "Access denied" });
+        }
+      } else {
+        mission.isAccessible = mission.mission_type === "free_practice";
+        if (!mission.isAccessible) return res.status(401).json({ message: "Not authenticated" });
+      }
+
+      res.set("Cache-Control", "private, no-store");
+      res.json(mission);
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ message: "Failed to fetch mission" });
+    }
+  });
+
   app.get("/api/daily-mission", async (req: Request, res: Response) => {
     try {
       const user = await getAuthUser(req);

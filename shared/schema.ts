@@ -204,6 +204,8 @@ export const dailyMissions = pgTable("daily_missions", {
   courseId: integer("course_id"),
   // Added via migration 0025 — groups missions into named buckets in admin and user UI.
   folderName: text("folder_name"),
+  // Added via migration 0059 — scopes missions to a subject in multisubject courses.
+  subjectKey: text("subject_key"),
 });
 
 export const userMissions = pgTable("user_missions", {
