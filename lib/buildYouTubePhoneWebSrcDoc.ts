@@ -29,12 +29,12 @@ export function buildYouTubePhoneWebSrcDoc(opts: BuildYouTubePhoneWebSrcDocOpts)
 html, body { width: 100%; height: 100%; background: #000; overflow: hidden; -webkit-user-select: none; user-select: none; }
 .wrapper { position: relative; width: 100%; height: 100%; overflow: hidden; background: #000; }
 iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; }
-.cover-tl { position: absolute; top: 0; left: 0; width: clamp(120px, 28vw, 25%); height: clamp(48px, 12vmin, 56px); background: #000; z-index: 9999; pointer-events: auto; }
+.cover-tl { position: absolute; top: 0; left: 0; width: clamp(120px, 28vw, 25%); height: 60px; background: #000; z-index: 9999; pointer-events: auto; }
 .cover-tr { position: absolute; top: 0; right: 0; width: clamp(100px, 28vw, 130px); height: clamp(48px, 12vmin, 56px); background: #000; z-index: 9999; pointer-events: auto; }
 .cover-bl { position: absolute; bottom: 0; left: 0; width: clamp(56px, 18vw, 70px); height: clamp(52px, 14vmin, 60px); background: #000; z-index: 9999; pointer-events: auto; }
 .cover-br { position: absolute; bottom: 0; right: clamp(40px, 14vw, 50px); width: min(280px, 72vw); height: clamp(52px, 14vmin, 60px); background: #000; z-index: 9999; pointer-events: auto; }
 @media (max-width: 600px) {
-  .cover-tl { width: clamp(48%, 55vw, 62%); height: clamp(48px, 12vmin, 53px); }
+  .cover-tl { width: clamp(48%, 55vw, 62%); height: 60px; }
   .cover-tr { display: none; }
   .cover-br { width: 100%; right: 0; }
 }
