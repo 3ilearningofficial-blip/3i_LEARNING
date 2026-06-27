@@ -165,13 +165,7 @@ export default function NotificationsScreen() {
               ]}
               onPress={() => { if (!n.is_read) markReadMutation.mutate(n.id); }}
             >
-              <View style={[styles.notifIcon, { backgroundColor: n.type === "info" ? "#EFF6FF" : "#FEF3C7" }]}>
-                <Ionicons
-                  name={n.type === "info" ? "information-circle" : "megaphone"}
-                  size={20}
-                  color={n.type === "info" ? Colors.light.primary : "#F59E0B"}
-                />
-              </View>
+              {!n.is_read ? <View style={styles.unreadDot} /> : null}
               <View style={styles.notifBody}>
                 {n.image_url ? (
                   <View style={{ borderRadius: 10, overflow: "hidden", marginBottom: 8, borderWidth: 1, borderColor: colors.border }}>
@@ -179,13 +173,13 @@ export default function NotificationsScreen() {
                   </View>
                 ) : null}
                 {n.title?.trim() ? (
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                    <Text style={[styles.notifTitle, { color: colors.text }]}>{n.title}</Text>
-                    {!n.is_read && (
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                    <Text style={[styles.notifTitle, { color: colors.text, flex: 1 }]}>{n.title}</Text>
+                    {!n.is_read ? (
                       <View style={{ backgroundColor: "#EF4444", borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1 }}>
                         <Text style={{ fontSize: 8, fontFamily: "Inter_700Bold", color: "#fff" }}>NEW</Text>
                       </View>
-                    )}
+                    ) : null}
                   </View>
                 ) : !n.is_read ? (
                   <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 4 }}>
@@ -201,7 +195,6 @@ export default function NotificationsScreen() {
                   {new Date(Number(n.created_at)).toLocaleDateString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
                 </Text>
               </View>
-              {!n.is_read && <View style={styles.unreadDot} />}
             </Pressable>
           ))
         )}
@@ -253,15 +246,28 @@ const styles = StyleSheet.create({
   emptyTitle: { fontSize: 16, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
   emptySub: { fontSize: 13, color: Colors.light.textMuted, textAlign: "center", fontFamily: "Inter_400Regular" },
   notifCard: {
-    backgroundColor: "#fff", borderRadius: 14, padding: 14,
-    flexDirection: "row", gap: 12, alignItems: "flex-start",
-    shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.04, shadowRadius: 4, elevation: 2,
+    backgroundColor: "#fff",
+    borderRadius: 14,
+    padding: 14,
+    position: "relative",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 2,
   },
   notifCardUnread: { borderLeftWidth: 3, borderLeftColor: Colors.light.primary },
-  notifIcon: { width: 40, height: 40, borderRadius: 12, alignItems: "center", justifyContent: "center" },
-  notifBody: { flex: 1, gap: 3 },
+  notifBody: { width: "100%", gap: 4 },
   notifTitle: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: Colors.light.text },
   notifMsg: { fontSize: 13, color: Colors.light.textSecondary, fontFamily: "Inter_400Regular", lineHeight: 18 },
   notifTime: { fontSize: 11, color: Colors.light.textMuted, fontFamily: "Inter_400Regular", marginTop: 2 },
-  unreadDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.light.primary, marginTop: 4 },
+  unreadDot: {
+    position: "absolute",
+    top: 12,
+    right: 12,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: Colors.light.primary,
+  },
 });
