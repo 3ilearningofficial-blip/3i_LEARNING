@@ -351,6 +351,35 @@ export function registerStudentMissionMaterialRoutes({
     }
   });
 
+  const STANDALONE_HOME_ORDER =
+    " ORDER BY COALESCE(order_index, 0) ASC, created_at DESC";
+
+  /** Home / admin free-materials tab: never surface course-linked rows (e.g. classroom board PDFs). */
+  const queryStandaloneMaterialsForHome = async (user: any | null) => {
+    if (user?.role === "admin") {
+      const result = await db.query(
+        `SELECT * FROM study_materials WHERE course_id IS NULL AND is_free = TRUE${STANDALONE_HOME_ORDER}`,
+        []
+      );
+      return result.rows;
+    }
+    if (!user) {
+      const result = await db.query(
+        `SELECT id, title, description, file_type, course_id, is_free, section_title, download_allowed, created_at, file_url
+         FROM study_materials
+         WHERE course_id IS NULL AND is_free = TRUE${STANDALONE_HOME_ORDER}`,
+        []
+      );
+      return result.rows;
+    }
+    const result = await db.query(
+      `SELECT * FROM study_materials
+       WHERE course_id IS NULL AND is_free = TRUE${STANDALONE_HOME_ORDER}`,
+      []
+    );
+    return result.rows;
+  };
+
   app.get("/api/study-materials", async (req: Request, res: Response) => {
     try {
       const user = await getAuthUser(req);
@@ -369,11 +398,15 @@ export function registerStudentMissionMaterialRoutes({
         return foldersResult.rows;
       };
 
+      if (free === "true") {
+        const materials = await queryStandaloneMaterialsForHome(user);
+        const folders = await loadFolders();
+        res.set("Cache-Control", "private, no-store");
+        return res.json({ materials, folders });
+      }
+
       if (user?.role === "admin") {
-        let query = "SELECT * FROM study_materials";
-        if (free === "true") query += " WHERE is_free = TRUE";
-        query += " ORDER BY COALESCE(order_index, 0) ASC, created_at DESC";
-        const result = await db.query(query, []);
+        const result = await db.query(`SELECT * FROM study_materials${STANDALONE_HOME_ORDER}`, []);
         const folders = await loadFolders();
         res.set("Cache-Control", "private, no-store");
         return res.json({ materials: result.rows, folders });
@@ -381,11 +414,13 @@ export function registerStudentMissionMaterialRoutes({
 
       if (!user) {
         const result = await db.query(
-          "SELECT id, title, description, file_type, course_id, is_free, section_title, download_allowed, created_at, file_url FROM study_materials WHERE is_free = TRUE ORDER BY COALESCE(order_index, 0) ASC, created_at DESC"
+          `SELECT id, title, description, file_type, course_id, is_free, section_title, download_allowed, created_at, file_url
+           FROM study_materials
+           WHERE is_free = TRUE${STANDALONE_HOME_ORDER}`,
+          []
         );
-        const folders = await loadFolders();
         res.set("Cache-Control", "private, no-store");
-        return res.json({ materials: result.rows, folders });
+        return res.json({ materials: result.rows, folders: [] });
       }
 
       const result = await db.query(
@@ -411,9 +446,8 @@ export function registerStudentMissionMaterialRoutes({
         }
         filteredRows.push(row);
       }
-      const folders = await loadFolders();
       res.set("Cache-Control", "private, no-store");
-      res.json({ materials: filteredRows, folders });
+      res.json({ materials: filteredRows, folders: [] });
     } catch {
       res.status(500).json({ message: "Failed to fetch materials" });
     }

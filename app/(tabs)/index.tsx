@@ -68,6 +68,7 @@ interface StudyMaterial {
   file_url: string;
   file_type: string;
   is_free: boolean;
+  course_id?: number | null;
   section_title?: string;
 }
 
@@ -1091,7 +1092,7 @@ export default function HomeScreen() {
                     </Pressable>
                   ))}
                   {/* Individual material cards */}
-                  {freeMaterials.filter((m) => !m.section_title).map((mat) => (
+                  {freeMaterials.filter((m) => !m.section_title && !m.course_id).map((mat) => (
                     <Pressable key={mat.id} style={[styles.materialCard, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={() => router.push(`/material/${mat.id}`)}>
                       <View style={styles.materialIconBg}>
                         <Ionicons name={mat.file_type === "pdf" ? "document-text" : mat.file_type === "video" ? "videocam" : mat.file_type === "doc" ? "document" : "link"} size={22} color={Colors.light.primary} />
