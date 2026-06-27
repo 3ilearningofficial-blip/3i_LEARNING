@@ -123,3 +123,21 @@ ${fullscreenLandscapeScript()}
 </body>
 </html>`;
 }
+
+/** Phone-web YouTube embed HTML (masked corners + shell fullscreen). Used on web iframe and native WebView. */
+export function buildYouTubeEmbedHtml(videoId: string, startAt = 0): string {
+  const q = new URLSearchParams({
+    autoplay: "1",
+    mute: "1",
+    playsinline: "1",
+    rel: "0",
+    modestbranding: "1",
+    showinfo: "0",
+    iv_load_policy: "3",
+    cc_load_policy: "0",
+    disablekb: "0",
+    controls: "1",
+  });
+  if (startAt > 5) q.set("start", String(Math.max(0, Math.floor(startAt - 2))));
+  return buildYouTubePhoneWebSrcDoc({ videoId, embedQueryWithoutFs: q.toString() });
+}

@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { sendPushToUsers } from "./push-notifications";
+import { resolveNotificationImageUrl } from "../shared/notificationImageUrl";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[]; rowCount?: number }>;
@@ -11,6 +12,18 @@ type RegisterAdminNotificationRoutesDeps = {
   requireAdmin: (req: Request, res: Response, next: () => void) => any;
 };
 
+function parseNotificationContent(body: Record<string, unknown>) {
+  const title = String(body.title ?? "").trim();
+  const message = String(body.message ?? "").trim();
+  const rawImage = String(body.imageUrl ?? "").trim();
+  const imageUrl = rawImage ? resolveNotificationImageUrl(rawImage) : "";
+  return { title, message, imageUrl };
+}
+
+function hasNotificationContent({ title, message, imageUrl }: { title: string; message: string; imageUrl: string }) {
+  return !!(title || message || imageUrl);
+}
+
 export function registerAdminNotificationRoutes({
   app,
   db,
@@ -18,7 +31,12 @@ export function registerAdminNotificationRoutes({
 }: RegisterAdminNotificationRoutesDeps): void {
   app.post("/api/admin/notifications/send", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { userId, title, message, type, target, courseId, imageUrl } = req.body;
+      const { userId, type, target, courseId } = req.body;
+      const { title, message, imageUrl } = parseNotificationContent(req.body);
+      if (!hasNotificationContent({ title, message, imageUrl })) {
+        return res.status(400).json({ message: "Provide at least a title, message, or image" });
+      }
+
       let userIds: number[] = [];
 
       if (userId) {
@@ -40,7 +58,7 @@ export function registerAdminNotificationRoutes({
 
       const insertResult = await db.query(
         "INSERT INTO admin_notifications (title, message, target, course_id, sent_count, image_url, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
-        [title, message, target || "all", courseId || null, userIds.length, imageUrl || null, now]
+        [title || null, message || null, target || "all", courseId || null, userIds.length, imageUrl || null, now]
       );
       const adminNotifId = insertResult.rows[0]?.id || null;
 
@@ -49,12 +67,12 @@ export function registerAdminNotificationRoutes({
           `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at, admin_notif_id, image_url)
            SELECT u, $2::text, $3::text, $4::text, $5::bigint, $6::bigint, $7, $8::text
            FROM unnest($1::int[]) AS u`,
-          [userIds, title, message, type || "info", now, expiresAt, adminNotifId, imageUrl || null]
+          [userIds, title || null, message || null, type || "info", now, expiresAt, adminNotifId, imageUrl || null]
         );
       }
       await sendPushToUsers(db, userIds.map((id) => Number(id)), {
-        title: String(title || "Notification"),
-        body: String(message || ""),
+        title: title || "Notification",
+        body: message || "",
         data: { type: "admin_notification", adminNotifId, courseId: courseId || null },
       });
 
@@ -80,10 +98,19 @@ export function registerAdminNotificationRoutes({
 
   app.put("/api/admin/notifications/:id", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const { title, message } = req.body;
+      const { title, message, imageUrl } = parseNotificationContent(req.body);
+      if (!hasNotificationContent({ title, message, imageUrl })) {
+        return res.status(400).json({ message: "Provide at least a title, message, or image" });
+      }
       const anId = parseInt(String(req.params.id));
-      await db.query("UPDATE admin_notifications SET title = $1, message = $2 WHERE id = $3", [title, message, anId]);
-      await db.query("UPDATE notifications SET title = $1, message = $2 WHERE admin_notif_id = $3", [title, message, anId]);
+      await db.query(
+        "UPDATE admin_notifications SET title = $1, message = $2, image_url = $3 WHERE id = $4",
+        [title || null, message || null, imageUrl || null, anId]
+      );
+      await db.query(
+        "UPDATE notifications SET title = $1, message = $2, image_url = $3 WHERE admin_notif_id = $4",
+        [title || null, message || null, imageUrl || null, anId]
+      );
       res.json({ success: true });
     } catch {
       res.status(500).json({ message: "Failed to update notification" });

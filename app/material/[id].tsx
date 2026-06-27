@@ -20,8 +20,8 @@ import { isAndroidWeb } from "@/lib/useAndroidWebGate";
 import AndroidWebGate from "@/components/AndroidWebGate";
 import { DownloadButton } from "@/components/DownloadButton";
 import { extractMediaFileKey } from "@/lib/media-key";
-import { buildYouTubePhoneWebSrcDoc } from "@/lib/buildYouTubePhoneWebSrcDoc";
-import { fullscreenLandscapeScript } from "@/lib/fullscreen-landscape-html";
+import { YouTubePhoneWebPlayer } from "@/components/YouTubePhoneWebPlayer";
+import { buildYouTubeEmbedHtml } from "@/lib/buildYouTubePhoneWebSrcDoc";
 import {
   handlePlaybackFullscreenMessage,
   useVideoPlaybackOrientation,
@@ -66,87 +66,6 @@ function getYouTubeVideoId(url: string): string | null {
   return m?.[1] || null;
 }
 
-function buildYouTubeHtml(videoId: string): string {
-  const q = new URLSearchParams({
-    autoplay: "1",
-    mute: "1",
-    playsinline: "1",
-    rel: "0",
-    modestbranding: "1",
-    showinfo: "0",
-    iv_load_policy: "3",
-    cc_load_policy: "0",
-    disablekb: "0",
-    controls: "1",
-  });
-  return buildYouTubePhoneWebSrcDoc({ videoId, embedQueryWithoutFs: q.toString() });
-}
-
-// Native-only: YouTube IFrame API with custom controls
-function buildNativeYouTubeHtml(videoId: string): string {
-  return `<!DOCTYPE html>
-<html><head>
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-html,body{width:100%;height:100%;background:#000;overflow:hidden;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
-#pw{position:relative;width:100%;height:100%}
-#player{position:absolute;top:0;left:0;width:100%;height:100%}
-.ctl{position:absolute;bottom:0;left:0;right:0;background:linear-gradient(transparent,rgba(0,0,0,0.9));padding:10px 14px 14px;z-index:100;display:flex;flex-direction:column;gap:8px;transition:opacity 0.3s}
-.ctl.h{opacity:0;pointer-events:none}
-.pr{display:flex;align-items:center;gap:10px}
-.pb{flex:1;height:5px;background:rgba(255,255,255,0.25);border-radius:3px;position:relative}
-.pf{height:100%;background:#EF4444;border-radius:3px;position:relative}.pf::after{content:'';position:absolute;right:-6px;top:-4px;width:13px;height:13px;background:#EF4444;border-radius:50%}
-.bf{position:absolute;top:0;left:0;height:100%;background:rgba(255,255,255,0.15);border-radius:3px}
-.tt{font-size:12px;color:rgba(255,255,255,0.85);font-family:-apple-system,sans-serif;min-width:80px;text-align:center}
-.br{display:flex;align-items:center;gap:6px}
-.cb{background:none;border:none;color:#fff;padding:8px;display:flex;align-items:center;justify-content:center;-webkit-tap-highlight-color:transparent}
-.cb svg{width:26px;height:26px;fill:#fff}.cb.sm svg{width:22px;height:22px}
-.sp{flex:1}
-.bp{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:70px;height:70px;background:rgba(0,0,0,0.5);border-radius:50%;display:flex;align-items:center;justify-content:center;z-index:50;transition:opacity 0.2s;-webkit-tap-highlight-color:transparent}
-.bp.h{opacity:0;pointer-events:none}.bp svg{width:36px;height:36px;fill:#fff;margin-left:4px}
-.ld{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:44px;height:44px;border:3px solid rgba(255,255,255,0.2);border-top:3px solid #fff;border-radius:50%;animation:sp 0.8s linear infinite;z-index:50;display:none}
-@keyframes sp{to{transform:translate(-50%,-50%) rotate(360deg)}}
-</style></head><body>
-<div id="pw" ontouchstart="sc()">
-<div id="player"></div><div class="ld" id="ld"></div>
-<div class="bp" id="bp" ontouchend="tp()"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
-<div class="ctl" id="ctl">
-<div class="pr"><div class="pb" id="pb" ontouchend="skT(event)"><div class="bf" id="bf"></div><div class="pf" id="pf"></div></div><span class="tt" id="tt">0:00 / 0:00</span></div>
-<div class="br">
-<button class="cb" ontouchend="tp()"><svg viewBox="0 0 24 24" id="pli"><path d="M8 5v14l11-7z"/></svg></button>
-<button class="cb sm" ontouchend="fwd(-10)"><svg viewBox="0 0 24 24"><path d="M12.5 5V1l-5 5 5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6h-2c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/></svg></button>
-<button class="cb sm" ontouchend="fwd(10)"><svg viewBox="0 0 24 24"><path d="M18 13c0 3.31-2.69 6-6 6s-6-2.69-6-6h-2c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8V1l-5 5 5 5V7c3.31 0 6 2.69 6 6z"/></svg></button>
-<button class="cb sm" ontouchend="tm()"><svg viewBox="0 0 24 24" id="vi"><path d="M16.5 12A4.5 4.5 0 0014 8v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51A8.8 8.8 0 0021 12c0-4.28-3-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06a8.99 8.99 0 003.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></svg></button>
-<div class="sp"></div>
-<button class="cb sm" ontouchend="tfs()"><svg viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg></button>
-<button class="cb sm" ontouchend="tsp()"><svg viewBox="0 0 24 24"><text x="12" y="17" font-size="12" fill="#fff" text-anchor="middle" font-weight="bold" font-family="sans-serif" id="spt">1x</text></svg></button>
-</div></div></div>
-<script>
-var tag=document.createElement('script');tag.src='https://www.youtube.com/iframe_api';document.head.appendChild(tag);
-var p,rdy=0,ht,spds=[0.5,0.75,1,1.25,1.5,2],si=2,isMuted=1;
-function onYouTubeIframeAPIReady(){p=new YT.Player('player',{videoId:'${videoId}',playerVars:{autoplay:1,mute:1,controls:0,modestbranding:1,rel:0,showinfo:0,iv_load_policy:3,cc_load_policy:0,playsinline:1,disablekb:1,fs:0},events:{onReady:function(e){rdy=1;e.target.playVideo();up();sc();},onStateChange:function(e){var s=e.data;document.getElementById('ld').style.display=s===3?'block':'none';document.getElementById('bp').className=(s===1||s===3)?'bp h':'bp';upi();}}});}
-function tp(){if(!rdy)return;p.getPlayerState()===1?p.pauseVideo():p.playVideo();}
-function upi(){var pl=p&&p.getPlayerState()===1;document.getElementById('pli').innerHTML=pl?'<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>':'<path d="M8 5v14l11-7z"/>';}
-function fwd(s){if(!rdy)return;p.seekTo(Math.max(0,p.getCurrentTime()+s),true);}
-function tm(){if(!rdy)return;if(isMuted){p.unMute();p.setVolume(100);isMuted=0;}else{p.mute();isMuted=1;}uvi();}
-function uvi(){document.getElementById('vi').innerHTML=isMuted?'<path d="M16.5 12A4.5 4.5 0 0014 8v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51A8.8 8.8 0 0021 12c0-4.28-3-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06a8.99 8.99 0 003.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/>':'<path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0014 8v8.05A4.49 4.49 0 0016.5 12zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>';}
-function tsp(){si=(si+1)%spds.length;p.setPlaybackRate(spds[si]);document.getElementById('spt').textContent=spds[si]+'x';}
-function skT(e){if(!rdy)return;e.preventDefault();var b=document.getElementById('pb'),r=b.getBoundingClientRect();var t=e.changedTouches?e.changedTouches[0]:e;var pc=Math.max(0,Math.min(1,(t.clientX-r.left)/r.width));p.seekTo(pc*p.getDuration(),true);}
-function fm(s){s=Math.floor(s);var h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sc=s%60;return h>0?h+':'+(m<10?'0':'')+m+':'+(sc<10?'0':'')+sc:m+':'+(sc<10?'0':'')+sc;}
-function up(){if(rdy&&p.getDuration){var c=p.getCurrentTime()||0,d=p.getDuration()||1;document.getElementById('pf').style.width=(c/d*100)+'%';document.getElementById('tt').textContent=fm(c)+' / '+fm(d);var l=p.getVideoLoadedFraction?p.getVideoLoadedFraction():0;document.getElementById('bf').style.width=(l*100)+'%';}requestAnimationFrame(up);}
-function sc(){document.getElementById('ctl').className='ctl';clearTimeout(ht);ht=setTimeout(function(){if(p&&p.getPlayerState()===1)document.getElementById('ctl').className='ctl h';},4000);}
-function tfs(){
-  var pw=document.getElementById('pw');
-  if(!pw)return;
-  var fn=pw.requestFullscreen||pw.webkitRequestFullscreen||pw.webkitRequestFullScreen;
-  if(fn){var pr=fn.call(pw);if(pr&&pr.then)pr.then(function(){try{if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify({event:'fullscreen',active:true}));}catch(_){}}).catch(function(){try{if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify({event:'fullscreen',active:true}));}catch(_){}});}
-  else{try{if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify({event:'fullscreen',active:true}));}catch(_){}}
-}
-document.addEventListener('contextmenu',function(e){e.preventDefault();});
-${fullscreenLandscapeScript()}
-</script></body></html>`;
-}
 
 function buildGoogleDriveViewerHtml(fileId: string): string {
   const previewUrl = `https://drive.google.com/file/d/${fileId}/preview`;
@@ -326,6 +245,8 @@ export default function MaterialViewerScreen() {
   const [mediaReadUrl, setMediaReadUrl] = useState<string | null>(null);
   const [mediaTokenError, setMediaTokenError] = useState<string | null>(null);
   const [mediaTokenRetryTick, setMediaTokenRetryTick] = useState(0);
+  const [youtubePlayerError, setYoutubePlayerError] = useState(false);
+  const [youtubePlayerRetryTick, setYoutubePlayerRetryTick] = useState(0);
   const qc = useQueryClient();
   const topPadding = Platform.OS === "web" ? 16 : insets.top;
   const { isAdmin, user } = useAuth();
@@ -372,7 +293,7 @@ export default function MaterialViewerScreen() {
     if (!raw) return "";
     if (raw.startsWith('file://')) return raw;
 
-    // Already a full R2/CDN URL — serve directly
+    // Already a full R2/CDN URL â€” serve directly
     if (raw.startsWith("https://cdn.3ilearning.in/")) return raw;
     if (raw.includes("r2.cloudflarestorage.com")) return raw;
     if (raw.includes("pub-") && raw.includes(".r2.dev")) return raw;
@@ -384,13 +305,13 @@ export default function MaterialViewerScreen() {
       return toHttpsMediaUrl(`${getBaseUrl()}${normalized}`);
     }
 
-    // Google Drive / Docs — use as-is
+    // Google Drive / Docs â€” use as-is
     if (raw.includes("drive.google.com") || raw.includes("docs.google.com")) return raw;
 
-    // Relative path — prepend base
+    // Relative path â€” prepend base
     if (raw.startsWith("/")) return toHttpsMediaUrl(`${getBaseUrl()}${raw}`);
 
-    // Anything else (YouTube, external URLs) — use as-is
+    // Anything else (YouTube, external URLs) â€” use as-is
     return raw;
   })();
 
@@ -485,17 +406,17 @@ export default function MaterialViewerScreen() {
     };
   }, [fileKey, material?.id, isGDrive, isYouTube, mediaTokenRetryTick, userScopedFileKey]);
 
-  // Authenticated URL with token (always use API base — never the Vercel preview origin on web)
+  // Authenticated URL with token (always use API base â€” never the Vercel preview origin on web)
   const tokenizedUrl = toHttpsMediaUrl(
     mediaToken && fileKey
       ? mediaReadUrl || `${apiBaseUrl}/api/media/${fileKey}?token=${mediaToken}`
       : (fileUrl || "")
   ) || fileUrl;
 
-  // PDF viewer URL — server-rendered page with pdf.js (no browser PDF controls).
+  // PDF viewer URL â€” server-rendered page with pdf.js (no browser PDF controls).
   // For paid materials we include the short-lived media token.
   // For free materials the backend now accepts the request without a token, so
-  // we omit it — this prevents 401s when the session has expired.
+  // we omit it â€” this prevents 401s when the session has expired.
   const pdfViewerUrl = fileKey
     ? (mediaToken
         ? `${apiBaseUrl}/api/pdf-viewer?key=${encodeURIComponent(fileKey)}&token=${mediaToken}`
@@ -509,7 +430,7 @@ export default function MaterialViewerScreen() {
       {/* For YouTube: fullscreen with floating back button only */}
       {isYouTube ? (
         <View style={{ flex: 1, backgroundColor: "#000", overflow: "hidden" as const, justifyContent: "center" }}>
-          {/* Back button — top-left of screen, above video */}
+          {/* Back button â€” top-left of screen, above video */}
           <Pressable
             style={[styles.backBtn, {
               position: "absolute",
@@ -533,30 +454,40 @@ export default function MaterialViewerScreen() {
           <View style={styles.playerContainer}>
             {Platform.OS === "web" ? (
               <iframe
-                srcDoc={buildYouTubeHtml(youtubeVideoId!)}
+                srcDoc={buildYouTubeEmbedHtml(youtubeVideoId!)}
                 style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" } as any}
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
                 title={material?.title || "Video"}
                 onLoad={() => setLoading(false)}
               />
-            ) : (
-              <WebView
-                source={{ html: buildNativeYouTubeHtml(youtubeVideoId!), baseUrl: "https://www.youtube.com" }}
+            ) : !youtubePlayerError ? (
+              <YouTubePhoneWebPlayer
+                key={`yt-material-${youtubePlayerRetryTick}-${youtubeVideoId}`}
+                videoId={youtubeVideoId!}
                 style={{ flex: 1, backgroundColor: "#000" }}
-                onLoad={() => setLoading(false)}
+                onLoad={() => { setLoading(false); setYoutubePlayerError(false); }}
+                onError={() => { setLoading(false); setYoutubePlayerError(true); }}
                 onMessage={(event) => handlePlaybackFullscreenMessage(event.nativeEvent.data)}
-                allowsFullscreenVideo
-                mediaPlaybackRequiresUserAction={false}
-                allowsInlineMediaPlayback
-                scrollEnabled={false}
-                javaScriptEnabled
-                domStorageEnabled
-                mixedContentMode="compatibility"
-                setSupportMultipleWindows={false}
-                originWhitelist={["*"]}
               />
+            ) : (
+              <View style={[styles.loadingOverlay, { backgroundColor: "rgba(0,0,0,0.92)" }]}>
+                <Ionicons name="alert-circle-outline" size={40} color="#EF4444" />
+                <Text style={{ color: "#fff", marginTop: 12, fontFamily: "Inter_500Medium", textAlign: "center", paddingHorizontal: 24 }}>
+                  Video unavailable. Check your connection and try again.
+                </Text>
+                <Pressable
+                  style={{ marginTop: 16, backgroundColor: Colors.light.primary, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 10 }}
+                  onPress={() => {
+                    setYoutubePlayerError(false);
+                    setLoading(true);
+                    setYoutubePlayerRetryTick((t) => t + 1);
+                  }}
+                >
+                  <Text style={{ color: "#fff", fontFamily: "Inter_600SemiBold" }}>Retry</Text>
+                </Pressable>
+              </View>
             )}
-            {loading && (
+            {loading && !youtubePlayerError && (
               <View style={styles.loadingOverlay}>
                 <ActivityIndicator size="large" color="#fff" />
               </View>

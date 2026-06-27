@@ -1393,6 +1393,41 @@ var init_require_admin = __esm({
   }
 });
 
+// backend/auth-failure-utils.ts
+function setAuthFailure(req, failure) {
+  const r = req;
+  if (failure) {
+    r[AUTH_FAILURE_KEY] = failure;
+  } else {
+    delete r[AUTH_FAILURE_KEY];
+  }
+}
+function getAuthFailure(req) {
+  const f = req[AUTH_FAILURE_KEY];
+  if (!f || typeof f !== "object") return null;
+  const row = f;
+  return row.code ? row : null;
+}
+function respondAuthFailureIfAny(req, res) {
+  const f = getAuthFailure(req);
+  if (f?.code === "SESSION_PLATFORM_MISMATCH") {
+    res.status(403).json({
+      message: "Please log in again on this browser or app.",
+      code: f.code,
+      activePlatform: f.activePlatform
+    });
+    return true;
+  }
+  return false;
+}
+var AUTH_FAILURE_KEY;
+var init_auth_failure_utils = __esm({
+  "backend/auth-failure-utils.ts"() {
+    "use strict";
+    AUTH_FAILURE_KEY = "__auth_failure";
+  }
+});
+
 // backend/auto-notification-expiry.ts
 function autoNotificationExpiresAt(now = Date.now()) {
   return now + AUTO_NOTIFICATION_TTL_MS;
@@ -1668,6 +1703,9 @@ async function notifyAdminsInAppAndPush(db2, opts) {
   console.log(
     `[AdminNotify] "${opts.title}" \u2014 admins=${adminIds.length} expoSent=${pushResult.sent}/${pushResult.tokens} webSent=${pushResult.webSent}/${pushResult.webSubscriptions}`
   );
+  if ((pushResult.webSubscriptions ?? 0) === 0) {
+    console.warn("[AdminNotify] hint: no active web_push_subscriptions for admin(s); browser push skipped (in-app still delivered)");
+  }
 }
 async function dedupAdminEvent(db2, dedupKey2, actorUserId) {
   const inserted = await db2.query(
@@ -3377,6 +3415,55 @@ function isEnrollmentExpired(row) {
   if (vu == null) return false;
   return Number(vu) < Date.now();
 }
+function enrollmentAccessState(row) {
+  if (!row) return "inactive";
+  const status = String(row.status ?? "active").trim().toLowerCase();
+  if (status === "inactive") return "inactive";
+  if (isEnrollmentExpired(row)) return "expired";
+  return "active";
+}
+async function repairCourseEnrollmentAccess(db2, userId, courseId) {
+  const courseResult = await db2.query("SELECT * FROM courses WHERE id = $1", [courseId]);
+  if (courseResult.rows.length === 0) return { fixed: false, reason: "course_not_found" };
+  const courseRow = courseResult.rows[0];
+  const existing = await db2.query(
+    "SELECT id, valid_until, status FROM enrollments WHERE user_id = $1 AND course_id = $2",
+    [userId, courseId]
+  );
+  if (existing.rows.length > 0) {
+    const row = existing.rows[0];
+    if (enrollmentAccessState(row) === "active") {
+      return { fixed: false, reason: "already_active" };
+    }
+    const at2 = Date.now();
+    const vu2 = computeEnrollmentValidUntil(courseRow, at2);
+    await db2.query(
+      `UPDATE enrollments SET status = 'active', enrolled_at = $1, valid_until = $2 WHERE id = $3`,
+      [at2, vu2, row.id]
+    );
+    return { fixed: true, reason: row.status === "inactive" ? "reactivated" : "renewed" };
+  }
+  const pay = await db2.query(
+    "SELECT id FROM payments WHERE user_id = $1 AND course_id = $2 AND status = 'paid' ORDER BY created_at DESC LIMIT 1",
+    [userId, courseId]
+  );
+  if (pay.rows.length === 0) {
+    return { fixed: false, reason: "no_enrollment_or_payment" };
+  }
+  const at = Date.now();
+  const vu = computeEnrollmentValidUntil(courseRow, at);
+  const ins = await db2.query(
+    `INSERT INTO enrollments (user_id, course_id, enrolled_at, valid_until, status)
+     VALUES ($1, $2, $3, $4, 'active')
+     ON CONFLICT (user_id, course_id) DO NOTHING
+     RETURNING id`,
+    [userId, courseId, at, vu]
+  );
+  if (ins.rows.length > 0) {
+    await db2.query("UPDATE courses SET total_students = COALESCE(total_students, 0) + 1 WHERE id = $1", [courseId]);
+  }
+  return { fixed: true, reason: "paid_sync" };
+}
 var init_course_access_utils = __esm({
   "backend/course-access-utils.ts"() {
     "use strict";
@@ -3832,21 +3919,17 @@ function registerPaymentRoutes({
     try {
       const user = await getAuthUser2(req);
       if (!user) return res.status(401).json({ message: "Not authenticated" });
+      if (respondAuthFailureIfAny(req, res)) return;
       const courseId = Number(req.body?.courseId);
       if (!Number.isFinite(courseId)) {
         return res.status(400).json({ message: "courseId is required" });
       }
-      const pay = await db2.query(
-        "SELECT * FROM payments WHERE user_id = $1 AND course_id = $2 AND status = 'paid' ORDER BY created_at DESC LIMIT 1",
-        [user.id, courseId]
-      );
-      if (pay.rows.length === 0) {
-        return res.json({ ok: true, fixed: false, message: "No paid order for this course" });
-      }
-      await runInTransaction2(async (tx) => {
-        await ensureCourseEnrollment(tx, pay.rows[0]);
+      const result = await repairCourseEnrollmentAccess(db2, user.id, courseId);
+      return res.json({
+        ok: true,
+        fixed: result.fixed,
+        message: result.fixed ? "Enrollment synced" : result.reason
       });
-      return res.json({ ok: true, fixed: true, message: "Enrollment synced" });
     } catch (err) {
       console.error("sync-enrollment error:", err);
       res.status(500).json({ message: "Failed to sync enrollment" });
@@ -4100,6 +4183,7 @@ var init_payment_routes = __esm({
   "backend/payment-routes.ts"() {
     "use strict";
     init_course_access_utils();
+    init_auth_failure_utils();
     init_notification_utils();
     init_native_device_binding();
     init_idempotency();
@@ -6328,6 +6412,221 @@ var init_admin_course_import_routes = __esm({
   }
 });
 
+// backend/progress-utils.ts
+function progressTestWhere(courseType, alias = "") {
+  const p = alias ? `${alias}.` : "";
+  const pub = `${p}is_published = TRUE`;
+  const real = alias ? REAL_TEST_T : REAL_TEST;
+  if (String(courseType).toLowerCase() === "multi_subject") {
+    return `${pub} AND ${real}`;
+  }
+  return `${pub} AND ${real} AND COALESCE(LOWER(${p}test_type), 'practice') <> 'pyq'`;
+}
+async function getCourseType(db2, courseId) {
+  const r = await db2.query(
+    `SELECT COALESCE(course_type, 'live') AS course_type FROM courses WHERE id = $1::int LIMIT 1`,
+    [courseId]
+  );
+  return String(r.rows[0]?.course_type || "live").toLowerCase();
+}
+async function getCourseProgressBreakdown(db2, courseId) {
+  const cid = Number(courseId);
+  if (!Number.isFinite(cid) || cid <= 0) return null;
+  const courseType = await getCourseType(db2, cid);
+  const testWhere = progressTestWhere(courseType);
+  const result = await db2.query(
+    `SELECT
+       (SELECT COUNT(*)::int FROM lectures WHERE course_id = $1::int AND ${VISIBLE_LECTURE}) AS lec,
+       (SELECT COUNT(*)::int FROM tests WHERE course_id = $1::int AND ${testWhere}) AS tests_total,
+       (SELECT COUNT(*)::int FROM tests WHERE course_id = $1::int AND is_published = TRUE AND COALESCE(LOWER(test_type), 'practice') = 'practice') AS tests_practice,
+       (SELECT COUNT(*)::int FROM tests WHERE course_id = $1::int AND is_published = TRUE AND LOWER(test_type) = 'pyq') AS tests_pyq,
+       (SELECT COUNT(*)::int FROM tests WHERE course_id = $1::int AND is_published = TRUE AND LOWER(test_type) = 'mock') AS tests_mock,
+       (SELECT COUNT(*)::int FROM daily_missions WHERE course_id = $1::int AND ${REAL_MISSION}) AS missions,
+       (SELECT COUNT(*)::int FROM daily_missions WHERE course_id = $1::int AND NOT (${REAL_MISSION})) AS mission_shells`,
+    [cid]
+  );
+  const row = result.rows[0] || {};
+  const lec = Number(row.lec || 0);
+  const testsTotal = Number(row.tests_total || 0);
+  const missions = Number(row.missions || 0);
+  return {
+    courseId: cid,
+    courseType,
+    lectures: { total: lec },
+    tests: {
+      total: testsTotal,
+      practice: Number(row.tests_practice || 0),
+      pyq: Number(row.tests_pyq || 0),
+      mock: Number(row.tests_mock || 0)
+    },
+    missions: { total: missions, emptyShells: Number(row.mission_shells || 0) },
+    totals: { items: lec + testsTotal + missions }
+  };
+}
+async function updateCourseTestCounts(db2, courseId) {
+  const id = Number(courseId);
+  if (!Number.isFinite(id)) {
+    console.warn("[Progress] updateCourseTestCounts skipped invalid courseId:", courseId);
+    return;
+  }
+  await db2.query(
+    `UPDATE courses SET
+      total_tests    = (SELECT COUNT(*) FROM tests WHERE course_id = $1::int AND is_published = TRUE),
+      pyq_count      = (SELECT COUNT(*) FROM tests WHERE course_id = $1::int AND test_type = 'pyq' AND is_published = TRUE),
+      mock_count     = (SELECT COUNT(*) FROM tests WHERE course_id = $1::int AND test_type = 'mock' AND is_published = TRUE),
+      practice_count = (SELECT COUNT(*) FROM tests WHERE course_id = $1::int AND test_type = 'practice' AND is_published = TRUE)
+    WHERE id = $1::int`,
+    [id]
+  );
+  await recomputeAllEnrollmentsProgressForCourse(db2, id);
+}
+async function updateCourseProgress(db2, userId, courseId, runTx) {
+  const cid = Number(courseId);
+  if (!Number.isFinite(cid)) {
+    console.warn("[Progress] updateCourseProgress skipped invalid courseId:", courseId);
+    return;
+  }
+  const doUpdate = async (client2) => {
+    if (runTx) {
+      await client2.query(
+        "SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2::int FOR UPDATE",
+        [userId, cid]
+      );
+    }
+    const courseType = await getCourseType(client2, cid);
+    const testWhere = progressTestWhere(courseType);
+    const testWhereT = progressTestWhere(courseType, "t");
+    const totals = await client2.query(
+      `SELECT
+         (SELECT COUNT(*)::int FROM lectures WHERE course_id = $1::int AND ${VISIBLE_LECTURE}) AS lec,
+         (SELECT COUNT(*)::int FROM tests WHERE course_id = $1::int AND ${testWhere}) AS tests,
+         (SELECT COUNT(*)::int FROM daily_missions WHERE course_id = $1::int AND ${REAL_MISSION}) AS missions`,
+      [cid]
+    );
+    const done = await client2.query(
+      `SELECT
+         (SELECT COUNT(*)::int FROM lecture_progress lp
+          JOIN lectures l ON lp.lecture_id = l.id
+          WHERE lp.user_id = $2 AND l.course_id = $1::int AND lp.is_completed = TRUE AND ${VISIBLE_LECTURE_L}) AS lec,
+         (SELECT COUNT(DISTINCT ta.test_id)::int FROM test_attempts ta
+          JOIN tests t ON ta.test_id = t.id AND t.course_id = $1::int AND ${testWhereT}
+          WHERE ta.user_id = $2 AND ta.status = 'completed') AS tests,
+         (SELECT COUNT(*)::int FROM user_missions um
+          JOIN daily_missions dm ON dm.id = um.mission_id AND dm.course_id = $1::int AND ${REAL_MISSION_DM}
+          WHERE um.user_id = $2 AND um.is_completed = TRUE) AS missions`,
+      [cid, userId]
+    );
+    const total = Number(totals.rows[0]?.lec || 0) + Number(totals.rows[0]?.tests || 0) + Number(totals.rows[0]?.missions || 0);
+    const completed = Number(done.rows[0]?.lec || 0) + Number(done.rows[0]?.tests || 0) + Number(done.rows[0]?.missions || 0);
+    const progress = total > 0 ? Math.min(100, Math.round(completed / total * 100)) : 0;
+    await client2.query(
+      "UPDATE enrollments SET progress_percent = $1 WHERE user_id = $2 AND course_id = $3::int",
+      [progress, userId, cid]
+    );
+  };
+  try {
+    if (runTx) {
+      await runTx((tx) => doUpdate(tx));
+    } else {
+      await doUpdate(db2);
+    }
+  } catch (err) {
+    console.error("[Progress] Failed to update:", err);
+  }
+}
+async function recomputeAllEnrollmentsProgressForCourse(db2, courseId) {
+  const cid = Number(courseId);
+  if (!Number.isFinite(cid)) {
+    console.warn("[Progress] recomputeAllEnrollmentsProgressForCourse skipped invalid courseId:", courseId);
+    return;
+  }
+  try {
+    const courseType = await getCourseType(db2, cid);
+    const testWhere = progressTestWhere(courseType);
+    const testWhereT = progressTestWhere(courseType, "t");
+    await db2.query(
+      `WITH
+         total_lec AS (
+           SELECT COUNT(*)::bigint AS n FROM lectures
+           WHERE course_id = $1::int AND ${VISIBLE_LECTURE}
+         ),
+         total_tests AS (
+           SELECT COUNT(*)::bigint AS n FROM tests
+           WHERE course_id = $1::int AND ${testWhere}
+         ),
+         total_missions AS (
+           SELECT COUNT(*)::bigint AS n FROM daily_missions WHERE course_id = $1::int AND ${REAL_MISSION}
+         ),
+         lec_done AS (
+           SELECT lp.user_id, COUNT(*)::bigint AS n
+           FROM lecture_progress lp
+           JOIN lectures l ON lp.lecture_id = l.id AND l.course_id = $1::int
+           WHERE lp.is_completed = TRUE AND ${VISIBLE_LECTURE_L}
+           GROUP BY lp.user_id
+         ),
+         tests_done AS (
+           SELECT ta.user_id, COUNT(DISTINCT ta.test_id)::bigint AS n
+           FROM test_attempts ta
+           JOIN tests t ON ta.test_id = t.id AND t.course_id = $1::int AND ${testWhereT}
+           WHERE ta.status = 'completed'
+           GROUP BY ta.user_id
+         ),
+         missions_done AS (
+           SELECT um.user_id, COUNT(*)::bigint AS n
+           FROM user_missions um
+           JOIN daily_missions dm ON dm.id = um.mission_id AND dm.course_id = $1::int AND ${REAL_MISSION_DM}
+           WHERE um.is_completed = TRUE
+           GROUP BY um.user_id
+         )
+       UPDATE enrollments AS e
+       SET progress_percent = calc.pct
+       FROM (
+         SELECT
+           en.user_id,
+           en.course_id,
+           CASE
+             WHEN (tl.n + tt.n + tm.n) <= 0 THEN 0
+             ELSE LEAST(100, GREATEST(0, ROUND(
+               100.0 * (COALESCE(ld.n, 0) + COALESCE(td.n, 0) + COALESCE(md.n, 0))
+               / NULLIF(tl.n + tt.n + tm.n, 0)
+             )))
+           END::integer AS pct
+         FROM enrollments en
+         CROSS JOIN total_lec tl
+         CROSS JOIN total_tests tt
+         CROSS JOIN total_missions tm
+         LEFT JOIN lec_done ld ON ld.user_id = en.user_id
+         LEFT JOIN tests_done td ON td.user_id = en.user_id
+         LEFT JOIN missions_done md ON md.user_id = en.user_id
+         WHERE en.course_id = $1::int AND (en.status = 'active' OR en.status IS NULL)
+       ) AS calc
+       WHERE e.user_id = calc.user_id AND e.course_id = calc.course_id`,
+      [cid]
+    );
+  } catch (err) {
+    console.error("[Progress] recomputeAllEnrollmentsProgressForCourse failed:", err);
+  }
+}
+var VISIBLE_LECTURE, VISIBLE_LECTURE_L, REAL_MISSION_SQL, REAL_MISSION, REAL_MISSION_DM, REAL_TEST, REAL_TEST_T;
+var init_progress_utils = __esm({
+  "backend/progress-utils.ts"() {
+    "use strict";
+    VISIBLE_LECTURE = `(visible_after_at IS NULL OR visible_after_at <= EXTRACT(EPOCH FROM NOW()) * 1000)`;
+    VISIBLE_LECTURE_L = `(l.visible_after_at IS NULL OR l.visible_after_at <= EXTRACT(EPOCH FROM NOW()) * 1000)`;
+    REAL_MISSION_SQL = `EXISTS (
+  SELECT 1 FROM jsonb_array_elements(COALESCE(questions, '[]'::jsonb)) q
+  WHERE length(trim(COALESCE(q->>'question', ''))) > 0
+)`;
+    REAL_MISSION = REAL_MISSION_SQL;
+    REAL_MISSION_DM = `EXISTS (
+  SELECT 1 FROM jsonb_array_elements(COALESCE(dm.questions, '[]'::jsonb)) q
+  WHERE length(trim(COALESCE(q->>'question', ''))) > 0
+)`;
+    REAL_TEST = `COALESCE(total_questions, 0) > 0`;
+    REAL_TEST_T = `COALESCE(t.total_questions, 0) > 0`;
+  }
+});
+
 // backend/admin-course-management-routes.ts
 function normalizeFolderName(value) {
   if (typeof value !== "string") return "";
@@ -6427,6 +6726,22 @@ function registerAdminCourseManagementRoutes({
       res.json(result.rows);
     } catch {
       res.status(500).json({ message: "Failed to fetch tests" });
+    }
+  });
+  app2.get("/api/admin/courses/:id/progress-breakdown", requireAdmin2, async (req, res) => {
+    try {
+      const courseId = Number(req.params.id);
+      if (!Number.isFinite(courseId) || courseId <= 0) {
+        return res.status(400).json({ message: "Invalid course id" });
+      }
+      const courseCheck = await db2.query("SELECT id FROM courses WHERE id = $1 LIMIT 1", [courseId]);
+      if (courseCheck.rows.length === 0) return res.status(404).json({ message: "Course not found" });
+      const breakdown = await getCourseProgressBreakdown(db2, courseId);
+      if (!breakdown) return res.status(400).json({ message: "Invalid course id" });
+      res.json(breakdown);
+    } catch (err) {
+      console.error("[Progress] breakdown failed:", err);
+      res.status(500).json({ message: "Failed to fetch progress breakdown" });
     }
   });
   app2.get("/api/admin/courses/:id/folders", requireAdmin2, async (req, res) => {
@@ -6634,6 +6949,7 @@ var COURSE_FOLDER_TYPES, MAX_FOLDER_NAME_LENGTH, COURSE_FOLDER_SELECT;
 var init_admin_course_management_routes = __esm({
   "backend/admin-course-management-routes.ts"() {
     "use strict";
+    init_progress_utils();
     COURSE_FOLDER_TYPES = /* @__PURE__ */ new Set(["lecture", "material", "test"]);
     MAX_FOLDER_NAME_LENGTH = 120;
     COURSE_FOLDER_SELECT = `
@@ -6654,6 +6970,46 @@ var init_admin_course_management_routes = __esm({
     WHERE NOT child.id = ANY(folder_tree.path_ids)
   )
 `;
+  }
+});
+
+// backend/admin-analytics-range.ts
+function toSafeTs(value) {
+  const ts = new Date(String(value)).getTime();
+  return Number.isFinite(ts) ? ts : null;
+}
+function buildAnalyticsRange(input) {
+  const period = String(input.period || "").trim();
+  const now = input.now ?? Date.now();
+  if (period === "lifetime" || period === "all") return null;
+  if (period === "today") {
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    return { start: start.getTime(), endExclusive: start.getTime() + DAY_MS };
+  }
+  if (period === "yesterday") {
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    start.setDate(start.getDate() - 1);
+    const end = new Date(now);
+    end.setHours(0, 0, 0, 0);
+    return { start: start.getTime(), endExclusive: end.getTime() };
+  }
+  if (period === "7days") return { start: now - 7 * DAY_MS, endExclusive: now + DAY_MS };
+  if (period === "15days") return { start: now - 15 * DAY_MS, endExclusive: now + DAY_MS };
+  if (period === "30days") return { start: now - 30 * DAY_MS, endExclusive: now + DAY_MS };
+  if (period === "custom" && input.startDate && input.endDate) {
+    const s = toSafeTs(input.startDate);
+    const e = toSafeTs(input.endDate);
+    if (s !== null && e !== null) return { start: s, endExclusive: e + DAY_MS };
+  }
+  return null;
+}
+var DAY_MS;
+var init_admin_analytics_range = __esm({
+  "backend/admin-analytics-range.ts"() {
+    "use strict";
+    DAY_MS = 864e5;
   }
 });
 
@@ -6679,36 +7035,12 @@ function registerAdminAnalyticsRoutes({
       } catch {
       }
       const now = Date.now();
-      const day = 864e5;
-      const toSafeTs = (value) => {
-        const ts = new Date(String(value)).getTime();
-        return Number.isFinite(ts) ? ts : null;
-      };
-      const buildRange = () => {
-        if (period === "today") {
-          const start = /* @__PURE__ */ new Date();
-          start.setHours(0, 0, 0, 0);
-          return { start: start.getTime(), endExclusive: start.getTime() + day };
-        }
-        if (period === "yesterday") {
-          const start = /* @__PURE__ */ new Date();
-          start.setHours(0, 0, 0, 0);
-          start.setDate(start.getDate() - 1);
-          const end = /* @__PURE__ */ new Date();
-          end.setHours(0, 0, 0, 0);
-          return { start: start.getTime(), endExclusive: end.getTime() };
-        }
-        if (period === "7days") return { start: now - 7 * day, endExclusive: now + day };
-        if (period === "15days") return { start: now - 15 * day, endExclusive: now + day };
-        if (period === "30days") return { start: now - 30 * day, endExclusive: now + day };
-        if (period === "custom" && startDate && endDate) {
-          const s = toSafeTs(startDate);
-          const e = toSafeTs(endDate);
-          if (s !== null && e !== null) return { start: s, endExclusive: e + day };
-        }
-        return null;
-      };
-      const range = buildRange();
+      const range = buildAnalyticsRange({
+        period: String(period || ""),
+        startDate: startDate ? String(startDate) : null,
+        endDate: endDate ? String(endDate) : null,
+        now
+      });
       const rangeParams = range ? [range.start, range.endExclusive] : [];
       const paymentWhere = range ? " AND p.created_at >= $1 AND p.created_at < $2" : "";
       const failedWhere = range ? " WHERE pf.created_at >= $1 AND pf.created_at < $2" : "";
@@ -6927,6 +7259,7 @@ function registerAdminAnalyticsRoutes({
   });
   app2.get("/api/admin/courses/:id/enrollments", requireAdmin2, async (req, res) => {
     try {
+      const nowMs2 = Date.now();
       const result = await db2.query(
         `SELECT
            e.id,
@@ -6935,7 +7268,13 @@ function registerAdminAnalyticsRoutes({
            u.phone AS user_phone,
            u.email AS user_email,
            e.enrolled_at,
+           e.valid_until,
            COALESCE(e.status, 'active') AS status,
+           CASE
+             WHEN COALESCE(e.status, 'active') = 'inactive' THEN 'inactive'
+             WHEN e.valid_until IS NOT NULL AND e.valid_until < $2 THEN 'expired'
+             ELSE 'active'
+           END AS access_state,
            CASE
              WHEN (COALESCE(tl.total_lectures, 0) + COALESCE(tt.total_tests, 0)) <= 0 THEN 0
              ELSE LEAST(
@@ -6998,7 +7337,7 @@ function registerAdminAnalyticsRoutes({
          ) tp ON true
          WHERE e.course_id = $1
          ORDER BY e.enrolled_at DESC`,
-        [req.params.id]
+        [req.params.id, nowMs2]
       );
       res.json(result.rows);
     } catch {
@@ -7092,6 +7431,7 @@ var ANALYTICS_CACHE_TTL_SEC;
 var init_admin_analytics_routes = __esm({
   "backend/admin-analytics-routes.ts"() {
     "use strict";
+    init_admin_analytics_range();
     init_redis_client();
     ANALYTICS_CACHE_TTL_SEC = 60;
   }
@@ -7118,6 +7458,18 @@ var init_download_access_utils = __esm({
 });
 
 // backend/admin-enrollment-routes.ts
+async function txQueryOptional(tx, savepoint, sql, params) {
+  const sp = `sp_${savepoint}`;
+  await tx.query(`SAVEPOINT ${sp}`);
+  try {
+    await tx.query(sql, params);
+    await tx.query(`RELEASE SAVEPOINT ${sp}`);
+  } catch (err) {
+    await tx.query(`ROLLBACK TO SAVEPOINT ${sp}`);
+    await tx.query(`RELEASE SAVEPOINT ${sp}`);
+    console.warn(`[EnrollmentDelete] optional step skipped (${savepoint}):`, err);
+  }
+}
 async function writeEnrollmentAuditLog(db2, adminUserId, action, enrollmentId, meta) {
   try {
     await db2.query(
@@ -7127,6 +7479,78 @@ async function writeEnrollmentAuditLog(db2, adminUserId, action, enrollmentId, m
     );
   } catch {
   }
+}
+async function purgeEnrollmentRelatedRows(tx, userId, courseId, enrollmentId) {
+  await tx.query(
+    `DELETE FROM user_downloads
+     WHERE user_id = $1
+       AND (
+         (item_type = 'lecture' AND item_id IN (SELECT id FROM lectures WHERE course_id = $2))
+         OR (item_type = 'material' AND item_id IN (SELECT id FROM study_materials WHERE course_id = $2))
+       )`,
+    [userId, courseId]
+  );
+  await txQueryOptional(
+    tx,
+    "download_tokens",
+    `DELETE FROM download_tokens WHERE user_id = $1 AND course_id = $2`,
+    [userId, courseId]
+  );
+  await tx.query(
+    `DELETE FROM media_tokens
+     WHERE user_id = $1
+       AND file_key IN (
+         SELECT file_url FROM study_materials WHERE course_id = $2 AND file_url IS NOT NULL
+         UNION ALL
+         SELECT video_url FROM lectures WHERE course_id = $2 AND video_url IS NOT NULL
+         UNION ALL
+         SELECT pdf_url FROM lectures WHERE course_id = $2 AND pdf_url IS NOT NULL
+         UNION ALL
+         SELECT recording_url FROM live_classes WHERE course_id = $2 AND recording_url IS NOT NULL
+       )`,
+    [userId, courseId]
+  );
+  await tx.query(
+    `DELETE FROM lecture_progress
+     WHERE user_id = $1
+       AND lecture_id IN (SELECT id FROM lectures WHERE course_id = $2)`,
+    [userId, courseId]
+  );
+  await txQueryOptional(
+    tx,
+    "live_recording_progress",
+    `DELETE FROM live_class_recording_progress
+     WHERE user_id = $1
+       AND live_class_id IN (SELECT id FROM live_classes WHERE course_id = $2)`,
+    [userId, courseId]
+  );
+  await txQueryOptional(
+    tx,
+    "live_class_viewers",
+    `DELETE FROM live_class_viewers
+     WHERE user_id = $1
+       AND live_class_id IN (SELECT id FROM live_classes WHERE course_id = $2)`,
+    [userId, courseId]
+  );
+  await tx.query(
+    `DELETE FROM test_attempts
+     WHERE user_id = $1
+       AND test_id IN (SELECT id FROM tests WHERE course_id = $2)`,
+    [userId, courseId]
+  );
+  await txQueryOptional(
+    tx,
+    "user_missions",
+    `DELETE FROM user_missions
+     WHERE user_id = $1
+       AND mission_id IN (SELECT id FROM daily_missions WHERE course_id = $2)`,
+    [userId, courseId]
+  );
+  await tx.query(`DELETE FROM enrollments WHERE id = $1`, [enrollmentId]);
+  await tx.query(
+    `UPDATE courses SET total_students = GREATEST(0, COALESCE(total_students, 0) - 1) WHERE id = $1`,
+    [courseId]
+  );
 }
 function registerAdminEnrollmentRoutes({
   app: app2,
@@ -7211,50 +7635,16 @@ function registerAdminEnrollmentRoutes({
         return res.json({ success: true });
       }
       const { user_id, course_id } = enrollment.rows[0];
+      const enrollmentId = String(req.params.id);
       try {
         await deleteDownloadsForUser3(Number(user_id), Number(course_id));
       } catch (cleanupErr) {
         console.warn("[Cleanup] download cleanup failed:", cleanupErr);
       }
       await runInTransaction2(async (tx) => {
-        await tx.query(
-          `DELETE FROM media_tokens
-           WHERE user_id = $1
-             AND file_key IN (
-               SELECT file_url FROM study_materials WHERE course_id = $2 AND file_url IS NOT NULL
-               UNION ALL
-               SELECT video_url FROM lectures        WHERE course_id = $2 AND video_url IS NOT NULL
-               UNION ALL
-               SELECT pdf_url   FROM lectures        WHERE course_id = $2 AND pdf_url IS NOT NULL
-               UNION ALL
-               SELECT recording_url FROM live_classes WHERE course_id = $2 AND recording_url IS NOT NULL
-             )`,
-          [user_id, course_id]
-        );
-        await tx.query(`DELETE FROM download_tokens WHERE user_id = $1 AND course_id = $2`, [user_id, course_id]).catch(() => {
-        });
-        await tx.query(
-          `DELETE FROM lecture_progress
-           WHERE user_id = $1
-             AND lecture_id IN (SELECT id FROM lectures WHERE course_id = $2)`,
-          [user_id, course_id]
-        );
-        await tx.query(
-          `DELETE FROM test_attempts
-           WHERE user_id = $1
-             AND test_id IN (SELECT id FROM tests WHERE course_id = $2)`,
-          [user_id, course_id]
-        );
-        await tx.query(
-          `DELETE FROM user_missions
-             WHERE user_id = $1
-               AND mission_id IN (SELECT id FROM daily_missions WHERE course_id = $2)`,
-          [user_id, course_id]
-        ).catch(() => {
-        });
-        await tx.query(`DELETE FROM enrollments WHERE id = $1`, [req.params.id]);
+        await purgeEnrollmentRelatedRows(tx, Number(user_id), Number(course_id), enrollmentId);
       });
-      void writeEnrollmentAuditLog(db2, adminUserId, "deleted", String(req.params.id), {
+      void writeEnrollmentAuditLog(db2, adminUserId, "deleted", enrollmentId, {
         user_id,
         course_id,
         hard_delete: true,
@@ -8731,15 +9121,30 @@ function registerAdminDailyMissionRoutes({
 }) {
   app2.post("/api/admin/daily-missions", requireAdmin2, async (req, res) => {
     try {
-      const { title, description, questions, missionDate, xpReward, missionType, courseId, folderName } = req.body;
+      const { title, description, questions, missionDate, xpReward, missionType, courseId, folderName, subjectKey } = req.body;
       if (!title || !questions || !Array.isArray(questions) || questions.length === 0) {
         return res.status(400).json({ message: "Title and questions are required" });
       }
+      const parsedCourseId = courseId != null && courseId !== "" ? Number(courseId) : null;
+      let normalizedSubjectKey = null;
+      if (typeof subjectKey === "string" && subjectKey.trim()) {
+        normalizedSubjectKey = subjectKey.trim().toLowerCase();
+      }
+      if (parsedCourseId && Number.isFinite(parsedCourseId)) {
+        const courseRow = await db2.query(
+          `SELECT COALESCE(course_type, 'live') AS course_type FROM courses WHERE id = $1 LIMIT 1`,
+          [parsedCourseId]
+        );
+        const courseType = String(courseRow.rows[0]?.course_type || "").toLowerCase();
+        if (courseType === "multi_subject" && !normalizedSubjectKey) {
+          return res.status(400).json({ message: "Subject is required for multisubject course missions" });
+        }
+      }
       const folderNameNorm = typeof folderName === "string" && folderName.trim() ? folderName.trim() : null;
       const result = await db2.query(
-        `INSERT INTO daily_missions (title, description, questions, mission_date, xp_reward, mission_type, course_id, folder_name)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-        [title, description || "", JSON.stringify(questions), missionDate || (/* @__PURE__ */ new Date()).toISOString().split("T")[0], xpReward || 50, missionType || "daily_drill", courseId || null, folderNameNorm]
+        `INSERT INTO daily_missions (title, description, questions, mission_date, xp_reward, mission_type, course_id, folder_name, subject_key)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+        [title, description || "", JSON.stringify(questions), missionDate || (/* @__PURE__ */ new Date()).toISOString().split("T")[0], xpReward || 50, missionType || "daily_drill", parsedCourseId, folderNameNorm, normalizedSubjectKey]
       );
       const row = result.rows[0];
       const cid = courseId != null && courseId !== "" ? String(courseId) : "";
@@ -8785,11 +9190,26 @@ function registerAdminDailyMissionRoutes({
   });
   app2.put("/api/admin/daily-missions/:id", requireAdmin2, async (req, res) => {
     try {
-      const { title, description, questions, missionDate, xpReward, missionType, courseId, folderName } = req.body;
+      const { title, description, questions, missionDate, xpReward, missionType, courseId, folderName, subjectKey } = req.body;
       const folderNameNorm = typeof folderName === "string" && folderName.trim() ? folderName.trim() : null;
+      const parsedCourseId = courseId != null && courseId !== "" ? Number(courseId) : null;
+      let normalizedSubjectKey = null;
+      if (typeof subjectKey === "string" && subjectKey.trim()) {
+        normalizedSubjectKey = subjectKey.trim().toLowerCase();
+      }
+      if (parsedCourseId && Number.isFinite(parsedCourseId)) {
+        const courseRow = await db2.query(
+          `SELECT COALESCE(course_type, 'live') AS course_type FROM courses WHERE id = $1 LIMIT 1`,
+          [parsedCourseId]
+        );
+        const courseType = String(courseRow.rows[0]?.course_type || "").toLowerCase();
+        if (courseType === "multi_subject" && !normalizedSubjectKey) {
+          return res.status(400).json({ message: "Subject is required for multisubject course missions" });
+        }
+      }
       await db2.query(
-        `UPDATE daily_missions SET title=$1, description=$2, questions=$3, mission_date=$4, xp_reward=$5, mission_type=$6, course_id=$7, folder_name=$8 WHERE id=$9`,
-        [title, description || "", JSON.stringify(questions), missionDate, xpReward || 50, missionType, courseId || null, folderNameNorm, req.params.id]
+        `UPDATE daily_missions SET title=$1, description=$2, questions=$3, mission_date=$4, xp_reward=$5, mission_type=$6, course_id=$7, folder_name=$8, subject_key=$9 WHERE id=$10`,
+        [title, description || "", JSON.stringify(questions), missionDate, xpReward || 50, missionType, parsedCourseId, folderNameNorm, normalizedSubjectKey, req.params.id]
       );
       await recomputeMissionCourseProgress(db2, recomputeAllEnrollmentsProgressForCourse3, courseId);
       res.json({ success: true });
@@ -9233,6 +9653,11 @@ function normalizeBatchStatus(value) {
   const status = String(value || "").toLowerCase();
   return status === "recorded" || status === "completed" ? "recorded" : "live";
 }
+function resolveCourseCategory(category, courseType) {
+  if (courseType === "test_series") return "Test Series";
+  const trimmed = category != null ? String(category).trim() : "";
+  return trimmed || "Mathematics";
+}
 function registerAdminCourseCrudRoutes({
   app: app2,
   db: db2,
@@ -9253,10 +9678,11 @@ function registerAdminCourseCrudRoutes({
         { key: "gk", label: "G.K", icon: "earth" }
       ]);
       const teacherDetails = normalizeJsonValue(teacherDetailsJson, []);
+      const resolvedCategory = resolveCourseCategory(category, normalizedCourseType);
       const result = await db2.query(
         `INSERT INTO courses (title, description, teacher_name, price, original_price, category, is_free, level, duration_hours, course_type, subject, exam, start_date, end_date, validity_months, thumbnail, cover_color, teacher_bio, teacher_image_url, teacher_details_json, multi_subject_config, course_language, batch_status, is_published, created_at) 
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20::jsonb, $21::jsonb, $22, $23, TRUE, $24) RETURNING *`,
-        [title, description, teacherName || "3i Learning", price || 0, originalPrice || 0, category || "Mathematics", isFree || false, level || "Beginner", durationHours || 0, normalizedCourseType, subject || "", exam || "", startDate || null, endDate || null, vm, thumbnail || null, resolvedCoverColor, teacherBio || null, teacherImageUrl || null, JSON.stringify(teacherDetails), JSON.stringify(normalizedCourseType === "multi_subject" ? subjects : normalizeJsonArray(multiSubjectConfig)), courseLanguage || "HINGLISH", normalizedCourseType === "multi_subject" ? normalizeBatchStatus(batchStatus) : null, Date.now()]
+        [title, description, teacherName || "3i Learning", price || 0, originalPrice || 0, resolvedCategory, isFree || false, level || "Beginner", durationHours || 0, normalizedCourseType, subject || "", exam || "", startDate || null, endDate || null, vm, thumbnail || null, resolvedCoverColor, teacherBio || null, teacherImageUrl || null, JSON.stringify(teacherDetails), JSON.stringify(normalizedCourseType === "multi_subject" ? subjects : normalizeJsonArray(multiSubjectConfig)), courseLanguage || "HINGLISH", normalizedCourseType === "multi_subject" ? normalizeBatchStatus(batchStatus) : null, Date.now()]
       );
       if (normalizedCourseType !== "test_series") {
         const course = result.rows[0];
@@ -9293,9 +9719,12 @@ function registerAdminCourseCrudRoutes({
       const vm = validityMonths != null && String(validityMonths).trim() !== "" ? Math.max(0, parseFloat(String(validityMonths)) || 0) || null : null;
       const teacherDetails = normalizeJsonValue(teacherDetailsJson, []);
       const subjects = normalizeJsonArray(multiSubjectConfig);
+      const existing = await db2.query("SELECT course_type FROM courses WHERE id = $1", [req.params.id]);
+      const effectiveCourseType = String(courseType || existing.rows[0]?.course_type || "live");
+      const resolvedCategory = resolveCourseCategory(category, effectiveCourseType);
       await db2.query(
         `UPDATE courses SET title=$1, description=$2, teacher_name=$3, price=$4, original_price=$5, category=$6, is_free=$7, level=$8, duration_hours=$9, is_published=$10, total_tests=COALESCE($11, total_tests), subject=COALESCE($12, subject), exam=COALESCE($13, exam), course_type=COALESCE($14, course_type), start_date=COALESCE($15, start_date), end_date=COALESCE($16, end_date), validity_months=COALESCE($17, validity_months), thumbnail=COALESCE($18, thumbnail), cover_color=COALESCE($19, cover_color), teacher_bio=COALESCE($20, teacher_bio), teacher_image_url=COALESCE($21, teacher_image_url), teacher_details_json=COALESCE($22::jsonb, teacher_details_json), multi_subject_config=COALESCE($23::jsonb, multi_subject_config), course_language=COALESCE($24, course_language), batch_status=COALESCE($25, batch_status) WHERE id=$26`,
-        [title, description, teacherName, price, originalPrice, category, isFree, level, durationHours, isPublished, totalTests, subject, exam, courseType, startDate, endDate, vm, thumbnail ?? null, coverColor ?? null, teacherBio ?? null, teacherImageUrl ?? null, teacherDetailsJson !== void 0 ? JSON.stringify(teacherDetails) : null, multiSubjectConfig !== void 0 ? JSON.stringify(subjects) : null, courseLanguage ?? null, batchStatus !== void 0 ? normalizeBatchStatus(batchStatus) : null, req.params.id]
+        [title, description, teacherName, price, originalPrice, resolvedCategory, isFree, level, durationHours, isPublished, totalTests, subject, exam, courseType, startDate, endDate, vm, thumbnail ?? null, coverColor ?? null, teacherBio ?? null, teacherImageUrl ?? null, teacherDetailsJson !== void 0 ? JSON.stringify(teacherDetails) : null, multiSubjectConfig !== void 0 ? JSON.stringify(subjects) : null, courseLanguage ?? null, batchStatus !== void 0 ? normalizeBatchStatus(batchStatus) : null, req.params.id]
       );
       res.json({ success: true });
     } catch {
@@ -10642,6 +11071,64 @@ function registerStudentMissionMaterialRoutes({
       res.status(500).json({ message: "Failed to fetch mission folders" });
     }
   });
+  app2.get("/api/daily-missions/:id", async (req, res) => {
+    try {
+      const user = await getAuthUser2(req);
+      const missionId = Number(req.params.id);
+      if (!Number.isFinite(missionId) || missionId <= 0) {
+        return res.status(400).json({ message: "Invalid mission id" });
+      }
+      const result = await db2.query(
+        `SELECT dm.*, c.title AS course_title
+         FROM daily_missions dm
+         LEFT JOIN courses c ON c.id = dm.course_id
+         WHERE dm.id = $1
+         LIMIT 1`,
+        [missionId]
+      );
+      if (result.rows.length === 0) return res.status(404).json({ message: "Mission not found" });
+      const mission = result.rows[0];
+      if (user) {
+        const um = await db2.query(
+          "SELECT * FROM user_missions WHERE user_id = $1 AND mission_id = $2 LIMIT 1",
+          [user.id, missionId]
+        );
+        const row = um.rows[0];
+        mission.isCompleted = !!row?.is_completed;
+        mission.userScore = row?.score || 0;
+        mission.userTimeTaken = row?.time_taken || 0;
+        mission.userAnswers = row?.answers || {};
+        mission.userIncorrect = row?.incorrect || 0;
+        mission.userSkipped = row?.skipped || 0;
+        let isAccessible = mission.mission_type === "free_practice" || user.role === "admin";
+        if (!isAccessible && mission.folder_name) {
+          const freeRows = await db2.query(
+            `${STANDALONE_FOLDER_SELECT2}
+             SELECT full_name FROM folder_tree
+             WHERE type = 'mission' AND is_free = TRUE AND full_name = $1
+             LIMIT 1`,
+            [String(mission.folder_name)]
+          );
+          if (freeRows.rows.length > 0) isAccessible = true;
+        }
+        if (!isAccessible) {
+          isAccessible = await canAccessMission(user, mission);
+        }
+        mission.isAccessible = isAccessible;
+        if (user.role !== "admin" && !isAccessible) {
+          return res.status(403).json({ message: "Access denied" });
+        }
+      } else {
+        mission.isAccessible = mission.mission_type === "free_practice";
+        if (!mission.isAccessible) return res.status(401).json({ message: "Not authenticated" });
+      }
+      res.set("Cache-Control", "private, no-store");
+      res.json(mission);
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ message: "Failed to fetch mission" });
+    }
+  });
   app2.get("/api/daily-mission", async (req, res) => {
     try {
       const user = await getAuthUser2(req);
@@ -10689,6 +11176,31 @@ function registerStudentMissionMaterialRoutes({
       res.status(500).json({ message: "Failed to complete mission" });
     }
   });
+  const STANDALONE_HOME_ORDER = " ORDER BY COALESCE(order_index, 0) ASC, created_at DESC";
+  const queryStandaloneMaterialsForHome = async (user) => {
+    if (user?.role === "admin") {
+      const result2 = await db2.query(
+        `SELECT * FROM study_materials WHERE course_id IS NULL AND is_free = TRUE${STANDALONE_HOME_ORDER}`,
+        []
+      );
+      return result2.rows;
+    }
+    if (!user) {
+      const result2 = await db2.query(
+        `SELECT id, title, description, file_type, course_id, is_free, section_title, download_allowed, created_at, file_url
+         FROM study_materials
+         WHERE course_id IS NULL AND is_free = TRUE${STANDALONE_HOME_ORDER}`,
+        []
+      );
+      return result2.rows;
+    }
+    const result = await db2.query(
+      `SELECT * FROM study_materials
+       WHERE course_id IS NULL AND is_free = TRUE${STANDALONE_HOME_ORDER}`,
+      []
+    );
+    return result.rows;
+  };
   app2.get("/api/study-materials", async (req, res) => {
     try {
       const user = await getAuthUser2(req);
@@ -10705,22 +11217,27 @@ function registerStudentMissionMaterialRoutes({
         );
         return foldersResult.rows;
       };
-      if (user?.role === "admin") {
-        let query = "SELECT * FROM study_materials";
-        if (free === "true") query += " WHERE is_free = TRUE";
-        query += " ORDER BY COALESCE(order_index, 0) ASC, created_at DESC";
-        const result2 = await db2.query(query, []);
-        const folders2 = await loadFolders();
+      if (free === "true") {
+        const materials = await queryStandaloneMaterialsForHome(user);
+        const folders = await loadFolders();
         res.set("Cache-Control", "private, no-store");
-        return res.json({ materials: result2.rows, folders: folders2 });
+        return res.json({ materials, folders });
+      }
+      if (user?.role === "admin") {
+        const result2 = await db2.query(`SELECT * FROM study_materials${STANDALONE_HOME_ORDER}`, []);
+        const folders = await loadFolders();
+        res.set("Cache-Control", "private, no-store");
+        return res.json({ materials: result2.rows, folders });
       }
       if (!user) {
         const result2 = await db2.query(
-          "SELECT id, title, description, file_type, course_id, is_free, section_title, download_allowed, created_at, file_url FROM study_materials WHERE is_free = TRUE ORDER BY COALESCE(order_index, 0) ASC, created_at DESC"
+          `SELECT id, title, description, file_type, course_id, is_free, section_title, download_allowed, created_at, file_url
+           FROM study_materials
+           WHERE is_free = TRUE${STANDALONE_HOME_ORDER}`,
+          []
         );
-        const folders2 = await loadFolders();
         res.set("Cache-Control", "private, no-store");
-        return res.json({ materials: result2.rows, folders: folders2 });
+        return res.json({ materials: result2.rows, folders: [] });
       }
       const result = await db2.query(
         `SELECT sm.*
@@ -10745,9 +11262,8 @@ function registerStudentMissionMaterialRoutes({
         }
         filteredRows.push(row);
       }
-      const folders = await loadFolders();
       res.set("Cache-Control", "private, no-store");
-      res.json({ materials: filteredRows, folders });
+      res.json({ materials: filteredRows, folders: [] });
     } catch {
       res.status(500).json({ message: "Failed to fetch materials" });
     }
@@ -11990,6 +12506,52 @@ var init_live_class_routes = __esm({
   }
 });
 
+// shared/classroomPipPosition.ts
+function normalizePipPosition(value) {
+  const s = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (VALID.has(s)) return s;
+  return DEFAULT_PIP_POSITION;
+}
+var DEFAULT_PIP_POSITION, VALID;
+var init_classroomPipPosition = __esm({
+  "shared/classroomPipPosition.ts"() {
+    "use strict";
+    DEFAULT_PIP_POSITION = "bottom-left";
+    VALID = /* @__PURE__ */ new Set(["top-right", "bottom-right", "top-left", "bottom-left"]);
+  }
+});
+
+// shared/recordingUrl.ts
+function isBoardSnapshotImageUrl(url) {
+  return /\.(png|jpe?g|webp|gif)(\?|$)/i.test(String(url || "").trim());
+}
+function isVideoRecordingUrl(url) {
+  const lower = String(url || "").trim().toLowerCase();
+  if (!lower) return false;
+  if (isBoardSnapshotImageUrl(lower)) return false;
+  if (/\.(mp4|webm|mov|mkv|avi|m3u8)(\?|$)/.test(lower)) return true;
+  if (lower.includes("youtube.com") || lower.includes("youtu.be")) return true;
+  if (lower.includes("videodelivery.net")) return true;
+  return lower.includes("/api/media/");
+}
+function pickVideoRecordingUrlFromRow(row, fallback) {
+  const candidates = (r) => [r.recording_url, r.cf_playback_hls, r.youtube_url].map((u) => String(u || "").trim());
+  for (const url of candidates(row)) {
+    if (isVideoRecordingUrl(url)) return url;
+  }
+  if (fallback) {
+    for (const url of candidates(fallback)) {
+      if (isVideoRecordingUrl(url)) return url;
+    }
+  }
+  return "";
+}
+var init_recordingUrl = __esm({
+  "shared/recordingUrl.ts"() {
+    "use strict";
+  }
+});
+
 // backend/live-class-lecture-convert.ts
 function inferVideoType2(url) {
   const lower = String(url || "").toLowerCase();
@@ -11998,8 +12560,7 @@ function inferVideoType2(url) {
   return "r2";
 }
 function pickRecordingUrl(row, fallback) {
-  const from = (r) => String(r.recording_url || r.cf_playback_hls || r.youtube_url || r.board_snapshot_url || "").trim();
-  return from(row) || (fallback ? from(fallback) : "");
+  return pickVideoRecordingUrlFromRow(row, fallback);
 }
 function durationMinutes(peer, anchor) {
   if (peer.started_at && peer.ended_at) {
@@ -12076,6 +12637,7 @@ var init_live_class_lecture_convert = __esm({
   "backend/live-class-lecture-convert.ts"() {
     "use strict";
     init_recordingSection();
+    init_recordingUrl();
   }
 });
 
@@ -12125,7 +12687,7 @@ function registerAdminLiveClassManageRoutes({
       const prevRow = await db2.query("SELECT id, title, course_id, is_completed FROM live_classes WHERE id = $1", [req.params.id]);
       const wasCompleted = prevRow.rows[0]?.is_completed === true;
       const { isLive, isCompleted, youtubeUrl, title, description, convertToLecture, sectionTitle, scheduledAt, notifyEmail, notifyBell, isFreePreview, streamType, chatMode, showViewerCount, recordingUrl, cfStreamUid, lectureSectionTitle, lectureSubfolderTitle, pipPosition, subjectKey } = req.body;
-      const normalizedPipPosition = pipPosition === void 0 ? void 0 : pipPosition === "bottom-right" ? "bottom-right" : "top-right";
+      const normalizedPipPosition = pipPosition === void 0 ? void 0 : normalizePipPosition(pipPosition);
       const updates = [];
       const params = [];
       const add = (col, val) => {
@@ -12453,6 +13015,7 @@ var init_admin_live_class_manage_routes = __esm({
     "use strict";
     init_download_access_utils();
     init_recordingSection();
+    init_classroomPipPosition();
     init_auto_notification_expiry();
     init_notification_utils();
     init_push_notifications();
@@ -13888,7 +14451,7 @@ function registerCourseAccessRoutes({
              FROM courses c
              LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM tests WHERE is_published = TRUE GROUP BY 1) t_agg ON t_agg.course_id = c.id
              LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM study_materials GROUP BY 1) m_agg ON m_agg.course_id = c.id
-             LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM daily_missions WHERE course_id IS NOT NULL GROUP BY 1) dm_agg ON dm_agg.course_id = c.id
+             LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM daily_missions WHERE course_id IS NOT NULL AND ${REAL_MISSION_SQL} GROUP BY 1) dm_agg ON dm_agg.course_id = c.id
              WHERE 1=1` : `SELECT c.*,
                COALESCE(t_agg.cnt, 0) AS total_tests,
                COALESCE(m_agg.cnt, 0) AS total_materials,
@@ -13896,7 +14459,7 @@ function registerCourseAccessRoutes({
              FROM courses c
              LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM tests WHERE is_published = TRUE GROUP BY 1) t_agg ON t_agg.course_id = c.id
              LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM study_materials GROUP BY 1) m_agg ON m_agg.course_id = c.id
-             LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM daily_missions WHERE course_id IS NOT NULL GROUP BY 1) dm_agg ON dm_agg.course_id = c.id
+             LEFT JOIN (SELECT course_id, COUNT(*) AS cnt FROM daily_missions WHERE course_id IS NOT NULL AND ${REAL_MISSION_SQL} GROUP BY 1) dm_agg ON dm_agg.course_id = c.id
              WHERE c.is_published = TRUE`;
       const params = [];
       if (search) {
@@ -13915,8 +14478,18 @@ function registerCourseAccessRoutes({
           "SELECT course_id, progress_percent, valid_until FROM enrollments WHERE user_id = $1 AND (status = 'active' OR status IS NULL) AND (valid_until IS NULL OR valid_until > $2)",
           [user.id, Date.now()]
         );
+        await Promise.all(
+          enrollResult.rows.map(
+            (e) => updateCourseProgress3(user.id, Number(e.course_id)).catch(() => {
+            })
+          )
+        );
+        const refreshedEnroll = enrollResult.rows.length > 0 ? await db2.query(
+          "SELECT course_id, progress_percent, valid_until FROM enrollments WHERE user_id = $1 AND (status = 'active' OR status IS NULL) AND (valid_until IS NULL OR valid_until > $2)",
+          [user.id, Date.now()]
+        ) : enrollResult;
         const enrollMap = /* @__PURE__ */ new Map();
-        enrollResult.rows.forEach((e) => {
+        refreshedEnroll.rows.forEach((e) => {
           enrollMap.set(Number(e.course_id), {
             progress: Number(e.progress_percent) || 0,
             validUntil: e.valid_until != null ? Number(e.valid_until) : null
@@ -13974,6 +14547,7 @@ function registerCourseAccessRoutes({
   app2.get("/api/courses/:id", async (req, res) => {
     try {
       const user = await getAuthUser2(req);
+      if (respondAuthFailureIfAny(req, res)) return;
       const courseIdParam = String(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id);
       const courseResult = await db2.query("SELECT * FROM courses WHERE id = $1", [courseIdParam]);
       if (courseResult.rows.length === 0) return res.status(404).json({ message: "Course not found" });
@@ -13995,7 +14569,7 @@ function registerCourseAccessRoutes({
         ),
         db2.query("SELECT * FROM tests WHERE course_id = $1 AND is_published = TRUE ORDER BY COALESCE(order_index, 0) ASC, created_at ASC, id ASC", [courseIdParam]),
         db2.query("SELECT * FROM study_materials WHERE course_id = $1 ORDER BY COALESCE(order_index, 0) ASC, created_at ASC, id ASC", [courseIdParam]),
-        db2.query("SELECT COUNT(*)::int AS cnt FROM daily_missions WHERE course_id = $1 AND course_id IS NOT NULL", [courseIdParam])
+        db2.query(`SELECT COUNT(*)::int AS cnt FROM daily_missions WHERE course_id = $1 AND course_id IS NOT NULL AND ${REAL_MISSION_SQL}`, [courseIdParam])
       ]);
       const fullLectures = lecturesResult.rows;
       const fullMaterials = materialsResult.rows;
@@ -14008,7 +14582,16 @@ function registerCourseAccessRoutes({
         course.isEnrolled = enroll.rows.length > 0 && !accessExpired;
         course.accessExpired = accessExpired || false;
         course.enrollmentValidUntil = row && row.valid_until != null ? row.valid_until : null;
-        const progressRow = row;
+        let progressRow = row;
+        if (course.isEnrolled && !accessExpired) {
+          await updateCourseProgress3(user.id, Number(courseIdParam)).catch(() => {
+          });
+          const refreshed = await db2.query(
+            "SELECT progress_percent, last_lecture_id FROM enrollments WHERE user_id = $1 AND course_id = $2 AND (status = 'active' OR status IS NULL)",
+            [user.id, courseIdParam]
+          );
+          if (refreshed.rows[0]) progressRow = refreshed.rows[0];
+        }
         course.progress = progressRow && !accessExpired ? progressRow?.progress_percent || 0 : 0;
         course.lastLectureId = progressRow && !accessExpired ? progressRow?.last_lecture_id : null;
         if (course.isEnrolled) {
@@ -14064,6 +14647,7 @@ function registerCourseAccessRoutes({
     try {
       const requester = await getAuthUser2(req);
       if (!requester) return res.status(401).json({ message: "Not authenticated" });
+      if (respondAuthFailureIfAny(req, res)) return;
       let user = requester;
       const isAdminGrant = requester?.role === "admin" && req.body.userId && requester.id !== parseInt(req.body.userId);
       if (isAdminGrant) {
@@ -14077,11 +14661,24 @@ function registerCourseAccessRoutes({
       if (courseResult.rows.length === 0) return res.status(404).json({ message: "Course not found" });
       const courseRow = courseResult.rows[0];
       if (!courseRow.is_free && !isAdminGrant) return res.status(403).json({ message: "This course requires payment" });
-      const existing = await db2.query("SELECT id, status FROM enrollments WHERE user_id = $1 AND course_id = $2", [user.id, req.params.id]);
+      const existing = await db2.query(
+        "SELECT id, status, valid_until FROM enrollments WHERE user_id = $1 AND course_id = $2",
+        [user.id, req.params.id]
+      );
       if (existing.rows.length > 0) {
-        if (existing.rows[0].status === "inactive" && isAdminGrant) {
-          await db2.query("UPDATE enrollments SET status = 'active' WHERE id = $1", [existing.rows[0].id]);
-          return res.json({ success: true, reactivated: true });
+        const row = existing.rows[0];
+        if (isAdminGrant) {
+          const inactive = row.status === "inactive";
+          const expired = isEnrollmentExpired(row);
+          if (inactive || expired) {
+            const at2 = Date.now();
+            const vu2 = computeEnrollmentValidUntil(courseRow, at2);
+            await db2.query(
+              `UPDATE enrollments SET status = 'active', enrolled_at = $1, valid_until = $2 WHERE id = $3`,
+              [at2, vu2, row.id]
+            );
+            return res.json({ success: true, reactivated: inactive, renewed: expired });
+          }
         }
         return res.json({ success: true, alreadyEnrolled: true });
       }
@@ -14103,6 +14700,23 @@ function registerCourseAccessRoutes({
       res.status(500).json({ message: "Failed to enroll" });
     }
   });
+  const handleRepairEnrollmentAccess = async (req, res) => {
+    try {
+      const user = await getAuthUser2(req);
+      if (!user) return res.status(401).json({ message: "Not authenticated" });
+      if (respondAuthFailureIfAny(req, res)) return;
+      const courseId = Number(req.body?.courseId);
+      if (!Number.isFinite(courseId)) {
+        return res.status(400).json({ message: "courseId is required" });
+      }
+      const result = await repairCourseEnrollmentAccess(db2, user.id, courseId);
+      return res.json({ ok: true, fixed: result.fixed, reason: result.reason });
+    } catch (err) {
+      console.error("repair-access error:", err);
+      res.status(500).json({ message: "Failed to repair enrollment access" });
+    }
+  };
+  app2.post("/api/enrollments/repair-access", handleRepairEnrollmentAccess);
   app2.get("/api/my-courses", async (req, res) => {
     try {
       const user = await getAuthUser2(req);
@@ -14438,6 +15052,8 @@ var init_course_access_routes = __esm({
   "backend/course-access-routes.ts"() {
     "use strict";
     init_course_access_utils();
+    init_auth_failure_utils();
+    init_progress_utils();
     init_media_key_utils();
     init_r2_presign_read();
     init_lecture_payload_utils();
@@ -15691,175 +16307,6 @@ var init_sms_utils = __esm({
   }
 });
 
-// backend/progress-utils.ts
-function progressTestWhere(courseType, alias = "") {
-  const p = alias ? `${alias}.` : "";
-  const pub = `${p}is_published = TRUE`;
-  if (String(courseType).toLowerCase() === "multi_subject") {
-    return pub;
-  }
-  return `${pub} AND COALESCE(LOWER(${p}test_type), 'practice') <> 'pyq'`;
-}
-async function getCourseType(db2, courseId) {
-  const r = await db2.query(
-    `SELECT COALESCE(course_type, 'live') AS course_type FROM courses WHERE id = $1::int LIMIT 1`,
-    [courseId]
-  );
-  return String(r.rows[0]?.course_type || "live").toLowerCase();
-}
-async function updateCourseTestCounts(db2, courseId) {
-  const id = Number(courseId);
-  if (!Number.isFinite(id)) {
-    console.warn("[Progress] updateCourseTestCounts skipped invalid courseId:", courseId);
-    return;
-  }
-  await db2.query(
-    `UPDATE courses SET
-      total_tests    = (SELECT COUNT(*) FROM tests WHERE course_id = $1::int AND is_published = TRUE),
-      pyq_count      = (SELECT COUNT(*) FROM tests WHERE course_id = $1::int AND test_type = 'pyq' AND is_published = TRUE),
-      mock_count     = (SELECT COUNT(*) FROM tests WHERE course_id = $1::int AND test_type = 'mock' AND is_published = TRUE),
-      practice_count = (SELECT COUNT(*) FROM tests WHERE course_id = $1::int AND test_type = 'practice' AND is_published = TRUE)
-    WHERE id = $1::int`,
-    [id]
-  );
-  await recomputeAllEnrollmentsProgressForCourse(db2, id);
-}
-async function updateCourseProgress(db2, userId, courseId, runTx) {
-  const cid = Number(courseId);
-  if (!Number.isFinite(cid)) {
-    console.warn("[Progress] updateCourseProgress skipped invalid courseId:", courseId);
-    return;
-  }
-  const doUpdate = async (client2) => {
-    if (runTx) {
-      await client2.query(
-        "SELECT id FROM enrollments WHERE user_id = $1 AND course_id = $2::int FOR UPDATE",
-        [userId, cid]
-      );
-    }
-    const courseType = await getCourseType(client2, cid);
-    const testWhere = progressTestWhere(courseType);
-    const testWhereT = progressTestWhere(courseType, "t");
-    const totals = await client2.query(
-      `SELECT
-         (SELECT COUNT(*)::int FROM lectures WHERE course_id = $1::int AND ${VISIBLE_LECTURE}) AS lec,
-         (SELECT COUNT(*)::int FROM tests WHERE course_id = $1::int AND ${testWhere}) AS tests,
-         (SELECT COUNT(*)::int FROM daily_missions WHERE course_id = $1::int) AS missions`,
-      [cid]
-    );
-    const done = await client2.query(
-      `SELECT
-         (SELECT COUNT(*)::int FROM lecture_progress lp
-          JOIN lectures l ON lp.lecture_id = l.id
-          WHERE lp.user_id = $2 AND l.course_id = $1::int AND lp.is_completed = TRUE AND ${VISIBLE_LECTURE_L}) AS lec,
-         (SELECT COUNT(DISTINCT ta.test_id)::int FROM test_attempts ta
-          JOIN tests t ON ta.test_id = t.id AND t.course_id = $1::int AND ${testWhereT}
-          WHERE ta.user_id = $2 AND ta.status = 'completed') AS tests,
-         (SELECT COUNT(*)::int FROM user_missions um
-          JOIN daily_missions dm ON dm.id = um.mission_id AND dm.course_id = $1::int
-          WHERE um.user_id = $2 AND um.is_completed = TRUE) AS missions`,
-      [cid, userId]
-    );
-    const total = Number(totals.rows[0]?.lec || 0) + Number(totals.rows[0]?.tests || 0) + Number(totals.rows[0]?.missions || 0);
-    const completed = Number(done.rows[0]?.lec || 0) + Number(done.rows[0]?.tests || 0) + Number(done.rows[0]?.missions || 0);
-    const progress = total > 0 ? Math.min(100, Math.round(completed / total * 100)) : 0;
-    await client2.query(
-      "UPDATE enrollments SET progress_percent = $1 WHERE user_id = $2 AND course_id = $3::int",
-      [progress, userId, cid]
-    );
-  };
-  try {
-    if (runTx) {
-      await runTx((tx) => doUpdate(tx));
-    } else {
-      await doUpdate(db2);
-    }
-  } catch (err) {
-    console.error("[Progress] Failed to update:", err);
-  }
-}
-async function recomputeAllEnrollmentsProgressForCourse(db2, courseId) {
-  const cid = Number(courseId);
-  if (!Number.isFinite(cid)) {
-    console.warn("[Progress] recomputeAllEnrollmentsProgressForCourse skipped invalid courseId:", courseId);
-    return;
-  }
-  try {
-    const courseType = await getCourseType(db2, cid);
-    const testWhere = progressTestWhere(courseType);
-    const testWhereT = progressTestWhere(courseType, "t");
-    await db2.query(
-      `WITH
-         total_lec AS (
-           SELECT COUNT(*)::bigint AS n FROM lectures
-           WHERE course_id = $1::int AND ${VISIBLE_LECTURE}
-         ),
-         total_tests AS (
-           SELECT COUNT(*)::bigint AS n FROM tests
-           WHERE course_id = $1::int AND ${testWhere}
-         ),
-         total_missions AS (
-           SELECT COUNT(*)::bigint AS n FROM daily_missions WHERE course_id = $1::int
-         ),
-         lec_done AS (
-           SELECT lp.user_id, COUNT(*)::bigint AS n
-           FROM lecture_progress lp
-           JOIN lectures l ON lp.lecture_id = l.id AND l.course_id = $1::int
-           WHERE lp.is_completed = TRUE AND ${VISIBLE_LECTURE_L}
-           GROUP BY lp.user_id
-         ),
-         tests_done AS (
-           SELECT ta.user_id, COUNT(DISTINCT ta.test_id)::bigint AS n
-           FROM test_attempts ta
-           JOIN tests t ON ta.test_id = t.id AND t.course_id = $1::int AND ${testWhereT}
-           WHERE ta.status = 'completed'
-           GROUP BY ta.user_id
-         ),
-         missions_done AS (
-           SELECT um.user_id, COUNT(*)::bigint AS n
-           FROM user_missions um
-           JOIN daily_missions dm ON dm.id = um.mission_id AND dm.course_id = $1::int
-           WHERE um.is_completed = TRUE
-           GROUP BY um.user_id
-         )
-       UPDATE enrollments AS e
-       SET progress_percent = calc.pct
-       FROM (
-         SELECT
-           en.user_id,
-           en.course_id,
-           CASE
-             WHEN (tl.n + tt.n + tm.n) <= 0 THEN 0
-             ELSE LEAST(100, GREATEST(0, ROUND(
-               100.0 * (COALESCE(ld.n, 0) + COALESCE(td.n, 0) + COALESCE(md.n, 0))
-               / NULLIF(tl.n + tt.n + tm.n, 0)
-             )))
-           END::integer AS pct
-         FROM enrollments en
-         CROSS JOIN total_lec tl
-         CROSS JOIN total_tests tt
-         CROSS JOIN total_missions tm
-         LEFT JOIN lec_done ld ON ld.user_id = en.user_id
-         LEFT JOIN tests_done td ON td.user_id = en.user_id
-         LEFT JOIN missions_done md ON md.user_id = en.user_id
-         WHERE en.course_id = $1::int AND (en.status = 'active' OR en.status IS NULL)
-       ) AS calc
-       WHERE e.user_id = calc.user_id AND e.course_id = calc.course_id`,
-      [cid]
-    );
-  } catch (err) {
-    console.error("[Progress] recomputeAllEnrollmentsProgressForCourse failed:", err);
-  }
-}
-var VISIBLE_LECTURE, VISIBLE_LECTURE_L;
-var init_progress_utils = __esm({
-  "backend/progress-utils.ts"() {
-    "use strict";
-    VISIBLE_LECTURE = `(visible_after_at IS NULL OR visible_after_at <= EXTRACT(EPOCH FROM NOW()) * 1000)`;
-    VISIBLE_LECTURE_L = `(l.visible_after_at IS NULL OR l.visible_after_at <= EXTRACT(EPOCH FROM NOW()) * 1000)`;
-  }
-});
-
 // backend/download-utils.ts
 async function deleteDownloadsForUser(db2, userId, courseId) {
   if (courseId) {
@@ -16492,8 +16939,13 @@ async function getAuthUser(req) {
       const platOk = await assertActiveSessionPlatformMatches(db, req, user.id, user.role);
       if (!platOk.ok) {
         req.session.user = null;
+        setAuthFailure(req, {
+          code: "SESSION_PLATFORM_MISMATCH",
+          activePlatform: platOk.activePlatform
+        });
         return null;
       }
+      setAuthFailure(req, null);
       return user;
     })();
     r[authUserLazyKey] = p;
@@ -16806,52 +17258,112 @@ async function registerRoutes(app2) {
         if (!Number.isFinite(userId) || userId <= 0) {
           return res.status(400).json({ message: "Invalid userId" });
         }
-        const detail = await db.query(
-          `SELECT t.user_id, u.name AS user_name, u.phone AS user_phone, t.expo_push_token, t.platform, t.is_active, t.created_at, t.last_seen_at
-           FROM user_push_tokens t
-           LEFT JOIN users u ON u.id = t.user_id
-           WHERE t.user_id = $1
-           ${activeOnly ? "AND t.is_active = TRUE" : ""}
-           ORDER BY t.last_seen_at DESC`,
-          [userId]
-        );
+        const [expoDetail, webDetail] = await Promise.all([
+          db.query(
+            `SELECT t.user_id, u.name AS user_name, u.phone AS user_phone, t.expo_push_token, t.platform, t.is_active, t.created_at, t.last_seen_at
+             FROM user_push_tokens t
+             LEFT JOIN users u ON u.id = t.user_id
+             WHERE t.user_id = $1
+             ${activeOnly ? "AND t.is_active = TRUE" : ""}
+             ORDER BY t.last_seen_at DESC`,
+            [userId]
+          ),
+          db.query(
+            `SELECT w.id, w.user_id, u.name AS user_name, w.endpoint, w.user_agent, w.is_active, w.created_at, w.last_seen_at
+             FROM web_push_subscriptions w
+             LEFT JOIN users u ON u.id = w.user_id
+             WHERE w.user_id = $1
+             ${activeOnly ? "AND w.is_active = TRUE" : ""}
+             ORDER BY w.last_seen_at DESC`,
+            [userId]
+          )
+        ]);
         return res.json({
           summary: {
             userId,
-            total: detail.rows.length,
-            active: detail.rows.filter((r) => r.is_active === true).length
+            expoTotal: expoDetail.rows.length,
+            expoActive: expoDetail.rows.filter((r) => r.is_active === true).length,
+            webTotal: webDetail.rows.length,
+            webActive: webDetail.rows.filter((r) => r.is_active === true).length
           },
-          tokens: detail.rows
+          expoTokens: expoDetail.rows,
+          webSubscriptions: webDetail.rows.map((r) => ({
+            ...r,
+            endpoint: String(r.endpoint || "").slice(0, 80) + (String(r.endpoint || "").length > 80 ? "\u2026" : "")
+          }))
         });
       }
-      const summary = await db.query(
-        `SELECT
-           COUNT(*)::int AS total_tokens,
-           COUNT(*) FILTER (WHERE is_active = TRUE)::int AS active_tokens,
-           COUNT(DISTINCT user_id)::int AS total_users,
-           COUNT(DISTINCT user_id) FILTER (WHERE is_active = TRUE)::int AS users_with_active_tokens
-         FROM user_push_tokens`
-      );
-      const recent = await db.query(
-        `SELECT t.user_id, u.name AS user_name, u.phone AS user_phone, t.platform, t.is_active, t.last_seen_at
-         FROM user_push_tokens t
-         LEFT JOIN users u ON u.id = t.user_id
-         ${activeOnly ? "WHERE t.is_active = TRUE" : ""}
-         ORDER BY t.last_seen_at DESC
-         LIMIT 200`
-      );
+      const [expoSummary, webSummary, recentExpo, recentWeb] = await Promise.all([
+        db.query(
+          `SELECT
+             COUNT(*)::int AS total_tokens,
+             COUNT(*) FILTER (WHERE is_active = TRUE)::int AS active_tokens,
+             COUNT(DISTINCT user_id)::int AS total_users,
+             COUNT(DISTINCT user_id) FILTER (WHERE is_active = TRUE)::int AS users_with_active_tokens
+           FROM user_push_tokens`
+        ),
+        db.query(
+          `SELECT
+             COUNT(*)::int AS total_subscriptions,
+             COUNT(*) FILTER (WHERE is_active = TRUE)::int AS active_subscriptions,
+             COUNT(DISTINCT user_id)::int AS total_users,
+             COUNT(DISTINCT user_id) FILTER (WHERE is_active = TRUE)::int AS users_with_active_subscriptions
+           FROM web_push_subscriptions`
+        ),
+        db.query(
+          `SELECT t.user_id, u.name AS user_name, u.phone AS user_phone, u.role, t.platform, t.is_active, t.last_seen_at
+           FROM user_push_tokens t
+           LEFT JOIN users u ON u.id = t.user_id
+           ${activeOnly ? "WHERE t.is_active = TRUE" : ""}
+           ORDER BY t.last_seen_at DESC
+           LIMIT 200`
+        ),
+        db.query(
+          `SELECT w.user_id, u.name AS user_name, u.role, w.is_active, w.last_seen_at, LEFT(w.endpoint, 64) AS endpoint_prefix
+           FROM web_push_subscriptions w
+           LEFT JOIN users u ON u.id = w.user_id
+           ${activeOnly ? "WHERE w.is_active = TRUE" : ""}
+           ORDER BY w.last_seen_at DESC
+           LIMIT 200`
+        )
+      ]);
       return res.json({
-        summary: summary.rows[0] || {
+        expo: expoSummary.rows[0] || {
           total_tokens: 0,
           active_tokens: 0,
           total_users: 0,
           users_with_active_tokens: 0
         },
-        recentTokens: recent.rows
+        web: webSummary.rows[0] || {
+          total_subscriptions: 0,
+          active_subscriptions: 0,
+          total_users: 0,
+          users_with_active_subscriptions: 0
+        },
+        recentExpoTokens: recentExpo.rows,
+        recentWebSubscriptions: recentWeb.rows
       });
     } catch (err) {
       console.error("[Push Debug] failed:", err);
       return res.status(500).json({ message: "Failed to fetch push token stats" });
+    }
+  });
+  app2.post("/api/admin/push/test", requireAdmin, async (req, res) => {
+    try {
+      const user = req.user;
+      const userId = Number(user?.id);
+      if (!Number.isFinite(userId) || userId <= 0) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      const result = await sendPushToUsers(db, [userId], {
+        title: "3i Learning \u2014 test push",
+        body: "If you see this, admin push delivery is working.",
+        data: { type: "admin_push_test" }
+      });
+      return res.json({ success: true, ...result });
+    } catch (err) {
+      console.error("[Push Test] failed:", err);
+      return res.status(500).json({ message: "Failed to send test push" });
     }
   });
   let r2Client = null;
@@ -17039,6 +17551,7 @@ var init_routes = __esm({
     init_auth_utils();
     init_require_admin();
     init_native_device_binding();
+    init_auth_failure_utils();
     init_auth_routes();
     init_pdf_routes();
     init_payment_routes();

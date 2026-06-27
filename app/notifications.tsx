@@ -1,5 +1,5 @@
 import React from "react";
-import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Platform, Image } from "react-native";
+import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Platform } from "react-native";
 import { router } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
@@ -11,6 +11,7 @@ import Colors from "@/constants/colors";
 import { useAppTheme } from "@/context/AppThemeContext";
 import { useAuth } from "@/context/AuthContext";
 import { ensurePushRegisteredWithGesture, getWebPushConnectionStatus, type WebPushConnectionStatus } from "@/lib/pushNotifications";
+import NotificationImage from "@/components/NotificationImage";
 
 interface Notification {
   id: number;
@@ -173,19 +174,29 @@ export default function NotificationsScreen() {
               </View>
               <View style={styles.notifBody}>
                 {n.image_url ? (
-                  <View style={{ borderRadius: 10, overflow: "hidden", marginBottom: 8 }}>
-                    <Image source={{ uri: n.image_url }} style={{ width: "100%", height: 120 }} resizeMode="cover" />
+                  <View style={{ borderRadius: 10, overflow: "hidden", marginBottom: 8, borderWidth: 1, borderColor: colors.border }}>
+                    <NotificationImage uri={n.image_url} backgroundColor={isDarkMode ? "#1E293B" : "#F8FAFC"} />
                   </View>
                 ) : null}
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                  <Text style={[styles.notifTitle, { color: colors.text }]}>{n.title}</Text>
-                  {!n.is_read && (
+                {n.title?.trim() ? (
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                    <Text style={[styles.notifTitle, { color: colors.text }]}>{n.title}</Text>
+                    {!n.is_read && (
+                      <View style={{ backgroundColor: "#EF4444", borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1 }}>
+                        <Text style={{ fontSize: 8, fontFamily: "Inter_700Bold", color: "#fff" }}>NEW</Text>
+                      </View>
+                    )}
+                  </View>
+                ) : !n.is_read ? (
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 4 }}>
                     <View style={{ backgroundColor: "#EF4444", borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1 }}>
                       <Text style={{ fontSize: 8, fontFamily: "Inter_700Bold", color: "#fff" }}>NEW</Text>
                     </View>
-                  )}
-                </View>
-                <Text style={[styles.notifMsg, { color: colors.textSecondary }]}>{n.message}</Text>
+                  </View>
+                ) : null}
+                {n.message?.trim() ? (
+                  <Text style={[styles.notifMsg, { color: colors.textSecondary }]}>{n.message}</Text>
+                ) : null}
                 <Text style={[styles.notifTime, { color: colors.textMuted }]}>
                   {new Date(Number(n.created_at)).toLocaleDateString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
                 </Text>

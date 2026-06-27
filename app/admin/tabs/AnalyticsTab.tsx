@@ -10,6 +10,26 @@ import { apiRequest, getApiUrl, authFetch } from "@/lib/query-client";
 import Colors from "@/constants/colors";
 import { useAppTheme } from "@/context/AppThemeContext";
 
+function toYmd(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function rollingPresetDates(months: number): { start: string; end: string } {
+  const end = new Date();
+  const start = new Date();
+  start.setMonth(start.getMonth() - months);
+  return { start: toYmd(start), end: toYmd(end) };
+}
+
+const CUSTOM_RANGE_PRESETS = [
+  { months: 3, label: "3 Months" },
+  { months: 6, label: "6 Months" },
+  { months: 12, label: "1 Year" },
+] as const;
+
 export function AnalyticsTab() {
   const qc = useQueryClient();
   const { colors, isDarkMode } = useAppTheme();
@@ -69,10 +89,44 @@ export function AnalyticsTab() {
     { key: "7days", label: "7 Days" },
     { key: "15days", label: "15 Days" },
     { key: "30days", label: "30 Days" },
+    { key: "lifetime", label: "Lifetime" },
     { key: "custom", label: "Custom" },
   ];
 
-  const periodLabel = period === "today" ? "Today" : period === "yesterday" ? "Yesterday" : period === "7days" ? "Last 7 Days" : period === "15days" ? "Last 15 Days" : period === "30days" ? "Last 30 Days" : "Custom";
+  const periodLabel =
+    period === "today"
+      ? "Today"
+      : period === "yesterday"
+        ? "Yesterday"
+        : period === "7days"
+          ? "Last 7 Days"
+          : period === "15days"
+            ? "Last 15 Days"
+            : period === "30days"
+              ? "Last 30 Days"
+              : period === "lifetime"
+                ? "Lifetime"
+                : "Custom";
+
+  const selectPeriod = (key: string) => {
+    if (key === "custom") {
+      setPeriod("custom");
+      setShowCustom(true);
+      return;
+    }
+    setPeriod(key);
+    setShowCustom(false);
+    setCustomStart("");
+    setCustomEnd("");
+  };
+
+  const applyCustomPreset = (months: number) => {
+    const { start, end } = rollingPresetDates(months);
+    setCustomStart(start);
+    setCustomEnd(end);
+    setPeriod("custom");
+    setShowCustom(true);
+  };
 
   /** When custom range is selected but not applied, the query is disabled and `data` is undefined — avoid reading properties of undefined. */
   const a = analytics ?? {};
@@ -239,14 +293,33 @@ export function AnalyticsTab() {
         <Text style={{ fontSize: 14, fontFamily: "Inter_600SemiBold", color: colors.text, marginBottom: 12 }}>Filter by Period</Text>
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
           {PERIODS.map((p) => (
-            <Pressable key={p.key} onPress={() => { setPeriod(p.key); setShowCustom(p.key === "custom"); }}
+            <Pressable key={p.key} onPress={() => selectPeriod(p.key)}
               style={{ paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, borderWidth: 1.5, borderColor: period === p.key ? Colors.light.primary : Colors.light.border, backgroundColor: period === p.key ? Colors.light.primary : "#fff" }}>
               <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: period === p.key ? "#fff" : Colors.light.text }}>{p.label}</Text>
             </Pressable>
           ))}
         </View>
         {showCustom && (
-          <View style={{ flexDirection: "row", gap: 12, marginTop: 12 }}>
+          <View style={{ marginTop: 12, gap: 12 }}>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+              {CUSTOM_RANGE_PRESETS.map((preset) => (
+                <Pressable
+                  key={preset.months}
+                  onPress={() => applyCustomPreset(preset.months)}
+                  style={{
+                    paddingHorizontal: 14,
+                    paddingVertical: 8,
+                    borderRadius: 20,
+                    borderWidth: 1.5,
+                    borderColor: Colors.light.border,
+                    backgroundColor: "#F9FAFB",
+                  }}
+                >
+                  <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.text }}>{preset.label}</Text>
+                </Pressable>
+              ))}
+            </View>
+            <View style={{ flexDirection: "row", gap: 12 }}>
             <View style={{ flex: 1 }}>
               <Text style={{ fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.textMuted, marginBottom: 4 }}>Start Date</Text>
               <TextInput style={[styles.formInput, { paddingVertical: 8 }]} placeholder="YYYY-MM-DD" placeholderTextColor={Colors.light.textMuted} value={customStart} onChangeText={setCustomStart} />
@@ -258,6 +331,7 @@ export function AnalyticsTab() {
             <Pressable onPress={() => refetch()} style={{ alignSelf: "flex-end", backgroundColor: Colors.light.primary, borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10 }}>
               <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: "#fff" }}>Apply</Text>
             </Pressable>
+          </View>
           </View>
         )}
       </View>

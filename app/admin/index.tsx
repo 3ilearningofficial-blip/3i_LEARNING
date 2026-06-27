@@ -30,6 +30,9 @@ import type { DeviceDeniedUserRow, UserRecord } from "./user-types";
 // AdminImageBoxInline is used throughout many sections — keep it eagerly loaded.
 import { AdminImageBoxInline } from "./components/AdminImageBoxInline";
 import AdminBannerPreview from "@/components/admin/AdminBannerPreview";
+import AdminNotificationPreview from "@/components/admin/AdminNotificationPreview";
+import NotificationImage from "@/components/NotificationImage";
+import { resolveNotificationImageUrl } from "@/lib/notificationImageUrl";
 // Heavy tab components are lazy-loaded: they are never rendered until the user
 // switches to that tab, so deferring their JS parse keeps the initial /admin
 // bundle smaller and speeds up first-paint for the default (welcome) tab.
@@ -101,11 +104,12 @@ function AdminR2ImagePicker({
   onChange: (url: string) => void;
   folder?: "images" | "books" | "lectures" | "materials";
   hint?: string;
-  variant?: "banner" | "image";
+  variant?: "banner" | "image" | "notification";
 }) {
   const [uploading, setUploading] = useState(false);
   const [uploadPct, setUploadPct] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
+  const resolveUrl = variant === "notification" ? resolveNotificationImageUrl : (url: string) => url;
 
   const cancelUpload = () => {
     abortRef.current?.abort();
@@ -125,7 +129,7 @@ function AdminR2ImagePicker({
         signal: controller.signal,
         contentLength,
       });
-      onChange(publicUrl);
+      onChange(resolveUrl(publicUrl));
     } catch (err: any) {
       if (err?.name !== "AbortError") {
         Alert.alert("Upload Failed", err?.message || "Could not upload image.");
@@ -135,6 +139,10 @@ function AdminR2ImagePicker({
       setUploading(false);
       setUploadPct(0);
     }
+  };
+
+  const handleUrlChange = (text: string) => {
+    onChange(text ? resolveUrl(text) : "");
   };
 
   const pickImage = async () => {
@@ -182,6 +190,8 @@ function AdminR2ImagePicker({
       {value ? (
         variant === "banner" ? (
           <AdminBannerPreview uri={value} onClear={() => onChange("")} showHint={false} />
+        ) : variant === "notification" ? (
+          <AdminNotificationPreview uri={value} onClear={() => onChange("")} showHint={false} />
         ) : (
           <View style={{ borderRadius: 12, overflow: "hidden", borderWidth: 1, borderColor: Colors.light.border, marginBottom: 8, position: "relative" }}>
             <Image source={{ uri: value }} style={{ width: "100%", height: 130, backgroundColor: "#F8FAFC" }} resizeMode="contain" />
@@ -205,10 +215,10 @@ function AdminR2ImagePicker({
       ) : null}
       <TextInput
         style={styles.formInput}
-        placeholder="Paste image URL or upload from device"
+        placeholder={variant === "notification" ? "Paste image or Google Drive URL" : "Paste image URL or upload from device"}
         placeholderTextColor={Colors.light.textMuted}
         value={value}
-        onChangeText={onChange}
+        onChangeText={handleUrlChange}
         autoCapitalize="none"
       />
       <Pressable
@@ -340,51 +350,19 @@ export default function AdminDashboard() {
   const [notifTarget, setNotifTarget] = useState<"all" | "enrolled" | "course">("all");
   const [notifCourseId, setNotifCourseId] = useState<number | null>(null);
   const [notifImageUrl, setNotifImageUrl] = useState("");
-  const [notifImageBase64, setNotifImageBase64] = useState<string | null>(null);
-
-  const pickNotifImage = async () => {
-    if (Platform.OS === "web") {
-      // Web: use file input via hidden input trick
-      const input = document.createElement("input");
-      input.type = "file";
-      input.accept = "image/*";
-      input.onchange = async (e: any) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
-        try {
-          const blobUrl = URL.createObjectURL(file);
-          const { publicUrl } = await uploadToR2(blobUrl, file.name, file.type || "image/jpeg", "images");
-          URL.revokeObjectURL(blobUrl);
-          setNotifImageUrl(publicUrl);
-          setNotifImageBase64(null);
-        } catch (err: any) { Alert.alert("Upload Failed", err?.message || "Could not upload image."); }
-      };
-      input.click();
-    } else {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== "granted") {
-        Alert.alert("Permission needed", "Allow photo library access to pick an image.");
-        return;
-      }
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true,
-        quality: 0.7,
-      });
-      if (!result.canceled && result.assets[0]) {
-        const asset = result.assets[0];
-        try {
-          const { publicUrl } = await uploadToR2(asset.uri, asset.fileName || `notif-${Date.now()}.jpg`, asset.mimeType || "image/jpeg", "images");
-          setNotifImageUrl(publicUrl);
-          setNotifImageBase64(null);
-        } catch (err: any) { Alert.alert("Upload Failed", err?.message || "Could not upload image."); }
-      }
-    }
-  };
   // Past notifications
   const [editNotifModal, setEditNotifModal] = useState<any | null>(null);
   const [editNotifTitle, setEditNotifTitle] = useState("");
   const [editNotifMessage, setEditNotifMessage] = useState("");
+  const [editNotifImageUrl, setEditNotifImageUrl] = useState("");
+  const openEditNotifModal = (n: any) => {
+    setEditNotifTitle(n.title || "");
+    setEditNotifMessage(n.message || "");
+    setEditNotifImageUrl(n.image_url || "");
+    setEditNotifModal(n);
+  };
+  const notifHasContent = !!(notifTitle.trim() || notifMessage.trim() || notifImageUrl.trim());
+  const editNotifHasContent = !!(editNotifTitle.trim() || editNotifMessage.trim() || editNotifImageUrl.trim());
   const [showAllPastNotifs, setShowAllPastNotifs] = useState(false);
   // User action sheet
   const [userActionUser, setUserActionUser] = useState<UserRecord | null>(null);
@@ -393,6 +371,8 @@ export default function AdminDashboard() {
   const [cleanupPending, setCleanupPending] = useState(false);
   const [showCourseAccess, setShowCourseAccess] = useState(false);
   const [courseAccessUserId, setCourseAccessUserId] = useState<number | null>(null);
+  const [userSearchInput, setUserSearchInput] = useState("");
+  const [userSearchDebounced, setUserSearchDebounced] = useState("");
   const [grantingCourseId, setGrantingCourseId] = useState<number | null>(null);
   const [enrollingCourseId, setEnrollingCourseId] = useState<number | null>(null);
   const [showAddMission, setShowAddMission] = useState(false);
@@ -625,30 +605,45 @@ export default function AdminDashboard() {
 
   const tsCourses = React.useMemo(() => courses.filter((c: any) => c.course_type === "test_series"), [courses]);
 
+  useEffect(() => {
+    const trimmed = userSearchInput.trim();
+    if (!trimmed) {
+      setUserSearchDebounced("");
+      return;
+    }
+    const timer = setTimeout(() => setUserSearchDebounced(trimmed), 300);
+    return () => clearTimeout(timer);
+  }, [userSearchInput]);
+
   const {
     data: usersPages,
     isLoading: usersLoading,
+    isFetching: usersFetching,
     fetchNextPage: fetchMoreUsers,
     hasNextPage: hasMoreUsers,
     isFetchingNextPage: isFetchingMoreUsers,
   } = useInfiniteQuery({
-    queryKey: ["/api/admin/users", "paged"],
+    queryKey: ["/api/admin/users", "paged", userSearchDebounced],
     initialPageParam: 0,
     queryFn: async ({ pageParam }) => {
       const baseUrl = getApiUrl();
       const url = new URL("/api/admin/users", baseUrl);
       url.searchParams.set("limit", "50");
       url.searchParams.set("offset", String(pageParam));
+      const searchTrimmed = userSearchDebounced.trim();
+      if (searchTrimmed) url.searchParams.set("search", searchTrimmed);
       const res = await authFetch(url.toString());
       if (!res.ok) {
         console.error("Admin users fetch failed:", res.status);
-        return { users: [] as UserRecord[], nextOffset: undefined as number | undefined };
+        return { users: [] as UserRecord[], nextOffset: undefined as number | undefined, totalCount: 0 };
       }
       const users = (await res.json()) as UserRecord[];
       const hasMore = res.headers.get("X-Has-More") === "true";
+      const totalCount = parseInt(res.headers.get("X-Total-Count") ?? "0", 10) || 0;
       return {
         users,
         nextOffset: hasMore ? Number(pageParam) + users.length : undefined,
+        totalCount,
       };
     },
     getNextPageParam: (last) => last.nextOffset,
@@ -662,6 +657,9 @@ export default function AdminDashboard() {
     () => usersPages?.pages.flatMap((p) => p.users) ?? [],
     [usersPages]
   );
+  const userSearchActive = userSearchDebounced.trim().length > 0;
+  const usersTotalCount = usersPages?.pages[0]?.totalCount ?? 0;
+  const allUsersLabelCount = userSearchActive ? usersTotalCount : users.length;
 
   const { data: courseAccessEnrollments } = useQuery<{ courseIds: number[] }>({
     queryKey: ["/api/admin/users", courseAccessUserId, "enrollments"],
@@ -1448,7 +1446,7 @@ export default function AdminDashboard() {
     },
     onSuccess: () => {
       setShowNotification(false);
-      setNotifTitle(""); setNotifMessage(""); setNotifTarget("all"); setNotifCourseId(null); setNotifImageUrl(""); setNotifImageBase64(null);
+      setNotifTitle(""); setNotifMessage(""); setNotifTarget("all"); setNotifCourseId(null); setNotifImageUrl("");
       qc.invalidateQueries({ queryKey: ["/api/admin/notifications/history"] });
       refetchNotifHistory();
       if (Platform.OS === "web") window.alert("Notification sent successfully!");
@@ -2885,7 +2883,38 @@ export default function AdminDashboard() {
 
         {activeTab === "users" && (
           <View style={styles.section}>
-            {usersLoading ? (
+            <View style={{ marginBottom: 16 }}>
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  backgroundColor: colors.card,
+                  borderRadius: 12,
+                  borderWidth: 1,
+                  borderColor: Colors.light.border,
+                  paddingHorizontal: 12,
+                  gap: 8,
+                }}
+              >
+                <Ionicons name="search" size={18} color={colors.textMuted} />
+                <TextInput
+                  style={[styles.formInput, { flex: 1, marginBottom: 0, borderWidth: 0, backgroundColor: "transparent", paddingVertical: 10 }]}
+                  placeholder="Search by name, phone, or email"
+                  placeholderTextColor={Colors.light.textMuted}
+                  value={userSearchInput}
+                  onChangeText={setUserSearchInput}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  clearButtonMode="while-editing"
+                />
+                {Platform.OS !== "ios" && userSearchInput.length > 0 ? (
+                  <Pressable onPress={() => setUserSearchInput("")} hitSlop={8} accessibilityRole="button" accessibilityLabel="Clear search">
+                    <Ionicons name="close-circle" size={20} color={colors.textMuted} />
+                  </Pressable>
+                ) : null}
+              </View>
+            </View>
+            {usersLoading || (usersFetching && !isFetchingMoreUsers && userSearchActive) ? (
               <ActivityIndicator size="large" color={Colors.light.primary} style={{ marginTop: 20 }} />
             ) : (
               (() => {
@@ -2942,12 +2971,14 @@ export default function AdminDashboard() {
                     <View style={{ flexDirection: "row", gap: 12, marginBottom: 16 }}>
                       <View style={[styles.statCard, { flex: 1, backgroundColor: colors.card }]}>
                         <Text style={[styles.statLabel, { color: colors.textMuted }]}>All Users</Text>
-                        <Text style={[styles.statValue, { color: colors.text }]}>{users.length}</Text>
+                        <Text style={[styles.statValue, { color: colors.text }]}>{allUsersLabelCount}</Text>
                       </View>
-                      <View style={[styles.statCard, { flex: 1, backgroundColor: colors.card }]}>
-                        <Text style={[styles.statLabel, { color: colors.textMuted }]}>Inactive (180d+)</Text>
-                        <Text style={[styles.statValue, { color: "#9CA3AF" }]}>{inactiveUsers.length}</Text>
-                      </View>
+                      {!userSearchActive ? (
+                        <View style={[styles.statCard, { flex: 1, backgroundColor: colors.card }]}>
+                          <Text style={[styles.statLabel, { color: colors.textMuted }]}>Inactive (180d+)</Text>
+                          <Text style={[styles.statValue, { color: "#9CA3AF" }]}>{inactiveUsers.length}</Text>
+                        </View>
+                      ) : null}
                     </View>
 
                     {/* Device mismatch / denied login — open dedicated screen */}
@@ -3045,9 +3076,11 @@ export default function AdminDashboard() {
                     </View>
 
                     {/* All Users list */}
-                    <Text style={[styles.sectionTitle, { marginBottom: 10 }]}>All Users ({users.length})</Text>
+                    <Text style={[styles.sectionTitle, { marginBottom: 10 }]}>All Users ({allUsersLabelCount})</Text>
                     {users.length === 0 ? (
-                      <Text style={{ color: Colors.light.textMuted, fontFamily: "Inter_400Regular", fontSize: 14, textAlign: "center", marginTop: 20 }}>No users yet</Text>
+                      <Text style={{ color: Colors.light.textMuted, fontFamily: "Inter_400Regular", fontSize: 14, textAlign: "center", marginTop: 20 }}>
+                        {userSearchActive ? "No users match your search" : "No users yet"}
+                      </Text>
                     ) : (
                       <>
                         {users.map(renderUserCard)}
@@ -3068,7 +3101,7 @@ export default function AdminDashboard() {
                     )}
 
                     {/* Inactive Users section */}
-                    {inactiveUsers.length > 0 && (
+                    {!userSearchActive && inactiveUsers.length > 0 && (
                       <>
                         <View style={{ height: 1, backgroundColor: Colors.light.border, marginVertical: 20 }} />
                         <Text style={[styles.sectionTitle, { marginBottom: 10, color: "#9CA3AF" }]}>Inactive Users — 180+ days ({inactiveUsers.length})</Text>
@@ -3093,11 +3126,18 @@ export default function AdminDashboard() {
                     <Pressable onPress={() => setEditNotifModal(null)}><Ionicons name="close" size={24} color={Colors.light.text} /></Pressable>
                   </View>
                   <ScrollView style={{ paddingHorizontal: 20 }} showsVerticalScrollIndicator={false}>
-                    <Text style={styles.notifLabel}>Notification Title</Text>
+                    <Text style={styles.notifLabel}>Notification Title <Text style={{ fontFamily: "Inter_400Regular", color: Colors.light.textMuted }}>(optional if message or image)</Text></Text>
                     <TextInput style={styles.notifInput} placeholder="e.g., New Test Available!" placeholderTextColor={Colors.light.textMuted} value={editNotifTitle} onChangeText={setEditNotifTitle} />
                     <View style={{ height: 12 }} />
-                    <Text style={styles.notifLabel}>Message</Text>
+                    <Text style={styles.notifLabel}>Message <Text style={{ fontFamily: "Inter_400Regular", color: Colors.light.textMuted }}>(optional if title or image)</Text></Text>
                     <TextInput style={[styles.notifInput, styles.notifInputMulti]} placeholder="Enter your notification message..." placeholderTextColor={Colors.light.textMuted} value={editNotifMessage} onChangeText={setEditNotifMessage} multiline numberOfLines={4} />
+                    <AdminR2ImagePicker
+                      label="Notification Image (optional)"
+                      value={editNotifImageUrl}
+                      onChange={setEditNotifImageUrl}
+                      variant="notification"
+                      hint="Recommended: 1200 × 630 px. Upload to R2 or paste a public image / Google Drive link."
+                    />
                     <View style={{ flexDirection: "row", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
                       <View style={{ backgroundColor: "#EEF2FF", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4, flexDirection: "row", alignItems: "center", gap: 4 }}>
                         <Ionicons name="people" size={12} color={Colors.light.primary} />
@@ -3116,11 +3156,15 @@ export default function AdminDashboard() {
                   </ScrollView>
                   <View style={{ padding: 20, paddingTop: 8 }}>
                     <Pressable
-                      style={{ borderRadius: 12, overflow: "hidden", opacity: (!editNotifTitle.trim() || !editNotifMessage.trim()) ? 0.5 : 1 }}
-                      disabled={!editNotifTitle.trim() || !editNotifMessage.trim()}
+                      style={{ borderRadius: 12, overflow: "hidden", opacity: !editNotifHasContent ? 0.5 : 1 }}
+                      disabled={!editNotifHasContent}
                       onPress={async () => {
-                        if (!editNotifTitle.trim() || !editNotifMessage.trim()) return;
-                        await apiRequest("PUT", `/api/admin/notifications/${editNotifModal.id}`, { title: editNotifTitle, message: editNotifMessage });
+                        if (!editNotifHasContent) return;
+                        await apiRequest("PUT", `/api/admin/notifications/${editNotifModal.id}`, {
+                          title: editNotifTitle,
+                          message: editNotifMessage,
+                          imageUrl: editNotifImageUrl.trim() || null,
+                        });
                         setEditNotifModal(null);
                         refetchNotifHistory();
                       }}
@@ -3143,7 +3187,7 @@ export default function AdminDashboard() {
                     <Text style={styles.sectionTitle}>Send Notification</Text>
                   </View>
                   <View style={[styles.notifCard, { borderWidth: 0, borderRadius: 0, margin: 0 }]}>
-                  <Text style={styles.notifLabel}>Notification Title</Text>
+                  <Text style={styles.notifLabel}>Notification Title <Text style={{ fontFamily: "Inter_400Regular", color: Colors.light.textMuted }}>(optional if message or image)</Text></Text>
                   <TextInput
                     style={styles.notifInput}
                     placeholder="e.g., New Test Available!"
@@ -3151,7 +3195,7 @@ export default function AdminDashboard() {
                     value={notifTitle}
                     onChangeText={setNotifTitle}
                   />
-                  <Text style={styles.notifLabel}>Message</Text>
+                  <Text style={styles.notifLabel}>Message <Text style={{ fontFamily: "Inter_400Regular", color: Colors.light.textMuted }}>(optional if title or image)</Text></Text>
                   <TextInput
                     style={[styles.notifInput, styles.notifInputMulti]}
                     placeholder="Enter your notification message..."
@@ -3161,41 +3205,13 @@ export default function AdminDashboard() {
                     multiline
                     numberOfLines={4}
                   />
-                  {/* Image — optional: pick from gallery or paste URL */}
-                  <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-                    <Text style={styles.notifLabel}>Image <Text style={{ fontFamily: "Inter_400Regular", color: Colors.light.textMuted }}>(optional)</Text></Text>
-                    <Text style={{ fontSize: 11, fontFamily: "Inter_400Regular", color: Colors.light.textMuted }}>Max 2MB · 1200×630px recommended</Text>
-                  </View>
-                  {/* Preview */}
-                  {(notifImageBase64 || notifImageUrl.trim()) ? (
-                    <View style={{ borderRadius: 10, overflow: "hidden", marginBottom: 10, borderWidth: 1, borderColor: Colors.light.border }}>
-                      <Image source={{ uri: notifImageBase64 || notifImageUrl }} style={{ width: "100%", height: 150 }} resizeMode="cover" />
-                      <Pressable onPress={() => { setNotifImageBase64(null); setNotifImageUrl(""); }}
-                        style={{ position: "absolute", top: 6, right: 6, backgroundColor: "rgba(0,0,0,0.55)", borderRadius: 14, width: 28, height: 28, alignItems: "center", justifyContent: "center" }}>
-                        <Ionicons name="close" size={16} color="#fff" />
-                      </Pressable>
-                    </View>
-                  ) : (
-                    /* Pick from gallery button */
-                    <Pressable onPress={pickNotifImage}
-                      style={{ borderWidth: 1.5, borderColor: Colors.light.border, borderStyle: "dashed", borderRadius: 10, padding: 18, alignItems: "center", gap: 6, marginBottom: 8, backgroundColor: "#FAFAFA" }}>
-                      <Ionicons name="image-outline" size={28} color={Colors.light.textMuted} />
-                      <Text style={{ fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>Pick from Gallery / Files</Text>
-                      <Text style={{ fontSize: 11, fontFamily: "Inter_400Regular", color: Colors.light.textMuted }}>JPG, PNG · Max 2MB</Text>
-                    </Pressable>
-                  )}
-                  {/* Or paste URL */}
-                  {!notifImageBase64 && (
-                    <TextInput
-                      style={[styles.notifInput, { marginBottom: 12 }]}
-                      placeholder="Or paste image URL (https://...)"
-                      placeholderTextColor={Colors.light.textMuted}
-                      value={notifImageUrl}
-                      onChangeText={setNotifImageUrl}
-                      autoCapitalize="none"
-                      keyboardType="url"
-                    />
-                  )}
+                  <AdminR2ImagePicker
+                    label="Notification Image (optional)"
+                    value={notifImageUrl}
+                    onChange={setNotifImageUrl}
+                    variant="notification"
+                    hint="Recommended: 1200 × 630 px. Upload to R2 or paste a public image / Google Drive link."
+                  />
                   <Text style={styles.notifLabel}>Send To</Text>
                   <View style={{ flexDirection: "row", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
                     {[
@@ -3231,12 +3247,18 @@ export default function AdminDashboard() {
                     </View>
                   )}
                   <Pressable
-                    style={[styles.sendNotifBtn, (!notifTitle || !notifMessage || (notifTarget === "course" && !notifCourseId)) && styles.sendNotifBtnDisabled]}
+                    style={[styles.sendNotifBtn, (!notifHasContent || (notifTarget === "course" && !notifCourseId)) && styles.sendNotifBtnDisabled]}
                     onPress={() => {
-                      if (!notifTitle || !notifMessage) return;
+                      if (!notifHasContent) return;
                       if (notifTarget === "course" && !notifCourseId) return;
                       const targetLabel = notifTarget === "all" ? "all students" : notifTarget === "enrolled" ? "all enrolled users" : "students in selected course";
-                      const doSend = () => sendNotificationMutation.mutate({ title: notifTitle, message: notifMessage, target: notifTarget, courseId: notifCourseId, imageUrl: notifImageBase64 || notifImageUrl.trim() || undefined });
+                      const doSend = () => sendNotificationMutation.mutate({
+                        title: notifTitle,
+                        message: notifMessage,
+                        target: notifTarget,
+                        courseId: notifCourseId,
+                        imageUrl: notifImageUrl.trim() || undefined,
+                      });
                       if (Platform.OS === "web") {
                         if (window.confirm(`Send to ${targetLabel}?`)) doSend();
                       } else {
@@ -3246,7 +3268,7 @@ export default function AdminDashboard() {
                         ]);
                       }
                     }}
-                    disabled={!notifTitle || !notifMessage || (notifTarget === "course" && !notifCourseId) || sendNotificationMutation.isPending}
+                    disabled={!notifHasContent || (notifTarget === "course" && !notifCourseId) || sendNotificationMutation.isPending}
                   >
                     <LinearGradient colors={[Colors.light.primary, Colors.light.primaryDark]} style={styles.sendNotifBtnGrad}>
                       {sendNotificationMutation.isPending ? <ActivityIndicator color="#fff" /> : (
@@ -3311,17 +3333,17 @@ export default function AdminDashboard() {
                         {(showAllPastNotifs ? notifHistory : notifHistory.slice(0, 4)).map((n: any) => (
                           <Pressable key={n.id} style={{ backgroundColor: n.is_hidden ? "#F9FAFB" : "#fff", borderRadius: 12, padding: 12, borderWidth: 1, borderColor: n.is_hidden ? "#E5E7EB" : Colors.light.border, opacity: n.is_hidden ? 0.6 : 1 }}
                             onPress={() => {
-                              if (Platform.OS === "web") { setEditNotifTitle(n.title); setEditNotifMessage(n.message); setEditNotifModal(n); }
+                              if (Platform.OS === "web") { openEditNotifModal(n); }
                               else Alert.alert(n.title, "Choose an action", [
-                                { text: "Edit", onPress: () => { setEditNotifTitle(n.title); setEditNotifMessage(n.message); setEditNotifModal(n); } },
+                                { text: "Edit", onPress: () => { openEditNotifModal(n); } },
                                 { text: n.is_hidden ? "Unhide" : "Hide", onPress: async () => { await apiRequest("PUT", `/api/admin/notifications/${n.id}/hide`, { hidden: !n.is_hidden }); refetchNotifHistory(); } },
                                 { text: "Delete", style: "destructive", onPress: () => { apiRequest("DELETE", `/api/admin/notifications/${n.id}`).then(() => refetchNotifHistory()); } },
                                 { text: "Cancel", style: "cancel" },
                               ]);
                             }}>
                             {n.image_url ? (
-                              <View style={{ borderRadius: 8, overflow: "hidden", marginBottom: 8 }}>
-                                <Image source={{ uri: n.image_url }} style={{ width: "100%", height: 80 }} resizeMode="cover" />
+                              <View style={{ borderRadius: 8, overflow: "hidden", marginBottom: 8, borderWidth: 1, borderColor: Colors.light.border }}>
+                                <NotificationImage uri={n.image_url} />
                               </View>
                             ) : null}
                             <View style={{ gap: 4 }}>
@@ -3344,7 +3366,7 @@ export default function AdminDashboard() {
                             {/* Web inline actions */}
                             {Platform.OS === "web" && (
                               <View style={{ flexDirection: "row", gap: 6, marginTop: 8, borderTopWidth: 1, borderTopColor: Colors.light.border, paddingTop: 8 }}>
-                                <Pressable onPress={(e) => { e.stopPropagation(); setEditNotifTitle(n.title); setEditNotifMessage(n.message); setEditNotifModal(n); }}
+                                <Pressable onPress={(e) => { e.stopPropagation(); openEditNotifModal(n); }}
                                   style={{ flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6, backgroundColor: "#EEF2FF" }}>
                                   <Ionicons name="pencil" size={11} color={Colors.light.primary} />
                                   <Text style={{ fontSize: 11, fontFamily: "Inter_600SemiBold", color: Colors.light.primary }}>Edit</Text>

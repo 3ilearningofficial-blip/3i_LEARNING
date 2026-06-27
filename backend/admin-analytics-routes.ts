@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { buildAnalyticsRange } from "./admin-analytics-range";
 import { getRedisClient } from "./redis-client";
 
 type DbClient = {
@@ -44,36 +45,12 @@ export function registerAdminAnalyticsRoutes({
       }
 
       const now = Date.now();
-      const day = 86400000;
-      const toSafeTs = (value: unknown): number | null => {
-        const ts = new Date(String(value)).getTime();
-        return Number.isFinite(ts) ? ts : null;
-      };
-      const buildRange = (): { start: number; endExclusive: number } | null => {
-        if (period === "today") {
-          const start = new Date();
-          start.setHours(0, 0, 0, 0);
-          return { start: start.getTime(), endExclusive: start.getTime() + day };
-        }
-        if (period === "yesterday") {
-          const start = new Date();
-          start.setHours(0, 0, 0, 0);
-          start.setDate(start.getDate() - 1);
-          const end = new Date();
-          end.setHours(0, 0, 0, 0);
-          return { start: start.getTime(), endExclusive: end.getTime() };
-        }
-        if (period === "7days") return { start: now - 7 * day, endExclusive: now + day };
-        if (period === "15days") return { start: now - 15 * day, endExclusive: now + day };
-        if (period === "30days") return { start: now - 30 * day, endExclusive: now + day };
-        if (period === "custom" && startDate && endDate) {
-          const s = toSafeTs(startDate);
-          const e = toSafeTs(endDate);
-          if (s !== null && e !== null) return { start: s, endExclusive: e + day };
-        }
-        return null;
-      };
-      const range = buildRange();
+      const range = buildAnalyticsRange({
+        period: String(period || ""),
+        startDate: startDate ? String(startDate) : null,
+        endDate: endDate ? String(endDate) : null,
+        now,
+      });
       const rangeParams = range ? [range.start, range.endExclusive] : [];
       const paymentWhere = range ? " AND p.created_at >= $1 AND p.created_at < $2" : "";
       const failedWhere = range ? " WHERE pf.created_at >= $1 AND pf.created_at < $2" : "";
