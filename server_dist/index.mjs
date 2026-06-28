@@ -1393,6 +1393,1595 @@ var init_require_admin = __esm({
   }
 });
 
+// backend/staff-permissions.ts
+function isStaffRole(role) {
+  return STAFF_ROLES.includes(role);
+}
+function getDefaultPermissionsForRole(role) {
+  if (role === "manager") {
+    return {
+      ...TEACHER_DEFAULTS,
+      "analytics.view": true,
+      "users.manage": false
+    };
+  }
+  return { ...TEACHER_DEFAULTS };
+}
+function mergePermissionOverrides(role, overrides) {
+  const base = getDefaultPermissionsForRole(role);
+  for (const o of overrides) {
+    const key = o.permission_key;
+    if (key in base) base[key] = o.allowed;
+  }
+  return base;
+}
+var STAFF_PERMISSION_KEYS, TEACHER_DEFAULTS, STAFF_ROLES;
+var init_staff_permissions = __esm({
+  "backend/staff-permissions.ts"() {
+    "use strict";
+    STAFF_PERMISSION_KEYS = [
+      "live.schedule",
+      "live.start",
+      "live.start_web_only",
+      "tests.create",
+      "tests.edit",
+      "tests.delete",
+      "materials.course.create",
+      "materials.course.edit",
+      "materials.course.delete",
+      "materials.free.create",
+      "materials.free.edit",
+      "materials.free.delete",
+      "materials.youtube",
+      "folders.create",
+      "folders.delete",
+      "missions.create",
+      "missions.edit",
+      "missions.delete",
+      "lectures.upload_recording",
+      "course.settings.edit",
+      "analytics.view",
+      "users.manage"
+    ];
+    TEACHER_DEFAULTS = {
+      "live.schedule": true,
+      "live.start": true,
+      "live.start_web_only": true,
+      "tests.create": true,
+      "tests.edit": true,
+      "tests.delete": false,
+      "materials.course.create": true,
+      "materials.course.edit": true,
+      "materials.course.delete": false,
+      "materials.free.create": true,
+      "materials.free.edit": true,
+      "materials.free.delete": true,
+      "materials.youtube": false,
+      "folders.create": true,
+      "folders.delete": false,
+      "missions.create": true,
+      "missions.edit": true,
+      "missions.delete": false,
+      "lectures.upload_recording": false,
+      "course.settings.edit": false,
+      "analytics.view": false,
+      "users.manage": false
+    };
+    STAFF_ROLES = ["teacher", "manager"];
+  }
+});
+
+// backend/require-staff.ts
+function createRequireStaff(getAuthUser2) {
+  return async function requireStaff2(req, res, next) {
+    const user = await getAuthUser2(req);
+    if (!user || !isStaffRole(user.role)) {
+      res.status(403).json({ message: "Staff access required" });
+      return;
+    }
+    req.user = user;
+    next();
+  };
+}
+var init_require_staff = __esm({
+  "backend/require-staff.ts"() {
+    "use strict";
+    init_staff_permissions();
+  }
+});
+
+// backend/staff-access-utils.ts
+async function getStaffAssignments(db2, userId) {
+  const res = await db2.query(
+    `SELECT id, user_id, course_id, subject_key, assigned_at
+     FROM staff_course_assignments
+     WHERE user_id = $1 AND is_active = TRUE
+     ORDER BY assigned_at DESC`,
+    [userId]
+  );
+  return res.rows.map((r) => ({
+    id: Number(r.id),
+    user_id: Number(r.user_id),
+    course_id: Number(r.course_id),
+    subject_key: r.subject_key != null && String(r.subject_key).trim() !== "" ? String(r.subject_key) : null,
+    assigned_at: Number(r.assigned_at || 0)
+  }));
+}
+function assignmentCoversSubject(a, subjectKey) {
+  if (a.subject_key == null) return true;
+  if (subjectKey == null || String(subjectKey).trim() === "") return false;
+  return String(a.subject_key).toLowerCase() === String(subjectKey).toLowerCase();
+}
+function findAssignmentForCourse(assignments, courseId, subjectKey) {
+  const matches = assignments.filter((a) => a.course_id === courseId);
+  if (matches.length === 0) return null;
+  if (subjectKey != null && String(subjectKey).trim() !== "") {
+    const exact = matches.find((a) => assignmentCoversSubject(a, subjectKey));
+    if (exact) return exact;
+    return null;
+  }
+  return matches[0] ?? null;
+}
+async function getPermissionOverrides(db2, userId) {
+  const res = await db2.query(
+    `SELECT permission_key, allowed FROM staff_permission_overrides WHERE user_id = $1`,
+    [userId]
+  );
+  return res.rows;
+}
+async function getEffectivePermissions(db2, userId, role) {
+  const overrides = await getPermissionOverrides(db2, userId);
+  return mergePermissionOverrides(role, overrides);
+}
+async function hasPermission(db2, userId, role, permission) {
+  if (!isStaffRole(role)) return false;
+  const perms = await getEffectivePermissions(db2, userId, role);
+  return !!perms[permission];
+}
+async function assertCourseAssignment(db2, userId, courseId, opts) {
+  const assignments = await getStaffAssignments(db2, userId);
+  const assignment = findAssignmentForCourse(assignments, courseId, opts?.subjectKey);
+  if (!assignment) {
+    throw new StaffAccessError(403, "course_not_assigned", "You are not assigned to this course");
+  }
+  if (opts?.permission) {
+    const roleRes = await db2.query(`SELECT role FROM users WHERE id = $1 LIMIT 1`, [userId]);
+    const role = String(roleRes.rows[0]?.role || "");
+    const ok = await hasPermission(db2, userId, role, opts.permission);
+    if (!ok) {
+      throw new StaffAccessError(403, "permission_denied", "Permission denied");
+    }
+  }
+  return assignment;
+}
+function resolveSubjectKeyForWrite(assignment, requestedSubjectKey) {
+  if (assignment.subject_key != null) return assignment.subject_key;
+  if (requestedSubjectKey != null && String(requestedSubjectKey).trim() !== "") {
+    return String(requestedSubjectKey).trim();
+  }
+  return null;
+}
+function getClientPlatform2(req) {
+  const header = String(req.headers["x-app-platform"] || req.headers["x-platform"] || "").toLowerCase();
+  if (header === "web" || header === "ios" || header === "android") return header;
+  const ua = String(req.headers["user-agent"] || "").toLowerCase();
+  if (ua.includes("expo") || ua.includes("okhttp") || ua.includes("cfnetwork")) {
+    return "android";
+  }
+  return "web";
+}
+async function assertLiveStartAllowed(db2, userId, role, req) {
+  const perms = await getEffectivePermissions(db2, userId, role);
+  if (!perms["live.start"]) {
+    throw new StaffAccessError(403, "permission_denied", "Live start not permitted");
+  }
+  if (perms["live.start_web_only"] && getClientPlatform2(req) !== "web") {
+    throw new StaffAccessError(403, "live_web_only", "Start live classes from the web Teacher Portal");
+  }
+}
+async function logStaffActivity(db2, opts) {
+  try {
+    const ip = opts.req ? String(opts.req.headers["x-forwarded-for"] || opts.req.socket?.remoteAddress || "") : "";
+    const ua = opts.req ? String(opts.req.headers["user-agent"] || "") : "";
+    await db2.query(
+      `INSERT INTO staff_activity_log
+        (user_id, action, entity_type, entity_id, course_id, subject_key, meta, ip_address, user_agent, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [
+        opts.userId,
+        opts.action,
+        opts.entityType ?? null,
+        opts.entityId != null ? String(opts.entityId) : null,
+        opts.courseId ?? null,
+        opts.subjectKey ?? null,
+        JSON.stringify(opts.meta ?? {}),
+        ip.slice(0, 128),
+        ua.slice(0, 512),
+        Date.now()
+      ]
+    );
+  } catch {
+  }
+}
+function filterRowsBySubjectKey(rows, assignment) {
+  if (assignment.subject_key == null) return rows;
+  const sk = assignment.subject_key.toLowerCase();
+  return rows.filter((r) => String(r.subject_key || "").toLowerCase() === sk);
+}
+var StaffAccessError;
+var init_staff_access_utils = __esm({
+  "backend/staff-access-utils.ts"() {
+    "use strict";
+    init_staff_permissions();
+    StaffAccessError = class extends Error {
+      status;
+      code;
+      constructor(status, code, message) {
+        super(message);
+        this.status = status;
+        this.code = code;
+      }
+    };
+  }
+});
+
+// backend/staff-profile-utils.ts
+async function ensureStaffProfile(db2, userId) {
+  await db2.query(
+    `INSERT INTO staff_profiles (user_id, created_at, updated_at)
+     VALUES ($1, $2, $2)
+     ON CONFLICT (user_id) DO NOTHING`,
+    [userId, Date.now()]
+  );
+}
+async function loadStaffProfileBundle(db2, userId) {
+  const [userRes, profileRes, eduRes, expRes] = await Promise.all([
+    db2.query(
+      `SELECT id, name, email, phone, role, last_active_at, created_at FROM users WHERE id = $1 LIMIT 1`,
+      [userId]
+    ),
+    db2.query(`SELECT * FROM staff_profiles WHERE user_id = $1 LIMIT 1`, [userId]),
+    db2.query(
+      `SELECT * FROM staff_education WHERE user_id = $1 ORDER BY sort_order ASC, id ASC`,
+      [userId]
+    ),
+    db2.query(
+      `SELECT * FROM staff_experience WHERE user_id = $1 ORDER BY sort_order ASC, id ASC`,
+      [userId]
+    )
+  ]);
+  const user = userRes.rows[0];
+  if (!user) return null;
+  return {
+    user,
+    profile: profileRes.rows[0] || null,
+    education: eduRes.rows,
+    experience: expRes.rows
+  };
+}
+function serializeStaffListRow(row) {
+  return {
+    id: Number(row.id),
+    name: row.name || "",
+    email: row.email || "",
+    phone: row.phone || "",
+    role: row.role || "teacher",
+    employeeId: row.employee_id || "",
+    teacherId: row.teacher_id || "",
+    status: row.status || "active",
+    photoUrl: row.photo_url || "",
+    courseCount: Number(row.course_count || 0),
+    lastActiveAt: row.last_active_at != null ? Number(row.last_active_at) : null,
+    createdAt: row.created_at != null ? Number(row.created_at) : null
+  };
+}
+var init_staff_profile_utils = __esm({
+  "backend/staff-profile-utils.ts"() {
+    "use strict";
+  }
+});
+
+// backend/staff-course-about-sync.ts
+async function syncTeacherToCourseAbout(db2, userId, courseId) {
+  try {
+    const [profileRes, userRes, courseRes] = await Promise.all([
+      db2.query(`SELECT photo_url, personal_json, teacher_id FROM staff_profiles WHERE user_id = $1 LIMIT 1`, [userId]),
+      db2.query(`SELECT name FROM users WHERE id = $1 LIMIT 1`, [userId]),
+      db2.query(`SELECT teacher_details_json FROM courses WHERE id = $1 LIMIT 1`, [courseId])
+    ]);
+    const profile = profileRes.rows[0];
+    const user = userRes.rows[0];
+    const course = courseRes.rows[0];
+    if (!profile || !user || !course) return;
+    const personal = typeof profile.personal_json === "string" ? JSON.parse(profile.personal_json) : profile.personal_json || {};
+    let details = [];
+    try {
+      details = Array.isArray(course.teacher_details_json) ? course.teacher_details_json : JSON.parse(course.teacher_details_json || "[]");
+    } catch {
+      details = [];
+    }
+    const entry = {
+      name: user.name,
+      photoUrl: profile.photo_url || "",
+      teacherId: profile.teacher_id || "",
+      bio: personal.bio || "",
+      syncedFromStaffId: userId,
+      syncedAt: Date.now()
+    };
+    const idx = details.findIndex((d) => d.syncedFromStaffId === userId);
+    if (idx >= 0) details[idx] = { ...details[idx], ...entry };
+    else details.push(entry);
+    await db2.query(
+      `UPDATE courses SET teacher_image_url = COALESCE($2, teacher_image_url), teacher_details_json = $3 WHERE id = $1`,
+      [courseId, profile.photo_url || null, JSON.stringify(details)]
+    );
+  } catch (err) {
+    console.warn("[StaffSync] course about sync failed:", err);
+  }
+}
+async function parseAadharOcrPlaceholder(_fileUrl) {
+  return {
+    message: "OCR not configured. Enter details manually."
+  };
+}
+var init_staff_course_about_sync = __esm({
+  "backend/staff-course-about-sync.ts"() {
+    "use strict";
+  }
+});
+
+// backend/admin-staff-routes.ts
+function parseUserId(raw) {
+  const id = parseInt(String(raw), 10);
+  return Number.isFinite(id) && id > 0 ? id : null;
+}
+function adminUserId(req) {
+  const u = req.user;
+  return u?.id ?? null;
+}
+function registerAdminStaffRoutes({
+  app: app2,
+  db: db2,
+  requireAdmin: requireAdmin2,
+  runInTransaction: runInTransaction2
+}) {
+  app2.get("/api/admin/staff", requireAdmin2, async (req, res) => {
+    try {
+      const search = String(req.query.search ?? "").trim();
+      const roleFilter = String(req.query.role ?? "").trim().toLowerCase();
+      const params = [];
+      let where = `WHERE LOWER(COALESCE(u.role, '')) IN ('teacher', 'manager')`;
+      if (roleFilter && STAFF_ROLES_LIST.includes(roleFilter)) {
+        params.push(roleFilter);
+        where += ` AND LOWER(u.role) = $${params.length}`;
+      }
+      if (search) {
+        params.push(`%${search}%`);
+        const p = `$${params.length}`;
+        where += ` AND (COALESCE(u.name,'') ILIKE ${p} OR COALESCE(u.phone,'') ILIKE ${p} OR COALESCE(u.email,'') ILIKE ${p})`;
+      }
+      const result = await db2.query(
+        `SELECT u.id, u.name, u.email, u.phone, u.role, u.last_active_at, u.created_at,
+                sp.employee_id, sp.teacher_id, sp.status, sp.photo_url,
+                (SELECT COUNT(*)::int FROM staff_course_assignments a
+                 WHERE a.user_id = u.id AND a.is_active = TRUE) AS course_count
+         FROM users u
+         LEFT JOIN staff_profiles sp ON sp.user_id = u.id
+         ${where}
+         ORDER BY u.name ASC, u.id ASC
+         LIMIT 500`,
+        params
+      );
+      res.json(result.rows.map(serializeStaffListRow));
+    } catch (err) {
+      console.error("[AdminStaff] list failed:", err);
+      res.status(500).json({ message: "Failed to list staff" });
+    }
+  });
+  app2.post("/api/admin/staff/create", requireAdmin2, async (req, res) => {
+    try {
+      const { name, phone, email, role, employeeId, teacherId, joiningDate, reportingManager } = req.body || {};
+      const staffRole = String(role || "teacher").toLowerCase();
+      if (!STAFF_ROLES_LIST.includes(staffRole)) {
+        return res.status(400).json({ message: "Invalid staff role" });
+      }
+      const phoneNorm = String(phone || "").replace(/\D/g, "");
+      if (phoneNorm.length < 10) return res.status(400).json({ message: "Valid phone required" });
+      const existing = await db2.query(`SELECT id, role FROM users WHERE phone = $1 LIMIT 1`, [phoneNorm]);
+      if (existing.rows.length > 0) {
+        return res.status(409).json({ message: "Phone already registered. Use promote instead.", userId: existing.rows[0].id });
+      }
+      const now = Date.now();
+      const userRes = await db2.query(
+        `INSERT INTO users (name, email, phone, role, profile_complete, created_at, last_active_at)
+         VALUES ($1, $2, $3, $4, TRUE, $5, $5) RETURNING id, name, email, phone, role`,
+        [String(name || "").trim() || "Teacher", email || null, phoneNorm, staffRole, now]
+      );
+      const user = userRes.rows[0];
+      await db2.query(
+        `INSERT INTO staff_profiles (user_id, employee_id, teacher_id, joining_date, reporting_manager, status, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, 'active', $6, $6)`,
+        [
+          user.id,
+          employeeId || null,
+          teacherId || null,
+          joiningDate ? Number(joiningDate) : null,
+          reportingManager || null,
+          now
+        ]
+      );
+      await logStaffActivity(db2, {
+        userId: Number(user.id),
+        action: "staff.created",
+        entityType: "user",
+        entityId: user.id,
+        meta: { byAdmin: adminUserId(req) },
+        req
+      });
+      res.status(201).json(user);
+    } catch (err) {
+      console.error("[AdminStaff] create failed:", err);
+      res.status(500).json({ message: "Failed to create staff" });
+    }
+  });
+  app2.post("/api/admin/staff/:userId/promote", requireAdmin2, async (req, res) => {
+    try {
+      const userId = parseUserId(req.params.userId);
+      if (!userId) return res.status(400).json({ message: "Invalid user id" });
+      const staffRole = String(req.body?.role || "teacher").toLowerCase();
+      if (!STAFF_ROLES_LIST.includes(staffRole)) {
+        return res.status(400).json({ message: "Invalid staff role" });
+      }
+      const userRes = await db2.query(`SELECT id, role FROM users WHERE id = $1 LIMIT 1`, [userId]);
+      if (userRes.rows.length === 0) return res.status(404).json({ message: "User not found" });
+      const currentRole = String(userRes.rows[0].role || "").toLowerCase();
+      if (currentRole === "admin") return res.status(400).json({ message: "Cannot promote admin" });
+      await db2.query(`UPDATE users SET role = $1 WHERE id = $2`, [staffRole, userId]);
+      await ensureStaffProfile(db2, userId);
+      const body = req.body || {};
+      await db2.query(
+        `UPDATE staff_profiles SET
+           employee_id = COALESCE($2, employee_id),
+           teacher_id = COALESCE($3, teacher_id),
+           reporting_manager = COALESCE($4, reporting_manager),
+           updated_at = $5
+         WHERE user_id = $1`,
+        [userId, body.employeeId || null, body.teacherId || null, body.reportingManager || null, Date.now()]
+      );
+      await logStaffActivity(db2, {
+        userId,
+        action: "staff.promoted",
+        entityType: "user",
+        entityId: userId,
+        meta: { role: staffRole, byAdmin: adminUserId(req) },
+        req
+      });
+      res.json({ success: true, userId, role: staffRole });
+    } catch (err) {
+      console.error("[AdminStaff] promote failed:", err);
+      res.status(500).json({ message: "Failed to promote user" });
+    }
+  });
+  app2.post("/api/admin/staff/:userId/demote", requireAdmin2, async (req, res) => {
+    try {
+      const userId = parseUserId(req.params.userId);
+      if (!userId) return res.status(400).json({ message: "Invalid user id" });
+      await db2.query(`UPDATE users SET role = 'student' WHERE id = $1 AND role IN ('teacher', 'manager')`, [userId]);
+      await db2.query(`UPDATE staff_course_assignments SET is_active = FALSE WHERE user_id = $1`, [userId]);
+      await db2.query(`UPDATE staff_profiles SET status = 'inactive', updated_at = $2 WHERE user_id = $1`, [
+        userId,
+        Date.now()
+      ]);
+      await logStaffActivity(db2, {
+        userId,
+        action: "staff.demoted",
+        entityType: "user",
+        entityId: userId,
+        meta: { byAdmin: adminUserId(req) },
+        req
+      });
+      res.json({ success: true });
+    } catch (err) {
+      console.error("[AdminStaff] demote failed:", err);
+      res.status(500).json({ message: "Failed to demote staff" });
+    }
+  });
+  app2.get("/api/admin/staff/:userId", requireAdmin2, async (req, res) => {
+    try {
+      const userId = parseUserId(req.params.userId);
+      if (!userId) return res.status(400).json({ message: "Invalid user id" });
+      const bundle = await loadStaffProfileBundle(db2, userId);
+      if (!bundle) return res.status(404).json({ message: "Staff not found" });
+      const assignments = await getStaffAssignments(db2, userId);
+      const permissions = await getEffectivePermissions(db2, userId, String(bundle.user.role));
+      const overrides = await getPermissionOverrides(db2, userId);
+      res.json({ ...bundle, assignments, permissions, permissionOverrides: overrides });
+    } catch (err) {
+      console.error("[AdminStaff] get detail failed:", err);
+      res.status(500).json({ message: "Failed to load staff" });
+    }
+  });
+  app2.put("/api/admin/staff/:userId", requireAdmin2, async (req, res) => {
+    try {
+      const userId = parseUserId(req.params.userId);
+      if (!userId) return res.status(400).json({ message: "Invalid user id" });
+      await ensureStaffProfile(db2, userId);
+      const b = req.body || {};
+      if (b.name != null) await db2.query(`UPDATE users SET name = $1 WHERE id = $2`, [String(b.name).trim(), userId]);
+      if (b.email !== void 0) await db2.query(`UPDATE users SET email = $1 WHERE id = $2`, [b.email || null, userId]);
+      if (b.phone !== void 0) {
+        const phoneNorm = String(b.phone || "").replace(/\D/g, "");
+        await db2.query(`UPDATE users SET phone = $1 WHERE id = $2`, [phoneNorm || null, userId]);
+      }
+      await db2.query(
+        `UPDATE staff_profiles SET
+           employee_id = COALESCE($2, employee_id),
+           teacher_id = COALESCE($3, teacher_id),
+           status = COALESCE($4, status),
+           personal_json = COALESCE($5, personal_json),
+           working_json = COALESCE($6, working_json),
+           bank_json = COALESCE($7, bank_json),
+           company_json = COALESCE($8, company_json),
+           photo_url = COALESCE($9, photo_url),
+           resume_url = COALESCE($10, resume_url),
+           aadhar_number = COALESCE($11, aadhar_number),
+           aadhar_front_url = COALESCE($12, aadhar_front_url),
+           aadhar_back_url = COALESCE($13, aadhar_back_url),
+           joining_date = COALESCE($14, joining_date),
+           reporting_manager = COALESCE($15, reporting_manager),
+           department = COALESCE($16, department),
+           designation = COALESCE($17, designation),
+           updated_at = $18
+         WHERE user_id = $1`,
+        [
+          userId,
+          b.employeeId ?? null,
+          b.teacherId ?? null,
+          b.status ?? null,
+          b.personalJson != null ? JSON.stringify(b.personalJson) : null,
+          b.workingJson != null ? JSON.stringify(b.workingJson) : null,
+          b.bankJson != null ? JSON.stringify(b.bankJson) : null,
+          b.companyJson != null ? JSON.stringify(b.companyJson) : null,
+          b.photoUrl ?? null,
+          b.resumeUrl ?? null,
+          b.aadharNumber ?? null,
+          b.aadharFrontUrl ?? null,
+          b.aadharBackUrl ?? null,
+          b.joiningDate != null ? Number(b.joiningDate) : null,
+          b.reportingManager ?? null,
+          b.department ?? null,
+          b.designation ?? null,
+          Date.now()
+        ]
+      );
+      res.json({ success: true });
+    } catch (err) {
+      console.error("[AdminStaff] update failed:", err);
+      res.status(500).json({ message: "Failed to update staff" });
+    }
+  });
+  app2.get("/api/admin/staff/:userId/education", requireAdmin2, async (req, res) => {
+    try {
+      const userId = parseUserId(req.params.userId);
+      if (!userId) return res.status(400).json({ message: "Invalid user id" });
+      const result = await db2.query(
+        `SELECT * FROM staff_education WHERE user_id = $1 ORDER BY sort_order ASC, id ASC`,
+        [userId]
+      );
+      res.json(result.rows);
+    } catch {
+      res.status(500).json({ message: "Failed to load education" });
+    }
+  });
+  app2.put("/api/admin/staff/:userId/education", requireAdmin2, async (req, res) => {
+    try {
+      const userId = parseUserId(req.params.userId);
+      if (!userId) return res.status(400).json({ message: "Invalid user id" });
+      const items = Array.isArray(req.body?.items) ? req.body.items : [];
+      const tx = runInTransaction2 || (async (fn) => fn(db2));
+      await tx(async (txDb) => {
+        await txDb.query(`DELETE FROM staff_education WHERE user_id = $1`, [userId]);
+        for (let i = 0; i < items.length; i++) {
+          const e = items[i] || {};
+          await txDb.query(
+            `INSERT INTO staff_education (user_id, degree, institute, board, university, passing_year, percentage, certificate_url, sort_order, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+            [
+              userId,
+              e.degree || null,
+              e.institute || null,
+              e.board || null,
+              e.university || null,
+              e.passingYear || null,
+              e.percentage || null,
+              e.certificateUrl || null,
+              i,
+              Date.now()
+            ]
+          );
+        }
+      });
+      res.json({ success: true });
+    } catch (err) {
+      console.error("[AdminStaff] education update failed:", err);
+      res.status(500).json({ message: "Failed to update education" });
+    }
+  });
+  app2.get("/api/admin/staff/:userId/experience", requireAdmin2, async (req, res) => {
+    try {
+      const userId = parseUserId(req.params.userId);
+      if (!userId) return res.status(400).json({ message: "Invalid user id" });
+      const result = await db2.query(
+        `SELECT * FROM staff_experience WHERE user_id = $1 ORDER BY sort_order ASC, id ASC`,
+        [userId]
+      );
+      res.json(result.rows);
+    } catch {
+      res.status(500).json({ message: "Failed to load experience" });
+    }
+  });
+  app2.put("/api/admin/staff/:userId/experience", requireAdmin2, async (req, res) => {
+    try {
+      const userId = parseUserId(req.params.userId);
+      if (!userId) return res.status(400).json({ message: "Invalid user id" });
+      const items = Array.isArray(req.body?.items) ? req.body.items : [];
+      const tx = runInTransaction2 || (async (fn) => fn(db2));
+      await tx(async (txDb) => {
+        await txDb.query(`DELETE FROM staff_experience WHERE user_id = $1`, [userId]);
+        for (let i = 0; i < items.length; i++) {
+          const e = items[i] || {};
+          await txDb.query(
+            `INSERT INTO staff_experience (user_id, institute_name, designation, subjects, years_experience, joining_date, leaving_date, experience_letter_url, sort_order, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+            [
+              userId,
+              e.instituteName || null,
+              e.designation || null,
+              e.subjects || null,
+              e.yearsExperience || null,
+              e.joiningDate || null,
+              e.leavingDate || null,
+              e.experienceLetterUrl || null,
+              i,
+              Date.now()
+            ]
+          );
+        }
+      });
+      res.json({ success: true });
+    } catch (err) {
+      console.error("[AdminStaff] experience update failed:", err);
+      res.status(500).json({ message: "Failed to update experience" });
+    }
+  });
+  app2.get("/api/admin/staff/:userId/assignments", requireAdmin2, async (req, res) => {
+    try {
+      const userId = parseUserId(req.params.userId);
+      if (!userId) return res.status(400).json({ message: "Invalid user id" });
+      const result = await db2.query(
+        `SELECT a.*, c.title AS course_title
+         FROM staff_course_assignments a
+         JOIN courses c ON c.id = a.course_id
+         WHERE a.user_id = $1 AND a.is_active = TRUE
+         ORDER BY a.assigned_at DESC`,
+        [userId]
+      );
+      res.json(result.rows);
+    } catch {
+      res.status(500).json({ message: "Failed to load assignments" });
+    }
+  });
+  app2.post("/api/admin/staff/:userId/assignments", requireAdmin2, async (req, res) => {
+    try {
+      const userId = parseUserId(req.params.userId);
+      const courseId = parseUserId(req.body?.courseId);
+      if (!userId || !courseId) return res.status(400).json({ message: "Invalid user or course id" });
+      const subjectKey = typeof req.body?.subjectKey === "string" && req.body.subjectKey.trim() ? req.body.subjectKey.trim().toLowerCase() : null;
+      const adminId = adminUserId(req);
+      await db2.query(
+        `UPDATE staff_course_assignments SET is_active = FALSE
+         WHERE user_id = $1 AND course_id = $2 AND COALESCE(subject_key, '') = COALESCE($3::text, '') AND is_active = TRUE`,
+        [userId, courseId, subjectKey]
+      );
+      const result = await db2.query(
+        `INSERT INTO staff_course_assignments (user_id, course_id, subject_key, assigned_by, assigned_at, is_active)
+         VALUES ($1, $2, $3, $4, $5, TRUE) RETURNING *`,
+        [userId, courseId, subjectKey, adminId, Date.now()]
+      );
+      await syncTeacherToCourseAbout(db2, userId, courseId);
+      res.status(201).json(result.rows[0]);
+    } catch (err) {
+      console.error("[AdminStaff] assign failed:", err);
+      res.status(500).json({ message: "Failed to assign course" });
+    }
+  });
+  app2.delete("/api/admin/staff/:userId/assignments/:assignmentId", requireAdmin2, async (req, res) => {
+    try {
+      const userId = parseUserId(req.params.userId);
+      const assignmentId = parseUserId(req.params.assignmentId);
+      if (!userId || !assignmentId) return res.status(400).json({ message: "Invalid id" });
+      await db2.query(
+        `UPDATE staff_course_assignments SET is_active = FALSE WHERE id = $1 AND user_id = $2`,
+        [assignmentId, userId]
+      );
+      res.json({ success: true });
+    } catch {
+      res.status(500).json({ message: "Failed to remove assignment" });
+    }
+  });
+  app2.put("/api/admin/staff/:userId/permissions", requireAdmin2, async (req, res) => {
+    try {
+      const userId = parseUserId(req.params.userId);
+      if (!userId) return res.status(400).json({ message: "Invalid user id" });
+      const overrides = req.body?.overrides;
+      if (!Array.isArray(overrides)) return res.status(400).json({ message: "overrides array required" });
+      const adminId = adminUserId(req);
+      const tx = runInTransaction2 || (async (fn) => fn(db2));
+      await tx(async (txDb) => {
+        for (const o of overrides) {
+          const key = String(o.permissionKey || o.permission_key || "");
+          if (!STAFF_PERMISSION_KEYS.includes(key)) continue;
+          await txDb.query(
+            `INSERT INTO staff_permission_overrides (user_id, permission_key, allowed, updated_by, updated_at)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (user_id, permission_key) DO UPDATE SET allowed = EXCLUDED.allowed, updated_by = EXCLUDED.updated_by, updated_at = EXCLUDED.updated_at`,
+            [userId, key, !!o.allowed, adminId, Date.now()]
+          );
+        }
+      });
+      const permissions = await getEffectivePermissions(
+        db2,
+        userId,
+        String((await db2.query(`SELECT role FROM users WHERE id = $1`, [userId])).rows[0]?.role || "teacher")
+      );
+      res.json({ permissions });
+    } catch (err) {
+      console.error("[AdminStaff] permissions failed:", err);
+      res.status(500).json({ message: "Failed to update permissions" });
+    }
+  });
+  app2.get("/api/admin/staff/:userId/activity", requireAdmin2, async (req, res) => {
+    try {
+      const userId = parseUserId(req.params.userId);
+      if (!userId) return res.status(400).json({ message: "Invalid user id" });
+      const result = await db2.query(
+        `SELECT * FROM staff_activity_log WHERE user_id = $1 ORDER BY created_at DESC LIMIT 200`,
+        [userId]
+      );
+      res.json(result.rows);
+    } catch {
+      res.status(500).json({ message: "Failed to load activity" });
+    }
+  });
+  app2.get("/api/admin/staff/requests/list", requireAdmin2, async (req, res) => {
+    try {
+      const status = String(req.query.status || "").trim();
+      const params = [];
+      let where = "WHERE 1=1";
+      if (status) {
+        params.push(status);
+        where += ` AND r.status = $${params.length}`;
+      }
+      const result = await db2.query(
+        `SELECT r.*, u.name AS user_name, u.phone AS user_phone
+         FROM staff_access_requests r
+         JOIN users u ON u.id = r.user_id
+         ${where}
+         ORDER BY r.created_at DESC
+         LIMIT 300`,
+        params
+      );
+      res.json(result.rows);
+    } catch {
+      res.status(500).json({ message: "Failed to load requests" });
+    }
+  });
+  app2.put("/api/admin/staff/requests/:requestId", requireAdmin2, async (req, res) => {
+    try {
+      const requestId = parseUserId(req.params.requestId);
+      if (!requestId) return res.status(400).json({ message: "Invalid request id" });
+      const status = String(req.body?.status || "").toLowerCase();
+      if (!["approved", "rejected"].includes(status)) {
+        return res.status(400).json({ message: "status must be approved or rejected" });
+      }
+      const reqRow = await db2.query(`SELECT * FROM staff_access_requests WHERE id = $1 LIMIT 1`, [requestId]);
+      if (reqRow.rows.length === 0) return res.status(404).json({ message: "Request not found" });
+      const row = reqRow.rows[0];
+      const adminId = adminUserId(req);
+      await db2.query(
+        `UPDATE staff_access_requests SET status = $1, admin_note = $2, reviewed_by = $3, reviewed_at = $4 WHERE id = $5`,
+        [status, req.body?.adminNote || null, adminId, Date.now(), requestId]
+      );
+      if (status === "approved") {
+        const type = String(row.request_type || "");
+        const userId = Number(row.user_id);
+        if (type === "recording_upload") {
+          await db2.query(
+            `INSERT INTO staff_permission_overrides (user_id, permission_key, allowed, updated_by, updated_at)
+             VALUES ($1, 'lectures.upload_recording', TRUE, $2, $3)
+             ON CONFLICT (user_id, permission_key) DO UPDATE SET allowed = TRUE, updated_by = EXCLUDED.updated_by, updated_at = EXCLUDED.updated_at`,
+            [userId, adminId, Date.now()]
+          );
+        } else if (type === "youtube_materials") {
+          await db2.query(
+            `INSERT INTO staff_permission_overrides (user_id, permission_key, allowed, updated_by, updated_at)
+             VALUES ($1, 'materials.youtube', TRUE, $2, $3)
+             ON CONFLICT (user_id, permission_key) DO UPDATE SET allowed = TRUE, updated_by = EXCLUDED.updated_at`,
+            [userId, adminId, Date.now()]
+          );
+        }
+      }
+      res.json({ success: true });
+    } catch (err) {
+      console.error("[AdminStaff] request review failed:", err);
+      res.status(500).json({ message: "Failed to review request" });
+    }
+  });
+  app2.post("/api/admin/staff/ocr/aadhar", requireAdmin2, async (req, res) => {
+    try {
+      const fileUrl = String(req.body?.fileUrl || "");
+      if (!fileUrl) return res.status(400).json({ message: "fileUrl required" });
+      const parsed = await parseAadharOcrPlaceholder(fileUrl);
+      res.json({ fields: parsed, verified: false });
+    } catch {
+      res.status(500).json({ message: "OCR failed" });
+    }
+  });
+}
+var STAFF_ROLES_LIST;
+var init_admin_staff_routes = __esm({
+  "backend/admin-staff-routes.ts"() {
+    "use strict";
+    init_staff_permissions();
+    init_staff_access_utils();
+    init_staff_profile_utils();
+    init_staff_course_about_sync();
+    STAFF_ROLES_LIST = ["teacher", "manager"];
+  }
+});
+
+// backend/require-staff-permission.ts
+function createRequireStaffPermission(db2) {
+  return function requireStaffPermission(permission) {
+    return async (req, res, next) => {
+      const user = req.user;
+      if (!user) {
+        res.status(403).json({ message: "Staff access required" });
+        return;
+      }
+      const ok = await hasPermission(db2, user.id, user.role, permission);
+      if (!ok) {
+        res.status(403).json({ message: "Permission denied", code: "permission_denied" });
+        return;
+      }
+      next();
+    };
+  };
+}
+var init_require_staff_permission = __esm({
+  "backend/require-staff-permission.ts"() {
+    "use strict";
+    init_staff_access_utils();
+  }
+});
+
+// backend/staff-routes.ts
+function staffUser(req) {
+  return req.user;
+}
+function handleStaffError(res, err) {
+  if (err instanceof StaffAccessError) {
+    res.status(err.status).json({ message: err.message, code: err.code });
+    return;
+  }
+  console.error("[Staff]", err);
+  res.status(500).json({ message: "Internal error" });
+}
+function parseId(raw) {
+  const id = parseInt(String(raw), 10);
+  return Number.isFinite(id) && id > 0 ? id : null;
+}
+function registerStaffRoutes({
+  app: app2,
+  db: db2,
+  requireStaff: requireStaff2,
+  updateCourseTestCounts: updateCourseTestCounts3,
+  recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse3
+}) {
+  const requireStaffPermission = createRequireStaffPermission(db2);
+  app2.get("/api/staff/me", requireStaff2, async (req, res) => {
+    try {
+      const user = staffUser(req);
+      const assignments = await getStaffAssignments(db2, user.id);
+      const permissions = await getEffectivePermissions(db2, user.id, user.role);
+      const profileRes = await db2.query(`SELECT * FROM staff_profiles WHERE user_id = $1 LIMIT 1`, [user.id]);
+      res.json({ user, assignments, permissions, profile: profileRes.rows[0] || null });
+    } catch (err) {
+      handleStaffError(res, err);
+    }
+  });
+  app2.get("/api/staff/assignments", requireStaff2, async (req, res) => {
+    try {
+      const user = staffUser(req);
+      const result = await db2.query(
+        `SELECT a.*, c.title, c.course_type, c.multi_subject_config
+         FROM staff_course_assignments a
+         JOIN courses c ON c.id = a.course_id
+         WHERE a.user_id = $1 AND a.is_active = TRUE
+         ORDER BY c.title ASC`,
+        [user.id]
+      );
+      res.json(result.rows);
+    } catch (err) {
+      handleStaffError(res, err);
+    }
+  });
+  app2.get("/api/staff/dashboard", requireStaff2, async (req, res) => {
+    try {
+      const user = staffUser(req);
+      const assignments = await getStaffAssignments(db2, user.id);
+      const courseIds = [...new Set(assignments.map((a) => a.course_id))];
+      if (courseIds.length === 0) {
+        return res.json({ todayClasses: [], upcomingClasses: [], courses: [], pendingRequests: [], recentActivity: [] });
+      }
+      const now = Date.now();
+      const dayStart = /* @__PURE__ */ new Date();
+      dayStart.setHours(0, 0, 0, 0);
+      const dayEnd = dayStart.getTime() + 864e5;
+      const liveRes = await db2.query(
+        `SELECT lc.*, c.title AS course_title
+         FROM live_classes lc
+         LEFT JOIN courses c ON c.id = lc.course_id
+         WHERE lc.course_id = ANY($1::int[])
+           AND COALESCE(lc.is_completed, FALSE) = FALSE
+         ORDER BY lc.scheduled_at ASC NULLS LAST
+         LIMIT 50`,
+        [courseIds]
+      );
+      const filteredLive = liveRes.rows.filter((lc) => {
+        const a = findAssignmentForCourse(assignments, Number(lc.course_id), lc.subject_key);
+        return !!a;
+      });
+      const todayClasses = filteredLive.filter(
+        (lc) => lc.scheduled_at >= dayStart.getTime() && lc.scheduled_at < dayEnd
+      );
+      const upcomingClasses = filteredLive.filter((lc) => Number(lc.scheduled_at || 0) >= now).slice(0, 10);
+      const coursesRes = await db2.query(
+        `SELECT id, title, course_type, thumbnail FROM courses WHERE id = ANY($1::int[])`,
+        [courseIds]
+      );
+      const pendingRes = await db2.query(
+        `SELECT * FROM staff_access_requests WHERE user_id = $1 AND status = 'pending' ORDER BY created_at DESC LIMIT 20`,
+        [user.id]
+      );
+      const activityRes = await db2.query(
+        `SELECT * FROM staff_activity_log WHERE user_id = $1 ORDER BY created_at DESC LIMIT 15`,
+        [user.id]
+      );
+      res.json({
+        todayClasses,
+        upcomingClasses,
+        courses: coursesRes.rows,
+        pendingRequests: pendingRes.rows,
+        recentActivity: activityRes.rows
+      });
+    } catch (err) {
+      handleStaffError(res, err);
+    }
+  });
+  app2.get("/api/staff/profile", requireStaff2, async (req, res) => {
+    try {
+      const user = staffUser(req);
+      const bundle = await loadStaffProfileBundle(db2, user.id);
+      res.json(bundle);
+    } catch (err) {
+      handleStaffError(res, err);
+    }
+  });
+  app2.put("/api/staff/profile", requireStaff2, async (req, res) => {
+    try {
+      const user = staffUser(req);
+      await ensureStaffProfile(db2, user.id);
+      const b = req.body || {};
+      if (b.name != null) await db2.query(`UPDATE users SET name = $1 WHERE id = $2`, [String(b.name).trim(), user.id]);
+      await db2.query(
+        `UPDATE staff_profiles SET
+           personal_json = COALESCE($2, personal_json),
+           bank_json = COALESCE($3, bank_json),
+           photo_url = COALESCE($4, photo_url),
+           resume_url = COALESCE($5, resume_url),
+           aadhar_number = COALESCE($6, aadhar_number),
+           aadhar_front_url = COALESCE($7, aadhar_front_url),
+           aadhar_back_url = COALESCE($8, aadhar_back_url),
+           updated_at = $9
+         WHERE user_id = $1`,
+        [
+          user.id,
+          b.personalJson != null ? JSON.stringify(b.personalJson) : null,
+          b.bankJson != null ? JSON.stringify(b.bankJson) : null,
+          b.photoUrl ?? null,
+          b.resumeUrl ?? null,
+          b.aadharNumber ?? null,
+          b.aadharFrontUrl ?? null,
+          b.aadharBackUrl ?? null,
+          Date.now()
+        ]
+      );
+      await logStaffActivity(db2, { userId: user.id, action: "profile.updated", req });
+      res.json({ success: true });
+    } catch (err) {
+      handleStaffError(res, err);
+    }
+  });
+  app2.get("/api/staff/profile/education", requireStaff2, async (req, res) => {
+    try {
+      const user = staffUser(req);
+      const result = await db2.query(
+        `SELECT * FROM staff_education WHERE user_id = $1 ORDER BY sort_order ASC, id ASC`,
+        [user.id]
+      );
+      res.json(result.rows);
+    } catch (err) {
+      handleStaffError(res, err);
+    }
+  });
+  app2.put("/api/staff/profile/education", requireStaff2, async (req, res) => {
+    try {
+      const user = staffUser(req);
+      const items = Array.isArray(req.body?.items) ? req.body.items : [];
+      await db2.query(`DELETE FROM staff_education WHERE user_id = $1`, [user.id]);
+      for (let i = 0; i < items.length; i++) {
+        const e = items[i] || {};
+        await db2.query(
+          `INSERT INTO staff_education (user_id, degree, institute, board, university, passing_year, percentage, certificate_url, sort_order, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+          [
+            user.id,
+            e.degree || null,
+            e.institute || null,
+            e.board || null,
+            e.university || null,
+            e.passingYear || null,
+            e.percentage || null,
+            e.certificateUrl || null,
+            i,
+            Date.now()
+          ]
+        );
+      }
+      await logStaffActivity(db2, { userId: user.id, action: "education.updated", req });
+      res.json({ success: true });
+    } catch (err) {
+      handleStaffError(res, err);
+    }
+  });
+  app2.get("/api/staff/courses", requireStaff2, async (req, res) => {
+    try {
+      const user = staffUser(req);
+      const assignments = await getStaffAssignments(db2, user.id);
+      const courseIds = [...new Set(assignments.map((a) => a.course_id))];
+      if (courseIds.length === 0) return res.json([]);
+      const result = await db2.query(`SELECT * FROM courses WHERE id = ANY($1::int[]) ORDER BY title ASC`, [courseIds]);
+      res.json(
+        result.rows.map((c) => ({
+          ...c,
+          assignments: assignments.filter((a) => a.course_id === c.id)
+        }))
+      );
+    } catch (err) {
+      handleStaffError(res, err);
+    }
+  });
+  app2.get("/api/staff/courses/:id", requireStaff2, async (req, res) => {
+    try {
+      const user = staffUser(req);
+      const courseId = parseId(req.params.id);
+      if (!courseId) return res.status(400).json({ message: "Invalid course id" });
+      const assignment = await assertCourseAssignment(db2, user.id, courseId);
+      const courseRes = await db2.query(`SELECT * FROM courses WHERE id = $1 LIMIT 1`, [courseId]);
+      if (courseRes.rows.length === 0) return res.status(404).json({ message: "Course not found" });
+      const [lectures, tests, materials, liveClasses, missions] = await Promise.all([
+        db2.query(`SELECT * FROM lectures WHERE course_id = $1 ORDER BY order_index ASC, id ASC`, [courseId]),
+        db2.query(`SELECT * FROM tests WHERE course_id = $1 ORDER BY order_index ASC, id ASC`, [courseId]),
+        db2.query(`SELECT * FROM study_materials WHERE course_id = $1 ORDER BY order_index ASC, id ASC`, [courseId]),
+        db2.query(`SELECT * FROM live_classes WHERE course_id = $1 ORDER BY scheduled_at DESC NULLS LAST`, [courseId]),
+        db2.query(`SELECT * FROM daily_missions WHERE course_id = $1 ORDER BY id DESC`, [courseId])
+      ]);
+      res.json({
+        course: courseRes.rows[0],
+        assignment,
+        lectures: filterRowsBySubjectKey(lectures.rows, assignment),
+        tests: filterRowsBySubjectKey(tests.rows, assignment),
+        materials: filterRowsBySubjectKey(materials.rows, assignment),
+        liveClasses: filterRowsBySubjectKey(liveClasses.rows, assignment),
+        missions: filterRowsBySubjectKey(missions.rows, assignment)
+      });
+    } catch (err) {
+      handleStaffError(res, err);
+    }
+  });
+  app2.post("/api/staff/live-classes", requireStaff2, requireStaffPermission("live.schedule"), async (req, res) => {
+    try {
+      const user = staffUser(req);
+      const courseId = parseId(req.body?.courseId);
+      if (!courseId) return res.status(400).json({ message: "courseId required" });
+      const assignment = await assertCourseAssignment(db2, user.id, courseId, { permission: "live.schedule" });
+      const subjectKey = resolveSubjectKeyForWrite(assignment, req.body?.subjectKey);
+      const { title, description, scheduledAt, isLive, streamType, chatMode, showViewerCount, lectureSectionTitle, lectureSubfolderTitle } = req.body || {};
+      if (req.body?.isRecordingMode === true) {
+        return res.status(403).json({ message: "Recording sessions require admin approval" });
+      }
+      const result = await db2.query(
+        `INSERT INTO live_classes (title, description, course_id, scheduled_at, is_live, is_public, notify_email, notify_bell, is_free_preview, stream_type, chat_mode, show_viewer_count, lecture_section_title, lecture_subfolder_title, is_recording_mode, subject_key, created_at)
+         VALUES ($1, $2, $3, $4, $5, FALSE, FALSE, FALSE, FALSE, $6, $7, $8, $9, $10, FALSE, $11, $12) RETURNING *`,
+        [
+          title,
+          description || "",
+          courseId,
+          scheduledAt,
+          isLive || false,
+          streamType || "rtmp",
+          chatMode || "public",
+          showViewerCount !== false,
+          lectureSectionTitle || null,
+          lectureSubfolderTitle || null,
+          subjectKey,
+          Date.now()
+        ]
+      );
+      await logStaffActivity(db2, {
+        userId: user.id,
+        action: "live.scheduled",
+        entityType: "live_class",
+        entityId: result.rows[0]?.id,
+        courseId,
+        subjectKey,
+        req
+      });
+      res.json(result.rows[0]);
+    } catch (err) {
+      handleStaffError(res, err);
+    }
+  });
+  app2.put("/api/staff/live-classes/:id", requireStaff2, requireStaffPermission("live.schedule"), async (req, res) => {
+    try {
+      const user = staffUser(req);
+      const liveId = parseId(req.params.id);
+      if (!liveId) return res.status(400).json({ message: "Invalid id" });
+      const lc = await db2.query(`SELECT * FROM live_classes WHERE id = $1 LIMIT 1`, [liveId]);
+      if (lc.rows.length === 0) return res.status(404).json({ message: "Not found" });
+      const courseId = Number(lc.rows[0].course_id);
+      await assertCourseAssignment(db2, user.id, courseId, {
+        subjectKey: lc.rows[0].subject_key,
+        permission: "live.schedule"
+      });
+      const b = req.body || {};
+      const result = await db2.query(
+        `UPDATE live_classes SET title = COALESCE($2, title), description = COALESCE($3, description), scheduled_at = COALESCE($4, scheduled_at)
+         WHERE id = $1 RETURNING *`,
+        [liveId, b.title, b.description, b.scheduledAt]
+      );
+      await logStaffActivity(db2, { userId: user.id, action: "live.updated", entityType: "live_class", entityId: liveId, courseId, req });
+      res.json(result.rows[0]);
+    } catch (err) {
+      handleStaffError(res, err);
+    }
+  });
+  app2.post("/api/staff/live-classes/:id/stream/create", requireStaff2, async (req, res) => {
+    try {
+      const user = staffUser(req);
+      await assertLiveStartAllowed(db2, user.id, user.role, req);
+      const liveId = parseId(req.params.id);
+      if (!liveId) return res.status(400).json({ message: "Invalid id" });
+      const lcResult = await db2.query(`SELECT * FROM live_classes WHERE id = $1`, [liveId]);
+      if (lcResult.rows.length === 0) return res.status(404).json({ message: "Live class not found" });
+      const liveClass = lcResult.rows[0];
+      await assertCourseAssignment(db2, user.id, Number(liveClass.course_id), {
+        subjectKey: liveClass.subject_key,
+        permission: "live.start"
+      });
+      const accountId = process.env.CF_STREAM_ACCOUNT_ID || process.env.R2_ACCOUNT_ID;
+      const apiToken = process.env.CF_STREAM_API_TOKEN;
+      if (!accountId || !apiToken) {
+        return res.status(500).json({ message: "Cloudflare Stream credentials not configured" });
+      }
+      if (liveClass.cf_stream_uid) {
+        return res.json({
+          uid: liveClass.cf_stream_uid,
+          rtmpUrl: liveClass.cf_stream_rtmp_url,
+          streamKey: liveClass.cf_stream_key,
+          playbackHls: liveClass.cf_playback_hls
+        });
+      }
+      const cfRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/live_inputs`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ meta: { name: liveClass.title }, recording: { mode: "automatic", timeoutSeconds: 20 } })
+      });
+      if (!cfRes.ok) {
+        const errBody = await cfRes.text();
+        return res.status(502).json({ message: "Cloudflare Stream API error: " + errBody });
+      }
+      const cfData = await cfRes.json();
+      const input = cfData.result;
+      const uid = input.uid;
+      const rtmpUrl = input.rtmps?.url || "rtmps://live.cloudflare.com:443/live/";
+      const streamKey = input.rtmps?.streamKey || uid;
+      const playbackHls = `https://videodelivery.net/${uid}/manifest/video.m3u8`;
+      await db2.query(
+        "UPDATE live_classes SET cf_stream_uid = $1, cf_stream_key = $2, cf_stream_rtmp_url = $3, cf_playback_hls = $4 WHERE id = $5",
+        [uid, streamKey, rtmpUrl, playbackHls, liveId]
+      );
+      await logStaffActivity(db2, {
+        userId: user.id,
+        action: "live.stream_created",
+        entityType: "live_class",
+        entityId: liveId,
+        courseId: Number(liveClass.course_id),
+        req
+      });
+      res.json({ uid, rtmpUrl, streamKey, playbackHls });
+    } catch (err) {
+      handleStaffError(res, err);
+    }
+  });
+  app2.post("/api/staff/tests", requireStaff2, requireStaffPermission("tests.create"), async (req, res) => {
+    try {
+      const user = staffUser(req);
+      const { title, description, courseId, durationMinutes: durationMinutes2, totalMarks, passingMarks, testType, folderName, difficulty, scheduledAt, subjectKey } = req.body || {};
+      const cid = courseId != null ? parseId(courseId) : null;
+      let normalizedSubjectKey = null;
+      if (cid) {
+        const assignment = await assertCourseAssignment(db2, user.id, cid, { permission: "tests.create" });
+        normalizedSubjectKey = resolveSubjectKeyForWrite(assignment, subjectKey);
+      }
+      const result = await db2.query(
+        `INSERT INTO tests (title, description, course_id, duration_minutes, total_marks, passing_marks, test_type, folder_name, difficulty, scheduled_at, subject_key, is_published, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, TRUE, $12) RETURNING *`,
+        [
+          title,
+          description,
+          cid,
+          durationMinutes2 || 60,
+          totalMarks || 100,
+          passingMarks || 35,
+          testType || "practice",
+          folderName || null,
+          difficulty || "moderate",
+          scheduledAt ? new Date(scheduledAt).getTime() : null,
+          normalizedSubjectKey,
+          Date.now()
+        ]
+      );
+      if (cid && updateCourseTestCounts3) await updateCourseTestCounts3(String(cid));
+      await logStaffActivity(db2, {
+        userId: user.id,
+        action: "test.created",
+        entityType: "test",
+        entityId: result.rows[0]?.id,
+        courseId: cid,
+        subjectKey: normalizedSubjectKey,
+        req
+      });
+      res.json(result.rows[0]);
+    } catch (err) {
+      handleStaffError(res, err);
+    }
+  });
+  app2.put("/api/staff/tests/:id", requireStaff2, requireStaffPermission("tests.edit"), async (req, res) => {
+    try {
+      const user = staffUser(req);
+      const testId = parseId(req.params.id);
+      if (!testId) return res.status(400).json({ message: "Invalid test id" });
+      const testRes = await db2.query(`SELECT * FROM tests WHERE id = $1 LIMIT 1`, [testId]);
+      if (testRes.rows.length === 0) return res.status(404).json({ message: "Test not found" });
+      const test = testRes.rows[0];
+      if (test.course_id) {
+        await assertCourseAssignment(db2, user.id, Number(test.course_id), {
+          subjectKey: test.subject_key,
+          permission: "tests.edit"
+        });
+      }
+      const b = req.body || {};
+      const result = await db2.query(
+        `UPDATE tests SET title = COALESCE($2, title), description = COALESCE($3, description), duration_minutes = COALESCE($4, duration_minutes),
+         total_marks = COALESCE($5, total_marks), passing_marks = COALESCE($6, passing_marks), folder_name = COALESCE($7, folder_name)
+         WHERE id = $1 RETURNING *`,
+        [testId, b.title, b.description, b.durationMinutes, b.totalMarks, b.passingMarks, b.folderName]
+      );
+      await logStaffActivity(db2, { userId: user.id, action: "test.updated", entityType: "test", entityId: testId, req });
+      res.json(result.rows[0]);
+    } catch (err) {
+      handleStaffError(res, err);
+    }
+  });
+  app2.get("/api/staff/tests", requireStaff2, async (req, res) => {
+    try {
+      const user = staffUser(req);
+      const assignments = await getStaffAssignments(db2, user.id);
+      const courseIds = [...new Set(assignments.map((a) => a.course_id))];
+      const standalone = await db2.query(
+        `SELECT t.*, NULL AS course_title FROM tests t WHERE t.course_id IS NULL ORDER BY t.created_at DESC LIMIT 200`
+      );
+      let courseTests = [];
+      if (courseIds.length > 0) {
+        const ct = await db2.query(
+          `SELECT t.*, c.title AS course_title FROM tests t JOIN courses c ON c.id = t.course_id WHERE t.course_id = ANY($1::int[])`,
+          [courseIds]
+        );
+        courseTests = ct.rows.filter((t) => {
+          const a = findAssignmentForCourse(assignments, Number(t.course_id), t.subject_key);
+          return !!a;
+        });
+      }
+      res.json([...standalone.rows, ...courseTests]);
+    } catch (err) {
+      handleStaffError(res, err);
+    }
+  });
+  app2.post("/api/staff/study-materials", requireStaff2, requireStaffPermission("materials.course.create"), async (req, res) => {
+    try {
+      const user = staffUser(req);
+      const courseId = parseId(req.body?.courseId);
+      if (!courseId) return res.status(400).json({ message: "courseId required" });
+      const assignment = await assertCourseAssignment(db2, user.id, courseId, { permission: "materials.course.create" });
+      const subjectKey = resolveSubjectKeyForWrite(assignment, req.body?.subjectKey);
+      const { title, description, fileUrl, fileType, sectionTitle, downloadAllowed } = req.body || {};
+      const result = await db2.query(
+        `INSERT INTO study_materials (course_id, title, description, file_url, file_type, section_title, subject_key, download_allowed, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+        [courseId, title, description || "", fileUrl, fileType || "pdf", sectionTitle || null, subjectKey, downloadAllowed || false, Date.now()]
+      );
+      await logStaffActivity(db2, {
+        userId: user.id,
+        action: "material.created",
+        entityType: "material",
+        entityId: result.rows[0]?.id,
+        courseId,
+        subjectKey,
+        req
+      });
+      res.json(result.rows[0]);
+    } catch (err) {
+      handleStaffError(res, err);
+    }
+  });
+  app2.put("/api/staff/study-materials/:id", requireStaff2, requireStaffPermission("materials.course.edit"), async (req, res) => {
+    try {
+      const user = staffUser(req);
+      const materialId = parseId(req.params.id);
+      if (!materialId) return res.status(400).json({ message: "Invalid id" });
+      const mRes = await db2.query(`SELECT * FROM study_materials WHERE id = $1`, [materialId]);
+      if (mRes.rows.length === 0) return res.status(404).json({ message: "Not found" });
+      const m = mRes.rows[0];
+      await assertCourseAssignment(db2, user.id, Number(m.course_id), {
+        subjectKey: m.subject_key,
+        permission: "materials.course.edit"
+      });
+      const b = req.body || {};
+      const result = await db2.query(
+        `UPDATE study_materials SET title = COALESCE($2, title), description = COALESCE($3, description) WHERE id = $1 RETURNING *`,
+        [materialId, b.title, b.description]
+      );
+      res.json(result.rows[0]);
+    } catch (err) {
+      handleStaffError(res, err);
+    }
+  });
+  app2.post("/api/staff/daily-missions", requireStaff2, requireStaffPermission("missions.create"), async (req, res) => {
+    try {
+      const user = staffUser(req);
+      const { title, description, questions, missionDate, xpReward, missionType, courseId, folderName, subjectKey } = req.body || {};
+      const parsedCourseId = parseId(courseId);
+      if (!parsedCourseId) return res.status(400).json({ message: "courseId required" });
+      const assignment = await assertCourseAssignment(db2, user.id, parsedCourseId, { permission: "missions.create" });
+      const normalizedSubjectKey = resolveSubjectKeyForWrite(assignment, subjectKey);
+      const folderNameNorm = typeof folderName === "string" && folderName.trim() ? folderName.trim() : null;
+      const result = await db2.query(
+        `INSERT INTO daily_missions (title, description, questions, mission_date, xp_reward, mission_type, course_id, folder_name, subject_key)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+        [
+          title,
+          description || "",
+          JSON.stringify(questions || []),
+          missionDate || (/* @__PURE__ */ new Date()).toISOString().split("T")[0],
+          xpReward || 50,
+          missionType || "daily_drill",
+          parsedCourseId,
+          folderNameNorm,
+          normalizedSubjectKey
+        ]
+      );
+      if (recomputeAllEnrollmentsProgressForCourse3) await recomputeAllEnrollmentsProgressForCourse3(parsedCourseId).catch(() => {
+      });
+      await logStaffActivity(db2, {
+        userId: user.id,
+        action: "mission.created",
+        entityType: "mission",
+        entityId: result.rows[0]?.id,
+        courseId: parsedCourseId,
+        subjectKey: normalizedSubjectKey,
+        req
+      });
+      res.json(result.rows[0]);
+    } catch (err) {
+      handleStaffError(res, err);
+    }
+  });
+  app2.put("/api/staff/daily-missions/:id", requireStaff2, requireStaffPermission("missions.edit"), async (req, res) => {
+    try {
+      const user = staffUser(req);
+      const missionId = parseId(req.params.id);
+      if (!missionId) return res.status(400).json({ message: "Invalid id" });
+      const mRes = await db2.query(`SELECT * FROM daily_missions WHERE id = $1`, [missionId]);
+      if (mRes.rows.length === 0) return res.status(404).json({ message: "Not found" });
+      const m = mRes.rows[0];
+      await assertCourseAssignment(db2, user.id, Number(m.course_id), {
+        subjectKey: m.subject_key,
+        permission: "missions.edit"
+      });
+      const b = req.body || {};
+      const result = await db2.query(
+        `UPDATE daily_missions SET title = COALESCE($2, title), description = COALESCE($3, description),
+         questions = COALESCE($4, questions) WHERE id = $1 RETURNING *`,
+        [missionId, b.title, b.description, b.questions ? JSON.stringify(b.questions) : null]
+      );
+      res.json(result.rows[0]);
+    } catch (err) {
+      handleStaffError(res, err);
+    }
+  });
+  app2.get("/api/staff/daily-missions", requireStaff2, async (req, res) => {
+    try {
+      const user = staffUser(req);
+      const assignments = await getStaffAssignments(db2, user.id);
+      const courseIds = [...new Set(assignments.map((a) => a.course_id))];
+      if (courseIds.length === 0) return res.json([]);
+      const result = await db2.query(`SELECT * FROM daily_missions WHERE course_id = ANY($1::int[]) ORDER BY id DESC`, [courseIds]);
+      const filtered = result.rows.filter((m) => {
+        const a = findAssignmentForCourse(assignments, Number(m.course_id), m.subject_key);
+        return !!a;
+      });
+      res.json(filtered);
+    } catch (err) {
+      handleStaffError(res, err);
+    }
+  });
+  app2.get("/api/staff/materials/folders", requireStaff2, async (req, res) => {
+    try {
+      const result = await db2.query(
+        `SELECT * FROM standalone_folders WHERE type = 'material' ORDER BY order_index ASC, id ASC`
+      );
+      res.json(result.rows);
+    } catch {
+      res.status(500).json({ message: "Failed to load folders" });
+    }
+  });
+  app2.get("/api/staff/materials", requireStaff2, async (req, res) => {
+    try {
+      const result = await db2.query(
+        `SELECT * FROM study_materials WHERE course_id IS NULL ORDER BY order_index ASC, id DESC LIMIT 500`
+      );
+      res.json(result.rows);
+    } catch {
+      res.status(500).json({ message: "Failed to load materials" });
+    }
+  });
+  app2.post("/api/staff/materials", requireStaff2, requireStaffPermission("materials.free.create"), async (req, res) => {
+    try {
+      const user = staffUser(req);
+      const { title, description, fileUrl, fileType, folderName } = req.body || {};
+      const fileTypeNorm = String(fileType || "pdf").toLowerCase();
+      if (fileTypeNorm === "youtube") {
+        const ok = await db2.query(`SELECT 1 FROM staff_permission_overrides WHERE user_id = $1 AND permission_key = 'materials.youtube' AND allowed = TRUE LIMIT 1`, [
+          user.id
+        ]);
+        const perms = await getEffectivePermissions(db2, user.id, user.role);
+        if (!perms["materials.youtube"] && ok.rows.length === 0) {
+          return res.status(403).json({ message: "YouTube upload requires approval" });
+        }
+      }
+      const result = await db2.query(
+        `INSERT INTO study_materials (title, description, file_url, file_type, section_title, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+        [title, description || "", fileUrl, fileTypeNorm, folderName || null, Date.now()]
+      );
+      await logStaffActivity(db2, { userId: user.id, action: "free_material.created", entityType: "material", entityId: result.rows[0]?.id, req });
+      res.json(result.rows[0]);
+    } catch (err) {
+      handleStaffError(res, err);
+    }
+  });
+  app2.put("/api/staff/materials/:id", requireStaff2, requireStaffPermission("materials.free.edit"), async (req, res) => {
+    try {
+      const user = staffUser(req);
+      const materialId = parseId(req.params.id);
+      if (!materialId) return res.status(400).json({ message: "Invalid id" });
+      const b = req.body || {};
+      const result = await db2.query(
+        `UPDATE study_materials SET title = COALESCE($2, title), description = COALESCE($3, description)
+         WHERE id = $1 AND course_id IS NULL RETURNING *`,
+        [materialId, b.title, b.description]
+      );
+      if (result.rows.length === 0) return res.status(404).json({ message: "Not found" });
+      res.json(result.rows[0]);
+    } catch (err) {
+      handleStaffError(res, err);
+    }
+  });
+  app2.delete("/api/staff/materials/:id", requireStaff2, requireStaffPermission("materials.free.delete"), async (req, res) => {
+    try {
+      const user = staffUser(req);
+      const materialId = parseId(req.params.id);
+      if (!materialId) return res.status(400).json({ message: "Invalid id" });
+      await db2.query(`DELETE FROM study_materials WHERE id = $1 AND course_id IS NULL`, [materialId]);
+      await logStaffActivity(db2, { userId: user.id, action: "free_material.deleted", entityType: "material", entityId: materialId, req });
+      res.json({ success: true });
+    } catch (err) {
+      handleStaffError(res, err);
+    }
+  });
+  app2.get("/api/staff/requests", requireStaff2, async (req, res) => {
+    try {
+      const user = staffUser(req);
+      const result = await db2.query(
+        `SELECT * FROM staff_access_requests WHERE user_id = $1 ORDER BY created_at DESC LIMIT 100`,
+        [user.id]
+      );
+      res.json(result.rows);
+    } catch (err) {
+      handleStaffError(res, err);
+    }
+  });
+  app2.post("/api/staff/requests", requireStaff2, async (req, res) => {
+    try {
+      const user = staffUser(req);
+      const requestType = String(req.body?.requestType || req.body?.type || "").trim();
+      const allowed = ["recording_upload", "youtube_materials", "student_course_access", "new_subject"];
+      if (!allowed.includes(requestType)) {
+        return res.status(400).json({ message: "Invalid request type" });
+      }
+      const result = await db2.query(
+        `INSERT INTO staff_access_requests (user_id, request_type, payload, status, created_at)
+         VALUES ($1, $2, $3, 'pending', $4) RETURNING *`,
+        [user.id, requestType, JSON.stringify(req.body?.payload || {}), Date.now()]
+      );
+      await logStaffActivity(db2, { userId: user.id, action: "request.submitted", entityType: "request", entityId: result.rows[0]?.id, req });
+      res.status(201).json(result.rows[0]);
+    } catch (err) {
+      handleStaffError(res, err);
+    }
+  });
+  app2.post("/api/staff/course-folders", requireStaff2, requireStaffPermission("folders.create"), async (req, res) => {
+    try {
+      const user = staffUser(req);
+      const courseId = parseId(req.body?.courseId);
+      const type = String(req.body?.type || "material");
+      const name = String(req.body?.name || "").trim();
+      if (!courseId || !name) return res.status(400).json({ message: "courseId and name required" });
+      const assignment = await assertCourseAssignment(db2, user.id, courseId, { permission: "folders.create" });
+      const subjectKey = resolveSubjectKeyForWrite(assignment, req.body?.subjectKey);
+      const parentId = parseId(req.body?.parentId);
+      const result = await db2.query(
+        `INSERT INTO course_folders (course_id, type, name, parent_id, subject_key, order_index, created_at)
+         VALUES ($1, $2, $3, $4, $5, COALESCE($6, 0), $7) RETURNING *`,
+        [courseId, type, name, parentId, subjectKey, req.body?.orderIndex ?? 0, Date.now()]
+      );
+      res.json(result.rows[0]);
+    } catch (err) {
+      handleStaffError(res, err);
+    }
+  });
+}
+var init_staff_routes = __esm({
+  "backend/staff-routes.ts"() {
+    "use strict";
+    init_staff_access_utils();
+    init_staff_profile_utils();
+    init_require_staff_permission();
+  }
+});
+
 // backend/auth-failure-utils.ts
 function setAuthFailure(req, failure) {
   const r = req;
@@ -7470,12 +9059,12 @@ async function txQueryOptional(tx, savepoint, sql, params) {
     console.warn(`[EnrollmentDelete] optional step skipped (${savepoint}):`, err);
   }
 }
-async function writeEnrollmentAuditLog(db2, adminUserId, action, enrollmentId, meta) {
+async function writeEnrollmentAuditLog(db2, adminUserId2, action, enrollmentId, meta) {
   try {
     await db2.query(
       `INSERT INTO admin_audit_log (admin_user_id, action, target_type, target_id, meta, created_at)
        VALUES ($1, $2, 'enrollment', $3, $4, $5)`,
-      [adminUserId, action, enrollmentId, JSON.stringify(meta), Date.now()]
+      [adminUserId2, action, enrollmentId, JSON.stringify(meta), Date.now()]
     );
   } catch {
   }
@@ -7562,7 +9151,7 @@ function registerAdminEnrollmentRoutes({
 }) {
   app2.put("/api/admin/enrollments/:id", requireAdmin2, async (req, res) => {
     try {
-      const adminUserId = Number(req.user?.id) || null;
+      const adminUserId2 = Number(req.user?.id) || null;
       const { status, valid_until } = req.body;
       const updates = [];
       const params = [];
@@ -7613,7 +9202,7 @@ function registerAdminEnrollmentRoutes({
           });
         }
       }
-      void writeEnrollmentAuditLog(db2, adminUserId, "updated", String(req.params.id), {
+      void writeEnrollmentAuditLog(db2, adminUserId2, "updated", String(req.params.id), {
         old_status: oldRow.status,
         new_status: status,
         old_valid_until: oldRow.valid_until,
@@ -7626,7 +9215,7 @@ function registerAdminEnrollmentRoutes({
   });
   app2.delete("/api/admin/enrollments/:id", requireAdmin2, async (req, res) => {
     try {
-      const adminUserId = Number(req.user?.id) || null;
+      const adminUserId2 = Number(req.user?.id) || null;
       const enrollment = await db2.query(
         "SELECT id, user_id, course_id, status, valid_until FROM enrollments WHERE id = $1",
         [req.params.id]
@@ -7644,7 +9233,7 @@ function registerAdminEnrollmentRoutes({
       await runInTransaction2(async (tx) => {
         await purgeEnrollmentRelatedRows(tx, Number(user_id), Number(course_id), enrollmentId);
       });
-      void writeEnrollmentAuditLog(db2, adminUserId, "deleted", enrollmentId, {
+      void writeEnrollmentAuditLog(db2, adminUserId2, "deleted", enrollmentId, {
         user_id,
         course_id,
         hard_delete: true,
@@ -9518,7 +11107,50 @@ var init_admin_ops_routes = __esm({
   }
 });
 
+// shared/notificationImageUrl.ts
+function normalizeNotificationImageUrl(raw) {
+  let u = raw.trim().replace(/\s/g, "");
+  if (!u) return "";
+  if (u.startsWith("//")) return `https:${u}`;
+  if (u.startsWith("http://")) return `https://${u.slice(7)}`;
+  return u;
+}
+function isGoogleDriveUrl(url) {
+  return url.includes("drive.google.com") || url.includes("docs.google.com");
+}
+function getGoogleDriveFileId(url) {
+  const match = url.match(/\/d\/([a-zA-Z0-9_-]+)/);
+  if (match) return match[1];
+  const idParam = url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  if (idParam) return idParam[1];
+  return null;
+}
+function resolveNotificationImageUrl(raw) {
+  const normalized = normalizeNotificationImageUrl(raw);
+  if (!normalized) return "";
+  if (isGoogleDriveUrl(normalized)) {
+    const fileId = getGoogleDriveFileId(normalized);
+    if (fileId) return `https://drive.google.com/uc?export=view&id=${fileId}`;
+  }
+  return normalized;
+}
+var init_notificationImageUrl = __esm({
+  "shared/notificationImageUrl.ts"() {
+    "use strict";
+  }
+});
+
 // backend/admin-notification-routes.ts
+function parseNotificationContent(body) {
+  const title = String(body.title ?? "").trim();
+  const message = String(body.message ?? "").trim();
+  const rawImage = String(body.imageUrl ?? "").trim();
+  const imageUrl = rawImage ? resolveNotificationImageUrl(rawImage) : "";
+  return { title, message, imageUrl };
+}
+function hasNotificationContent({ title, message, imageUrl }) {
+  return !!(title || message || imageUrl);
+}
 function registerAdminNotificationRoutes({
   app: app2,
   db: db2,
@@ -9526,7 +11158,11 @@ function registerAdminNotificationRoutes({
 }) {
   app2.post("/api/admin/notifications/send", requireAdmin2, async (req, res) => {
     try {
-      const { userId, title, message, type, target, courseId, imageUrl } = req.body;
+      const { userId, type, target, courseId } = req.body;
+      const { title, message, imageUrl } = parseNotificationContent(req.body);
+      if (!hasNotificationContent({ title, message, imageUrl })) {
+        return res.status(400).json({ message: "Provide at least a title, message, or image" });
+      }
       let userIds = [];
       if (userId) {
         userIds = [userId];
@@ -9544,7 +11180,7 @@ function registerAdminNotificationRoutes({
       const expiresAt = null;
       const insertResult = await db2.query(
         "INSERT INTO admin_notifications (title, message, target, course_id, sent_count, image_url, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
-        [title, message, target || "all", courseId || null, userIds.length, imageUrl || null, now]
+        [title || null, message || null, target || "all", courseId || null, userIds.length, imageUrl || null, now]
       );
       const adminNotifId = insertResult.rows[0]?.id || null;
       if (userIds.length > 0) {
@@ -9552,12 +11188,12 @@ function registerAdminNotificationRoutes({
           `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at, admin_notif_id, image_url)
            SELECT u, $2::text, $3::text, $4::text, $5::bigint, $6::bigint, $7, $8::text
            FROM unnest($1::int[]) AS u`,
-          [userIds, title, message, type || "info", now, expiresAt, adminNotifId, imageUrl || null]
+          [userIds, title || null, message || null, type || "info", now, expiresAt, adminNotifId, imageUrl || null]
         );
       }
       await sendPushToUsers(db2, userIds.map((id) => Number(id)), {
-        title: String(title || "Notification"),
-        body: String(message || ""),
+        title: title || "Notification",
+        body: message || "",
         data: { type: "admin_notification", adminNotifId, courseId: courseId || null }
       });
       res.json({ success: true, sent: userIds.length });
@@ -9580,10 +11216,19 @@ function registerAdminNotificationRoutes({
   });
   app2.put("/api/admin/notifications/:id", requireAdmin2, async (req, res) => {
     try {
-      const { title, message } = req.body;
+      const { title, message, imageUrl } = parseNotificationContent(req.body);
+      if (!hasNotificationContent({ title, message, imageUrl })) {
+        return res.status(400).json({ message: "Provide at least a title, message, or image" });
+      }
       const anId = parseInt(String(req.params.id));
-      await db2.query("UPDATE admin_notifications SET title = $1, message = $2 WHERE id = $3", [title, message, anId]);
-      await db2.query("UPDATE notifications SET title = $1, message = $2 WHERE admin_notif_id = $3", [title, message, anId]);
+      await db2.query(
+        "UPDATE admin_notifications SET title = $1, message = $2, image_url = $3 WHERE id = $4",
+        [title || null, message || null, imageUrl || null, anId]
+      );
+      await db2.query(
+        "UPDATE notifications SET title = $1, message = $2, image_url = $3 WHERE admin_notif_id = $4",
+        [title || null, message || null, imageUrl || null, anId]
+      );
       res.json({ success: true });
     } catch {
       res.status(500).json({ message: "Failed to update notification" });
@@ -9620,6 +11265,7 @@ var init_admin_notification_routes = __esm({
   "backend/admin-notification-routes.ts"() {
     "use strict";
     init_push_notifications();
+    init_notificationImageUrl();
   }
 });
 
@@ -13023,6 +14669,92 @@ var init_admin_live_class_manage_routes = __esm({
   }
 });
 
+// backend/livekit-sdk.ts
+function getLiveKitConfig() {
+  const url = String(process.env.LIVEKIT_URL || "").trim();
+  const apiKey = String(process.env.LIVEKIT_API_KEY || "").trim();
+  const apiSecret = String(process.env.LIVEKIT_API_SECRET || "").trim();
+  if (!url || !apiKey || !apiSecret) return null;
+  return { url, apiKey, apiSecret };
+}
+function isLiveKitWebhookConfigured() {
+  const apiKey = String(process.env.LIVEKIT_API_KEY || "").trim();
+  const apiSecret = String(process.env.LIVEKIT_API_SECRET || "").trim();
+  return !!(apiKey && apiSecret);
+}
+async function loadLiveKitSdk() {
+  if (cachedSdk !== void 0) return cachedSdk;
+  try {
+    const mod = await import("livekit-server-sdk");
+    cachedSdk = mod;
+    return mod;
+  } catch (err) {
+    console.error("[LiveKit] Failed to load livekit-server-sdk:", err);
+    cachedSdk = null;
+    return null;
+  }
+}
+function resolveWebhookReceiverClass(mod) {
+  const ctor = mod.WebhookReceiver;
+  if (typeof ctor === "function") return ctor;
+  console.error("[LiveKit] livekit-server-sdk WebhookReceiver export is missing or invalid");
+  return null;
+}
+function resolveAccessTokenClass(mod) {
+  const ctor = mod.AccessToken;
+  if (typeof ctor === "function") return ctor;
+  return null;
+}
+async function getWebhookReceiver() {
+  if (cachedWebhookReceiver !== void 0) return cachedWebhookReceiver;
+  if (webhookReceiverLoadFailed) return null;
+  const apiKey = String(process.env.LIVEKIT_API_KEY || "").trim();
+  const apiSecret = String(process.env.LIVEKIT_API_SECRET || "").trim();
+  if (!apiKey || !apiSecret) {
+    cachedWebhookReceiver = null;
+    return null;
+  }
+  const mod = await loadLiveKitSdk();
+  if (!mod) {
+    webhookReceiverLoadFailed = true;
+    cachedWebhookReceiver = null;
+    return null;
+  }
+  const WebhookReceiver = resolveWebhookReceiverClass(mod);
+  if (!WebhookReceiver) {
+    webhookReceiverLoadFailed = true;
+    cachedWebhookReceiver = null;
+    return null;
+  }
+  try {
+    cachedWebhookReceiver = new WebhookReceiver(apiKey, apiSecret);
+    return cachedWebhookReceiver;
+  } catch (err) {
+    console.error("[LiveKit] Failed to create WebhookReceiver:", err);
+    webhookReceiverLoadFailed = true;
+    cachedWebhookReceiver = null;
+    return null;
+  }
+}
+async function createAccessToken(apiKey, apiSecret, options) {
+  const mod = await loadLiveKitSdk();
+  if (!mod) {
+    throw new Error("livekit-server-sdk failed to load");
+  }
+  const AccessToken = resolveAccessTokenClass(mod);
+  if (!AccessToken) {
+    throw new Error("livekit-server-sdk AccessToken export is missing or invalid");
+  }
+  return new AccessToken(apiKey, apiSecret, options);
+}
+var cachedSdk, cachedWebhookReceiver, webhookReceiverLoadFailed;
+var init_livekit_sdk = __esm({
+  "backend/livekit-sdk.ts"() {
+    "use strict";
+    webhookReceiverLoadFailed = false;
+  }
+});
+
 // backend/classroom-sync.ts
 import { URL as URL2 } from "node:url";
 import { createRequire as createRequire2 } from "node:module";
@@ -13399,14 +15131,6 @@ var init_classroom_sync = __esm({
 });
 
 // backend/classroom-routes.ts
-import { AccessToken } from "livekit-server-sdk";
-function getLiveKitConfig() {
-  const url = String(process.env.LIVEKIT_URL || "").trim();
-  const apiKey = String(process.env.LIVEKIT_API_KEY || "").trim();
-  const apiSecret = String(process.env.LIVEKIT_API_SECRET || "").trim();
-  if (!url || !apiKey || !apiSecret) return null;
-  return { url, apiKey, apiSecret };
-}
 function classroomRoomName(liveClassId) {
   return `lc-${liveClassId}`;
 }
@@ -13459,7 +15183,7 @@ function registerClassroomRoutes({
         ]);
       }
       const identity = `user-${user.id}`;
-      const at = new AccessToken(cfg.apiKey, cfg.apiSecret, {
+      const at = await createAccessToken(cfg.apiKey, cfg.apiSecret, {
         identity,
         name: user.name || identity,
         ttl: "6h"
@@ -13668,6 +15392,7 @@ function registerClassroomRoutes({
 var init_classroom_routes = __esm({
   "backend/classroom-routes.ts"() {
     "use strict";
+    init_livekit_sdk();
     init_live_class_access();
     init_recordingSection();
     init_live_class_recording_save();
@@ -15900,7 +17625,6 @@ var init_cloudflare_webhook_routes = __esm({
 });
 
 // backend/livekit-webhook-routes.ts
-import { WebhookReceiver } from "livekit-server-sdk";
 function parseLiveClassId(roomName) {
   const match = String(roomName || "").match(/^lc-(\d+)$/);
   if (!match) return null;
@@ -15911,20 +17635,19 @@ function registerLiveKitWebhookRoutes({
   app: app2,
   db: db2
 }) {
-  const apiKey = process.env.LIVEKIT_API_KEY;
-  const apiSecret = process.env.LIVEKIT_API_SECRET;
-  if (!apiKey || !apiSecret) {
-    console.warn(
-      "[LiveKit Webhook] LIVEKIT_API_KEY or LIVEKIT_API_SECRET not set \u2014 webhook endpoint registered but signature verification will always reject. Set both env vars and configure the webhook URL in the LiveKit dashboard."
-    );
-  }
-  const receiver = apiKey && apiSecret ? new WebhookReceiver(apiKey, apiSecret) : null;
   app2.post("/api/webhooks/livekit", async (req, res) => {
     res.status(200).end();
     void (async () => {
       try {
+        let receiver;
+        try {
+          receiver = await getWebhookReceiver();
+        } catch (loadErr) {
+          console.warn("[LiveKit Webhook] Failed to load receiver:", loadErr);
+          return;
+        }
         if (!receiver) {
-          console.warn("[LiveKit Webhook] Ignoring event \u2014 receiver not initialised (missing env vars).");
+          console.warn("[LiveKit Webhook] Ignoring event \u2014 receiver not available.");
           return;
         }
         const rawBody = req.rawBody;
@@ -15982,6 +17705,7 @@ function registerLiveKitWebhookRoutes({
 var init_livekit_webhook_routes = __esm({
   "backend/livekit-webhook-routes.ts"() {
     "use strict";
+    init_livekit_sdk();
   }
 });
 
@@ -17239,10 +18963,12 @@ async function registerRoutes(app2) {
     app: app2,
     db
   });
-  registerLiveKitWebhookRoutes({
-    app: app2,
-    db
-  });
+  if (isLiveKitWebhookConfigured()) {
+    registerLiveKitWebhookRoutes({
+      app: app2,
+      db
+    });
+  }
   registerRuntimeFlagRoutes({
     app: app2,
     db,
@@ -17497,6 +19223,19 @@ async function registerRoutes(app2) {
     requireAdmin,
     getR2Client
   });
+  registerAdminStaffRoutes({
+    app: app2,
+    db,
+    requireAdmin,
+    runInTransaction
+  });
+  registerStaffRoutes({
+    app: app2,
+    db,
+    requireStaff,
+    updateCourseTestCounts: updateCourseTestCounts2,
+    recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse2
+  });
   registerLiveChatRoutes({
     app: app2,
     db,
@@ -17540,7 +19279,7 @@ async function registerRoutes(app2) {
   attachClassroomSyncServer(httpServer, db, getR2Client);
   return httpServer;
 }
-var databaseUrlRaw, databaseUrl, pgPoolMax, pgPoolMin, pgIdleTimeoutMs, pool, listenPool, db, generateAIAnswer, updateCourseProgress2, recomputeAllEnrollmentsProgressForCourse2, updateCourseTestCounts2, deleteDownloadsForUser2, deleteDownloadsForCourse2, authUserLazyKey, requireAdmin;
+var databaseUrlRaw, databaseUrl, pgPoolMax, pgPoolMin, pgIdleTimeoutMs, pool, listenPool, db, generateAIAnswer, updateCourseProgress2, recomputeAllEnrollmentsProgressForCourse2, updateCourseTestCounts2, deleteDownloadsForUser2, deleteDownloadsForCourse2, authUserLazyKey, requireAdmin, requireStaff;
 var init_routes = __esm({
   "backend/routes.ts"() {
     "use strict";
@@ -17550,6 +19289,9 @@ var init_routes = __esm({
     init_security_utils();
     init_auth_utils();
     init_require_admin();
+    init_require_staff();
+    init_admin_staff_routes();
+    init_staff_routes();
     init_native_device_binding();
     init_auth_failure_utils();
     init_auth_routes();
@@ -17593,6 +19335,7 @@ var init_routes = __esm({
     init_media_stream_routes();
     init_runtime_flag_routes();
     init_cloudflare_webhook_routes();
+    init_livekit_sdk();
     init_livekit_webhook_routes();
     init_ai_tutor_service();
     init_db_readiness();
@@ -17660,6 +19403,7 @@ var init_routes = __esm({
     deleteDownloadsForCourse2 = (courseId) => deleteDownloadsForCourse(db, courseId);
     authUserLazyKey = /* @__PURE__ */ Symbol("authUserLazy");
     requireAdmin = createRequireAdmin(getAuthUser);
+    requireStaff = createRequireStaff(getAuthUser);
   }
 });
 

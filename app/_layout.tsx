@@ -27,11 +27,12 @@ import { DownloadManagerProvider, useDownloadManager } from "@/lib/useDownloadMa
 import { listWebOfflineKeys, removeWebOffline } from "@/lib/web-offline-store";
 import { getStoredAuthUser } from "@/lib/auth-storage";
 import { clearWebPostLoginHomeGrace, getWebPostLoginHomeGraceRemainingMs } from "@/lib/web-post-login-grace";
+import { getPostAuthPathForUser } from "@/lib/post-auth-path";
 import { reportAppInstallOnce, setupPwaInstallListener } from "@/lib/report-admin-ops";
 
 SplashScreen.preventAutoHideAsync();
 
-const WEB_PUBLIC_OR_SELF_GATED_TOP_SEGMENTS = new Set(["", "welcome", "privacy-policy", "delete-account", "(auth)", "profile-setup", "admin", "_sitemap"]);
+const WEB_PUBLIC_OR_SELF_GATED_TOP_SEGMENTS = new Set(["", "welcome", "privacy-policy", "delete-account", "(auth)", "profile-setup", "admin", "staff", "_sitemap"]);
 const WEB_PUBLIC_LEGAL_TOP_SEGMENTS = new Set(["privacy-policy", "delete-account"]);
 
 function shouldWaitForPersistedWebSession(currentSegmentName: string): boolean {
@@ -157,7 +158,7 @@ function RootLayoutNav() {
     if (!currentSegment) {
       if (user) {
         if (user.profileComplete) {
-          router.replace((Platform.OS === "web" ? "/home" : "/(tabs)") as any);
+          router.replace(getPostAuthPathForUser(user) as any);
         } else {
           if (!incompleteSplashNavDoneRef.current) {
             incompleteSplashNavDoneRef.current = true;
@@ -211,9 +212,20 @@ function RootLayoutNav() {
     }
 
     if (user) {
+      const staffRole = user.role === "teacher" || user.role === "manager";
+      const adminRole = user.role === "admin";
       if (user.profileComplete) {
         if (inAuthGroup || (Platform.OS !== "web" && inWelcome)) {
-          router.replace((Platform.OS === "web" ? "/home" : "/(tabs)") as any);
+          router.replace(getPostAuthPathForUser(user) as any);
+          return;
+        }
+        if (staffRole && (currentSegment === "(tabs)" || currentSegmentName === "home")) {
+          router.replace("/staff" as any);
+          return;
+        }
+        if (adminRole && currentSegment === "(tabs)") {
+          router.replace("/admin" as any);
+          return;
         }
         return;
       }
@@ -253,7 +265,7 @@ function RootLayoutNav() {
     // registrationToken handoff from /api/auth/verify-otp. The screen itself
     // validates the token; the layout just needs to not bounce them back.
     // Admin routes gate auth themselves; avoid welcome bounce on refresh races.
-    if (currentSegment === "admin") {
+    if (currentSegment === "admin" || String(currentSegment) === "staff") {
       return;
     }
     if (Platform.OS === "web" && currentSegmentName === "home") {

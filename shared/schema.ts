@@ -300,6 +300,101 @@ export const doubts = pgTable("doubts", {
   createdAt: bigint("created_at", { mode: "number" }),
 });
 
+export const staffProfiles = pgTable("staff_profiles", {
+  userId: integer("user_id").primaryKey(),
+  employeeId: text("employee_id"),
+  teacherId: text("teacher_id"),
+  status: text("status").notNull().default("active"),
+  personalJson: jsonb("personal_json").default({}),
+  workingJson: jsonb("working_json").default({}),
+  bankJson: jsonb("bank_json").default({}),
+  companyJson: jsonb("company_json").default({}),
+  photoUrl: text("photo_url"),
+  resumeUrl: text("resume_url"),
+  aadharNumber: text("aadhar_number"),
+  aadharFrontUrl: text("aadhar_front_url"),
+  aadharBackUrl: text("aadhar_back_url"),
+  joiningDate: bigint("joining_date", { mode: "number" }),
+  reportingManager: text("reporting_manager"),
+  department: text("department"),
+  designation: text("designation"),
+  createdAt: bigint("created_at", { mode: "number" }),
+  updatedAt: bigint("updated_at", { mode: "number" }),
+});
+
+export const staffEducation = pgTable("staff_education", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  degree: text("degree"),
+  institute: text("institute"),
+  board: text("board"),
+  university: text("university"),
+  passingYear: text("passing_year"),
+  percentage: text("percentage"),
+  certificateUrl: text("certificate_url"),
+  sortOrder: integer("sort_order").default(0),
+  createdAt: bigint("created_at", { mode: "number" }),
+});
+
+export const staffExperience = pgTable("staff_experience", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  instituteName: text("institute_name"),
+  designation: text("designation"),
+  subjects: text("subjects"),
+  yearsExperience: text("years_experience"),
+  joiningDate: text("joining_date"),
+  leavingDate: text("leaving_date"),
+  experienceLetterUrl: text("experience_letter_url"),
+  sortOrder: integer("sort_order").default(0),
+  createdAt: bigint("created_at", { mode: "number" }),
+});
+
+export const staffCourseAssignments = pgTable("staff_course_assignments", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  courseId: integer("course_id").notNull(),
+  subjectKey: text("subject_key"),
+  assignedBy: integer("assigned_by"),
+  assignedAt: bigint("assigned_at", { mode: "number" }),
+  isActive: boolean("is_active").default(true),
+});
+
+export const staffPermissionOverrides = pgTable("staff_permission_overrides", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  permissionKey: text("permission_key").notNull(),
+  allowed: boolean("allowed").notNull(),
+  updatedBy: integer("updated_by"),
+  updatedAt: bigint("updated_at", { mode: "number" }),
+});
+
+export const staffAccessRequests = pgTable("staff_access_requests", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  requestType: text("request_type").notNull(),
+  payload: jsonb("payload").default({}),
+  status: text("status").notNull().default("pending"),
+  adminNote: text("admin_note"),
+  reviewedBy: integer("reviewed_by"),
+  reviewedAt: bigint("reviewed_at", { mode: "number" }),
+  createdAt: bigint("created_at", { mode: "number" }),
+});
+
+export const staffActivityLog = pgTable("staff_activity_log", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  action: text("action").notNull(),
+  entityType: text("entity_type"),
+  entityId: text("entity_id"),
+  courseId: integer("course_id"),
+  subjectKey: text("subject_key"),
+  meta: jsonb("meta").default({}),
+  ipAddress: text("ip_address"),
+  userAgent: text("user_agent"),
+  createdAt: bigint("created_at", { mode: "number" }),
+});
+
 export const payments = pgTable("payments", {
   id: serial("id").primaryKey(),
   userId: integer("user_id"),

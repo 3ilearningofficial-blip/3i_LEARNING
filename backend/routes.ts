@@ -9,6 +9,9 @@ import { randomInt } from "node:crypto";
 import { generateSecureToken, hashOtpValue, verifyOtpValue } from "./security-utils";
 import { getAuthUserFromRequest } from "./auth-utils";
 import { createRequireAdmin } from "./require-admin";
+import { createRequireStaff } from "./require-staff";
+import { registerAdminStaffRoutes } from "./admin-staff-routes";
+import { registerStaffRoutes } from "./staff-routes";
 import { assertActiveSessionPlatformMatches, enforceInstallationBinding } from "./native-device-binding";
 import { setAuthFailure } from "./auth-failure-utils";
 import { registerAuthRoutes } from "./auth-routes";
@@ -52,6 +55,7 @@ import { registerUploadRoutes } from "./upload-routes";
 import { registerMediaStreamRoutes } from "./media-stream-routes";
 import { registerRuntimeFlagRoutes } from "./runtime-flag-routes";
 import { registerCloudflareWebhookRoutes } from "./cloudflare-webhook-routes";
+import { isLiveKitWebhookConfigured } from "./livekit-sdk";
 import { registerLiveKitWebhookRoutes } from "./livekit-webhook-routes";
 import { createGenerateAIAnswer } from "./ai-tutor-service";
 import { checkDatabaseReadiness } from "./db-readiness";
@@ -303,6 +307,7 @@ async function getAuthUser(req: Request): Promise<AuthUserResolved> {
 }
 
 const requireAdmin = createRequireAdmin(getAuthUser);
+const requireStaff = createRequireStaff(getAuthUser);
 
 export async function registerRoutes(app: Express): Promise<Server> {
   if (process.env.ALLOW_RUNTIME_SCHEMA_SYNC === "true" || process.env.ALLOW_STARTUP_SCHEMA_ENSURE === "true") {
@@ -637,10 +642,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // CFSR-01: LiveKit room_finished webhook — safety net to set is_live = FALSE
   // even when the admin "End Class" button is never clicked (crash, network drop, etc.).
-  registerLiveKitWebhookRoutes({
-    app,
-    db,
-  });
+  if (isLiveKitWebhookConfigured()) {
+    registerLiveKitWebhookRoutes({
+      app,
+      db,
+    });
+  }
 
   registerRuntimeFlagRoutes({
     app,
@@ -922,6 +929,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
     db,
     requireAdmin,
     getR2Client,
+  });
+
+  registerAdminStaffRoutes({
+    app,
+    db,
+    requireAdmin,
+    runInTransaction,
+  });
+
+  registerStaffRoutes({
+    app,
+    db,
+    requireStaff,
+    updateCourseTestCounts,
+    recomputeAllEnrollmentsProgressForCourse,
   });
 
   registerLiveChatRoutes({

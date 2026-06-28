@@ -21,6 +21,7 @@ import {
   verifyOtpRequest,
   secondsUntilTimestamp,
 } from "@/lib/otp-lockout";
+import { getPostAuthPathForUser } from "@/lib/post-auth-path";
 
 export default function OTPScreen() {
   const insets = useSafeAreaInsets();
@@ -37,17 +38,14 @@ export default function OTPScreen() {
   const lockTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const { login } = useAuth();
 
-  const getPostAuthPath = () => {
-    if (Platform.OS === "web" && typeof next === "string" && next.startsWith("/")) return next === "/(tabs)" ? "/home" : next;
-    if (Platform.OS === "web") return "/home";
-    return "/(tabs)";
-  };
+  const getPostAuthPath = (authUser?: { role?: string }) =>
+    getPostAuthPathForUser(authUser as any, { next: typeof next === "string" ? next : undefined });
 
   const isWebModal = modal === "1";
 
   const completeWebModalAuth = (authUser: any) => {
     if (!isWebModal) return false;
-    return notifyWebModalAuthSuccess(getPostAuthPath(), authUser);
+    return notifyWebModalAuthSuccess(getPostAuthPath(authUser), authUser);
   };
 
   const startLockCountdown = (until: number) => {
@@ -183,7 +181,7 @@ export default function OTPScreen() {
       if (!result.user.profileComplete) {
         navigateToProfileSetupWithNotice();
       } else {
-        router.replace(getPostAuthPath() as any);
+        router.replace(getPostAuthPath(result.user) as any);
       }
       return;
     }

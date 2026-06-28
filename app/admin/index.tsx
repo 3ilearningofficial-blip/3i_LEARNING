@@ -39,6 +39,9 @@ import { resolveNotificationImageUrl } from "@/lib/notificationImageUrl";
 const AnalyticsTab = lazy(() =>
   import("./tabs/AnalyticsTab").then((m) => ({ default: m.AnalyticsTab }))
 );
+const StaffAccessTab = lazy(() =>
+  import("./tabs/StaffAccessTab").then((m) => ({ default: m.StaffAccessTab }))
+);
 const WelcomeSettingsTab = lazy(() =>
   import("./tabs/WelcomeSettingsTab").then((m) => ({ default: m.WelcomeSettingsTab }))
 );
@@ -59,7 +62,7 @@ interface Course {
   validity_months?: number | null;
 }
 
-type AdminTab = "courses" | "tests" | "materials" | "users" | "notifications" | "aiTutor" | "missions" | "books" | "support" | "analytics" | "welcome";
+type AdminTab = "courses" | "tests" | "materials" | "users" | "notifications" | "aiTutor" | "missions" | "books" | "support" | "analytics" | "welcome" | "staffAccess";
 
 const ADMIN_TABS: { key: AdminTab; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
   { key: "welcome", label: "Welcome", icon: "home" },
@@ -73,6 +76,7 @@ const ADMIN_TABS: { key: AdminTab; label: string; icon: keyof typeof Ionicons.gl
   { key: "support", label: "Support", icon: "chatbubbles" },
   { key: "analytics", label: "Analytics", icon: "bar-chart" },
   { key: "users", label: "Users", icon: "people" },
+  { key: "staffAccess", label: "Staff & Access", icon: "people-circle" },
 ];
 
 interface NewCourse {
@@ -313,13 +317,13 @@ export default function AdminDashboard() {
   }, [authLoading, isAdmin, authRetryDone, refreshUser]);
   const [activeTab, setActiveTab] = useState<AdminTab>(() => {
     const t = String(adminTabParam || "").toLowerCase();
-    const valid: AdminTab[] = ["welcome", "courses", "tests", "materials", "missions", "notifications", "aiTutor", "books", "support", "analytics", "users"];
+    const valid: AdminTab[] = ["welcome", "courses", "tests", "materials", "missions", "notifications", "aiTutor", "books", "support", "analytics", "users", "staffAccess"];
     return valid.includes(t as AdminTab) ? (t as AdminTab) : "welcome";
   });
 
   useEffect(() => {
     const t = String(adminTabParam || "").toLowerCase();
-    const valid: AdminTab[] = ["welcome", "courses", "tests", "materials", "missions", "notifications", "aiTutor", "books", "support", "analytics", "users"];
+    const valid: AdminTab[] = ["welcome", "courses", "tests", "materials", "missions", "notifications", "aiTutor", "books", "support", "analytics", "users", "staffAccess"];
     if (valid.includes(t as AdminTab)) setActiveTab(t as AdminTab);
   }, [adminTabParam]);
 
@@ -3647,6 +3651,12 @@ export default function AdminDashboard() {
         {activeTab === "analytics" && (
           <Suspense fallback={<ActivityIndicator size="large" color={Colors.light.primary} style={{ marginTop: 40 }} />}>
             <AnalyticsTab />
+          </Suspense>
+        )}
+
+        {activeTab === "staffAccess" && (
+          <Suspense fallback={<ActivityIndicator size="large" color={Colors.light.primary} style={{ marginTop: 40 }} />}>
+            <StaffAccessTab />
           </Suspense>
         )}
 

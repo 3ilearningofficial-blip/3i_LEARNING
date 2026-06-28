@@ -1,5 +1,5 @@
 import type { Express, Request, Response } from "express";
-import { WebhookReceiver } from "livekit-server-sdk";
+import { getWebhookReceiver } from "./livekit-sdk";
 
 /**
  * CFSR-01: LiveKit room_finished webhook — server-side safety net.
@@ -55,25 +55,6 @@ export function registerLiveKitWebhookRoutes({
   app,
   db,
 }: RegisterLiveKitWebhookRoutesDeps): void {
-  const apiKey = process.env.LIVEKIT_API_KEY;
-  const apiSecret = process.env.LIVEKIT_API_SECRET;
-
-  if (!apiKey || !apiSecret) {
-    // Warn at startup so operators know the webhook will be a no-op.
-    // This is intentionally non-fatal: the platform works without LiveKit webhooks
-    // (the admin UI end-class button is the primary signal).
-    console.warn(
-      "[LiveKit Webhook] LIVEKIT_API_KEY or LIVEKIT_API_SECRET not set — " +
-        "webhook endpoint registered but signature verification will always reject. " +
-        "Set both env vars and configure the webhook URL in the LiveKit dashboard."
-    );
-  }
-
-  // Create the receiver once (it holds the key/secret for HMAC verification).
-  // If keys are missing we still register the route so it returns 401 rather
-  // than 404 (clearer signal for misconfiguration debugging).
-  const receiver = apiKey && apiSecret ? new WebhookReceiver(apiKey, apiSecret) : null;
-
   /**
    * POST /api/webhooks/livekit
    *
@@ -92,10 +73,16 @@ export function registerLiveKitWebhookRoutes({
 
     void (async () => {
       try {
+        let receiver;
+        try {
+          receiver = await getWebhookReceiver();
+        } catch (loadErr) {
+          console.warn("[LiveKit Webhook] Failed to load receiver:", loadErr);
+          return;
+        }
+
         if (!receiver) {
-          // Keys not configured — log once per event rather than spamming the
-          // startup warning. Return silently so LiveKit stops retrying (200 sent).
-          console.warn("[LiveKit Webhook] Ignoring event — receiver not initialised (missing env vars).");
+          console.warn("[LiveKit Webhook] Ignoring event — receiver not available.");
           return;
         }
 
@@ -113,7 +100,7 @@ export function registerLiveKitWebhookRoutes({
           return;
         }
 
-        let event: Awaited<ReturnType<WebhookReceiver["receive"]>>;
+        let event: Awaited<ReturnType<typeof receiver.receive>>;
         try {
           event = await receiver.receive(rawBody.toString("utf-8"), authHeader as string);
         } catch (verifyErr) {

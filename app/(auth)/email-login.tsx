@@ -15,6 +15,7 @@ import Colors from "@/constants/colors";
 import { PROFILE_INCOMPLETE_ALERT_MESSAGE, PROFILE_INCOMPLETE_ALERT_TITLE, navigateToProfileSetupWithNotice } from "@/lib/profile-completion-ui";
 import { navigateBackFromAuth } from "@/lib/navigate-auth-back";
 import { notifyWebModalAuthSuccess } from "@/lib/web-modal-auth";
+import { getPostAuthPathForUser } from "@/lib/post-auth-path";
 
 export default function EmailLoginScreen() {
   const insets = useSafeAreaInsets();
@@ -34,17 +35,14 @@ export default function EmailLoginScreen() {
   const [error, setError] = useState("");
   const [needsSignup, setNeedsSignup] = useState<null | "not_found" | "incomplete">(null);
 
-  const getPostAuthPath = () => {
-    if (Platform.OS === "web" && typeof next === "string" && next.startsWith("/")) return next === "/(tabs)" ? "/home" : next;
-    if (Platform.OS === "web") return "/home";
-    return "/(tabs)";
-  };
+  const getPostAuthPath = (authUser?: { role?: string }) =>
+    getPostAuthPathForUser(authUser as any, { next: typeof next === "string" ? next : undefined });
 
   const isWebModal = modal === "1";
 
   const completeWebModalAuth = (authUser: any) => {
     if (!isWebModal) return false;
-    return notifyWebModalAuthSuccess(getPostAuthPath(), authUser);
+    return notifyWebModalAuthSuccess(getPostAuthPath(authUser), authUser);
   };
 
   const handleLogin = async () => {
@@ -69,7 +67,7 @@ export default function EmailLoginScreen() {
       if (!data.user.profileComplete) {
         navigateToProfileSetupWithNotice();
       } else {
-        router.replace(getPostAuthPath() as any);
+        router.replace(getPostAuthPath(data.user) as any);
       }
     } catch (err: any) {
       const msg = (err?.message || "").replace(/^\d+:\s*/, "");

@@ -24,6 +24,9 @@ interface AuthContextValue {
   user: AuthUser | null;
   isLoading: boolean;
   isAdmin: boolean;
+  isStaff: boolean;
+  isTeacher: boolean;
+  staffRole: string | null;
   login: (user: AuthUser) => Promise<void>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
@@ -51,7 +54,8 @@ function isProtectedPlaybackRoute(path: string): boolean {
     path.startsWith("/mission-folder/") ||
     path.startsWith("/home") ||
     path.startsWith("/(tabs)") ||
-    path.startsWith("/admin")
+    path.startsWith("/admin") ||
+    path.startsWith("/staff")
   );
 }
 
@@ -455,15 +459,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const value = useMemo(
-    () => ({
-      user,
-      isLoading,
-      isAdmin: user?.role === "admin",
-      login,
-      logout,
-      refreshUser,
-      updateUser,
-    }),
+    () => {
+      const role = String(user?.role || "student").toLowerCase();
+      const isStaff = role === "teacher" || role === "manager";
+      return {
+        user,
+        isLoading,
+        isAdmin: role === "admin",
+        isStaff,
+        isTeacher: role === "teacher",
+        staffRole: isStaff ? role : null,
+        login,
+        logout,
+        refreshUser,
+        updateUser,
+      };
+    },
     [user, isLoading, refreshUser]
   );
 

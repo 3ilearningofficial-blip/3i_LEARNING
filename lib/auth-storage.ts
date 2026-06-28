@@ -6,7 +6,7 @@ export interface StoredAuthUser {
   name: string;
   email?: string;
   phone?: string;
-  role: "student" | "admin";
+  role: "student" | "admin" | "teacher" | "manager";
   deviceId?: string;
   sessionToken?: string;
   profileComplete?: boolean;

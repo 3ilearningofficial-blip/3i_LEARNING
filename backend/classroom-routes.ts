@@ -1,5 +1,5 @@
 import type { Express, Request, Response } from "express";
-import { AccessToken } from "livekit-server-sdk";
+import { createAccessToken, getLiveKitConfig } from "./livekit-sdk";
 import { userCanAccessLiveClassContent } from "./live-class-access";
 import { buildRecordingLectureSectionTitle } from "../shared/recordingSection";
 import { saveRecordingForClassAndPeers } from "./live-class-recording-save";
@@ -21,14 +21,6 @@ type RegisterClassroomRoutesDeps = {
   getAuthUser: (req: Request) => Promise<AuthUser>;
   recomputeAllEnrollmentsProgressForCourse: (courseId: number | string) => Promise<void>;
 };
-
-function getLiveKitConfig(): { url: string; apiKey: string; apiSecret: string } | null {
-  const url = String(process.env.LIVEKIT_URL || "").trim();
-  const apiKey = String(process.env.LIVEKIT_API_KEY || "").trim();
-  const apiSecret = String(process.env.LIVEKIT_API_SECRET || "").trim();
-  if (!url || !apiKey || !apiSecret) return null;
-  return { url, apiKey, apiSecret };
-}
 
 function classroomRoomName(liveClassId: string | number): string {
   return `lc-${liveClassId}`;
@@ -92,7 +84,7 @@ export function registerClassroomRoutes({
       }
 
       const identity = `user-${user.id}`;
-      const at = new AccessToken(cfg.apiKey, cfg.apiSecret, {
+      const at = await createAccessToken(cfg.apiKey, cfg.apiSecret, {
         identity,
         name: user.name || identity,
         ttl: "6h",
