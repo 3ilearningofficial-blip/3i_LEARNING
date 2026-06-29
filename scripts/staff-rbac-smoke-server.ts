@@ -18,7 +18,10 @@ const pool = new pg.Pool({
 });
 
 const db = {
-  query: (text: string, params?: unknown[]) => pool.query(text, params),
+  query: async (text: string, params?: unknown[]) => {
+    const result = await pool.query(text, params);
+    return { rows: result.rows, rowCount: result.rowCount ?? undefined };
+  },
 };
 
 async function getAuthUser(req: express.Request) {

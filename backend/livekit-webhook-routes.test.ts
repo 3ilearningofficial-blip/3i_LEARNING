@@ -3,10 +3,10 @@ import express from "express";
 import { createServer } from "node:http";
 import { registerLiveKitWebhookRoutes } from "./livekit-webhook-routes";
 
-const getWebhookReceiver = vi.fn(async () => null);
+const mockGetWebhookReceiver = vi.fn(async () => null);
 
 vi.mock("./livekit-sdk", () => ({
-  getWebhookReceiver: (...args: unknown[]) => getWebhookReceiver(...args),
+  getWebhookReceiver: mockGetWebhookReceiver,
 }));
 
 function mockDb() {
@@ -27,7 +27,7 @@ describe("registerLiveKitWebhookRoutes", () => {
   });
 
   it("POST /api/webhooks/livekit returns 200 immediately even when receiver is null", async () => {
-    getWebhookReceiver.mockResolvedValue(null);
+    mockGetWebhookReceiver.mockResolvedValue(null);
 
     const app = express();
     app.use(
