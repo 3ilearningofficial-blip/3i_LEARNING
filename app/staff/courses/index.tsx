@@ -1,5 +1,5 @@
 import React from "react";
-import { View, Text, ScrollView, Pressable, ActivityIndicator, StyleSheet, Platform } from "react-native";
+import { View, Text, ScrollView, ActivityIndicator, StyleSheet, Platform, useWindowDimensions } from "react-native";
 import { router } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { authFetch, getApiUrl } from "@/lib/query-client";
@@ -7,10 +7,21 @@ import Colors from "@/constants/colors";
 import { useAppTheme } from "@/context/AppThemeContext";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
+import { CourseCard, type CourseHomeCardCourse } from "@/components/course/CourseHomeCards";
+
+function assignmentSubjects(course: any): string[] {
+  return (course.assignments || [])
+    .map((a: any) => a.subject_key)
+    .filter((k: string) => k && String(k).trim());
+}
 
 export default function StaffCoursesIndex() {
-  const { colors } = useAppTheme();
+  const { colors, isDarkMode } = useAppTheme();
   const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
+  const isWide = width >= 768;
+  const topPadding = Platform.OS === "web" ? 16 : insets.top;
+
   const { data: courses = [], isLoading } = useQuery({
     queryKey: ["/api/staff/courses"],
     queryFn: async () => {
@@ -22,26 +33,34 @@ export default function StaffCoursesIndex() {
 
   return (
     <ScrollView style={{ flex: 1, backgroundColor: colors.background }}>
-      <LinearGradient colors={[Colors.light.primary, "#1e40af"]} style={{ paddingTop: insets.top + 12, padding: 16 }}>
-        <Text style={{ color: "#fff", fontFamily: "Inter_800ExtraBold", fontSize: 20 }}>My Courses</Text>
+      <LinearGradient
+        colors={isDarkMode ? ["#020617", "#0F172A"] : ["#0A1628", "#1A2E50"]}
+        style={{ paddingTop: topPadding + 12, paddingHorizontal: 20, paddingBottom: 20 }}
+      >
+        <Text style={{ color: "#fff", fontFamily: "Inter_800ExtraBold", fontSize: 22 }}>My Courses</Text>
+        <Text style={{ color: "rgba(255,255,255,0.85)", fontSize: 14, marginTop: 4, fontFamily: "Inter_400Regular" }}>
+          Browse and manage your assigned courses
+        </Text>
       </LinearGradient>
       {isLoading ? (
         <ActivityIndicator color={Colors.light.primary} style={{ marginTop: 24 }} />
       ) : (
-        <View style={{ padding: 16 }}>
-          {courses.map((c: any) => (
-            <Pressable
-              key={c.id}
-              style={[styles.card, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}
-              onPress={() => router.push(`/staff/courses/${c.id}` as any)}
-            >
-              <Text style={{ color: colors.text, fontFamily: "Inter_700Bold", fontSize: 16 }}>{c.title}</Text>
-              <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 4 }}>
-                {(c.assignments || []).map((a: any) => a.subject_key || "Full course").join(", ")}
-              </Text>
-            </Pressable>
+        <View style={[styles.grid, isWide && styles.gridWide]}>
+          {courses.map((c: CourseHomeCardCourse & { assignments?: any[] }) => (
+            <View key={c.id} style={[styles.gridItem, isWide && styles.gridItemWide]}>
+              <CourseCard
+                course={c}
+                variant="staff"
+                assignmentSubjects={assignmentSubjects(c)}
+                onPress={() => router.push(`/staff/courses/${c.id}` as any)}
+              />
+            </View>
           ))}
-          {courses.length === 0 && <Text style={{ color: colors.textMuted, textAlign: "center" }}>No courses assigned yet.</Text>}
+          {courses.length === 0 && (
+            <Text style={{ color: colors.textMuted, textAlign: "center", width: "100%", padding: 24 }}>
+              No courses assigned yet.
+            </Text>
+          )}
         </View>
       )}
     </ScrollView>
@@ -49,5 +68,8 @@ export default function StaffCoursesIndex() {
 }
 
 const styles = StyleSheet.create({
-  card: { borderRadius: 12, borderWidth: 1, padding: 14, marginBottom: 10 },
+  grid: { padding: 16, gap: 0 },
+  gridWide: { flexDirection: "row", flexWrap: "wrap", gap: 16, paddingHorizontal: 20 },
+  gridItem: { marginBottom: 4 },
+  gridItemWide: { width: "31%", minWidth: 280 },
 });

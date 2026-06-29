@@ -8,6 +8,8 @@ export const users = pgTable("users", {
   role: text("role").notNull().default("student"),
   deviceId: text("device_id"),
   appBoundDeviceId: text("app_bound_device_id"),
+  webDeviceIdPhone: text("web_device_id_phone"),
+  webDeviceIdDesktop: text("web_device_id_desktop"),
   sessionToken: text("session_token"),
   otp: text("otp"),
   otpExpiresAt: bigint("otp_expires_at", { mode: "number" }),

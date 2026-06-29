@@ -591,6 +591,7 @@ export default function AdminDashboard() {
   const bottomPadding = Platform.OS === "web" ? 16 : insets.bottom;
   const { width: screenWidth } = useWindowDimensions();
   const isWideSidebar = Platform.OS === "web" && screenWidth >= 768;
+  const isAdminCompact = !isWideSidebar;
 
   const { data: courses = [], isLoading: coursesLoading } = useQuery<Course[]>({
     queryKey: ["/api/courses"],
@@ -2143,9 +2144,9 @@ export default function AdminDashboard() {
       })() : (
       <>
       {activeTab === "courses" && (
-        <View style={{ flexDirection: Platform.OS === "web" ? "row" : "column", gap: 20, alignItems: Platform.OS === "web" ? "stretch" as any : "flex-start" }}>
-          {/* Courses List — 2/3 width on web */}
-          <View style={{ flex: 2, minWidth: 0 }}>
+        <View style={{ flexDirection: isWideSidebar ? "row" : "column-reverse", gap: isWideSidebar ? 20 : 16, alignItems: isWideSidebar ? ("stretch" as any) : "stretch", width: "100%" }}>
+          {/* Courses List — 2/3 width on laptop web */}
+          <View style={{ flex: isWideSidebar ? 2 : undefined, minWidth: 0, width: isAdminCompact ? "100%" : undefined }}>
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>Courses ({courses.filter(c => c.course_type !== "test_series").length})</Text>
@@ -2231,9 +2232,9 @@ export default function AdminDashboard() {
           </View>
           </View>
 
-          {/* Upcoming Class — 1/3 width on web */}
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <View style={{ backgroundColor: "#fff", borderRadius: 16, borderWidth: 1, borderColor: Colors.light.border, padding: 16, flex: 1, overflow: "hidden" }}>
+          {/* Upcoming Class — 1/3 width on laptop web; first on compact (column-reverse) */}
+          <View style={{ flex: isWideSidebar ? 1 : undefined, minWidth: 0, width: isAdminCompact ? "100%" : undefined }}>
+            <View style={{ backgroundColor: "#fff", borderRadius: 16, borderWidth: 1, borderColor: Colors.light.border, padding: 16, flex: isWideSidebar ? 1 : undefined, overflow: isWideSidebar ? "hidden" : undefined }}>
               {/* Panel Header */}
               {showAddLessonClass ? (
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 12 }}>
@@ -2279,7 +2280,7 @@ export default function AdminDashboard() {
               )}
 
               {/* Panel Content */}
-              <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 16 }}>
+              <ScrollView style={isWideSidebar ? { flex: 1 } : undefined} nestedScrollEnabled={isWideSidebar} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 16 }}>
                 {showAddLessonClass ? (
                   /* Add Lesson Class Form */
                   <View style={{ gap: 10 }}>
@@ -3183,9 +3184,9 @@ export default function AdminDashboard() {
               </Pressable>
             </Modal>
 
-            <View style={{ flexDirection: Platform.OS === "web" ? "row" : "column", gap: 20, alignItems: Platform.OS === "web" ? "stretch" as any : "flex-start" }}>
+            <View style={{ flexDirection: isWideSidebar ? "row" : "column", gap: isWideSidebar ? 20 : 16, alignItems: "stretch", width: "100%" }}>
               {/* Send Notification */}
-              <View style={{ flex: Platform.OS === "web" ? 3 : 1, minWidth: 0 }}>
+              <View style={{ flex: isWideSidebar ? 3 : undefined, minWidth: 0, width: isAdminCompact ? "100%" : undefined }}>
                 <View style={{ backgroundColor: "#fff", borderRadius: 16, borderWidth: 1, borderColor: Colors.light.border, overflow: "hidden" }}>
                   <View style={{ paddingHorizontal: 16, paddingTop: 16, paddingBottom: 10, borderBottomWidth: 1, borderBottomColor: Colors.light.border }}>
                     <Text style={styles.sectionTitle}>Send Notification</Text>
@@ -3302,8 +3303,8 @@ export default function AdminDashboard() {
               </View>
 
               {/* Past Notifications */}
-              <View style={{ flex: Platform.OS === "web" ? 1 : 1, minWidth: 0 }}>
-                <View style={{ backgroundColor: "#fff", borderRadius: 16, borderWidth: 1, borderColor: Colors.light.border, flex: 1, overflow: "hidden" }}>
+              <View style={{ flex: isWideSidebar ? 1 : undefined, minWidth: 0, width: isAdminCompact ? "100%" : undefined }}>
+                <View style={{ backgroundColor: "#fff", borderRadius: 16, borderWidth: 1, borderColor: Colors.light.border, flex: isWideSidebar ? 1 : undefined, overflow: isWideSidebar ? "hidden" : undefined }}>
                   {/* Header */}
                   <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", padding: 16, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: Colors.light.border }}>
                     {showAllPastNotifs ? (
@@ -3326,7 +3327,13 @@ export default function AdminDashboard() {
                     )}
                   </View>
                   {/* Content */}
-                  <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 12, gap: 10 }} showsVerticalScrollIndicator={false}>
+                  <ScrollView
+                    style={isWideSidebar ? { flex: 1 } : undefined}
+                    scrollEnabled={isWideSidebar}
+                    nestedScrollEnabled={isWideSidebar}
+                    contentContainerStyle={{ padding: 12, gap: 10 }}
+                    showsVerticalScrollIndicator={false}
+                  >
                     {notifHistory.length === 0 ? (
                       <View style={{ alignItems: "center", paddingVertical: 32, gap: 8 }}>
                         <Ionicons name="notifications-off-outline" size={36} color={Colors.light.textMuted} />
@@ -3666,9 +3673,9 @@ export default function AdminDashboard() {
               <Text style={styles.sectionTitle}>AI Tutor Doubts ({adminDoubtData.total || 0})</Text>
             </View>
 
-            <View style={[styles.adminCard, { marginBottom: 14, gap: 10 }]}>
-              <Text style={styles.adminCardTitle}>Filters</Text>
-              <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
+            <View style={isAdminCompact ? [styles.adminCompactCard, { backgroundColor: colors.card, borderColor: colors.border }] : [styles.adminCard, { marginBottom: 14, gap: 10 }]}>
+              <Text style={[styles.adminCardTitle, isAdminCompact && { flex: undefined }]}>Filters</Text>
+              <View style={styles.adminCompactChipRow}>
                 {[
                   { key: "all", label: "All Time" },
                   { key: "7", label: "Last 7 Days" },
@@ -3683,7 +3690,7 @@ export default function AdminDashboard() {
                   </Pressable>
                 ))}
               </View>
-              <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
+              <View style={styles.adminCompactChipRow}>
                 <Pressable
                   style={[styles.typeSelectBtn, aiDoubtTopic === "all" && styles.typeSelectActive]}
                   onPress={() => setAiDoubtTopic("all")}
@@ -3703,7 +3710,7 @@ export default function AdminDashboard() {
                 ))}
               </View>
               <TextInput
-                style={styles.formInput}
+                style={[styles.formInput, isAdminCompact && { width: "100%" }]}
                 placeholder="Search student name/phone/email or question..."
                 placeholderTextColor={Colors.light.textMuted}
                 value={aiDoubtStudent}
@@ -3722,6 +3729,7 @@ export default function AdminDashboard() {
                   justifyContent: "center",
                   gap: 8,
                   opacity: clearAdminDoubtsMutation.isPending ? 0.7 : 1,
+                  alignSelf: isAdminCompact ? "stretch" : undefined,
                 }}
                 onPress={() => {
                   const run = () => clearAdminDoubtsMutation.mutate();
@@ -3752,8 +3760,8 @@ export default function AdminDashboard() {
               <ActivityIndicator size="large" color={Colors.light.primary} style={{ marginTop: 20 }} />
             ) : (
               <>
-                <View style={[styles.adminCard, { marginBottom: 14 }]}>
-                  <Text style={[styles.adminCardTitle, { marginBottom: 8 }]}>Frequently Asked Topics</Text>
+                <View style={isAdminCompact ? [styles.adminCompactCard, { backgroundColor: colors.card, borderColor: colors.border }] : [styles.adminCard, { marginBottom: 14 }]}>
+                  <Text style={[styles.adminCardTitle, { marginBottom: 8 }, isAdminCompact && { flex: undefined }]}>Frequently Asked Topics</Text>
                   {(adminDoubtData.topTopics || []).length === 0 ? (
                     <Text style={styles.adminCardMetaText}>No topic data yet.</Text>
                   ) : (
@@ -3769,9 +3777,9 @@ export default function AdminDashboard() {
                   )}
                 </View>
 
-                <View style={[styles.adminCard, { marginBottom: 14 }]}>
-                  <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-                    <Text style={styles.adminCardTitle}>Student History</Text>
+                <View style={isAdminCompact ? [styles.adminCompactCard, { backgroundColor: colors.card, borderColor: colors.border }] : [styles.adminCard, { marginBottom: 14 }]}>
+                  <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8, width: "100%" }}>
+                    <Text style={[styles.adminCardTitle, isAdminCompact && { flex: undefined }]}>Student History</Text>
                     <Text style={styles.adminCardMetaText}>{adminDoubtStudentsData.total} students</Text>
                   </View>
                   {adminDoubtStudentsData.rows.length === 0 ? (
@@ -3804,9 +3812,9 @@ export default function AdminDashboard() {
                   )}
                 </View>
 
-                <View style={[styles.adminCard, { marginBottom: 14 }]}>
-                  <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-                    <Text style={styles.adminCardTitle}>Frequently Asked Questions</Text>
+                <View style={isAdminCompact ? [styles.adminCompactCard, { backgroundColor: colors.card, borderColor: colors.border }] : [styles.adminCard, { marginBottom: 14 }]}>
+                  <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8, width: "100%" }}>
+                    <Text style={[styles.adminCardTitle, isAdminCompact && { flex: undefined }]}>Frequently Asked Questions</Text>
                     <Text style={styles.adminCardMetaText}>{adminFrequentPatternsData.total} patterns</Text>
                   </View>
                   {adminFrequentPatternsData.rows.length === 0 ? (
@@ -7292,6 +7300,17 @@ const styles = StyleSheet.create({
   statusDot: { width: 8, height: 8, borderRadius: 4, marginTop: 4 },
   adminCardMeta: { flexDirection: "row", gap: 6, flexWrap: "wrap" },
   adminCardMetaText: { fontSize: 12, color: Colors.light.textMuted, fontFamily: "Inter_400Regular" },
+  adminCompactCard: {
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 14,
+    borderWidth: 1,
+    width: "100%",
+    flexDirection: "column",
+    alignItems: "stretch",
+    gap: 12,
+  },
+  adminCompactChipRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   adminCardActions: { flexDirection: "row", gap: 8 },
   editBtn: { width: 36, height: 36, borderRadius: 10, backgroundColor: Colors.light.secondary, alignItems: "center", justifyContent: "center" },
   deleteBtn: { width: 36, height: 36, borderRadius: 10, backgroundColor: "#FEE2E2", alignItems: "center", justifyContent: "center" },

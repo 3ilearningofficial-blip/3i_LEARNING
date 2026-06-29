@@ -248,12 +248,17 @@ export function registerStaffRoutes({
       const assignment = await assertCourseAssignment(db, user.id, courseId);
       const courseRes = await db.query(`SELECT * FROM courses WHERE id = $1 LIMIT 1`, [courseId]);
       if (courseRes.rows.length === 0) return res.status(404).json({ message: "Course not found" });
-      const [lectures, tests, materials, liveClasses, missions] = await Promise.all([
+      const [lectures, tests, materials, liveClasses, missions, foldersRes] = await Promise.all([
         db.query(`SELECT * FROM lectures WHERE course_id = $1 ORDER BY order_index ASC, id ASC`, [courseId]),
         db.query(`SELECT * FROM tests WHERE course_id = $1 ORDER BY order_index ASC, id ASC`, [courseId]),
         db.query(`SELECT * FROM study_materials WHERE course_id = $1 ORDER BY order_index ASC, id ASC`, [courseId]),
         db.query(`SELECT * FROM live_classes WHERE course_id = $1 ORDER BY scheduled_at DESC NULLS LAST`, [courseId]),
         db.query(`SELECT * FROM daily_missions WHERE course_id = $1 ORDER BY id DESC`, [courseId]),
+        db.query(
+          `SELECT id, course_id, name, full_name, type, parent_id, order_index, subject_key
+           FROM course_folders WHERE course_id = $1 ORDER BY order_index ASC NULLS LAST, id ASC`,
+          [courseId],
+        ),
       ]);
       res.json({
         course: courseRes.rows[0],
@@ -263,6 +268,7 @@ export function registerStaffRoutes({
         materials: filterRowsBySubjectKey(materials.rows, assignment),
         liveClasses: filterRowsBySubjectKey(liveClasses.rows, assignment),
         missions: filterRowsBySubjectKey(missions.rows, assignment),
+        folders: filterRowsBySubjectKey(foldersRes.rows, assignment),
       });
     } catch (err) {
       handleStaffError(res, err);

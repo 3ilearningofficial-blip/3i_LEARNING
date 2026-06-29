@@ -211,7 +211,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return;
         }
 
-        if (msg === "device_binding_mismatch") {
+        if (msg === "max_devices_registered") {
+          Alert.alert(
+            "Device limit reached",
+            "This account is already registered on the maximum number of devices (2). Contact support or ask admin to unlock.",
+            [{ text: "OK" }]
+          );
+          setUser(null);
+          await removeStoredAuthUser();
+          queryClient.clear();
+        } else if (msg === "device_binding_mismatch") {
           Alert.alert(
             "Access Restricted",
             "This account's paid subscription is tied to the device used at purchase. Sign in using that same installation, or contact support.",

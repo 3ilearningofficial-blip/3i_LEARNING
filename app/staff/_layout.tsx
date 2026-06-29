@@ -8,15 +8,10 @@ import { useAuth } from "@/context/AuthContext";
 import Colors from "@/constants/colors";
 import { useAppTheme } from "@/context/AppThemeContext";
 
-const WEB_NAV = [
-  { href: "/staff", label: "Home", icon: "home" as const },
-  { href: "/staff/profile", label: "Profile", icon: "person" as const },
-  { href: "/staff/courses", label: "Courses", icon: "book" as const },
-  { href: "/staff/tests", label: "Tests", icon: "document-text" as const },
-  { href: "/staff/missions", label: "Missions", icon: "flame" as const },
-  { href: "/staff/materials", label: "Materials", icon: "folder-open" as const },
-  { href: "/staff/requests", label: "Requests", icon: "hand-left" as const },
-];
+import { STAFF_WEB_NAV } from "@/components/staff/staff-web-nav";
+import { StaffScreenShell } from "@/components/staff/StaffScreenShell";
+
+const WEB_NAV = STAFF_WEB_NAV;
 
 function StaffGuard({ children }: { children: React.ReactNode }) {
   const { user, isStaff, isLoading, logout } = useAuth();
@@ -50,7 +45,13 @@ function WebStaffShell({ children }: { children: React.ReactNode }) {
   const isWide = width >= 900;
 
   if (!isWide) {
-    return <StaffGuard>{children}</StaffGuard>;
+    return (
+      <StaffGuard>
+        <StaffScreenShell>
+          {children}
+        </StaffScreenShell>
+      </StaffGuard>
+    );
   }
 
   return (

@@ -13,7 +13,6 @@ export default function StaffMoreScreen() {
   const links = [
     { label: "Daily Missions", href: "/staff/missions", icon: "flame" as const },
     { label: "Access Requests", href: "/staff/requests", icon: "hand-left" as const },
-    { label: "Notifications", href: "/notifications", icon: "notifications" as const },
   ];
 
   return (

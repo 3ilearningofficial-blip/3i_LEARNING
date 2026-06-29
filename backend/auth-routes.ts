@@ -30,6 +30,7 @@ import {
   resolveUserBySessionToken,
   revokeSessionTokenForUser,
 } from "./user-sessions";
+import { usesStaffDualSession } from "./session-policy";
 import { purgeStudentAccountById } from "./user-account-purge";
 
 type DbClient = {
@@ -377,7 +378,9 @@ export function registerAuthRoutes({
           email: user.email,
         });
         if (!loginGate.ok) {
-          return res.status(loginGate.httpStatus).json({ message: loginGate.message });
+          return res.status(loginGate.httpStatus).json({
+            message: (loginGate as { code?: string }).code ?? loginGate.message,
+          });
         }
 
         const finalized = await finalizeAuthenticatedSession(req, user, deviceId || null, true);
@@ -471,7 +474,9 @@ export function registerAuthRoutes({
         email: user.email,
       });
       if (!loginGate.ok) {
-        return res.status(loginGate.httpStatus).json({ message: loginGate.message });
+        return res.status(loginGate.httpStatus).json({
+          message: (loginGate as { code?: string }).code ?? loginGate.message,
+        });
       }
 
       const finalized = await finalizeAuthenticatedSession(req, user, deviceId || null, true);
@@ -560,8 +565,8 @@ export function registerAuthRoutes({
         const isActive = isSessionLastActiveValid(row);
         const primaryMatches = row.session_token === tok && isActive;
         if (!primaryMatches) {
-          if (row.role === "admin") {
-            // Admins support multiple concurrent sessions stored in user_sessions table.
+          if (row.role === "admin" || usesStaffDualSession(String(row.role ?? ""))) {
+            // Admins and staff support multiple concurrent sessions in user_sessions.
             // Fall back to that table only when the primary token doesn't match (rare).
             const minAge = Date.now() - ADMIN_SESSION_MAX_AGE_MS;
             const sess = await db.query(
@@ -642,7 +647,9 @@ export function registerAuthRoutes({
         email: user.email,
       });
       if (!loginGate.ok) {
-        return res.status(loginGate.httpStatus).json({ message: loginGate.message });
+        return res.status(loginGate.httpStatus).json({
+          message: (loginGate as { code?: string }).code ?? loginGate.message,
+        });
       }
 
       const finalized = await finalizeAuthenticatedSession(req, user, deviceId || null, false);
@@ -806,7 +813,9 @@ export function registerAuthRoutes({
         email: user.email,
       });
       if (!gate.ok) {
-        return res.status(gate.httpStatus).json({ message: gate.message });
+        return res.status(gate.httpStatus).json({
+          message: (gate as { code?: string }).code ?? gate.message,
+        });
       }
 
       const dev = typeof deviceId === "string" ? deviceId : null;
@@ -900,7 +909,9 @@ export function registerAuthRoutes({
         email: user.email,
       });
       if (!gate.ok) {
-        return res.status(gate.httpStatus).json({ message: gate.message });
+        return res.status(gate.httpStatus).json({
+          message: (gate as { code?: string }).code ?? gate.message,
+        });
       }
 
       const dev = typeof deviceId === "string" ? deviceId : null;

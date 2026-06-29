@@ -333,6 +333,7 @@ function RootLayoutNav() {
     !!user?.profileComplete &&
     !inPublicLegalRoute &&
     currentSegment !== "admin" &&
+    String(currentSegment) !== "staff" &&
     currentSegment !== "(auth)" &&
     currentSegment !== "welcome" &&
     currentSegment !== "profile-setup";

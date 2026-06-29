@@ -1,5 +1,14 @@
 import React from "react";
-import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Platform } from "react-native";
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  Pressable,
+  ActivityIndicator,
+  Platform,
+  useWindowDimensions,
+} from "react-native";
 import { router } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { Ionicons } from "@expo/vector-icons";
@@ -8,10 +17,23 @@ import Colors from "@/constants/colors";
 import { useAppTheme } from "@/context/AppThemeContext";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
+import { useAuth } from "@/context/AuthContext";
+import { CourseCard, type CourseHomeCardCourse } from "@/components/course/CourseHomeCards";
+
+function assignmentSubjects(course: any): string[] {
+  return (course.assignments || [])
+    .map((a: any) => a.subject_key)
+    .filter((k: string) => k && String(k).trim());
+}
 
 export default function StaffHomeScreen() {
-  const { colors } = useAppTheme();
+  const { colors, isDarkMode } = useAppTheme();
   const insets = useSafeAreaInsets();
+  const { user } = useAuth();
+  const { width } = useWindowDimensions();
+  const isWide = width >= 768;
+  const cardWidth = isWide ? 360 : Math.min(width - 40, 420);
+
   const { data, isLoading } = useQuery({
     queryKey: ["/api/staff/dashboard"],
     queryFn: async () => {
@@ -22,14 +44,47 @@ export default function StaffHomeScreen() {
     staleTime: 0,
   });
 
+  const topPadding = Platform.OS === "web" ? 16 : insets.top;
+
   if (isLoading) return <ActivityIndicator color={Colors.light.primary} style={{ marginTop: 40 }} />;
+
+  const courses: CourseHomeCardCourse[] = (data?.courses || []).map((c: any) => ({
+    ...c,
+    teacher_name: c.teacher_name || user?.name,
+  }));
 
   return (
     <ScrollView style={{ flex: 1, backgroundColor: colors.background }} contentContainerStyle={{ paddingBottom: 24 }}>
-      <LinearGradient colors={[Colors.light.primary, "#1e40af"]} style={{ paddingTop: insets.top + 16, paddingHorizontal: 16, paddingBottom: 20 }}>
-        <Text style={styles.headerTitle}>Teacher Portal</Text>
-        <Text style={styles.headerSub}>Dashboard</Text>
+      <LinearGradient
+        colors={isDarkMode ? ["#020617", "#0F172A"] : ["#0A1628", "#1A2E50"]}
+        style={{ paddingTop: topPadding + 12, paddingHorizontal: 20, paddingBottom: 22 }}
+      >
+        <Text style={styles.headerGreeting}>Hello, {user?.name?.split(" ")[0] || "Teacher"}</Text>
+        <Text style={styles.headerSub}>Teacher Portal Dashboard</Text>
       </LinearGradient>
+
+      {courses.length > 0 && (
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text style={[styles.sectionTitle, { color: colors.text }]}>Assigned Courses</Text>
+            <Pressable onPress={() => router.push("/staff/courses" as any)}>
+              <Text style={styles.seeAll}>See all</Text>
+            </Pressable>
+          </View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 20 }}>
+            {courses.map((item) => (
+              <View key={item.id} style={{ width: cardWidth, marginRight: 14 }}>
+                <CourseCard
+                  course={item}
+                  variant="staff"
+                  assignmentSubjects={assignmentSubjects(item)}
+                  onPress={() => router.push(`/staff/courses/${item.id}` as any)}
+                />
+              </View>
+            ))}
+          </ScrollView>
+        </View>
+      )}
 
       <View style={styles.section}>
         <Text style={[styles.sectionTitle, { color: colors.text }]}>Today's Classes</Text>
@@ -55,17 +110,6 @@ export default function StaffHomeScreen() {
             </Text>
           </View>
         ))}
-      </View>
-
-      <View style={styles.section}>
-        <Text style={[styles.sectionTitle, { color: colors.text }]}>Assigned Courses</Text>
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
-          {(data?.courses || []).map((c: any) => (
-            <Pressable key={c.id} style={[styles.courseCard, { backgroundColor: colors.surfaceAlt }]} onPress={() => router.push(`/staff/courses/${c.id}` as any)}>
-              <Text style={{ color: colors.text, fontFamily: "Inter_700Bold" }} numberOfLines={2}>{c.title}</Text>
-            </Pressable>
-          ))}
-        </View>
       </View>
 
       <View style={styles.section}>
@@ -99,12 +143,13 @@ export default function StaffHomeScreen() {
 }
 
 const styles = StyleSheet.create({
-  headerTitle: { color: "#fff", fontSize: 22, fontFamily: "Inter_800ExtraBold" },
+  headerGreeting: { color: "#fff", fontSize: 22, fontFamily: "Inter_800ExtraBold" },
   headerSub: { color: "rgba(255,255,255,0.85)", fontSize: 14, marginTop: 4, fontFamily: "Inter_400Regular" },
-  section: { padding: 16 },
-  sectionTitle: { fontSize: 16, fontFamily: "Inter_700Bold", marginBottom: 10 },
+  section: { paddingHorizontal: 20, paddingTop: 16 },
+  sectionHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 12 },
+  sectionTitle: { fontSize: 18, fontFamily: "Inter_700Bold" },
+  seeAll: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: Colors.light.primary },
   card: { padding: 12, borderRadius: 10, marginBottom: 8 },
-  courseCard: { width: Platform.OS === "web" ? 180 : "46%", minHeight: 80, padding: 12, borderRadius: 10 },
   quickRow: { flexDirection: "row", gap: 10, flexWrap: "wrap" },
   quickBtn: { backgroundColor: Colors.light.primary, borderRadius: 10, padding: 12, alignItems: "center", minWidth: 90 },
   quickText: { color: "#fff", fontSize: 11, fontFamily: "Inter_600SemiBold", marginTop: 4 },

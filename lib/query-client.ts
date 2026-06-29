@@ -311,7 +311,12 @@ export async function attachInstallationHeaders(headers: Record<string, string>)
     headers["X-App-Device-Id"] = id;
     if (Platform.OS === "ios") headers["X-Client-Platform"] = "ios";
     else if (Platform.OS === "android") headers["X-Client-Platform"] = "android";
-    else headers["X-Client-Platform"] = "web";
+    else {
+      headers["X-Client-Platform"] = "web";
+      if (typeof window !== "undefined") {
+        headers["X-Client-Form-Factor"] = window.innerWidth < 768 ? "phone" : "desktop";
+      }
+    }
   } catch {
     /* ignore */
   }

@@ -67,6 +67,8 @@ export const REQUIRED_COLUMNS: Record<string, string[]> = {
     "password_hash",
     "session_token",
     "app_bound_device_id",
+    "web_device_id_phone",
+    "web_device_id_desktop",
     "profile_complete",
     "is_blocked",
     "last_active_at",
@@ -117,7 +119,7 @@ export const REQUIRED_COLUMNS: Record<string, string[]> = {
   course_folders: ["parent_id", "subject_key"],
   standalone_folders: ["parent_id", "category", "price", "original_price", "is_free", "description", "validity_months"],
   // Migration 0042 - admin session device binding
-  user_sessions: ["device_id"],
+  user_sessions: ["device_id", "platform_family"],
 };
 
 export const REQUIRED_UNIQUE_INDEX_SPECS = [
