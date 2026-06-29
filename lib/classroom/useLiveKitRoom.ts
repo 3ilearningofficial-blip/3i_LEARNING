@@ -1,8 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Room, RoomEvent, Track } from "livekit-client";
+import { Room, RoomEvent, Track, type RemoteParticipant } from "livekit-client";
 import type { Editor } from "tldraw";
 import type { ClassroomTokenPayload } from "./useClassroomToken";
-import { loadClassroomMediaDevices, normalizePipPosition, parseClassroomTeacherStreamMeta, serializeClassroomTeacherStreamMeta, type ClassroomTeacherStreamMeta } from "./mediaDevices";
+import {
+  loadClassroomMediaDevices,
+  normalizePipPosition,
+  parseClassroomTeacherStreamMeta,
+  serializeClassroomTeacherStreamMeta,
+  type ClassroomTeacherStreamMeta,
+} from "./mediaDevices";
 import {
   CLASSROOM_SPLIT_STREAM,
   isClassroomBoardCaptureReady,
@@ -11,7 +17,14 @@ import {
   type ClassroomPublishBundle,
   type ClassroomCompositeHandle,
 } from "./classroomCompositeStream";
-import { LIVEKIT_PARTICIPANT_METADATA_CHANGED, publishTeacherStreamMeta, readParticipantMeta } from "./livekitParticipantMeta";
+import {
+  LIVEKIT_PARTICIPANT_METADATA_CHANGED,
+  LIVEKIT_TRACK_MUTED,
+  LIVEKIT_TRACK_UNMUTED,
+  LIVEKIT_TRACK_UNPUBLISHED,
+  publishTeacherStreamMeta,
+  readParticipantMeta,
+} from "./livekitParticipantMeta";
 
 type LocalPublisher = {
   publishTrack(
@@ -26,6 +39,28 @@ type PublishedTracks = {
   camera?: MediaStreamTrack;
   legacy?: MediaStreamTrack;
 };
+
+function findTeacherParticipant(room: Room): RemoteParticipant | undefined {
+  for (const participant of room.remoteParticipants.values()) {
+    const hasBoard = participant.getTrackPublication(Track.Source.ScreenShare);
+    const hasCam = participant.getTrackPublication(Track.Source.Camera);
+    const hasMic = participant.getTrackPublication(Track.Source.Microphone);
+    if (hasBoard || hasCam || hasMic) return participant;
+  }
+  return undefined;
+}
+
+type CameraPublication = {
+  videoTrack?: unknown;
+  isMuted?: boolean;
+};
+
+function isTeacherCameraActive(participant: RemoteParticipant): boolean {
+  const camPub = participant.getTrackPublication(Track.Source.Camera) as CameraPublication | undefined;
+  if (!camPub?.videoTrack) return false;
+  if (camPub.isMuted === true) return false;
+  return true;
+}
 
 export function useLiveKitRoom(
   tokenPayload: ClassroomTokenPayload | undefined,
@@ -57,18 +92,14 @@ export function useLiveKitRoom(
   const [compositeStream, setCompositeStream] = useState<MediaStream | null>(null);
   const [boardStreaming, setBoardStreaming] = useState(false);
   const [teacherStreamMeta, setTeacherStreamMeta] = useState<ClassroomTeacherStreamMeta>({});
+  const [teacherCameraActive, setTeacherCameraActive] = useState(false);
 
   const syncTeacherStreamMeta = useCallback(() => {
     const room = roomRef.current;
     if (!room || tokenPayload?.canPublish) return;
-    for (const participant of room.remoteParticipants.values()) {
-      const hasBoard = participant.getTrackPublication(Track.Source.ScreenShare);
-      const hasCam = participant.getTrackPublication(Track.Source.Camera);
-      if (hasBoard || hasCam) {
-        setTeacherStreamMeta(parseClassroomTeacherStreamMeta(readParticipantMeta(participant)));
-        return;
-      }
-    }
+    const teacher = findTeacherParticipant(room);
+    if (!teacher) return;
+    setTeacherStreamMeta(parseClassroomTeacherStreamMeta(readParticipantMeta(teacher)));
   }, [tokenPayload?.canPublish]);
 
   const attachLocalCameraPreview = useCallback(() => {
@@ -86,33 +117,51 @@ export function useLiveKitRoom(
     void el.play().catch(() => {});
   }, []);
 
+  const publishTeacherMeta = useCallback(async (room: Room, cameraEnabled: boolean) => {
+    const prefs = loadClassroomMediaDevices();
+    const meta: ClassroomTeacherStreamMeta = {
+      pipPosition: normalizePipPosition(prefs.pipPosition),
+      greenScreen: !!prefs.greenScreenEnabled,
+      cameraEnabled,
+    };
+    await publishTeacherStreamMeta(room, serializeClassroomTeacherStreamMeta(meta));
+    if (tokenPayload?.canPublish) {
+      setTeacherStreamMeta(meta);
+    }
+  }, [tokenPayload?.canPublish]);
+
   const attachRemoteTeacher = useCallback(() => {
     const room = roomRef.current;
     if (!room) return;
-    for (const participant of room.remoteParticipants.values()) {
-      const screenPub = participant.getTrackPublication(Track.Source.ScreenShare);
-      const screenTrack = screenPub?.videoTrack;
-      if (screenTrack && remoteBoardRef.current) {
-        screenTrack.attach(remoteBoardRef.current);
-      }
 
-      const camPub = participant.getTrackPublication(Track.Source.Camera);
-      const camTrack = camPub?.videoTrack;
-      if (camTrack && remoteCameraRef.current) {
-        camTrack.attach(remoteCameraRef.current);
-      }
-
-      const micPub = participant.getTrackPublication(Track.Source.Microphone);
-      const micTrack = micPub?.audioTrack;
-      if (micTrack && remoteAudioRef.current) {
-        micTrack.attach(remoteAudioRef.current);
-      }
-
-      if (screenTrack || camTrack || micTrack) {
-        syncTeacherStreamMeta();
-        return;
-      }
+    const teacher = findTeacherParticipant(room);
+    if (!teacher) {
+      setTeacherCameraActive(false);
+      return;
     }
+
+    const screenPub = teacher.getTrackPublication(Track.Source.ScreenShare);
+    const screenTrack = screenPub?.videoTrack;
+    if (screenTrack && remoteBoardRef.current) {
+      screenTrack.attach(remoteBoardRef.current);
+    }
+
+    const camPub = teacher.getTrackPublication(Track.Source.Camera);
+    const camTrack = camPub?.videoTrack;
+    if (camTrack && remoteCameraRef.current) {
+      camTrack.attach(remoteCameraRef.current);
+    } else if (remoteCameraRef.current) {
+      remoteCameraRef.current.srcObject = null;
+    }
+
+    const micPub = teacher.getTrackPublication(Track.Source.Microphone);
+    const micTrack = micPub?.audioTrack;
+    if (micTrack && remoteAudioRef.current) {
+      micTrack.attach(remoteAudioRef.current);
+    }
+
+    setTeacherCameraActive(isTeacherCameraActive(teacher));
+    syncTeacherStreamMeta();
   }, [syncTeacherStreamMeta]);
 
   const unpublishCompositeTracks = useCallback(async () => {
@@ -132,10 +181,12 @@ export function useLiveKitRoom(
     const localParticipant = room.localParticipant as unknown as LocalPublisher;
     const cam = publishedTracksRef.current.camera;
     if (!cam) return;
-    await localParticipant.unpublishTrack(cam, true);
+    // Keep local capture alive for fast re-publish and recording composite.
+    await localParticipant.unpublishTrack(cam, false);
     const { board, legacy } = publishedTracksRef.current;
     publishedTracksRef.current = { board, legacy };
-  }, []);
+    await publishTeacherMeta(room, false);
+  }, [publishTeacherMeta]);
 
   const publishCameraTrackOnly = useCallback(async (): Promise<boolean> => {
     const room = roomRef.current;
@@ -145,7 +196,7 @@ export function useLiveKitRoom(
     if (!cameraTrack || cameraTrack.readyState !== "live") return false;
     const localParticipant = room.localParticipant as unknown as LocalPublisher;
     if (publishedTracksRef.current.camera) {
-      await localParticipant.unpublishTrack(publishedTracksRef.current.camera, true).catch(() => {});
+      await localParticipant.unpublishTrack(publishedTracksRef.current.camera, false).catch(() => {});
     }
     await localParticipant.publishTrack(cameraTrack, {
       source: Track.Source.Camera,
@@ -155,9 +206,10 @@ export function useLiveKitRoom(
       ...publishedTracksRef.current,
       camera: cameraTrack,
     };
+    await publishTeacherMeta(room, true);
     attachLocalCameraPreview();
     return true;
-  }, [attachLocalCameraPreview]);
+  }, [attachLocalCameraPreview, publishTeacherMeta]);
 
   const stopComposite = useCallback(() => {
     publishBundleRef.current?.stop();
@@ -211,13 +263,7 @@ export function useLiveKitRoom(
           simulcast: true,
         });
         publishedTracksRef.current = { board: boardTrack, camera: cameraTrack };
-        await publishTeacherStreamMeta(
-          room,
-          serializeClassroomTeacherStreamMeta({
-            pipPosition: normalizePipPosition(prefs.pipPosition),
-            greenScreen: !!prefs.greenScreenEnabled,
-          })
-        );
+        await publishTeacherMeta(room, true);
         setBoardStreaming(true);
       } else {
         const handle = await startClassroomRecordingComposite({
@@ -236,13 +282,7 @@ export function useLiveKitRoom(
           simulcast: true,
         });
         publishedTracksRef.current = { legacy: videoTrack };
-        await publishTeacherStreamMeta(
-          room,
-          serializeClassroomTeacherStreamMeta({
-            pipPosition: normalizePipPosition(prefs.pipPosition),
-            greenScreen: !!prefs.greenScreenEnabled,
-          })
-        );
+        await publishTeacherMeta(room, true);
         setBoardStreaming(true);
       }
 
@@ -266,6 +306,7 @@ export function useLiveKitRoom(
     stopComposite,
     unpublishCompositeTracks,
     attachLocalCameraPreview,
+    publishTeacherMeta,
   ]);
 
   const setLocalVideoEl = useCallback(
@@ -313,10 +354,21 @@ export function useLiveKitRoom(
     const room = new Room({ adaptiveStream: true, dynacast: true });
     roomRef.current = room;
 
-    const onRemoteSubscribed = () => attachRemoteTeacher();
-    const onParticipantMetadataChanged = () => syncTeacherStreamMeta();
+    const onRemoteTracksChanged = () => attachRemoteTeacher();
+    const onParticipantMetadataChanged = () => {
+      syncTeacherStreamMeta();
+      attachRemoteTeacher();
+    };
 
-    // LiveKit's own ICE-restart recovery (transient blips).
+    const onTrackMuted = (...args: unknown[]) => {
+      const pub = args[0] as { source?: Track.Source };
+      if (pub.source === Track.Source.Camera) attachRemoteTeacher();
+    };
+    const onTrackUnmuted = (...args: unknown[]) => {
+      const pub = args[0] as { source?: Track.Source };
+      if (pub.source === Track.Source.Camera) attachRemoteTeacher();
+    };
+
     const onReconnecting = () => {
       if (connectGenRef.current === gen) setReconnecting(true);
     };
@@ -328,10 +380,10 @@ export function useLiveKitRoom(
       reconnectAttemptsRef.current = 0;
       attachRemoteTeacher();
     };
-    // Hard drop: rebuild a fresh Room with capped backoff (unless we tore down on purpose).
     const onDisconnected = () => {
       if (connectGenRef.current !== gen) return;
       setConnected(false);
+      setTeacherCameraActive(false);
       if (intentionalDisconnectRef.current || !enabled) return;
       const attempt = reconnectAttemptsRef.current++;
       const delay = Math.min(1000 * 2 ** attempt, 15000);
@@ -340,7 +392,10 @@ export function useLiveKitRoom(
       reconnectTimerRef.current = setTimeout(() => setReconnectNonce((n) => n + 1), delay);
     };
 
-    room.on(RoomEvent.TrackSubscribed, onRemoteSubscribed);
+    room.on(RoomEvent.TrackSubscribed, onRemoteTracksChanged);
+    room.on(LIVEKIT_TRACK_UNPUBLISHED as RoomEvent, onRemoteTracksChanged);
+    room.on(LIVEKIT_TRACK_MUTED as RoomEvent, onTrackMuted);
+    room.on(LIVEKIT_TRACK_UNMUTED as RoomEvent, onTrackUnmuted);
     room.on(LIVEKIT_PARTICIPANT_METADATA_CHANGED as RoomEvent, onParticipantMetadataChanged);
     room.on(RoomEvent.Reconnecting, onReconnecting);
     room.on(RoomEvent.Reconnected, onReconnected);
@@ -377,7 +432,6 @@ export function useLiveKitRoom(
       } catch (e: unknown) {
         if (connectGenRef.current !== gen) return;
         setConnected(false);
-        // Retry the initial connect too (e.g. server warm-up / transient 5xx).
         if (!intentionalDisconnectRef.current && enabled) {
           const attempt = reconnectAttemptsRef.current++;
           const delay = Math.min(1000 * 2 ** attempt, 15000);
@@ -401,7 +455,10 @@ export function useLiveKitRoom(
         clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
       }
-      room.off(RoomEvent.TrackSubscribed, onRemoteSubscribed);
+      room.off(RoomEvent.TrackSubscribed, onRemoteTracksChanged);
+      room.off(LIVEKIT_TRACK_UNPUBLISHED as RoomEvent, onRemoteTracksChanged);
+      room.off(LIVEKIT_TRACK_MUTED as RoomEvent, onTrackMuted);
+      room.off(LIVEKIT_TRACK_UNMUTED as RoomEvent, onTrackUnmuted);
       room.off(LIVEKIT_PARTICIPANT_METADATA_CHANGED as RoomEvent, onParticipantMetadataChanged);
       room.off(RoomEvent.Reconnecting, onReconnecting);
       room.off(RoomEvent.Reconnected, onReconnected);
@@ -411,8 +468,20 @@ export function useLiveKitRoom(
       void room.disconnect();
       roomRef.current = null;
       setConnected(false);
+      setTeacherCameraActive(false);
     };
-  }, [enabled, tokenPayload?.token, tokenPayload?.url, tokenPayload?.canPublish, reconnectNonce]);
+  }, [
+    enabled,
+    tokenPayload?.token,
+    tokenPayload?.url,
+    tokenPayload?.canPublish,
+    reconnectNonce,
+    attachRemoteTeacher,
+    syncTeacherStreamMeta,
+    unpublishCompositeTracks,
+    stopComposite,
+    boardEl,
+  ]);
 
   useEffect(() => {
     if (!connected || !boardEl || !editor || !tokenPayload?.canPublish) return;
@@ -450,13 +519,11 @@ export function useLiveKitRoom(
     const room = roomRef.current;
     if (!room) return;
     const next = !camEnabled;
-    // Classroom teachers always publish canvas composite tracks when boardEl is set.
     if (boardEl && tokenPayload?.canPublish) {
       if (next) {
         const republished = await publishCameraTrackOnly();
         if (!republished) await startCompositePublish();
       } else {
-        // Keep recording composite running; only unpublish student camera track.
         await unpublishCameraTrackOnly();
         if (localVideoRef.current) localVideoRef.current.srcObject = null;
       }
@@ -477,6 +544,7 @@ export function useLiveKitRoom(
     compositeStream,
     boardStreaming,
     teacherStreamMeta,
+    teacherCameraActive,
     setLocalVideoEl,
     setRemoteVideoEl,
     setRemoteBoardEl,
@@ -486,4 +554,4 @@ export function useLiveKitRoom(
     toggleCam,
     room: roomRef,
   };
-}
+};

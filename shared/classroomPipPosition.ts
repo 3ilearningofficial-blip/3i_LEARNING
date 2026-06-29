@@ -14,6 +14,8 @@ export function normalizePipPosition(value: unknown): ClassroomPipPosition {
 export type ClassroomTeacherStreamMeta = {
   pipPosition?: ClassroomPipPosition;
   greenScreen?: boolean;
+  /** False when teacher turns camera off — students hide PiP/overlay but keep board. */
+  cameraEnabled?: boolean;
 };
 
 export function parseClassroomTeacherStreamMeta(raw: string | undefined | null): ClassroomTeacherStreamMeta {
@@ -23,6 +25,7 @@ export function parseClassroomTeacherStreamMeta(raw: string | undefined | null):
     return {
       pipPosition: normalizePipPosition(parsed.pipPosition),
       greenScreen: parsed.greenScreen === true,
+      cameraEnabled: parsed.cameraEnabled === false ? false : true,
     };
   } catch {
     return {};
@@ -33,5 +36,6 @@ export function serializeClassroomTeacherStreamMeta(meta: ClassroomTeacherStream
   return JSON.stringify({
     pipPosition: normalizePipPosition(meta.pipPosition),
     greenScreen: meta.greenScreen === true,
+    cameraEnabled: meta.cameraEnabled !== false,
   });
 }

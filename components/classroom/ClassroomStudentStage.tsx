@@ -10,6 +10,8 @@ type Props = {
   pipPosition?: ClassroomPipPosition;
   /** From LiveKit teacher metadata — student re-keys raw camera locally. */
   greenScreen?: boolean;
+  /** When false, hide teacher PiP/overlay; board stays full-bleed. */
+  cameraVisible?: boolean;
   /** When false, PiP uses minimal bottom inset (portrait shell has controls below video). */
   controlsOnVideo?: boolean;
 };
@@ -82,6 +84,7 @@ export default function ClassroomStudentStage({
   cameraVideoRef,
   pipPosition = DEFAULT_PIP_POSITION,
   greenScreen = false,
+  cameraVisible = true,
   controlsOnVideo = true,
 }: Props) {
   const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -90,6 +93,13 @@ export default function ClassroomStudentStage({
   );
   const [useChromaOverlay, setUseChromaOverlay] = useState(greenScreen);
   const [fullOverlay, setFullOverlay] = useState(greenScreen);
+
+  useEffect(() => {
+    if (!cameraVisible) {
+      setUseChromaOverlay(false);
+      setFullOverlay(false);
+    }
+  }, [cameraVisible]);
 
   useEffect(() => {
     if (Platform.OS !== "web" || typeof window === "undefined") {
@@ -110,7 +120,7 @@ export default function ClassroomStudentStage({
   }, [pipPosition, controlsOnVideo]);
 
   useEffect(() => {
-    if (Platform.OS !== "web") return;
+    if (Platform.OS !== "web" || !cameraVisible) return;
     const el = cameraVideoRef.current;
     if (!el) return;
 
@@ -122,17 +132,19 @@ export default function ClassroomStudentStage({
     el.addEventListener("loadedmetadata", check);
     if (el.readyState >= 1) check();
     return () => el.removeEventListener("loadedmetadata", check);
-  }, [cameraVideoRef, greenScreen]);
+  }, [cameraVideoRef, greenScreen, cameraVisible]);
 
   useEffect(() => {
-    if (Platform.OS !== "web" || !useChromaOverlay) return;
+    if (Platform.OS !== "web" || !cameraVisible || !useChromaOverlay) return;
     const source = cameraVideoRef.current;
     const canvas = overlayCanvasRef.current;
     if (!source || !canvas) return;
     return startStudentChromaOverlay(source, canvas, { fullOverlay: fullOverlay });
-  }, [cameraVideoRef, useChromaOverlay, fullOverlay]);
+  }, [cameraVideoRef, useChromaOverlay, fullOverlay, cameraVisible]);
 
   if (Platform.OS !== "web") return null;
+
+  const showCameraOverlay = cameraVisible;
 
   return (
     <View style={styles.wrap}>
@@ -142,18 +154,29 @@ export default function ClassroomStudentStage({
         playsInline
         style={boardStyle}
       />
-      <video
-        ref={cameraVideoRef as React.RefObject<HTMLVideoElement>}
-        autoPlay
-        playsInline
-        style={useChromaOverlay ? hiddenVideoStyle : fullOverlay ? overlayStyle : pipStyle}
-      />
-      {useChromaOverlay ? (
-        <canvas
-          ref={overlayCanvasRef as React.RefObject<HTMLCanvasElement>}
-          style={fullOverlay ? overlayStyle : pipStyle}
+      {showCameraOverlay ? (
+        <>
+          <video
+            ref={cameraVideoRef as React.RefObject<HTMLVideoElement>}
+            autoPlay
+            playsInline
+            style={useChromaOverlay ? hiddenVideoStyle : fullOverlay ? overlayStyle : pipStyle}
+          />
+          {useChromaOverlay ? (
+            <canvas
+              ref={overlayCanvasRef as React.RefObject<HTMLCanvasElement>}
+              style={fullOverlay ? overlayStyle : pipStyle}
+            />
+          ) : null}
+        </>
+      ) : (
+        <video
+          ref={cameraVideoRef as React.RefObject<HTMLVideoElement>}
+          autoPlay
+          playsInline
+          style={hiddenVideoStyle}
         />
-      ) : null}
+      )}
     </View>
   );
 }

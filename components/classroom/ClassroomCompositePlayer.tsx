@@ -23,8 +23,16 @@ export default function ClassroomCompositePlayer({
   layout = "default",
 }: Props) {
   const { data: tokenPayload, isLoading } = useClassroomToken(liveClassId, enabled);
-  const { setRemoteBoardEl, setRemoteCameraEl, setRemoteAudioEl, connected, reconnecting, error, teacherStreamMeta } =
-    useLiveKitRoom(tokenPayload, enabled && Platform.OS === "web");
+  const {
+    setRemoteBoardEl,
+    setRemoteCameraEl,
+    setRemoteAudioEl,
+    connected,
+    reconnecting,
+    error,
+    teacherStreamMeta,
+    teacherCameraActive,
+  } = useLiveKitRoom(tokenPayload, enabled && Platform.OS === "web");
   const boardRef = useRef<HTMLVideoElement | null>(null);
   const cameraRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -58,6 +66,8 @@ export default function ClassroomCompositePlayer({
   if (Platform.OS !== "web") return null;
 
   const isPortraitTop = layout === "portraitTop";
+  const cameraVisible =
+    teacherCameraActive && teacherStreamMeta.cameraEnabled !== false;
 
   return (
     <View style={[styles.wrap, isPortraitTop && styles.wrapPortraitTop]}>
@@ -67,6 +77,7 @@ export default function ClassroomCompositePlayer({
           cameraVideoRef={cameraRef}
           pipPosition={normalizePipPosition(teacherStreamMeta.pipPosition ?? pipPosition)}
           greenScreen={teacherStreamMeta.greenScreen === true}
+          cameraVisible={cameraVisible}
           controlsOnVideo={!isPortraitTop}
         />
         <audio ref={audioRef as React.RefObject<HTMLAudioElement>} autoPlay />
