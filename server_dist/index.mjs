@@ -850,549 +850,6 @@ var init_security_utils = __esm({
   }
 });
 
-// backend/native-device-binding.ts
-function envFlagEnabled(name) {
-  const raw = String(process.env[name] || "").trim().toLowerCase();
-  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
-}
-function isStudentDeviceBindingDisabled(role) {
-  return String(role || "").trim().toLowerCase() !== "admin" && envFlagEnabled("DISABLE_STUDENT_DEVICE_BINDING");
-}
-function getInstallationIdFromRequest(req) {
-  const raw = (req.get("x-app-device-id") || "").trim();
-  if (!raw || raw === "null" || raw === "undefined") return null;
-  return raw;
-}
-function getClientPlatform(req) {
-  const p = (req.get("x-client-platform") || "").trim().toLowerCase();
-  if (p === "ios" || p === "android" || p === "web") return p;
-  return null;
-}
-function getActiveSessionPlatformFamily(req) {
-  const plat = getClientPlatform(req);
-  if (plat === "web") return "web";
-  if (plat === "ios" || plat === "android") return "mobile";
-  return null;
-}
-async function insertBlockEvent(db2, row) {
-  await db2.query(
-    `INSERT INTO device_block_events (user_id, attempted_device_id, bound_device_id, phone, email, platform, reason, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-    [
-      row.userId,
-      row.attempted,
-      row.bound,
-      row.phone ?? null,
-      row.email ?? null,
-      row.platform ?? null,
-      row.reason,
-      Date.now()
-    ]
-  );
-}
-async function logWrongInstallationAttempt(db2, req, userId, boundId, attemptedId, meta, reason = "wrong_device_login_denied") {
-  await insertBlockEvent(db2, {
-    userId,
-    attempted: attemptedId,
-    bound: boundId,
-    phone: meta.phone ?? null,
-    email: meta.email ?? null,
-    platform: getClientPlatform(req) ?? void 0,
-    reason
-  });
-}
-async function assertNativePaidPurchaseInstallation(db2, userId, req) {
-  const inst = getInstallationIdFromRequest(req);
-  if (!inst || inst === "web_anon") return { ok: true };
-  const plat = getClientPlatform(req);
-  if (plat === "web") return { ok: true };
-  const r = await db2.query(
-    `SELECT app_bound_device_id, role
-     FROM users WHERE id = $1`,
-    [userId]
-  );
-  if (r.rows.length === 0) return { ok: true };
-  const row = r.rows[0];
-  if (isStudentDeviceBindingDisabled(row.role)) return { ok: true };
-  const ok = studentInstallationMatchesActiveSession(
-    {
-      app_bound_device_id: row.app_bound_device_id
-    },
-    req,
-    inst,
-    plat
-  );
-  if (!ok) {
-    return {
-      ok: false,
-      message: "Purchases must be completed on the same native device registered for this account."
-    };
-  }
-  return { ok: true };
-}
-async function finalizeInstallationBindAfterPurchase(db2, userId, req) {
-  const inst = getInstallationIdFromRequest(req);
-  if (!inst || inst === "web_anon") return;
-  const plat = getClientPlatform(req);
-  if (plat !== "ios" && plat !== "android") return;
-  const ur = await db2.query("SELECT role FROM users WHERE id = $1", [userId]);
-  const role = ur.rows[0]?.role;
-  if (isStudentDeviceBindingDisabled(role)) return;
-  await db2.query("UPDATE users SET app_bound_device_id = $1 WHERE id = $2 AND app_bound_device_id IS NULL", [inst, userId]);
-}
-async function bindDeviceForNativeFirstLogin(db2, userId, role, req) {
-  if (role === "admin") return;
-  if (isStudentDeviceBindingDisabled(role)) return;
-  const plat = getClientPlatform(req);
-  if (plat !== "ios" && plat !== "android") return;
-  const inst = getInstallationIdFromRequest(req);
-  if (!inst || inst === "web_anon") return;
-  await db2.query(
-    "UPDATE users SET app_bound_device_id = $1 WHERE id = $2 AND (app_bound_device_id IS NULL OR app_bound_device_id = '')",
-    [inst, userId]
-  );
-}
-function studentInstallationMatchesActiveSession(row, req, cand, plat) {
-  if (!cand || cand === "web_anon") return false;
-  const appb = String(row.app_bound_device_id ?? "").trim();
-  if (plat === "ios" || plat === "android") {
-    if (!appb) return true;
-    return cand === appb;
-  }
-  if (!appb) return true;
-  return cand === appb;
-}
-async function enforceInstallationBinding(db2, req, userId, role) {
-  if (role === "admin") return { ok: true };
-  if (isStudentDeviceBindingDisabled(role)) return { ok: true };
-  const plat = getClientPlatform(req);
-  if (plat === "web") return { ok: true };
-  const r = await db2.query(
-    `SELECT COALESCE(app_bound_device_id, '') AS appb
-     FROM users WHERE id = $1`,
-    [userId]
-  );
-  if (!r.rows.length) return { ok: true };
-  const row = r.rows[0];
-  const appb = String(row.appb ?? "").trim();
-  const cand = getInstallationIdFromRequest(req);
-  if (!appb) return { ok: true };
-  if (!cand || cand === "web_anon") {
-    return { ok: false, code: "device_id_missing" };
-  }
-  const matches = studentInstallationMatchesActiveSession(
-    { app_bound_device_id: appb },
-    req,
-    cand,
-    plat
-  );
-  return matches ? { ok: true } : { ok: false, code: "device_binding_mismatch" };
-}
-async function assertLoginAllowedForInstallation(db2, req, opts) {
-  if (opts.role === "admin") return { ok: true };
-  const ur = await db2.query(
-    `SELECT app_bound_device_id,
-            role,
-            COALESCE(is_blocked,FALSE) AS blocked
-     FROM users WHERE id = $1`,
-    [opts.userId]
-  );
-  if (ur.rows.length === 0) return { ok: true };
-  const row = ur.rows[0];
-  if (row.blocked) return { ok: false, httpStatus: 403, message: "Your account has been blocked. Please contact support." };
-  if (isStudentDeviceBindingDisabled(opts.role ?? row.role)) return { ok: true };
-  const attemptHeader = getInstallationIdFromRequest(req);
-  const bodyId = opts.bodyDeviceId && String(opts.bodyDeviceId).trim() || "";
-  const attempted = attemptHeader || bodyId || null;
-  const plat = getClientPlatform(req);
-  const appb = row.app_bound_device_id ? String(row.app_bound_device_id).trim() : "";
-  if (plat === "ios" || plat === "android") {
-    if (!appb) return { ok: true };
-    if (!attempted || attempted !== appb) {
-      await logWrongInstallationAttempt(db2, req, opts.userId, appb, attempted, {
-        phone: opts.phone ?? null,
-        email: opts.email ?? null
-      });
-      return {
-        ok: false,
-        httpStatus: 403,
-        message: "Access denied: this account is linked to another native device. Use the original device or ask admin to clear the device lock."
-      };
-    }
-    return { ok: true };
-  }
-  if (plat === "web") {
-    return { ok: true };
-  }
-  if (!appb) return { ok: true };
-  if (!attempted || attempted !== appb) {
-    await logWrongInstallationAttempt(db2, req, opts.userId, appb, attempted, {
-      phone: opts.phone ?? null,
-      email: opts.email ?? null
-    });
-    return {
-      ok: false,
-      httpStatus: 403,
-      message: "Access denied: this account is linked to another native device. Use the original device or ask admin to clear the device lock."
-    };
-  }
-  return { ok: true };
-}
-async function assertSessionNotActivelyInUse(db2, req, opts) {
-  if (opts.role === "admin") return { ok: true };
-  const ur = await db2.query(
-    `SELECT session_token, last_active_at, role, device_id, phone, email,
-            app_bound_device_id
-     FROM users WHERE id = $1`,
-    [opts.userId]
-  );
-  if (ur.rows.length === 0) return { ok: true };
-  const row = ur.rows[0];
-  if (String(row.role ?? "") === "admin") return { ok: true };
-  const sessionToken = row.session_token ? String(row.session_token).trim() : "";
-  if (!sessionToken) return { ok: true };
-  const lastActive = Number(row.last_active_at || 0);
-  const plat = getClientPlatform(req);
-  const lockWindowMs = plat === "web" ? STUDENT_WEB_SESSION_LOCK_WINDOW_MS : 10 * 60 * 1e3;
-  if (!lastActive || Date.now() - lastActive > lockWindowMs) {
-    return { ok: true };
-  }
-  const attemptHeader = getInstallationIdFromRequest(req);
-  const bodyId = opts.bodyDeviceId && String(opts.bodyDeviceId).trim() || "";
-  const attempted = attemptHeader || bodyId || null;
-  const storedDeviceId = row.device_id ? String(row.device_id).trim() : "";
-  if (attempted && storedDeviceId && attempted === storedDeviceId) {
-    return { ok: true };
-  }
-  if (plat === "web") {
-    if (!storedDeviceId) return { ok: true };
-    await logWrongInstallationAttempt(
-      db2,
-      req,
-      opts.userId,
-      storedDeviceId,
-      attempted,
-      { phone: row.phone ?? null, email: row.email ?? null },
-      "active_web_session_login_denied"
-    );
-    return {
-      ok: false,
-      httpStatus: 403,
-      message: "This account is already logged in on another device. Ask admin to unlock it, or try again after 7 days of inactivity."
-    };
-  }
-  if (isStudentDeviceBindingDisabled(row.role)) {
-    await logWrongInstallationAttempt(
-      db2,
-      req,
-      opts.userId,
-      storedDeviceId || null,
-      attempted,
-      { phone: row.phone ?? null, email: row.email ?? null },
-      "active_web_session_login_denied"
-    );
-    return {
-      ok: false,
-      httpStatus: 403,
-      message: "This account is already logged in on another device. Ask admin to unlock it, or try again after 7 days of inactivity."
-    };
-  }
-  const bindingRow = {
-    app_bound_device_id: row.app_bound_device_id
-  };
-  if (userRowHasDeviceBinding(bindingRow) && requestMatchesUserDeviceBinding(req, bindingRow)) {
-    return { ok: true };
-  }
-  return {
-    ok: false,
-    httpStatus: 403,
-    message: "This account is currently active on another device. Log out from that device first, or wait for it to become inactive."
-  };
-}
-function userRowHasDeviceBinding(row) {
-  const appb = String(row.app_bound_device_id ?? "").trim();
-  return !!appb;
-}
-function requestMatchesUserDeviceBinding(req, row) {
-  const cand = getInstallationIdFromRequest(req);
-  const plat = getClientPlatform(req);
-  if (!cand || cand === "web_anon") return false;
-  return studentInstallationMatchesActiveSession(
-    {
-      app_bound_device_id: row.app_bound_device_id
-    },
-    req,
-    cand,
-    plat
-  );
-}
-async function assertActiveSessionPlatformMatches(db2, req, userId, role) {
-  if (role === "admin") return { ok: true };
-  const r = await db2.query(
-    "SELECT COALESCE(active_session_platform, '') AS asp FROM users WHERE id = $1",
-    [userId]
-  );
-  const active = String(r.rows[0]?.asp ?? "").trim();
-  if (!active || active !== "web" && active !== "mobile") return { ok: true };
-  const requestFamily = getActiveSessionPlatformFamily(req);
-  if (!requestFamily || requestFamily === active) return { ok: true };
-  return { ok: false, activePlatform: active };
-}
-var STUDENT_WEB_SESSION_LOCK_WINDOW_MS;
-var init_native_device_binding = __esm({
-  "backend/native-device-binding.ts"() {
-    "use strict";
-    STUDENT_WEB_SESSION_LOCK_WINDOW_MS = 7 * 24 * 60 * 60 * 1e3;
-  }
-});
-
-// backend/user-sessions.ts
-function envFlagEnabled2(name) {
-  const raw = String(process.env[name] || "").trim().toLowerCase();
-  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
-}
-function isAdminDeviceBindingDisabled() {
-  return envFlagEnabled2("DISABLE_ADMIN_DEVICE_BINDING");
-}
-function sessionMaxAgeMsForRow(row) {
-  if (String(row.role ?? "") === "admin") return ADMIN_SESSION_MAX_AGE_MS;
-  return STUDENT_SESSION_MAX_AGE_MS;
-}
-function sessionMinActiveAt(row) {
-  return Date.now() - sessionMaxAgeMsForRow(row);
-}
-function isSessionLastActiveValid(row) {
-  const la = Number(row.last_active_at || 0);
-  if (!la) return true;
-  return la >= sessionMinActiveAt(row);
-}
-async function resolveUserBySessionToken(db2, token, deviceId) {
-  const primary = await db2.query(
-    "SELECT * FROM users WHERE session_token = $1 AND COALESCE(is_blocked, FALSE) = FALSE",
-    [token]
-  );
-  if (primary.rows.length > 0) {
-    const row = primary.rows[0];
-    if (isSessionLastActiveValid(row)) {
-      return { row, matchedVia: "primary" };
-    }
-  }
-  const minCreatedAt = Date.now() - ADMIN_SESSION_MAX_AGE_MS;
-  const extra = await db2.query(
-    `SELECT u.*, s.device_id AS _session_device_id
-     FROM users u
-     INNER JOIN user_sessions s ON s.user_id = u.id AND s.session_token = $1
-     WHERE u.role = 'admin' AND COALESCE(u.is_blocked, FALSE) = FALSE AND s.created_at >= $2`,
-    [token, minCreatedAt]
-  );
-  if (extra.rows.length === 0) return null;
-  const sessionRow = extra.rows[0];
-  const boundDevice = sessionRow._session_device_id;
-  if (!isAdminDeviceBindingDisabled() && boundDevice && deviceId && boundDevice !== deviceId) {
-    console.warn(
-      `[AdminSessionBinding] Device mismatch for user ${sessionRow.id}: bound=${boundDevice} attempted=${deviceId}`
-    );
-    return null;
-  }
-  const { _session_device_id: _discarded, ...userRow } = sessionRow;
-  return { row: userRow, matchedVia: "extra" };
-}
-async function userHasSessionToken(db2, userId, token) {
-  if (!token) return false;
-  const u = await db2.query(
-    "SELECT session_token, role, last_active_at FROM users WHERE id = $1",
-    [userId]
-  );
-  if (u.rows.length === 0) return false;
-  const row = u.rows[0];
-  if (row.session_token === token) {
-    if (isSessionLastActiveValid(row)) return true;
-  }
-  if (row.role !== "admin") return false;
-  const minCreatedAt = Date.now() - ADMIN_SESSION_MAX_AGE_MS;
-  const s = await db2.query(
-    "SELECT 1 FROM user_sessions WHERE user_id = $1 AND session_token = $2 AND created_at >= $3",
-    [userId, token, minCreatedAt]
-  );
-  return s.rows.length > 0;
-}
-async function persistLoginSession(db2, user, token, deviceId, opts) {
-  const isAdmin = user.role === "admin";
-  const now = Date.now();
-  const detectedPlatform = !isAdmin && opts.req ? getActiveSessionPlatformFamily(opts.req) : null;
-  const platformFamily = isAdmin ? null : detectedPlatform || "web";
-  if (isAdmin) {
-    const adminSessionDeviceId = isAdminDeviceBindingDisabled() ? null : deviceId ?? null;
-    await db2.query(
-      "INSERT INTO user_sessions (user_id, session_token, device_id, created_at) VALUES ($1, $2, $3, $4)",
-      [user.id, token, adminSessionDeviceId, now]
-    );
-    const urow = await db2.query("SELECT session_token FROM users WHERE id = $1", [user.id]);
-    const hasPrimary = !!urow.rows[0]?.session_token;
-    if (!hasPrimary) {
-      await db2.query(
-        "UPDATE users SET session_token = $1, last_active_at = $2, device_id = COALESCE($3, device_id) WHERE id = $4",
-        [token, now, deviceId, user.id]
-      );
-    } else if (opts.clearOtp) {
-      await db2.query(
-        "UPDATE users SET otp = NULL, otp_expires_at = NULL, otp_failed_attempts = 0, otp_locked_until = NULL, last_active_at = $1, device_id = COALESCE($2, device_id) WHERE id = $3",
-        [now, deviceId, user.id]
-      );
-    } else {
-      await db2.query(
-        "UPDATE users SET last_active_at = $1, device_id = COALESCE($2, device_id) WHERE id = $3",
-        [now, deviceId, user.id]
-      );
-    }
-    return;
-  }
-  await db2.query("DELETE FROM user_sessions WHERE user_id = $1", [user.id]);
-  const otpClause = opts.clearOtp !== false ? "otp = NULL, otp_expires_at = NULL, otp_failed_attempts = 0, otp_locked_until = NULL, " : "";
-  if (platformFamily === "web" || platformFamily === "mobile") {
-    await db2.query(
-      `UPDATE users SET ${otpClause}device_id = $1, session_token = $2, last_active_at = $3, active_session_platform = $4 WHERE id = $5`,
-      [deviceId || null, token, now, platformFamily, user.id]
-    );
-  } else {
-    await db2.query(
-      `UPDATE users SET ${otpClause}device_id = $1, session_token = $2, last_active_at = $3 WHERE id = $4`,
-      [deviceId || null, token, now, user.id]
-    );
-  }
-}
-async function revokeSessionTokenForUser(db2, userId, token) {
-  if (!token) return;
-  await db2.query("DELETE FROM user_sessions WHERE user_id = $1 AND session_token = $2", [userId, token]);
-  const u = await db2.query("SELECT session_token FROM users WHERE id = $1", [userId]);
-  if (u.rows[0]?.session_token === token) {
-    await db2.query(
-      "UPDATE users SET session_token = NULL, active_session_platform = NULL WHERE id = $1",
-      [userId]
-    );
-  }
-}
-var ADMIN_SESSION_MAX_AGE_MS, STUDENT_SESSION_MAX_AGE_MS;
-var init_user_sessions = __esm({
-  "backend/user-sessions.ts"() {
-    "use strict";
-    init_native_device_binding();
-    ADMIN_SESSION_MAX_AGE_MS = 10 * 365 * 24 * 60 * 60 * 1e3;
-    STUDENT_SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
-  }
-});
-
-// backend/auth-utils.ts
-function rowsToAuthUser(u, sessionTokenOverride) {
-  return {
-    id: u.id,
-    name: u.name,
-    email: u.email,
-    phone: u.phone,
-    role: u.role,
-    sessionToken: sessionTokenOverride ?? u.session_token,
-    profileComplete: !!u.profile_complete || false
-  };
-}
-function syncSessionUser(req, user) {
-  const session2 = req.session;
-  if (session2 && typeof session2 === "object") {
-    session2.user = user;
-  }
-}
-async function getAuthUserFromRequest(req, db2) {
-  const cacheKey = "__auth_user_from_request_cache";
-  if (Object.prototype.hasOwnProperty.call(req, cacheKey)) {
-    return req[cacheKey];
-  }
-  const setCache = (val) => {
-    req[cacheKey] = val;
-    return val;
-  };
-  const authHeader = req.headers.authorization;
-  const bearerRaw = authHeader?.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
-  const bearerToken = bearerRaw && bearerRaw !== "null" && bearerRaw !== "undefined" ? bearerRaw : "";
-  if (bearerToken) {
-    const token = bearerToken;
-    try {
-      const requestDeviceId = getInstallationIdFromRequest(req);
-      const resolved = await resolveUserBySessionToken(db2, token, requestDeviceId);
-      if (!resolved) {
-        syncSessionUser(req, null);
-        return null;
-      }
-      const u = resolved.row;
-      if (u.is_blocked) {
-        syncSessionUser(req, null);
-        return setCache(null);
-      }
-      const authUser = rowsToAuthUser(u, token);
-      syncSessionUser(req, authUser);
-      return setCache(authUser);
-    } catch (e) {
-      console.error("[Auth] Bearer token lookup error:", e);
-      return setCache(null);
-    }
-  }
-  const sessionUser = req.session.user;
-  if (!sessionUser?.id) return setCache(null);
-  try {
-    const result = await db2.query(
-      "SELECT id, name, email, phone, role, session_token, profile_complete, is_blocked FROM users WHERE id = $1",
-      [sessionUser.id]
-    );
-    if (result.rows.length === 0) {
-      syncSessionUser(req, null);
-      return setCache(null);
-    }
-    const row = result.rows[0];
-    if (row.is_blocked) {
-      syncSessionUser(req, null);
-      return setCache(null);
-    }
-    const cookieTok = sessionUser.sessionToken;
-    if (cookieTok && !await userHasSessionToken(db2, sessionUser.id, cookieTok)) {
-      syncSessionUser(req, null);
-      return setCache(null);
-    }
-    if (row.session_token && !sessionUser.sessionToken) {
-      syncSessionUser(req, null);
-      return setCache(null);
-    }
-    const authUser = rowsToAuthUser(row, cookieTok || row.session_token);
-    syncSessionUser(req, authUser);
-    return setCache(authUser);
-  } catch (e) {
-    console.error("[Auth] Session user lookup error:", e);
-    return setCache(null);
-  }
-}
-var init_auth_utils = __esm({
-  "backend/auth-utils.ts"() {
-    "use strict";
-    init_user_sessions();
-    init_native_device_binding();
-  }
-});
-
-// backend/require-admin.ts
-function createRequireAdmin(getAuthUser2) {
-  return async function requireAdmin2(req, res, next) {
-    const user = await getAuthUser2(req);
-    if (!user || user.role !== "admin") {
-      res.status(403).json({ message: "Admin access required" });
-      return;
-    }
-    req.user = user;
-    next();
-  };
-}
-var init_require_admin = __esm({
-  "backend/require-admin.ts"() {
-    "use strict";
-  }
-});
-
 // backend/staff-permissions.ts
 function isStaffRole(role) {
   return STAFF_ROLES.includes(role);
@@ -1468,6 +925,708 @@ var init_staff_permissions = __esm({
       "users.manage": false
     };
     STAFF_ROLES = ["teacher", "manager"];
+  }
+});
+
+// backend/session-policy.ts
+function getClientPlatform(req) {
+  const p = (req.get("x-client-platform") || "").trim().toLowerCase();
+  if (p === "ios" || p === "android" || p === "web") return p;
+  return null;
+}
+function getInstallationIdFromRequest(req) {
+  const raw = (req.get("x-app-device-id") || "").trim();
+  if (!raw || raw === "null" || raw === "undefined") return null;
+  return raw;
+}
+function usesStaffDualSession(role) {
+  return isStaffRole(String(role || ""));
+}
+function getWebFormFactor(req) {
+  const header = (req.get("x-client-form-factor") || "").trim().toLowerCase();
+  if (header === "phone" || header === "desktop") return header;
+  const ua = (req.get("user-agent") || "").toLowerCase();
+  if (/iphone|ipod|android.+mobile|mobile/.test(ua)) return "phone";
+  return "desktop";
+}
+function getRegistrationSlot(req) {
+  const plat = getClientPlatform(req);
+  if (plat === "ios" || plat === "android") return "app_bound";
+  if (plat === "web") {
+    return getWebFormFactor(req) === "phone" ? "web_phone" : "web_desktop";
+  }
+  return null;
+}
+function trimId(value) {
+  return String(value ?? "").trim();
+}
+function countRegisteredDevices(row) {
+  const appb = trimId(row.app_bound_device_id);
+  const phone = trimId(row.web_device_id_phone);
+  const desktop = trimId(row.web_device_id_desktop);
+  if (appb) {
+    return 1 + (phone || desktop ? 1 : 0);
+  }
+  return (phone ? 1 : 0) + (desktop ? 1 : 0);
+}
+function getRegisteredInstallationIds(row) {
+  const ids = [];
+  const appb = trimId(row.app_bound_device_id);
+  const phone = trimId(row.web_device_id_phone);
+  const desktop = trimId(row.web_device_id_desktop);
+  if (appb) ids.push(appb);
+  if (phone) ids.push(phone);
+  if (desktop) ids.push(desktop);
+  return ids;
+}
+function isInstallationRegistered(row, installationId) {
+  const cand = trimId(installationId);
+  if (!cand || cand === "web_anon") return false;
+  return getRegisteredInstallationIds(row).includes(cand);
+}
+function canRegisterNewDevice(row, slot) {
+  const appb = trimId(row.app_bound_device_id);
+  const phone = trimId(row.web_device_id_phone);
+  const desktop = trimId(row.web_device_id_desktop);
+  if (countRegisteredDevices(row) >= 2) return false;
+  if (slot === "web_phone" && appb) return false;
+  if (appb && (slot === "web_phone" || slot === "web_desktop")) {
+    if (phone || desktop) return false;
+  }
+  return true;
+}
+function studentIsWebOnly(row) {
+  return !trimId(row.app_bound_device_id);
+}
+function getAttemptedInstallationId(req, bodyDeviceId) {
+  const header = getInstallationIdFromRequest(req);
+  const bodyId = bodyDeviceId && String(bodyDeviceId).trim() || "";
+  return header || bodyId || null;
+}
+var init_session_policy = __esm({
+  "backend/session-policy.ts"() {
+    "use strict";
+    init_staff_permissions();
+  }
+});
+
+// backend/native-device-binding.ts
+function envFlagEnabled(name) {
+  const raw = String(process.env[name] || "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+function isStudentDeviceBindingDisabled(role) {
+  return String(role || "").trim().toLowerCase() !== "admin" && envFlagEnabled("DISABLE_STUDENT_DEVICE_BINDING");
+}
+function getInstallationIdFromRequest2(req) {
+  const raw = (req.get("x-app-device-id") || "").trim();
+  if (!raw || raw === "null" || raw === "undefined") return null;
+  return raw;
+}
+function getClientPlatform2(req) {
+  const p = (req.get("x-client-platform") || "").trim().toLowerCase();
+  if (p === "ios" || p === "android" || p === "web") return p;
+  return null;
+}
+function getActiveSessionPlatformFamily(req) {
+  const plat = getClientPlatform2(req);
+  if (plat === "web") return "web";
+  if (plat === "ios" || plat === "android") return "mobile";
+  return null;
+}
+async function insertBlockEvent(db2, row) {
+  await db2.query(
+    `INSERT INTO device_block_events (user_id, attempted_device_id, bound_device_id, phone, email, platform, reason, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [
+      row.userId,
+      row.attempted,
+      row.bound,
+      row.phone ?? null,
+      row.email ?? null,
+      row.platform ?? null,
+      row.reason,
+      Date.now()
+    ]
+  );
+}
+async function logWrongInstallationAttempt(db2, req, userId, boundId, attemptedId, meta, reason = "wrong_device_login_denied") {
+  await insertBlockEvent(db2, {
+    userId,
+    attempted: attemptedId,
+    bound: boundId,
+    phone: meta.phone ?? null,
+    email: meta.email ?? null,
+    platform: getClientPlatform2(req) ?? void 0,
+    reason
+  });
+}
+function studentDeviceRowFromDb(row) {
+  return {
+    app_bound_device_id: row.app_bound_device_id,
+    web_device_id_phone: row.web_device_id_phone,
+    web_device_id_desktop: row.web_device_id_desktop
+  };
+}
+async function loadStudentDeviceRow(db2, userId) {
+  const r = await db2.query(
+    `SELECT app_bound_device_id, web_device_id_phone, web_device_id_desktop
+     FROM users WHERE id = $1`,
+    [userId]
+  );
+  if (!r.rows.length) return null;
+  return studentDeviceRowFromDb(r.rows[0]);
+}
+async function bindStudentDeviceOnLogin(db2, userId, req) {
+  const plat = getClientPlatform2(req);
+  const inst = getInstallationIdFromRequest2(req);
+  if (!inst || inst === "web_anon") return;
+  if (plat === "ios" || plat === "android") {
+    await db2.query(
+      "UPDATE users SET app_bound_device_id = $1 WHERE id = $2 AND (app_bound_device_id IS NULL OR app_bound_device_id = '')",
+      [inst, userId]
+    );
+    return;
+  }
+  if (plat === "web") {
+    const slot = getRegistrationSlot(req);
+    if (slot === "web_phone") {
+      await db2.query(
+        "UPDATE users SET web_device_id_phone = $1 WHERE id = $2 AND (web_device_id_phone IS NULL OR web_device_id_phone = '')",
+        [inst, userId]
+      );
+    } else if (slot === "web_desktop") {
+      await db2.query(
+        "UPDATE users SET web_device_id_desktop = $1 WHERE id = $2 AND (web_device_id_desktop IS NULL OR web_device_id_desktop = '')",
+        [inst, userId]
+      );
+    }
+  }
+}
+async function assertNativePaidPurchaseInstallation(db2, userId, req) {
+  const inst = getInstallationIdFromRequest2(req);
+  if (!inst || inst === "web_anon") return { ok: true };
+  const plat = getClientPlatform2(req);
+  if (plat === "web") return { ok: true };
+  const r = await db2.query(`SELECT app_bound_device_id, role FROM users WHERE id = $1`, [userId]);
+  if (r.rows.length === 0) return { ok: true };
+  const row = r.rows[0];
+  if (usesStaffDualSession(row.role) || isStudentDeviceBindingDisabled(row.role)) {
+    return { ok: true };
+  }
+  const ok = studentInstallationMatchesActiveSession(
+    { app_bound_device_id: row.app_bound_device_id },
+    req,
+    inst,
+    plat
+  );
+  if (!ok) {
+    return {
+      ok: false,
+      message: "Purchases must be completed on the same native device registered for this account."
+    };
+  }
+  return { ok: true };
+}
+async function finalizeInstallationBindAfterPurchase(db2, userId, req) {
+  const inst = getInstallationIdFromRequest2(req);
+  if (!inst || inst === "web_anon") return;
+  const plat = getClientPlatform2(req);
+  if (plat !== "ios" && plat !== "android") return;
+  const ur = await db2.query("SELECT role FROM users WHERE id = $1", [userId]);
+  const role = ur.rows[0]?.role;
+  if (usesStaffDualSession(role) || isStudentDeviceBindingDisabled(role)) return;
+  await db2.query("UPDATE users SET app_bound_device_id = $1 WHERE id = $2 AND app_bound_device_id IS NULL", [inst, userId]);
+}
+async function bindDeviceForNativeFirstLogin(db2, userId, role, req) {
+  if (role === "admin" || usesStaffDualSession(role)) return;
+  if (isStudentDeviceBindingDisabled(role)) return;
+  await bindStudentDeviceOnLogin(db2, userId, req);
+}
+function studentInstallationMatchesActiveSession(row, req, cand, plat) {
+  if (!cand || cand === "web_anon") return false;
+  const appb = String(row.app_bound_device_id ?? "").trim();
+  if (plat === "ios" || plat === "android") {
+    if (!appb) return true;
+    return cand === appb;
+  }
+  if (!appb) return true;
+  return cand === appb;
+}
+async function enforceInstallationBinding(db2, req, userId, role) {
+  if (role === "admin" || usesStaffDualSession(role)) return { ok: true };
+  if (isStudentDeviceBindingDisabled(role)) return { ok: true };
+  const plat = getClientPlatform2(req);
+  const cand = getInstallationIdFromRequest2(req);
+  if (plat === "web") {
+    const deviceRow = await loadStudentDeviceRow(db2, userId);
+    if (!deviceRow || countRegisteredDevices(deviceRow) === 0) return { ok: true };
+    if (!cand || cand === "web_anon") {
+      return { ok: false, code: "device_id_missing" };
+    }
+    if (isInstallationRegistered(deviceRow, cand)) return { ok: true };
+    return { ok: false, code: "device_binding_mismatch" };
+  }
+  const r = await db2.query(
+    `SELECT COALESCE(app_bound_device_id, '') AS appb
+     FROM users WHERE id = $1`,
+    [userId]
+  );
+  if (!r.rows.length) return { ok: true };
+  const appb = String(r.rows[0].appb ?? "").trim();
+  if (!appb) return { ok: true };
+  if (!cand || cand === "web_anon") {
+    return { ok: false, code: "device_id_missing" };
+  }
+  const matches = studentInstallationMatchesActiveSession(
+    { app_bound_device_id: appb },
+    req,
+    cand,
+    plat
+  );
+  return matches ? { ok: true } : { ok: false, code: "device_binding_mismatch" };
+}
+async function assertLoginAllowedForInstallation(db2, req, opts) {
+  if (opts.role === "admin" || usesStaffDualSession(opts.role)) return { ok: true };
+  const ur = await db2.query(
+    `SELECT app_bound_device_id, web_device_id_phone, web_device_id_desktop,
+            role, COALESCE(is_blocked,FALSE) AS blocked
+     FROM users WHERE id = $1`,
+    [opts.userId]
+  );
+  if (ur.rows.length === 0) return { ok: true };
+  const row = ur.rows[0];
+  const role = opts.role ?? row.role;
+  if (row.blocked) {
+    return { ok: false, httpStatus: 403, message: "Your account has been blocked. Please contact support." };
+  }
+  if (isStudentDeviceBindingDisabled(role)) return { ok: true };
+  const deviceRow = studentDeviceRowFromDb(row);
+  const attempted = getAttemptedInstallationId(req, opts.bodyDeviceId);
+  const plat = getClientPlatform2(req);
+  const slot = getRegistrationSlot(req);
+  const meta = { phone: opts.phone ?? null, email: opts.email ?? null };
+  if (plat === "ios" || plat === "android") {
+    const appb2 = String(row.app_bound_device_id ?? "").trim();
+    if (!appb2) return { ok: true };
+    if (attempted && attempted === appb2) return { ok: true };
+    if (attempted && isInstallationRegistered(deviceRow, attempted)) return { ok: true };
+    if (attempted && canRegisterNewDevice(deviceRow, "app_bound")) return { ok: true };
+    if (countRegisteredDevices(deviceRow) >= 2) {
+      await logWrongInstallationAttempt(db2, req, opts.userId, appb2, attempted, meta, "max_devices_registered");
+      return { ok: false, httpStatus: 403, message: MAX_DEVICES_MESSAGE, code: "max_devices_registered" };
+    }
+    await logWrongInstallationAttempt(db2, req, opts.userId, appb2, attempted, meta);
+    return {
+      ok: false,
+      httpStatus: 403,
+      message: "Access denied: this account is linked to another native device. Use the original device or ask admin to clear the device lock."
+    };
+  }
+  if (plat === "web") {
+    const appb2 = String(row.app_bound_device_id ?? "").trim();
+    if (slot === "web_phone" && appb2) {
+      await logWrongInstallationAttempt(db2, req, opts.userId, appb2, attempted, meta, "wrong_device_login_denied");
+      return {
+        ok: false,
+        httpStatus: 403,
+        message: "Phone web sign-in is not available for accounts registered on the mobile app. Use the app or your registered laptop browser."
+      };
+    }
+    if (attempted && isInstallationRegistered(deviceRow, attempted)) return { ok: true };
+    if (slot && canRegisterNewDevice(deviceRow, slot)) return { ok: true };
+    if (countRegisteredDevices(deviceRow) >= 2) {
+      const bound = getRegisteredInstallationIdsForLog(deviceRow);
+      await logWrongInstallationAttempt(db2, req, opts.userId, bound, attempted, meta, "max_devices_registered");
+      return { ok: false, httpStatus: 403, message: MAX_DEVICES_MESSAGE, code: "max_devices_registered" };
+    }
+    return { ok: true };
+  }
+  const appb = String(row.app_bound_device_id ?? "").trim();
+  if (!appb) return { ok: true };
+  if (!attempted || attempted !== appb) {
+    await logWrongInstallationAttempt(db2, req, opts.userId, appb, attempted, meta);
+    return {
+      ok: false,
+      httpStatus: 403,
+      message: "Access denied: this account is linked to another native device. Use the original device or ask admin to clear the device lock."
+    };
+  }
+  return { ok: true };
+}
+function getRegisteredInstallationIdsForLog(row) {
+  const ids = [
+    String(row.app_bound_device_id ?? "").trim(),
+    String(row.web_device_id_phone ?? "").trim(),
+    String(row.web_device_id_desktop ?? "").trim()
+  ].filter(Boolean);
+  return ids[0] ?? null;
+}
+async function assertSessionNotActivelyInUse(db2, req, opts) {
+  if (opts.role === "admin" || usesStaffDualSession(opts.role)) return { ok: true };
+  const ur = await db2.query(
+    `SELECT session_token, last_active_at, role, device_id, phone, email,
+            app_bound_device_id, web_device_id_phone, web_device_id_desktop
+     FROM users WHERE id = $1`,
+    [opts.userId]
+  );
+  if (ur.rows.length === 0) return { ok: true };
+  const row = ur.rows[0];
+  if (String(row.role ?? "") === "admin" || usesStaffDualSession(String(row.role ?? ""))) {
+    return { ok: true };
+  }
+  const sessionToken = row.session_token ? String(row.session_token).trim() : "";
+  if (!sessionToken) return { ok: true };
+  const attempted = getAttemptedInstallationId(req, opts.bodyDeviceId);
+  const storedDeviceId = row.device_id ? String(row.device_id).trim() : "";
+  const deviceRow = studentDeviceRowFromDb(row);
+  if (attempted && storedDeviceId && attempted === storedDeviceId) {
+    return { ok: true };
+  }
+  if (attempted && isInstallationRegistered(deviceRow, attempted)) {
+    return { ok: true };
+  }
+  if (attempted && countRegisteredDevices(deviceRow) < 2) {
+    return { ok: true };
+  }
+  const lastActive = Number(row.last_active_at || 0);
+  const plat = getClientPlatform2(req);
+  const lockWindowMs = plat === "web" ? STUDENT_WEB_SESSION_LOCK_WINDOW_MS : 10 * 60 * 1e3;
+  if (!lastActive || Date.now() - lastActive > lockWindowMs) {
+    return { ok: true };
+  }
+  await logWrongInstallationAttempt(
+    db2,
+    req,
+    opts.userId,
+    storedDeviceId || getRegisteredInstallationIdsForLog(deviceRow),
+    attempted,
+    { phone: row.phone ?? null, email: row.email ?? null },
+    "active_web_session_login_denied"
+  );
+  return {
+    ok: false,
+    httpStatus: 403,
+    message: "This account is already logged in on another device. Sign in here to switch devices, or ask admin to unlock."
+  };
+}
+async function assertActiveSessionPlatformMatches(db2, req, userId, role) {
+  if (role === "admin" || usesStaffDualSession(role)) return { ok: true };
+  const r = await db2.query(
+    `SELECT COALESCE(active_session_platform, '') AS asp,
+            app_bound_device_id
+     FROM users WHERE id = $1`,
+    [userId]
+  );
+  if (studentIsWebOnly({ app_bound_device_id: r.rows[0]?.app_bound_device_id })) {
+    return { ok: true };
+  }
+  const active = String(r.rows[0]?.asp ?? "").trim();
+  if (!active || active !== "web" && active !== "mobile") return { ok: true };
+  const requestFamily = getActiveSessionPlatformFamily(req);
+  if (!requestFamily || requestFamily === active) return { ok: true };
+  return { ok: false, activePlatform: active };
+}
+var MAX_DEVICES_MESSAGE, STUDENT_WEB_SESSION_LOCK_WINDOW_MS;
+var init_native_device_binding = __esm({
+  "backend/native-device-binding.ts"() {
+    "use strict";
+    init_session_policy();
+    MAX_DEVICES_MESSAGE = "You are not allowed to sign in. This account is already registered on the maximum number of devices (2). Contact support or ask admin to unlock.";
+    STUDENT_WEB_SESSION_LOCK_WINDOW_MS = 7 * 24 * 60 * 60 * 1e3;
+  }
+});
+
+// backend/user-sessions.ts
+function envFlagEnabled2(name) {
+  const raw = String(process.env[name] || "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+function isAdminDeviceBindingDisabled() {
+  return envFlagEnabled2("DISABLE_ADMIN_DEVICE_BINDING");
+}
+function isMultiSessionRole(role) {
+  const r = String(role || "");
+  return r === "admin" || usesStaffDualSession(r);
+}
+function sessionMaxAgeMsForRow(row) {
+  const role = String(row.role ?? "");
+  if (role === "admin" || usesStaffDualSession(role)) return ADMIN_SESSION_MAX_AGE_MS;
+  return STUDENT_SESSION_MAX_AGE_MS;
+}
+function sessionMinActiveAt(row) {
+  return Date.now() - sessionMaxAgeMsForRow(row);
+}
+function isSessionLastActiveValid(row) {
+  const la = Number(row.last_active_at || 0);
+  if (!la) return true;
+  return la >= sessionMinActiveAt(row);
+}
+async function resolveUserBySessionToken(db2, token, deviceId) {
+  const primary = await db2.query(
+    "SELECT * FROM users WHERE session_token = $1 AND COALESCE(is_blocked, FALSE) = FALSE",
+    [token]
+  );
+  if (primary.rows.length > 0) {
+    const row = primary.rows[0];
+    if (isSessionLastActiveValid(row)) {
+      return { row, matchedVia: "primary" };
+    }
+  }
+  const minCreatedAt = Date.now() - ADMIN_SESSION_MAX_AGE_MS;
+  const extra = await db2.query(
+    `SELECT u.*, s.device_id AS _session_device_id
+     FROM users u
+     INNER JOIN user_sessions s ON s.user_id = u.id AND s.session_token = $1
+     WHERE u.role IN ('admin', 'teacher', 'manager')
+       AND COALESCE(u.is_blocked, FALSE) = FALSE
+       AND s.created_at >= $2`,
+    [token, minCreatedAt]
+  );
+  if (extra.rows.length === 0) return null;
+  const sessionRow = extra.rows[0];
+  const boundDevice = sessionRow._session_device_id;
+  const role = String(sessionRow.role ?? "");
+  if (role === "admin" && !isAdminDeviceBindingDisabled() && boundDevice && deviceId && boundDevice !== deviceId) {
+    console.warn(
+      `[AdminSessionBinding] Device mismatch for user ${sessionRow.id}: bound=${boundDevice} attempted=${deviceId}`
+    );
+    return null;
+  }
+  const { _session_device_id: _discarded, ...userRow } = sessionRow;
+  return { row: userRow, matchedVia: "extra" };
+}
+async function userHasSessionToken(db2, userId, token) {
+  if (!token) return false;
+  const u = await db2.query(
+    "SELECT session_token, role, last_active_at FROM users WHERE id = $1",
+    [userId]
+  );
+  if (u.rows.length === 0) return false;
+  const row = u.rows[0];
+  if (row.session_token === token) {
+    if (isSessionLastActiveValid(row)) return true;
+  }
+  if (!isMultiSessionRole(row.role)) return false;
+  const minCreatedAt = Date.now() - ADMIN_SESSION_MAX_AGE_MS;
+  const s = await db2.query(
+    "SELECT 1 FROM user_sessions WHERE user_id = $1 AND session_token = $2 AND created_at >= $3",
+    [userId, token, minCreatedAt]
+  );
+  return s.rows.length > 0;
+}
+async function persistStaffLoginSession(db2, user, token, deviceId, opts) {
+  const now = Date.now();
+  const platformFamily = opts.req ? getActiveSessionPlatformFamily(opts.req) || "web" : "web";
+  await db2.query(
+    `DELETE FROM user_sessions
+     WHERE user_id = $1 AND platform_family = $2`,
+    [user.id, platformFamily]
+  );
+  await db2.query(
+    `INSERT INTO user_sessions (user_id, session_token, device_id, platform_family, created_at)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [user.id, token, deviceId ?? null, platformFamily, now]
+  );
+  const urow = await db2.query("SELECT session_token FROM users WHERE id = $1", [user.id]);
+  const hasPrimary = !!urow.rows[0]?.session_token;
+  if (!hasPrimary) {
+    await db2.query(
+      "UPDATE users SET session_token = $1, last_active_at = $2, device_id = COALESCE($3, device_id) WHERE id = $4",
+      [token, now, deviceId, user.id]
+    );
+  } else if (opts.clearOtp) {
+    await db2.query(
+      "UPDATE users SET otp = NULL, otp_expires_at = NULL, otp_failed_attempts = 0, otp_locked_until = NULL, last_active_at = $1, device_id = COALESCE($2, device_id) WHERE id = $3",
+      [now, deviceId, user.id]
+    );
+  } else {
+    await db2.query(
+      "UPDATE users SET last_active_at = $1, device_id = COALESCE($2, device_id) WHERE id = $3",
+      [now, deviceId, user.id]
+    );
+  }
+}
+async function persistLoginSession(db2, user, token, deviceId, opts) {
+  const isAdmin = user.role === "admin";
+  const isStaff = usesStaffDualSession(user.role);
+  const now = Date.now();
+  const detectedPlatform = !isAdmin && !isStaff && opts.req ? getActiveSessionPlatformFamily(opts.req) : null;
+  const platformFamily = isAdmin || isStaff ? null : detectedPlatform || "web";
+  if (isStaff) {
+    await persistStaffLoginSession(db2, user, token, deviceId, opts);
+    return;
+  }
+  if (isAdmin) {
+    const adminSessionDeviceId = isAdminDeviceBindingDisabled() ? null : deviceId ?? null;
+    await db2.query(
+      "INSERT INTO user_sessions (user_id, session_token, device_id, created_at) VALUES ($1, $2, $3, $4)",
+      [user.id, token, adminSessionDeviceId, now]
+    );
+    const urow = await db2.query("SELECT session_token FROM users WHERE id = $1", [user.id]);
+    const hasPrimary = !!urow.rows[0]?.session_token;
+    if (!hasPrimary) {
+      await db2.query(
+        "UPDATE users SET session_token = $1, last_active_at = $2, device_id = COALESCE($3, device_id) WHERE id = $4",
+        [token, now, deviceId, user.id]
+      );
+    } else if (opts.clearOtp) {
+      await db2.query(
+        "UPDATE users SET otp = NULL, otp_expires_at = NULL, otp_failed_attempts = 0, otp_locked_until = NULL, last_active_at = $1, device_id = COALESCE($2, device_id) WHERE id = $3",
+        [now, deviceId, user.id]
+      );
+    } else {
+      await db2.query(
+        "UPDATE users SET last_active_at = $1, device_id = COALESCE($2, device_id) WHERE id = $3",
+        [now, deviceId, user.id]
+      );
+    }
+    return;
+  }
+  await db2.query("DELETE FROM user_sessions WHERE user_id = $1", [user.id]);
+  const otpClause = opts.clearOtp !== false ? "otp = NULL, otp_expires_at = NULL, otp_failed_attempts = 0, otp_locked_until = NULL, " : "";
+  if (platformFamily === "web" || platformFamily === "mobile") {
+    await db2.query(
+      `UPDATE users SET ${otpClause}device_id = $1, session_token = $2, last_active_at = $3, active_session_platform = $4 WHERE id = $5`,
+      [deviceId || null, token, now, platformFamily, user.id]
+    );
+  } else {
+    await db2.query(
+      `UPDATE users SET ${otpClause}device_id = $1, session_token = $2, last_active_at = $3 WHERE id = $4`,
+      [deviceId || null, token, now, user.id]
+    );
+  }
+}
+async function revokeSessionTokenForUser(db2, userId, token) {
+  if (!token) return;
+  await db2.query("DELETE FROM user_sessions WHERE user_id = $1 AND session_token = $2", [userId, token]);
+  const u = await db2.query("SELECT session_token FROM users WHERE id = $1", [userId]);
+  if (u.rows[0]?.session_token === token) {
+    await db2.query(
+      "UPDATE users SET session_token = NULL, active_session_platform = NULL WHERE id = $1",
+      [userId]
+    );
+  }
+}
+var ADMIN_SESSION_MAX_AGE_MS, STUDENT_SESSION_MAX_AGE_MS;
+var init_user_sessions = __esm({
+  "backend/user-sessions.ts"() {
+    "use strict";
+    init_native_device_binding();
+    init_session_policy();
+    ADMIN_SESSION_MAX_AGE_MS = 10 * 365 * 24 * 60 * 60 * 1e3;
+    STUDENT_SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
+  }
+});
+
+// backend/auth-utils.ts
+function rowsToAuthUser(u, sessionTokenOverride) {
+  return {
+    id: u.id,
+    name: u.name,
+    email: u.email,
+    phone: u.phone,
+    role: u.role,
+    sessionToken: sessionTokenOverride ?? u.session_token,
+    profileComplete: !!u.profile_complete || false
+  };
+}
+function syncSessionUser(req, user) {
+  const session2 = req.session;
+  if (session2 && typeof session2 === "object") {
+    session2.user = user;
+  }
+}
+async function getAuthUserFromRequest(req, db2) {
+  const cacheKey = "__auth_user_from_request_cache";
+  if (Object.prototype.hasOwnProperty.call(req, cacheKey)) {
+    return req[cacheKey];
+  }
+  const setCache = (val) => {
+    req[cacheKey] = val;
+    return val;
+  };
+  const authHeader = req.headers.authorization;
+  const bearerRaw = authHeader?.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+  const bearerToken = bearerRaw && bearerRaw !== "null" && bearerRaw !== "undefined" ? bearerRaw : "";
+  if (bearerToken) {
+    const token = bearerToken;
+    try {
+      const requestDeviceId = getInstallationIdFromRequest2(req);
+      const resolved = await resolveUserBySessionToken(db2, token, requestDeviceId);
+      if (!resolved) {
+        syncSessionUser(req, null);
+        return null;
+      }
+      const u = resolved.row;
+      if (u.is_blocked) {
+        syncSessionUser(req, null);
+        return setCache(null);
+      }
+      const authUser = rowsToAuthUser(u, token);
+      syncSessionUser(req, authUser);
+      return setCache(authUser);
+    } catch (e) {
+      console.error("[Auth] Bearer token lookup error:", e);
+      return setCache(null);
+    }
+  }
+  const sessionUser = req.session.user;
+  if (!sessionUser?.id) return setCache(null);
+  try {
+    const result = await db2.query(
+      "SELECT id, name, email, phone, role, session_token, profile_complete, is_blocked FROM users WHERE id = $1",
+      [sessionUser.id]
+    );
+    if (result.rows.length === 0) {
+      syncSessionUser(req, null);
+      return setCache(null);
+    }
+    const row = result.rows[0];
+    if (row.is_blocked) {
+      syncSessionUser(req, null);
+      return setCache(null);
+    }
+    const cookieTok = sessionUser.sessionToken;
+    if (cookieTok && !await userHasSessionToken(db2, sessionUser.id, cookieTok)) {
+      syncSessionUser(req, null);
+      return setCache(null);
+    }
+    if (row.session_token && !sessionUser.sessionToken) {
+      syncSessionUser(req, null);
+      return setCache(null);
+    }
+    const authUser = rowsToAuthUser(row, cookieTok || row.session_token);
+    syncSessionUser(req, authUser);
+    return setCache(authUser);
+  } catch (e) {
+    console.error("[Auth] Session user lookup error:", e);
+    return setCache(null);
+  }
+}
+var init_auth_utils = __esm({
+  "backend/auth-utils.ts"() {
+    "use strict";
+    init_user_sessions();
+    init_native_device_binding();
+  }
+});
+
+// backend/require-admin.ts
+function createRequireAdmin(getAuthUser2) {
+  return async function requireAdmin2(req, res, next) {
+    const user = await getAuthUser2(req);
+    if (!user || user.role !== "admin") {
+      res.status(403).json({ message: "Admin access required" });
+      return;
+    }
+    req.user = user;
+    next();
+  };
+}
+var init_require_admin = __esm({
+  "backend/require-admin.ts"() {
+    "use strict";
   }
 });
 
@@ -1561,7 +1720,7 @@ function resolveSubjectKeyForWrite(assignment, requestedSubjectKey) {
   }
   return null;
 }
-function getClientPlatform2(req) {
+function getClientPlatform3(req) {
   const header = String(req.headers["x-app-platform"] || req.headers["x-platform"] || "").toLowerCase();
   if (header === "web" || header === "ios" || header === "android") return header;
   const ua = String(req.headers["user-agent"] || "").toLowerCase();
@@ -1575,7 +1734,7 @@ async function assertLiveStartAllowed(db2, userId, role, req) {
   if (!perms["live.start"]) {
     throw new StaffAccessError(403, "permission_denied", "Live start not permitted");
   }
-  if (perms["live.start_web_only"] && getClientPlatform2(req) !== "web") {
+  if (perms["live.start_web_only"] && getClientPlatform3(req) !== "web") {
     throw new StaffAccessError(403, "live_web_only", "Start live classes from the web Teacher Portal");
   }
 }
@@ -2265,6 +2424,320 @@ var init_require_staff_permission = __esm({
   }
 });
 
+// backend/auto-notification-expiry.ts
+function autoNotificationExpiresAt(now = Date.now()) {
+  return now + AUTO_NOTIFICATION_TTL_MS;
+}
+function computeAutoNotificationHideAfterAt(tappedAt, expiresAt) {
+  if (expiresAt == null || !Number.isFinite(Number(expiresAt))) return null;
+  const expiry = Number(expiresAt);
+  if (tappedAt < expiry) return expiry;
+  return tappedAt + AUTO_NOTIFICATION_POST_EXPIRY_TAP_GRACE_MS;
+}
+async function notifyEnrolledCourseStudents(db2, courseId, opts) {
+  const recipients = await db2.query("SELECT user_id FROM enrollments WHERE course_id = $1", [courseId]).catch(() => ({ rows: [] }));
+  const recipientIds = recipients.rows.map((r) => Number(r.user_id)).filter((id) => Number.isFinite(id));
+  if (recipientIds.length === 0) return;
+  const now = opts.now ?? Date.now();
+  const expiresAt = autoNotificationExpiresAt(now);
+  await db2.query(
+    `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
+       SELECT u, $2::text, $3::text, $4::text, $5::bigint, $6::bigint
+       FROM unnest($1::int[]) AS u`,
+    [recipientIds, opts.title, opts.message, opts.type ?? "info", now, expiresAt]
+  ).catch(() => {
+  });
+  if (opts.sendPush) {
+    await opts.sendPush(recipientIds, { title: opts.title, body: opts.message, data: opts.pushData }).catch(() => {
+    });
+  }
+}
+var AUTO_NOTIFICATION_TTL_MS, AUTO_NOTIFICATION_POST_EXPIRY_TAP_GRACE_MS;
+var init_auto_notification_expiry = __esm({
+  "backend/auto-notification-expiry.ts"() {
+    "use strict";
+    AUTO_NOTIFICATION_TTL_MS = 12 * 60 * 60 * 1e3;
+    AUTO_NOTIFICATION_POST_EXPIRY_TAP_GRACE_MS = 60 * 60 * 1e3;
+  }
+});
+
+// backend/redis-notification-dedup.ts
+function dedupKey(classId, userId, type) {
+  return `notif:sent:${classId}:${userId}:${type}`;
+}
+async function filterNewNotificationRecipientsRedis(redis, classId, userIds, type, batchSize = 500) {
+  const accepted = [];
+  try {
+    for (let i = 0; i < userIds.length; i += batchSize) {
+      const batch = userIds.slice(i, i + batchSize);
+      const multi = redis.multi();
+      for (const userId of batch) {
+        multi.set(dedupKey(classId, userId, type), "1", { NX: true, EX: NOTIF_DEDUP_TTL_SEC });
+      }
+      const replies = await multi.exec();
+      batch.forEach((userId, idx) => {
+        const reply = replies?.[idx];
+        if (reply != null) accepted.push(userId);
+      });
+    }
+    return accepted;
+  } catch (err) {
+    console.error("[Redis] filterNewNotificationRecipientsRedis pipeline failed, falling back to PostgreSQL:", err);
+    return null;
+  }
+}
+var NOTIF_DEDUP_TTL_SEC;
+var init_redis_notification_dedup = __esm({
+  "backend/redis-notification-dedup.ts"() {
+    "use strict";
+    NOTIF_DEDUP_TTL_SEC = 24 * 60 * 60;
+  }
+});
+
+// backend/scheduled-jobs.ts
+function liveClassReminderRunAt(scheduledAt) {
+  return scheduledAt - LIVE_CLASS_REMINDER_MS;
+}
+function shouldScheduleLiveClassReminder(lc, now = Date.now()) {
+  if (lc.notify_bell !== true) return false;
+  const scheduledAt = Number(lc.scheduled_at);
+  if (!Number.isFinite(scheduledAt) || scheduledAt <= now) return false;
+  if (lc.is_completed === true) return false;
+  if (lc.is_live === true) return false;
+  if (lc.is_recording_mode === true) return false;
+  return true;
+}
+async function cancelLiveClassReminderJob(db2, liveClassId) {
+  const now = Date.now();
+  await db2.query(
+    `UPDATE scheduled_jobs
+     SET status = 'cancelled', updated_at = $3
+     WHERE job_type = $1 AND ref_id = $2 AND status IN ('pending', 'running')`,
+    [LIVE_CLASS_REMINDER_30MIN_JOB, liveClassId, now]
+  );
+}
+async function syncLiveClassReminderJob(db2, liveClassId) {
+  const result = await db2.query(
+    `SELECT id, title, course_id, scheduled_at, notify_bell, is_completed, is_live,
+            is_recording_mode, is_free_preview, is_public
+     FROM live_classes WHERE id = $1 LIMIT 1`,
+    [liveClassId]
+  );
+  if (!result.rows.length) {
+    await cancelLiveClassReminderJob(db2, liveClassId);
+    return;
+  }
+  await syncLiveClassReminderJobFromRow(db2, result.rows[0]);
+}
+async function syncLiveClassReminderJobFromRow(db2, lc) {
+  const now = Date.now();
+  const liveClassId = Number(lc.id);
+  if (!Number.isFinite(liveClassId)) return;
+  if (!shouldScheduleLiveClassReminder(lc, now)) {
+    await cancelLiveClassReminderJob(db2, liveClassId);
+    return;
+  }
+  const runAt = liveClassReminderRunAt(Number(lc.scheduled_at));
+  await db2.query(
+    `INSERT INTO scheduled_jobs (job_type, ref_id, run_at, status, created_at, updated_at)
+     VALUES ($1, $2, $3, 'pending', $4, $4)
+     ON CONFLICT (job_type, ref_id) DO UPDATE SET
+       run_at = EXCLUDED.run_at,
+       status = CASE
+         WHEN scheduled_jobs.status = 'running' THEN 'running'
+         WHEN scheduled_jobs.status = 'done' AND scheduled_jobs.run_at = EXCLUDED.run_at THEN 'done'
+         ELSE 'pending'
+       END,
+       updated_at = EXCLUDED.updated_at`,
+    [LIVE_CLASS_REMINDER_30MIN_JOB, liveClassId, runAt, now]
+  );
+}
+async function getNextPendingScheduledJobRunAt(db2, now = Date.now()) {
+  const result = await db2.query(
+    `SELECT MIN(run_at) AS next_run_at
+     FROM scheduled_jobs
+     WHERE status = 'pending' AND run_at > $1`,
+    [now]
+  );
+  const next = Number(result.rows[0]?.next_run_at);
+  return Number.isFinite(next) ? next : null;
+}
+async function runWithAdvisoryLock(pool2, lockKey, job) {
+  const client2 = await pool2.connect();
+  let locked = false;
+  try {
+    const got = await client2.query("SELECT pg_try_advisory_lock($1) AS acquired", [lockKey]);
+    locked = got.rows[0]?.acquired === true;
+    if (!locked) return;
+    await job();
+  } finally {
+    if (locked) {
+      await client2.query("SELECT pg_advisory_unlock($1)", [lockKey]).catch(() => {
+      });
+    }
+    client2.release();
+  }
+}
+async function trimNotificationsSent(db2, now) {
+  await db2.query("DELETE FROM notifications_sent WHERE sent_at < $1", [now - 24 * 60 * 60 * 1e3]);
+}
+async function sendLiveClassReminder30Min(db2, lc, sendPushToUsers2) {
+  const now = Date.now();
+  const expiresAt = autoNotificationExpiresAt(now);
+  const notifTitle = "\u23F0 Live Class in 30 minutes!";
+  const notifMessage = `"${lc.title}" starts in 30 minutes. Get ready!`;
+  const PUSH_BATCH_SIZE = 500;
+  const dedupType = LIVE_CLASS_REMINDER_30MIN_JOB;
+  let recipientIds = [];
+  const redis = await getRedisClient();
+  let dedupHandled = false;
+  if (redis) {
+    const candidates = !lc.course_id || lc.is_free_preview === true || lc.is_public === true ? await db2.query(`SELECT u.id::int AS user_id FROM users u WHERE u.role = 'student' LIMIT 5000`, []) : await db2.query(
+      `SELECT e.user_id::int AS user_id
+             FROM enrollments e
+             WHERE e.course_id = $1::int
+               AND (e.status = 'active' OR e.status IS NULL)
+               AND (e.valid_until IS NULL OR e.valid_until > $2::bigint)`,
+      [lc.course_id, now]
+    );
+    const candidateIds = candidates.rows.map((r) => Number(r.user_id));
+    const redisResult = await filterNewNotificationRecipientsRedis(redis, lc.id, candidateIds, dedupType);
+    if (redisResult !== null) {
+      dedupHandled = true;
+      recipientIds = redisResult;
+      if (recipientIds.length) {
+        await db2.query(
+          `INSERT INTO notifications_sent (class_id, user_id, type)
+           SELECT $1::int, u_id::int, $2::text
+           FROM unnest($3::int[]) AS u_id
+           ON CONFLICT (class_id, user_id, type) DO NOTHING`,
+          [lc.id, dedupType, recipientIds]
+        );
+      }
+    }
+  }
+  if (!dedupHandled) {
+    if (!lc.course_id || lc.is_free_preview === true || lc.is_public === true) {
+      const inserted = await db2.query(
+        `INSERT INTO notifications_sent (class_id, user_id, type)
+         SELECT $1::int, u.id::int, $2::text
+         FROM users u
+         WHERE u.role = 'student'
+         ON CONFLICT (class_id, user_id, type) DO NOTHING
+         RETURNING user_id`,
+        [lc.id, dedupType]
+      );
+      recipientIds = inserted.rows.map((r) => Number(r.user_id));
+    } else {
+      const inserted = await db2.query(
+        `INSERT INTO notifications_sent (class_id, user_id, type)
+         SELECT $1::int, e.user_id::int, $2::text
+         FROM enrollments e
+         WHERE e.course_id = $3::int
+           AND (e.status = 'active' OR e.status IS NULL)
+           AND (e.valid_until IS NULL OR e.valid_until > $4::bigint)
+         ON CONFLICT (class_id, user_id, type) DO NOTHING
+         RETURNING user_id`,
+        [lc.id, dedupType, lc.course_id, now]
+      );
+      recipientIds = inserted.rows.map((r) => Number(r.user_id));
+    }
+  }
+  if (!recipientIds.length) return 0;
+  await db2.query(
+    `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
+     SELECT u_id::int, $1::text, $2::text, 'info', $3::bigint, $4::bigint
+     FROM unnest($5::int[]) AS u_id`,
+    [notifTitle, notifMessage, now, expiresAt, recipientIds]
+  );
+  for (let i = 0; i < recipientIds.length; i += PUSH_BATCH_SIZE) {
+    const batch = recipientIds.slice(i, i + PUSH_BATCH_SIZE);
+    await sendPushToUsers2(db2, batch, {
+      title: notifTitle,
+      body: notifMessage,
+      data: !lc.course_id || lc.is_free_preview === true || lc.is_public === true ? { type: "live_class_reminder", liveClassId: lc.id } : { type: "live_class_reminder", liveClassId: lc.id, courseId: lc.course_id }
+    });
+    if (i + PUSH_BATCH_SIZE < recipientIds.length) {
+      await new Promise((resolve2) => setTimeout(resolve2, 200));
+    }
+  }
+  console.log(`[LiveNotif] 30min reminder sent for class=${lc.id} recipients=${recipientIds.length}`);
+  return recipientIds.length;
+}
+async function processDueJob(db2, job, sendPushToUsers2) {
+  const now = Date.now();
+  const jobId = Number(job.id);
+  const liveClassId = Number(job.ref_id);
+  await db2.query(
+    `UPDATE scheduled_jobs SET status = 'running', updated_at = $2 WHERE id = $1 AND status = 'pending'`,
+    [jobId, now]
+  );
+  if (job.job_type !== LIVE_CLASS_REMINDER_30MIN_JOB) {
+    await db2.query(
+      `UPDATE scheduled_jobs SET status = 'cancelled', updated_at = $2 WHERE id = $1`,
+      [jobId, now]
+    );
+    return;
+  }
+  const lcResult = await db2.query(
+    `SELECT id, title, course_id, scheduled_at, notify_bell, is_completed, is_live,
+            is_recording_mode, is_free_preview, is_public
+     FROM live_classes WHERE id = $1 LIMIT 1`,
+    [liveClassId]
+  );
+  const lc = lcResult.rows[0];
+  if (!lc || !shouldScheduleLiveClassReminder(lc, now)) {
+    await db2.query(
+      `UPDATE scheduled_jobs SET status = 'cancelled', updated_at = $2 WHERE id = $1`,
+      [jobId, now]
+    );
+    return;
+  }
+  try {
+    await sendLiveClassReminder30Min(db2, lc, sendPushToUsers2);
+    await db2.query(
+      `UPDATE scheduled_jobs SET status = 'done', updated_at = $2 WHERE id = $1`,
+      [jobId, now]
+    );
+  } catch (err) {
+    console.error("[ScheduledJobs] live class reminder failed:", err);
+    await db2.query(
+      `UPDATE scheduled_jobs
+       SET status = 'pending', updated_at = $2, run_at = $3
+       WHERE id = $1`,
+      [jobId, now, now + 60 * 1e3]
+    );
+  }
+}
+async function runDueScheduledJobs(db2, pool2, sendPushToUsers2, now = Date.now()) {
+  await runWithAdvisoryLock(pool2, SCHEDULED_JOBS_ADVISORY_LOCK_KEY, async () => {
+    await trimNotificationsSent(db2, now);
+    const due = await db2.query(
+      `SELECT id, job_type, ref_id
+       FROM scheduled_jobs
+       WHERE status = 'pending' AND run_at <= $1
+       ORDER BY run_at ASC
+       LIMIT 20`,
+      [now]
+    );
+    for (const job of due.rows) {
+      await processDueJob(db2, job, sendPushToUsers2);
+    }
+  });
+}
+var LIVE_CLASS_REMINDER_30MIN_JOB, LIVE_CLASS_REMINDER_MS, SCHEDULED_JOBS_ADVISORY_LOCK_KEY;
+var init_scheduled_jobs = __esm({
+  "backend/scheduled-jobs.ts"() {
+    "use strict";
+    init_auto_notification_expiry();
+    init_redis_client();
+    init_redis_notification_dedup();
+    LIVE_CLASS_REMINDER_30MIN_JOB = "live_class_reminder_30min";
+    LIVE_CLASS_REMINDER_MS = 30 * 60 * 1e3;
+    SCHEDULED_JOBS_ADVISORY_LOCK_KEY = 31415926541;
+  }
+});
+
 // backend/staff-routes.ts
 function staffUser(req) {
   return req.user;
@@ -2480,12 +2953,17 @@ function registerStaffRoutes({
       const assignment = await assertCourseAssignment(db2, user.id, courseId);
       const courseRes = await db2.query(`SELECT * FROM courses WHERE id = $1 LIMIT 1`, [courseId]);
       if (courseRes.rows.length === 0) return res.status(404).json({ message: "Course not found" });
-      const [lectures, tests, materials, liveClasses, missions] = await Promise.all([
+      const [lectures, tests, materials, liveClasses, missions, foldersRes] = await Promise.all([
         db2.query(`SELECT * FROM lectures WHERE course_id = $1 ORDER BY order_index ASC, id ASC`, [courseId]),
         db2.query(`SELECT * FROM tests WHERE course_id = $1 ORDER BY order_index ASC, id ASC`, [courseId]),
         db2.query(`SELECT * FROM study_materials WHERE course_id = $1 ORDER BY order_index ASC, id ASC`, [courseId]),
         db2.query(`SELECT * FROM live_classes WHERE course_id = $1 ORDER BY scheduled_at DESC NULLS LAST`, [courseId]),
-        db2.query(`SELECT * FROM daily_missions WHERE course_id = $1 ORDER BY id DESC`, [courseId])
+        db2.query(`SELECT * FROM daily_missions WHERE course_id = $1 ORDER BY id DESC`, [courseId]),
+        db2.query(
+          `SELECT id, course_id, name, full_name, type, parent_id, order_index, subject_key
+           FROM course_folders WHERE course_id = $1 ORDER BY order_index ASC NULLS LAST, id ASC`,
+          [courseId]
+        )
       ]);
       res.json({
         course: courseRes.rows[0],
@@ -2494,7 +2972,8 @@ function registerStaffRoutes({
         tests: filterRowsBySubjectKey(tests.rows, assignment),
         materials: filterRowsBySubjectKey(materials.rows, assignment),
         liveClasses: filterRowsBySubjectKey(liveClasses.rows, assignment),
-        missions: filterRowsBySubjectKey(missions.rows, assignment)
+        missions: filterRowsBySubjectKey(missions.rows, assignment),
+        folders: filterRowsBySubjectKey(foldersRes.rows, assignment)
       });
     } catch (err) {
       handleStaffError(res, err);
@@ -2562,6 +3041,9 @@ function registerStaffRoutes({
         [liveId, b.title, b.description, b.scheduledAt]
       );
       await logStaffActivity(db2, { userId: user.id, action: "live.updated", entityType: "live_class", entityId: liveId, courseId, req });
+      await syncLiveClassReminderJob(db2, liveId).catch(
+        (err) => console.error("[StaffLiveClass] reminder job sync failed:", err)
+      );
       res.json(result.rows[0]);
     } catch (err) {
       handleStaffError(res, err);
@@ -2979,6 +3461,7 @@ var init_staff_routes = __esm({
     init_staff_access_utils();
     init_staff_profile_utils();
     init_require_staff_permission();
+    init_scheduled_jobs();
   }
 });
 
@@ -3014,43 +3497,6 @@ var init_auth_failure_utils = __esm({
   "backend/auth-failure-utils.ts"() {
     "use strict";
     AUTH_FAILURE_KEY = "__auth_failure";
-  }
-});
-
-// backend/auto-notification-expiry.ts
-function autoNotificationExpiresAt(now = Date.now()) {
-  return now + AUTO_NOTIFICATION_TTL_MS;
-}
-function computeAutoNotificationHideAfterAt(tappedAt, expiresAt) {
-  if (expiresAt == null || !Number.isFinite(Number(expiresAt))) return null;
-  const expiry = Number(expiresAt);
-  if (tappedAt < expiry) return expiry;
-  return tappedAt + AUTO_NOTIFICATION_POST_EXPIRY_TAP_GRACE_MS;
-}
-async function notifyEnrolledCourseStudents(db2, courseId, opts) {
-  const recipients = await db2.query("SELECT user_id FROM enrollments WHERE course_id = $1", [courseId]).catch(() => ({ rows: [] }));
-  const recipientIds = recipients.rows.map((r) => Number(r.user_id)).filter((id) => Number.isFinite(id));
-  if (recipientIds.length === 0) return;
-  const now = opts.now ?? Date.now();
-  const expiresAt = autoNotificationExpiresAt(now);
-  await db2.query(
-    `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
-       SELECT u, $2::text, $3::text, $4::text, $5::bigint, $6::bigint
-       FROM unnest($1::int[]) AS u`,
-    [recipientIds, opts.title, opts.message, opts.type ?? "info", now, expiresAt]
-  ).catch(() => {
-  });
-  if (opts.sendPush) {
-    await opts.sendPush(recipientIds, { title: opts.title, body: opts.message, data: opts.pushData }).catch(() => {
-    });
-  }
-}
-var AUTO_NOTIFICATION_TTL_MS, AUTO_NOTIFICATION_POST_EXPIRY_TAP_GRACE_MS;
-var init_auto_notification_expiry = __esm({
-  "backend/auto-notification-expiry.ts"() {
-    "use strict";
-    AUTO_NOTIFICATION_TTL_MS = 12 * 60 * 60 * 1e3;
-    AUTO_NOTIFICATION_POST_EXPIRY_TAP_GRACE_MS = 60 * 60 * 1e3;
   }
 });
 
@@ -3744,7 +4190,7 @@ function registerAuthRoutes({
       role: String(user.role || "student"),
       userName: String(user.name || user.phone || user.email || ""),
       deviceId: normalizedDeviceId,
-      platform: req ? getClientPlatform(req) ?? void 0 : void 0
+      platform: req ? getClientPlatform2(req) ?? void 0 : void 0
     });
     await persistLoginSession(db2, user, sessionToken, normalizedDeviceId, {
       clearOtp,
@@ -3978,7 +4424,9 @@ function registerAuthRoutes({
           email: user.email
         });
         if (!loginGate.ok) {
-          return res.status(loginGate.httpStatus).json({ message: loginGate.message });
+          return res.status(loginGate.httpStatus).json({
+            message: loginGate.code ?? loginGate.message
+          });
         }
         const finalized = await finalizeAuthenticatedSession(req, user, deviceId || null, true);
         if (!finalized.success) {
@@ -4056,7 +4504,9 @@ function registerAuthRoutes({
         email: user.email
       });
       if (!loginGate.ok) {
-        return res.status(loginGate.httpStatus).json({ message: loginGate.message });
+        return res.status(loginGate.httpStatus).json({
+          message: loginGate.code ?? loginGate.message
+        });
       }
       const finalized = await finalizeAuthenticatedSession(req, user, deviceId || null, true);
       if (!finalized.success) {
@@ -4134,7 +4584,7 @@ function registerAuthRoutes({
         const isActive = isSessionLastActiveValid(row);
         const primaryMatches = row.session_token === tok && isActive;
         if (!primaryMatches) {
-          if (row.role === "admin") {
+          if (row.role === "admin" || usesStaffDualSession(String(row.role ?? ""))) {
             const minAge = Date.now() - ADMIN_SESSION_MAX_AGE_MS;
             const sess = await db2.query(
               "SELECT 1 FROM user_sessions WHERE user_id = $1 AND session_token = $2 AND created_at >= $3",
@@ -4207,7 +4657,9 @@ function registerAuthRoutes({
         email: user.email
       });
       if (!loginGate.ok) {
-        return res.status(loginGate.httpStatus).json({ message: loginGate.message });
+        return res.status(loginGate.httpStatus).json({
+          message: loginGate.code ?? loginGate.message
+        });
       }
       const finalized = await finalizeAuthenticatedSession(req, user, deviceId || null, false);
       if (!finalized.success) {
@@ -4238,7 +4690,7 @@ function registerAuthRoutes({
     let preserveStudentWebLock = false;
     if (revokeUserId) {
       const roleResult = await db2.query("SELECT role FROM users WHERE id = $1", [revokeUserId]).catch(() => ({ rows: [] }));
-      preserveStudentWebLock = String(roleResult.rows[0]?.role || "").toLowerCase() !== "admin" && getClientPlatform(req) === "web";
+      preserveStudentWebLock = String(roleResult.rows[0]?.role || "").toLowerCase() !== "admin" && getClientPlatform2(req) === "web";
     }
     if (revokeUserId && revokeToken && !preserveStudentWebLock) {
       await revokeSessionTokenForUser(db2, revokeUserId, revokeToken).catch(() => {
@@ -4351,7 +4803,9 @@ function registerAuthRoutes({
         email: user.email
       });
       if (!gate.ok) {
-        return res.status(gate.httpStatus).json({ message: gate.message });
+        return res.status(gate.httpStatus).json({
+          message: gate.code ?? gate.message
+        });
       }
       const dev = typeof deviceId === "string" ? deviceId : null;
       console.log("[Auth] email-login: finalize session start", { userId: user.id });
@@ -4420,7 +4874,9 @@ function registerAuthRoutes({
         email: user.email
       });
       if (!gate.ok) {
-        return res.status(gate.httpStatus).json({ message: gate.message });
+        return res.status(gate.httpStatus).json({
+          message: gate.code ?? gate.message
+        });
       }
       const dev = typeof deviceId === "string" ? deviceId : null;
       let finalized;
@@ -4563,6 +5019,7 @@ var init_auth_routes = __esm({
     init_auth_service();
     init_native_device_binding();
     init_user_sessions();
+    init_session_policy();
     init_user_account_purge();
   }
 });
@@ -10367,6 +10824,9 @@ function registerAdminUsersAndContentRoutes({
         ]
       );
       console.log(`[LiveClass] created id=${result.rows[0]?.id} title="${title}" courseId=${courseId} scheduledAt=${scheduledAt} isLive=${isLive} isRecordingMode=${recMode}`);
+      await syncLiveClassReminderJob(db2, Number(result.rows[0]?.id)).catch(
+        (err) => console.error("[LiveClass] reminder job sync failed:", err)
+      );
       res.json(result.rows[0]);
     } catch (err) {
       console.error("[LiveClass] create failed", err);
@@ -10403,7 +10863,7 @@ function registerAdminUsersAndContentRoutes({
                 (ARRAY_AGG(e.platform ORDER BY e.created_at DESC))[1] AS latest_platform
          FROM device_block_events e
          INNER JOIN users u ON u.id = e.user_id
-         WHERE e.reason IN ('wrong_device_login_denied', 'active_web_session_login_denied')
+         WHERE e.reason IN ('wrong_device_login_denied', 'active_web_session_login_denied', 'max_devices_registered')
            AND (
              e.reason <> 'active_web_session_login_denied'
              OR (
@@ -10428,13 +10888,13 @@ function registerAdminUsersAndContentRoutes({
       const uid = parseInt(String(req.params.id), 10);
       if (!Number.isFinite(uid)) return res.status(400).json({ message: "Invalid user id" });
       await db2.query(
-        "UPDATE users SET app_bound_device_id = NULL, session_token = NULL, device_id = NULL, active_session_platform = NULL WHERE id = $1",
+        "UPDATE users SET app_bound_device_id = NULL, session_token = NULL, device_id = NULL, active_session_platform = NULL, web_device_id_phone = NULL, web_device_id_desktop = NULL WHERE id = $1",
         [uid]
       );
       await db2.query("DELETE FROM user_sessions WHERE user_id = $1", [uid]).catch(() => {
       });
       await db2.query(
-        "DELETE FROM device_block_events WHERE user_id = $1 AND reason IN ('wrong_device_login_denied', 'active_web_session_login_denied')",
+        "DELETE FROM device_block_events WHERE user_id = $1 AND reason IN ('wrong_device_login_denied', 'active_web_session_login_denied', 'max_devices_registered')",
         [uid]
       ).catch(() => {
       });
@@ -10606,6 +11066,7 @@ var init_admin_users_and_content_routes = __esm({
     init_auto_notification_expiry();
     init_notification_utils();
     init_push_notifications();
+    init_scheduled_jobs();
     init_user_account_purge();
   }
 });
@@ -14577,6 +15038,9 @@ function registerAdminLiveClassManageRoutes({
           (err) => console.error("[GoLive] admin completion notify failed:", err)
         );
       }
+      await syncLiveClassReminderJob(db2, Number(liveClass?.id ?? req.params.id)).catch(
+        (err) => console.error("[LiveClass] reminder job sync failed:", err)
+      );
       res.json(liveClass);
     } catch (err) {
       console.error("Update live class error:", err);
@@ -14585,6 +15049,8 @@ function registerAdminLiveClassManageRoutes({
   });
   app2.delete("/api/admin/live-classes/:id", requireAdmin2, async (req, res) => {
     try {
+      await cancelLiveClassReminderJob(db2, Number(req.params.id)).catch(() => {
+      });
       await db2.query("DELETE FROM live_classes WHERE id = $1", [req.params.id]);
       res.json({ success: true });
     } catch {
@@ -14664,6 +15130,7 @@ var init_admin_live_class_manage_routes = __esm({
     init_classroomPipPosition();
     init_auto_notification_expiry();
     init_notification_utils();
+    init_scheduled_jobs();
     init_push_notifications();
     init_live_class_lecture_convert();
   }
@@ -17774,6 +18241,8 @@ var init_schema_readiness_contract = __esm({
       "webhook_event_receipts",
       // Migration 0039 - live stream finalize job queue
       "live_stream_finalize_jobs",
+      // Migration 0062 - event-driven scheduled jobs (live class reminders)
+      "scheduled_jobs",
       // Migration 0040b - live chat messages (existed in production, was missing from migrations)
       "live_chat_messages",
       // Migration 0043 - per-device server-issued offline encryption secrets (ODSR-01)
@@ -17786,6 +18255,8 @@ var init_schema_readiness_contract = __esm({
         "password_hash",
         "session_token",
         "app_bound_device_id",
+        "web_device_id_phone",
+        "web_device_id_desktop",
         "profile_complete",
         "is_blocked",
         "last_active_at",
@@ -17836,7 +18307,7 @@ var init_schema_readiness_contract = __esm({
       course_folders: ["parent_id", "subject_key"],
       standalone_folders: ["parent_id", "category", "price", "original_price", "is_free", "description", "validity_months"],
       // Migration 0042 - admin session device binding
-      user_sessions: ["device_id"]
+      user_sessions: ["device_id", "platform_family"]
     };
     REQUIRED_UNIQUE_INDEX_SPECS = [
       { table: "enrollments", columns: ["user_id", "course_id"] },
@@ -18080,55 +18551,33 @@ var init_download_utils = __esm({
   }
 });
 
-// backend/redis-notification-dedup.ts
-function dedupKey(classId, userId, type) {
-  return `notif:sent:${classId}:${userId}:${type}`;
-}
-async function filterNewNotificationRecipientsRedis(redis, classId, userIds, type, batchSize = 500) {
-  const accepted = [];
-  try {
-    for (let i = 0; i < userIds.length; i += batchSize) {
-      const batch = userIds.slice(i, i + batchSize);
-      const multi = redis.multi();
-      for (const userId of batch) {
-        multi.set(dedupKey(classId, userId, type), "1", { NX: true, EX: NOTIF_DEDUP_TTL_SEC });
-      }
-      const replies = await multi.exec();
-      batch.forEach((userId, idx) => {
-        const reply = replies?.[idx];
-        if (reply != null) accepted.push(userId);
-      });
-    }
-    return accepted;
-  } catch (err) {
-    console.error("[Redis] filterNewNotificationRecipientsRedis pipeline failed, falling back to PostgreSQL:", err);
-    return null;
-  }
-}
-var NOTIF_DEDUP_TTL_SEC;
-var init_redis_notification_dedup = __esm({
-  "backend/redis-notification-dedup.ts"() {
-    "use strict";
-    NOTIF_DEDUP_TTL_SEC = 24 * 60 * 60;
-  }
-});
-
 // backend/schedulers.ts
 function startSchedulers(db2, pool2, sendPushToUsers2) {
   const runBackgroundSchedulers = process.env.RUN_BACKGROUND_SCHEDULERS !== "false";
-  startNeonKeepalive(db2);
+  if (isNeonKeepaliveEnabled()) {
+    startNeonKeepalive(db2);
+  } else {
+    console.log("[Keepalive] Neon keepalive disabled \u2014 Neon may scale to zero after idle");
+  }
   if (!runBackgroundSchedulers) {
-    console.log("[Schedulers] Background schedulers disabled (RUN_BACKGROUND_SCHEDULERS=false); keepalive still active");
+    console.log("[Schedulers] Background schedulers disabled (RUN_BACKGROUND_SCHEDULERS=false)");
     return;
   }
-  startLiveClassNotificationScheduler(db2, pool2, sendPushToUsers2);
-  startDownloadCleanupRetryScheduler(db2, pool2);
-  startDownloadTokenCleanupScheduler(db2, pool2);
-  startStuckLiveClassCleanupScheduler(db2, pool2);
-  startLiveFinalizeQueueScheduler(db2, pool2);
-  startMediaTokenCleanupScheduler(db2, pool2);
+  resetStuckFinalizeJobs(db2);
+  startAdaptiveSchedulerLoop(db2, pool2, sendPushToUsers2);
 }
-async function runWithAdvisoryLock(pool2, lockKey, job) {
+function resetStuckFinalizeJobs(db2) {
+  db2.query("UPDATE live_stream_finalize_jobs SET status = 'pending', updated_at = $1 WHERE status = 'running'", [
+    Date.now()
+  ]).then((r) => {
+    if ((r.rowCount ?? 0) > 0) {
+      console.log(`[FinalizeQueue] Startup: reset ${r.rowCount} stuck 'running' job(s) to 'pending'`);
+    }
+  }).catch((err) => {
+    console.error("[FinalizeQueue] Startup reset of stuck jobs failed:", err);
+  });
+}
+async function runWithAdvisoryLock2(pool2, lockKey, job) {
   const client2 = await pool2.connect();
   let locked = false;
   try {
@@ -18144,187 +18593,92 @@ async function runWithAdvisoryLock(pool2, lockKey, job) {
     client2.release();
   }
 }
-function startDownloadCleanupRetryScheduler(db2, pool2) {
-  const retryIntervalMs = 10 * 60 * 1e3;
-  const retryNow = async () => {
-    try {
-      await runWithAdvisoryLock(pool2, DOWNLOAD_CLEANUP_RETRY_LOCK_KEY, async () => {
-        const pending = await db2.query(
-          `SELECT id, user_id, course_id
+function startAdaptiveSchedulerLoop(db2, pool2, sendPushToUsers2) {
+  let lastStuckLiveRun = 0;
+  let lastTokenCleanupRun = 0;
+  let lastDownloadRetryCheck = 0;
+  let lastFinalizeCheck = 0;
+  const scheduleNext = (sleepMs) => {
+    const delay = Math.max(SCHEDULER_MIN_SLEEP_MS, Math.min(SCHEDULER_MAX_SLEEP_MS, sleepMs));
+    setTimeout(() => void tick().catch((err) => console.error("[Scheduler] tick error:", err)), delay);
+  };
+  const tick = async () => {
+    const now = Date.now();
+    let sleepMs = SCHEDULER_MAX_SLEEP_MS;
+    await runDueScheduledJobs(db2, pool2, sendPushToUsers2, now);
+    const nextJobAt = await getNextPendingScheduledJobRunAt(db2, now);
+    if (nextJobAt != null) {
+      sleepMs = Math.min(sleepMs, Math.max(SCHEDULER_MIN_SLEEP_MS, nextJobAt - now));
+    }
+    if (now - lastFinalizeCheck >= FINALIZE_CHECK_INTERVAL_MS) {
+      lastFinalizeCheck = now;
+      const hasFinalize = await hasDueFinalizeJobs(db2, now);
+      if (hasFinalize) {
+        await runLiveFinalizeQueueTick(db2, pool2);
+        sleepMs = Math.min(sleepMs, FINALIZE_CHECK_INTERVAL_MS);
+      }
+    }
+    if (now - lastDownloadRetryCheck >= DOWNLOAD_RETRY_INTERVAL_MS) {
+      lastDownloadRetryCheck = now;
+      const hasDownloadRetry = await hasDownloadCleanupPending(db2);
+      if (hasDownloadRetry) {
+        await runDownloadCleanupRetry(db2, pool2);
+      }
+    }
+    if (now - lastStuckLiveRun >= STUCK_LIVE_INTERVAL_MS) {
+      lastStuckLiveRun = now;
+      await runWithAdvisoryLock2(pool2, STUCK_LIVE_CLEANUP_LOCK_KEY, async () => clearStuckLiveClasses(db2));
+    }
+    if (now - lastTokenCleanupRun >= TOKEN_CLEANUP_INTERVAL_MS) {
+      lastTokenCleanupRun = now;
+      await runDownloadTokenCleanup(db2, pool2);
+      await runMediaTokenCleanup(db2, pool2);
+    }
+    scheduleNext(sleepMs);
+  };
+  console.log("[Scheduler] Adaptive loop started \u2014 event-driven reminders + idle-friendly housekeeping");
+  void tick().catch((err) => console.error("[Scheduler] initial tick error:", err));
+}
+async function hasDueFinalizeJobs(db2, now) {
+  const result = await db2.query(
+    `SELECT 1 FROM live_stream_finalize_jobs
+     WHERE status IN ('pending', 'running') AND next_attempt_at <= $1
+     LIMIT 1`,
+    [now]
+  );
+  return result.rows.length > 0;
+}
+async function hasDownloadCleanupPending(db2) {
+  const result = await db2.query(
+    `SELECT 1 FROM enrollments WHERE download_cleanup_pending = TRUE LIMIT 1`
+  );
+  return result.rows.length > 0;
+}
+async function runDownloadCleanupRetry(db2, pool2) {
+  try {
+    await runWithAdvisoryLock2(pool2, DOWNLOAD_CLEANUP_RETRY_LOCK_KEY, async () => {
+      const pending = await db2.query(
+        `SELECT id, user_id, course_id
          FROM enrollments
          WHERE download_cleanup_pending = TRUE
          LIMIT 200`
-        );
-        for (const row of pending.rows) {
-          const enrollmentId = Number(row.id);
-          const userId = Number(row.user_id);
-          const courseId = Number(row.course_id);
-          if (!Number.isFinite(enrollmentId) || !Number.isFinite(userId) || !Number.isFinite(courseId)) continue;
-          try {
-            await deleteDownloadsForUser(db2, userId, courseId);
-            await db2.query(
-              "UPDATE enrollments SET download_cleanup_pending = FALSE WHERE id = $1",
-              [enrollmentId]
-            );
-          } catch (err) {
-            console.error("[CleanupRetry] cleanup failed; will retry later", {
-              enrollmentId,
-              userId,
-              courseId
-            });
-          }
-        }
-      });
-    } catch (err) {
-      console.error("[CleanupRetry] scheduler error:", err);
-    }
-  };
-  void retryNow();
-  setInterval(() => void retryNow(), retryIntervalMs);
-}
-function startLiveClassNotificationScheduler(db2, pool2, sendPushToUsers2) {
-  setInterval(async () => {
-    let lockClient = null;
-    let lockAcquired = false;
-    try {
-      lockClient = await pool2.connect();
-      const lockResult = await lockClient.query(
-        "SELECT pg_try_advisory_lock($1) AS acquired",
-        [LIVE_NOTIF_ADVISORY_LOCK_KEY]
       );
-      lockAcquired = lockResult.rows[0]?.acquired === true;
-      if (!lockAcquired) {
-        return;
+      for (const row of pending.rows) {
+        const enrollmentId = Number(row.id);
+        const userId = Number(row.user_id);
+        const courseId = Number(row.course_id);
+        if (!Number.isFinite(enrollmentId) || !Number.isFinite(userId) || !Number.isFinite(courseId)) continue;
+        try {
+          await deleteDownloadsForUser(db2, userId, courseId);
+          await db2.query("UPDATE enrollments SET download_cleanup_pending = FALSE WHERE id = $1", [enrollmentId]);
+        } catch {
+          console.error("[CleanupRetry] cleanup failed; will retry later", { enrollmentId, userId, courseId });
+        }
       }
-      const now = Date.now();
-      await db2.query("DELETE FROM notifications_sent WHERE sent_at < $1", [now - 24 * 60 * 60 * 1e3]);
-      const minScheduleAt = now + 29 * 60 * 1e3;
-      const maxScheduleAt = now + 31 * 60 * 1e3;
-      const classes = await db2.query(
-        `SELECT lc.id, lc.title, lc.course_id, lc.is_free_preview, lc.is_public
-         FROM live_classes lc
-         WHERE lc.is_completed IS NOT TRUE
-           AND lc.is_live IS NOT TRUE
-           AND COALESCE(lc.is_recording_mode, FALSE) = FALSE
-           AND lc.notify_bell = TRUE
-           AND lc.scheduled_at IS NOT NULL
-           AND lc.scheduled_at BETWEEN $1 AND $2
-         ORDER BY lc.scheduled_at ASC
-         LIMIT 50`,
-        [minScheduleAt, maxScheduleAt]
-      );
-      for (const lc of classes.rows) {
-        const expiresAt = autoNotificationExpiresAt(now);
-        const notifTitle = "\u23F0 Live Class in 30 minutes!";
-        const notifMessage = `"${lc.title}" starts in 30 minutes. Get ready!`;
-        const PUSH_BATCH_SIZE = 500;
-        const dedupType = "live_class_reminder_30min";
-        let recipientIds = [];
-        const redis = await getRedisClient();
-        let dedupHandled = false;
-        if (redis) {
-          const candidates = !lc.course_id || lc.is_free_preview === true || lc.is_public === true ? await db2.query(
-            // HCFR-01: Add LIMIT to prevent unbounded fanout at scale.
-            // At 10,000 students this query returns 10,000 rows, triggering a 20-second
-            // Expo push API loop while holding the advisory lock. LIMIT 5000 is a safe
-            // ceiling — real notification batching/pagination to be added in a follow-up.
-            `SELECT u.id::int AS user_id FROM users u WHERE u.role = 'student' LIMIT 5000`,
-            []
-          ) : await db2.query(
-            `SELECT e.user_id::int AS user_id
-                 FROM enrollments e
-                 WHERE e.course_id = $1::int
-                   AND (e.status = 'active' OR e.status IS NULL)
-                   AND (e.valid_until IS NULL OR e.valid_until > $2::bigint)`,
-            [lc.course_id, now]
-          );
-          const candidateIds = candidates.rows.map((r) => Number(r.user_id));
-          const redisResult = await filterNewNotificationRecipientsRedis(
-            redis,
-            lc.id,
-            candidateIds,
-            dedupType
-          );
-          if (redisResult !== null) {
-            dedupHandled = true;
-            recipientIds = redisResult;
-            if (recipientIds.length) {
-              await db2.query(
-                `INSERT INTO notifications_sent (class_id, user_id, type)
-                 SELECT $1::int, u_id::int, $2::text
-                 FROM unnest($3::int[]) AS u_id
-                 ON CONFLICT (class_id, user_id, type) DO NOTHING`,
-                [lc.id, dedupType, recipientIds]
-              );
-            }
-          }
-        }
-        if (!dedupHandled) {
-          if (!lc.course_id || lc.is_free_preview === true || lc.is_public === true) {
-            const inserted = await db2.query(
-              `INSERT INTO notifications_sent (class_id, user_id, type)
-               SELECT $1::int, u.id::int, $2::text
-               FROM users u
-               WHERE u.role = 'student'
-               ON CONFLICT (class_id, user_id, type) DO NOTHING
-               RETURNING user_id`,
-              [lc.id, dedupType]
-            );
-            recipientIds = inserted.rows.map((r) => Number(r.user_id));
-          } else {
-            const inserted = await db2.query(
-              `INSERT INTO notifications_sent (class_id, user_id, type)
-               SELECT $1::int, e.user_id::int, $2::text
-               FROM enrollments e
-               WHERE e.course_id = $3::int
-                 AND (e.status = 'active' OR e.status IS NULL)
-                 AND (e.valid_until IS NULL OR e.valid_until > $4::bigint)
-               ON CONFLICT (class_id, user_id, type) DO NOTHING
-               RETURNING user_id`,
-              [lc.id, dedupType, lc.course_id, now]
-            );
-            recipientIds = inserted.rows.map((r) => Number(r.user_id));
-          }
-        }
-        if (!recipientIds.length) continue;
-        await db2.query(
-          `INSERT INTO notifications (user_id, title, message, type, created_at, expires_at)
-           SELECT u_id::int, $1::text, $2::text, 'info', $3::bigint, $4::bigint
-           FROM unnest($5::int[]) AS u_id`,
-          [notifTitle, notifMessage, now, expiresAt, recipientIds]
-        );
-        for (let i = 0; i < recipientIds.length; i += PUSH_BATCH_SIZE) {
-          const batch = recipientIds.slice(i, i + PUSH_BATCH_SIZE);
-          await sendPushToUsers2(db2, batch, {
-            title: notifTitle,
-            body: notifMessage,
-            data: !lc.course_id || lc.is_free_preview === true || lc.is_public === true ? { type: "live_class_reminder", liveClassId: lc.id } : { type: "live_class_reminder", liveClassId: lc.id, courseId: lc.course_id }
-          });
-          if (i + PUSH_BATCH_SIZE < recipientIds.length) {
-            await new Promise((resolve2) => setTimeout(resolve2, 200));
-          }
-        }
-        console.log(`[LiveNotif] 30min reminder sent for class=${lc.id} recipients=${recipientIds.length}`);
-      }
-    } catch (err) {
-      console.error("[LiveNotif] Scheduler error:", err);
-    } finally {
-      if (lockClient) {
-        if (lockAcquired) {
-          try {
-            await lockClient.query(
-              "SELECT pg_advisory_unlock($1)",
-              [LIVE_NOTIF_ADVISORY_LOCK_KEY]
-            );
-          } catch (unlockErr) {
-            console.error("[LiveNotif] Failed to release advisory lock:", unlockErr);
-          }
-        }
-        lockClient.release();
-      }
-    }
-  }, 60 * 1e3);
-  console.log("[LiveNotif] Scheduler started \u2014 checks every 60s");
+    });
+  } catch (err) {
+    console.error("[CleanupRetry] scheduler error:", err);
+  }
 }
 async function clearStuckLiveClasses(db2) {
   try {
@@ -18342,21 +18696,11 @@ async function clearStuckLiveClasses(db2) {
     console.error("[StuckLiveCleanup] Error clearing stuck live classes:", err);
   }
 }
-function startStuckLiveClassCleanupScheduler(db2, pool2) {
-  runWithAdvisoryLock(pool2, STUCK_LIVE_CLEANUP_LOCK_KEY, async () => clearStuckLiveClasses(db2)).catch(() => {
-  });
-  setInterval(
-    () => void runWithAdvisoryLock(pool2, STUCK_LIVE_CLEANUP_LOCK_KEY, async () => clearStuckLiveClasses(db2)),
-    15 * 60 * 1e3
-  );
-  console.log("[StuckLiveCleanup] Scheduler started \u2014 runs every 15 minutes");
-}
-function startDownloadTokenCleanupScheduler(db2, pool2) {
-  setInterval(async () => {
-    try {
-      await runWithAdvisoryLock(pool2, DOWNLOAD_TOKEN_CLEANUP_LOCK_KEY, async () => {
-        const result = await db2.query(
-          `DELETE FROM download_tokens
+async function runDownloadTokenCleanup(db2, pool2) {
+  try {
+    await runWithAdvisoryLock2(pool2, DOWNLOAD_TOKEN_CLEANUP_LOCK_KEY, async () => {
+      const result = await db2.query(
+        `DELETE FROM download_tokens
          WHERE id IN (
            SELECT id
            FROM download_tokens
@@ -18364,146 +18708,144 @@ function startDownloadTokenCleanupScheduler(db2, pool2) {
            ORDER BY expires_at ASC
            LIMIT 2000
          )`,
-          [Date.now()]
-        );
-        if (result.rowCount && result.rowCount > 0) {
-          console.log(`[TokenCleanup] Deleted ${result.rowCount} expired tokens`);
-        }
-      });
-    } catch (err) {
-      console.error("[TokenCleanup] Error:", err);
-    }
-  }, 5 * 60 * 1e3);
-  console.log("[TokenCleanup] Scheduler started \u2014 runs every 5 minutes");
-}
-function startLiveFinalizeQueueScheduler(db2, pool2) {
-  db2.query(
-    "UPDATE live_stream_finalize_jobs SET status = 'pending', updated_at = $1 WHERE status = 'running'",
-    [Date.now()]
-  ).then((r) => {
-    if ((r.rowCount ?? 0) > 0) {
-      console.log(`[FinalizeQueue] Startup: reset ${r.rowCount} stuck 'running' job(s) to 'pending'`);
-    }
-  }).catch((err) => {
-    console.error("[FinalizeQueue] Startup reset of stuck jobs failed:", err);
-  });
-  const tick = async () => {
-    await runWithAdvisoryLock(pool2, LIVE_FINALIZE_QUEUE_LOCK_KEY, async () => {
-      const now = Date.now();
-      const pending = await db2.query(
-        `SELECT id, live_class_id, attempts
-         FROM live_stream_finalize_jobs
-         WHERE status IN ('pending', 'running')
-           AND next_attempt_at <= $1
-         ORDER BY next_attempt_at ASC
-         LIMIT 100`,
-        [now]
+        [Date.now()]
       );
-      setGauge("live_finalize_queue_backlog", pending.rows.length);
-      for (const job of pending.rows) {
-        const jobId = Number(job.id);
-        const liveClassId = Number(job.live_class_id);
-        const attempts = Number(job.attempts || 0);
-        if (!Number.isFinite(jobId) || !Number.isFinite(liveClassId)) continue;
-        try {
-          await db2.query(
-            "UPDATE live_stream_finalize_jobs SET status = 'running', updated_at = $2 WHERE id = $1",
-            [jobId, now]
-          );
-          const lc = await db2.query(
-            "SELECT recording_url, cf_stream_uid, cf_recording_uid FROM live_classes WHERE id = $1 LIMIT 1",
-            [liveClassId]
-          );
-          let recordingUrl = String(lc.rows[0]?.recording_url || "").trim();
-          if (!recordingUrl && attempts >= 5) {
-            const cfAccountId = process.env.CF_STREAM_ACCOUNT_ID;
-            const cfApiToken = process.env.CF_STREAM_API_TOKEN;
-            if (cfAccountId && cfApiToken) {
-              const cfRecordingUid = String(lc.rows[0]?.cf_recording_uid || "").trim();
-              const cfStreamUid = String(lc.rows[0]?.cf_stream_uid || "").trim();
-              let cfRecording = null;
-              if (cfRecordingUid) {
-                cfRecording = await getCfVideoByUid(cfAccountId, cfApiToken, cfRecordingUid);
-              }
-              if (!cfRecording && cfStreamUid) {
-                cfRecording = await getLatestRecordingForLiveInput(cfAccountId, cfApiToken, cfStreamUid);
-              }
-              if (cfRecording?.recordingUid) {
-                await db2.query(
-                  "UPDATE live_classes SET cf_recording_uid = COALESCE(cf_recording_uid, $1) WHERE id = $2",
-                  [cfRecording.recordingUid, liveClassId]
-                ).catch(() => {
-                });
-                if (cfRecording.status === "ready") {
-                  try {
-                    await saveRecordingForClassAndPeers(db2, String(liveClassId), cfRecording.manifestUrl);
-                    recordingUrl = cfRecording.manifestUrl;
-                    incrementCounter("live_finalize_queue_cf_fallback_success");
-                    console.log(
-                      `[LiveFinalizeQueue] CFSR-03 fallback resolved recording for live_class=${liveClassId} uid=${cfRecording.recordingUid}`
-                    );
-                  } catch (saveErr) {
-                    console.warn("[LiveFinalizeQueue] CF fallback save failed:", saveErr);
-                  }
-                } else {
-                  console.log(
-                    `[LiveFinalizeQueue] CFSR-03 fallback found recording uid=${cfRecording.recordingUid} status=${cfRecording.status} for live_class=${liveClassId} \u2014 waiting for ready`
-                  );
+      if (result.rowCount && result.rowCount > 0) {
+        console.log(`[TokenCleanup] Deleted ${result.rowCount} expired download tokens`);
+      }
+    });
+  } catch (err) {
+    console.error("[TokenCleanup] Error:", err);
+  }
+}
+async function runMediaTokenCleanup(db2, pool2) {
+  try {
+    await runWithAdvisoryLock2(pool2, MEDIA_TOKEN_CLEANUP_LOCK_KEY, async () => {
+      const result = await db2.query(
+        `DELETE FROM media_tokens
+         WHERE token IN (
+           SELECT token FROM media_tokens
+           WHERE expires_at < $1
+           ORDER BY expires_at ASC
+           LIMIT 2000
+         )`,
+        [Date.now()]
+      );
+      if (result.rowCount && result.rowCount > 0) {
+        console.log(`[MediaTokenCleanup] Deleted ${result.rowCount} expired media tokens`);
+      }
+    });
+  } catch (err) {
+    console.error("[MediaTokenCleanup] Error:", err);
+  }
+}
+async function runLiveFinalizeQueueTick(db2, pool2) {
+  await runWithAdvisoryLock2(pool2, LIVE_FINALIZE_QUEUE_LOCK_KEY, async () => {
+    const now = Date.now();
+    const pending = await db2.query(
+      `SELECT id, live_class_id, attempts
+       FROM live_stream_finalize_jobs
+       WHERE status IN ('pending', 'running')
+         AND next_attempt_at <= $1
+       ORDER BY next_attempt_at ASC
+       LIMIT 100`,
+      [now]
+    );
+    setGauge("live_finalize_queue_backlog", pending.rows.length);
+    for (const job of pending.rows) {
+      const jobId = Number(job.id);
+      const liveClassId = Number(job.live_class_id);
+      const attempts = Number(job.attempts || 0);
+      if (!Number.isFinite(jobId) || !Number.isFinite(liveClassId)) continue;
+      try {
+        await db2.query("UPDATE live_stream_finalize_jobs SET status = 'running', updated_at = $2 WHERE id = $1", [
+          jobId,
+          now
+        ]);
+        const lc = await db2.query(
+          "SELECT recording_url, cf_stream_uid, cf_recording_uid FROM live_classes WHERE id = $1 LIMIT 1",
+          [liveClassId]
+        );
+        let recordingUrl = String(lc.rows[0]?.recording_url || "").trim();
+        if (!recordingUrl && attempts >= 5) {
+          const cfAccountId = process.env.CF_STREAM_ACCOUNT_ID;
+          const cfApiToken = process.env.CF_STREAM_API_TOKEN;
+          if (cfAccountId && cfApiToken) {
+            const cfRecordingUid = String(lc.rows[0]?.cf_recording_uid || "").trim();
+            const cfStreamUid = String(lc.rows[0]?.cf_stream_uid || "").trim();
+            let cfRecording = null;
+            if (cfRecordingUid) {
+              cfRecording = await getCfVideoByUid(cfAccountId, cfApiToken, cfRecordingUid);
+            }
+            if (!cfRecording && cfStreamUid) {
+              cfRecording = await getLatestRecordingForLiveInput(cfAccountId, cfApiToken, cfStreamUid);
+            }
+            if (cfRecording?.recordingUid) {
+              await db2.query("UPDATE live_classes SET cf_recording_uid = COALESCE(cf_recording_uid, $1) WHERE id = $2", [
+                cfRecording.recordingUid,
+                liveClassId
+              ]).catch(() => {
+              });
+              if (cfRecording.status === "ready") {
+                try {
+                  await saveRecordingForClassAndPeers(db2, String(liveClassId), cfRecording.manifestUrl);
+                  recordingUrl = cfRecording.manifestUrl;
+                  incrementCounter("live_finalize_queue_cf_fallback_success");
+                } catch (saveErr) {
+                  console.warn("[LiveFinalizeQueue] CF fallback save failed:", saveErr);
                 }
               }
             }
           }
-          if (recordingUrl) {
-            await db2.query(
-              "UPDATE live_stream_finalize_jobs SET status = 'done', updated_at = $2 WHERE id = $1",
-              [jobId, now]
-            );
-            continue;
-          }
-          const nextAttempts = attempts + 1;
-          const maxAttempts = Number(process.env.LIVE_FINALIZE_MAX_ATTEMPTS || 24);
-          const backoffMs = Math.min(10 * 60 * 1e3, nextAttempts * 60 * 1e3);
-          const nextAt = now + backoffMs;
-          await db2.query(
-            `UPDATE live_stream_finalize_jobs
-             SET status = $2,
-                 attempts = $3,
-                 updated_at = $4,
-                 next_attempt_at = $5,
-                 last_error = $6
-             WHERE id = $1`,
-            [
-              jobId,
-              nextAttempts >= maxAttempts ? "failed" : "pending",
-              nextAttempts,
-              now,
-              nextAt,
-              "recording_url_not_ready"
-            ]
-          );
-          if (nextAttempts >= maxAttempts) incrementCounter("live_finalize_queue_failed");
-        } catch (err) {
-          incrementCounter("live_finalize_queue_errors");
-          await db2.query(
-            `UPDATE live_stream_finalize_jobs
+        }
+        if (recordingUrl) {
+          await db2.query("UPDATE live_stream_finalize_jobs SET status = 'done', updated_at = $2 WHERE id = $1", [
+            jobId,
+            now
+          ]);
+          continue;
+        }
+        const nextAttempts = attempts + 1;
+        const maxAttempts = Number(process.env.LIVE_FINALIZE_MAX_ATTEMPTS || 24);
+        const backoffMs = Math.min(10 * 60 * 1e3, nextAttempts * 60 * 1e3);
+        await db2.query(
+          `UPDATE live_stream_finalize_jobs
+           SET status = $2,
+               attempts = $3,
+               updated_at = $4,
+               next_attempt_at = $5,
+               last_error = $6
+           WHERE id = $1`,
+          [
+            jobId,
+            nextAttempts >= maxAttempts ? "failed" : "pending",
+            nextAttempts,
+            now,
+            now + backoffMs,
+            "recording_url_not_ready"
+          ]
+        );
+        if (nextAttempts >= maxAttempts) incrementCounter("live_finalize_queue_failed");
+      } catch (err) {
+        incrementCounter("live_finalize_queue_errors");
+        await db2.query(
+          `UPDATE live_stream_finalize_jobs
              SET status = 'pending',
                  attempts = COALESCE(attempts, 0) + 1,
                  updated_at = $2,
                  next_attempt_at = $3,
                  last_error = $4
              WHERE id = $1`,
-            [jobId, now, now + 60 * 1e3, String(err?.message || "queue_error").slice(0, 500)]
-          ).catch(() => {
-          });
-        }
+          [jobId, now, now + 60 * 1e3, String(err?.message || "queue_error").slice(0, 500)]
+        ).catch(() => {
+        });
       }
-    });
-  };
-  void tick().catch(() => {
+    }
   });
-  setInterval(() => void tick().catch(() => {
-  }), 60 * 1e3);
-  console.log("[LiveFinalizeQueue] Scheduler started \u2014 runs every 60 seconds");
+}
+function isNeonKeepaliveEnabled() {
+  const raw = String(process.env.NEON_KEEPALIVE ?? "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
 }
 function startNeonKeepalive(db2) {
   const KEEPALIVE_INTERVAL_MS = 30 * 1e3;
@@ -18515,49 +18857,26 @@ function startNeonKeepalive(db2) {
   }, KEEPALIVE_INTERVAL_MS);
   console.log("[Keepalive] Neon keepalive started \u2014 pings every 30s");
 }
-function startMediaTokenCleanupScheduler(db2, pool2) {
-  const MEDIA_TOKEN_CLEANUP_LOCK_KEY = 31415926540;
-  const run = async () => {
-    try {
-      await runWithAdvisoryLock(pool2, MEDIA_TOKEN_CLEANUP_LOCK_KEY, async () => {
-        const result = await db2.query(
-          `DELETE FROM media_tokens
-           WHERE token IN (
-             SELECT token FROM media_tokens
-             WHERE expires_at < $1
-             ORDER BY expires_at ASC
-             LIMIT 2000
-           )`,
-          [Date.now()]
-        );
-        if (result.rowCount && result.rowCount > 0) {
-          console.log(`[MediaTokenCleanup] Deleted ${result.rowCount} expired tokens`);
-        }
-      });
-    } catch (err) {
-      console.error("[MediaTokenCleanup] Error:", err);
-    }
-  };
-  void run();
-  setInterval(() => void run(), 5 * 60 * 1e3);
-  console.log("[MediaTokenCleanup] Scheduler started \u2014 runs every 5 minutes");
-}
-var LIVE_NOTIF_ADVISORY_LOCK_KEY, DOWNLOAD_CLEANUP_RETRY_LOCK_KEY, DOWNLOAD_TOKEN_CLEANUP_LOCK_KEY, STUCK_LIVE_CLEANUP_LOCK_KEY, LIVE_FINALIZE_QUEUE_LOCK_KEY;
+var DOWNLOAD_CLEANUP_RETRY_LOCK_KEY, DOWNLOAD_TOKEN_CLEANUP_LOCK_KEY, STUCK_LIVE_CLEANUP_LOCK_KEY, LIVE_FINALIZE_QUEUE_LOCK_KEY, MEDIA_TOKEN_CLEANUP_LOCK_KEY, SCHEDULER_MIN_SLEEP_MS, SCHEDULER_MAX_SLEEP_MS, STUCK_LIVE_INTERVAL_MS, TOKEN_CLEANUP_INTERVAL_MS, DOWNLOAD_RETRY_INTERVAL_MS, FINALIZE_CHECK_INTERVAL_MS;
 var init_schedulers = __esm({
   "backend/schedulers.ts"() {
     "use strict";
-    init_auto_notification_expiry();
     init_download_utils();
-    init_redis_client();
-    init_redis_notification_dedup();
     init_observability();
     init_cloudflare_stream_api();
     init_live_class_recording_save();
-    LIVE_NOTIF_ADVISORY_LOCK_KEY = 31415926535;
+    init_scheduled_jobs();
     DOWNLOAD_CLEANUP_RETRY_LOCK_KEY = 31415926536;
     DOWNLOAD_TOKEN_CLEANUP_LOCK_KEY = 31415926537;
     STUCK_LIVE_CLEANUP_LOCK_KEY = 31415926538;
     LIVE_FINALIZE_QUEUE_LOCK_KEY = 31415926539;
+    MEDIA_TOKEN_CLEANUP_LOCK_KEY = 31415926540;
+    SCHEDULER_MIN_SLEEP_MS = 3e4;
+    SCHEDULER_MAX_SLEEP_MS = 5 * 60 * 1e3;
+    STUCK_LIVE_INTERVAL_MS = 60 * 60 * 1e3;
+    TOKEN_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1e3;
+    DOWNLOAD_RETRY_INTERVAL_MS = 15 * 60 * 1e3;
+    FINALIZE_CHECK_INTERVAL_MS = 5 * 60 * 1e3;
   }
 });
 
@@ -19351,7 +19670,7 @@ var init_routes = __esm({
       throw new Error("DATABASE_URL must be set");
     }
     pgPoolMax = Math.min(50, Math.max(1, parseInt(process.env.PG_POOL_MAX || "10", 10) || 10));
-    pgPoolMin = Math.min(pgPoolMax, Math.max(0, parseInt(process.env.PG_POOL_MIN || "2", 10) || 0));
+    pgPoolMin = Math.min(pgPoolMax, Math.max(0, parseInt(process.env.PG_POOL_MIN || "0", 10) || 0));
     pgIdleTimeoutMs = Math.max(1e3, parseInt(process.env.PG_POOL_IDLE_MS || "60000", 10) || 6e4);
     pool = new Pool2({
       connectionString: databaseUrl,

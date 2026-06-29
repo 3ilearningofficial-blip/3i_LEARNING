@@ -13,6 +13,7 @@ import {
 } from "./staff-access-utils";
 import { ensureStaffProfile, loadStaffProfileBundle } from "./staff-profile-utils";
 import { createRequireStaffPermission } from "./require-staff-permission";
+import { syncLiveClassReminderJob } from "./scheduled-jobs";
 
 type RegisterStaffRoutesDeps = {
   app: Express;
@@ -339,6 +340,9 @@ export function registerStaffRoutes({
         [liveId, b.title, b.description, b.scheduledAt],
       );
       await logStaffActivity(db, { userId: user.id, action: "live.updated", entityType: "live_class", entityId: liveId, courseId, req });
+      await syncLiveClassReminderJob(db, liveId).catch((err) =>
+        console.error("[StaffLiveClass] reminder job sync failed:", err)
+      );
       res.json(result.rows[0]);
     } catch (err) {
       handleStaffError(res, err);

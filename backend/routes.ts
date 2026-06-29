@@ -113,13 +113,10 @@ if (!databaseUrl) {
 }
 
 const pgPoolMax = Math.min(50, Math.max(1, parseInt(process.env.PG_POOL_MAX || "10", 10) || 10));
-// Keep a few connections permanently warm. node-pg never reaps below `min`, so
-// these TLS sessions to Neon stay open and avoid paying the (cross-region)
-// handshake on every burst. This is the single biggest lever against the
-// repeated 1–3s "cold connection" spikes when EC2 and Neon are far apart; the
-// per-query round-trip itself only improves by co-locating the two regions.
-// Both are env-overridable so they can be tuned/reverted without a code change.
-const pgPoolMin = Math.min(pgPoolMax, Math.max(0, parseInt(process.env.PG_POOL_MIN || "2", 10) || 0));
+// Warm floor connections (default 0). node-pg never reaps below `min`; a non-zero
+// min keeps sockets open and can prevent Neon scale-to-zero. Use PG_POOL_MIN=2 only
+// when cross-region latency to Neon is painful; same-region deploys should stay at 0.
+const pgPoolMin = Math.min(pgPoolMax, Math.max(0, parseInt(process.env.PG_POOL_MIN || "0", 10) || 0));
 const pgIdleTimeoutMs = Math.max(1000, parseInt(process.env.PG_POOL_IDLE_MS || "60000", 10) || 60000);
 const pool = new Pool({
   connectionString: databaseUrl,

@@ -2,6 +2,7 @@ import type { Express, Request, Response } from "express";
 import { autoNotificationExpiresAt } from "./auto-notification-expiry";
 import { notifyStandaloneMaterialAdded } from "./notification-utils";
 import { sendPushToUsers } from "./push-notifications";
+import { syncLiveClassReminderJob } from "./scheduled-jobs";
 import { purgeStudentAccountById } from "./user-account-purge";
 
 type DbClient = {
@@ -270,6 +271,9 @@ export function registerAdminUsersAndContentRoutes({
         ]
       );
       console.log(`[LiveClass] created id=${result.rows[0]?.id} title="${title}" courseId=${courseId} scheduledAt=${scheduledAt} isLive=${isLive} isRecordingMode=${recMode}`);
+      await syncLiveClassReminderJob(db, Number(result.rows[0]?.id)).catch((err) =>
+        console.error("[LiveClass] reminder job sync failed:", err)
+      );
       res.json(result.rows[0]);
     } catch (err) {
       console.error("[LiveClass] create failed", err);

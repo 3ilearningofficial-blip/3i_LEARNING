@@ -4,6 +4,7 @@ import { buildRecordingLectureSectionTitle } from "../shared/recordingSection";
 import { normalizePipPosition } from "../shared/classroomPipPosition";
 import { autoNotificationExpiresAt } from "./auto-notification-expiry";
 import { notifyAdminsLiveClassCompleted } from "./notification-utils";
+import { cancelLiveClassReminderJob, syncLiveClassReminderJob } from "./scheduled-jobs";
 import { sendPushToUsers } from "./push-notifications";
 import {
   convertLiveClassTitlePeersToLectures,
@@ -377,6 +378,10 @@ export function registerAdminLiveClassManageRoutes({
         );
       }
 
+      await syncLiveClassReminderJob(db, Number(liveClass?.id ?? req.params.id)).catch((err) =>
+        console.error("[LiveClass] reminder job sync failed:", err)
+      );
+
       res.json(liveClass);
     } catch (err) {
       console.error("Update live class error:", err);
@@ -386,6 +391,7 @@ export function registerAdminLiveClassManageRoutes({
 
   app.delete("/api/admin/live-classes/:id", requireAdmin, async (req: Request, res: Response) => {
     try {
+      await cancelLiveClassReminderJob(db, Number(req.params.id)).catch(() => {});
       await db.query("DELETE FROM live_classes WHERE id = $1", [req.params.id]);
       res.json({ success: true });
     } catch {
