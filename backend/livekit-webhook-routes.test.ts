@@ -3,7 +3,9 @@ import express from "express";
 import { createServer } from "node:http";
 import { registerLiveKitWebhookRoutes } from "./livekit-webhook-routes";
 
-const mockGetWebhookReceiver = vi.fn(async () => null);
+const { mockGetWebhookReceiver } = vi.hoisted(() => ({
+  mockGetWebhookReceiver: vi.fn(async () => null),
+}));
 
 vi.mock("./livekit-sdk", () => ({
   getWebhookReceiver: mockGetWebhookReceiver,
