@@ -72,7 +72,7 @@ export default function ChooseStreamPage() {
   return (
     <View style={styles.container}>
       <LinearGradient colors={["#0A1628", "#1A2A4A"]} style={styles.header}>
-        <Pressable style={styles.backButton} onPress={() => router.back()}>
+        <Pressable style={styles.backButton} onPress={() => router.replace("/admin" as any)}>
           <Ionicons name="arrow-back" size={22} color="#fff" />
         </Pressable>
         <View style={styles.headerText}>

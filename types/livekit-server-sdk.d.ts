@@ -12,6 +12,7 @@ declare module "livekit-server-sdk" {
     canPublish?: boolean;
     canSubscribe?: boolean;
     canPublishData?: boolean;
+    canUpdateOwnMetadata?: boolean;
   }
 
   export class AccessToken {

@@ -9,7 +9,7 @@ import {
   Platform,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
@@ -27,12 +27,14 @@ import { loadClassroomMediaDevices, saveClassroomMediaDevices, normalizePipPosit
 import CloudflareSetupPreview, { type CfStreamInfo } from "@/components/live-setup/CloudflareSetupPreview";
 import RtmpSetupPreview from "@/components/live-setup/RtmpSetupPreview";
 import WebrtcSetupPreview from "@/components/live-setup/WebrtcSetupPreview";
+import { isTruthyDbFlag } from "@/lib/live-class/dbFlags";
 import Colors from "@/constants/colors";
 
 export default function LiveSetupPage() {
   const { id, type: typeParam } = useLocalSearchParams<{ id: string; type?: string }>();
   const liveClassId = String(id || "");
   const streamType = normalizeStreamType(typeParam) || "cloudflare";
+  const qc = useQueryClient();
 
   const [chatMode, setChatMode] = useState<ChatMode>("public");
   const [showViewerCount, setShowViewerCount] = useState(true);
@@ -128,6 +130,8 @@ export default function LiveSetupPage() {
 
       await apiRequest("PUT", `/api/admin/live-classes/${liveClassId}`, body);
 
+      qc.invalidateQueries({ queryKey: liveClassQueryKey(liveClassId) });
+
       if (streamType === "classroom" && Platform.OS === "web") {
         const existing = loadClassroomMediaDevices();
         saveClassroomMediaDevices({
@@ -156,6 +160,7 @@ export default function LiveSetupPage() {
     showViewerCount,
     liveClassId,
     webrtc,
+    qc,
   ]);
 
   if (isLoading) {
@@ -214,6 +219,14 @@ export default function LiveSetupPage() {
               />
             )}
             {validationError ? <Text style={styles.validationError}>{validationError}</Text> : null}
+            {liveClass && isTruthyDbFlag(liveClass.is_completed) ? (
+              <View style={styles.completedBanner}>
+                <Ionicons name="information-circle-outline" size={18} color="#92400E" />
+                <Text style={styles.completedBannerText}>
+                  This class was marked ended. Go Live will start a new session.
+                </Text>
+              </View>
+            ) : null}
           </ScrollView>
 
           <Pressable
@@ -300,6 +313,18 @@ const styles = StyleSheet.create({
     textTransform: "capitalize",
   },
   validationError: { fontSize: 13, color: Colors.light.error, marginBottom: 8, lineHeight: 18 },
+  completedBanner: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    backgroundColor: "#FFFBEB",
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: "#FDE68A",
+  },
+  completedBannerText: { flex: 1, fontSize: 12, color: "#92400E", lineHeight: 16 },
   goLiveButton: {
     flexDirection: "row",
     alignItems: "center",

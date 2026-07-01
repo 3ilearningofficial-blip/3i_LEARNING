@@ -33,6 +33,7 @@ import AdminBannerPreview from "@/components/admin/AdminBannerPreview";
 import AdminNotificationPreview from "@/components/admin/AdminNotificationPreview";
 import NotificationImage from "@/components/NotificationImage";
 import { resolveNotificationImageUrl } from "@/lib/notificationImageUrl";
+import { adminGoBack } from "@/lib/admin/adminNavigation";
 // Heavy tab components are lazy-loaded: they are never rendered until the user
 // switches to that tab, so deferring their JS parse keeps the initial /admin
 // bundle smaller and speeds up first-paint for the default (welcome) tab.
@@ -1810,7 +1811,7 @@ export default function AdminDashboard() {
       <View style={styles.centered}>
         <Ionicons name="lock-closed" size={48} color={Colors.light.textMuted} />
         <Text style={styles.errorText}>Admin access required</Text>
-        <Pressable style={styles.backBtnSimple} onPress={() => router.back()}>
+        <Pressable style={styles.backBtnSimple} onPress={() => adminGoBack(router, "/(tabs)")}>
           <Text style={styles.backBtnText}>Go Back</Text>
         </Pressable>
       </View>

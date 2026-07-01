@@ -95,6 +95,7 @@ export function registerClassroomRoutes({
         canPublish: isAdmin,
         canSubscribe: true,
         canPublishData: true,
+        canUpdateOwnMetadata: isAdmin,
       });
 
       const token = await at.toJwt();

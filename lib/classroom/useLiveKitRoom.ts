@@ -124,10 +124,10 @@ export function useLiveKitRoom(
       greenScreen: !!prefs.greenScreenEnabled,
       cameraEnabled,
     };
-    await publishTeacherStreamMeta(room, serializeClassroomTeacherStreamMeta(meta));
     if (tokenPayload?.canPublish) {
       setTeacherStreamMeta(meta);
     }
+    await publishTeacherStreamMeta(room, serializeClassroomTeacherStreamMeta(meta));
   }, [tokenPayload?.canPublish]);
 
   const attachRemoteTeacher = useCallback(() => {
@@ -185,7 +185,7 @@ export function useLiveKitRoom(
     await localParticipant.unpublishTrack(cam, false);
     const { board, legacy } = publishedTracksRef.current;
     publishedTracksRef.current = { board, legacy };
-    await publishTeacherMeta(room, false);
+    void publishTeacherMeta(room, false);
   }, [publishTeacherMeta]);
 
   const publishCameraTrackOnly = useCallback(async (): Promise<boolean> => {
@@ -206,7 +206,7 @@ export function useLiveKitRoom(
       ...publishedTracksRef.current,
       camera: cameraTrack,
     };
-    await publishTeacherMeta(room, true);
+    void publishTeacherMeta(room, true);
     attachLocalCameraPreview();
     return true;
   }, [attachLocalCameraPreview, publishTeacherMeta]);
@@ -263,8 +263,8 @@ export function useLiveKitRoom(
           simulcast: true,
         });
         publishedTracksRef.current = { board: boardTrack, camera: cameraTrack };
-        await publishTeacherMeta(room, true);
         setBoardStreaming(true);
+        void publishTeacherMeta(room, true);
       } else {
         const handle = await startClassroomRecordingComposite({
           editor,
@@ -282,8 +282,8 @@ export function useLiveKitRoom(
           simulcast: true,
         });
         publishedTracksRef.current = { legacy: videoTrack };
-        await publishTeacherMeta(room, true);
         setBoardStreaming(true);
+        void publishTeacherMeta(room, true);
       }
 
       setCamEnabled(true);

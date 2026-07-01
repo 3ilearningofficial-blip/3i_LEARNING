@@ -13,10 +13,16 @@ export const LIVEKIT_TRACK_UNPUBLISHED = "trackUnpublished" as const;
 export const LIVEKIT_TRACK_MUTED = "trackMuted" as const;
 export const LIVEKIT_TRACK_UNMUTED = "trackUnmuted" as const;
 
-export async function publishTeacherStreamMeta(room: Room, payload: string): Promise<void> {
+/** @returns true when metadata was accepted by LiveKit */
+export async function publishTeacherStreamMeta(room: Room, payload: string): Promise<boolean> {
   const lp = room.localParticipant as LocalParticipant & ParticipantWithMeta;
-  if (typeof lp.setMetadata === "function") {
+  if (typeof lp.setMetadata !== "function") return false;
+  try {
     await lp.setMetadata(payload);
+    return true;
+  } catch (err) {
+    console.warn("[Classroom] setMetadata failed:", err instanceof Error ? err.message : err);
+    return false;
   }
 }
 

@@ -83,7 +83,11 @@ export function registerAdminLiveClassManageRoutes({
       };
       if (isLive !== undefined) add("is_live", isLive);
       if (isCompleted !== undefined) add("is_completed", isCompleted);
-      if (isLive === true) add("started_at", Date.now());
+      if (isLive === true) {
+        add("started_at", Date.now());
+        add("is_completed", false);
+        add("ended_at", null);
+      }
       if (isCompleted === true || isLive === false) add("ended_at", Date.now());
       if (youtubeUrl !== undefined) add("youtube_url", youtubeUrl);
       if (title !== undefined) add("title", title);
@@ -228,6 +232,8 @@ export function registerAdminLiveClassManageRoutes({
         };
         syncAdd("is_live", true);
         syncAdd("started_at", Date.now());
+        syncAdd("is_completed", false);
+        syncAdd("ended_at", null);
         if (youtubeUrl !== undefined) syncAdd("youtube_url", youtubeUrl);
         if (streamType !== undefined) syncAdd("stream_type", streamType);
         if (chatMode !== undefined) syncAdd("chat_mode", chatMode);

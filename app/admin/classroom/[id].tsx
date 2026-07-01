@@ -31,6 +31,7 @@ import type { Editor } from "tldraw";
 import { useClassroomSessionRecorder } from "@/lib/classroom/useClassroomSessionRecorder";
 import { uploadToR2 } from "@/lib/r2-upload";
 import { getAdminCoursesSectionRoute } from "@/lib/admin/courseAdminRoutes";
+import { adminGoBack } from "@/lib/admin/adminNavigation";
 import TeacherVideoPanel from "@/components/classroom/TeacherVideoPanel";
 import LiveClassRecordingTimer from "@/components/LiveClassRecordingTimer";
 import ClassroomEngagementSidebar from "@/components/classroom/ClassroomEngagementSidebar";
@@ -165,12 +166,12 @@ export default function AdminClassroomPage() {
   }, [liveClassId]);
 
   useEffect(() => {
-    if (!isLive || !sessionActive || !compositeStream) return;
+    if (!isLive || !sessionActive || !compositeStream || !boardStreaming) return;
     const t = setTimeout(() => {
       sessionRecorder.startSessionRecording(compositeStream, liveKitRoomRef.current);
     }, 1500);
     return () => clearTimeout(t);
-  }, [isLive, sessionActive, sessionRecorder.startSessionRecording, compositeStream]);
+  }, [isLive, sessionActive, boardStreaming, sessionRecorder.startSessionRecording, compositeStream]);
 
   const chatModeResolved = useMemo(
     () => (liveClass?.chat_mode as "public" | "private") || "public",
@@ -307,7 +308,7 @@ export default function AdminClassroomPage() {
         <Ionicons name="desktop-outline" size={48} color={Colors.light.primary} />
         <Text style={styles.webOnlyTitle}>Classroom requires web</Text>
         <Text style={styles.webOnlyText}>Open the admin panel in a desktop browser to teach with the whiteboard.</Text>
-        <Pressable style={styles.backBtn} onPress={() => router.back()}>
+        <Pressable style={styles.backBtn} onPress={() => adminGoBack(router)}>
           <Text style={styles.backBtnText}>Go back</Text>
         </Pressable>
       </View>
@@ -325,7 +326,7 @@ export default function AdminClassroomPage() {
   return (
     <View style={styles.container}>
       <LinearGradient colors={["#0A1628", "#1A2A4A"]} style={styles.header}>
-        <Pressable style={styles.headerBack} onPress={() => router.back()}>
+        <Pressable style={styles.headerBack} onPress={() => adminGoBack(router)}>
           <Ionicons name="arrow-back" size={22} color="#fff" />
         </Pressable>
         <Text style={styles.headerTitle} numberOfLines={1}>

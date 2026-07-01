@@ -33,6 +33,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "@/context/AuthContext";
 import { useDocumentVisibility } from "@/lib/useDocumentVisibility";
 import { useScreenWakeLock } from "@/lib/useScreenWakeLock";
+import { adminGoBack } from "@/lib/admin/adminNavigation";
 import { buildRecordingLectureSectionTitle } from "@shared/recordingSection";
 import { getAdminCoursesSectionRoute } from "@/lib/admin/courseAdminRoutes";
 
@@ -529,7 +530,7 @@ export default function BroadcastPage() {
   return (
     <View style={styles.container}>
       <LinearGradient colors={["#0A1628", "#1A2A4A"]} style={styles.broadcastHeader}>
-        <Pressable style={styles.headerBack} onPress={() => router.back()}>
+        <Pressable style={styles.headerBack} onPress={() => adminGoBack(router)}>
           <Ionicons name="arrow-back" size={22} color="#fff" />
         </Pressable>
         <Text style={styles.headerTitle} numberOfLines={1}>
