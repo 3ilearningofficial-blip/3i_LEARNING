@@ -15324,27 +15324,84 @@ async function uploadSnapshotToR2(getR2Client, objectKey, snapshot) {
     return false;
   }
 }
+async function fetchSnapshotFromHttp(url) {
+  try {
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (err) {
+    console.warn("[classroom-checkpoint] HTTP GET failed:", err?.message || String(err));
+    return null;
+  }
+}
+function resolveR2ObjectKey(stored) {
+  const s = stored.trim();
+  if (!s) return null;
+  if (s.startsWith(AUTO_CHECKPOINT_KEY_PREFIX)) return s;
+  if (/^https?:\/\//i.test(s)) {
+    try {
+      const pathname = decodeURIComponent(new URL2(s).pathname);
+      const markerIdx = pathname.indexOf(AUTO_CHECKPOINT_KEY_PREFIX);
+      if (markerIdx >= 0) {
+        return pathname.slice(markerIdx).replace(/^\//, "");
+      }
+      const base = pathname.replace(/^\//, "");
+      if (base.endsWith(".json")) return base;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
 async function loadAutoCheckpointSnapshot(db2, liveClassId, getR2Client) {
   if (!isR2Configured()) return null;
   try {
     const result = await db2.query(
-      "SELECT board_sync_checkpoint_url FROM live_classes WHERE id = $1",
+      `SELECT board_sync_checkpoint_url, board_checkpoint_at,
+              board_client_checkpoint_url, board_client_checkpoint_at
+       FROM live_classes WHERE id = $1`,
       [liveClassId]
     );
     const row = result.rows[0];
     if (!row) return null;
-    const storedUrl = String(row.board_sync_checkpoint_url || "");
-    if (!storedUrl.startsWith(AUTO_CHECKPOINT_KEY_PREFIX)) return null;
-    console.log(
-      `[classroom-checkpoint] Restoring class=${liveClassId} key=${storedUrl}`
-    );
-    const snapshot = await fetchSnapshotFromR2(getR2Client, storedUrl);
-    if (snapshot) {
-      console.log(
-        `[classroom-checkpoint] Restored class=${liveClassId} docs=${snapshot.documents?.length ?? 0}`
-      );
+    const serverUrl = String(row.board_sync_checkpoint_url || "");
+    const clientUrl = String(row.board_client_checkpoint_url || "");
+    const serverAt = Number(row.board_checkpoint_at) || 0;
+    const clientAt = Number(row.board_client_checkpoint_at) || 0;
+    const useClient = clientUrl && clientAt >= serverAt;
+    if (useClient) {
+      console.log(`[classroom-checkpoint] Restoring class=${liveClassId} client url`);
+      const fromHttp = await fetchSnapshotFromHttp(clientUrl);
+      if (fromHttp) {
+        console.log(
+          `[classroom-checkpoint] Restored class=${liveClassId} docs=${fromHttp.documents?.length ?? 0}`
+        );
+        return fromHttp;
+      }
+      const clientKey = resolveR2ObjectKey(clientUrl);
+      if (clientKey) {
+        const fromR2 = await fetchSnapshotFromR2(getR2Client, clientKey);
+        if (fromR2) return fromR2;
+      }
     }
-    return snapshot;
+    if (serverUrl) {
+      const serverKey = resolveR2ObjectKey(serverUrl);
+      if (serverKey) {
+        console.log(`[classroom-checkpoint] Restoring class=${liveClassId} key=${serverKey}`);
+        const snapshot = await fetchSnapshotFromR2(getR2Client, serverKey);
+        if (snapshot) {
+          console.log(
+            `[classroom-checkpoint] Restored class=${liveClassId} docs=${snapshot.documents?.length ?? 0}`
+          );
+          return snapshot;
+        }
+      }
+    }
+    if (!useClient && clientUrl) {
+      const fromHttp = await fetchSnapshotFromHttp(clientUrl);
+      if (fromHttp) return fromHttp;
+    }
+    return null;
   } catch (err) {
     console.warn("[classroom-checkpoint] Load error:", err?.message || String(err));
     return null;
@@ -15452,6 +15509,22 @@ async function teardownRoomIfAllowed(roomId, liveClassId, roomInstance, db2, get
     );
     const lc = r.rows[0];
     if (lc && Boolean(lc.is_live) && !Boolean(lc.is_completed)) {
+      const state2 = checkpointStates.get(roomId);
+      if (state2) {
+        if (state2.timer !== null) {
+          clearTimeout(state2.timer);
+          state2.timer = null;
+        }
+        try {
+          await Promise.race([
+            runCheckpoint(roomId, liveClassId, roomInstance, db2, getR2Client),
+            new Promise(
+              (resolve2) => setTimeout(resolve2, AUTO_CHECKPOINT_TEARDOWN_TIMEOUT_MS)
+            )
+          ]);
+        } catch {
+        }
+      }
       return;
     }
   } catch (e) {
@@ -15707,9 +15780,14 @@ function registerClassroomRoutes({
       try {
         const lc = await loadLiveClass(db2, String(req.params.id));
         if (!lc) return res.status(404).json({ message: "Live class not found" });
+        const clientUrl = String(lc.board_client_checkpoint_url || "").trim();
+        const serverUrl = String(lc.board_sync_checkpoint_url || "").trim();
+        const clientAt = Number(lc.board_client_checkpoint_at) || 0;
+        const serverAt = Number(lc.board_checkpoint_at) || 0;
+        const useClient = clientUrl && clientAt >= serverAt;
         res.json({
-          checkpointUrl: lc.board_sync_checkpoint_url || null,
-          checkpointAt: lc.board_checkpoint_at || null
+          checkpointUrl: useClient ? clientUrl : serverUrl || clientUrl || null,
+          checkpointAt: useClient ? clientAt : serverAt || clientAt || null
         });
       } catch (err) {
         console.error("[Classroom] get checkpoint error:", err?.message || err);
@@ -15729,7 +15807,7 @@ function registerClassroomRoutes({
         if (!lc) return res.status(404).json({ message: "Live class not found" });
         const t = Date.now();
         await db2.query(
-          `UPDATE live_classes SET board_sync_checkpoint_url = $1, board_checkpoint_at = $2 WHERE id = $3`,
+          `UPDATE live_classes SET board_client_checkpoint_url = $1, board_client_checkpoint_at = $2 WHERE id = $3`,
           [checkpointUrl, t, liveClassId]
         );
         res.json({ ok: true, checkpointUrl, checkpointAt: t });
@@ -18293,6 +18371,8 @@ var init_schema_readiness_contract = __esm({
         "board_pages_json",
         "board_sync_checkpoint_url",
         "board_checkpoint_at",
+        "board_client_checkpoint_url",
+        "board_client_checkpoint_at",
         "cf_recording_uid",
         "recording_url_normalized"
       ],

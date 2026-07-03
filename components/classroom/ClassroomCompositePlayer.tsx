@@ -191,7 +191,6 @@ export default function ClassroomCompositePlayer({
     <View style={[styles.wrap, isPortraitTop && styles.wrapPortraitTop]}>
       <View
         ref={setFrameRef}
-        // @ts-expect-error web nativeID maps to DOM id for fullscreen lookup
         nativeID={`classroom-player-frame-${liveClassId}`}
         style={[styles.frame, isPortraitTop && styles.framePortraitTop]}
       >
