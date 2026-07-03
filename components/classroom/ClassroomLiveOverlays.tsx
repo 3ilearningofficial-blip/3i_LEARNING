@@ -74,7 +74,7 @@ export default function ClassroomLiveOverlays({
       return json.poll as any;
     },
     refetchInterval: 800,
-    enabled: !!liveClassId && sessionActive && enabled && !authBlocked && Platform.OS === "web",
+    enabled: !!liveClassId && sessionActive && enabled && !authBlocked,
   });
 
   const { data: activeTimer } = useQuery({
@@ -90,7 +90,7 @@ export default function ClassroomLiveOverlays({
       return json.timer as ActiveTimer | null;
     },
     refetchInterval: 800,
-    enabled: !!liveClassId && sessionActive && enabled && !authBlocked && Platform.OS === "web",
+    enabled: !!liveClassId && sessionActive && enabled && !authBlocked,
   });
 
   const vote = useMutation({
@@ -200,7 +200,7 @@ export default function ClassroomLiveOverlays({
     };
   }, [scheduleSavePosition]);
 
-  if (Platform.OS !== "web" || !sessionActive) return null;
+  if (!sessionActive) return null;
 
   const pollRemaining =
     activePoll && Number(activePoll.ends_at) > Date.now()

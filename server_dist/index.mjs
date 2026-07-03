@@ -15475,8 +15475,22 @@ async function makeOrLoadRoom(roomId, liveClassId, db2, getR2Client) {
         }
       });
       if (!isPreviewRoom(id) && isR2Configured()) {
+        let lastPageCount = room.getCurrentSnapshot().documents?.length ?? 0;
+        let pageChangeTimer = null;
         storage.onChange(() => {
           scheduleCheckpoint(id, liveClassId, room, db2, getR2Client);
+          try {
+            const pageCount = room.getCurrentSnapshot().documents?.length ?? 0;
+            if (pageCount !== lastPageCount) {
+              lastPageCount = pageCount;
+              if (pageChangeTimer) clearTimeout(pageChangeTimer);
+              pageChangeTimer = setTimeout(() => {
+                pageChangeTimer = null;
+                void runCheckpoint(id, liveClassId, room, db2, getR2Client);
+              }, PAGE_CHANGE_CHECKPOINT_DEBOUNCE_MS);
+            }
+          } catch {
+          }
         });
       }
       rooms.set(id, room);
@@ -15647,7 +15661,7 @@ async function handleConnection(ws, req, rawRoomId, db2, getR2Client, pathToken 
     );
   }
 }
-var require3, WebSocketServer, CLASSROOM_SYNC_TOKEN_TTL_MS, rooms, roomLoadingPromises, checkpointStates, AUTO_CHECKPOINT_INTERVAL_MS, AUTO_CHECKPOINT_KEY_PREFIX, AUTO_CHECKPOINT_LOAD_TIMEOUT_MS, AUTO_CHECKPOINT_TEARDOWN_TIMEOUT_MS, CHECKPOINT_CLEANUP_INTERVAL_MS;
+var require3, WebSocketServer, CLASSROOM_SYNC_TOKEN_TTL_MS, rooms, roomLoadingPromises, checkpointStates, AUTO_CHECKPOINT_INTERVAL_MS, PAGE_CHANGE_CHECKPOINT_DEBOUNCE_MS, AUTO_CHECKPOINT_KEY_PREFIX, AUTO_CHECKPOINT_LOAD_TIMEOUT_MS, AUTO_CHECKPOINT_TEARDOWN_TIMEOUT_MS, CHECKPOINT_CLEANUP_INTERVAL_MS;
 var init_classroom_sync = __esm({
   "backend/classroom-sync.ts"() {
     "use strict";
@@ -15663,6 +15677,7 @@ var init_classroom_sync = __esm({
       6e4,
       Number(process.env.BOARD_CHECKPOINT_INTERVAL_MS || "120000")
     );
+    PAGE_CHANGE_CHECKPOINT_DEBOUNCE_MS = 5e3;
     AUTO_CHECKPOINT_KEY_PREFIX = "board-checkpoints/";
     AUTO_CHECKPOINT_LOAD_TIMEOUT_MS = 8e3;
     AUTO_CHECKPOINT_TEARDOWN_TIMEOUT_MS = 5e3;
@@ -15692,7 +15707,8 @@ function registerClassroomRoutes({
   requireAuth,
   requireAdmin: requireAdmin2,
   getAuthUser: getAuthUser2,
-  recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse3
+  recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse3,
+  getR2Client
 }) {
   app2.get("/api/live-classes/:id/classroom/config", requireAuth, async (req, res) => {
     const cfg = getLiveKitConfig();
@@ -15792,6 +15808,24 @@ function registerClassroomRoutes({
       } catch (err) {
         console.error("[Classroom] get checkpoint error:", err?.message || err);
         res.status(500).json({ message: "Failed to load board checkpoint" });
+      }
+    }
+  );
+  app2.get(
+    "/api/admin/live-classes/:id/classroom/board-checkpoint/snapshot",
+    requireAdmin2,
+    async (req, res) => {
+      try {
+        const liveClassId = String(req.params.id);
+        const lc = await loadLiveClass(db2, liveClassId);
+        if (!lc) return res.status(404).json({ message: "Live class not found" });
+        const snapshot = await loadAutoCheckpointSnapshot(db2, liveClassId, getR2Client);
+        if (!snapshot) return res.status(404).json({ message: "No board checkpoint snapshot" });
+        res.set("Cache-Control", "no-store");
+        res.json(snapshot);
+      } catch (err) {
+        console.error("[Classroom] checkpoint snapshot error:", err instanceof Error ? err.message : err);
+        res.status(500).json({ message: "Failed to load board checkpoint snapshot" });
       }
     }
   );
@@ -19672,7 +19706,8 @@ async function registerRoutes(app2) {
     requireAuth,
     requireAdmin,
     getAuthUser,
-    recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse2
+    recomputeAllEnrollmentsProgressForCourse: recomputeAllEnrollmentsProgressForCourse2,
+    getR2Client
   });
   registerLiveClassPollRoutes({
     app: app2,

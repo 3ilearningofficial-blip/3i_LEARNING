@@ -18,12 +18,19 @@ export type ClassroomTeacherStreamMeta = {
   cameraEnabled?: boolean;
 };
 
+function parsePipPositionField(value: unknown): ClassroomPipPosition | undefined {
+  const s = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (!VALID.has(s)) return undefined;
+  return s as ClassroomPipPosition;
+}
+
 export function parseClassroomTeacherStreamMeta(raw: string | undefined | null): ClassroomTeacherStreamMeta {
   if (!raw || typeof raw !== "string") return {};
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const pipPosition = parsePipPositionField(parsed.pipPosition);
     return {
-      pipPosition: normalizePipPosition(parsed.pipPosition),
+      ...(pipPosition !== undefined ? { pipPosition } : {}),
       greenScreen: parsed.greenScreen === true,
       cameraEnabled: parsed.cameraEnabled === false ? false : true,
     };

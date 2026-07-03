@@ -5,7 +5,7 @@ import { buildRecordingLectureSectionTitle } from "../shared/recordingSection";
 import { saveRecordingForClassAndPeers } from "./live-class-recording-save";
 import { convertLiveClassTitlePeersToLectures } from "./live-class-lecture-convert";
 import { notifyAdminsLiveClassCompleted } from "./notification-utils";
-import { signClassroomSyncToken } from "./classroom-sync";
+import { signClassroomSyncToken, loadAutoCheckpointSnapshot } from "./classroom-sync";
 
 type DbClient = {
   query: (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
@@ -20,6 +20,7 @@ type RegisterClassroomRoutesDeps = {
   requireAdmin: (req: Request, res: Response, next: () => void) => any;
   getAuthUser: (req: Request) => Promise<AuthUser>;
   recomputeAllEnrollmentsProgressForCourse: (courseId: number | string) => Promise<void>;
+  getR2Client: () => Promise<unknown>;
 };
 
 function classroomRoomName(liveClassId: string | number): string {
@@ -38,6 +39,7 @@ export function registerClassroomRoutes({
   requireAdmin,
   getAuthUser,
   recomputeAllEnrollmentsProgressForCourse,
+  getR2Client,
 }: RegisterClassroomRoutesDeps): void {
   app.get("/api/live-classes/:id/classroom/config", requireAuth, async (req: Request, res: Response) => {
     const cfg = getLiveKitConfig();
@@ -158,6 +160,25 @@ export function registerClassroomRoutes({
       } catch (err: any) {
         console.error("[Classroom] get checkpoint error:", err?.message || err);
         res.status(500).json({ message: "Failed to load board checkpoint" });
+      }
+    }
+  );
+
+  app.get(
+    "/api/admin/live-classes/:id/classroom/board-checkpoint/snapshot",
+    requireAdmin,
+    async (req: Request, res: Response) => {
+      try {
+        const liveClassId = String(req.params.id);
+        const lc = await loadLiveClass(db, liveClassId);
+        if (!lc) return res.status(404).json({ message: "Live class not found" });
+        const snapshot = await loadAutoCheckpointSnapshot(db, liveClassId, getR2Client);
+        if (!snapshot) return res.status(404).json({ message: "No board checkpoint snapshot" });
+        res.set("Cache-Control", "no-store");
+        res.json(snapshot);
+      } catch (err: unknown) {
+        console.error("[Classroom] checkpoint snapshot error:", err instanceof Error ? err.message : err);
+        res.status(500).json({ message: "Failed to load board checkpoint snapshot" });
       }
     }
   );

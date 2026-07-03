@@ -3,8 +3,6 @@ import { View, StyleSheet, Platform, ActivityIndicator, Pressable, Text } from "
 import { Ionicons } from "@expo/vector-icons";
 import { useClassroomToken } from "@/lib/classroom/useClassroomToken";
 import { useLiveKitRoom } from "@/lib/classroom/useLiveKitRoom";
-import ClassroomStudentStage from "@/components/classroom/ClassroomStudentStage";
-import { normalizePipPosition } from "@/lib/classroom/mediaDevices";
 import {
   lockLandscapeForPlayback,
   restorePortraitAfterPlayback,
@@ -14,8 +12,6 @@ import Colors from "@/constants/colors";
 type Props = {
   liveClassId: string;
   enabled?: boolean;
-  /** Teacher PiP corner chosen by the admin; defaults to top-right. */
-  pipPosition?: string;
   /** portraitTop fills a fixed 16:9 slot; default centers in flex stage. */
   layout?: "default" | "portraitTop";
 };
@@ -25,52 +21,38 @@ function resolveFrameDomNode(liveClassId: string): HTMLElement | null {
   return document.getElementById(`classroom-player-frame-${liveClassId}`) as HTMLElement | null;
 }
 
-/** Full-area LiveKit player for students (board + responsive teacher PiP + audio). */
+/** Full-area LiveKit player for students (single pre-composited board + teacher video). */
 export default function ClassroomCompositePlayer({
   liveClassId,
   enabled = true,
-  pipPosition,
   layout = "default",
 }: Props) {
   const { data: tokenPayload, isLoading } = useClassroomToken(liveClassId, enabled);
   const {
-    setRemoteBoardEl,
-    setRemoteCameraEl,
+    setRemoteVideoEl,
     setRemoteAudioEl,
     connected,
     reconnecting,
     error,
-    teacherStreamMeta,
-    teacherCameraActive,
-  } = useLiveKitRoom(tokenPayload, enabled && Platform.OS === "web");
-  const boardRef = useRef<HTMLVideoElement | null>(null);
+    attachRemoteTeacher,
+  } = useLiveKitRoom(tokenPayload, enabled);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const frameDomRef = useRef<HTMLElement | null>(null);
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [fullscreenUnsupported, setFullscreenUnsupported] = useState(false);
 
-  const onBoardVideoEl = useCallback(
+  const bindFrameDom = useCallback((el: HTMLElement | null) => {
+    frameDomRef.current = el;
+  }, []);
+
+  const onVideoEl = useCallback(
     (el: HTMLVideoElement | null) => {
-      boardRef.current = el;
-      if (el) setRemoteBoardEl(el);
+      videoRef.current = el;
+      if (el) setRemoteVideoEl(el);
     },
-    [setRemoteBoardEl]
-  );
-
-  const onCameraVideoEl = useCallback(
-    (el: HTMLVideoElement | null) => {
-      if (el) setRemoteCameraEl(el);
-    },
-    [setRemoteCameraEl]
-  );
-
-  const setFrameRef = useCallback(
-    (node: View | null) => {
-      if (Platform.OS !== "web") return;
-      frameDomRef.current =
-        (node as unknown as HTMLElement | null) || resolveFrameDomNode(liveClassId);
-    },
-    [liveClassId]
+    [setRemoteVideoEl]
   );
 
   const getFullscreenElement = useCallback((): Element | null => {
@@ -80,7 +62,8 @@ export default function ClassroomCompositePlayer({
   }, []);
 
   const enterIosVideoFullscreen = useCallback(() => {
-    const video = boardRef.current;
+    setFullscreenUnsupported(true);
+    const video = videoRef.current;
     const iosFs =
       video && (video as HTMLVideoElement & { webkitEnterFullscreen?: () => void }).webkitEnterFullscreen;
     if (iosFs) {
@@ -106,7 +89,7 @@ export default function ClassroomCompositePlayer({
     const frame =
       frameDomRef.current ||
       resolveFrameDomNode(liveClassId) ||
-      (boardRef.current?.parentElement as HTMLElement | null);
+      (videoRef.current?.parentElement as HTMLElement | null);
     if (!frame) {
       enterIosVideoFullscreen();
       return;
@@ -141,8 +124,13 @@ export default function ClassroomCompositePlayer({
     const onFs = () => {
       const active = !!getFullscreenElement();
       setIsFullscreen(active);
-      if (active) void lockLandscapeForPlayback();
-      else void restorePortraitAfterPlayback();
+      if (active) {
+        void lockLandscapeForPlayback();
+        attachRemoteTeacher();
+      } else {
+        void restorePortraitAfterPlayback();
+        attachRemoteTeacher();
+      }
     };
     document.addEventListener("fullscreenchange", onFs);
     document.addEventListener("webkitfullscreenchange", onFs as EventListener);
@@ -150,7 +138,7 @@ export default function ClassroomCompositePlayer({
       document.removeEventListener("fullscreenchange", onFs);
       document.removeEventListener("webkitfullscreenchange", onFs as EventListener);
     };
-  }, [getFullscreenElement]);
+  }, [getFullscreenElement, attachRemoteTeacher]);
 
   const setAudioRef = useCallback(
     (el: HTMLAudioElement | null) => {
@@ -181,52 +169,77 @@ export default function ClassroomCompositePlayer({
   if (Platform.OS !== "web") return null;
 
   const isPortraitTop = layout === "portraitTop";
-  const cameraVisible =
-    teacherCameraActive && teacherStreamMeta.cameraEnabled !== false;
-  const effectivePipPosition = normalizePipPosition(
-    teacherStreamMeta.pipPosition ?? pipPosition
+
+  const frameContent = (
+    <>
+      <video
+        ref={onVideoEl as React.Ref<HTMLVideoElement>}
+        playsInline
+        autoPlay
+        style={{
+          width: "100%",
+          height: "100%",
+          objectFit: "contain",
+          backgroundColor: "#000",
+          display: "block",
+        }}
+      />
+      <audio ref={setAudioRef as React.Ref<HTMLAudioElement>} autoPlay />
+
+      {isLoading || !connected || reconnecting ? (
+        <View style={styles.loading}>
+          <ActivityIndicator size="large" color={Colors.light.primary} />
+          <Text style={styles.loadingText}>
+            {reconnecting && !isLoading ? "Reconnecting…" : "Connecting…"}
+          </Text>
+        </View>
+      ) : null}
+
+      {error ? (
+        <View style={styles.errorBanner}>
+          <Text style={styles.errorText}>{error}</Text>
+        </View>
+      ) : null}
+
+      {audioBlocked ? (
+        <Pressable style={styles.unmuteBtn} onPress={enableAudio}>
+          <Text style={styles.unmuteText}>Tap to enable sound</Text>
+        </Pressable>
+      ) : null}
+
+      {fullscreenUnsupported ? (
+        <View style={styles.fsHint} pointerEvents="none">
+          <Text style={styles.fsHintText}>Fullscreen: board only on this browser</Text>
+        </View>
+      ) : null}
+
+      <Pressable
+        style={styles.fullscreenBtn}
+        onPress={toggleFullscreen}
+        accessibilityLabel={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+      >
+        <Ionicons name={isFullscreen ? "contract-outline" : "scan-outline"} size={20} color="#fff" />
+      </Pressable>
+    </>
   );
 
   return (
     <View style={[styles.wrap, isPortraitTop && styles.wrapPortraitTop]}>
-      <View
-        ref={setFrameRef}
-        nativeID={`classroom-player-frame-${liveClassId}`}
-        style={[styles.frame, isPortraitTop && styles.framePortraitTop]}
+      <div
+        id={`classroom-player-frame-${liveClassId}`}
+        ref={bindFrameDom}
+        style={{
+          width: "100%",
+          height: isPortraitTop ? "100%" : undefined,
+          maxHeight: "100%",
+          aspectRatio: isPortraitTop ? undefined : "16 / 9",
+          maxWidth: "100%",
+          position: "relative",
+          backgroundColor: "#000",
+        }}
       >
-        <ClassroomStudentStage
-          onBoardVideoEl={onBoardVideoEl}
-          onCameraVideoEl={onCameraVideoEl}
-          pipPosition={effectivePipPosition}
-          greenScreen={teacherStreamMeta.greenScreen === true}
-          cameraVisible={cameraVisible}
-          controlsOnVideo={!isPortraitTop}
-        />
-        <audio ref={setAudioRef as React.Ref<HTMLAudioElement>} autoPlay />
-
-        {isLoading || !connected || reconnecting ? (
-          <View style={styles.loading}>
-            <ActivityIndicator size="large" color={Colors.light.primary} />
-            <Text style={styles.loadingText}>
-              {reconnecting && !isLoading ? "Reconnecting…" : "Connecting…"}
-            </Text>
-          </View>
-        ) : null}
-
-        {audioBlocked ? (
-          <Pressable style={styles.unmuteBtn} onPress={enableAudio}>
-            <Text style={styles.unmuteText}>Tap to enable sound</Text>
-          </Pressable>
-        ) : null}
-
-        <Pressable
-          style={styles.fullscreenBtn}
-          onPress={toggleFullscreen}
-          accessibilityLabel={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
-        >
-          <Ionicons name={isFullscreen ? "contract-outline" : "scan-outline"} size={20} color="#fff" />
-        </Pressable>
-      </View>
+        {frameContent}
+      </div>
     </View>
   );
 }
@@ -239,25 +252,11 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     minHeight: 0,
   },
-  frame: {
-    width: "100%",
-    maxHeight: "100%",
-    aspectRatio: 16 / 9,
-    maxWidth: "100%",
-    position: "relative",
-    backgroundColor: "#000",
-  },
   wrapPortraitTop: {
     flex: 1,
     width: "100%",
     height: "100%",
     minHeight: 0,
-  },
-  framePortraitTop: {
-    width: "100%",
-    height: "100%",
-    maxHeight: "100%",
-    aspectRatio: undefined,
   },
   loading: {
     ...StyleSheet.absoluteFillObject,
@@ -268,6 +267,17 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.5)",
   },
   loadingText: { color: "#fff", fontSize: 13, fontWeight: "600" },
+  errorBanner: {
+    position: "absolute",
+    bottom: 56,
+    left: 12,
+    right: 12,
+    zIndex: 10,
+    backgroundColor: "rgba(220,38,38,0.9)",
+    padding: 10,
+    borderRadius: 8,
+  },
+  errorText: { color: "#fff", fontSize: 12, textAlign: "center" },
   unmuteBtn: {
     position: "absolute",
     bottom: 16,
@@ -293,4 +303,16 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  fsHint: {
+    position: "absolute",
+    top: 48,
+    left: 10,
+    right: 10,
+    zIndex: 11,
+    backgroundColor: "rgba(0,0,0,0.65)",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+  },
+  fsHintText: { color: "#FCD34D", fontSize: 11, textAlign: "center", fontWeight: "600" },
 });

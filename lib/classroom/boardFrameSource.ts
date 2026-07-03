@@ -1,5 +1,6 @@
 import { Box, type Editor } from "tldraw";
-import { getCurrentPageExportBounds } from "./exportClassroomBoardViewport";
+import { getSlideBounds } from "./slideConstants";
+import { fitEditorToSlide } from "./classroomSlideEditor";
 
 /**
  * Live board frame provider for the classroom composite stream.
@@ -87,7 +88,7 @@ export function createBoardFrameSource(
         markFirstFrameReady();
         return;
       }
-      const bounds = getCurrentPageExportBounds(editor, boardEl);
+      const bounds = getSlideBounds();
       // "jpeg" encodes ~3× faster than "png" for the same content; pixelRatio 0.75
       // reduces the blob size without visible quality loss on a 1920-wide canvas.
       const { blob } = await editor.toImage(shapeIds, {
@@ -146,6 +147,7 @@ export function createBoardFrameSource(
     if (pageId !== lastPageId) {
       lastPageId = pageId;
       if (debounceTimer) clearTimeout(debounceTimer);
+      fitEditorToSlide(editor);
       void rasterize();
     }
   }, { scope: "document" });

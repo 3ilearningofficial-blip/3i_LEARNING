@@ -19,7 +19,8 @@ const GS_TEACHER_BAND_FRAC = 0.45;
 const GS_CAM_WIDTH = COMPOSITE_WIDTH;
 const GS_CAM_HEIGHT = COMPOSITE_HEIGHT;
 
-export const CLASSROOM_SPLIT_STREAM = true;
+/** When false, teacher publishes a single pre-composited track (board + teacher baked in). */
+export const CLASSROOM_SPLIT_STREAM = false;
 
 /** Top-left corner of the PiP rectangle for the chosen corner. */
 export function computePipOrigin(position: ClassroomPipPosition): { pipX: number; pipY: number } {

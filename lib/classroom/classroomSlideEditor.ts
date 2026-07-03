@@ -4,7 +4,7 @@ import { getSlideBounds, SLIDE_LOGICAL_H, SLIDE_LOGICAL_W } from "./slideConstan
 export function fitEditorToSlide(editor: Editor, opts?: { lock?: boolean }) {
   const bounds = getSlideBounds();
   try {
-    editor.zoomToBounds(bounds, { inset: 16, animation: { duration: 0 } });
+    editor.zoomToBounds(bounds, { inset: 0, animation: { duration: 0 } });
   } catch {
     editor.setCamera({ x: SLIDE_LOGICAL_W / 2, y: SLIDE_LOGICAL_H / 2, z: 1 });
   }

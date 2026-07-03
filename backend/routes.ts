@@ -1,4 +1,4 @@
-﻿import type { Express, Request, Response } from "express";
+import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "node:http";
 import { Pool } from "pg";
 import { PDFParse } from "pdf-parse";
@@ -975,6 +975,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     requireAdmin,
     getAuthUser,
     recomputeAllEnrollmentsProgressForCourse,
+    getR2Client,
   });
 
   registerLiveClassPollRoutes({

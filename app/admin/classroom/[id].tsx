@@ -425,6 +425,7 @@ export default function AdminClassroomPage() {
             enabled={!!sessionActive}
             boardEl={boardEl}
             editor={editor}
+            liveClassPipPosition={liveClass?.pip_position}
             onRoomReady={handleRoomReady}
             onCompositeStream={setCompositeStream}
             onBoardStreamingChange={setBoardStreaming}

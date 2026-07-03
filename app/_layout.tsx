@@ -30,6 +30,13 @@ import { clearWebPostLoginHomeGrace, getWebPostLoginHomeGraceRemainingMs } from 
 import { getPostAuthPathForUser } from "@/lib/post-auth-path";
 import { reportAppInstallOnce, setupPwaInstallListener } from "@/lib/report-admin-ops";
 
+if (Platform.OS !== "web") {
+  // Required once before any LiveKit RN usage (WebRTC globals).
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { registerGlobals } = require("@livekit/react-native") as typeof import("@livekit/react-native");
+  registerGlobals();
+}
+
 SplashScreen.preventAutoHideAsync();
 
 const WEB_PUBLIC_OR_SELF_GATED_TOP_SEGMENTS = new Set(["", "welcome", "privacy-policy", "delete-account", "(auth)", "profile-setup", "admin", "staff", "_sitemap"]);

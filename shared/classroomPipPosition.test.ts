@@ -50,4 +50,15 @@ describe("classroom teacher stream meta", () => {
       true
     );
   });
+
+  it("leaves pipPosition undefined when field is missing so DB fallback can apply", () => {
+    const meta = parseClassroomTeacherStreamMeta('{"greenScreen":false,"cameraEnabled":true}');
+    expect(meta.pipPosition).toBeUndefined();
+    expect(meta.greenScreen).toBe(false);
+    expect(meta.cameraEnabled).toBe(true);
+  });
+
+  it("leaves pipPosition undefined for invalid corner values", () => {
+    expect(parseClassroomTeacherStreamMeta('{"pipPosition":"center"}').pipPosition).toBeUndefined();
+  });
 });

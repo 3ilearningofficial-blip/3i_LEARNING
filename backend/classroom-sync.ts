@@ -134,6 +134,9 @@ const AUTO_CHECKPOINT_INTERVAL_MS = Math.max(
   Number(process.env.BOARD_CHECKPOINT_INTERVAL_MS || "120000")
 );
 
+/** Debounced checkpoint after page add/remove (ms). */
+const PAGE_CHANGE_CHECKPOINT_DEBOUNCE_MS = 5_000;
+
 /**
  * R2 object-key prefix for server-generated auto-checkpoints.
  * Only keys with this prefix are restored on server restart.
@@ -272,7 +275,7 @@ function resolveR2ObjectKey(stored: string): string | null {
  * Prefers the newer of server auto-checkpoint (R2 key) vs client-uploaded (https URL).
  * Returns null on any failure — caller falls back to empty board.
  */
-async function loadAutoCheckpointSnapshot(
+export async function loadAutoCheckpointSnapshot(
   db: DbClient,
   liveClassId: string,
   getR2Client: GetR2Client
@@ -472,8 +475,23 @@ async function makeOrLoadRoom(
       // Wire auto-checkpoint: any board change schedules a periodic save.
       // Non-preview rooms only; silently skip if R2 is not configured.
       if (!isPreviewRoom(id) && isR2Configured()) {
+        let lastPageCount = room.getCurrentSnapshot().documents?.length ?? 0;
+        let pageChangeTimer: ReturnType<typeof setTimeout> | null = null;
         storage.onChange(() => {
           scheduleCheckpoint(id, liveClassId, room, db, getR2Client);
+          try {
+            const pageCount = room.getCurrentSnapshot().documents?.length ?? 0;
+            if (pageCount !== lastPageCount) {
+              lastPageCount = pageCount;
+              if (pageChangeTimer) clearTimeout(pageChangeTimer);
+              pageChangeTimer = setTimeout(() => {
+                pageChangeTimer = null;
+                void runCheckpoint(id, liveClassId, room, db, getR2Client);
+              }, PAGE_CHANGE_CHECKPOINT_DEBOUNCE_MS);
+            }
+          } catch {
+            /* ignore page-count probe errors */
+          }
         });
       }
 

@@ -11,6 +11,7 @@ type Options = {
 };
 
 const MAX_BACKOFF_MS = 30000;
+const NATIVE_POLL_MS = 2000;
 
 function unwrapAuthPayload(payload: any): any {
   if (payload?.success === true && payload?.data && typeof payload.data === "object") {
@@ -19,7 +20,35 @@ function unwrapAuthPayload(payload: any): any {
   return payload;
 }
 
-/** Web SSE for poll, timer, and hand-raise updates (PostgreSQL NOTIFY). */
+function invalidateEngagementQueries(
+  qc: ReturnType<typeof useQueryClient>,
+  liveClassId: string,
+  type: string,
+  isAdmin: boolean
+) {
+  if (type === "poll") {
+    void qc.invalidateQueries({ queryKey: ["/api/live-classes", liveClassId, "polls", "active"] });
+    if (isAdmin) {
+      void qc.invalidateQueries({
+        queryKey: ["/api/admin/live-classes", liveClassId, "polls", "session"],
+      });
+    }
+  } else if (type === "timer") {
+    void qc.invalidateQueries({
+      queryKey: ["/api/live-classes", liveClassId, "activity-timer", "active"],
+    });
+  } else if (type === "hand_raise" && isAdmin) {
+    void qc.invalidateQueries({
+      queryKey: [`/api/admin/live-classes/${liveClassId}/raised-hands`],
+    });
+  } else if (type === "viewer" && isAdmin) {
+    void qc.invalidateQueries({
+      queryKey: [`/api/live-classes/${liveClassId}/viewers`],
+    });
+  }
+}
+
+/** SSE (web) or polling (native) for poll, timer, and hand-raise updates. */
 export function useLiveEngagementSse({ liveClassId, enabled = true, isAdmin = false }: Options): boolean {
   const qc = useQueryClient();
   const [active, setActive] = useState(false);
@@ -27,9 +56,23 @@ export function useLiveEngagementSse({ liveClassId, enabled = true, isAdmin = fa
   qcRef.current = qc;
 
   useEffect(() => {
-    if (Platform.OS !== "web" || !liveClassId || !enabled) {
+    if (!liveClassId || !enabled) {
       setActive(false);
       return;
+    }
+
+    if (Platform.OS !== "web") {
+      setActive(true);
+      const pollTypes = ["poll", "timer", ...(isAdmin ? ["hand_raise", "viewer"] : [])];
+      const t = setInterval(() => {
+        for (const type of pollTypes) {
+          invalidateEngagementQueries(qcRef.current, liveClassId, type, isAdmin);
+        }
+      }, NATIVE_POLL_MS);
+      return () => {
+        setActive(false);
+        clearInterval(t);
+      };
     }
 
     let closed = false;
@@ -38,27 +81,7 @@ export function useLiveEngagementSse({ liveClassId, enabled = true, isAdmin = fa
     let backoffMs = 1000;
 
     const invalidateForType = (type: string) => {
-      const id = liveClassId;
-      if (type === "poll") {
-        void qcRef.current.invalidateQueries({ queryKey: ["/api/live-classes", id, "polls", "active"] });
-        if (isAdmin) {
-          void qcRef.current.invalidateQueries({
-            queryKey: ["/api/admin/live-classes", id, "polls", "session"],
-          });
-        }
-      } else if (type === "timer") {
-        void qcRef.current.invalidateQueries({
-          queryKey: ["/api/live-classes", id, "activity-timer", "active"],
-        });
-      } else if (type === "hand_raise" && isAdmin) {
-        void qcRef.current.invalidateQueries({
-          queryKey: [`/api/admin/live-classes/${id}/raised-hands`],
-        });
-      } else if (type === "viewer" && isAdmin) {
-        void qcRef.current.invalidateQueries({
-          queryKey: [`/api/live-classes/${id}/viewers`],
-        });
-      }
+      invalidateEngagementQueries(qcRef.current, liveClassId, type, isAdmin);
     };
 
     const connect = async () => {

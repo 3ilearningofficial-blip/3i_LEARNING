@@ -13,13 +13,13 @@ import {
 } from "react-native";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import * as WebBrowser from "expo-web-browser";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiRequest, authFetch, getApiUrl, getWebUrl } from "@/lib/query-client";
+import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
 import { useAuth } from "@/context/AuthContext";
 import { filterChatMessages } from "@/lib/chat-utils";
 import { useVoiceInput } from "@/lib/useVoiceInput";
 import ClassroomCompositePlayer from "@/components/classroom/ClassroomCompositePlayer";
+import NativeClassroomPlayer from "@/components/classroom/NativeClassroomPlayer";
 import ClassroomLiveOverlays from "@/components/classroom/ClassroomLiveOverlays";
 import ClassroomStudentPortraitShell from "@/components/classroom/ClassroomStudentPortraitShell";
 import LiveClassRecordingTimer from "@/components/LiveClassRecordingTimer";
@@ -50,46 +50,6 @@ type Props = {
   bottomPadding: number;
 };
 
-function NativeClassroomGate({
-  liveClassId,
-  title,
-  topPadding,
-}: {
-  liveClassId: string;
-  title: string;
-  topPadding: number;
-}) {
-  const openInBrowser = useCallback(async () => {
-    const url = `${getWebUrl()}/live-class/${liveClassId}`;
-    try {
-      await WebBrowser.openBrowserAsync(url, {
-        presentationStyle: WebBrowser.WebBrowserPresentationStyle.FULL_SCREEN,
-        enableBarCollapsing: true,
-      });
-    } catch {
-      const { Linking } = await import("react-native");
-      void Linking.openURL(url);
-    }
-  }, [liveClassId]);
-
-  return (
-    <View style={[styles.nativeGate, { paddingTop: topPadding }]}>
-      <Pressable style={styles.backBtn} onPress={() => router.back()}>
-        <Ionicons name="arrow-back" size={20} color="#fff" />
-      </Pressable>
-      <Text style={styles.nativeTitle}>{title}</Text>
-      <Text style={styles.nativeText}>
-        Interactive classroom runs in your mobile browser for reliable live video and chat. Open the
-        class below to use the full portrait experience.
-      </Text>
-      <Pressable style={styles.nativeOpenBtn} onPress={() => void openInBrowser()}>
-        <Ionicons name="open-outline" size={18} color="#fff" />
-        <Text style={styles.nativeOpenBtnText}>Open in browser</Text>
-      </Pressable>
-    </View>
-  );
-}
-
 export default function ClassroomStudentView({
   liveClassId,
   title,
@@ -98,7 +58,7 @@ export default function ClassroomStudentView({
   startedAt,
   isCompleted,
   chatMode = "public",
-  pipPosition,
+  pipPosition: _pipPosition,
   topPadding,
   bottomPadding,
 }: Props) {
@@ -121,7 +81,7 @@ export default function ClassroomStudentView({
 
   useLiveEngagementSse({
     liveClassId,
-    enabled: canChat && Platform.OS === "web",
+    enabled: canChat,
     isAdmin: false,
   });
 
@@ -228,12 +188,11 @@ export default function ClassroomStudentView({
         </View>
       ) : watchComposite ? (
         <>
-          <ClassroomCompositePlayer
-            liveClassId={liveClassId}
-            enabled
-            pipPosition={pipPosition}
-            layout={layout}
-          />
+          {Platform.OS === "web" ? (
+            <ClassroomCompositePlayer liveClassId={liveClassId} enabled layout={layout} />
+          ) : (
+            <NativeClassroomPlayer liveClassId={liveClassId} enabled />
+          )}
           <ClassroomLiveOverlays liveClassId={liveClassId} sessionActive={isLive} />
         </>
       ) : showAsLiveUI || isCompleted ? (
@@ -319,13 +278,7 @@ export default function ClassroomStudentView({
     </View>
   );
 
-  if (Platform.OS !== "web") {
-    return (
-      <NativeClassroomGate liveClassId={liveClassId} title={title} topPadding={topPadding} />
-    );
-  }
-
-  if (isPhonePortrait) {
+  if (isPhonePortrait || Platform.OS !== "web") {
     return (
       <ClassroomStudentPortraitShell
         title={title}
@@ -580,19 +533,4 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   sendDisabled: { opacity: 0.5 },
-  nativeGate: { flex: 1, backgroundColor: "#0A1628", padding: 20 },
-  nativeTitle: { fontSize: 18, fontWeight: "700", color: "#fff", marginTop: 16 },
-  nativeText: { fontSize: 14, color: "#9CA3AF", marginTop: 12, lineHeight: 20 },
-  nativeOpenBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    marginTop: 24,
-    backgroundColor: Colors.light.primary,
-    borderRadius: 12,
-    paddingVertical: 14,
-    paddingHorizontal: 20,
-  },
-  nativeOpenBtnText: { fontSize: 15, fontWeight: "700", color: "#fff" },
 });

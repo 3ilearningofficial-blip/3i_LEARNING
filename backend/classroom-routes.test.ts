@@ -20,6 +20,8 @@ vi.mock("./livekit-sdk", () => ({
 
 import { getLiveKitConfig } from "./livekit-sdk";
 
+const mockGetR2Client = vi.fn(async () => ({}));
+
 function mockDb(overrides: { liveClass?: any } = {}) {
   const lc = overrides.liveClass ?? {
     id: 1,
@@ -40,19 +42,24 @@ function mockDb(overrides: { liveClass?: any } = {}) {
   };
 }
 
+function registerRoutes(app: express.Express, db: ReturnType<typeof mockDb>, getAuthUser = async () => ({ id: 1, name: "Admin", role: "admin" })) {
+  registerClassroomRoutes({
+    app,
+    db: db as any,
+    requireAuth: (_req, _res, next) => next(),
+    requireAdmin: (_req, _res, next) => next(),
+    getAuthUser,
+    recomputeAllEnrollmentsProgressForCourse: async () => {},
+    getR2Client: mockGetR2Client,
+  });
+}
+
 describe("classroom board checkpoint", () => {
   it("PUT checkpoint requires checkpointUrl", async () => {
     const app = express();
     app.use(express.json());
     const db = mockDb();
-    registerClassroomRoutes({
-      app,
-      db: db as any,
-      requireAuth: (_req, _res, next) => next(),
-      requireAdmin: (_req, _res, next) => next(),
-      getAuthUser: async () => ({ id: 1, name: "Admin", role: "admin" }),
-      recomputeAllEnrollmentsProgressForCourse: async () => {},
-    });
+    registerRoutes(app, db);
     const server = createServer(app);
     await new Promise<void>((resolve) => server.listen(0, resolve));
     const port = (server.address() as any).port;
@@ -82,14 +89,7 @@ describe("classroom token", () => {
     const app = express();
     app.use(express.json());
     const db = mockDb();
-    registerClassroomRoutes({
-      app,
-      db: db as any,
-      requireAuth: (_req, _res, next) => next(),
-      requireAdmin: (_req, _res, next) => next(),
-      getAuthUser: async () => ({ id: 1, name: "Admin", role: "admin" }),
-      recomputeAllEnrollmentsProgressForCourse: async () => {},
-    });
+    registerRoutes(app, db);
     const server = createServer(app);
     await new Promise<void>((resolve) => server.listen(0, resolve));
     const port = (server.address() as any).port;
@@ -115,14 +115,7 @@ describe("classroom token", () => {
     const app = express();
     app.use(express.json());
     const db = mockDb();
-    registerClassroomRoutes({
-      app,
-      db: db as any,
-      requireAuth: (_req, _res, next) => next(),
-      requireAdmin: (_req, _res, next) => next(),
-      getAuthUser: async () => ({ id: 2, name: "Student", role: "student" }),
-      recomputeAllEnrollmentsProgressForCourse: async () => {},
-    });
+    registerRoutes(app, db, async () => ({ id: 2, name: "Student", role: "student" }));
     const server = createServer(app);
     await new Promise<void>((resolve) => server.listen(0, resolve));
     const port = (server.address() as any).port;

@@ -1,9 +1,16 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { View, Text, StyleSheet, Pressable, Platform, ActivityIndicator } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useClassroomToken } from "@/lib/classroom/useClassroomToken";
 import { useLiveKitRoom } from "@/lib/classroom/useLiveKitRoom";
 import { primeHandRaiseAudio } from "@/lib/playHandRaiseChime";
+import {
+  loadClassroomMediaDevices,
+  saveClassroomMediaDevices,
+  normalizePipPosition,
+  type ClassroomPipPosition,
+} from "@/lib/classroom/mediaDevices";
+import { apiRequest } from "@/lib/query-client";
 import Colors from "@/constants/colors";
 
 import type { Room } from "livekit-client";
@@ -14,13 +21,20 @@ type Props = {
   enabled?: boolean;
   boardEl?: HTMLElement | null;
   editor?: Editor | null;
+  liveClassPipPosition?: string;
   onRoomReady?: (room: Room | null) => void;
   onCompositeStream?: (stream: MediaStream | null) => void;
   onBoardStreamingChange?: (streaming: boolean) => void;
 };
 
+const PIP_CORNERS: { pos: ClassroomPipPosition; label: string }[] = [
+  { pos: "top-left", label: "TL" },
+  { pos: "top-right", label: "TR" },
+  { pos: "bottom-left", label: "BL" },
+  { pos: "bottom-right", label: "BR" },
+];
+
 // "contain" shows the full teacher (not cropped) in the admin preview panel.
-// This matches what students receive: a full-body view or a full-board green-screen overlay.
 const videoStyle = { width: "100%", height: "100%", objectFit: "contain" as const, backgroundColor: "#000" };
 
 export default function TeacherVideoPanel({
@@ -28,6 +42,7 @@ export default function TeacherVideoPanel({
   enabled = true,
   boardEl = null,
   editor = null,
+  liveClassPipPosition,
   onRoomReady,
   onCompositeStream,
   onBoardStreamingChange,
@@ -43,9 +58,22 @@ export default function TeacherVideoPanel({
     setLocalVideoEl,
     toggleMic,
     toggleCam,
+    republishTeacherStreamMeta,
     room,
-  } = useLiveKitRoom(tokenPayload, enabled && Platform.OS === "web", boardEl, editor);
+  } = useLiveKitRoom(
+    tokenPayload,
+    enabled && Platform.OS === "web",
+    boardEl,
+    editor,
+    liveClassPipPosition
+  );
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [pipPosition, setPipPosition] = useState<ClassroomPipPosition>("bottom-left");
+
+  useEffect(() => {
+    const prefs = loadClassroomMediaDevices();
+    setPipPosition(normalizePipPosition(prefs.pipPosition ?? liveClassPipPosition));
+  }, [liveClassPipPosition]);
 
   useEffect(() => {
     if (Platform.OS === "web" && videoRef.current && connected && camEnabled) {
@@ -65,6 +93,16 @@ export default function TeacherVideoPanel({
   useEffect(() => {
     onBoardStreamingChange?.(boardStreaming);
   }, [boardStreaming, onBoardStreamingChange]);
+
+  const selectPipPosition = (next: ClassroomPipPosition) => {
+    setPipPosition(next);
+    const prefs = loadClassroomMediaDevices();
+    saveClassroomMediaDevices({ ...prefs, pipPosition: next });
+    void apiRequest("PUT", `/api/admin/live-classes/${liveClassId}`, { pipPosition: next }).catch(
+      () => {}
+    );
+    void republishTeacherStreamMeta(next);
+  };
 
   if (Platform.OS !== "web") {
     return (
@@ -110,13 +148,28 @@ export default function TeacherVideoPanel({
           />
         </Pressable>
       </View>
+      <View style={styles.pipBlock}>
+        <Text style={styles.pipLabel}>Student PiP corner</Text>
+        <View style={styles.segment}>
+          {PIP_CORNERS.map(({ pos, label }) => (
+            <Pressable
+              key={pos}
+              style={[styles.segmentBtn, pipPosition === pos && styles.segmentBtnOn]}
+              onPress={() => selectPipPosition(pos)}
+            >
+              <Text style={[styles.segmentText, pipPosition === pos && styles.segmentTextOn]}>
+                {label}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  // Increased from 176px → 260px so full-body teacher is visible in admin preview.
-  wrap: { height: 260, backgroundColor: "#111827", borderRadius: 10, overflow: "hidden", marginBottom: 8 },
+  wrap: { backgroundColor: "#111827", borderRadius: 10, overflow: "hidden", marginBottom: 8 },
   cameraLabel: {
     fontSize: 10,
     fontWeight: "700",
@@ -126,7 +179,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingTop: 6,
   },
-  videoBox: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#000" },
+  videoBox: { height: 200, justifyContent: "center", alignItems: "center", backgroundColor: "#000" },
   muted: { color: "#9CA3AF", fontSize: 12, padding: 12 },
   error: { color: "#FCA5A5", fontSize: 11, padding: 8, textAlign: "center" },
   controls: {
@@ -149,4 +202,23 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(252,165,165,0.6)",
   },
+  pipBlock: { paddingHorizontal: 10, paddingBottom: 10, gap: 6 },
+  pipLabel: { fontSize: 10, fontWeight: "700", color: "#9CA3AF", textTransform: "uppercase" },
+  segment: {
+    flexDirection: "row",
+    gap: 4,
+    backgroundColor: "#1F2937",
+    borderRadius: 8,
+    padding: 3,
+  },
+  segmentBtn: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 6,
+    borderRadius: 6,
+  },
+  segmentBtnOn: { backgroundColor: Colors.light.primary },
+  segmentText: { fontSize: 11, fontWeight: "700", color: "#9CA3AF" },
+  segmentTextOn: { color: "#fff" },
 });

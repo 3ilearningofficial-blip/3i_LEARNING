@@ -38,9 +38,11 @@ const pipBaseStyle: React.CSSProperties = {
   minWidth: 96,
   aspectRatio: "3 / 4",
   objectFit: "cover",
-  borderRadius: 8,
   zIndex: 5,
   backgroundColor: "transparent",
+  border: "none",
+  outline: "none",
+  boxShadow: "none",
 };
 
 /** Green-screen teacher band: lower ~45% of the board so writing stays visible up top. */
@@ -66,8 +68,10 @@ function getPipStyleFor(
   const onBottom = position === "bottom-right" || position === "bottom-left";
   return {
     ...pipBaseStyle,
-    ...(onLeft ? { left: 12 } : { right: 12 }),
-    ...(onBottom ? { bottom: bottomInset } : { top: 12 }),
+    width: narrow ? "27%" : pipBaseStyle.width,
+    maxWidth: narrow ? 200 : pipBaseStyle.maxWidth,
+    ...(onLeft ? { left: 8 } : { right: 8 }),
+    ...(onBottom ? { bottom: bottomInset } : { top: 8 }),
   };
 }
 
