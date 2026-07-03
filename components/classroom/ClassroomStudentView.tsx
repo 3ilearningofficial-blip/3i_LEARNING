@@ -112,8 +112,8 @@ export default function ClassroomStudentView({
   const chatInputRef = useRef<TextInput>(null);
   const prevIsLiveRef = useRef(false);
 
-  const isPhonePortrait = height > width && width < 768;
-  const isWideLayout = !isPhonePortrait && (width >= 768 || width > height);
+  const isPhonePortrait = width < 768;
+  const isWideLayout = width >= 768;
   const classIsLive = isTruthyDbFlag(isLive) || isLive === true;
   const canChat = classIsLive && !isCompleted;
   const showLiveHeader = (showAsLiveUI || classIsLive) && !isCompleted;

@@ -98,6 +98,8 @@ export const REQUIRED_COLUMNS: Record<string, string[]> = {
     "board_pages_json",
     "board_sync_checkpoint_url",
     "board_checkpoint_at",
+    "board_client_checkpoint_url",
+    "board_client_checkpoint_at",
     "cf_recording_uid",
     "recording_url_normalized",
   ],

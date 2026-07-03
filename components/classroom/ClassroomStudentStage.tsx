@@ -1,11 +1,11 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { View, StyleSheet, Platform } from "react-native";
 import { DEFAULT_PIP_POSITION, normalizePipPosition, type ClassroomPipPosition } from "@/lib/classroom/mediaDevices";
 import { startStudentChromaOverlay } from "@/lib/classroom/studentChromaOverlay";
 
 type Props = {
-  boardVideoRef: React.RefObject<HTMLVideoElement | null>;
-  cameraVideoRef: React.RefObject<HTMLVideoElement | null>;
+  onBoardVideoEl?: (el: HTMLVideoElement | null) => void;
+  onCameraVideoEl?: (el: HTMLVideoElement | null) => void;
   /** Corner where the teacher PiP sits; matches the recording composite. */
   pipPosition?: ClassroomPipPosition;
   /** From LiveKit teacher metadata — student re-keys raw camera locally. */
@@ -71,46 +71,34 @@ function getPipStyleFor(
   };
 }
 
-function isFullBoardAspect(video: HTMLVideoElement): boolean {
-  if (video.videoWidth <= 0 || video.videoHeight <= 0) return false;
-  const aspect = video.videoWidth / video.videoHeight;
-  return aspect > 1.6 && aspect < 1.9;
-}
-
 /**
  * Student live stage: board full-bleed + teacher overlay.
  * Green screen: raw camera is keyed on a canvas (alpha preserved over the board).
  */
 export default function ClassroomStudentStage({
-  boardVideoRef,
-  cameraVideoRef,
+  onBoardVideoEl,
+  onCameraVideoEl,
   pipPosition = DEFAULT_PIP_POSITION,
   greenScreen = false,
   cameraVisible = true,
   controlsOnVideo = true,
 }: Props) {
   const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const cameraVideoElRef = useRef<HTMLVideoElement | null>(null);
+  const normalizedPip = normalizePipPosition(pipPosition);
   const [pipStyle, setPipStyle] = useState<React.CSSProperties>(() =>
-    getPipStyleFor(normalizePipPosition(pipPosition), { controlsOnVideo }),
+    getPipStyleFor(normalizedPip, { controlsOnVideo }),
   );
-  const [useChromaOverlay, setUseChromaOverlay] = useState(greenScreen);
-  const [fullOverlay, setFullOverlay] = useState(greenScreen);
-
-  useEffect(() => {
-    if (!cameraVisible) {
-      setUseChromaOverlay(false);
-      setFullOverlay(false);
-    }
-  }, [cameraVisible]);
+  const useChromaOverlay = greenScreen === true;
+  const fullOverlay = greenScreen === true;
 
   useEffect(() => {
     if (Platform.OS !== "web" || typeof window === "undefined") {
-      setPipStyle(getPipStyleFor(normalizePipPosition(pipPosition), { controlsOnVideo }));
+      setPipStyle(getPipStyleFor(normalizedPip, { controlsOnVideo }));
       return;
     }
 
-    const update = () =>
-      setPipStyle(getPipStyleFor(normalizePipPosition(pipPosition), { controlsOnVideo }));
+    const update = () => setPipStyle(getPipStyleFor(normalizedPip, { controlsOnVideo }));
     update();
     window.addEventListener("resize", update);
     const mq = window.matchMedia("(orientation: landscape)");
@@ -119,67 +107,43 @@ export default function ClassroomStudentStage({
       window.removeEventListener("resize", update);
       mq.removeEventListener("change", update);
     };
-  }, [pipPosition, controlsOnVideo]);
-
-  useEffect(() => {
-    if (Platform.OS !== "web" || !cameraVisible) return;
-    const el = cameraVideoRef.current;
-    if (!el) return;
-
-    const check = () => {
-      const gs = greenScreen || isFullBoardAspect(el);
-      setUseChromaOverlay(gs);
-      setFullOverlay(gs);
-    };
-    el.addEventListener("loadedmetadata", check);
-    if (el.readyState >= 1) check();
-    return () => el.removeEventListener("loadedmetadata", check);
-  }, [cameraVideoRef, greenScreen, cameraVisible]);
+  }, [normalizedPip, controlsOnVideo]);
 
   useEffect(() => {
     if (Platform.OS !== "web" || !cameraVisible || !useChromaOverlay) return;
-    const source = cameraVideoRef.current;
+    const source = cameraVideoElRef.current;
     const canvas = overlayCanvasRef.current;
     if (!source || !canvas) return;
-    return startStudentChromaOverlay(source, canvas, { fullOverlay: fullOverlay });
-  }, [cameraVideoRef, useChromaOverlay, fullOverlay, cameraVisible]);
+    return startStudentChromaOverlay(source, canvas, { fullOverlay });
+  }, [useChromaOverlay, fullOverlay, cameraVisible]);
+
+  const bindCameraRef = useCallback(
+    (el: HTMLVideoElement | null) => {
+      cameraVideoElRef.current = el;
+      onCameraVideoEl?.(el);
+    },
+    [onCameraVideoEl]
+  );
 
   if (Platform.OS !== "web") return null;
 
-  const showCameraOverlay = cameraVisible;
   const chromaOverlayStyle = fullOverlay ? bottomOverlayStyle : pipStyle;
+  const cameraDisplayStyle = !cameraVisible
+    ? hiddenVideoStyle
+    : useChromaOverlay
+      ? hiddenVideoStyle
+      : pipStyle;
 
   return (
     <View style={styles.wrap}>
-      <video
-        ref={boardVideoRef as React.RefObject<HTMLVideoElement>}
-        autoPlay
-        playsInline
-        style={boardStyle}
-      />
-      {showCameraOverlay ? (
-        <>
-          <video
-            ref={cameraVideoRef as React.RefObject<HTMLVideoElement>}
-            autoPlay
-            playsInline
-            style={useChromaOverlay ? hiddenVideoStyle : fullOverlay ? chromaOverlayStyle : pipStyle}
-          />
-          {useChromaOverlay ? (
-            <canvas
-              ref={overlayCanvasRef as React.RefObject<HTMLCanvasElement>}
-              style={chromaOverlayStyle}
-            />
-          ) : null}
-        </>
-      ) : (
-        <video
-          ref={cameraVideoRef as React.RefObject<HTMLVideoElement>}
-          autoPlay
-          playsInline
-          style={hiddenVideoStyle}
+      <video ref={onBoardVideoEl} autoPlay playsInline style={boardStyle} />
+      <video ref={bindCameraRef} autoPlay playsInline style={cameraDisplayStyle} />
+      {cameraVisible && useChromaOverlay ? (
+        <canvas
+          ref={overlayCanvasRef as React.RefObject<HTMLCanvasElement>}
+          style={chromaOverlayStyle}
         />
-      )}
+      ) : null}
     </View>
   );
 }

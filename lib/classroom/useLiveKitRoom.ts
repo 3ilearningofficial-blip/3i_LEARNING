@@ -393,6 +393,7 @@ export function useLiveKitRoom(
     };
 
     room.on(RoomEvent.TrackSubscribed, onRemoteTracksChanged);
+    room.on(RoomEvent.TrackPublished, onRemoteTracksChanged);
     room.on(LIVEKIT_TRACK_UNPUBLISHED as RoomEvent, onRemoteTracksChanged);
     room.on(LIVEKIT_TRACK_MUTED as RoomEvent, onTrackMuted);
     room.on(LIVEKIT_TRACK_UNMUTED as RoomEvent, onTrackUnmuted);
@@ -456,6 +457,7 @@ export function useLiveKitRoom(
         reconnectTimerRef.current = null;
       }
       room.off(RoomEvent.TrackSubscribed, onRemoteTracksChanged);
+      room.off(RoomEvent.TrackPublished, onRemoteTracksChanged);
       room.off(LIVEKIT_TRACK_UNPUBLISHED as RoomEvent, onRemoteTracksChanged);
       room.off(LIVEKIT_TRACK_MUTED as RoomEvent, onTrackMuted);
       room.off(LIVEKIT_TRACK_UNMUTED as RoomEvent, onTrackUnmuted);

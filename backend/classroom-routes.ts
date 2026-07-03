@@ -146,9 +146,14 @@ export function registerClassroomRoutes({
       try {
         const lc = await loadLiveClass(db, String(req.params.id));
         if (!lc) return res.status(404).json({ message: "Live class not found" });
+        const clientUrl = String(lc.board_client_checkpoint_url || "").trim();
+        const serverUrl = String(lc.board_sync_checkpoint_url || "").trim();
+        const clientAt = Number(lc.board_client_checkpoint_at) || 0;
+        const serverAt = Number(lc.board_checkpoint_at) || 0;
+        const useClient = clientUrl && clientAt >= serverAt;
         res.json({
-          checkpointUrl: lc.board_sync_checkpoint_url || null,
-          checkpointAt: lc.board_checkpoint_at || null,
+          checkpointUrl: useClient ? clientUrl : serverUrl || clientUrl || null,
+          checkpointAt: useClient ? clientAt : serverAt || clientAt || null,
         });
       } catch (err: any) {
         console.error("[Classroom] get checkpoint error:", err?.message || err);
@@ -171,7 +176,7 @@ export function registerClassroomRoutes({
 
         const t = Date.now();
         await db.query(
-          `UPDATE live_classes SET board_sync_checkpoint_url = $1, board_checkpoint_at = $2 WHERE id = $3`,
+          `UPDATE live_classes SET board_client_checkpoint_url = $1, board_client_checkpoint_at = $2 WHERE id = $3`,
           [checkpointUrl, t, liveClassId]
         );
         res.json({ ok: true, checkpointUrl, checkpointAt: t });

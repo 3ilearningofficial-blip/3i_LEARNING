@@ -2,6 +2,11 @@
  * classroom-sync.ts
  * WebSocket sync server for tldraw collaborative whiteboard during live classroom sessions.
  *
+ * Cluster note: pm2 runs multiple HTTP workers; sync rooms live in one process's memory.
+ * Use nginx sticky sessions on the classroom WebSocket upgrade path, or route sync to a
+ * single worker, so admin refresh always hits the same in-memory room when possible.
+ * Auto-checkpoints to R2 cover reconnects that land on a different worker.
+ *
  * Changes from original:
  *  - attachClassroomSyncServer now accepts getR2Client so it can persist board snapshots.
  *  - makeOrLoadRoom is now async; it attempts to restore the latest auto-checkpoint from R2
@@ -226,13 +231,46 @@ async function uploadSnapshotToR2(
   }
 }
 
-// ── Checkpoint load on room creation ──────────────────────────────────────────
+/**
+ * Download and parse a RoomSnapshot JSON from a public https URL (client checkpoint).
+ */
+async function fetchSnapshotFromHttp(url: string): Promise<RoomSnapshot | null> {
+  try {
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) return null;
+    return (await res.json()) as RoomSnapshot;
+  } catch (err: any) {
+    console.warn("[classroom-checkpoint] HTTP GET failed:", err?.message || String(err));
+    return null;
+  }
+}
+
+/** Normalize a stored checkpoint reference (R2 key or public https URL) to an R2 object key. */
+function resolveR2ObjectKey(stored: string): string | null {
+  const s = stored.trim();
+  if (!s) return null;
+  if (s.startsWith(AUTO_CHECKPOINT_KEY_PREFIX)) return s;
+  if (/^https?:\/\//i.test(s)) {
+    try {
+      const pathname = decodeURIComponent(new URL(s).pathname);
+      const markerIdx = pathname.indexOf(AUTO_CHECKPOINT_KEY_PREFIX);
+      if (markerIdx >= 0) {
+        return pathname.slice(markerIdx).replace(/^\//, "");
+      }
+      const base = pathname.replace(/^\//, "");
+      if (base.endsWith(".json")) return base;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 
 /**
- * Read the latest auto-checkpoint key from the DB and fetch its snapshot from R2.
- * Only restores keys that start with AUTO_CHECKPOINT_KEY_PREFIX — frontend-uploaded
- * checkpoint URLs have a different format and are left alone.
- * Returns null on any failure (missing row, wrong prefix, R2 error, parse error).
+ * Read the latest checkpoint from the DB and fetch its snapshot.
+ * Prefers the newer of server auto-checkpoint (R2 key) vs client-uploaded (https URL).
+ * Returns null on any failure — caller falls back to empty board.
  */
 async function loadAutoCheckpointSnapshot(
   db: DbClient,
@@ -242,23 +280,56 @@ async function loadAutoCheckpointSnapshot(
   if (!isR2Configured()) return null;
   try {
     const result = await db.query(
-      "SELECT board_sync_checkpoint_url FROM live_classes WHERE id = $1",
+      `SELECT board_sync_checkpoint_url, board_checkpoint_at,
+              board_client_checkpoint_url, board_client_checkpoint_at
+       FROM live_classes WHERE id = $1`,
       [liveClassId]
     );
     const row = result.rows[0];
     if (!row) return null;
-    const storedUrl = String(row.board_sync_checkpoint_url || "");
-    if (!storedUrl.startsWith(AUTO_CHECKPOINT_KEY_PREFIX)) return null;
-    console.log(
-      `[classroom-checkpoint] Restoring class=${liveClassId} key=${storedUrl}`
-    );
-    const snapshot = await fetchSnapshotFromR2(getR2Client, storedUrl);
-    if (snapshot) {
-      console.log(
-        `[classroom-checkpoint] Restored class=${liveClassId} docs=${snapshot.documents?.length ?? 0}`
-      );
+
+    const serverUrl = String(row.board_sync_checkpoint_url || "");
+    const clientUrl = String(row.board_client_checkpoint_url || "");
+    const serverAt = Number(row.board_checkpoint_at) || 0;
+    const clientAt = Number(row.board_client_checkpoint_at) || 0;
+    const useClient = clientUrl && clientAt >= serverAt;
+
+    if (useClient) {
+      console.log(`[classroom-checkpoint] Restoring class=${liveClassId} client url`);
+      const fromHttp = await fetchSnapshotFromHttp(clientUrl);
+      if (fromHttp) {
+        console.log(
+          `[classroom-checkpoint] Restored class=${liveClassId} docs=${fromHttp.documents?.length ?? 0}`
+        );
+        return fromHttp;
+      }
+      const clientKey = resolveR2ObjectKey(clientUrl);
+      if (clientKey) {
+        const fromR2 = await fetchSnapshotFromR2(getR2Client, clientKey);
+        if (fromR2) return fromR2;
+      }
     }
-    return snapshot;
+
+    if (serverUrl) {
+      const serverKey = resolveR2ObjectKey(serverUrl);
+      if (serverKey) {
+        console.log(`[classroom-checkpoint] Restoring class=${liveClassId} key=${serverKey}`);
+        const snapshot = await fetchSnapshotFromR2(getR2Client, serverKey);
+        if (snapshot) {
+          console.log(
+            `[classroom-checkpoint] Restored class=${liveClassId} docs=${snapshot.documents?.length ?? 0}`
+          );
+          return snapshot;
+        }
+      }
+    }
+
+    if (!useClient && clientUrl) {
+      const fromHttp = await fetchSnapshotFromHttp(clientUrl);
+      if (fromHttp) return fromHttp;
+    }
+
+    return null;
   } catch (err: any) {
     console.warn("[classroom-checkpoint] Load error:", err?.message || String(err));
     return null;
@@ -476,7 +547,25 @@ async function teardownRoomIfAllowed(
       | { is_live?: boolean | number; is_completed?: boolean | number }
       | undefined;
     if (lc && Boolean(lc.is_live) && !Boolean(lc.is_completed)) {
-      // Class is still live — keep room alive, do not tear down.
+      // Class is still live — keep room in memory but flush a checkpoint so another
+      // cluster worker can restore if this admin reconnects on a different instance.
+      const state = checkpointStates.get(roomId);
+      if (state) {
+        if (state.timer !== null) {
+          clearTimeout(state.timer);
+          state.timer = null;
+        }
+        try {
+          await Promise.race([
+            runCheckpoint(roomId, liveClassId, roomInstance, db, getR2Client),
+            new Promise<void>((resolve) =>
+              setTimeout(resolve, AUTO_CHECKPOINT_TEARDOWN_TIMEOUT_MS)
+            ),
+          ]);
+        } catch {
+          /* ignore — must not block session removal */
+        }
+      }
       return;
     }
   } catch (e) {

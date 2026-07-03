@@ -20,6 +20,11 @@ type Props = {
   layout?: "default" | "portraitTop";
 };
 
+function resolveFrameDomNode(liveClassId: string): HTMLElement | null {
+  if (typeof document === "undefined") return null;
+  return document.getElementById(`classroom-player-frame-${liveClassId}`) as HTMLElement | null;
+}
+
 /** Full-area LiveKit player for students (board + responsive teacher PiP + audio). */
 export default function ClassroomCompositePlayer({
   liveClassId,
@@ -39,16 +44,50 @@ export default function ClassroomCompositePlayer({
     teacherCameraActive,
   } = useLiveKitRoom(tokenPayload, enabled && Platform.OS === "web");
   const boardRef = useRef<HTMLVideoElement | null>(null);
-  const cameraRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const frameRef = useRef<View>(null);
+  const frameDomRef = useRef<HTMLElement | null>(null);
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+
+  const onBoardVideoEl = useCallback(
+    (el: HTMLVideoElement | null) => {
+      boardRef.current = el;
+      if (el) setRemoteBoardEl(el);
+    },
+    [setRemoteBoardEl]
+  );
+
+  const onCameraVideoEl = useCallback(
+    (el: HTMLVideoElement | null) => {
+      if (el) setRemoteCameraEl(el);
+    },
+    [setRemoteCameraEl]
+  );
+
+  const setFrameRef = useCallback(
+    (node: View | null) => {
+      if (Platform.OS !== "web") return;
+      frameDomRef.current =
+        (node as unknown as HTMLElement | null) || resolveFrameDomNode(liveClassId);
+    },
+    [liveClassId]
+  );
 
   const getFullscreenElement = useCallback((): Element | null => {
     if (typeof document === "undefined") return null;
     const doc = document as Document & { webkitFullscreenElement?: Element };
     return doc.fullscreenElement || doc.webkitFullscreenElement || null;
+  }, []);
+
+  const enterIosVideoFullscreen = useCallback(() => {
+    const video = boardRef.current;
+    const iosFs =
+      video && (video as HTMLVideoElement & { webkitEnterFullscreen?: () => void }).webkitEnterFullscreen;
+    if (iosFs) {
+      iosFs.call(video);
+      void lockLandscapeForPlayback();
+      setIsFullscreen(true);
+    }
   }, []);
 
   const toggleFullscreen = useCallback(() => {
@@ -63,24 +102,39 @@ export default function ClassroomCompositePlayer({
       void exit?.();
       return;
     }
-    const frame = frameRef.current as unknown as HTMLElement | null;
-    if (!frame) return;
+
+    const frame =
+      frameDomRef.current ||
+      resolveFrameDomNode(liveClassId) ||
+      (boardRef.current?.parentElement as HTMLElement | null);
+    if (!frame) {
+      enterIosVideoFullscreen();
+      return;
+    }
+
     const req =
       frame.requestFullscreen?.bind(frame) ||
-      (frame as HTMLElement & { webkitRequestFullscreen?: () => Promise<void> })
-        .webkitRequestFullscreen?.bind(frame);
-    if (!req) return;
-    void req()
-      .then(() => void lockLandscapeForPlayback())
-      .catch(() => {
-        const video = boardRef.current;
-        const iosFs = video && (video as HTMLVideoElement & { webkitEnterFullscreen?: () => void }).webkitEnterFullscreen;
-        if (iosFs) {
-          iosFs.call(video);
-          void lockLandscapeForPlayback();
-        }
-      });
-  }, [getFullscreenElement]);
+      (frame as HTMLElement & { webkitRequestFullscreen?: () => void }).webkitRequestFullscreen?.bind(
+        frame
+      );
+    if (!req) {
+      enterIosVideoFullscreen();
+      return;
+    }
+
+    try {
+      const result = req();
+      if (result && typeof (result as Promise<void>).then === "function") {
+        void (result as Promise<void>)
+          .then(() => void lockLandscapeForPlayback())
+          .catch(() => enterIosVideoFullscreen());
+      } else {
+        void lockLandscapeForPlayback();
+      }
+    } catch {
+      enterIosVideoFullscreen();
+    }
+  }, [getFullscreenElement, enterIosVideoFullscreen, liveClassId]);
 
   useEffect(() => {
     if (Platform.OS !== "web" || typeof document === "undefined") return;
@@ -98,12 +152,13 @@ export default function ClassroomCompositePlayer({
     };
   }, [getFullscreenElement]);
 
-  useEffect(() => {
-    if (Platform.OS !== "web") return;
-    if (boardRef.current) setRemoteBoardEl(boardRef.current);
-    if (cameraRef.current) setRemoteCameraEl(cameraRef.current);
-    if (audioRef.current) setRemoteAudioEl(audioRef.current);
-  }, [setRemoteBoardEl, setRemoteCameraEl, setRemoteAudioEl, connected]);
+  const setAudioRef = useCallback(
+    (el: HTMLAudioElement | null) => {
+      audioRef.current = el;
+      if (el) setRemoteAudioEl(el);
+    },
+    [setRemoteAudioEl]
+  );
 
   useEffect(() => {
     if (Platform.OS !== "web" || !connected || !audioRef.current) return;
@@ -128,23 +183,27 @@ export default function ClassroomCompositePlayer({
   const isPortraitTop = layout === "portraitTop";
   const cameraVisible =
     teacherCameraActive && teacherStreamMeta.cameraEnabled !== false;
+  const effectivePipPosition = normalizePipPosition(
+    teacherStreamMeta.pipPosition ?? pipPosition
+  );
 
   return (
     <View style={[styles.wrap, isPortraitTop && styles.wrapPortraitTop]}>
       <View
-        ref={frameRef}
+        ref={setFrameRef}
+        // @ts-expect-error web nativeID maps to DOM id for fullscreen lookup
         nativeID={`classroom-player-frame-${liveClassId}`}
         style={[styles.frame, isPortraitTop && styles.framePortraitTop]}
       >
         <ClassroomStudentStage
-          boardVideoRef={boardRef}
-          cameraVideoRef={cameraRef}
-          pipPosition={normalizePipPosition(teacherStreamMeta.pipPosition ?? pipPosition)}
+          onBoardVideoEl={onBoardVideoEl}
+          onCameraVideoEl={onCameraVideoEl}
+          pipPosition={effectivePipPosition}
           greenScreen={teacherStreamMeta.greenScreen === true}
           cameraVisible={cameraVisible}
           controlsOnVideo={!isPortraitTop}
         />
-        <audio ref={audioRef as React.RefObject<HTMLAudioElement>} autoPlay />
+        <audio ref={setAudioRef as React.Ref<HTMLAudioElement>} autoPlay />
 
         {isLoading || !connected || reconnecting ? (
           <View style={styles.loading}>
