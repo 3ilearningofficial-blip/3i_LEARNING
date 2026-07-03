@@ -1,9 +1,14 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { View, StyleSheet, Platform, ActivityIndicator, Pressable, Text } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { useClassroomToken } from "@/lib/classroom/useClassroomToken";
 import { useLiveKitRoom } from "@/lib/classroom/useLiveKitRoom";
 import ClassroomStudentStage from "@/components/classroom/ClassroomStudentStage";
 import { normalizePipPosition } from "@/lib/classroom/mediaDevices";
+import {
+  lockLandscapeForPlayback,
+  restorePortraitAfterPlayback,
+} from "@/lib/video-playback-orientation";
 import Colors from "@/constants/colors";
 
 type Props = {
@@ -36,7 +41,62 @@ export default function ClassroomCompositePlayer({
   const boardRef = useRef<HTMLVideoElement | null>(null);
   const cameraRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const frameRef = useRef<View>(null);
   const [audioBlocked, setAudioBlocked] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  const getFullscreenElement = useCallback((): Element | null => {
+    if (typeof document === "undefined") return null;
+    const doc = document as Document & { webkitFullscreenElement?: Element };
+    return doc.fullscreenElement || doc.webkitFullscreenElement || null;
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    if (Platform.OS !== "web" || typeof document === "undefined") return;
+    const fsEl = getFullscreenElement();
+    if (fsEl) {
+      const exit =
+        document.exitFullscreen?.bind(document) ||
+        (document as Document & { webkitExitFullscreen?: () => void }).webkitExitFullscreen?.bind(
+          document
+        );
+      void exit?.();
+      return;
+    }
+    const frame = frameRef.current as unknown as HTMLElement | null;
+    if (!frame) return;
+    const req =
+      frame.requestFullscreen?.bind(frame) ||
+      (frame as HTMLElement & { webkitRequestFullscreen?: () => Promise<void> })
+        .webkitRequestFullscreen?.bind(frame);
+    if (!req) return;
+    void req()
+      .then(() => void lockLandscapeForPlayback())
+      .catch(() => {
+        const video = boardRef.current;
+        const iosFs = video && (video as HTMLVideoElement & { webkitEnterFullscreen?: () => void }).webkitEnterFullscreen;
+        if (iosFs) {
+          iosFs.call(video);
+          void lockLandscapeForPlayback();
+        }
+      });
+  }, [getFullscreenElement]);
+
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof document === "undefined") return;
+    const onFs = () => {
+      const active = !!getFullscreenElement();
+      setIsFullscreen(active);
+      if (active) void lockLandscapeForPlayback();
+      else void restorePortraitAfterPlayback();
+    };
+    document.addEventListener("fullscreenchange", onFs);
+    document.addEventListener("webkitfullscreenchange", onFs as EventListener);
+    return () => {
+      document.removeEventListener("fullscreenchange", onFs);
+      document.removeEventListener("webkitfullscreenchange", onFs as EventListener);
+    };
+  }, [getFullscreenElement]);
 
   useEffect(() => {
     if (Platform.OS !== "web") return;
@@ -71,7 +131,11 @@ export default function ClassroomCompositePlayer({
 
   return (
     <View style={[styles.wrap, isPortraitTop && styles.wrapPortraitTop]}>
-      <View style={[styles.frame, isPortraitTop && styles.framePortraitTop]}>
+      <View
+        ref={frameRef}
+        nativeID={`classroom-player-frame-${liveClassId}`}
+        style={[styles.frame, isPortraitTop && styles.framePortraitTop]}
+      >
         <ClassroomStudentStage
           boardVideoRef={boardRef}
           cameraVideoRef={cameraRef}
@@ -96,6 +160,14 @@ export default function ClassroomCompositePlayer({
             <Text style={styles.unmuteText}>Tap to enable sound</Text>
           </Pressable>
         ) : null}
+
+        <Pressable
+          style={styles.fullscreenBtn}
+          onPress={toggleFullscreen}
+          accessibilityLabel={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+        >
+          <Ionicons name={isFullscreen ? "contract-outline" : "scan-outline"} size={20} color="#fff" />
+        </Pressable>
       </View>
     </View>
   );
@@ -151,4 +223,16 @@ const styles = StyleSheet.create({
     borderRadius: 999,
   },
   unmuteText: { color: "#fff", fontSize: 13, fontWeight: "600" },
+  fullscreenBtn: {
+    position: "absolute",
+    top: 10,
+    right: 10,
+    zIndex: 12,
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
 });

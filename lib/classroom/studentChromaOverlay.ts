@@ -6,7 +6,8 @@ function drawImageContain(
   sourceWidth: number,
   sourceHeight: number,
   dw: number,
-  dh: number
+  dh: number,
+  opts?: { bottomAlign?: boolean }
 ) {
   if (sourceWidth <= 0 || sourceHeight <= 0 || dw <= 0 || dh <= 0) return;
   const sourceAspect = sourceWidth / sourceHeight;
@@ -17,10 +18,11 @@ function drawImageContain(
   let dy = 0;
   if (sourceAspect > destAspect) {
     drawH = dw / sourceAspect;
-    dy = (dh - drawH) / 2;
+    dy = opts?.bottomAlign ? dh - drawH : (dh - drawH) / 2;
   } else {
     drawW = dh * sourceAspect;
     dx = (dw - drawW) / 2;
+    if (opts?.bottomAlign) dy = dh - drawH;
   }
   ctx.drawImage(source, dx, dy, drawW, drawH);
 }
@@ -53,7 +55,15 @@ export function startStudentChromaOverlay(
       drawVideoWithChromaKey(sourceVideo, chromaCanvas, chromaCtx);
       outCtx.clearRect(0, 0, displayCanvas.width, displayCanvas.height);
       if (opts?.fullOverlay) {
-        drawImageContain(outCtx, chromaCanvas, chromaCanvas.width, chromaCanvas.height, cw, ch);
+        drawImageContain(
+          outCtx,
+          chromaCanvas,
+          chromaCanvas.width,
+          chromaCanvas.height,
+          cw,
+          ch,
+          { bottomAlign: true }
+        );
       } else {
         outCtx.drawImage(chromaCanvas, 0, 0, cw, ch);
       }

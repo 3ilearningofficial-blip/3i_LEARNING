@@ -70,9 +70,11 @@ export function registerAdminLiveClassManageRoutes({
 
   app.put("/api/admin/live-classes/:id", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const prevRow = await db.query("SELECT id, title, course_id, is_completed FROM live_classes WHERE id = $1", [req.params.id]);
+      const prevRow = await db.query("SELECT id, title, course_id, is_completed, is_live FROM live_classes WHERE id = $1", [req.params.id]);
       const wasCompleted = prevRow.rows[0]?.is_completed === true;
+      const wasLive = prevRow.rows[0]?.is_live === true;
       const { isLive, isCompleted, youtubeUrl, title, description, convertToLecture, sectionTitle, scheduledAt, notifyEmail, notifyBell, isFreePreview, streamType, chatMode, showViewerCount, recordingUrl, cfStreamUid, lectureSectionTitle, lectureSubfolderTitle, pipPosition, subjectKey } = req.body;
+      const classEnding = isCompleted === true || (isLive === false && wasLive);
       const normalizedPipPosition =
         pipPosition === undefined ? undefined : normalizePipPosition(pipPosition);
       const updates: string[] = [];
@@ -88,7 +90,7 @@ export function registerAdminLiveClassManageRoutes({
         add("is_completed", false);
         add("ended_at", null);
       }
-      if (isCompleted === true || isLive === false) add("ended_at", Date.now());
+      if (classEnding) add("ended_at", Date.now());
       if (youtubeUrl !== undefined) add("youtube_url", youtubeUrl);
       if (title !== undefined) add("title", title);
       if (description !== undefined) add("description", description);
@@ -322,7 +324,7 @@ export function registerAdminLiveClassManageRoutes({
           .catch(() => {});
       }
 
-      if (isCompleted === true || isLive === false) {
+      if (classEnding) {
         await db
           .query(
             `UPDATE live_classes 
@@ -369,7 +371,7 @@ export function registerAdminLiveClassManageRoutes({
       // Clean up engagement rows when a class ends.
       // live_class_viewers and live_class_hand_raises accumulate permanently
       // if not purged — each class × each student adds a row forever.
-      if (isCompleted === true || isLive === false) {
+      if (classEnding) {
         await db
           .query("DELETE FROM live_class_viewers WHERE live_class_id = $1", [req.params.id])
           .catch(() => {});
@@ -378,7 +380,7 @@ export function registerAdminLiveClassManageRoutes({
           .catch(() => {});
       }
 
-      if ((isCompleted === true || isLive === false) && !wasCompleted && liveClass) {
+      if (classEnding && !wasCompleted && liveClass) {
         await notifyAdminsLiveClassCompleted(db, liveClass).catch((err) =>
           console.error("[GoLive] admin completion notify failed:", err)
         );

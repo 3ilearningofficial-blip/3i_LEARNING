@@ -43,11 +43,13 @@ const pipBaseStyle: React.CSSProperties = {
   backgroundColor: "transparent",
 };
 
-const overlayStyle: React.CSSProperties = {
+/** Green-screen teacher band: lower ~45% of the board so writing stays visible up top. */
+const bottomOverlayStyle: React.CSSProperties = {
   position: "absolute",
-  inset: 0,
-  width: "100%",
-  height: "100%",
+  left: 0,
+  right: 0,
+  bottom: 0,
+  height: "45%",
   zIndex: 5,
   backgroundColor: "transparent",
   pointerEvents: "none",
@@ -145,6 +147,7 @@ export default function ClassroomStudentStage({
   if (Platform.OS !== "web") return null;
 
   const showCameraOverlay = cameraVisible;
+  const chromaOverlayStyle = fullOverlay ? bottomOverlayStyle : pipStyle;
 
   return (
     <View style={styles.wrap}>
@@ -160,12 +163,12 @@ export default function ClassroomStudentStage({
             ref={cameraVideoRef as React.RefObject<HTMLVideoElement>}
             autoPlay
             playsInline
-            style={useChromaOverlay ? hiddenVideoStyle : fullOverlay ? overlayStyle : pipStyle}
+            style={useChromaOverlay ? hiddenVideoStyle : fullOverlay ? chromaOverlayStyle : pipStyle}
           />
           {useChromaOverlay ? (
             <canvas
               ref={overlayCanvasRef as React.RefObject<HTMLCanvasElement>}
-              style={fullOverlay ? overlayStyle : pipStyle}
+              style={chromaOverlayStyle}
             />
           ) : null}
         </>

@@ -40,6 +40,7 @@ type Props = {
   onChatMsgChange: (text: string) => void;
   onSend: () => void;
   sendPending: boolean;
+  chatError?: string;
   displayMessages: ChatMsg[];
   listRef: RefObject<FlatList<ChatMsg> | null>;
   chatInputRef: RefObject<TextInput | null>;
@@ -73,6 +74,7 @@ export default function ClassroomStudentPortraitShell({
   onChatMsgChange,
   onSend,
   sendPending,
+  chatError,
   displayMessages,
   listRef,
   chatInputRef,
@@ -199,6 +201,7 @@ export default function ClassroomStudentPortraitShell({
             <Ionicons name="send" size={18} color="#fff" />
           </Pressable>
         </View>
+        {chatError ? <Text style={styles.chatErrorText}>{chatError}</Text> : null}
       </View>
     </KeyboardAvoidingView>
   );
@@ -341,4 +344,10 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   sendDisabled: { opacity: 0.5 },
+  chatErrorText: {
+    fontSize: 12,
+    color: "#DC2626",
+    paddingHorizontal: 12,
+    paddingBottom: 4,
+  },
 });

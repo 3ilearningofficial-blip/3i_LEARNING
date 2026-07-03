@@ -12,9 +12,10 @@ const PIP_HEIGHT = Math.round(PIP_WIDTH * (3 / 4)); // portrait 3:4 so full body
 const PIP_MARGIN = 16;
 const DEFAULT_FPS = 30;
 
-// Camera canvas dimensions when green screen is ON:
-// Full board size lets the teacher stand / move anywhere; the chroma key
-// makes the green background transparent so only the body shows.
+// Green-screen teacher band height (fraction of board height) for recording composite.
+const GS_TEACHER_BAND_FRAC = 0.45;
+
+// Camera canvas dimensions when green screen is ON: full resolution for keying / raw publish.
 const GS_CAM_WIDTH = COMPOSITE_WIDTH;
 const GS_CAM_HEIGHT = COMPOSITE_HEIGHT;
 
@@ -168,7 +169,7 @@ function drawPipLayer(
   outCtx.restore();
 }
 
-/** Green-screen recording: full-board keyed teacher (not corner PiP). */
+/** Green-screen recording: teacher keyed in the lower band (not full board). */
 function drawFullBoardTeacherLayer(
   outCtx: CanvasRenderingContext2D,
   cameraVideo: HTMLVideoElement,
@@ -177,7 +178,9 @@ function drawFullBoardTeacherLayer(
 ) {
   if (cameraVideo.readyState < 2) return;
   drawVideoWithChromaKey(cameraVideo, chromaCanvas, chromaCtx);
-  drawCameraCover(outCtx, chromaCanvas, 0, 0, COMPOSITE_WIDTH, COMPOSITE_HEIGHT);
+  const bandH = Math.round(COMPOSITE_HEIGHT * GS_TEACHER_BAND_FRAC);
+  const bandY = COMPOSITE_HEIGHT - bandH;
+  drawCameraCover(outCtx, chromaCanvas, 0, bandY, COMPOSITE_WIDTH, bandH);
 }
 
 async function openCameraVideo(cameraId?: string): Promise<HTMLVideoElement> {

@@ -158,7 +158,11 @@ export default function ClassroomStudentView({
 
   const sendMutation = useMutation({
     mutationFn: async (message: string) => {
-      await apiRequest("POST", `/api/live-classes/${liveClassId}/chat`, { message });
+      const res = await apiRequest("POST", `/api/live-classes/${liveClassId}/chat`, { message });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { message?: string }).message || "Failed to send message");
+      }
     },
     onSuccess: () => {
       setChatMsg("");
@@ -309,6 +313,9 @@ export default function ClassroomStudentView({
           <Ionicons name="send" size={18} color="#fff" />
         </Pressable>
       </View>
+      {sendMutation.error ? (
+        <Text style={styles.chatErrorText}>{sendMutation.error.message}</Text>
+      ) : null}
     </View>
   );
 
@@ -335,6 +342,7 @@ export default function ClassroomStudentView({
         onChatMsgChange={setChatMsg}
         onSend={handleSend}
         sendPending={sendMutation.isPending}
+        chatError={sendMutation.error?.message}
         displayMessages={displayMessages}
         listRef={listRef}
         chatInputRef={chatInputRef}
@@ -532,6 +540,12 @@ const styles = StyleSheet.create({
   bubbleName: { fontSize: 11, fontWeight: "700", color: Colors.light.primary, marginBottom: 2 },
   bubbleText: { fontSize: 14, color: Colors.light.text },
   emptyChat: { textAlign: "center", color: Colors.light.textMuted, marginTop: 24 },
+  chatErrorText: {
+    fontSize: 12,
+    color: "#DC2626",
+    paddingHorizontal: 12,
+    paddingBottom: 8,
+  },
   chatInputRow: {
     flexDirection: "row",
     gap: 8,

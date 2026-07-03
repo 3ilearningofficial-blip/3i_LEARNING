@@ -145,6 +145,23 @@ export default function ClassroomEngagementPanel({ liveClassId, enabled = true }
 
   const endedPolls = (sessionPolls || []).filter((p) => !p.is_active);
 
+  const trimmedOptions = options.map((o) => o.trim()).filter(Boolean);
+  const durationNum = Number(duration);
+  const canCreatePoll =
+    question.trim().length > 0 &&
+    trimmedOptions.length >= 2 &&
+    Number.isFinite(durationNum) &&
+    durationNum >= 5 &&
+    durationNum <= 600;
+
+  const pollValidationHint = !question.trim()
+    ? "Enter a question"
+    : trimmedOptions.length < 2
+      ? "Add at least 2 options"
+      : !Number.isFinite(durationNum) || durationNum < 5 || durationNum > 600
+        ? "Duration must be 5–600 seconds"
+        : null;
+
   if (Platform.OS !== "web") {
     return <Text style={styles.note}>Polls and timers are available on web.</Text>;
   }
@@ -280,13 +297,19 @@ export default function ClassroomEngagementPanel({ liveClassId, enabled = true }
           keyboardType="number-pad"
         />
       </View>
+      {pollValidationHint && !activePoll ? (
+        <Text style={styles.validationHint}>{pollValidationHint}</Text>
+      ) : null}
       <Pressable
-        style={styles.primaryBtn}
+        style={[styles.primaryBtn, (!canCreatePoll || !!activePoll) && styles.primaryBtnDisabled]}
         onPress={() => void createPoll.mutate()}
-        disabled={createPoll.isPending || !!activePoll}
+        disabled={createPoll.isPending || !!activePoll || !canCreatePoll}
       >
         <Text style={styles.primaryBtnText}>{createPoll.isPending ? "Starting…" : "Start poll"}</Text>
       </Pressable>
+      {createPoll.error ? (
+        <Text style={styles.errorText}>{createPoll.error.message}</Text>
+      ) : null}
     </ScrollView>
   );
 }
@@ -343,7 +366,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 4,
   },
+  primaryBtnDisabled: { opacity: 0.5 },
   primaryBtnText: { color: "#fff", fontWeight: "700", fontSize: 13 },
+  validationHint: { fontSize: 11, color: Colors.light.textMuted, marginBottom: 6 },
+  errorText: { fontSize: 12, color: "#DC2626", marginTop: 4, marginBottom: 8 },
   secondaryBtn: {
     flex: 1,
     borderWidth: 1,

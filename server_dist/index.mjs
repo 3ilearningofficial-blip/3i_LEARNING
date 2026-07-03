@@ -14791,9 +14791,11 @@ function registerAdminLiveClassManageRoutes({
   });
   app2.put("/api/admin/live-classes/:id", requireAdmin2, async (req, res) => {
     try {
-      const prevRow = await db2.query("SELECT id, title, course_id, is_completed FROM live_classes WHERE id = $1", [req.params.id]);
+      const prevRow = await db2.query("SELECT id, title, course_id, is_completed, is_live FROM live_classes WHERE id = $1", [req.params.id]);
       const wasCompleted = prevRow.rows[0]?.is_completed === true;
+      const wasLive = prevRow.rows[0]?.is_live === true;
       const { isLive, isCompleted, youtubeUrl, title, description, convertToLecture, sectionTitle, scheduledAt, notifyEmail, notifyBell, isFreePreview, streamType, chatMode, showViewerCount, recordingUrl, cfStreamUid, lectureSectionTitle, lectureSubfolderTitle, pipPosition, subjectKey } = req.body;
+      const classEnding = isCompleted === true || isLive === false && wasLive;
       const normalizedPipPosition = pipPosition === void 0 ? void 0 : normalizePipPosition(pipPosition);
       const updates = [];
       const params = [];
@@ -14803,8 +14805,12 @@ function registerAdminLiveClassManageRoutes({
       };
       if (isLive !== void 0) add("is_live", isLive);
       if (isCompleted !== void 0) add("is_completed", isCompleted);
-      if (isLive === true) add("started_at", Date.now());
-      if (isCompleted === true || isLive === false) add("ended_at", Date.now());
+      if (isLive === true) {
+        add("started_at", Date.now());
+        add("is_completed", false);
+        add("ended_at", null);
+      }
+      if (classEnding) add("ended_at", Date.now());
       if (youtubeUrl !== void 0) add("youtube_url", youtubeUrl);
       if (title !== void 0) add("title", title);
       if (description !== void 0) add("description", description);
@@ -14923,6 +14929,8 @@ function registerAdminLiveClassManageRoutes({
         };
         syncAdd("is_live", true);
         syncAdd("started_at", Date.now());
+        syncAdd("is_completed", false);
+        syncAdd("ended_at", null);
         if (youtubeUrl !== void 0) syncAdd("youtube_url", youtubeUrl);
         if (streamType !== void 0) syncAdd("stream_type", streamType);
         if (chatMode !== void 0) syncAdd("chat_mode", chatMode);
@@ -14989,7 +14997,7 @@ function registerAdminLiveClassManageRoutes({
         await db2.query("DELETE FROM notifications WHERE title IN ('\u{1F534} Live Class Started!', '\u{1F534} Live Class Starting Now!', '\u23F0 Live Class in 30 minutes!') AND message ILIKE $1", ["%" + liveClass.title + "%"]).catch(() => {
         });
       }
-      if (isCompleted === true || isLive === false) {
+      if (classEnding) {
         await db2.query(
           `UPDATE live_classes 
            SET is_completed = TRUE, is_live = FALSE
@@ -15027,13 +15035,13 @@ function registerAdminLiveClassManageRoutes({
           });
         }
       }
-      if (isCompleted === true || isLive === false) {
+      if (classEnding) {
         await db2.query("DELETE FROM live_class_viewers WHERE live_class_id = $1", [req.params.id]).catch(() => {
         });
         await db2.query("DELETE FROM live_class_hand_raises WHERE live_class_id = $1", [req.params.id]).catch(() => {
         });
       }
-      if ((isCompleted === true || isLive === false) && !wasCompleted && liveClass) {
+      if (classEnding && !wasCompleted && liveClass) {
         await notifyAdminsLiveClassCompleted(db2, liveClass).catch(
           (err) => console.error("[GoLive] admin completion notify failed:", err)
         );
@@ -15660,7 +15668,8 @@ function registerClassroomRoutes({
         room: roomName,
         canPublish: isAdmin,
         canSubscribe: true,
-        canPublishData: true
+        canPublishData: true,
+        canUpdateOwnMetadata: isAdmin
       });
       const token = await at.toJwt();
       res.json({
@@ -19872,7 +19881,8 @@ function setupCors(app2) {
       "X-Requested-With",
       "X-User-Id",
       "X-App-Device-Id",
-      "X-Client-Platform"
+      "X-Client-Platform",
+      "X-Client-Form-Factor"
     ],
     credentials: true,
     exposedHeaders: ["Content-Length", "Content-Type", "Content-Disposition"],

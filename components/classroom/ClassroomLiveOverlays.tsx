@@ -233,6 +233,7 @@ export default function ClassroomLiveOverlays({
                 </Pressable>
               );
             })}
+            {vote.error ? <Text style={styles.pollErrorText}>{vote.error.message}</Text> : null}
           </View>
         </View>
       ) : null}
@@ -332,6 +333,7 @@ const styles = StyleSheet.create({
   },
   pollOptVoted: { borderColor: Colors.light.primary, backgroundColor: "#1E3A5F" },
   pollOptText: { color: "#E2E8F0", fontSize: 13 },
+  pollErrorText: { color: "#FCA5A5", fontSize: 12, marginTop: 6 },
   timerWrap: {
     position: "absolute",
     maxWidth: 220,
