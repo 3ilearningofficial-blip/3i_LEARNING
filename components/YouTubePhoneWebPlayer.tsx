@@ -1,13 +1,18 @@
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { StyleProp, ViewStyle } from "react-native";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
-import { buildYouTubeEmbedHtml } from "@/lib/buildYouTubePhoneWebSrcDoc";
+import {
+  buildNativeYouTubeFallbackHtml,
+  buildNativeYouTubeHtml,
+} from "@/lib/buildNativeYouTubeHtml";
 
-const YOUTUBE_NOCOOKIE_BASE = "https://www.youtube-nocookie.com";
+const YOUTUBE_BASE = "https://www.youtube.com";
 
 type Props = {
   videoId: string;
   resumeAt?: number;
+  /** Clip end seconds (live-class completed recording). */
+  endAt?: number;
   style?: StyleProp<ViewStyle>;
   onLoad?: () => void;
   onError?: () => void;
@@ -15,27 +20,46 @@ type Props = {
   injectedJavaScript?: string;
 };
 
-/** Native Android/iOS: same masked YouTube player as phone web (not IFrame API). */
+/**
+ * Native Android/iOS YouTube player via RN WebView.
+ * Uses YouTube IFrame API (same approach as live-class); falls back to a
+ * simple embed with origin=3ilearning.in if the primary HTML fails to load.
+ */
 export function YouTubePhoneWebPlayer({
   videoId,
   resumeAt = 0,
+  endAt,
   style,
   onLoad,
   onError,
   onMessage,
   injectedJavaScript,
 }: Props) {
-  const html = useMemo(
-    () => buildYouTubeEmbedHtml(videoId, resumeAt),
-    [videoId, resumeAt],
-  );
+  const [useFallback, setUseFallback] = useState(false);
+
+  useEffect(() => {
+    setUseFallback(false);
+  }, [videoId, resumeAt, endAt]);
+
+  const html = useMemo(() => {
+    const opts = { startAt: resumeAt, endAt };
+    return useFallback
+      ? buildNativeYouTubeFallbackHtml(videoId, opts)
+      : buildNativeYouTubeHtml(videoId, opts);
+  }, [videoId, resumeAt, endAt, useFallback]);
 
   return (
     <WebView
-      source={{ html, baseUrl: YOUTUBE_NOCOOKIE_BASE }}
+      source={{ html, baseUrl: YOUTUBE_BASE }}
       style={style}
       onLoad={onLoad}
-      onError={onError}
+      onError={() => {
+        if (!useFallback) {
+          setUseFallback(true);
+          return;
+        }
+        onError?.();
+      }}
       onMessage={onMessage}
       injectedJavaScript={injectedJavaScript}
       allowsFullscreenVideo

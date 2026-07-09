@@ -434,7 +434,14 @@ export default function SupportChatTab() {
   const listBottomPadding = Platform.OS === "web" ? INPUT_BAR_HEIGHT + 12 : tabBarHeight + INPUT_BAR_HEIGHT + 8;
 
   const composer = (
-    <View style={[styles.inputRow, Platform.OS === "web" ? { paddingBottom: 12 } : { paddingBottom: 8 }]}>
+    <View
+      style={[
+        styles.inputRow,
+        Platform.OS === "web"
+          ? { paddingBottom: 12 }
+          : { paddingBottom: Math.max(insets.bottom, 8) },
+      ]}
+    >
       <TextInput
         style={styles.input}
         placeholder="Type your message..."
@@ -531,7 +538,7 @@ export default function SupportChatTab() {
       {Platform.OS === "web" ? (
         composer
       ) : (
-        <KeyboardStickyView offset={{ closed: tabBarHeight, opened: 0 }}>
+        <KeyboardStickyView offset={{ closed: -tabBarHeight, opened: 0 }}>
           {composer}
         </KeyboardStickyView>
       )}
