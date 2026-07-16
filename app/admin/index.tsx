@@ -33,7 +33,7 @@ import AdminBannerPreview from "@/components/admin/AdminBannerPreview";
 import AdminNotificationPreview from "@/components/admin/AdminNotificationPreview";
 import NotificationImage from "@/components/NotificationImage";
 import { resolveNotificationImageUrl } from "@/lib/notificationImageUrl";
-import { adminGoBack } from "@/lib/admin/adminNavigation";
+import { adminGoBack, adminBackToApp } from "@/lib/admin/adminNavigation";
 // Heavy tab components are lazy-loaded: they are never rendered until the user
 // switches to that tab, so deferring their JS parse keeps the initial /admin
 // bundle smaller and speeds up first-paint for the default (welcome) tab.
@@ -4170,7 +4170,7 @@ export default function AdminDashboard() {
                   <Text style={{ fontSize: 12, color: colors.textMuted, fontFamily: "Inter_400Regular" }}>Admin</Text>
                 </View>
               </View>
-              <Pressable onPress={() => { if (router.canGoBack()) router.back(); else router.replace("/(tabs)"); }}
+              <Pressable onPress={() => adminBackToApp(router)}
                 style={{ flexDirection: "row", alignItems: "center", gap: 10, padding: 12, borderRadius: 10, backgroundColor: colors.surfaceAlt }}>
                 <Ionicons name="arrow-back" size={18} color={colors.textMuted} />
                 <Text style={{ fontSize: 15, fontFamily: "Inter_500Medium", color: colors.textSecondary }}>Back to App</Text>
@@ -4226,7 +4226,7 @@ export default function AdminDashboard() {
           <LinearGradient colors={isDarkMode ? ["#020617", "#0F172A"] : ["#0A1628", "#1A2E50"]} style={[styles.header, { paddingTop: topPadding + 8 }]}>
             <View style={styles.headerRow}>
               {Platform.OS !== "web" && (
-                <Pressable style={styles.backBtn} onPress={() => { if (router.canGoBack()) router.back(); else router.replace("/(tabs)"); }}>
+                <Pressable style={styles.backBtn} onPress={() => adminBackToApp(router)}>
                   <Ionicons name="arrow-back" size={20} color="#fff" />
                 </Pressable>
               )}
@@ -4240,7 +4240,7 @@ export default function AdminDashboard() {
                 </Pressable>
               )}
               {Platform.OS === "web" && (
-                <Pressable onPress={() => router.replace("/(tabs)")} style={{ width: 34, height: 34, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.12)", alignItems: "center", justifyContent: "center" }}>
+                <Pressable onPress={() => adminBackToApp(router)} style={{ width: 34, height: 34, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.12)", alignItems: "center", justifyContent: "center" }}>
                   <Ionicons name="arrow-back" size={18} color="#fff" />
                 </Pressable>
               )}

@@ -15,6 +15,7 @@ import { useQuery } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
 import { useAppTheme } from "@/context/AppThemeContext";
 import { getApiUrl, authFetch } from "@/lib/query-client";
+import { adminGoBack } from "@/lib/admin/adminNavigation";
 
 type StudentRow = {
   id?: number;
@@ -263,7 +264,7 @@ export default function AdminEnrollmentStudentDetailScreen() {
   return (
     <View style={[styles.container, { paddingTop: insets.top + 8, backgroundColor: colors.background }]}>
       <View style={styles.topBar}>
-        <Pressable style={styles.backBtn} onPress={() => router.back()} hitSlop={10}>
+        <Pressable style={styles.backBtn} onPress={() => adminGoBack(router)} hitSlop={10}>
           <Ionicons name="arrow-back" size={22} color={Colors.light.text} />
         </Pressable>
         <View style={{ flex: 1, minWidth: 0 }}>

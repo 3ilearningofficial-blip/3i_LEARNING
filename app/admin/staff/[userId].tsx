@@ -8,6 +8,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
 import Colors from "@/constants/colors";
 import { useAppTheme } from "@/context/AppThemeContext";
+import { adminGoBack } from "@/lib/admin/adminNavigation";
 import { StaffProfileSections } from "@/components/staff/StaffProfileSections";
 import { STAFF_PERMISSION_KEYS } from "@/shared/staff-permission-keys";
 import { MULTI_SUBJECTS } from "@/constants/multiSubjects";
@@ -44,7 +45,7 @@ export default function AdminStaffDetailScreen() {
     mutationFn: async () => apiRequest("POST", `/api/admin/staff/${userId}/demote`, {}),
     onSuccess: () => {
       Alert.alert("Demoted", "Staff role removed.");
-      router.back();
+      adminGoBack(router);
     },
   });
 
@@ -90,7 +91,7 @@ export default function AdminStaffDetailScreen() {
 
   return (
     <ScrollView style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={{ padding: 16 }}>
-      <Pressable onPress={() => router.back()} style={styles.back}>
+      <Pressable onPress={() => adminGoBack(router)} style={styles.back}>
         <Ionicons name="arrow-back" size={22} color={colors.text} />
         <Text style={{ color: colors.text, fontFamily: "Inter_600SemiBold" }}>Back</Text>
       </Pressable>

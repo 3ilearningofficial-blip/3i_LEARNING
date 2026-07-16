@@ -6,6 +6,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
 import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
 import { useAppTheme } from "@/context/AppThemeContext";
+import { adminGoBack } from "@/lib/admin/adminNavigation";
 import type { DeviceDeniedUserRow } from "./user-types";
 
 export default function AdminDeviceLocksScreen() {
@@ -38,7 +39,7 @@ export default function AdminDeviceLocksScreen() {
     <View style={{ flex: 1, backgroundColor: colors.background }}>
       <View style={{ paddingTop: Platform.OS === "web" ? 18 : 16, paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: colors.border, backgroundColor: colors.card }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-          <Pressable onPress={() => router.back()} style={{ width: 34, height: 34, borderRadius: 10, backgroundColor: "#EEF2FF", alignItems: "center", justifyContent: "center" }}>
+          <Pressable onPress={() => adminGoBack(router)} style={{ width: 34, height: 34, borderRadius: 10, backgroundColor: "#EEF2FF", alignItems: "center", justifyContent: "center" }}>
             <Ionicons name="arrow-back" size={18} color={Colors.light.primary} />
           </Pressable>
           <View style={{ flex: 1 }}>

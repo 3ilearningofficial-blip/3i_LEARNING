@@ -8,6 +8,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
 import Colors from "@/constants/colors";
 import { useAppTheme } from "@/context/AppThemeContext";
+import { adminGoBack } from "@/lib/admin/adminNavigation";
 
 function useDebounced(value: string, ms = 300) {
   const [debounced, setDebounced] = useState(value);
@@ -72,7 +73,7 @@ export default function AdminStaffNewScreen() {
 
   return (
     <ScrollView style={[styles.container, { backgroundColor: colors.background }]} contentContainerStyle={{ padding: 16 }}>
-      <Pressable onPress={() => router.back()} style={styles.back}>
+      <Pressable onPress={() => adminGoBack(router)} style={styles.back}>
         <Ionicons name="arrow-back" size={22} color={colors.text} />
         <Text style={[styles.backText, { color: colors.text }]}>Back</Text>
       </Pressable>
