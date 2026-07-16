@@ -606,7 +606,11 @@ export function registerLiveStreamRoutes({
   };
   const runArchiveSweepWorker = process.env.RUN_BACKGROUND_SCHEDULERS !== "false";
   if (runArchiveSweepWorker) {
-    const sweepIntervalMs = Math.max(30000, Number(process.env.CF_ARCHIVE_SWEEP_MS || 120000));
+    // Default 15 min (was 2 min): keep the sweep spaced past Neon's ~5 min
+    // auto-suspend window so idle periods actually scale compute to zero.
+    // Archiving is only needed after a Cloudflare live class ends, so a slower
+    // fallback is fine; the burst query still runs when there is work to do.
+    const sweepIntervalMs = Math.max(30000, Number(process.env.CF_ARCHIVE_SWEEP_MS || 900000));
     void runArchiveSweep();
     setInterval(() => {
       void runArchiveSweep();

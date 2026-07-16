@@ -19,9 +19,15 @@ const DOWNLOAD_TOKEN_CLEANUP_LOCK_KEY = 31415926537;
 const STUCK_LIVE_CLEANUP_LOCK_KEY = 31415926538;
 const LIVE_FINALIZE_QUEUE_LOCK_KEY = 31415926539;
 const MEDIA_TOKEN_CLEANUP_LOCK_KEY = 31415926540;
+const SESSION_CLEANUP_LOCK_KEY = 31415926541;
+const RATE_LIMIT_CLEANUP_LOCK_KEY = 31415926542;
 
 const SCHEDULER_MIN_SLEEP_MS = 30_000;
-const SCHEDULER_MAX_SLEEP_MS = 5 * 60 * 1000;
+// Idle max sleep raised to 15 min (was 5 min, which sat right on Neon's
+// auto-suspend boundary). This only applies when there are no pending jobs —
+// the tick still sleeps precisely until the next scheduled_jobs.run_at — so
+// spacing idle ticks >5 min lets Neon compute scale to zero overnight.
+const SCHEDULER_MAX_SLEEP_MS = Math.max(60_000, Number(process.env.SCHEDULER_MAX_SLEEP_MS) || 15 * 60 * 1000);
 const STUCK_LIVE_INTERVAL_MS = 60 * 60 * 1000;
 const TOKEN_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const DOWNLOAD_RETRY_INTERVAL_MS = 15 * 60 * 1000;
@@ -144,6 +150,10 @@ function startAdaptiveSchedulerLoop(db: DbClient, pool: DbPool, sendPushToUsers:
       lastTokenCleanupRun = now;
       await runDownloadTokenCleanup(db, pool);
       await runMediaTokenCleanup(db, pool);
+      // Folded in from connect-pg-simple's own prune timer (now disabled) and
+      // to bound the unbounded express_rate_limit table.
+      await runSessionCleanup(db, pool);
+      await runExpiredRateLimitCleanup(db, pool);
     }
 
     scheduleNext(sleepMs);
@@ -258,6 +268,39 @@ async function runMediaTokenCleanup(db: DbClient, pool: DbPool): Promise<void> {
     });
   } catch (err) {
     console.error("[MediaTokenCleanup] Error:", err);
+  }
+}
+
+async function runSessionCleanup(db: DbClient, pool: DbPool): Promise<void> {
+  try {
+    await runWithAdvisoryLock(pool, SESSION_CLEANUP_LOCK_KEY, async () => {
+      // connect-pg-simple `session` table (migrations/0011). Its own prune timer
+      // is disabled to allow Neon scale-to-zero; prune expired rows here instead.
+      const result = await db.query(`DELETE FROM "session" WHERE expire < NOW()`);
+      if (result.rowCount && result.rowCount > 0) {
+        console.log(`[SessionCleanup] Deleted ${result.rowCount} expired sessions`);
+      }
+    });
+  } catch (err) {
+    console.error("[SessionCleanup] Error:", err);
+  }
+}
+
+async function runExpiredRateLimitCleanup(db: DbClient, pool: DbPool): Promise<void> {
+  try {
+    await runWithAdvisoryLock(pool, RATE_LIMIT_CLEANUP_LOCK_KEY, async () => {
+      // express_rate_limit (migrations/0011) has no automatic pruning; expired
+      // buckets accumulate forever. Delete rows whose window has elapsed.
+      const result = await db.query(
+        `DELETE FROM express_rate_limit WHERE reset_time_ms < $1`,
+        [Date.now()]
+      );
+      if (result.rowCount && result.rowCount > 0) {
+        console.log(`[RateLimitCleanup] Deleted ${result.rowCount} expired rate-limit buckets`);
+      }
+    });
+  } catch (err) {
+    console.error("[RateLimitCleanup] Error:", err);
   }
 }
 

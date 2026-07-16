@@ -6,8 +6,9 @@
 - Apply SQL migrations before deploy: `npm run db:apply-sql` (includes `0027`–`0033`).
 - CI runs `db:apply-sql` + `db:check` on Postgres 16 for every PR to `main`.
 - Regenerate Drizzle schema after DB changes: `npm run db:push` (review `shared/schema.ts` in PRs).
-- Redis (`REDIS_URL`): optional live-class notification dedup. Express rate limits default to PostgreSQL (`RATE_LIMIT_STORE=pg`) so auth is not blocked by Redis quota exhaustion.
+- Redis (`REDIS_URL`): optional live-class notification dedup. Auth/OTP/media rate limits default to PostgreSQL (`RATE_LIMIT_STORE=pg`) so auth is not blocked by Redis quota exhaustion. The high-volume global `/api` limiter defaults to in-memory (`GLOBAL_RATE_LIMIT_STORE=memory`) to avoid a PG write per request.
 - Large uploads: use presigned R2 client upload only; `POST /api/upload/to-r2` returns 410.
+- Neon scale-to-zero (cost): Neon suspends compute only after ~5 min with zero queries. Keep every recurring background DB pinger spaced `>5 min` apart — currently the scheduler idle tick (`SCHEDULER_MAX_SLEEP_MS`, default 15 min), the Cloudflare archive sweep (`CF_ARCHIVE_SWEEP_MS`, default 15 min), and the daily session/`express_rate_limit` cleanup. `connect-pg-simple` internal pruning is disabled (`pruneSessionInterval: false`); expired sessions are pruned by the scheduler. Do NOT add sub-5-min interval DB jobs or set `NEON_KEEPALIVE=true` unless intentional, or the DB never sleeps.
 
 ## Frontend (Expo)
 

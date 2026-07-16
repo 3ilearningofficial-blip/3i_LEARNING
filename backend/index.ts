@@ -622,6 +622,10 @@ function normalizeRateLimitStoreKind(value: unknown, fallback: RateLimitStoreKin
       tableName: "session",
       // Table is created by migrations/0011_distributed_rate_limits_and_session.sql
       createTableIfMissing: false,
+      // Disable connect-pg-simple's own ~15 min prune timer — it wakes Neon and
+      // prevents scale-to-zero. Expired sessions are pruned by the daily
+      // scheduler cleanup instead (see backend/schedulers.ts).
+      pruneSessionInterval: false,
     });
     const sessionStoreWithEvents = sessionConfig.store as session.Store & { on?: (event: string, listener: (...args: any[]) => void) => void };
     sessionStoreWithEvents.on?.("error", (err: unknown) => {
@@ -704,7 +708,11 @@ function normalizeRateLimitStoreKind(value: unknown, fallback: RateLimitStoreKin
   const defaultRateLimitStoreKind = normalizeRateLimitStoreKind(process.env.RATE_LIMIT_STORE, "pg");
   const authRateLimitStoreKind = normalizeRateLimitStoreKind(process.env.AUTH_RATE_LIMIT_STORE, defaultRateLimitStoreKind);
   const mediaRateLimitStoreKind = normalizeRateLimitStoreKind(process.env.MEDIA_RATE_LIMIT_STORE, defaultRateLimitStoreKind);
-  const globalRateLimitStoreKind = normalizeRateLimitStoreKind(process.env.GLOBAL_RATE_LIMIT_STORE, defaultRateLimitStoreKind);
+  // Global "slow down" guard defaults to in-memory (per worker) instead of PG:
+  // a PG-backed global limiter writes an upsert on EVERY /api request, which
+  // keeps Neon compute busy and drives cost. Auth/OTP/media stay on PG for
+  // cross-instance durability. Override with GLOBAL_RATE_LIMIT_STORE if needed.
+  const globalRateLimitStoreKind = normalizeRateLimitStoreKind(process.env.GLOBAL_RATE_LIMIT_STORE, "memory");
   const makeRateLimitStore = (
     prefix: string,
     options?: { failClosed?: boolean },
