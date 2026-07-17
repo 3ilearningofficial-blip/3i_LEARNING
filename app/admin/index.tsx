@@ -3674,8 +3674,8 @@ export default function AdminDashboard() {
               <Text style={styles.sectionTitle}>AI Tutor Doubts ({adminDoubtData.total || 0})</Text>
             </View>
 
-            <View style={isAdminCompact ? [styles.adminCompactCard, { backgroundColor: colors.card, borderColor: colors.border }] : [styles.adminCard, { marginBottom: 14, gap: 10 }]}>
-              <Text style={[styles.adminCardTitle, isAdminCompact && { flex: undefined }]}>Filters</Text>
+            <View style={[styles.adminCompactCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <Text style={[styles.adminCardTitle, { flex: undefined }]}>Filters</Text>
               <View style={styles.adminCompactChipRow}>
                 {[
                   { key: "all", label: "All Time" },
@@ -3761,8 +3761,8 @@ export default function AdminDashboard() {
               <ActivityIndicator size="large" color={Colors.light.primary} style={{ marginTop: 20 }} />
             ) : (
               <>
-                <View style={isAdminCompact ? [styles.adminCompactCard, { backgroundColor: colors.card, borderColor: colors.border }] : [styles.adminCard, { marginBottom: 14 }]}>
-                  <Text style={[styles.adminCardTitle, { marginBottom: 8 }, isAdminCompact && { flex: undefined }]}>Frequently Asked Topics</Text>
+                <View style={[styles.adminCompactCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                  <Text style={[styles.adminCardTitle, { marginBottom: 8 }, { flex: undefined }]}>Frequently Asked Topics</Text>
                   {(adminDoubtData.topTopics || []).length === 0 ? (
                     <Text style={styles.adminCardMetaText}>No topic data yet.</Text>
                   ) : (
@@ -3778,9 +3778,9 @@ export default function AdminDashboard() {
                   )}
                 </View>
 
-                <View style={isAdminCompact ? [styles.adminCompactCard, { backgroundColor: colors.card, borderColor: colors.border }] : [styles.adminCard, { marginBottom: 14 }]}>
+                <View style={[styles.adminCompactCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
                   <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8, width: "100%" }}>
-                    <Text style={[styles.adminCardTitle, isAdminCompact && { flex: undefined }]}>Student History</Text>
+                    <Text style={[styles.adminCardTitle, { flex: undefined }]}>Student History</Text>
                     <Text style={styles.adminCardMetaText}>{adminDoubtStudentsData.total} students</Text>
                   </View>
                   {adminDoubtStudentsData.rows.length === 0 ? (
@@ -3813,9 +3813,9 @@ export default function AdminDashboard() {
                   )}
                 </View>
 
-                <View style={isAdminCompact ? [styles.adminCompactCard, { backgroundColor: colors.card, borderColor: colors.border }] : [styles.adminCard, { marginBottom: 14 }]}>
+                <View style={[styles.adminCompactCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
                   <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8, width: "100%" }}>
-                    <Text style={[styles.adminCardTitle, isAdminCompact && { flex: undefined }]}>Frequently Asked Questions</Text>
+                    <Text style={[styles.adminCardTitle, { flex: undefined }]}>Frequently Asked Questions</Text>
                     <Text style={styles.adminCardMetaText}>{adminFrequentPatternsData.total} patterns</Text>
                   </View>
                   {adminFrequentPatternsData.rows.length === 0 ? (

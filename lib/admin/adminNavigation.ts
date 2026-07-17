@@ -21,7 +21,16 @@ export function adminGoBack(router: Router, fallback: "/admin" | "/(tabs)" | "/h
   router.replace(target as any);
 }
 
-/** Leave the admin panel and return to the student-facing app home (history-independent). */
+/** Leave the admin panel and return to the student-facing app home. */
 export function adminBackToApp(router: Router) {
-  router.replace(getAppHomeRoute() as any);
+  const target = getAppHomeRoute();
+  // On web, expo-router's `replace` can intermittently fail to re-render when
+  // leaving the admin panel (the "back button does nothing sometimes" bug).
+  // `push` matches the reliable WebAppHeader navigation and always lands on the
+  // app home. Native keeps `replace` so the admin stack does not grow.
+  if (Platform.OS === "web") {
+    router.push(target as any);
+  } else {
+    router.replace(target as any);
+  }
 }
