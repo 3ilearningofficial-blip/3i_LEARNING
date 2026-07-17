@@ -3,6 +3,7 @@ import { Platform } from "react-native";
 import { useQueryClient } from "@tanstack/react-query";
 import { attachInstallationHeaders, getApiUrl, getBaseUrl } from "@/lib/query-client";
 import { getStoredAuthToken } from "@/lib/auth-storage";
+import { useDocumentVisibility } from "@/lib/useDocumentVisibility";
 
 type Options = {
   liveClassId: string | undefined;
@@ -54,9 +55,13 @@ export function useLiveEngagementSse({ liveClassId, enabled = true, isAdmin = fa
   const [active, setActive] = useState(false);
   const qcRef = useRef(qc);
   qcRef.current = qc;
+  // Pause the stream/polling while the tab is hidden or the app is backgrounded
+  // so an idle live-class tab doesn't hold a Postgres LISTEN connection open
+  // (which keeps Neon compute awake). Reconnects automatically when visible.
+  const visible = useDocumentVisibility();
 
   useEffect(() => {
-    if (!liveClassId || !enabled) {
+    if (!liveClassId || !enabled || !visible) {
       setActive(false);
       return;
     }
@@ -173,7 +178,7 @@ export function useLiveEngagementSse({ liveClassId, enabled = true, isAdmin = fa
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (es) es.close();
     };
-  }, [liveClassId, enabled, isAdmin]);
+  }, [liveClassId, enabled, isAdmin, visible]);
 
   return active;
 }

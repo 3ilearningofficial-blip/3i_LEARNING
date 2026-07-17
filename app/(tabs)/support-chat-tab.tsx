@@ -63,7 +63,9 @@ export default function SupportChatTab() {
 
   /** Web: push new rows via SSE; native keeps polling only. */
   useEffect(() => {
-    if (Platform.OS !== "web" || typeof EventSource === "undefined" || !isAdmin || !adminSelectedUserId) return;
+    // Close the SSE stream (and its server-side Postgres LISTEN connection) while
+    // the tab is hidden/backgrounded so an idle open tab doesn't keep Neon awake.
+    if (Platform.OS !== "web" || typeof EventSource === "undefined" || !isAdmin || !adminSelectedUserId || !tabVisible) return;
     const baseUrl = getApiUrl();
     const url = new URL(`/api/admin/support/messages/${adminSelectedUserId}/stream`, baseUrl).toString();
     const es = new EventSource(url, { withCredentials: true } as EventSourceInit);
@@ -84,7 +86,7 @@ export default function SupportChatTab() {
       }
     };
     return () => es.close();
-  }, [isAdmin, adminSelectedUserId, qc]);
+  }, [isAdmin, adminSelectedUserId, qc, tabVisible]);
 
   const { data: adminConvos = [], isLoading: adminConvosLoading } = useQuery<any[]>({
     queryKey: ["/api/admin/support/conversations"],
@@ -185,7 +187,7 @@ export default function SupportChatTab() {
 
   /** Web student: SSE merges rows while this tab is focused; native uses polling only. */
   useEffect(() => {
-    if (Platform.OS !== "web" || typeof EventSource === "undefined" || isAdmin || !user?.id || !isFocused) return;
+    if (Platform.OS !== "web" || typeof EventSource === "undefined" || isAdmin || !user?.id || !isFocused || !tabVisible) return;
     const baseUrl = getApiUrl();
     const url = new URL("/api/support/messages/stream", baseUrl).toString();
     const es = new EventSource(url, { withCredentials: true } as EventSourceInit);
@@ -204,7 +206,7 @@ export default function SupportChatTab() {
       }
     };
     return () => es.close();
-  }, [isAdmin, user?.id, isFocused, qc]);
+  }, [isAdmin, user?.id, isFocused, qc, tabVisible]);
 
   useEffect(() => {
     if (Platform.OS === "web") return;
