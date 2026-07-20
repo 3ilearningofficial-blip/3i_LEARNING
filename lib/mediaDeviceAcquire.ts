@@ -34,18 +34,21 @@ export function buildVideoConstraintAttempts(deviceId?: string): MediaTrackConst
   ];
 }
 
-export function buildAudioConstraintAttempts(deviceId?: string): MediaTrackConstraints[] {
-  if (!deviceId) return [true as MediaTrackConstraints];
+/** Per-attempt constraint passed to getUserMedia for one track kind. */
+export type MediaTrackConstraintAttempt = boolean | MediaTrackConstraints;
+
+export function buildAudioConstraintAttempts(deviceId?: string): MediaTrackConstraintAttempt[] {
+  if (!deviceId) return [true];
   return [
     { deviceId: { exact: deviceId } },
     { deviceId: { ideal: deviceId } },
-    true as MediaTrackConstraints,
+    true,
   ];
 }
 
 async function acquireTrack(
   kind: "video" | "audio",
-  attempts: MediaTrackConstraints[],
+  attempts: MediaTrackConstraintAttempt[],
   label: string,
 ): Promise<MediaStreamTrack> {
   let lastError: unknown = null;
