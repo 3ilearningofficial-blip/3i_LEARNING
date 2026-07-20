@@ -187,7 +187,7 @@ export default function MissionAttemptFlow({
       setReviewQIndex(0);
       setScreen("start");
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset when mission.id changes only
+     
   }, [mission.id]);
 
   useEffect(() => {

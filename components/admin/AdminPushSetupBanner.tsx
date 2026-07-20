@@ -1,4 +1,4 @@
-﻿import React from "react";
+import React from "react";
 import { View, Text, Pressable, StyleSheet, Platform } from "react-native";
 import { useSegments } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";

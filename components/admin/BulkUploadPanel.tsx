@@ -57,11 +57,11 @@ export interface BulkUploadPanelProps {
   parentFolderName?: string | null;
   subjectKey?: string | null;
   baseOrderIndex: number;
-  existingItems: Array<{
+  existingItems: {
     section_title?: string | null;
     order_index?: number | null;
     subject_key?: string | null;
-  }>;
+  }[];
   onSaved: () => void;
   onEnsureLectureFolder?: (path: string) => Promise<void>;
   courseQueryKey?: string;

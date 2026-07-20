@@ -12,11 +12,11 @@ type Props = {
   parentFolderName?: string | null;
   subjectKey?: string | null;
   baseOrderIndex: number;
-  existingLectures: Array<{
+  existingLectures: {
     section_title?: string | null;
     order_index?: number | null;
     subject_key?: string | null;
-  }>;
+  }[];
   onBulkSaved: () => void;
   onEnsureLectureFolder?: (path: string) => Promise<void>;
   singleContent: React.ReactNode;

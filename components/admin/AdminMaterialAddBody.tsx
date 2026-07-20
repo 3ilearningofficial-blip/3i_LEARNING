@@ -10,11 +10,11 @@ type Props = {
   parentFolderName?: string | null;
   subjectKey?: string | null;
   baseOrderIndex: number;
-  existingMaterials: Array<{
+  existingMaterials: {
     section_title?: string | null;
     order_index?: number | null;
     subject_key?: string | null;
-  }>;
+  }[];
   onBulkSaved: () => void;
   singleContent: React.ReactNode;
 };

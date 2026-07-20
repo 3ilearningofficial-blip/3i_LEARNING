@@ -30,7 +30,7 @@ import AdminLectureAddBody, { type AddContentMode } from "@/components/admin/Adm
 import AdminMaterialAddBody from "@/components/admin/AdminMaterialAddBody";
 import { computeBaseOrderIndex } from "@/lib/bulk-upload-utils";
 import AdminBannerPreview from "@/components/admin/AdminBannerPreview";
-import AboutTeacherPhotoField from "@/components/admin/AboutTeacherPhotoField";
+import { AboutTeacherPhotoField } from "@/components/admin/AboutTeacherPhotoField";
 import { AdminImageBoxInline } from "@/app/admin/components/AdminImageBoxInline";
 import {
   type AboutTeacher,
