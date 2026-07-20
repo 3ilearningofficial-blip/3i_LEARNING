@@ -28,6 +28,7 @@ import { listWebOfflineKeys, removeWebOffline } from "@/lib/web-offline-store";
 import { getStoredAuthUser } from "@/lib/auth-storage";
 import { clearWebPostLoginHomeGrace, getWebPostLoginHomeGraceRemainingMs } from "@/lib/web-post-login-grace";
 import { getPostAuthPathForUser } from "@/lib/post-auth-path";
+import { isAdminWebStudentTabRoute } from "@/lib/admin/adminNavigation";
 import { reportAppInstallOnce, setupPwaInstallListener } from "@/lib/report-admin-ops";
 
 if (Platform.OS !== "web") {
@@ -231,6 +232,11 @@ function RootLayoutNav() {
           return;
         }
         if (adminRole && currentSegment === "(tabs)") {
+          const tabChild = (segments as readonly string[]).at(1);
+          // Web: /home is the admin's app home; header links land on student tab screens.
+          if (Platform.OS === "web" && isAdminWebStudentTabRoute(tabChild)) {
+            return;
+          }
           router.replace("/admin" as any);
           return;
         }

@@ -20,6 +20,7 @@ import { DownloadButton } from "@/components/DownloadButton";
 import { VideoWatermark } from "@/components/VideoWatermark";
 import { YouTubePhoneWebPlayer } from "@/components/YouTubePhoneWebPlayer";
 import { buildYouTubeEmbedHtml } from "@/lib/buildYouTubePhoneWebSrcDoc";
+import { getYouTubeVideoId as extractYouTubeVideoId } from "@/lib/youtube-utils";
 import { buildCfHlsPlayerHtml } from "@/lib/buildCfHlsPlayerHtml";
 import { extractMediaFileKey } from "@/lib/media-key";
 import { fullscreenLandscapeScript } from "@/lib/fullscreen-landscape-html";
@@ -33,40 +34,6 @@ import {
 const mediaTokenCache = new Map<string, { token: string; expiresAt: number; readUrl?: string }>();
 const MEDIA_TOKEN_REFRESH_SKEW_MS = 60 * 1000;
 const MEDIA_READ_URL_MIN_TTL_MS = 15 * 1000;
-
-function getYouTubeVideoId(url: string): string {
-  if (!url) return "";
-  let decoded = url;
-  try { decoded = decodeURIComponent(decodeURIComponent(url)); } catch (_e) { try { decoded = decodeURIComponent(url); } catch (_e2) {} }
-  decoded = decoded.trim();
-  try {
-    const parsed = new URL(decoded);
-    if (parsed.hostname.includes("youtu.be")) {
-      return parsed.pathname.slice(1).split("?")[0].split("/")[0];
-    }
-    if (parsed.hostname.includes("youtube.com") || parsed.hostname.includes("youtube-nocookie.com")) {
-      if (parsed.searchParams.get("v")) return parsed.searchParams.get("v")!;
-      const pathParts = parsed.pathname.split("/").filter(Boolean);
-      if (pathParts[0] === "embed" || pathParts[0] === "shorts" || pathParts[0] === "live") {
-        return pathParts[1] || "";
-      }
-      if (pathParts.length >= 2 && pathParts[pathParts.length - 2] === "live") {
-        return pathParts[pathParts.length - 1] || "";
-      }
-      for (const part of pathParts) {
-        if (/^[A-Za-z0-9_-]{11}$/.test(part) && part !== "watch" && part !== "channel" && !part.startsWith("@")) {
-          return part;
-        }
-      }
-    }
-  } catch (_e) {}
-  const match = decoded.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/|live\/|v\/))([A-Za-z0-9_-]{11})/);
-  if (match?.[1]) return match[1];
-  const simpleMatch = decoded.match(/[?&]v=([A-Za-z0-9_-]{11})/);
-  if (simpleMatch?.[1]) return simpleMatch[1];
-  if (/^[A-Za-z0-9_-]{11}$/.test(decoded)) return decoded;
-  return "";
-}
 
 function isBoardSnapshotImage(url: string): boolean {
   if (!url) return false;
@@ -736,7 +703,7 @@ export default function LectureScreen() {
 
   // Determine video type and prepare appropriate HTML
   const playbackUrl = authenticatedVideoUrl || videoUrl;
-  const videoId = getYouTubeVideoId(playbackUrl);
+  const videoId = extractYouTubeVideoId(playbackUrl) || "";
   const isStreamId = !videoId && isCloudflareStreamId(playbackUrl);
   const isCfHls = !videoId && !isStreamId && isHlsManifestUrl(playbackUrl);
   const isBoardImage = !videoId && !isStreamId && !isCfHls && isBoardSnapshotImage(playbackUrl);

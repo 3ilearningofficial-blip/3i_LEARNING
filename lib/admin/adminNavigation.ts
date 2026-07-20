@@ -1,10 +1,22 @@
 import { Platform } from "react-native";
 import type { Router } from "expo-router";
 
+/** Tab child routes admins may open from the web app header (student-facing views). */
+export const ADMIN_WEB_STUDENT_TAB_ROUTES = new Set([
+  "daily-mission",
+  "test-series",
+  "support-chat-tab",
+  "ai-tutor",
+]);
+
+export function isAdminWebStudentTabRoute(tabChild: string | undefined): boolean {
+  return ADMIN_WEB_STUDENT_TAB_ROUTES.has(String(tabChild || ""));
+}
+
 /**
  * App home for a user leaving the admin/staff panels.
- * Admins are redirected away from `/(tabs)` on web (root layout bounces them
- * back to `/admin`), so web must use the student-facing `/home` route instead.
+ * On web, admins use `/home` (not `/(tabs)/index`, which redirects to `/admin`).
+ * Student tab screens linked from the web header remain reachable under `/(tabs)/…`.
  */
 export function getAppHomeRoute(): "/home" | "/(tabs)" {
   return Platform.OS === "web" ? "/home" : "/(tabs)";

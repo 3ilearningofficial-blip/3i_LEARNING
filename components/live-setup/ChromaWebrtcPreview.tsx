@@ -23,22 +23,20 @@ export default function ChromaWebrtcPreview({ webrtc, greenScreen, compact = fal
 
   if (Platform.OS !== "web") return null;
 
-  if (webrtc.error) {
-    return (
-      <View style={[styles.placeholder, compact && styles.placeholderCompact]}>
-        <Text style={styles.errorText}>{webrtc.error}</Text>
-      </View>
-    );
-  }
-
   return (
     <View style={[styles.wrap, compact && styles.wrapCompact]}>
       {webrtc.stream ? (
         <video ref={videoRef as React.RefObject<HTMLVideoElement>} autoPlay muted playsInline style={videoStyle} />
       ) : (
         <View style={[styles.placeholder, compact && styles.placeholderCompact]}>
-          <ActivityIndicator size="small" color={Colors.light.primary} />
-          <Text style={styles.placeholderText}>Allow camera access</Text>
+          {webrtc.error ? (
+            <Text style={styles.errorText}>{webrtc.error}</Text>
+          ) : (
+            <>
+              <ActivityIndicator size="small" color={Colors.light.primary} />
+              <Text style={styles.placeholderText}>Starting camera…</Text>
+            </>
+          )}
         </View>
       )}
     </View>

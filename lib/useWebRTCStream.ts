@@ -1,5 +1,13 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { Platform } from "react-native";
+import { loadClassroomMediaDevices } from "@/lib/classroom/mediaDevices";
+import {
+  acquireCameraMicrophoneStream,
+  formatMediaAccessError,
+  mediaDelay,
+  pickDeviceId,
+  USB_CAMERA_RELEASE_MS,
+} from "@/lib/mediaDeviceAcquire";
 
 export interface UseWebRTCStreamReturn {
   stream: MediaStream | null;
@@ -36,27 +44,35 @@ export function useWebRTCStream(enabled = true): UseWebRTCStreamReturn {
 
   const streamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
+  const selectedCameraRef = useRef("");
+  const selectedMicrophoneRef = useRef("");
+  const startGenerationRef = useRef(0);
 
   const isWeb = Platform.OS === "web";
 
+  const releaseCurrentStream = useCallback(async () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+    setStream(null);
+    await mediaDelay(USB_CAMERA_RELEASE_MS);
+  }, []);
+
   const enumerateDevices = useCallback(async () => {
-    if (!isWeb || !navigator.mediaDevices?.enumerateDevices) return;
+    if (!isWeb || !navigator.mediaDevices?.enumerateDevices) {
+      return { cameras: [] as MediaDeviceInfo[], microphones: [] as MediaDeviceInfo[] };
+    }
     try {
       const allDevices = await navigator.mediaDevices.enumerateDevices();
       const cameras = allDevices.filter((d) => d.kind === "videoinput");
       const microphones = allDevices.filter((d) => d.kind === "audioinput");
       setDevices({ cameras, microphones });
-
-      if (cameras.length > 0 && !selectedCamera) {
-        setSelectedCameraState(cameras[0].deviceId);
-      }
-      if (microphones.length > 0 && !selectedMicrophone) {
-        setSelectedMicrophoneState(microphones[0].deviceId);
-      }
+      return { cameras, microphones };
     } catch {
-      // silently fail — devices will be empty
+      return { cameras: [] as MediaDeviceInfo[], microphones: [] as MediaDeviceInfo[] };
     }
-  }, [isWeb, selectedCamera, selectedMicrophone]);
+  }, [isWeb]);
 
   const startStream = useCallback(
     async (cameraId?: string, micId?: string) => {
@@ -66,53 +82,79 @@ export function useWebRTCStream(enabled = true): UseWebRTCStreamReturn {
       }
       if (!navigator.mediaDevices?.getUserMedia) {
         setError(
-          "Your browser does not support camera access. Please use Chrome, Firefox, or Edge."
+          "Your browser does not support camera access. Please use Chrome, Firefox, or Edge.",
         );
         return;
       }
 
-      // Stop existing stream tracks
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((t) => t.stop());
-      }
+      const generation = ++startGenerationRef.current;
+      setError(null);
 
       try {
-        const constraints: MediaStreamConstraints = {
-          video: cameraId ? { deviceId: { exact: cameraId } } : true,
-          audio: micId ? { deviceId: { exact: micId } } : true,
-        };
-        const newStream = await navigator.mediaDevices.getUserMedia(constraints);
+        await releaseCurrentStream();
+        if (generation !== startGenerationRef.current) return;
+
+        const listed = await enumerateDevices();
+        if (generation !== startGenerationRef.current) return;
+
+        const resolvedCamera = pickDeviceId(cameraId || selectedCameraRef.current, listed.cameras);
+        const resolvedMic = pickDeviceId(micId || selectedMicrophoneRef.current, listed.microphones);
+
+        if (resolvedCamera) {
+          selectedCameraRef.current = resolvedCamera;
+          setSelectedCameraState(resolvedCamera);
+        }
+        if (resolvedMic) {
+          selectedMicrophoneRef.current = resolvedMic;
+          setSelectedMicrophoneState(resolvedMic);
+        }
+
+        const newStream = await acquireCameraMicrophoneStream({
+          cameraId: resolvedCamera,
+          microphoneId: resolvedMic,
+        });
+        if (generation !== startGenerationRef.current) {
+          newStream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+
         streamRef.current = newStream;
         setStream(newStream);
         setIsVideoEnabled(true);
         setIsAudioEnabled(true);
         setError(null);
-
-        // Re-enumerate after permission grant (labels become available)
         await enumerateDevices();
-      } catch (err: any) {
-        if (err?.name === "NotAllowedError" || err?.name === "PermissionDeniedError") {
-          setError(
-            "Camera/microphone permission denied. Please allow access in your browser settings and reload."
-          );
-        } else if (err?.name === "NotFoundError") {
-          setError(
-            "No camera or microphone found. Please connect a device and try again."
-          );
-        } else {
-          setError(`Failed to access camera/microphone: ${err?.message || "Unknown error"}`);
-        }
+      } catch (err: unknown) {
+        if (generation !== startGenerationRef.current) return;
+        setError(formatMediaAccessError(err));
       }
     },
-    [isWeb, enumerateDevices]
+    [isWeb, enumerateDevices, releaseCurrentStream],
   );
 
   // Initialize stream and devices on mount (web only, when enabled)
   useEffect(() => {
     if (!enabled || !isWeb) return;
-    enumerateDevices();
-    startStream();
+
+    const prefs = loadClassroomMediaDevices();
+    if (prefs.cameraId) {
+      selectedCameraRef.current = prefs.cameraId;
+      setSelectedCameraState(prefs.cameraId);
+    }
+    if (prefs.microphoneId) {
+      selectedMicrophoneRef.current = prefs.microphoneId;
+      setSelectedMicrophoneState(prefs.microphoneId);
+    }
+
+    void startStream(prefs.cameraId, prefs.microphoneId);
+
+    const onDeviceChange = () => {
+      void enumerateDevices();
+    };
+    navigator.mediaDevices?.addEventListener?.("devicechange", onDeviceChange);
+
     return () => {
+      navigator.mediaDevices?.removeEventListener?.("devicechange", onDeviceChange);
       streamRef.current?.getTracks().forEach((t) => t.stop());
       screenStreamRef.current?.getTracks().forEach((t) => t.stop());
     };
@@ -121,18 +163,20 @@ export function useWebRTCStream(enabled = true): UseWebRTCStreamReturn {
 
   const setSelectedCamera = useCallback(
     (deviceId: string) => {
+      selectedCameraRef.current = deviceId;
       setSelectedCameraState(deviceId);
-      startStream(deviceId, selectedMicrophone || undefined);
+      void startStream(deviceId, selectedMicrophoneRef.current || undefined);
     },
-    [startStream, selectedMicrophone]
+    [startStream],
   );
 
   const setSelectedMicrophone = useCallback(
     (deviceId: string) => {
+      selectedMicrophoneRef.current = deviceId;
       setSelectedMicrophoneState(deviceId);
-      startStream(selectedCamera || undefined, deviceId);
+      void startStream(selectedCameraRef.current || undefined, deviceId);
     },
-    [startStream, selectedCamera]
+    [startStream],
   );
 
   const toggleVideo = useCallback(() => {
@@ -159,7 +203,7 @@ export function useWebRTCStream(enabled = true): UseWebRTCStreamReturn {
     }
     if (!navigator.mediaDevices?.getDisplayMedia) {
       throw new Error(
-        "Your browser does not support screen sharing. Please use Chrome, Firefox, or Edge."
+        "Your browser does not support screen sharing. Please use Chrome, Firefox, or Edge.",
       );
     }
 
@@ -174,7 +218,6 @@ export function useWebRTCStream(enabled = true): UseWebRTCStreamReturn {
       setIsScreenSharing(true);
       setError(null);
 
-      // Listen for the user stopping screen share via browser UI
       displayStream.getVideoTracks()[0]?.addEventListener("ended", () => {
         screenStreamRef.current = null;
         setScreenStream(null);
@@ -183,9 +226,8 @@ export function useWebRTCStream(enabled = true): UseWebRTCStreamReturn {
 
       return displayStream;
     } catch (err: any) {
-      // User cancelled — not an error
       if (err?.name === "AbortError" || err?.name === "NotAllowedError") {
-        throw err; // let caller handle cancellation
+        throw err;
       }
       setError(`Screen share failed: ${err?.message || "Unknown error"}`);
       throw err;
@@ -202,6 +244,7 @@ export function useWebRTCStream(enabled = true): UseWebRTCStreamReturn {
   }, []);
 
   const cleanup = useCallback(() => {
+    startGenerationRef.current += 1;
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;

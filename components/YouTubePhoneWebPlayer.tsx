@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { StyleProp, ViewStyle } from "react-native";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 import {
@@ -36,9 +36,11 @@ export function YouTubePhoneWebPlayer({
   injectedJavaScript,
 }: Props) {
   const [useFallback, setUseFallback] = useState(false);
+  const loadNotifiedRef = useRef(false);
 
   useEffect(() => {
     setUseFallback(false);
+    loadNotifiedRef.current = false;
   }, [videoId, resumeAt, endAt]);
 
   const html = useMemo(() => {
@@ -48,17 +50,33 @@ export function YouTubePhoneWebPlayer({
       : buildNativeYouTubeHtml(videoId, opts);
   }, [videoId, resumeAt, endAt, useFallback]);
 
+  const notifyLoaded = useCallback(() => {
+    if (loadNotifiedRef.current) return;
+    loadNotifiedRef.current = true;
+    onLoad?.();
+  }, [onLoad]);
+
+  const triggerFallback = useCallback(() => {
+    if (!useFallback) {
+      loadNotifiedRef.current = false;
+      setUseFallback(true);
+      return true;
+    }
+    onError?.();
+    return false;
+  }, [onError, useFallback]);
+
   return (
     <WebView
       source={{ html, baseUrl: YOUTUBE_BASE }}
       style={style}
-      onLoad={onLoad}
+      onLoad={notifyLoaded}
+      onLoadEnd={notifyLoaded}
+      onHttpError={() => {
+        triggerFallback();
+      }}
       onError={() => {
-        if (!useFallback) {
-          setUseFallback(true);
-          return;
-        }
-        onError?.();
+        triggerFallback();
       }}
       onMessage={onMessage}
       injectedJavaScript={injectedJavaScript}

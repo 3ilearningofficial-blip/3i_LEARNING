@@ -16,7 +16,9 @@ export function attachChromaPreviewToVideo(
     videoEl.srcObject = sourceStream;
     void videoEl.play().catch(() => {});
     return () => {
+      videoEl.pause();
       videoEl.srcObject = null;
+      sourceVideo.pause();
       sourceVideo.srcObject = null;
     };
   }
@@ -58,7 +60,9 @@ export function attachChromaPreviewToVideo(
   return () => {
     cancelAnimationFrame(raf);
     outStream.getTracks().forEach((t) => t.stop());
+    videoEl.pause();
     videoEl.srcObject = null;
+    sourceVideo.pause();
     sourceVideo.srcObject = null;
   };
 }

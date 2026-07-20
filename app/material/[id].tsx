@@ -22,6 +22,7 @@ import { DownloadButton } from "@/components/DownloadButton";
 import { extractMediaFileKey } from "@/lib/media-key";
 import { YouTubePhoneWebPlayer } from "@/components/YouTubePhoneWebPlayer";
 import { buildYouTubeEmbedHtml } from "@/lib/buildYouTubePhoneWebSrcDoc";
+import { getYouTubeVideoId } from "@/lib/youtube-utils";
 import {
   handlePlaybackFullscreenMessage,
   useVideoPlaybackOrientation,
@@ -49,23 +50,6 @@ function getGoogleDriveFileId(url: string): string | null {
 function isGoogleDriveUrl(url: string): boolean {
   return url.includes("drive.google.com") || url.includes("docs.google.com");
 }
-
-function getYouTubeVideoId(url: string): string | null {
-  if (!url) return null;
-  try {
-    const parsed = new URL(url);
-    if (parsed.hostname.includes("youtu.be")) return parsed.pathname.slice(1).split("?")[0] || null;
-    if (parsed.hostname.includes("youtube.com") || parsed.hostname.includes("youtube-nocookie.com")) {
-      if (parsed.searchParams.get("v")) return parsed.searchParams.get("v");
-      const parts = parsed.pathname.split("/").filter(Boolean);
-      const idx = parts.findIndex(p => ["embed", "shorts", "live", "v"].includes(p));
-      if (idx !== -1 && parts[idx + 1]) return parts[idx + 1];
-    }
-  } catch (_e) {}
-  const m = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/|live\/|v\/))([A-Za-z0-9_-]{11})/);
-  return m?.[1] || null;
-}
-
 
 function buildGoogleDriveViewerHtml(fileId: string): string {
   const previewUrl = `https://drive.google.com/file/d/${fileId}/preview`;
@@ -451,7 +435,7 @@ export default function MaterialViewerScreen() {
             <Ionicons name="arrow-back" size={22} color="#fff" />
           </Pressable>
           {/* 16:9 video container */}
-          <View style={styles.playerContainer}>
+          <View style={[styles.playerContainer, Platform.OS !== "web" && styles.playerContainerNativeYouTube]}>
             {Platform.OS === "web" ? (
               <iframe
                 srcDoc={buildYouTubeEmbedHtml(youtubeVideoId!)}
@@ -699,6 +683,10 @@ const styles = StyleSheet.create({
       web: { height: 450, maxHeight: "60%" as any },
       default: { flex: 1, maxHeight: "56%" as any },
     }),
+  },
+  playerContainerNativeYouTube: {
+    flex: 1,
+    maxHeight: undefined,
   },
   loadingOverlay: {
     position: "absolute", top: 0, left: 0, right: 0, bottom: 0,
