@@ -1,3 +1,9 @@
+// Static import: `await import("jspdf")` was resolving to a Metro chunk id
+// (e.g. "Requiring unknown module '2431'") in the classroom end-class flow on
+// web, which threw before `onConfirmEnd` could run and left the class stuck as
+// `is_live=true`. Static import bakes jspdf into the main web bundle.
+import { jsPDF } from "jspdf";
+
 export type PdfSlideInput = {
   blob: Blob;
   width: number;
@@ -24,7 +30,6 @@ export async function pngSlidesToPdfBlob(slides: PdfSlideInput[]): Promise<Blob>
     throw new Error("No slides to export");
   }
 
-  const { jsPDF } = await import("jspdf");
   let pdf: InstanceType<typeof jsPDF> | null = null;
 
   for (let i = 0; i < slides.length; i++) {

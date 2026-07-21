@@ -1,5 +1,5 @@
 import React, { useEffect } from "react";
-import { View, Text, StyleSheet, Pressable, Animated } from "react-native";
+import { View, Text, StyleSheet, Pressable, Animated, Platform } from "react-native";
 import { router } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
@@ -290,8 +290,8 @@ function MultiSubjectCourseCard({
     }
     const animation = Animated.loop(
       Animated.sequence([
-        Animated.timing(livePulse, { toValue: 0.35, duration: 650, useNativeDriver: true }),
-        Animated.timing(livePulse, { toValue: 1, duration: 650, useNativeDriver: true }),
+        Animated.timing(livePulse, { toValue: 0.35, duration: 650, useNativeDriver: Platform.OS !== "web" }),
+        Animated.timing(livePulse, { toValue: 1, duration: 650, useNativeDriver: Platform.OS !== "web" }),
       ])
     );
     animation.start();
@@ -462,8 +462,8 @@ function NormalCourseCard({
     }
     const animation = Animated.loop(
       Animated.sequence([
-        Animated.timing(livePulse, { toValue: 0.35, duration: 650, useNativeDriver: true }),
-        Animated.timing(livePulse, { toValue: 1, duration: 650, useNativeDriver: true }),
+        Animated.timing(livePulse, { toValue: 0.35, duration: 650, useNativeDriver: Platform.OS !== "web" }),
+        Animated.timing(livePulse, { toValue: 1, duration: 650, useNativeDriver: Platform.OS !== "web" }),
       ])
     );
     animation.start();

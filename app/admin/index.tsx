@@ -2734,6 +2734,18 @@ export default function AdminDashboard() {
                                           if (!confirmed) return;
                                           try {
                                             setEndingLiveGroupKey(g.key);
+                                            // Classroom sessions must finalize through the studio so the
+                                            // MediaRecorder blob is uploaded to R2 and the board PDF /
+                                            // snapshot are archived. A bare PUT { isLive:false } flips DB
+                                            // flags but drops both the recording and the whiteboard from
+                                            // the course.
+                                            if ((g.streamType || "").toLowerCase() === "classroom") {
+                                              router.push({
+                                                pathname: "/admin/classroom/[id]",
+                                                params: { id: String(g.ids[0]), autoEnd: "1" },
+                                              } as any);
+                                              return;
+                                            }
                                             if ((g.streamType || "").toLowerCase() === "cloudflare") {
                                               await apiRequest("POST", `/api/admin/live-classes/${g.ids[0]}/stream/end`, {});
                                             } else {

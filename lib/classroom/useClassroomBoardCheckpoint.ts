@@ -78,6 +78,12 @@ async function fetchCheckpointSnapshot(
   if (proxyRes.ok) {
     const fromProxy = await parseJsonSnapshotResponse(proxyRes, "snapshot proxy");
     if (fromProxy) return fromProxy;
+  } else if (proxyRes.status !== 404) {
+    // 404 is expected on a fresh session — the server auto-checkpoint runs
+    // only every ~2 minutes, so there is no snapshot to restore until then.
+    // The browser still logs the 404 as a red "Failed to load resource" line
+    // even though we handle it, but we don't want to add our own warn on top.
+    console.warn(`[Classroom] snapshot proxy failed (${proxyRes.status})`);
   }
 
   const url = String(publicUrl || "").trim();

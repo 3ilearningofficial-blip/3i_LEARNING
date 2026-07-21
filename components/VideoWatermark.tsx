@@ -1,6 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { Text, Animated, Dimensions } from 'react-native';
+import { Text, Animated, Dimensions, Platform } from 'react-native';
 import { useAuth } from '@/context/AuthContext';
+
+// React Native web has no native animated module, so `useNativeDriver: true`
+// emits a runtime warning and falls back to the JS driver anyway. Explicitly
+// opt out on web to keep the console clean.
+const USE_NATIVE_DRIVER = Platform.OS !== 'web';
 
 interface VideoWatermarkProps {
   isPlaying?: boolean;
@@ -38,14 +43,14 @@ export function VideoWatermark({ isPlaying = true }: VideoWatermarkProps) {
       Animated.timing(opacity, {
         toValue: 0.55,
         duration: 300,
-        useNativeDriver: true,
+        useNativeDriver: USE_NATIVE_DRIVER,
       }).start();
 
       setTimeout(() => {
         Animated.timing(opacity, {
           toValue: 0,
           duration: 300,
-          useNativeDriver: true,
+          useNativeDriver: USE_NATIVE_DRIVER,
         }).start(() => setIsVisible(false));
       }, 2000);
     }, 3000);

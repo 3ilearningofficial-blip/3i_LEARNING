@@ -24,7 +24,16 @@ export function useClassroomToken(liveClassId: string, enabled: boolean) {
       }
       return res.json();
     },
-    staleTime: 30_000,
+    // Once the classroom is live, the LiveKit access token is valid for the
+    // whole session (server issues long-lived tokens). Never refetch on
+    // window focus / remount: React Query used to fire a token refetch on
+    // focus which flipped the useLiveKitRoom effect and tore down the whole
+    // Room, causing the "disconnected → connecting" cycles and
+    // "createOffer with closed peer connection" errors in the console.
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount: false,
     retry: 1,
   });
 }

@@ -12,10 +12,33 @@ const PIP_HEIGHT = Math.round(PIP_WIDTH * (3 / 4)); // portrait 3:4 so full body
 const PIP_MARGIN = 16;
 const DEFAULT_FPS = 30;
 
-/** Max box for OBS-style green-screen cutout (full person, contain-fit). */
-export const GS_CUTOUT_MAX_WIDTH_FRAC = 0.32;
-export const GS_CUTOUT_MAX_HEIGHT_FRAC = 0.42;
+/**
+ * Max box for OBS-style green-screen cutout (full person, contain-fit).
+ *
+ * Portrait 3:4-ish box (~422 x 594 px on a 1920 x 1080 composite) so a 16:9
+ * webcam, cropped to a centered portrait ROI first, produces a slim vertical
+ * figure that sits comfortably in the chosen corner without eating half the
+ * board.
+ */
+export const GS_CUTOUT_MAX_WIDTH_FRAC = 0.22;
+export const GS_CUTOUT_MAX_HEIGHT_FRAC = 0.55;
 export const GS_CUTOUT_MARGIN = 16;
+
+/**
+ * Crop a landscape webcam source to a centered portrait ROI so the teacher's
+ * full body fills the cutout box regardless of camera aspect.
+ */
+export function computePortraitRoi(
+  sourceWidth: number,
+  sourceHeight: number,
+  targetAspect = 3 / 4
+): { sx: number; sy: number; sw: number; sh: number } {
+  const sw = Math.max(1, sourceWidth);
+  const sh = Math.max(1, sourceHeight);
+  const wantW = Math.min(sw, Math.max(1, Math.round(sh * targetAspect)));
+  const sx = Math.round((sw - wantW) / 2);
+  return { sx, sy: 0, sw: wantW, sh };
+}
 
 // Camera canvas dimensions when green screen is ON: full resolution for keying / raw publish.
 const GS_CAM_WIDTH = COMPOSITE_WIDTH;
@@ -99,6 +122,12 @@ export type ClassroomPublishBundle = {
   board: BoardStreamHandle;
   camera: CameraStreamHandle;
   recording: ClassroomCompositeHandle;
+  /**
+   * Move the teacher cutout / PiP to a different board corner at runtime,
+   * without restarting the capture pipeline or the LiveKit publish. The next
+   * composite frame paints in the new corner.
+   */
+  setPipPosition: (next: ClassroomPipPosition) => void;
   stop: () => void;
 };
 
@@ -166,21 +195,6 @@ function drawImageCover(
   ctx.drawImage(source, sx, sy, sw, sh, dx, dy, dw, dh);
 }
 
-/** Draw source fully visible inside dest (no crop); letterbox within dx/dy/dw/dh is unused. */
-function drawImageContain(
-  ctx: CanvasRenderingContext2D,
-  source: CanvasImageSource,
-  sourceWidth: number,
-  sourceHeight: number,
-  dx: number,
-  dy: number,
-  dw: number,
-  dh: number
-) {
-  if (sourceWidth <= 0 || sourceHeight <= 0 || dw <= 0 || dh <= 0) return;
-  ctx.drawImage(source, 0, 0, sourceWidth, sourceHeight, dx, dy, dw, dh);
-}
-
 function drawCameraCover(
   ctx: CanvasRenderingContext2D,
   source: HTMLVideoElement | HTMLCanvasElement,
@@ -228,10 +242,14 @@ function drawFullBoardTeacherLayer(
 ) {
   if (cameraVideo.readyState < 2) return;
   drawVideoWithChromaKey(cameraVideo, chromaCanvas, chromaCtx);
-  const sw = chromaCanvas.width || cameraVideo.videoWidth || 1;
-  const sh = chromaCanvas.height || cameraVideo.videoHeight || 1;
-  const { dx, dy, dw, dh } = computeGreenScreenCutoutRect(pipPosition, sw, sh);
-  drawImageContain(outCtx, chromaCanvas, sw, sh, dx, dy, dw, dh);
+  const chromaSw = chromaCanvas.width || cameraVideo.videoWidth || 1;
+  const chromaSh = chromaCanvas.height || cameraVideo.videoHeight || 1;
+  // Crop the keyed source to a centered portrait ROI so the person fills the
+  // cutout regardless of webcam aspect (16:9 sources land as a slim figure,
+  // not a huge letterboxed landscape).
+  const roi = computePortraitRoi(chromaSw, chromaSh);
+  const { dx, dy, dw, dh } = computeGreenScreenCutoutRect(pipPosition, roi.sw, roi.sh);
+  outCtx.drawImage(chromaCanvas, roi.sx, roi.sy, roi.sw, roi.sh, dx, dy, dw, dh);
 }
 
 async function openCameraVideo(cameraId?: string): Promise<HTMLVideoElement> {
@@ -342,8 +360,12 @@ export async function startClassroomPublishBundle(
   recCanvas.height = COMPOSITE_HEIGHT;
   const recCtx = recCanvas.getContext("2d");
   if (!recCtx) throw new Error("Canvas not supported");
-  const pipPosition = normalizePipPosition(opts.pipPosition);
-  const { pipX, pipY } = computePipOrigin(pipPosition);
+  // pipPosition is mutable so runtime corner tabs update the paint loop without
+  // restarting the whole publish bundle.
+  let pipPosition = normalizePipPosition(opts.pipPosition);
+  const setPipPosition = (next: ClassroomPipPosition) => {
+    pipPosition = normalizePipPosition(next);
+  };
   let resolveRecordingReady: (() => void) | null = null;
   let hasResolvedRecordingReady = false;
   const recordingReady = new Promise<void>((resolve) => {
@@ -371,6 +393,7 @@ export async function startClassroomPublishBundle(
     if (opts.greenScreen && chromaCanvas && chromaCtx) {
       drawFullBoardTeacherLayer(recCtx, cameraVideo, chromaCanvas, chromaCtx, pipPosition);
     } else {
+      const { pipX, pipY } = computePipOrigin(pipPosition);
       drawPipLayer(recCtx, cameraVideo, false, null, null, pipX, pipY);
     }
     tryResolveRecordingReady();
@@ -413,6 +436,7 @@ export async function startClassroomPublishBundle(
     board: { stream: boardStream, stop: () => boardTrack.stop() },
     camera: { stream: camStream, previewEl: camPreviewEl, livePublishTrack, stop: () => camTrack.stop() },
     recording: { stream: recStream, previewEl: recPreviewEl, ready: recordingReady, stop: () => recTrack.stop() },
+    setPipPosition,
     stop,
   };
 }

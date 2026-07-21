@@ -7,6 +7,7 @@ import {
   normalizePipPosition,
   parseClassroomTeacherStreamMeta,
   serializeClassroomTeacherStreamMeta,
+  type ClassroomPipPosition,
   type ClassroomTeacherStreamMeta,
 } from "./mediaDevices";
 import {
@@ -79,6 +80,18 @@ export function useLiveKitRoom(
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectAttemptsRef = useRef(0);
   const intentionalDisconnectRef = useRef(false);
+  // boardEl / tokenPayload.token change often (slide frame remounts, JWT
+  // refresh), and having them in the connect-effect deps caused a full
+  // Room.disconnect() + reconnect loop. Track them in refs so the connect
+  // effect only re-runs when the LiveKit URL or the publish flag changes.
+  const boardElRef = useRef<HTMLElement | null>(boardEl);
+  const tokenRef = useRef<ClassroomTokenPayload | undefined>(tokenPayload);
+  useEffect(() => {
+    boardElRef.current = boardEl;
+  }, [boardEl]);
+  useEffect(() => {
+    tokenRef.current = tokenPayload;
+  }, [tokenPayload]);
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
@@ -282,12 +295,17 @@ export function useLiveKitRoom(
     republishTeacherStreamMetaRef.current = async (pipOverride?: string) => {
       const room = roomRef.current;
       if (!room || !tokenPayload?.canPublish) return;
-      await publishTeacherMeta(room, camEnabled, pipOverride);
-      if (pipOverride && boardEl && editor) {
-        await startCompositePublish();
+      // Move the teacher cutout in the live composite paint loop directly
+      // instead of restarting the whole publish bundle — restarting caused
+      // "createOffer with closed peer connection" errors and brief video
+      // stalls for students every time the admin picked a new corner.
+      if (pipOverride) {
+        const nextPos = normalizePipPosition(pipOverride) as ClassroomPipPosition;
+        publishBundleRef.current?.setPipPosition(nextPos);
       }
+      await publishTeacherMeta(room, camEnabled, pipOverride);
     };
-  }, [startCompositePublish, tokenPayload?.canPublish, camEnabled, publishTeacherMeta, boardEl, editor]);
+  }, [tokenPayload?.canPublish, camEnabled, publishTeacherMeta]);
 
   const republishTeacherStreamMeta = useCallback(async (pipOverride?: string) => {
     await republishTeacherStreamMetaRef.current(pipOverride);
@@ -324,7 +342,12 @@ export function useLiveKitRoom(
   );
 
   useEffect(() => {
-    if (!enabled || !tokenPayload?.token || !tokenPayload.url) return;
+    if (!enabled || !tokenPayload?.url) return;
+    // Read the latest token from the ref so a JWT rotation does not trigger a
+    // full disconnect/reconnect. We only rebuild the Room when the LiveKit
+    // server URL or publish permission actually changes.
+    const initialToken = tokenRef.current?.token;
+    if (!initialToken) return;
 
     const gen = ++connectGenRef.current;
     intentionalDisconnectRef.current = false;
@@ -381,7 +404,7 @@ export function useLiveKitRoom(
 
     const connect = async () => {
       try {
-        await room.connect(tokenPayload.url, tokenPayload.token);
+        await room.connect(tokenPayload.url!, initialToken);
         if (connectGenRef.current !== gen) return;
 
         setConnected(true);
@@ -395,7 +418,11 @@ export function useLiveKitRoom(
             deviceId: prefs.microphoneId,
           });
           setMicEnabled(room.localParticipant.isMicrophoneEnabled);
-          if (!boardEl) {
+          // Read the latest boardEl at connect time: it may still be null on
+          // first connect (slide frame not yet mounted). If it is, publish the
+          // plain camera track; the composite-publish effect will republish
+          // once the board is ready.
+          if (!boardElRef.current) {
             await room.localParticipant.setCameraEnabled(true, {
               deviceId: prefs.cameraId,
             });
@@ -442,25 +469,32 @@ export function useLiveKitRoom(
       room.off(RoomEvent.Reconnecting, onReconnecting);
       room.off(RoomEvent.Reconnected, onReconnected);
       room.off(RoomEvent.Disconnected, onDisconnected);
-      void unpublishCompositeTracks();
-      stopComposite();
-      void room.disconnect();
+      // Serialize teardown: await the track unpublish + composite stop before
+      // calling room.disconnect(). Racing these caused "createOffer with
+      // closed peer connection" warnings whenever the effect cleaned up.
+      void (async () => {
+        try {
+          await unpublishCompositeTracks();
+        } catch {
+          /* peer connection may already be closed */
+        }
+        stopComposite();
+        try {
+          await room.disconnect();
+        } catch {
+          /* already disconnected */
+        }
+      })();
       roomRef.current = null;
       setConnected(false);
       setTeacherCameraActive(false);
     };
-  }, [
-    enabled,
-    tokenPayload?.token,
-    tokenPayload?.url,
-    tokenPayload?.canPublish,
-    reconnectNonce,
-    attachRemoteTeacher,
-    syncTeacherStreamMeta,
-    unpublishCompositeTracks,
-    stopComposite,
-    boardEl,
-  ]);
+    // Intentionally exclude tokenPayload.token, boardEl and the stable
+    // callback refs (attachRemoteTeacher, syncTeacherStreamMeta,
+    // unpublishCompositeTracks, stopComposite): including them caused the
+    // whole LiveKit room to tear down and reconnect on every JWT refresh or
+    // slide-frame remount. See boardElRef / tokenRef above.
+  }, [enabled, tokenPayload?.url, tokenPayload?.canPublish, reconnectNonce]);
 
   useEffect(() => {
     if (!connected || !boardEl || !editor || !tokenPayload?.canPublish) return;

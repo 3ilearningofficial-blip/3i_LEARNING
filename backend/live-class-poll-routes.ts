@@ -134,7 +134,13 @@ export function registerLiveClassPollRoutes({
       if (!(await userCanAccessLiveClassContent(db, user, lc))) {
         return res.status(403).json({ message: "Access denied" });
       }
-      const expiresInSeconds = 90;
+      // The token was 90s previously — that caused a burst of 401s on the
+      // client every time the EventSource auto-retried with a stale
+      // `?sse_token=`. The token is single-URL (`/engagement/stream`) and
+      // scoped to `{userId, liveClassId, role}`, so a longer TTL just means
+      // fewer round-trips for token refresh, not more attack surface. 15 min
+      // matches the average live-class engagement burst.
+      const expiresInSeconds = 15 * 60;
       const expiresAt = nowMs() + expiresInSeconds * 1000;
       const token = issueEngagementSseToken({
         userId: user.id,

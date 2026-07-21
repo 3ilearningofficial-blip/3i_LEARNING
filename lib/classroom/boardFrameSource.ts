@@ -39,6 +39,8 @@ const DEFAULT_MIN_INTERVAL = 33;
 const DEFAULT_DEBOUNCE = 0;
 // Safety refresh reduced from 1000ms → 400ms to keep students in sync on slow canvases.
 const DEFAULT_SAFETY = 400;
+// ~60 fps ceiling when re-running immediately after a slow rasterize.
+const PENDING_MIN_INTERVAL = 16;
 
 export function createBoardFrameSource(
   editor: Editor | null,
@@ -52,6 +54,11 @@ export function createBoardFrameSource(
   let current: HTMLImageElement | null = null;
   let currentUrl: string | null = null;
   let inFlight = false;
+  // Set true when a store change arrives during an in-flight rasterize. On
+  // completion we re-run immediately (queueMicrotask) with a shorter min gap
+  // so the very next stroke shows up without waiting for the 400 ms safety
+  // tick.
+  let pending = false;
   let lastRasterAt = 0;
   let stopped = false;
   let warned = false;
@@ -75,9 +82,19 @@ export function createBoardFrameSource(
   };
 
   const rasterize = async () => {
-    if (stopped || inFlight || !editor) return;
+    if (stopped || !editor) return;
+    if (inFlight) {
+      // Board changed while a previous rasterize is still running — schedule
+      // an immediate re-run once it finishes so the new strokes don't wait
+      // for the safety interval.
+      pending = true;
+      return;
+    }
     const now = Date.now();
-    if (now - lastRasterAt < minIntervalMs) return;
+    // When retrying because of a pending update, allow up to ~60 fps; otherwise
+    // hold at the normal ~30 fps cap.
+    const gap = pending ? PENDING_MIN_INTERVAL : minIntervalMs;
+    if (now - lastRasterAt < gap) return;
     inFlight = true;
     lastRasterAt = now;
     try {
@@ -126,6 +143,10 @@ export function createBoardFrameSource(
       markFirstFrameReady();
     } finally {
       inFlight = false;
+      if (pending && !stopped) {
+        pending = false;
+        queueMicrotask(() => void rasterize());
+      }
     }
   };
 

@@ -43,11 +43,12 @@ import Colors from "@/constants/colors";
 
 
 export default function AdminClassroomPage() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, autoEnd } = useLocalSearchParams<{ id: string; autoEnd?: string }>();
   const liveClassId = String(id || "");
   const qc = useQueryClient();
   const [isEnding, setIsEnding] = useState(false);
   const [endModalOpen, setEndModalOpen] = useState(false);
+  const autoEndTriggeredRef = useRef(false);
   const [boardEl, setBoardEl] = useState<HTMLElement | null>(null);
   const [editor, setEditor] = useState<Editor | null>(null);
   const [compositeStream, setCompositeStream] = useState<MediaStream | null>(null);
@@ -106,11 +107,26 @@ export default function AdminClassroomPage() {
 
   useLiveEngagementSse({
     liveClassId,
-    // Recording-only sessions are private and have no student engagement panel.
-    // Opening the SSE endpoint there creates noisy 401s while the teacher is recording.
-    enabled: !!sessionActive && !isRecordingMode && Platform.OS === "web",
+    // Only run the engagement stream while the class is actually live. On a
+    // scheduled-but-not-yet-live or already-ended class the /engagement/stream
+    // endpoint returns 401/403 loops that flood the console; broadcast/[id]
+    // gates on `isLive && tabVisible` for the same reason.
+    enabled: !!isLive && !isRecordingMode && Platform.OS === "web",
     isAdmin: true,
   });
+
+  // Dashboard "End Live" redirects here with autoEnd=1 so the class is always
+  // ended through the studio (which runs the MediaRecorder stop + R2 upload +
+  // board PDF flow). Fire once per navigation, and only after the class query
+  // has resolved so the modal has real editor / boardEl values to work with.
+  useEffect(() => {
+    if (Platform.OS !== "web") return;
+    if (autoEndTriggeredRef.current) return;
+    if (String(autoEnd || "") !== "1") return;
+    if (!sessionActive) return;
+    autoEndTriggeredRef.current = true;
+    setEndModalOpen(true);
+  }, [autoEnd, sessionActive]);
 
   const handleRoomReady = useCallback((room: Room | null) => {
     liveKitRoomRef.current = room;

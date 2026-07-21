@@ -128,19 +128,30 @@ export default function ClassroomEndSessionModal({
   const handleEndClass = async () => {
     setEnding(true);
     setError(null);
-    try {
-      let archive: EndSessionArchive | null = null;
-      if (editor) {
+    // Board archive (PDF + PNGs) is best-effort: never let a rasterize / PDF /
+    // upload failure block the actual end-class call. A stuck live class with
+    // `is_live=true` is worse than a missing PDF, and the caller can still
+    // finalize the recording without the archive.
+    let archive: EndSessionArchive | null = null;
+    if (editor) {
+      try {
         const pages = await exportClassroomBoardAllPagesPng(editor, boardEl);
         if (pages?.length) {
           const uploaded = await uploadClassroomBoardArchive(liveClassId, pages, subfolder);
           if (uploaded) archive = uploaded;
         } else if (editor.getPages().some((p) => editor.getPageShapeIds(p.id).size > 0)) {
           setError(
-            "Board export failed; class will still end using cloud checkpoint if available."
+            "Board export produced no pages; class will still end using cloud checkpoint if available."
           );
         }
+      } catch (e) {
+        console.warn("[Classroom] board archive failed, ending without PDF", e);
+        setError(
+          "Board PDF export failed. Class will still end and the video will be saved."
+        );
       }
+    }
+    try {
       await onConfirmEnd(archive);
       onClose();
     } catch (e: unknown) {

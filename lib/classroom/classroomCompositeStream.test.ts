@@ -5,6 +5,7 @@ import {
   computeCornerOrigin,
   computeGreenScreenCutoutRect,
   computePipOrigin,
+  computePortraitRoi,
   GS_CUTOUT_MARGIN,
   GS_CUTOUT_MAX_HEIGHT_FRAC,
   GS_CUTOUT_MAX_WIDTH_FRAC,
@@ -33,10 +34,11 @@ describe("computePipOrigin", () => {
 });
 
 describe("computeGreenScreenCutoutRect", () => {
-  it("contain-fits into the max box and anchors bottom-right (OBS-style)", () => {
-    // Landscape source — height-limited by maxH
-    const sw = 1280;
-    const sh = 720;
+  it("contain-fits into the portrait max box and anchors bottom-right (OBS-style)", () => {
+    // The cutout is fed a portrait ROI in production, but the function itself
+    // should still contain-fit whatever source dims are passed in.
+    const sw = 540;
+    const sh = 720; // 3:4 portrait ROI from a 1280x720 webcam
     const maxW = Math.round(COMPOSITE_WIDTH * GS_CUTOUT_MAX_WIDTH_FRAC);
     const maxH = Math.round(COMPOSITE_HEIGHT * GS_CUTOUT_MAX_HEIGHT_FRAC);
     const scale = Math.min(maxW / sw, maxH / sh);
@@ -52,8 +54,26 @@ describe("computeGreenScreenCutoutRect", () => {
     expect(dx).toBe(COMPOSITE_WIDTH - dw - GS_CUTOUT_MARGIN);
     expect(dy).toBe(COMPOSITE_HEIGHT - dh - GS_CUTOUT_MARGIN);
     // Not a full-width bottom band
-    expect(dw).toBeLessThan(COMPOSITE_WIDTH * 0.5);
+    expect(dw).toBeLessThan(COMPOSITE_WIDTH * 0.3);
     expect(dx).toBeGreaterThan(COMPOSITE_WIDTH / 2);
+  });
+
+  it("stays inside the portrait max box for a 16:9 webcam ROI", () => {
+    // Real ROI from a 1280x720 webcam is 540x720 (3:4). The resulting cutout
+    // must fit inside the tuned portrait box (~ 422 x 594) with the tuned
+    // margin and NOT sprawl across a full landscape band.
+    const roiW = 540;
+    const roiH = 720;
+    const maxW = Math.round(COMPOSITE_WIDTH * GS_CUTOUT_MAX_WIDTH_FRAC);
+    const maxH = Math.round(COMPOSITE_HEIGHT * GS_CUTOUT_MAX_HEIGHT_FRAC);
+    const { dw, dh, dx, dy } = computeGreenScreenCutoutRect("bottom-right", roiW, roiH);
+    expect(dw).toBeLessThanOrEqual(maxW);
+    expect(dh).toBeLessThanOrEqual(maxH);
+    // Under 25% of the composite width — much smaller than the board area.
+    expect(dw).toBeLessThan(Math.round(COMPOSITE_WIDTH * 0.25));
+    // Actually anchored to bottom-right within GS_CUTOUT_MARGIN.
+    expect(COMPOSITE_WIDTH - (dx + dw)).toBe(GS_CUTOUT_MARGIN);
+    expect(COMPOSITE_HEIGHT - (dy + dh)).toBe(GS_CUTOUT_MARGIN);
   });
 
   it("anchors bottom-left when selected", () => {
@@ -69,5 +89,30 @@ describe("computeGreenScreenCutoutRect", () => {
     const sh = 1600; // tall portrait
     const { dw, dh } = computeGreenScreenCutoutRect("bottom-right", sw, sh);
     expect(dw / dh).toBeCloseTo(sw / sh, 2);
+  });
+});
+
+describe("computePortraitRoi", () => {
+  it("crops a 1280x720 (16:9) source to a centered 540x720 portrait ROI", () => {
+    const { sx, sy, sw, sh } = computePortraitRoi(1280, 720);
+    expect(sw).toBe(540);
+    expect(sh).toBe(720);
+    // Centered horizontally, top-anchored so the full body/head is visible.
+    expect(sx).toBe(Math.round((1280 - 540) / 2));
+    expect(sy).toBe(0);
+  });
+
+  it("returns full frame when the source is already narrower than the target", () => {
+    // 720x1600 portrait: 720 < round(1600 * 3/4) = 1200, so wantW = 720.
+    const { sx, sw, sh } = computePortraitRoi(720, 1600);
+    expect(sw).toBe(720);
+    expect(sh).toBe(1600);
+    expect(sx).toBe(0);
+  });
+
+  it("guards against zero / negative inputs", () => {
+    const { sw, sh } = computePortraitRoi(0, 0);
+    expect(sw).toBeGreaterThanOrEqual(1);
+    expect(sh).toBeGreaterThanOrEqual(1);
   });
 });

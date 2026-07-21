@@ -1,11 +1,13 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { View, Text, StyleSheet, Pressable, Platform } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import LiveChatPanel from "@/components/LiveChatPanel";
 import LiveStudentsPanel from "@/components/LiveStudentsPanel";
 import ClassroomEngagementPanel from "@/components/classroom/ClassroomEngagementPanel";
 import Colors from "@/constants/colors";
 import type { ChatMode } from "@/lib/live-stream/types";
+import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
 
 type SideTab = "chat" | "poll" | "students";
 
@@ -20,6 +22,16 @@ type Props = {
   };
 };
 
+type HandRaiseRow = {
+  id: number;
+  user_id?: number;
+  userId?: number;
+  user_name?: string;
+  userName?: string;
+  raised_at?: number;
+  raisedAt?: number;
+};
+
 export default function ClassroomEngagementSidebar({
   liveClassId,
   chatMode,
@@ -28,6 +40,46 @@ export default function ClassroomEngagementSidebar({
   parentViewers,
 }: Props) {
   const [activeTab, setActiveTab] = useState<SideTab>("chat");
+  const qc = useQueryClient();
+
+  // Own the raised-hands poll at the sidebar level so LiveChatPanel doesn't
+  // fire its own 500 ms poll while the parent (chat tab) is already polling
+  // — that duplicate produced 401 noise while auth flapped, and the sidebar
+  // has the right lifecycle to gate polling on engagementEnabled.
+  const { data: raisedHandsRaw = [] } = useQuery<HandRaiseRow[]>({
+    queryKey: [`/api/admin/live-classes/${liveClassId}/raised-hands`],
+    queryFn: async () => {
+      const res = await authFetch(
+        `${getApiUrl()}/admin/live-classes/${encodeURIComponent(liveClassId)}/raised-hands`
+      );
+      if (!res.ok) return [];
+      return (await res.json()) as HandRaiseRow[];
+    },
+    enabled: engagementEnabled && Platform.OS === "web",
+    refetchInterval: engagementEnabled ? 2000 : false,
+    staleTime: 0,
+  });
+
+  const raisedHands = useMemo(
+    () =>
+      raisedHandsRaw.map((h) => ({
+        id: Number(h.id),
+        userId: Number(h.userId ?? h.user_id ?? 0),
+        userName: String(h.userName ?? h.user_name ?? "Student"),
+        raisedAt: Number(h.raisedAt ?? h.raised_at ?? 0),
+      })),
+    [raisedHandsRaw]
+  );
+
+  const resolveHandMutation = useMutation({
+    mutationFn: (userId: number) =>
+      apiRequest("POST", `/api/admin/live-classes/${liveClassId}/raised-hands/${userId}/resolve`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({
+        queryKey: [`/api/admin/live-classes/${liveClassId}/raised-hands`],
+      });
+    },
+  });
 
   if (Platform.OS !== "web") {
     return <Text style={styles.note}>Engagement panel is web-only.</Text>;
@@ -77,7 +129,13 @@ export default function ClassroomEngagementSidebar({
 
       <View style={styles.tabContent}>
         {activeTab === "chat" ? (
-          <LiveChatPanel liveClassId={liveClassId} chatMode={chatMode} isAdmin />
+          <LiveChatPanel
+            liveClassId={liveClassId}
+            chatMode={chatMode}
+            isAdmin
+            raisedHands={raisedHands}
+            onResolveHand={(userId) => resolveHandMutation.mutate(userId)}
+          />
         ) : activeTab === "poll" ? (
           <View style={styles.tabPanelFill}>
             <ClassroomEngagementPanel liveClassId={liveClassId} enabled={engagementEnabled} />
