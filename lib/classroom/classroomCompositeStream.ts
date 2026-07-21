@@ -12,8 +12,10 @@ const PIP_HEIGHT = Math.round(PIP_WIDTH * (3 / 4)); // portrait 3:4 so full body
 const PIP_MARGIN = 16;
 const DEFAULT_FPS = 30;
 
-// Green-screen teacher band height (fraction of board height) for recording composite.
-const GS_TEACHER_BAND_FRAC = 0.45;
+/** Max box for OBS-style green-screen cutout (full person, contain-fit). */
+export const GS_CUTOUT_MAX_WIDTH_FRAC = 0.32;
+export const GS_CUTOUT_MAX_HEIGHT_FRAC = 0.42;
+export const GS_CUTOUT_MARGIN = 16;
 
 // Camera canvas dimensions when green screen is ON: full resolution for keying / raw publish.
 const GS_CAM_WIDTH = COMPOSITE_WIDTH;
@@ -22,13 +24,44 @@ const GS_CAM_HEIGHT = COMPOSITE_HEIGHT;
 /** When false, teacher publishes a single pre-composited track (board + teacher baked in). */
 export const CLASSROOM_SPLIT_STREAM = false;
 
-/** Top-left corner of the PiP rectangle for the chosen corner. */
-export function computePipOrigin(position: ClassroomPipPosition): { pipX: number; pipY: number } {
+/** Top-left origin of a rectangle of size (w×h) in the chosen board corner. */
+export function computeCornerOrigin(
+  position: ClassroomPipPosition,
+  w: number,
+  h: number,
+  margin: number = PIP_MARGIN
+): { x: number; y: number } {
   const onLeft = position === "top-left" || position === "bottom-left";
   const onBottom = position === "bottom-right" || position === "bottom-left";
-  const pipX = onLeft ? PIP_MARGIN : COMPOSITE_WIDTH - PIP_WIDTH - PIP_MARGIN;
-  const pipY = onBottom ? COMPOSITE_HEIGHT - PIP_HEIGHT - PIP_MARGIN : PIP_MARGIN;
-  return { pipX, pipY };
+  const x = onLeft ? margin : COMPOSITE_WIDTH - w - margin;
+  const y = onBottom ? COMPOSITE_HEIGHT - h - margin : margin;
+  return { x, y };
+}
+
+/** Top-left corner of the PiP rectangle for the chosen corner. */
+export function computePipOrigin(position: ClassroomPipPosition): { pipX: number; pipY: number } {
+  const { x, y } = computeCornerOrigin(position, PIP_WIDTH, PIP_HEIGHT, PIP_MARGIN);
+  return { pipX: x, pipY: y };
+}
+
+/**
+ * Contain-fit the keyed teacher into a max box and anchor to the chosen corner
+ * (OBS-style cutout — full silhouette, no crop, no full-width band).
+ */
+export function computeGreenScreenCutoutRect(
+  position: ClassroomPipPosition,
+  sourceWidth: number,
+  sourceHeight: number
+): { dx: number; dy: number; dw: number; dh: number } {
+  const maxW = Math.round(COMPOSITE_WIDTH * GS_CUTOUT_MAX_WIDTH_FRAC);
+  const maxH = Math.round(COMPOSITE_HEIGHT * GS_CUTOUT_MAX_HEIGHT_FRAC);
+  const sw = Math.max(1, sourceWidth);
+  const sh = Math.max(1, sourceHeight);
+  const scale = Math.min(maxW / sw, maxH / sh);
+  const dw = Math.max(1, Math.round(sw * scale));
+  const dh = Math.max(1, Math.round(sh * scale));
+  const { x: dx, y: dy } = computeCornerOrigin(position, dw, dh, GS_CUTOUT_MARGIN);
+  return { dx, dy, dw, dh };
 }
 
 export type ClassroomStreamOptions = {
@@ -133,6 +166,21 @@ function drawImageCover(
   ctx.drawImage(source, sx, sy, sw, sh, dx, dy, dw, dh);
 }
 
+/** Draw source fully visible inside dest (no crop); letterbox within dx/dy/dw/dh is unused. */
+function drawImageContain(
+  ctx: CanvasRenderingContext2D,
+  source: CanvasImageSource,
+  sourceWidth: number,
+  sourceHeight: number,
+  dx: number,
+  dy: number,
+  dw: number,
+  dh: number
+) {
+  if (sourceWidth <= 0 || sourceHeight <= 0 || dw <= 0 || dh <= 0) return;
+  ctx.drawImage(source, 0, 0, sourceWidth, sourceHeight, dx, dy, dw, dh);
+}
+
 function drawCameraCover(
   ctx: CanvasRenderingContext2D,
   source: HTMLVideoElement | HTMLCanvasElement,
@@ -170,18 +218,20 @@ function drawPipLayer(
   outCtx.restore();
 }
 
-/** Green-screen recording: teacher keyed in the lower band (not full board). */
+/** Green-screen recording: OBS-style cutout anchored to the chosen board corner. */
 function drawFullBoardTeacherLayer(
   outCtx: CanvasRenderingContext2D,
   cameraVideo: HTMLVideoElement,
   chromaCanvas: HTMLCanvasElement,
-  chromaCtx: CanvasRenderingContext2D
+  chromaCtx: CanvasRenderingContext2D,
+  pipPosition: ClassroomPipPosition
 ) {
   if (cameraVideo.readyState < 2) return;
   drawVideoWithChromaKey(cameraVideo, chromaCanvas, chromaCtx);
-  const bandH = Math.round(COMPOSITE_HEIGHT * GS_TEACHER_BAND_FRAC);
-  const bandY = COMPOSITE_HEIGHT - bandH;
-  drawCameraCover(outCtx, chromaCanvas, 0, bandY, COMPOSITE_WIDTH, bandH);
+  const sw = chromaCanvas.width || cameraVideo.videoWidth || 1;
+  const sh = chromaCanvas.height || cameraVideo.videoHeight || 1;
+  const { dx, dy, dw, dh } = computeGreenScreenCutoutRect(pipPosition, sw, sh);
+  drawImageContain(outCtx, chromaCanvas, sw, sh, dx, dy, dw, dh);
 }
 
 async function openCameraVideo(cameraId?: string): Promise<HTMLVideoElement> {
@@ -292,7 +342,8 @@ export async function startClassroomPublishBundle(
   recCanvas.height = COMPOSITE_HEIGHT;
   const recCtx = recCanvas.getContext("2d");
   if (!recCtx) throw new Error("Canvas not supported");
-  const { pipX, pipY } = computePipOrigin(normalizePipPosition(opts.pipPosition));
+  const pipPosition = normalizePipPosition(opts.pipPosition);
+  const { pipX, pipY } = computePipOrigin(pipPosition);
   let resolveRecordingReady: (() => void) | null = null;
   let hasResolvedRecordingReady = false;
   const recordingReady = new Promise<void>((resolve) => {
@@ -318,7 +369,7 @@ export async function startClassroomPublishBundle(
   const recPaint = () => {
     drawBoardLayer(recCtx, boardFrame.getFrame());
     if (opts.greenScreen && chromaCanvas && chromaCtx) {
-      drawFullBoardTeacherLayer(recCtx, cameraVideo, chromaCanvas, chromaCtx);
+      drawFullBoardTeacherLayer(recCtx, cameraVideo, chromaCanvas, chromaCtx, pipPosition);
     } else {
       drawPipLayer(recCtx, cameraVideo, false, null, null, pipX, pipY);
     }

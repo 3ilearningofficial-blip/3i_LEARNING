@@ -121,7 +121,7 @@ export default function ClassroomMediaSetupPanel({ webrtc, livekitConfigured }: 
           ))}
         </View>
         <Text style={styles.hint}>
-          Corner where you appear for students. With green screen, you appear as a full overlay — position is ignored.
+          Corner where you appear for students. With green screen, your cutout is anchored to this corner (OBS-style).
         </Text>
       </View>
     </View>
