@@ -17,6 +17,11 @@ import {
   type ClassroomCompositeHandle,
 } from "./classroomCompositeStream";
 import {
+  USB_CAMERA_RELEASE_MS,
+  formatMediaAccessError,
+  mediaDelay,
+} from "../mediaDeviceAcquire";
+import {
   LIVEKIT_PARTICIPANT_METADATA_CHANGED,
   LIVEKIT_TRACK_MUTED,
   LIVEKIT_TRACK_PUBLISHED,
@@ -93,6 +98,8 @@ export function useLiveKitRoom(
     tokenRef.current = tokenPayload;
   }, [tokenPayload]);
   const [error, setError] = useState<string | null>(null);
+  /** Soft warning (e.g. board-only when camera failed) — does not block the video preview. */
+  const [streamWarning, setStreamWarning] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
   const [reconnectNonce, setReconnectNonce] = useState(0);
@@ -250,6 +257,9 @@ export function useLiveKitRoom(
       await unpublishCompositeTracks();
       stopComposite();
       await room.localParticipant.setCameraEnabled(false);
+      // Give Blink time to release the device after LiveKit disables its own
+      // camera track — skipping this caused "Timeout starting video source".
+      await mediaDelay(USB_CAMERA_RELEASE_MS);
 
       const localParticipant = room.localParticipant as unknown as LocalPublisher;
 
@@ -278,10 +288,16 @@ export function useLiveKitRoom(
 
       setCamEnabled(true);
       setError(null);
+      setStreamWarning(
+        bundle.cameraWarning
+          ? `Camera unavailable — board-only streaming. ${bundle.cameraWarning}`
+          : null
+      );
       attachLocalCameraPreview();
     } catch (e: unknown) {
-      const detail = e instanceof Error ? e.message : "Failed to start board stream";
-      setError(`${detail}. Board stream failed — refresh the page.`);
+      const detail = formatMediaAccessError(e);
+      setError(`${detail} Board stream failed — refresh the page.`);
+      setStreamWarning(null);
       setCamEnabled(false);
       setBoardStreaming(false);
       await unpublishCompositeTracks().catch(() => {});
@@ -542,11 +558,25 @@ export function useLiveKitRoom(
     if (!room) return;
     const next = !camEnabled;
     if (boardEl && tokenPayload?.canPublish) {
+      const bundle = publishBundleRef.current;
       if (next) {
-        const republished = await publishCameraTrackOnly();
-        if (!republished) await startCompositePublish();
+        // Resume PiP on the already-published board composite. Only restart
+        // the full publish pipeline if the bundle/track is missing.
+        if (bundle) {
+          bundle.setPipEnabled(true);
+          void publishTeacherMeta(room, true);
+          attachLocalCameraPreview();
+        } else {
+          const republished = await publishCameraTrackOnly();
+          if (!republished) await startCompositePublish();
+        }
       } else {
-        await unpublishCameraTrackOnly();
+        // Hide teacher PiP only — keep the composite LiveKit track live so
+        // students still see the board (and hear mic audio).
+        if (bundle) {
+          bundle.setPipEnabled(false);
+        }
+        void publishTeacherMeta(room, false);
         if (localVideoRef.current) localVideoRef.current.srcObject = null;
       }
       setCamEnabled(next);
@@ -559,6 +589,7 @@ export function useLiveKitRoom(
 
   return {
     error,
+    streamWarning,
     connected,
     reconnecting,
     micEnabled,

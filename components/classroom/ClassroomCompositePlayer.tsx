@@ -223,16 +223,18 @@ export default function ClassroomCompositePlayer({
         <Ionicons name={isFullscreen ? "contract-outline" : "scan-outline"} size={20} color="#fff" />
       </Pressable>
 
-      {/* Poll & stats overlays live *inside* the fullscreen container so
-          they stay visible when a student taps fullscreen on phone-web. The
-          chat-side panel outside the frame is hidden by the browser's
-          fullscreen. */}
-      <View pointerEvents="box-none" style={styles.pollOverlay}>
-        <StudentActivePollPanel liveClassId={liveClassId} enabled={enabled} compact />
-      </View>
-      <View pointerEvents="box-none" style={styles.pollOverlay}>
-        <StudentPollStatsOverlay liveClassId={liveClassId} enabled={enabled} compact />
-      </View>
+      {/* Poll & stats overlays only while fullscreen — outside FS the under-video
+          / chat panels own the UI; mounting both caused duplicate quiz cards. */}
+      {isFullscreen ? (
+        <>
+          <View pointerEvents="box-none" style={styles.pollOverlay}>
+            <StudentActivePollPanel liveClassId={liveClassId} enabled={enabled} compact />
+          </View>
+          <View pointerEvents="box-none" style={styles.pollOverlay}>
+            <StudentPollStatsOverlay liveClassId={liveClassId} enabled={enabled} compact />
+          </View>
+        </>
+      ) : null}
     </>
   );
 

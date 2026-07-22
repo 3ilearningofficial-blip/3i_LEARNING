@@ -241,6 +241,7 @@ export function registerClassroomRoutes({
       const boardPdfUrl = String(body.boardPdfUrl || "").trim();
       const boardPagesRaw = body.boardPages;
       const boardSyncCheckpointUrl = String(body.boardSyncCheckpointUrl || "").trim();
+      const boardClientCheckpointUrl = String(body.boardClientCheckpointUrl || "").trim();
       const sectionTitle = buildRecordingLectureSectionTitle(
         lc.lecture_section_title,
         lc.lecture_subfolder_title,
@@ -280,6 +281,14 @@ export function registerClassroomRoutes({
         archiveFields.push(`board_sync_checkpoint_url = $${p++}`);
         archiveParams.push(boardSyncCheckpointUrl);
         archiveFields.push(`board_checkpoint_at = $${p++}`);
+        archiveParams.push(Date.now());
+      }
+      // Editor getSnapshot() JSON belongs in the client column only — never
+      // overwrite board_sync_checkpoint_url (RoomSnapshot) with editor format.
+      if (boardClientCheckpointUrl) {
+        archiveFields.push(`board_client_checkpoint_url = $${p++}`);
+        archiveParams.push(boardClientCheckpointUrl);
+        archiveFields.push(`board_client_checkpoint_at = $${p++}`);
         archiveParams.push(Date.now());
       }
       if (archiveFields.length > 0) {

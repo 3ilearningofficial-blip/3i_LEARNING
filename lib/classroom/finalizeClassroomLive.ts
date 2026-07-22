@@ -69,7 +69,8 @@ export async function finalizeClassroomLiveSession(
     videoRecordingUrl?: string | null;
     boardEl?: HTMLElement | null;
     boardArchive?: EndSessionArchive | null;
-    boardSyncCheckpointUrl?: string | null;
+    /** Client editor getSnapshot() JSON URL — must not overwrite server RoomSnapshot column. */
+    boardClientCheckpointUrl?: string | null;
   }
 ): Promise<{
   savedToLectures: boolean;
@@ -154,7 +155,7 @@ export async function finalizeClassroomLiveSession(
     const shapeIds = [...editor.getCurrentPageShapeIds()];
     const blob = await exportClassroomBoardPng(editor, opts?.boardEl ?? null);
     if (shapeIds.length > 0 && !blob) {
-      const hasCheckpoint = Boolean(String(opts?.boardSyncCheckpointUrl || "").trim());
+      const hasCheckpoint = Boolean(String(opts?.boardClientCheckpointUrl || "").trim());
       const hasArchive =
         Boolean(opts?.boardArchive?.boardSnapshotUrl) ||
         Boolean(opts?.boardArchive?.boardPdfUrl) ||
@@ -195,7 +196,7 @@ export async function finalizeClassroomLiveSession(
     boardSnapshotUrl: boardSnapshotUrl || undefined,
     boardPdfUrl: opts?.boardArchive?.boardPdfUrl || undefined,
     boardPages: opts?.boardArchive?.boardPageUrls || undefined,
-    boardSyncCheckpointUrl: opts?.boardSyncCheckpointUrl || undefined,
+    boardClientCheckpointUrl: opts?.boardClientCheckpointUrl || undefined,
     sectionTitle,
   });
   if (!res.ok) {

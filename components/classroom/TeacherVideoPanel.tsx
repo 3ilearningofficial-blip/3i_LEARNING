@@ -57,6 +57,7 @@ export default function TeacherVideoPanel({
   const { data: tokenPayload, isLoading, error: tokenError } = useClassroomToken(liveClassId, enabled);
   const {
     error,
+    streamWarning,
     connected,
     micEnabled,
     camEnabled,
@@ -131,6 +132,9 @@ export default function TeacherVideoPanel({
           <video ref={videoRef as any} autoPlay playsInline muted style={videoStyle} />
         )}
       </View>
+      {streamWarning && !error && !tokenError ? (
+        <Text style={styles.warning}>{streamWarning}</Text>
+      ) : null}
       <View style={styles.controls}>
         <Pressable
           style={[styles.ctrlBtn, !micEnabled && styles.ctrlBtnOff]}
@@ -176,7 +180,13 @@ export default function TeacherVideoPanel({
 }
 
 const styles = StyleSheet.create({
-  wrap: { backgroundColor: "#111827", borderRadius: 10, overflow: "hidden", marginBottom: 8 },
+  wrap: {
+    flex: 1,
+    minHeight: 0,
+    backgroundColor: "#111827",
+    borderRadius: 10,
+    overflow: "hidden",
+  },
   cameraLabel: {
     fontSize: 10,
     fontWeight: "700",
@@ -187,19 +197,21 @@ const styles = StyleSheet.create({
     paddingTop: 6,
   },
   videoBox: {
+    flex: 1,
+    minHeight: 180,
     width: "100%",
-    aspectRatio: 4 / 3,
     justifyContent: "center",
     alignItems: "center",
     backgroundColor: "#000",
   },
   muted: { color: "#9CA3AF", fontSize: 12, padding: 12 },
   error: { color: "#FCA5A5", fontSize: 11, padding: 8, textAlign: "center" },
+  warning: { color: "#FCD34D", fontSize: 10, paddingHorizontal: 8, paddingBottom: 4, textAlign: "center" },
   controls: {
     flexDirection: "row",
     justifyContent: "center",
     gap: 8,
-    paddingVertical: 6,
+    paddingVertical: 8,
     backgroundColor: "rgba(0,0,0,0.6)",
   },
   ctrlBtn: {

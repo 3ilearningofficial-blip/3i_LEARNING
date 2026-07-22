@@ -12,16 +12,47 @@ type CheckpointMeta = {
   checkpointAt: number;
 };
 
-function getSnapshotPageCount(snapshot: unknown): number {
+type SnapshotBoardStats = { pageCount: number; shapeCount: number };
+
+/**
+ * Editor `getSnapshot()` JSON has document.store.records (or store.records).
+ * Server auto-checkpoints are tldraw RoomSnapshots with a top-level `documents` array.
+ * Client `loadSnapshot` only accepts the editor shape.
+ */
+export function isEditorBoardSnapshot(snapshot: unknown): boolean {
+  if (!snapshot || typeof snapshot !== "object") return false;
+  const s = snapshot as Record<string, unknown>;
+  if (Array.isArray(s.documents)) return false;
   const records =
-    (snapshot as { document?: { store?: { records?: Record<string, { typeName?: string }> } } })
-      ?.document?.store?.records ??
-    (snapshot as { store?: { records?: Record<string, { typeName?: string }> } })?.store?.records;
-  if (!records || typeof records !== "object") return 0;
-  return Object.values(records).filter((r) => r?.typeName === "page").length;
+    (s.document as { store?: { records?: unknown } } | undefined)?.store?.records ??
+    (s.store as { records?: unknown } | undefined)?.records;
+  return !!records && typeof records === "object";
 }
 
-function countLocalBoardState(editor: Editor): { pageCount: number; shapeCount: number } {
+function getEditorSnapshotRecords(
+  snapshot: unknown
+): Record<string, { typeName?: string }> | null {
+  if (!isEditorBoardSnapshot(snapshot)) return null;
+  const s = snapshot as {
+    document?: { store?: { records?: Record<string, { typeName?: string }> } };
+    store?: { records?: Record<string, { typeName?: string }> };
+  };
+  return s.document?.store?.records ?? s.store?.records ?? null;
+}
+
+function getSnapshotBoardStats(snapshot: unknown): SnapshotBoardStats {
+  const records = getEditorSnapshotRecords(snapshot);
+  if (!records) return { pageCount: 0, shapeCount: 0 };
+  let pageCount = 0;
+  let shapeCount = 0;
+  for (const r of Object.values(records)) {
+    if (r?.typeName === "page") pageCount += 1;
+    if (r?.typeName === "shape") shapeCount += 1;
+  }
+  return { pageCount, shapeCount };
+}
+
+function countLocalBoardState(editor: Editor): SnapshotBoardStats {
   const pages = editor.getPages();
   const originalPageId = editor.getCurrentPageId();
   let shapeCount = 0;
@@ -88,7 +119,7 @@ async function fetchCheckpointSnapshot(
   );
   if (proxyRes.ok) {
     const fromProxy = await parseJsonSnapshotResponse(proxyRes, "snapshot proxy");
-    if (fromProxy) return fromProxy;
+    if (fromProxy && isEditorBoardSnapshot(fromProxy)) return fromProxy;
   } else if (proxyRes.status !== 404) {
     console.warn(`[Classroom] snapshot proxy failed (${proxyRes.status})`);
   }
@@ -99,7 +130,9 @@ async function fetchCheckpointSnapshot(
     console.warn(`[Classroom] checkpoint restore: public URL fetch failed (${snapRes.status})`);
     return null;
   }
-  return parseJsonSnapshotResponse(snapRes, publicUrl);
+  const parsed = await parseJsonSnapshotResponse(snapRes, publicUrl);
+  if (parsed && isEditorBoardSnapshot(parsed)) return parsed;
+  return null;
 }
 
 function shouldRestoreFromCheckpoint(
@@ -107,10 +140,12 @@ function shouldRestoreFromCheckpoint(
   snapshot: unknown,
   checkpointAt: number
 ): boolean {
+  if (!isEditorBoardSnapshot(snapshot)) return false;
+  if (!(checkpointAt > 0)) return false;
   const local = countLocalBoardState(editor);
   if (local.shapeCount === 0) return true;
-  const remotePages = getSnapshotPageCount(snapshot);
-  return remotePages > local.pageCount && checkpointAt > 0;
+  const remote = getSnapshotBoardStats(snapshot);
+  return remote.pageCount > local.pageCount || remote.shapeCount > local.shapeCount;
 }
 
 export function useClassroomBoardCheckpoint(
@@ -189,7 +224,8 @@ export async function restoreClassroomBoardCheckpoint(
     if (!snapshot) return false;
     if (!shouldRestoreFromCheckpoint(editor, snapshot, meta?.checkpointAt ?? 0)) return false;
 
-    editor.loadSnapshot(snapshot);
+    // loadSnapshot expects editor-shaped JSON only (never RoomSnapshot).
+    editor.loadSnapshot(snapshot as Parameters<Editor["loadSnapshot"]>[0]);
     return true;
   } catch (e) {
     console.warn("[Classroom] checkpoint restore failed:", e);

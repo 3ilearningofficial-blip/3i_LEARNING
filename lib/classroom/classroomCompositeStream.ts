@@ -3,6 +3,10 @@ import { drawVideoWithChromaKey } from "./chromaKey";
 import { createBoardFrameSource, type BoardFrameSource } from "./boardFrameSource";
 import { COMPOSITE_WIDTH, COMPOSITE_HEIGHT } from "./slideConstants";
 import { normalizePipPosition, type ClassroomPipPosition } from "./mediaDevices";
+import {
+  acquireVideoOnlyStream,
+  formatMediaAccessError,
+} from "../mediaDeviceAcquire";
 
 export { COMPOSITE_WIDTH, COMPOSITE_HEIGHT };
 
@@ -141,6 +145,13 @@ export type ClassroomPublishBundle = {
    * composite frame paints in the new corner.
    */
   setPipPosition: (next: ClassroomPipPosition) => void;
+  /**
+   * Show/hide the teacher PiP in the published composite without unpublishing
+   * the LiveKit track. Off = board-only frames; On = PiP returns on the next paint.
+   */
+  setPipEnabled: (enabled: boolean) => void;
+  /** Set when camera open failed and the bundle is board-only. */
+  cameraWarning?: string;
   stop: () => void;
 };
 
@@ -266,10 +277,7 @@ function drawFullBoardTeacherLayer(
 }
 
 async function openCameraVideo(cameraId?: string): Promise<HTMLVideoElement> {
-  const cameraStream = await navigator.mediaDevices.getUserMedia({
-    video: cameraId ? { deviceId: { exact: cameraId } } : true,
-    audio: false,
-  });
+  const cameraStream = await acquireVideoOnlyStream(cameraId);
   const cameraVideo = document.createElement("video");
   cameraVideo.srcObject = cameraStream;
   cameraVideo.muted = true;
@@ -310,11 +318,21 @@ export async function startClassroomPublishBundle(
   opts: ClassroomStreamOptions
 ): Promise<ClassroomPublishBundle> {
   const fps = opts.fps ?? DEFAULT_FPS;
-  const cameraVideo = await openCameraVideo(opts.cameraId);
-  const cameraStream = cameraVideo.srcObject as MediaStream;
+
+  let cameraVideo: HTMLVideoElement | null = null;
+  let cameraStream: MediaStream | null = null;
+  let cameraWarning: string | undefined;
+  try {
+    cameraVideo = await openCameraVideo(opts.cameraId);
+    cameraStream = cameraVideo.srcObject as MediaStream;
+  } catch (err) {
+    // Prefer board-only streaming over failing the whole class for students.
+    cameraWarning = formatMediaAccessError(err);
+    console.warn("[Classroom] camera open failed; continuing board-only:", cameraWarning);
+  }
 
   const boardFrame = createBoardFrameSource(opts.editor ?? null, opts.boardEl);
-  const chromaCanvas = opts.greenScreen ? document.createElement("canvas") : null;
+  const chromaCanvas = opts.greenScreen && cameraVideo ? document.createElement("canvas") : null;
   const chromaCtx = chromaCanvas?.getContext("2d", { willReadFrequently: true }) ?? null;
 
   const boardCanvas = document.createElement("canvas");
@@ -342,7 +360,7 @@ export async function startClassroomPublishBundle(
   let camRaf = 0;
   const camPaint = () => {
     camCtx.clearRect(0, 0, camW, camH);
-    if (cameraVideo.readyState >= 2) {
+    if (cameraVideo && cameraVideo.readyState >= 2) {
       if (opts.greenScreen && chromaCanvas && chromaCtx) {
         drawVideoWithChromaKey(cameraVideo, chromaCanvas, chromaCtx);
         // Draw the keyed teacher image centered / cover-fitted in the full-board canvas.
@@ -357,7 +375,7 @@ export async function startClassroomPublishBundle(
   const camStream = camCanvas.captureStream(fps);
   const camTrack = camStream.getVideoTracks()[0];
   if (!camTrack) throw new Error("Could not create camera video track");
-  const rawCamTrack = cameraStream.getVideoTracks()[0];
+  const rawCamTrack = cameraStream?.getVideoTracks()[0];
   const livePublishTrack =
     opts.greenScreen && rawCamTrack?.readyState === "live" ? rawCamTrack : camTrack;
 
@@ -373,11 +391,15 @@ export async function startClassroomPublishBundle(
   recCanvas.height = COMPOSITE_HEIGHT;
   const recCtx = recCanvas.getContext("2d");
   if (!recCtx) throw new Error("Canvas not supported");
-  // pipPosition is mutable so runtime corner tabs update the paint loop without
-  // restarting the whole publish bundle.
+  // pipPosition / pipEnabled are mutable so runtime corner tabs and cam on/off
+  // update the paint loop without restarting the whole publish bundle.
   let pipPosition = normalizePipPosition(opts.pipPosition);
+  let pipEnabled = true;
   const setPipPosition = (next: ClassroomPipPosition) => {
     pipPosition = normalizePipPosition(next);
+  };
+  const setPipEnabled = (enabled: boolean) => {
+    pipEnabled = !!enabled;
   };
   let resolveRecordingReady: (() => void) | null = null;
   let hasResolvedRecordingReady = false;
@@ -386,7 +408,9 @@ export async function startClassroomPublishBundle(
   });
   const tryResolveRecordingReady = () => {
     if (hasResolvedRecordingReady) return;
-    if (!boardFrameIsReady || cameraVideo.readyState < 2) return;
+    // Board-only: ready as soon as the first board frame lands.
+    if (!boardFrameIsReady) return;
+    if (pipEnabled && cameraVideo && cameraVideo.readyState < 2) return;
     hasResolvedRecordingReady = true;
     resolveRecordingReady?.();
   };
@@ -403,11 +427,13 @@ export async function startClassroomPublishBundle(
   let recRaf = 0;
   const recPaint = () => {
     drawBoardLayer(recCtx, boardFrame.getFrame());
-    if (opts.greenScreen && chromaCanvas && chromaCtx) {
-      drawFullBoardTeacherLayer(recCtx, cameraVideo, chromaCanvas, chromaCtx, pipPosition);
-    } else {
-      const { pipX, pipY } = computePipOrigin(pipPosition);
-      drawPipLayer(recCtx, cameraVideo, false, null, null, pipX, pipY);
+    if (pipEnabled && cameraVideo) {
+      if (opts.greenScreen && chromaCanvas && chromaCtx) {
+        drawFullBoardTeacherLayer(recCtx, cameraVideo, chromaCanvas, chromaCtx, pipPosition);
+      } else {
+        const { pipX, pipY } = computePipOrigin(pipPosition);
+        drawPipLayer(recCtx, cameraVideo, false, null, null, pipX, pipY);
+      }
     }
     tryResolveRecordingReady();
     recRaf = requestAnimationFrame(recPaint);
@@ -432,6 +458,13 @@ export async function startClassroomPublishBundle(
   recPreviewEl.srcObject = recStream;
   void recPreviewEl.play().catch(() => {});
 
+  const previewStream = cameraStream ?? recStream;
+  const rawCamPreviewEl = document.createElement("video");
+  rawCamPreviewEl.muted = true;
+  rawCamPreviewEl.playsInline = true;
+  rawCamPreviewEl.srcObject = previewStream;
+  void rawCamPreviewEl.play().catch(() => {});
+
   const stop = () => {
     boardLoop.stopRaf();
     cancelAnimationFrame(camRaf);
@@ -443,20 +476,17 @@ export async function startClassroomPublishBundle(
     cameraStream?.getTracks().forEach((t) => t.stop());
     camPreviewEl.srcObject = null;
     recPreviewEl.srcObject = null;
+    rawCamPreviewEl.srcObject = null;
   };
-
-  const rawCamPreviewEl = document.createElement("video");
-  rawCamPreviewEl.muted = true;
-  rawCamPreviewEl.playsInline = true;
-  rawCamPreviewEl.srcObject = cameraStream;
-  void rawCamPreviewEl.play().catch(() => {});
 
   return {
     board: { stream: boardStream, stop: () => boardTrack.stop() },
     camera: { stream: camStream, previewEl: camPreviewEl, livePublishTrack, stop: () => camTrack.stop() },
     recording: { stream: recStream, previewEl: recPreviewEl, ready: recordingReady, stop: () => recTrack.stop() },
-    cameraPreview: { stream: cameraStream, el: rawCamPreviewEl },
+    cameraPreview: { stream: previewStream, el: rawCamPreviewEl },
     setPipPosition,
+    setPipEnabled,
+    cameraWarning,
     stop,
   };
 }

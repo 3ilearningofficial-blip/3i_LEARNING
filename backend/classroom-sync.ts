@@ -198,7 +198,14 @@ async function fetchSnapshotFromR2(
       chunks.push(chunk instanceof Uint8Array ? chunk : Buffer.from(chunk));
     }
     const json = Buffer.concat(chunks).toString("utf-8");
-    return JSON.parse(json) as RoomSnapshot;
+    const parsed = JSON.parse(json) as RoomSnapshot & { document?: unknown };
+    if (!Array.isArray(parsed?.documents)) {
+      console.warn(
+        `[classroom-checkpoint] R2 object ${objectKey} is not a RoomSnapshot — skipping for sync restore`
+      );
+      return null;
+    }
+    return parsed;
   } catch (err: any) {
     console.warn("[classroom-checkpoint] R2 GET failed:", err?.message || String(err));
     return null;
@@ -236,12 +243,21 @@ async function uploadSnapshotToR2(
 
 /**
  * Download and parse a RoomSnapshot JSON from a public https URL (client checkpoint).
+ * Returns null if the body is not a RoomSnapshot (e.g. editor getSnapshot JSON).
  */
 async function fetchSnapshotFromHttp(url: string): Promise<RoomSnapshot | null> {
   try {
     const res = await fetch(url, { cache: "no-store" });
     if (!res.ok) return null;
-    return (await res.json()) as RoomSnapshot;
+    const json = (await res.json()) as RoomSnapshot & { document?: unknown; store?: unknown };
+    // Editor getSnapshot() has document/store.records — not usable as RoomSnapshot.
+    if (!Array.isArray(json?.documents)) {
+      console.warn(
+        "[classroom-checkpoint] HTTP snapshot is editor JSON, not RoomSnapshot — skipping for sync restore"
+      );
+      return null;
+    }
+    return json;
   } catch (err: any) {
     console.warn("[classroom-checkpoint] HTTP GET failed:", err?.message || String(err));
     return null;

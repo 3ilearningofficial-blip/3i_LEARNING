@@ -85,6 +85,19 @@ async function acquireTrack(
   throw lastError ?? new Error(`Could not open ${label.toLowerCase()}`);
 }
 
+/** Video-only acquire with exact→ideal→any fallbacks and retries (classroom composite). */
+export async function acquireVideoOnlyStream(cameraId?: string): Promise<MediaStream> {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new Error("Camera access is not supported in this browser.");
+  }
+  const videoTrack = await acquireTrack(
+    "video",
+    buildVideoConstraintAttempts(cameraId),
+    "Camera",
+  );
+  return new MediaStream([videoTrack]);
+}
+
 export async function acquireCameraMicrophoneStream(opts?: {
   cameraId?: string;
   microphoneId?: string;

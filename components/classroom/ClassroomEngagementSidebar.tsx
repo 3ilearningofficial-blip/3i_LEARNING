@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { View, Text, StyleSheet, Pressable, Platform } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -10,13 +10,18 @@ import Colors from "@/constants/colors";
 import type { ChatMode } from "@/lib/live-stream/types";
 import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
 
-type SideTab = "chat" | "poll" | "students";
+type SideTab = "camera" | "chat" | "poll" | "students";
 
 type Props = {
   liveClassId: string;
   chatMode: ChatMode;
   showViewerCount?: boolean;
   engagementEnabled?: boolean;
+  /**
+   * Camera / LiveKit panel. Always kept mounted (hidden when another tab is
+   * active) so publishing to students is never interrupted by tab switches.
+   */
+  cameraPanel: ReactNode;
   parentViewers?: {
     viewers: { user_id: number; user_name: string }[];
     count: number;
@@ -38,12 +43,18 @@ export default function ClassroomEngagementSidebar({
   chatMode,
   showViewerCount = true,
   engagementEnabled = true,
+  cameraPanel,
   parentViewers,
 }: Props) {
-  const [activeTab, setActiveTab] = useState<SideTab>("chat");
-  const previousTabRef = useRef<SideTab>("chat");
+  const [activeTab, setActiveTab] = useState<SideTab>("camera");
+  const previousTabRef = useRef<SideTab>("camera");
   const wasPollActiveRef = useRef(false);
+  const [authBlocked, setAuthBlocked] = useState(false);
   const qc = useQueryClient();
+
+  useEffect(() => {
+    setAuthBlocked(false);
+  }, [engagementEnabled, liveClassId]);
 
   const { data: activePoll } = useActivePoll(liveClassId, engagementEnabled);
   const pollActive =
@@ -51,14 +62,14 @@ export default function ClassroomEngagementSidebar({
 
   // Auto-swap: when a poll goes active, jump the admin to the Poll tab so
   // they can watch results roll in. When it ends, restore whatever tab they
-  // had open before (usually "chat") so the sidebar doesn't feel sticky.
+  // had open before so the sidebar doesn't feel sticky.
   useEffect(() => {
     if (pollActive && !wasPollActiveRef.current) {
       previousTabRef.current = activeTab;
       if (activeTab !== "poll") setActiveTab("poll");
     }
     if (!pollActive && wasPollActiveRef.current) {
-      if (activeTab === "poll") setActiveTab(previousTabRef.current || "chat");
+      if (activeTab === "poll") setActiveTab(previousTabRef.current || "camera");
     }
     wasPollActiveRef.current = pollActive;
   }, [pollActive, activeTab]);
@@ -73,11 +84,15 @@ export default function ClassroomEngagementSidebar({
       const res = await authFetch(
         `${getApiUrl()}/admin/live-classes/${encodeURIComponent(liveClassId)}/raised-hands`
       );
+      if (res.status === 401 || res.status === 403) {
+        setAuthBlocked(true);
+        return [];
+      }
       if (!res.ok) return [];
       return (await res.json()) as HandRaiseRow[];
     },
-    enabled: engagementEnabled && Platform.OS === "web",
-    refetchInterval: engagementEnabled ? 2000 : false,
+    enabled: engagementEnabled && Platform.OS === "web" && !authBlocked,
+    refetchInterval: engagementEnabled && !authBlocked ? 2000 : false,
     staleTime: 0,
   });
 
@@ -106,49 +121,50 @@ export default function ClassroomEngagementSidebar({
     return <Text style={styles.note}>Engagement panel is web-only.</Text>;
   }
 
+  const tabs: { id: SideTab; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
+    { id: "camera", label: "Camera", icon: "videocam-outline" },
+    { id: "chat", label: "Chat", icon: "chatbubbles-outline" },
+    { id: "poll", label: "Poll / Quiz", icon: "stats-chart-outline" },
+    { id: "students", label: "Students", icon: "people-outline" },
+  ];
+
   return (
     <View style={styles.wrap}>
       <View style={styles.tabBar}>
-        <Pressable
-          style={[styles.tab, activeTab === "chat" && styles.tabActive]}
-          onPress={() => setActiveTab("chat")}
-        >
-          <Ionicons
-            name="chatbubbles-outline"
-            size={16}
-            color={activeTab === "chat" ? Colors.light.primary : Colors.light.textMuted}
-          />
-          <Text style={[styles.tabText, activeTab === "chat" && styles.tabTextActive]}>Chat</Text>
-        </Pressable>
-        <Pressable
-          style={[styles.tab, activeTab === "poll" && styles.tabActive]}
-          onPress={() => setActiveTab("poll")}
-        >
-          <Ionicons
-            name="stats-chart-outline"
-            size={16}
-            color={activeTab === "poll" ? Colors.light.primary : Colors.light.textMuted}
-          />
-          <Text style={[styles.tabText, activeTab === "poll" && styles.tabTextActive]}>
-            Poll / Quiz
-          </Text>
-        </Pressable>
-        <Pressable
-          style={[styles.tab, activeTab === "students" && styles.tabActive]}
-          onPress={() => setActiveTab("students")}
-        >
-          <Ionicons
-            name="people-outline"
-            size={16}
-            color={activeTab === "students" ? Colors.light.primary : Colors.light.textMuted}
-          />
-          <Text style={[styles.tabText, activeTab === "students" && styles.tabTextActive]}>
-            Students
-          </Text>
-        </Pressable>
+        {tabs.map((tab) => {
+          const active = activeTab === tab.id;
+          return (
+            <Pressable
+              key={tab.id}
+              style={[styles.tab, active && styles.tabActive]}
+              onPress={() => setActiveTab(tab.id)}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: active }}
+            >
+              <Ionicons
+                name={tab.icon}
+                size={15}
+                color={active ? Colors.light.primary : Colors.light.textMuted}
+              />
+              <Text style={[styles.tabText, active && styles.tabTextActive]} numberOfLines={1}>
+                {tab.label}
+              </Text>
+            </Pressable>
+          );
+        })}
       </View>
 
       <View style={styles.tabContent}>
+        {/* Keep camera mounted always — hiding (not unmounting) preserves LiveKit publish. */}
+        <View
+          style={[styles.tabPanelFill, activeTab !== "camera" && styles.panelHidden]}
+          pointerEvents={activeTab === "camera" ? "auto" : "none"}
+          accessibilityElementsHidden={activeTab !== "camera"}
+          importantForAccessibility={activeTab === "camera" ? "yes" : "no-hide-descendants"}
+        >
+          {cameraPanel}
+        </View>
+
         {activeTab === "chat" ? (
           <LiveChatPanel
             liveClassId={liveClassId}
@@ -158,17 +174,21 @@ export default function ClassroomEngagementSidebar({
             raisedHands={raisedHands}
             onResolveHand={(userId) => resolveHandMutation.mutate(userId)}
           />
-        ) : activeTab === "poll" ? (
+        ) : null}
+
+        {activeTab === "poll" ? (
           <View style={styles.tabPanelFill}>
             <ClassroomEngagementPanel liveClassId={liveClassId} enabled={engagementEnabled} />
           </View>
-        ) : (
+        ) : null}
+
+        {activeTab === "students" ? (
           <LiveStudentsPanel
             liveClassId={liveClassId}
             showViewerCount={showViewerCount}
             parentViewers={parentViewers}
           />
-        )}
+        ) : null}
       </View>
     </View>
   );
@@ -185,17 +205,28 @@ const styles = StyleSheet.create({
   },
   tab: {
     flex: 1,
-    flexDirection: "row",
+    flexDirection: "column",
     alignItems: "center",
     justifyContent: "center",
-    gap: 6,
-    paddingVertical: 10,
+    gap: 2,
+    paddingVertical: 8,
+    paddingHorizontal: 2,
     borderBottomWidth: 2,
     borderBottomColor: "transparent",
   },
   tabActive: { borderBottomColor: Colors.light.primary },
-  tabText: { fontSize: 12, fontWeight: "600", color: Colors.light.textMuted },
+  tabText: { fontSize: 10, fontWeight: "600", color: Colors.light.textMuted },
   tabTextActive: { color: Colors.light.primary },
-  tabContent: { flex: 1, minHeight: 0 },
+  tabContent: { flex: 1, minHeight: 0, position: "relative" },
   tabPanelFill: { flex: 1, minHeight: 0 },
+  // Keep layout out of the way without unmounting (LiveKit must stay alive).
+  panelHidden: {
+    position: "absolute",
+    width: 1,
+    height: 1,
+    opacity: 0,
+    overflow: "hidden",
+    left: 0,
+    top: 0,
+  },
 });

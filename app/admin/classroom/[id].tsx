@@ -157,9 +157,16 @@ export default function AdminClassroomPage() {
     const flush = () => {
       void uploadCheckpoint();
     };
+    const onVisibility = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        flush();
+      }
+    };
     window.addEventListener("beforeunload", flush);
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
       window.removeEventListener("beforeunload", flush);
+      document.removeEventListener("visibilitychange", onVisibility);
       flush();
     };
   }, [uploadCheckpoint]);
@@ -274,7 +281,7 @@ export default function AdminClassroomPage() {
             videoRecordingUrl,
             boardEl: getBoardDomElement(),
             boardArchive: archive,
-            boardSyncCheckpointUrl: checkpointUrl,
+            boardClientCheckpointUrl: checkpointUrl,
           }
         );
         qc.invalidateQueries({ queryKey: liveClassesQueryKey() });
@@ -436,17 +443,6 @@ export default function AdminClassroomPage() {
         </View>
 
         <View style={styles.sidePanel}>
-          <TeacherVideoPanel
-            liveClassId={liveClassId}
-            enabled={!!sessionActive}
-            boardEl={boardEl}
-            editor={editor}
-            liveClassPipPosition={liveClass?.pip_position}
-            onRoomReady={handleRoomReady}
-            onCompositeStream={setCompositeStream}
-            onBoardStreamingChange={setBoardStreaming}
-          />
-
           {/* Recording mode is a clean lecture recorder: no chat, polls, quiz, hands, or student list. */}
           {!isRecordingMode ? (
             <ClassroomEngagementSidebar
@@ -459,8 +455,31 @@ export default function AdminClassroomPage() {
                   ? { viewers: viewerData.viewers, count: viewerData.count }
                   : undefined
               }
+              cameraPanel={
+                <TeacherVideoPanel
+                  liveClassId={liveClassId}
+                  enabled={!!sessionActive}
+                  boardEl={boardEl}
+                  editor={editor}
+                  liveClassPipPosition={liveClass?.pip_position}
+                  onRoomReady={handleRoomReady}
+                  onCompositeStream={setCompositeStream}
+                  onBoardStreamingChange={setBoardStreaming}
+                />
+              }
             />
-          ) : null}
+          ) : (
+            <TeacherVideoPanel
+              liveClassId={liveClassId}
+              enabled={!!sessionActive}
+              boardEl={boardEl}
+              editor={editor}
+              liveClassPipPosition={liveClass?.pip_position}
+              onRoomReady={handleRoomReady}
+              onCompositeStream={setCompositeStream}
+              onBoardStreamingChange={setBoardStreaming}
+            />
+          )}
         </View>
       </View>
     </View>
@@ -548,6 +567,7 @@ const styles = StyleSheet.create({
     padding: 10,
     minWidth: 420,
     maxWidth: 720,
+    minHeight: 0,
   },
   colLabel: {
     fontSize: 11,

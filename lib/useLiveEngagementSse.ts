@@ -65,6 +65,7 @@ function invalidateEngagementQueries(
 export function useLiveEngagementSse({ liveClassId, enabled = true, isAdmin = false }: Options): boolean {
   const qc = useQueryClient();
   const [active, setActive] = useState(false);
+  const [authBlocked, setAuthBlocked] = useState(false);
   const qcRef = useRef(qc);
   qcRef.current = qc;
   // Pause the stream/polling while the tab is hidden or the app is backgrounded
@@ -73,7 +74,11 @@ export function useLiveEngagementSse({ liveClassId, enabled = true, isAdmin = fa
   const visible = useDocumentVisibility();
 
   useEffect(() => {
-    if (!liveClassId || !enabled || !visible) {
+    setAuthBlocked(false);
+  }, [enabled, liveClassId]);
+
+  useEffect(() => {
+    if (!liveClassId || !enabled || !visible || authBlocked) {
       setActive(false);
       return;
     }
@@ -96,13 +101,24 @@ export function useLiveEngagementSse({ liveClassId, enabled = true, isAdmin = fa
     let es: EventSource | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let backoffMs = 1000;
+    /** Only reconnect EventSource errors after a successful open — avoids
+     *  spamming /stream with a stale token that never opened. */
+    let everOpened = false;
 
     const invalidateForType = (type: string) => {
       invalidateEngagementQueries(qcRef.current, liveClassId, type, isAdmin);
     };
 
+    const scheduleReconnect = () => {
+      if (closed || authBlocked) return;
+      reconnectTimer = setTimeout(() => {
+        backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS);
+        connect();
+      }, backoffMs);
+    };
+
     const connect = async () => {
-      if (closed) return;
+      if (closed || authBlocked) return;
       if (es) {
         es.close();
         es = null;
@@ -110,13 +126,9 @@ export function useLiveEngagementSse({ liveClassId, enabled = true, isAdmin = fa
 
       const token = await getStoredAuthToken();
       if (!token) {
+        // No session yet — do not spin reconnect timers. The effect re-runs
+        // when enabled/liveClassId/visible changes (or after a remount).
         setActive(false);
-        if (!closed) {
-          reconnectTimer = setTimeout(() => {
-            backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS);
-            connect();
-          }, backoffMs);
-        }
         return;
       }
       const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
@@ -129,22 +141,22 @@ export function useLiveEngagementSse({ liveClassId, enabled = true, isAdmin = fa
           headers,
         }
       );
-      if (!tokenRes.ok) {
+      if (tokenRes.status === 401 || tokenRes.status === 403) {
         setActive(false);
-        reconnectTimer = setTimeout(() => {
-          backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS);
-          connect();
-        }, backoffMs);
+        setAuthBlocked(true);
+        return;
+      }
+      if (!tokenRes.ok) {
+        // Transient (5xx / network-shaped non-OK) — back off and retry.
+        setActive(false);
+        scheduleReconnect();
         return;
       }
       const tokenPayload = unwrapAuthPayload(await tokenRes.json().catch(() => null));
       const streamToken = String(tokenPayload?.token || "").trim();
       if (!streamToken) {
         setActive(false);
-        reconnectTimer = setTimeout(() => {
-          backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS);
-          connect();
-        }, backoffMs);
+        scheduleReconnect();
         return;
       }
       const params = new URLSearchParams();
@@ -156,6 +168,7 @@ export function useLiveEngagementSse({ liveClassId, enabled = true, isAdmin = fa
 
       es.onopen = () => {
         setActive(true);
+        everOpened = true;
         backoffMs = 1000;
       };
 
@@ -175,10 +188,15 @@ export function useLiveEngagementSse({ liveClassId, enabled = true, isAdmin = fa
           es = null;
         }
         if (closed) return;
-        reconnectTimer = setTimeout(() => {
-          backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS);
-          connect();
-        }, backoffMs);
+        // If the stream never opened, the token/URL is likely bad (401). Stop
+        // rather than hammering. After a successful open, reconnect (token
+        // refresh on the next connect() call).
+        if (!everOpened) {
+          setAuthBlocked(true);
+          return;
+        }
+        everOpened = false;
+        scheduleReconnect();
       };
     };
 
@@ -190,7 +208,7 @@ export function useLiveEngagementSse({ liveClassId, enabled = true, isAdmin = fa
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (es) es.close();
     };
-  }, [liveClassId, enabled, isAdmin, visible]);
+  }, [liveClassId, enabled, isAdmin, visible, authBlocked]);
 
   return active;
 }
