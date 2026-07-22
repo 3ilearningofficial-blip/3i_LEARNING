@@ -52,9 +52,13 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 // ── Short-lived classroom-sync auth token ──────────────────────────────────────
 // A browser cannot set an Authorization header on a WebSocket, and tldraw's
 // useSync discards query params — so the credential must ride in the URL PATH.
-// We issue a signed, ~2-minute token (NOT the raw session token) bound to the
-// user + live class, verified here on connect.
-const CLASSROOM_SYNC_TOKEN_TTL_MS = 2 * 60 * 1000;
+// Tokens must outlive typical reconnect gaps during a live class. A 2-minute
+// TTL caused sync error NOT_AUTHENTICATED whenever the socket reconnected after
+// idle / LiveKit resets mid-session. 8h covers long classes; the client also
+// refreshes the URI well before expiry.
+export const CLASSROOM_SYNC_TOKEN_TTL_MS = 8 * 60 * 60 * 1000;
+/** Client should rebuild the WS URI this often (must be < TTL). */
+export const CLASSROOM_SYNC_TOKEN_REFRESH_MS = 45 * 60 * 1000;
 function syncB64Url(buf: Buffer): string {
   return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }

@@ -8,7 +8,9 @@ import ClassroomEngagementPanel from "@/components/classroom/ClassroomEngagement
 import { useActivePoll } from "@/lib/classroom/useActivePoll";
 import Colors from "@/constants/colors";
 import type { ChatMode } from "@/lib/live-stream/types";
+import { normalizeChatMode } from "@/lib/live-stream/types";
 import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
+import { liveClassQueryKey } from "@/lib/query-keys";
 
 type SideTab = "camera" | "chat" | "poll" | "students";
 
@@ -117,6 +119,34 @@ export default function ClassroomEngagementSidebar({
     },
   });
 
+  // Remember public/private so disabling chat mid-class can restore the prior mode.
+  const priorChatModeRef = useRef<Exclude<ChatMode, "disabled">>(
+    chatMode === "private" ? "private" : "public"
+  );
+  useEffect(() => {
+    if (chatMode === "public" || chatMode === "private") {
+      priorChatModeRef.current = chatMode;
+    }
+  }, [chatMode]);
+
+  const chatDisableMutation = useMutation({
+    mutationFn: async (disabled: boolean) => {
+      const next: ChatMode = disabled ? "disabled" : priorChatModeRef.current;
+      const res = await apiRequest("PUT", `/api/admin/live-classes/${liveClassId}`, {
+        chatMode: next,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { message?: string }).message || "Failed to update chat");
+      }
+      return next;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: liveClassQueryKey(liveClassId) });
+      qc.invalidateQueries({ queryKey: [`/api/live-classes/${liveClassId}`] });
+    },
+  });
+
   if (Platform.OS !== "web") {
     return <Text style={styles.note}>Engagement panel is web-only.</Text>;
   }
@@ -168,11 +198,13 @@ export default function ClassroomEngagementSidebar({
         {activeTab === "chat" ? (
           <LiveChatPanel
             liveClassId={liveClassId}
-            chatMode={chatMode}
+            chatMode={normalizeChatMode(chatMode)}
             isAdmin
             enabled={engagementEnabled}
             raisedHands={raisedHands}
             onResolveHand={(userId) => resolveHandMutation.mutate(userId)}
+            onToggleChatDisabled={(disabled) => chatDisableMutation.mutate(disabled)}
+            chatDisablePending={chatDisableMutation.isPending}
           />
         ) : null}
 

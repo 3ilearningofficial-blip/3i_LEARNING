@@ -215,11 +215,14 @@ export function registerLiveChatRoutes({
       const hasAccess = await checkLiveClassAccess(req, res, db, getAuthUser, req.params.id as string);
       if (!hasAccess) return;
       const user = (req as any).user;
-      const lc = await db.query("SELECT is_live, is_completed FROM live_classes WHERE id = $1", [req.params.id]);
+      const lc = await db.query("SELECT is_live, is_completed, chat_mode FROM live_classes WHERE id = $1", [req.params.id]);
       const liveClass = lc.rows[0];
       // Students can message only while class is actually live.
       if (user?.role !== "admin" && (!liveClass?.is_live || liveClass?.is_completed)) {
         return res.status(403).json({ message: "Chat is available only during live class." });
+      }
+      if (user?.role !== "admin" && String(liveClass?.chat_mode || "") === "disabled") {
+        return res.status(403).json({ message: "Live chat has been disabled by the teacher." });
       }
       const { message } = req.body;
       if (!message || !message.trim()) return res.status(400).json({ message: "Message is required" });

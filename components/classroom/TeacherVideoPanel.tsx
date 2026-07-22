@@ -120,14 +120,20 @@ export default function TeacherVideoPanel({
     );
   }
 
+  // Board-only preview is a 16:9 composite — keep the box 16:9 so it doesn't
+  // shrink into a tiny thumbnail inside the tall CAMERA tab.
+  const boardOnlyPreview = !!streamWarning && !error && !tokenError;
+
   return (
     <View style={styles.wrap}>
-      <Text style={styles.cameraLabel}>Camera</Text>
-      <View style={styles.videoBox}>
+      <Text style={styles.cameraLabel}>{boardOnlyPreview ? "Board stream" : "Camera"}</Text>
+      <View style={[styles.videoBox, boardOnlyPreview && styles.videoBoxBoard]}>
         {isLoading ? (
           <ActivityIndicator color={Colors.light.primary} />
         ) : tokenError || error ? (
           <Text style={styles.error}>{tokenError?.message || error}</Text>
+        ) : boardOnlyPreview ? (
+          <Text style={styles.boardOnlyHint}>Board-only — camera unavailable</Text>
         ) : (
           <video ref={videoRef as any} autoPlay playsInline muted style={videoStyle} />
         )}
@@ -204,7 +210,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
     backgroundColor: "#000",
   },
+  videoBoxBoard: {
+    flexGrow: 0,
+    flexShrink: 0,
+    minHeight: 0,
+    width: "100%",
+    aspectRatio: 16 / 9,
+  },
   muted: { color: "#9CA3AF", fontSize: 12, padding: 12 },
+  boardOnlyHint: { color: "#9CA3AF", fontSize: 12, padding: 12, textAlign: "center" },
   error: { color: "#FCA5A5", fontSize: 11, padding: 8, textAlign: "center" },
   warning: { color: "#FCD34D", fontSize: 10, paddingHorizontal: 8, paddingBottom: 4, textAlign: "center" },
   controls: {

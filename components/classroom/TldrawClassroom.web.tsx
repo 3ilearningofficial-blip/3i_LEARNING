@@ -3,7 +3,8 @@ import { Tldraw, type Editor, type TLAssetStore } from "tldraw";
 import { useSync } from "@tldraw/sync";
 import { View, ActivityIndicator, StyleSheet, Text, Platform } from "react-native";
 import "@tldraw/tldraw/tldraw.css";
-import { buildClassroomSyncUriWithAuth } from "@/lib/classroom/syncUri";
+import { buildClassroomSyncUriWithAuth, CLASSROOM_SYNC_URI_REFRESH_MS } from "@/lib/classroom/syncUri";
+import { installClassroomDomGuards } from "@/lib/classroom/installClassroomDomGuards";
 import { getTldrawLicenseKey, tldrawLicenseHint } from "@/lib/tldrawLicense";
 import { createClassroomAssetStore } from "@/lib/classroom/classroomAssetStore";
 import {
@@ -27,51 +28,9 @@ export type { TldrawClassroomHandle } from "./TldrawClassroom.types";
 
 const TLDRAW_LICENSE_KEY = getTldrawLicenseKey();
 const TLDRAW_LICENSE_HINT = tldrawLicenseHint(TLDRAW_LICENSE_KEY);
-let classroomTouchPatchInstalled = false;
 
-// tldraw calls `event.preventDefault()` inside touch AND wheel handlers to
-// stop the browser from scrolling / pinch-zooming the whole page while the
-// user is drawing on the board. Modern Chrome treats `touchstart`,
-// `touchmove`, `wheel`, and `mousewheel` as passive by default on the root
-// element, so those preventDefault() calls become no-ops and the console
-// gets a "Unable to preventDefault inside passive event listener" warning
-// for every stroke. Force `{ passive: false }` on those event types (only)
-// so preventDefault actually works and the console stays clean.
-function installClassroomNonPassiveTouchPatch() {
-  if (Platform.OS !== "web" || typeof EventTarget === "undefined" || classroomTouchPatchInstalled) return;
-  classroomTouchPatchInstalled = true;
-
-  const proto = EventTarget.prototype as typeof EventTarget.prototype & {
-    __classroomAddEventListener?: EventTarget["addEventListener"];
-  };
-  if (proto.__classroomAddEventListener) return;
-
-  const NON_PASSIVE_EVENTS = new Set([
-    "touchstart",
-    "touchmove",
-    "touchend",
-    "touchcancel",
-    "wheel",
-    "mousewheel",
-  ]);
-
-  const original = proto.addEventListener;
-  proto.__classroomAddEventListener = original;
-  proto.addEventListener = function patchedAddEventListener(
-    type: string,
-    listener: EventListenerOrEventListenerObject | null,
-    options?: boolean | AddEventListenerOptions
-  ) {
-    if (NON_PASSIVE_EVENTS.has(type) && options !== false) {
-      const nextOptions =
-        typeof options === "object" && options !== null
-          ? { ...options, passive: false }
-          : { capture: options === true, passive: false };
-      return original.call(this, type, listener, nextOptions);
-    }
-    return original.call(this, type, listener, options);
-  };
-}
+// Install before tldraw attaches gesture listeners (module load + mount).
+installClassroomDomGuards();
 
 type Props = {
   liveClassId: string;
@@ -196,10 +155,11 @@ const TldrawClassroomWeb = forwardRef<TldrawClassroomHandle, Props>(function Tld
   { liveClassId, readonly = false, preview = false, onEditorReady },
   ref
 ) {
-  installClassroomNonPassiveTouchPatch();
+  installClassroomDomGuards();
   const editorRef = useRef<Editor | null>(null);
   const [uri, setUri] = useState<string | null>(null);
   const [uriError, setUriError] = useState<string | null>(null);
+  const [uriNonce, setUriNonce] = useState(0);
 
   useImperativeHandle(ref, () => ({
     getEditor: () => editorRef.current,
@@ -217,16 +177,53 @@ const TldrawClassroomWeb = forwardRef<TldrawClassroomHandle, Props>(function Tld
     let cancelled = false;
     void buildClassroomSyncUriWithAuth(liveClassId, preview)
       .then((u) => {
-        if (!cancelled) setUri(u);
+        if (!cancelled) {
+          setUri(u);
+          setUriError(null);
+        }
       })
       .catch((e) => {
-        if (!cancelled) setUriError(e?.message || "Failed to connect to board");
+        if (cancelled) return;
+        // Keep an existing live board up if a mid-session token refresh fails.
+        setUri((prev) => {
+          if (prev) {
+            console.warn("[Classroom] sync token refresh failed:", e?.message || e);
+            return prev;
+          }
+          setUriError(e?.message || "Failed to connect to board");
+          return prev;
+        });
       });
     return () => {
       cancelled = true;
     };
-  }, [liveClassId, preview]);
+  }, [liveClassId, preview, uriNonce]);
 
+  // Refresh the path token before it expires so mid-class reconnects stay authenticated.
+  useEffect(() => {
+    if (Platform.OS !== "web") return;
+    const id = setInterval(() => setUriNonce((n) => n + 1), CLASSROOM_SYNC_URI_REFRESH_MS);
+    return () => clearInterval(id);
+  }, []);
+
+  // After a long background (laptop sleep), refresh auth once so reconnect does not
+  // reuse an expired path token. Ignore short tab switches to avoid remount churn.
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof document === "undefined") return;
+    let hiddenAt = 0;
+    const onVisible = () => {
+      if (document.visibilityState === "hidden") {
+        hiddenAt = Date.now();
+        return;
+      }
+      if (hiddenAt > 0 && Date.now() - hiddenAt > 2 * 60 * 1000) {
+        setUriNonce((n) => n + 1);
+      }
+      hiddenAt = 0;
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, []);
   const needsLicense =
     Platform.OS === "web" &&
     typeof window !== "undefined" &&

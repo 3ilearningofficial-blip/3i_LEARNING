@@ -36,6 +36,10 @@ type Props = {
   showLiveHeader: boolean;
   isLive: boolean;
   canChat: boolean;
+  canSendChat?: boolean;
+  chatDisabled?: boolean;
+  /** When true, poll/stats are shown on the video frame — skip under-title copy. */
+  hideUnderVideoEngagement?: boolean;
   handRaised: boolean;
   onHandRaise: () => void;
   chatMsg: string;
@@ -69,6 +73,9 @@ export default function ClassroomStudentPortraitShell({
   showLiveHeader,
   isLive,
   canChat,
+  canSendChat = canChat,
+  chatDisabled = false,
+  hideUnderVideoEngagement = false,
   handRaised,
   onHandRaise,
   chatMsg,
@@ -88,6 +95,8 @@ export default function ClassroomStudentPortraitShell({
     !!activePoll && Number(activePoll.ends_at) > Date.now() && !activePoll.ended_at;
   const { data: broadcastStats } = usePollBroadcastStats(liveClassId, canChat);
   const statsBroadcast = !!broadcastStats && !pollActive;
+  const showUnderVideoPoll = pollActive && !hideUnderVideoEngagement;
+  const showUnderVideoStats = statsBroadcast && !hideUnderVideoEngagement;
   return (
     <KeyboardAvoidingView
       style={styles.root}
@@ -120,13 +129,19 @@ export default function ClassroomStudentPortraitShell({
         </Text>
       </View>
 
-      {pollActive ? (
+      {showUnderVideoPoll ? (
         <View style={[styles.pollBlock, { paddingBottom: Math.max(bottomPadding, 12) }]}>
           <StudentActivePollPanel liveClassId={liveClassId} enabled={canChat} />
         </View>
-      ) : statsBroadcast ? (
+      ) : showUnderVideoStats ? (
         <View style={[styles.pollBlock, { paddingBottom: Math.max(bottomPadding, 12) }]}>
           <StudentPollStatsOverlay liveClassId={liveClassId} enabled={canChat} />
+        </View>
+      ) : chatDisabled ? (
+        <View style={[styles.chatDisabledBox, { paddingBottom: Math.max(bottomPadding, 24) }]}>
+          <Ionicons name="chatbubbles-outline" size={48} color="#6B7280" />
+          <Text style={styles.chatDisabledTitle}>Live Chat Has Been disabled by the Teacher</Text>
+          <Text style={styles.chatDisabledSub}>Focus on learning</Text>
         </View>
       ) : (
         <>
@@ -154,7 +169,7 @@ export default function ClassroomStudentPortraitShell({
               <Pressable
                 style={[styles.actionBtn, isListening && styles.actionBtnActive]}
                 onPress={onMicPress}
-                disabled={!canChat}
+                disabled={!canSendChat}
               >
                 <Ionicons
                   name={isListening ? "mic" : "mic-outline"}
@@ -205,16 +220,16 @@ export default function ClassroomStudentPortraitShell({
                 style={styles.chatInput}
                 value={chatMsg}
                 onChangeText={onChatMsgChange}
-                placeholder={canChat ? "Ask a doubt…" : "Chat closed"}
+                placeholder={canSendChat ? "Ask a doubt…" : "Chat closed"}
                 placeholderTextColor="#6B7280"
-                editable={canChat}
+                editable={canSendChat}
                 onSubmitEditing={onSend}
                 enterKeyHint="send"
               />
               <Pressable
                 style={[styles.sendBtn, (!chatMsg.trim() || sendPending) && styles.sendDisabled]}
                 onPress={onSend}
-                disabled={!canChat || !chatMsg.trim() || sendPending}
+                disabled={!canSendChat || !chatMsg.trim() || sendPending}
               >
                 <Ionicons name="send" size={18} color="#fff" />
               </Pressable>
@@ -342,6 +357,23 @@ const styles = StyleSheet.create({
   msgTime: { fontSize: 11, color: "#6B7280" },
   msgText: { fontSize: 14, color: "#D1D5DB", lineHeight: 20 },
   emptyChat: { textAlign: "center", color: "#6B7280", marginTop: 24, fontSize: 13 },
+  chatDisabledBox: {
+    flex: 1,
+    minHeight: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 12,
+    paddingHorizontal: 28,
+    backgroundColor: "#111827",
+  },
+  chatDisabledTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#F3F4F6",
+    textAlign: "center",
+    lineHeight: 24,
+  },
+  chatDisabledSub: { fontSize: 14, color: "#9CA3AF", textAlign: "center" },
   chatInputRow: {
     flexDirection: "row",
     alignItems: "center",

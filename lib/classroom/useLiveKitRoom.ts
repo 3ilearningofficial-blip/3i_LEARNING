@@ -143,6 +143,13 @@ export function useLiveKitRoom(
       void el.play().catch(() => {});
       return;
     }
+    // Board-only: do NOT attach the board composite into the CAMERA panel —
+    // that produced a misleading tiny board thumbnail. Leave empty; the
+    // streamWarning banner explains board-only mode.
+    if (bundle?.cameraWarning) {
+      el.srcObject = null;
+      return;
+    }
     const previewEl = bundle?.recording.previewEl ?? recordingCompositeRef.current?.previewEl;
     if (previewEl?.srcObject) {
       el.srcObject = previewEl.srcObject;
@@ -257,9 +264,10 @@ export function useLiveKitRoom(
       await unpublishCompositeTracks();
       stopComposite();
       await room.localParticipant.setCameraEnabled(false);
-      // Give Blink time to release the device after LiveKit disables its own
-      // camera track — skipping this caused "Timeout starting video source".
-      await mediaDelay(USB_CAMERA_RELEASE_MS);
+      // Brief pause in case LiveKit briefly held the device earlier this session
+      // (e.g. cam toggle). We no longer open LiveKit's camera on connect, so this
+      // stays short — long waits made Insta360 feel "stuck" for tens of seconds.
+      await mediaDelay(Math.min(USB_CAMERA_RELEASE_MS, 250));
 
       const localParticipant = room.localParticipant as unknown as LocalPublisher;
 
@@ -443,19 +451,11 @@ export function useLiveKitRoom(
             deviceId: prefs.microphoneId,
           });
           setMicEnabled(room.localParticipant.isMicrophoneEnabled);
-          // Read the latest boardEl at connect time: it may still be null on
-          // first connect (slide frame not yet mounted). If it is, publish the
-          // plain camera track; the composite-publish effect will republish
-          // once the board is ready.
-          if (!boardElRef.current) {
-            await room.localParticipant.setCameraEnabled(true, {
-              deviceId: prefs.cameraId,
-            });
-            setCamEnabled(room.localParticipant.isCameraEnabled);
-            const pub = room.localParticipant.getTrackPublication(Track.Source.Camera);
-            const track = pub?.videoTrack;
-            if (track && localVideoRef.current) track.attach(localVideoRef.current);
-          }
+          // Do NOT open LiveKit's built-in camera here. The composite publish
+          // path opens the webcam once via getUserMedia. Opening it here first
+          // (especially when boardEl is still null) doubles the Insta360/USB
+          // open cost and often triggers "Timeout starting video source".
+          // Composite starts from the boardEl/editor effect instead.
         } else {
           attachRemoteTeacher();
         }

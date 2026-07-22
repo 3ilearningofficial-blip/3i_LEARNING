@@ -129,9 +129,9 @@ export function registerClassroomRoutes({
       if (String(lc.stream_type || "").toLowerCase() !== "classroom") {
         return res.status(400).json({ message: "Not a classroom stream" });
       }
-      // Issue a short-lived, single-purpose signed token (NOT the raw session
-      // token) for the tldraw WS to carry in its URL path. ~2-min TTL, bound to
-      // this user + live class, verified by the sync server on connect.
+      // Issue a signed, single-purpose token (NOT the raw session token) for the
+      // tldraw WS path. TTL is CLASSROOM_SYNC_TOKEN_TTL_MS (8h); client refreshes
+      // the URI periodically so reconnects stay authenticated.
       const token = signClassroomSyncToken(user.id, String(req.params.id));
       res.set("Cache-Control", "no-store");
       res.json({ token });

@@ -1,3 +1,5 @@
+import type { ChatMode } from "@/lib/live-stream/types";
+
 export interface ChatMessage {
   id: number;
   user_id: number;
@@ -12,14 +14,16 @@ export interface ChatMessage {
  *
  * - public mode: returns all messages (everyone sees everything)
  * - private mode: returns only admin messages + the viewer's own messages
+ * - disabled: same visibility rules as public for history restore; UI hides the
+ *   list behind a locked banner for students (admin still sees messages)
  */
 export function filterChatMessages(
   messages: ChatMessage[],
   viewerUserId: number,
   isAdmin: boolean,
-  chatMode: "public" | "private"
+  chatMode: ChatMode
 ): ChatMessage[] {
-  if (chatMode === "public") {
+  if (chatMode === "public" || chatMode === "disabled") {
     return messages;
   }
 

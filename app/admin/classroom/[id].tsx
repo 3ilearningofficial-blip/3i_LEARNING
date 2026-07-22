@@ -39,6 +39,7 @@ import ClassroomLiveOverlays from "@/components/classroom/ClassroomLiveOverlays"
 import ClassroomHeaderActivityTimer from "@/components/classroom/ClassroomHeaderActivityTimer";
 import { useLiveEngagementSse } from "@/lib/useLiveEngagementSse";
 import { isTruthyDbFlag } from "@/lib/live-class/dbFlags";
+import { normalizeChatMode } from "@/lib/live-stream/types";
 import Colors from "@/constants/colors";
 
 
@@ -197,7 +198,7 @@ export default function AdminClassroomPage() {
   }, [isLive, sessionActive, boardStreaming, sessionRecorder.startSessionRecording, compositeStream]);
 
   const chatModeResolved = useMemo(
-    () => (liveClass?.chat_mode as "public" | "private") || "public",
+    () => normalizeChatMode(liveClass?.chat_mode),
     [liveClass?.chat_mode]
   );
 

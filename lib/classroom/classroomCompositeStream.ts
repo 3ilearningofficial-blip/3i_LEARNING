@@ -123,8 +123,8 @@ export type ClassroomCompositeHandle = {
 };
 
 export type ClassroomCameraPreview = {
-  /** Raw webcam MediaStream, no chroma-key applied, no board composite. */
-  stream: MediaStream;
+  /** Raw webcam MediaStream, no chroma-key applied, no board composite. Null when board-only. */
+  stream: MediaStream | null;
   /** Hidden <video> attached to the raw stream so consumers can clone srcObject. */
   el: HTMLVideoElement;
 };
@@ -458,12 +458,14 @@ export async function startClassroomPublishBundle(
   recPreviewEl.srcObject = recStream;
   void recPreviewEl.play().catch(() => {});
 
-  const previewStream = cameraStream ?? recStream;
+  const previewStream = cameraStream;
   const rawCamPreviewEl = document.createElement("video");
   rawCamPreviewEl.muted = true;
   rawCamPreviewEl.playsInline = true;
-  rawCamPreviewEl.srcObject = previewStream;
-  void rawCamPreviewEl.play().catch(() => {});
+  if (previewStream) {
+    rawCamPreviewEl.srcObject = previewStream;
+    void rawCamPreviewEl.play().catch(() => {});
+  }
 
   const stop = () => {
     boardLoop.stopRaf();
@@ -483,6 +485,7 @@ export async function startClassroomPublishBundle(
     board: { stream: boardStream, stop: () => boardTrack.stop() },
     camera: { stream: camStream, previewEl: camPreviewEl, livePublishTrack, stop: () => camTrack.stop() },
     recording: { stream: recStream, previewEl: recPreviewEl, ready: recordingReady, stop: () => recTrack.stop() },
+    // null when board-only — never attach the board composite into the CAMERA panel
     cameraPreview: { stream: previewStream, el: rawCamPreviewEl },
     setPipPosition,
     setPipEnabled,

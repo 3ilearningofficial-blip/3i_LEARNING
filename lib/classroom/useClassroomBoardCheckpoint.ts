@@ -70,13 +70,12 @@ function countLocalBoardState(editor: Editor): SnapshotBoardStats {
   return { pageCount: pages.length, shapeCount };
 }
 
-async function parseJsonSnapshotResponse(res: Response, source: string): Promise<unknown | null> {
+async function parseJsonSnapshotResponse(res: Response, _source: string): Promise<unknown | null> {
   const text = await res.text();
   const trimmed = text.trimStart();
   if (trimmed.startsWith("<")) {
-    console.warn(
-      `[Classroom] checkpoint restore: ${source} returned HTML (status ${res.status}), not JSON`
-    );
+    // Public R2/CDN URLs sometimes return an HTML error/login page. Treat as
+    // missing checkpoint — avoid spamming the console every remount.
     return null;
   }
   try {

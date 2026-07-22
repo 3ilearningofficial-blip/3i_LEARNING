@@ -10,6 +10,7 @@ import { useAuth } from "@/context/AuthContext";
 import { filterChatMessages, ChatMessage } from "@/lib/chat-utils";
 import { useHandRaiseChime } from "@/lib/useHandRaiseChime";
 import Colors from "@/constants/colors";
+import type { ChatMode } from "@/lib/live-stream/types";
 
 interface HandRaise {
   id: number;
@@ -20,7 +21,7 @@ interface HandRaise {
 
 interface LiveChatPanelProps {
   liveClassId: string;
-  chatMode: "public" | "private";
+  chatMode: ChatMode;
   isAdmin: boolean;
   /**
    * When false, all authenticated pollers stop firing. This keeps the panel
@@ -31,6 +32,9 @@ interface LiveChatPanelProps {
   /** When provided, parent owns raised-hands polling (all broadcast tabs). */
   raisedHands?: HandRaise[];
   onResolveHand?: (userId: number) => void;
+  /** Admin-only: toggle live chat for students (disabled mode). */
+  onToggleChatDisabled?: (disabled: boolean) => void;
+  chatDisablePending?: boolean;
 }
 
 function useVoiceInput(onResult: (text: string) => void) {
@@ -79,6 +83,8 @@ export default function LiveChatPanel({
   enabled = true,
   raisedHands: raisedHandsProp,
   onResolveHand,
+  onToggleChatDisabled,
+  chatDisablePending = false,
 }: LiveChatPanelProps) {
   const { user } = useAuth();
   const qc = useQueryClient();
@@ -259,6 +265,36 @@ export default function LiveChatPanel({
         )}
       </View>
 
+      {isAdmin && onToggleChatDisabled ? (
+        <View style={styles.disableRow}>
+          <View style={styles.disableCopy}>
+            <Ionicons
+              name={chatMode === "disabled" ? "chatbubbles-outline" : "chatbubbles"}
+              size={16}
+              color={chatMode === "disabled" ? "#F87171" : Colors.light.textMuted}
+            />
+            <Text style={styles.disableLabel}>
+              {chatMode === "disabled" ? "Chat disabled for students" : "Disable chat for students"}
+            </Text>
+          </View>
+          <Pressable
+            style={[
+              styles.disableToggle,
+              chatMode === "disabled" && styles.disableToggleOn,
+              chatDisablePending && styles.disableTogglePending,
+            ]}
+            onPress={() => onToggleChatDisabled(chatMode !== "disabled")}
+            disabled={chatDisablePending}
+            accessibilityRole="switch"
+            accessibilityState={{ checked: chatMode === "disabled" }}
+          >
+            <Text style={[styles.disableToggleText, chatMode === "disabled" && styles.disableToggleTextOn]}>
+              {chatMode === "disabled" ? "ON" : "OFF"}
+            </Text>
+          </Pressable>
+        </View>
+      ) : null}
+
       {/* Admin: raised hands list */}
       {isAdmin && raisedHands.length > 0 && (
         <View style={styles.raisedHandsList}>
@@ -355,6 +391,31 @@ const styles = StyleSheet.create({
     backgroundColor: "#FEF3C7", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10,
   },
   raisedHandsText: { fontSize: 11, fontFamily: "Inter_700Bold", color: "#B45309" },
+  disableRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+    backgroundColor: "#F9FAFB",
+  },
+  disableCopy: { flex: 1, flexDirection: "row", alignItems: "center", gap: 8, minWidth: 0 },
+  disableLabel: { flex: 1, fontSize: 12, fontFamily: "Inter_500Medium", color: Colors.light.text },
+  disableToggle: {
+    minWidth: 44,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: "#E5E7EB",
+    alignItems: "center",
+  },
+  disableToggleOn: { backgroundColor: "#DC2626" },
+  disableTogglePending: { opacity: 0.6 },
+  disableToggleText: { fontSize: 11, fontFamily: "Inter_700Bold", color: "#111827" },
+  disableToggleTextOn: { color: "#fff" },
   raisedHandsList: {
     backgroundColor: "#FFFBEB", borderBottomWidth: 1, borderBottomColor: "#FDE68A",
     paddingHorizontal: 12, paddingVertical: 8, gap: 6,

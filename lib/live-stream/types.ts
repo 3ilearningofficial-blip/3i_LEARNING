@@ -1,6 +1,7 @@
 export type StreamType = "classroom" | "cloudflare" | "rtmp" | "webrtc";
 
-export type ChatMode = "public" | "private";
+export type { ChatMode } from "../../shared/chatMode";
+export { normalizeChatMode, parseChatModeInput } from "../../shared/chatMode";
 
 export const STREAM_TYPE_OPTIONS: {
   id: StreamType;

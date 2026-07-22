@@ -2,6 +2,7 @@ import type { Express, Request, Response } from "express";
 import { purgeUserDownloadsForItem } from "./download-access-utils";
 import { buildRecordingLectureSectionTitle } from "../shared/recordingSection";
 import { normalizePipPosition } from "../shared/classroomPipPosition";
+import { parseChatModeInput } from "../shared/chatMode";
 import { autoNotificationExpiresAt } from "./auto-notification-expiry";
 import { notifyAdminsLiveClassCompleted } from "./notification-utils";
 import { cancelLiveClassReminderJob, syncLiveClassReminderJob } from "./scheduled-jobs";
@@ -77,6 +78,11 @@ export function registerAdminLiveClassManageRoutes({
       const classEnding = isCompleted === true || (isLive === false && wasLive);
       const normalizedPipPosition =
         pipPosition === undefined ? undefined : normalizePipPosition(pipPosition);
+      const normalizedChatMode =
+        chatMode === undefined ? undefined : parseChatModeInput(chatMode);
+      if (chatMode !== undefined && normalizedChatMode === null) {
+        return res.status(400).json({ message: "Invalid chatMode (use public, private, or disabled)" });
+      }
       const updates: string[] = [];
       const params: unknown[] = [];
       const add = (col: string, val: unknown) => {
@@ -99,7 +105,7 @@ export function registerAdminLiveClassManageRoutes({
       if (notifyBell !== undefined) add("notify_bell", notifyBell);
       if (isFreePreview !== undefined) add("is_free_preview", isFreePreview);
       if (streamType !== undefined) add("stream_type", streamType);
-      if (chatMode !== undefined) add("chat_mode", chatMode);
+      if (normalizedChatMode !== undefined) add("chat_mode", normalizedChatMode);
       if (showViewerCount !== undefined) add("show_viewer_count", showViewerCount);
       if (normalizedPipPosition !== undefined) add("pip_position", normalizedPipPosition);
       if (recordingUrl !== undefined) add("recording_url", recordingUrl);
@@ -238,7 +244,7 @@ export function registerAdminLiveClassManageRoutes({
         syncAdd("ended_at", null);
         if (youtubeUrl !== undefined) syncAdd("youtube_url", youtubeUrl);
         if (streamType !== undefined) syncAdd("stream_type", streamType);
-        if (chatMode !== undefined) syncAdd("chat_mode", chatMode);
+        if (normalizedChatMode !== undefined) syncAdd("chat_mode", normalizedChatMode);
         if (showViewerCount !== undefined) syncAdd("show_viewer_count", showViewerCount);
         if (normalizedPipPosition !== undefined) syncAdd("pip_position", normalizedPipPosition);
         if (cfStreamUid !== undefined) syncAdd("cf_stream_uid", cfStreamUid);

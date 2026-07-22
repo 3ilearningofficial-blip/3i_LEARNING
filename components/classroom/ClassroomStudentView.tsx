@@ -29,6 +29,7 @@ import { useActivePoll } from "@/lib/classroom/useActivePoll";
 import { usePollBroadcastStats } from "@/lib/classroom/usePollBroadcastStats";
 import { useLiveEngagementSse } from "@/lib/useLiveEngagementSse";
 import { isTruthyDbFlag } from "@/lib/live-class/dbFlags";
+import { normalizeChatMode } from "@/lib/live-stream/types";
 import Colors from "@/constants/colors";
 
 type ChatMsg = {
@@ -78,9 +79,13 @@ export default function ClassroomStudentView({
   const isPhonePortrait = width < 768;
   const isWideLayout = width >= 768;
   const classIsLive = isTruthyDbFlag(isLive) || isLive === true;
+  const chatModeResolved = normalizeChatMode(chatMode);
+  const chatDisabled = chatModeResolved === "disabled";
   const canChat = classIsLive && !isCompleted;
+  const canSendChat = canChat && !chatDisabled;
   const showLiveHeader = (showAsLiveUI || classIsLive) && !isCompleted;
   const watchComposite = showAsLiveUI && classIsLive && !isCompleted;
+  const [playerImmersive, setPlayerImmersive] = useState(false);
 
   useLiveEngagementSse({
     liveClassId,
@@ -94,7 +99,9 @@ export default function ClassroomStudentView({
 
   const { data: broadcastStats } = usePollBroadcastStats(liveClassId, canChat);
   const statsBroadcast = !!broadcastStats && !pollActive;
-  const chatReplaced = pollActive || statsBroadcast;
+  // When the player is immersive (element/CSS fullscreen), overlays live on the
+  // video frame — hide the under-title / side-panel poll to avoid duplicates.
+  const chatReplaced = (pollActive || statsBroadcast) && !playerImmersive;
 
   // Auto-open the side/bottom drawer when a poll goes active OR when the
   // admin starts broadcasting stats, so students always see the takeover.
@@ -130,7 +137,7 @@ export default function ClassroomStudentView({
     messages,
     user?.id ?? 0,
     false,
-    (chatMode as "public" | "private") || "public",
+    chatModeResolved === "disabled" ? "public" : chatModeResolved,
   );
 
   const sendMutation = useMutation({
@@ -192,9 +199,9 @@ export default function ClassroomStudentView({
 
   const handleSend = useCallback(() => {
     const t = chatMsg.trim();
-    if (!t || !canChat) return;
+    if (!t || !canSendChat) return;
     sendMutation.mutate(t);
-  }, [chatMsg, canChat, sendMutation]);
+  }, [chatMsg, canSendChat, sendMutation]);
 
   const renderVideoStage = (layout: "default" | "portraitTop") => (
     <View style={layout === "portraitTop" ? styles.stagePortraitSlot : styles.stageWideSlot}>
@@ -206,7 +213,12 @@ export default function ClassroomStudentView({
       ) : watchComposite ? (
         <>
           {Platform.OS === "web" ? (
-            <ClassroomCompositePlayer liveClassId={liveClassId} enabled layout={layout} />
+            <ClassroomCompositePlayer
+              liveClassId={liveClassId}
+              enabled
+              layout={layout}
+              onImmersiveChange={setPlayerImmersive}
+            />
           ) : (
             <NativeClassroomPlayer liveClassId={liveClassId} enabled />
           )}
@@ -258,6 +270,12 @@ export default function ClassroomStudentView({
         <View style={styles.pollPanelSlot}>
           <StudentPollStatsOverlay liveClassId={liveClassId} enabled={canChat} />
         </View>
+      ) : chatDisabled ? (
+        <View style={styles.chatDisabledBox}>
+          <Ionicons name="chatbubbles-outline" size={40} color="#9CA3AF" />
+          <Text style={styles.chatDisabledTitle}>Live Chat Has Been disabled by the Teacher</Text>
+          <Text style={styles.chatDisabledSub}>Focus on learning</Text>
+        </View>
       ) : (
         <>
           <FlatList
@@ -283,8 +301,8 @@ export default function ClassroomStudentView({
               style={styles.chatInput}
               value={chatMsg}
               onChangeText={setChatMsg}
-              placeholder={canChat ? "Ask a doubt…" : "Chat closed"}
-              editable={canChat}
+              placeholder={canSendChat ? "Ask a doubt…" : "Chat closed"}
+              editable={canSendChat}
               onSubmitEditing={handleSend}
               autoFocus={chatOpen}
               enterKeyHint="send"
@@ -293,7 +311,7 @@ export default function ClassroomStudentView({
               <Pressable
                 style={[styles.micBtn, isListening && styles.micBtnActive]}
                 onPress={isListening ? stopListening : startListening}
-                disabled={!canChat}
+                disabled={!canSendChat}
               >
                 <Ionicons
                   name={isListening ? "mic" : "mic-outline"}
@@ -305,7 +323,7 @@ export default function ClassroomStudentView({
             <Pressable
               style={[styles.sendBtn, !chatMsg.trim() && styles.sendDisabled]}
               onPress={handleSend}
-              disabled={!canChat || !chatMsg.trim() || sendMutation.isPending}
+              disabled={!canSendChat || !chatMsg.trim() || sendMutation.isPending}
             >
               <Ionicons name="send" size={18} color="#fff" />
             </Pressable>
@@ -328,6 +346,9 @@ export default function ClassroomStudentView({
         showLiveHeader={showLiveHeader}
         isLive={isLive}
         canChat={canChat}
+        canSendChat={canSendChat}
+        chatDisabled={chatDisabled}
+        hideUnderVideoEngagement={playerImmersive}
         handRaised={handRaised}
         onHandRaise={() => handMutation.mutate(!handRaised)}
         chatMsg={chatMsg}
@@ -536,6 +557,22 @@ const styles = StyleSheet.create({
   bubbleName: { fontSize: 11, fontWeight: "700", color: Colors.light.primary, marginBottom: 2 },
   bubbleText: { fontSize: 14, color: Colors.light.text },
   emptyChat: { textAlign: "center", color: Colors.light.textMuted, marginTop: 24 },
+  chatDisabledBox: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    paddingHorizontal: 24,
+    paddingVertical: 32,
+  },
+  chatDisabledTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: Colors.light.text,
+    textAlign: "center",
+    lineHeight: 22,
+  },
+  chatDisabledSub: { fontSize: 13, color: Colors.light.textMuted, textAlign: "center" },
   chatErrorText: {
     fontSize: 12,
     color: "#DC2626",

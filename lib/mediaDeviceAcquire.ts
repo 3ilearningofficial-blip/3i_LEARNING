@@ -1,36 +1,69 @@
 /** Reliable getUserMedia for classroom setup — handles slow USB cameras (e.g. Insta360). */
 
 export const USB_CAMERA_RELEASE_MS = 500;
-export const MEDIA_GUM_TIMEOUT_MS = 25_000;
-export const MEDIA_GUM_MAX_ATTEMPTS = 3;
-export const MEDIA_GUM_RETRY_DELAY_MS = 700;
+/** Per-attempt budget. Prefer failing fast over waiting 25s on a hung Blink open. */
+export const MEDIA_GUM_TIMEOUT_MS = 4_000;
+export const MEDIA_GUM_MAX_ATTEMPTS = 2;
+export const MEDIA_GUM_RETRY_DELAY_MS = 350;
 
 export function mediaDelay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export function withMediaTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) => {
-      setTimeout(() => {
-        reject(new DOMException(`${label} timed out after ${Math.round(ms / 1000)}s`, "TimeoutError"));
-      }, ms);
-    }),
-  ]);
+/**
+ * Race getUserMedia against a timeout. If GUM resolves after the timeout, stop
+ * its tracks so a zombie exclusive hold does not block later attempts.
+ */
+export function withMediaTimeout<T extends MediaStream>(
+  promise: Promise<T>,
+  ms: number,
+  label: string,
+): Promise<T> {
+  let settled = false;
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new DOMException(`${label} timed out after ${Math.round(ms / 1000)}s`, "TimeoutError"));
+    }, ms);
+
+    promise
+      .then((stream) => {
+        if (settled) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        resolve(stream);
+      })
+      .catch((err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
 }
 
 export function buildVideoConstraintAttempts(deviceId?: string): MediaTrackConstraints[] {
-  const base: MediaTrackConstraints = {
-    width: { ideal: 1280 },
-    height: { ideal: 720 },
-    frameRate: { ideal: 30, max: 60 },
-  };
-  if (!deviceId) return [base];
+  // Fast path first: deviceId only (no 1280×720 ideals — those slow UVC init).
+  // Put heavier / exact constraints last; Blink often hangs ~10s on exact+high ideals.
+  if (!deviceId) {
+    return [
+      { facingMode: "user" },
+      { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 60 } },
+    ];
+  }
   return [
-    { ...base, deviceId: { exact: deviceId } },
-    { ...base, deviceId: { ideal: deviceId } },
-    base,
+    { deviceId: { ideal: deviceId } },
+    {
+      deviceId: { ideal: deviceId },
+      width: { ideal: 1280 },
+      height: { ideal: 720 },
+      frameRate: { ideal: 30, max: 60 },
+    },
+    { deviceId: { exact: deviceId } },
   ];
 }
 
@@ -40,10 +73,20 @@ export type MediaTrackConstraintAttempt = boolean | MediaTrackConstraints;
 export function buildAudioConstraintAttempts(deviceId?: string): MediaTrackConstraintAttempt[] {
   if (!deviceId) return [true];
   return [
-    { deviceId: { exact: deviceId } },
     { deviceId: { ideal: deviceId } },
+    { deviceId: { exact: deviceId } },
     true,
   ];
+}
+
+function isRetryableMediaError(err: unknown): boolean {
+  const name = String((err as { name?: string })?.name || "");
+  return (
+    name === "NotReadableError" ||
+    name === "TrackStartError" ||
+    name === "TimeoutError" ||
+    name === "OverconstrainedError"
+  );
 }
 
 async function acquireTrack(
@@ -76,6 +119,14 @@ async function acquireTrack(
         return track;
       } catch (err) {
         lastError = err;
+        // Permission / missing device: don't burn more attempts.
+        const name = String((err as { name?: string })?.name || "");
+        if (name === "NotAllowedError" || name === "PermissionDeniedError" || name === "NotFoundError") {
+          throw err;
+        }
+        if (!isRetryableMediaError(err)) {
+          throw err;
+        }
       }
     }
     if (round < MEDIA_GUM_MAX_ATTEMPTS - 1) {
@@ -85,7 +136,7 @@ async function acquireTrack(
   throw lastError ?? new Error(`Could not open ${label.toLowerCase()}`);
 }
 
-/** Video-only acquire with exact→ideal→any fallbacks and retries (classroom composite). */
+/** Video-only acquire with ideal→fallback ladder and short timeouts (classroom composite). */
 export async function acquireVideoOnlyStream(cameraId?: string): Promise<MediaStream> {
   if (!navigator.mediaDevices?.getUserMedia) {
     throw new Error("Camera access is not supported in this browser.");
@@ -106,25 +157,22 @@ export async function acquireCameraMicrophoneStream(opts?: {
     throw new Error("Camera access is not supported in this browser.");
   }
 
-  const videoTrack = await acquireTrack(
-    "video",
-    buildVideoConstraintAttempts(opts?.cameraId),
-    "Camera",
-  );
+  // Open A/V in parallel — serial open roughly doubles setup "Starting camera…" time.
+  const [videoResult, audioResult] = await Promise.allSettled([
+    acquireTrack("video", buildVideoConstraintAttempts(opts?.cameraId), "Camera"),
+    acquireTrack("audio", buildAudioConstraintAttempts(opts?.microphoneId), "Microphone"),
+  ]);
 
-  let audioTrack: MediaStreamTrack | null = null;
-  try {
-    audioTrack = await acquireTrack(
-      "audio",
-      buildAudioConstraintAttempts(opts?.microphoneId),
-      "Microphone",
-    );
-  } catch (err) {
-    videoTrack.stop();
-    throw err;
+  if (videoResult.status === "rejected") {
+    if (audioResult.status === "fulfilled") audioResult.value.stop();
+    throw videoResult.reason;
+  }
+  if (audioResult.status === "rejected") {
+    videoResult.value.stop();
+    throw audioResult.reason;
   }
 
-  return new MediaStream([videoTrack, audioTrack]);
+  return new MediaStream([videoResult.value, audioResult.value]);
 }
 
 export function formatMediaAccessError(err: unknown): string {

@@ -31,6 +31,13 @@ import { getPostAuthPathForUser } from "@/lib/post-auth-path";
 import { isAdminWebStudentTabRoute } from "@/lib/admin/adminNavigation";
 import { reportAppInstallOnce, setupPwaInstallListener } from "@/lib/report-admin-ops";
 
+if (Platform.OS === "web") {
+  // Before any classroom board mounts — silences passive preventDefault spam.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { installClassroomDomGuards } = require("@/lib/classroom/installClassroomDomGuards") as typeof import("@/lib/classroom/installClassroomDomGuards");
+  installClassroomDomGuards();
+}
+
 if (Platform.OS !== "web") {
   // Required once before any LiveKit RN usage (WebRTC globals).
   // eslint-disable-next-line @typescript-eslint/no-require-imports

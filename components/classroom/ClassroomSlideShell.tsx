@@ -42,7 +42,10 @@ const ClassroomSlideShell = forwardRef<ClassroomSlideShellHandle, Props>(functio
           ref={slideDivRef}
           data-classroom-slide-frame="true"
           style={{
-            width: "100%",
+            // Let aspect-ratio win under max constraints so the admin frame
+            // stays true 16:9 (same crop students see in the composite).
+            width: "auto",
+            height: "auto",
             maxHeight: "100%",
             aspectRatio: "16 / 9",
             maxWidth: "100%",

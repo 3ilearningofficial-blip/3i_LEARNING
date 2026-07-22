@@ -16,6 +16,8 @@ type Props = {
   enabled?: boolean;
   /** portraitTop fills a fixed 16:9 slot; default centers in flex stage. */
   layout?: "default" | "portraitTop";
+  /** Fired when element/CSS immersive mode changes — parent should hide under-video poll/chat. */
+  onImmersiveChange?: (immersive: boolean) => void;
 };
 
 function resolveFrameDomNode(liveClassId: string): HTMLElement | null {
@@ -28,6 +30,7 @@ export default function ClassroomCompositePlayer({
   liveClassId,
   enabled = true,
   layout = "default",
+  onImmersiveChange,
 }: Props) {
   const { data: tokenPayload, isLoading } = useClassroomToken(liveClassId, enabled);
   const {
@@ -42,8 +45,9 @@ export default function ClassroomCompositePlayer({
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const frameDomRef = useRef<HTMLElement | null>(null);
   const [audioBlocked, setAudioBlocked] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  const [fullscreenUnsupported, setFullscreenUnsupported] = useState(false);
+  const [docFullscreen, setDocFullscreen] = useState(false);
+  const [cssFullscreen, setCssFullscreen] = useState(false);
+  const immersive = docFullscreen || cssFullscreen;
 
   const bindFrameDom = useCallback((el: HTMLElement | null) => {
     frameDomRef.current = el;
@@ -63,20 +67,28 @@ export default function ClassroomCompositePlayer({
     return doc.fullscreenElement || doc.webkitFullscreenElement || null;
   }, []);
 
-  const enterIosVideoFullscreen = useCallback(() => {
-    setFullscreenUnsupported(true);
-    const video = videoRef.current;
-    const iosFs =
-      video && (video as HTMLVideoElement & { webkitEnterFullscreen?: () => void }).webkitEnterFullscreen;
-    if (iosFs) {
-      iosFs.call(video);
-      void lockLandscapeForPlayback();
-      setIsFullscreen(true);
-    }
-  }, []);
+  const enterCssFullscreen = useCallback(() => {
+    // Prefer CSS immersive over iOS `webkitEnterFullscreen` on <video>:
+    // native video FS cannot host poll/quiz overlays (siblings are excluded).
+    setCssFullscreen(true);
+    void lockLandscapeForPlayback();
+    attachRemoteTeacher();
+  }, [attachRemoteTeacher]);
+
+  const exitCssFullscreen = useCallback(() => {
+    setCssFullscreen(false);
+    void restorePortraitAfterPlayback();
+    attachRemoteTeacher();
+  }, [attachRemoteTeacher]);
 
   const toggleFullscreen = useCallback(() => {
     if (Platform.OS !== "web" || typeof document === "undefined") return;
+
+    if (cssFullscreen) {
+      exitCssFullscreen();
+      return;
+    }
+
     const fsEl = getFullscreenElement();
     if (fsEl) {
       const exit =
@@ -93,7 +105,7 @@ export default function ClassroomCompositePlayer({
       resolveFrameDomNode(liveClassId) ||
       (videoRef.current?.parentElement as HTMLElement | null);
     if (!frame) {
-      enterIosVideoFullscreen();
+      enterCssFullscreen();
       return;
     }
 
@@ -103,7 +115,7 @@ export default function ClassroomCompositePlayer({
         frame
       );
     if (!req) {
-      enterIosVideoFullscreen();
+      enterCssFullscreen();
       return;
     }
 
@@ -112,24 +124,25 @@ export default function ClassroomCompositePlayer({
       if (result && typeof (result as Promise<void>).then === "function") {
         void (result as Promise<void>)
           .then(() => void lockLandscapeForPlayback())
-          .catch(() => enterIosVideoFullscreen());
+          .catch(() => enterCssFullscreen());
       } else {
         void lockLandscapeForPlayback();
       }
     } catch {
-      enterIosVideoFullscreen();
+      enterCssFullscreen();
     }
-  }, [getFullscreenElement, enterIosVideoFullscreen, liveClassId]);
+  }, [cssFullscreen, exitCssFullscreen, getFullscreenElement, enterCssFullscreen, liveClassId]);
 
   useEffect(() => {
     if (Platform.OS !== "web" || typeof document === "undefined") return;
     const onFs = () => {
       const active = !!getFullscreenElement();
-      setIsFullscreen(active);
+      setDocFullscreen(active);
       if (active) {
+        setCssFullscreen(false);
         void lockLandscapeForPlayback();
         attachRemoteTeacher();
-      } else {
+      } else if (!cssFullscreen) {
         void restorePortraitAfterPlayback();
         attachRemoteTeacher();
       }
@@ -140,7 +153,20 @@ export default function ClassroomCompositePlayer({
       document.removeEventListener("fullscreenchange", onFs);
       document.removeEventListener("webkitfullscreenchange", onFs as EventListener);
     };
-  }, [getFullscreenElement, attachRemoteTeacher]);
+  }, [getFullscreenElement, attachRemoteTeacher, cssFullscreen]);
+
+  useEffect(() => {
+    onImmersiveChange?.(immersive);
+  }, [immersive, onImmersiveChange]);
+
+  useEffect(() => {
+    if (!cssFullscreen || Platform.OS !== "web" || typeof document === "undefined") return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") exitCssFullscreen();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [cssFullscreen, exitCssFullscreen]);
 
   const setAudioRef = useCallback(
     (el: HTMLAudioElement | null) => {
@@ -209,23 +235,17 @@ export default function ClassroomCompositePlayer({
         </Pressable>
       ) : null}
 
-      {fullscreenUnsupported ? (
-        <View style={styles.fsHint} pointerEvents="none">
-          <Text style={styles.fsHintText}>Fullscreen: board only on this browser</Text>
-        </View>
-      ) : null}
-
       <Pressable
         style={styles.fullscreenBtn}
         onPress={toggleFullscreen}
-        accessibilityLabel={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+        accessibilityLabel={immersive ? "Exit fullscreen" : "Enter fullscreen"}
       >
-        <Ionicons name={isFullscreen ? "contract-outline" : "scan-outline"} size={20} color="#fff" />
+        <Ionicons name={immersive ? "contract-outline" : "scan-outline"} size={20} color="#fff" />
       </Pressable>
 
-      {/* Poll & stats overlays only while fullscreen — outside FS the under-video
-          / chat panels own the UI; mounting both caused duplicate quiz cards. */}
-      {isFullscreen ? (
+      {/* Overlays only in immersive mode. Outside FS the under-video / chat
+          panels own poll UI — mounting both caused duplicates above & below title. */}
+      {immersive ? (
         <>
           <View pointerEvents="box-none" style={styles.pollOverlay}>
             <StudentActivePollPanel liveClassId={liveClassId} enabled={enabled} compact />
@@ -243,15 +263,28 @@ export default function ClassroomCompositePlayer({
       <div
         id={`classroom-player-frame-${liveClassId}`}
         ref={bindFrameDom}
-        style={{
-          width: "100%",
-          height: isPortraitTop ? "100%" : undefined,
-          maxHeight: "100%",
-          aspectRatio: isPortraitTop ? undefined : "16 / 9",
-          maxWidth: "100%",
-          position: "relative",
-          backgroundColor: "#000",
-        }}
+        style={
+          cssFullscreen
+            ? {
+                position: "fixed",
+                inset: 0,
+                zIndex: 100000,
+                width: "100vw",
+                height: "100vh",
+                maxWidth: "100vw",
+                maxHeight: "100vh",
+                backgroundColor: "#000",
+              }
+            : {
+                width: "100%",
+                height: isPortraitTop ? "100%" : undefined,
+                maxHeight: "100%",
+                aspectRatio: isPortraitTop ? undefined : "16 / 9",
+                maxWidth: "100%",
+                position: "relative",
+                backgroundColor: "#000",
+              }
+        }
       >
         {frameContent}
       </div>
@@ -318,18 +351,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  fsHint: {
-    position: "absolute",
-    top: 48,
-    left: 10,
-    right: 10,
-    zIndex: 11,
-    backgroundColor: "rgba(0,0,0,0.65)",
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 6,
-  },
-  fsHintText: { color: "#FCD34D", fontSize: 11, textAlign: "center", fontWeight: "600" },
   pollOverlay: {
     position: "absolute",
     left: 12,

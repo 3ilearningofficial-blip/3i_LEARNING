@@ -7,25 +7,28 @@ import {
 } from "./mediaDeviceAcquire";
 
 describe("buildVideoConstraintAttempts", () => {
-  it("returns generic constraints when no device id", () => {
+  it("returns lightweight then sized constraints when no device id", () => {
     const attempts = buildVideoConstraintAttempts();
-    expect(attempts).toHaveLength(1);
-    expect(attempts[0]).toMatchObject({ width: { ideal: 1280 } });
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0]).toMatchObject({ facingMode: "user" });
+    expect(attempts[1]).toMatchObject({ width: { ideal: 1280 } });
   });
 
-  it("prefers exact then ideal device id", () => {
+  it("prefers ideal device-only first, then ideal+size, then exact", () => {
     const attempts = buildVideoConstraintAttempts("cam-123");
     expect(attempts).toHaveLength(3);
-    expect(attempts[0].deviceId).toEqual({ exact: "cam-123" });
+    expect(attempts[0].deviceId).toEqual({ ideal: "cam-123" });
+    expect(attempts[0].width).toBeUndefined();
     expect(attempts[1].deviceId).toEqual({ ideal: "cam-123" });
-    expect(attempts[2].deviceId).toBeUndefined();
+    expect(attempts[1].width).toEqual({ ideal: 1280 });
+    expect(attempts[2].deviceId).toEqual({ exact: "cam-123" });
   });
 });
 
 describe("buildAudioConstraintAttempts", () => {
   it("falls back to default mic", () => {
     const attempts = buildAudioConstraintAttempts("mic-1");
-    expect(attempts[0]).toEqual({ deviceId: { exact: "mic-1" } });
+    expect(attempts[0]).toEqual({ deviceId: { ideal: "mic-1" } });
     expect(attempts[2]).toBe(true);
   });
 });

@@ -19,6 +19,7 @@ import { useScreenWakeLock } from "@/lib/useScreenWakeLock";
 import { VideoWatermark } from "@/components/VideoWatermark";
 import LiveStudentsPanel from "@/components/LiveStudentsPanel";
 import { filterChatMessages } from "@/lib/chat-utils";
+import { normalizeChatMode } from "@/lib/live-stream/types";
 import { buildYouTubePhoneWebSrcDoc } from "@/lib/buildYouTubePhoneWebSrcDoc";
 import {
   YT_EMBED_ORIGIN,
@@ -925,10 +926,11 @@ export default function LiveClassScreen() {
     staleTime: 1500,
   });
 
-  const chatMode: "public" | "private" =
-    liveClassData?.chat_mode === "private" ? "private" : "public";
+  const chatMode = normalizeChatMode(liveClassData?.chat_mode);
   const canStudentChat = !!liveClassData?.is_live && !liveClassData?.is_completed;
-  const canSendChat = !!isAdmin || canStudentChat;
+  const canSendChat =
+    !!isAdmin || (canStudentChat && chatMode !== "disabled");
+  const chatDisabledForStudent = !isAdmin && chatMode === "disabled";
   const [engagementAuthBlocked, setEngagementAuthBlocked] = useState(false);
 
   useEffect(() => {
@@ -1493,7 +1495,13 @@ export default function LiveClassScreen() {
                     style={styles.chatInput}
                     value={chatMsg}
                     onChangeText={setChatMsg}
-                    placeholder={canSendChat ? "Ask a doubt or say hi..." : "Chat opens when class goes live"}
+                    placeholder={
+                      chatDisabledForStudent
+                        ? "Live chat disabled by the teacher"
+                        : canSendChat
+                          ? "Ask a doubt or say hi..."
+                          : "Chat opens when class goes live"
+                    }
                     placeholderTextColor="#999"
                     maxLength={500}
                     returnKeyType="send"
@@ -1750,7 +1758,13 @@ export default function LiveClassScreen() {
                     style={styles.chatInput}
                     value={chatMsg}
                     onChangeText={setChatMsg}
-                    placeholder={canSendChat ? "Ask a doubt or say hi..." : "Chat opens when class goes live"}
+                    placeholder={
+                      chatDisabledForStudent
+                        ? "Live chat disabled by the teacher"
+                        : canSendChat
+                          ? "Ask a doubt or say hi..."
+                          : "Chat opens when class goes live"
+                    }
                     placeholderTextColor="#999"
                     maxLength={500}
                     returnKeyType="send"
@@ -1854,7 +1868,13 @@ export default function LiveClassScreen() {
                     style={styles.chatInput}
                     value={chatMsg}
                     onChangeText={setChatMsg}
-                    placeholder={canSendChat ? "Ask a doubt or say hi..." : "Chat opens when class goes live"}
+                    placeholder={
+                      chatDisabledForStudent
+                        ? "Live chat disabled by the teacher"
+                        : canSendChat
+                          ? "Ask a doubt or say hi..."
+                          : "Chat opens when class goes live"
+                    }
                     placeholderTextColor="#999"
                     maxLength={500}
                     returnKeyType="send"

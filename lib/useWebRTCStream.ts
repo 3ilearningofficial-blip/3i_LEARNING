@@ -51,12 +51,16 @@ export function useWebRTCStream(enabled = true): UseWebRTCStreamReturn {
   const isWeb = Platform.OS === "web";
 
   const releaseCurrentStream = useCallback(async () => {
+    const hadTracks = !!streamRef.current?.getTracks().length;
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     }
     setStream(null);
-    await mediaDelay(USB_CAMERA_RELEASE_MS);
+    // Only wait for USB release when we actually stopped tracks.
+    if (hadTracks) {
+      await mediaDelay(USB_CAMERA_RELEASE_MS);
+    }
   }, []);
 
   const enumerateDevices = useCallback(async () => {

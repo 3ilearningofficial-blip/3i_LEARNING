@@ -24,6 +24,7 @@ import MediaDeviceSelectors from "@/components/live-setup/MediaDeviceSelectors";
 import ClassroomMediaSetupPanel from "@/components/live-setup/ClassroomMediaSetupPanel";
 import ClassroomSetupPreview from "@/components/live-setup/ClassroomSetupPreview";
 import { loadClassroomMediaDevices, saveClassroomMediaDevices, normalizePipPosition } from "@/lib/classroom/mediaDevices";
+import { mediaDelay, USB_CAMERA_RELEASE_MS } from "@/lib/mediaDeviceAcquire";
 import CloudflareSetupPreview, { type CfStreamInfo } from "@/components/live-setup/CloudflareSetupPreview";
 import RtmpSetupPreview from "@/components/live-setup/RtmpSetupPreview";
 import WebrtcSetupPreview from "@/components/live-setup/WebrtcSetupPreview";
@@ -139,9 +140,11 @@ export default function LiveSetupPage() {
           cameraId: webrtc.selectedCamera || existing.cameraId,
           microphoneId: webrtc.selectedMicrophone || existing.microphoneId,
         });
-      }
-
-      if (streamType === "webrtc") {
+        // Release the setup preview cam before studio re-opens it. Without this,
+        // Insta360 stays exclusively held and studio GUM times out into board-only.
+        webrtc.cleanup();
+        await mediaDelay(USB_CAMERA_RELEASE_MS);
+      } else if (streamType === "webrtc") {
         webrtc.cleanup();
       }
 

@@ -3,10 +3,13 @@ import { getSlideBounds, SLIDE_LOGICAL_H, SLIDE_LOGICAL_W } from "./slideConstan
 
 export function fitEditorToSlide(editor: Editor, opts?: { lock?: boolean }) {
   const bounds = getSlideBounds();
+  // Live admin locks the camera after page 1. Without `force`, zoomToBounds /
+  // setCamera no-op on later pages and each page keeps a different default
+  // camera — admin writing area no longer matches the 16:9 student composite.
   try {
-    editor.zoomToBounds(bounds, { inset: 0, animation: { duration: 0 } });
+    editor.zoomToBounds(bounds, { inset: 0, animation: { duration: 0 }, force: true });
   } catch {
-    editor.setCamera({ x: SLIDE_LOGICAL_W / 2, y: SLIDE_LOGICAL_H / 2, z: 1 });
+    editor.setCamera({ x: SLIDE_LOGICAL_W / 2, y: SLIDE_LOGICAL_H / 2, z: 1 }, { force: true });
   }
   if (opts?.lock) {
     editor.setCameraOptions({ isLocked: true });
