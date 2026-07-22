@@ -453,6 +453,7 @@ export default function AdminClassroomPage() {
               liveClassId={liveClassId}
               chatMode={chatModeResolved}
               showViewerCount={showViewerCount}
+              engagementEnabled={!!isLive}
               parentViewers={
                 viewerData
                   ? { viewers: viewerData.viewers, count: viewerData.count }

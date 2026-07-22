@@ -118,10 +118,23 @@ export type ClassroomCompositeHandle = {
   stop: () => void;
 };
 
+export type ClassroomCameraPreview = {
+  /** Raw webcam MediaStream, no chroma-key applied, no board composite. */
+  stream: MediaStream;
+  /** Hidden <video> attached to the raw stream so consumers can clone srcObject. */
+  el: HTMLVideoElement;
+};
+
 export type ClassroomPublishBundle = {
   board: BoardStreamHandle;
   camera: CameraStreamHandle;
   recording: ClassroomCompositeHandle;
+  /**
+   * Raw webcam preview (no chroma-key, no board). Used by the admin studio's
+   * CAMERA panel so the teacher always sees their full uncropped self, even
+   * when the published composite crops them into a corner cutout.
+   */
+  cameraPreview: ClassroomCameraPreview;
   /**
    * Move the teacher cutout / PiP to a different board corner at runtime,
    * without restarting the capture pipeline or the LiveKit publish. The next
@@ -432,10 +445,17 @@ export async function startClassroomPublishBundle(
     recPreviewEl.srcObject = null;
   };
 
+  const rawCamPreviewEl = document.createElement("video");
+  rawCamPreviewEl.muted = true;
+  rawCamPreviewEl.playsInline = true;
+  rawCamPreviewEl.srcObject = cameraStream;
+  void rawCamPreviewEl.play().catch(() => {});
+
   return {
     board: { stream: boardStream, stop: () => boardTrack.stop() },
     camera: { stream: camStream, previewEl: camPreviewEl, livePublishTrack, stop: () => camTrack.stop() },
     recording: { stream: recStream, previewEl: recPreviewEl, ready: recordingReady, stop: () => recTrack.stop() },
+    cameraPreview: { stream: cameraStream, el: rawCamPreviewEl },
     setPipPosition,
     stop,
   };

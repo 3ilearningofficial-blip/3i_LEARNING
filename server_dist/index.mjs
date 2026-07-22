@@ -7918,7 +7918,7 @@ function registerLiveStreamRoutes({
   };
   const runArchiveSweepWorker = process.env.RUN_BACKGROUND_SCHEDULERS !== "false";
   if (runArchiveSweepWorker) {
-    const sweepIntervalMs = Math.max(3e4, Number(process.env.CF_ARCHIVE_SWEEP_MS || 12e4));
+    const sweepIntervalMs = Math.max(3e4, Number(process.env.CF_ARCHIVE_SWEEP_MS || 9e5));
     void runArchiveSweep();
     setInterval(() => {
       void runArchiveSweep();
@@ -16079,7 +16079,7 @@ function registerLiveClassPollRoutes({
       if (!await userCanAccessLiveClassContent(db2, user, lc)) {
         return res.status(403).json({ message: "Access denied" });
       }
-      const expiresInSeconds = 90;
+      const expiresInSeconds = 15 * 60;
       const expiresAt = nowMs() + expiresInSeconds * 1e3;
       const token = issueEngagementSseToken({
         userId: user.id,
@@ -16101,8 +16101,8 @@ function registerLiveClassPollRoutes({
       if (kind !== "poll" && kind !== "quiz") {
         return res.status(400).json({ message: "kind must be poll or quiz" });
       }
-      const q = String(question || "").trim();
-      if (!q) return res.status(400).json({ message: "question required" });
+      const rawQuestion = String(question || "").trim();
+      const q = rawQuestion.length > 0 ? rawQuestion : null;
       const opts = Array.isArray(options) ? options.map((o) => String(o || "").trim()).filter(Boolean) : [];
       if (opts.length < 2) return res.status(400).json({ message: "At least 2 options required" });
       const duration = Number(durationSeconds);
@@ -16159,12 +16159,136 @@ function registerLiveClassPollRoutes({
       res.status(500).json({ message: "Failed to end poll" });
     }
   });
+  app2.post(
+    "/api/admin/live-classes/:id/polls/:pollId/broadcast-stats",
+    requireAdmin2,
+    async (req, res) => {
+      try {
+        const liveClassId = String(req.params.id);
+        const pollId = Number(req.params.pollId);
+        const show = !!req.body?.show;
+        const t = show ? nowMs() : null;
+        if (show) {
+          await db2.query(
+            "UPDATE live_class_polls SET broadcast_stats = NULL WHERE live_class_id = $1 AND id <> $2 AND broadcast_stats IS NOT NULL",
+            [liveClassId, pollId]
+          );
+        }
+        const upd = await db2.query(
+          "UPDATE live_class_polls SET broadcast_stats = $1 WHERE id = $2 AND live_class_id = $3 RETURNING id",
+          [t, pollId, liveClassId]
+        );
+        if (!upd.rows[0]) return res.status(404).json({ message: "Poll not found" });
+        try {
+          await db2.query(
+            "SELECT pg_notify('live_engagement', $1::text)",
+            [
+              JSON.stringify({
+                type: "stats_show",
+                liveClassId,
+                pollId,
+                show
+              })
+            ]
+          );
+        } catch (e) {
+          console.warn("[Poll] stats_show NOTIFY failed:", e.message);
+        }
+        res.json({ ok: true, show });
+      } catch (err) {
+        console.error("[Poll] broadcast-stats error:", err?.message || err);
+        res.status(500).json({ message: "Failed to toggle broadcast" });
+      }
+    }
+  );
+  app2.get(
+    "/api/live-classes/:id/polls/broadcast-stats",
+    requireAuth,
+    async (req, res) => {
+      try {
+        const liveClassId = String(req.params.id);
+        const user = await getAuthUser2(req);
+        const lc = await loadLiveClass2(db2, liveClassId);
+        if (!lc) return res.status(404).json({ message: "Live class not found" });
+        if (!await userCanAccessLiveClassContent(db2, user, lc)) {
+          return res.status(403).json({ message: "Access denied" });
+        }
+        const pollRes = await db2.query(
+          `SELECT id, kind, question, correct_option_id, broadcast_stats
+             FROM live_class_polls
+            WHERE live_class_id = $1 AND broadcast_stats IS NOT NULL
+            ORDER BY broadcast_stats DESC
+            LIMIT 1`,
+          [liveClassId]
+        );
+        const poll = pollRes.rows[0];
+        if (!poll) return res.json({ stats: null });
+        const [options, votes, leaderboardRows] = await Promise.all([
+          db2.query(
+            "SELECT id, label, sort_order FROM live_class_poll_options WHERE poll_id = $1 ORDER BY sort_order",
+            [poll.id]
+          ),
+          db2.query(
+            `SELECT option_id, COUNT(*)::int AS count FROM live_class_poll_votes WHERE poll_id = $1 GROUP BY option_id`,
+            [poll.id]
+          ),
+          db2.query(
+            `SELECT v.user_id,
+                    COALESCE(u.name, '') AS user_name,
+                    v.option_id,
+                    v.voted_at,
+                    CASE WHEN $2::int IS NOT NULL AND v.option_id = $2::int THEN 1 ELSE 0 END AS is_correct
+               FROM live_class_poll_votes v
+               LEFT JOIN users u ON u.id = v.user_id
+              WHERE v.poll_id = $1
+              ORDER BY is_correct DESC, v.voted_at ASC
+              LIMIT 10`,
+            [poll.id, poll.correct_option_id ? Number(poll.correct_option_id) : null]
+          )
+        ]);
+        const total = votes.rows.reduce((s, r) => s + Number(r.count), 0);
+        const results = options.rows.map((o) => {
+          const row = votes.rows.find((v) => Number(v.option_id) === Number(o.id));
+          const count = Number(row?.count || 0);
+          return {
+            id: o.id,
+            label: o.label,
+            sort_order: o.sort_order,
+            count,
+            percent: total > 0 ? Math.round(count / total * 100) : 0
+          };
+        });
+        const leaderboard = leaderboardRows.rows.map((r, idx) => ({
+          rank: idx + 1,
+          userId: Number(r.user_id),
+          userName: String(r.user_name || "Student"),
+          optionId: Number(r.option_id),
+          votedAt: Number(r.voted_at),
+          isCorrect: Number(r.is_correct) === 1
+        }));
+        res.json({
+          stats: {
+            pollId: poll.id,
+            kind: poll.kind,
+            question: poll.question,
+            correctOptionId: poll.correct_option_id ? Number(poll.correct_option_id) : null,
+            totalVotes: total,
+            results,
+            leaderboard
+          }
+        });
+      } catch (err) {
+        console.error("[Poll] broadcast-stats fetch error:", err?.message || err);
+        res.status(500).json({ message: "Failed to load stats" });
+      }
+    }
+  );
   app2.get("/api/admin/live-classes/:id/polls/session", requireAdmin2, async (req, res) => {
     try {
       const liveClassId = String(req.params.id);
       await finalizeExpiredPolls(db2, liveClassId);
       const pollsRes = await db2.query(
-        `SELECT p.id, p.kind, p.question, p.started_at, p.ends_at, p.ended_at,
+        `SELECT p.id, p.kind, p.question, p.started_at, p.ends_at, p.ended_at, p.broadcast_stats,
                 COALESCE(v.total_votes, 0)::int AS total_votes
          FROM live_class_polls p
          LEFT JOIN (
@@ -16185,13 +16309,57 @@ function registerLiveClassPollRoutes({
         ends_at: p.ends_at,
         ended_at: p.ended_at,
         total_votes: Number(p.total_votes || 0),
-        is_active: !p.ended_at && Number(p.ends_at) > t
+        is_active: !p.ended_at && Number(p.ends_at) > t,
+        broadcast_stats: p.broadcast_stats ? Number(p.broadcast_stats) : null
       }));
       res.json({ polls });
     } catch {
       res.status(500).json({ message: "Failed to load session polls" });
     }
   });
+  app2.get(
+    "/api/admin/live-classes/:id/polls/:pollId/leaderboard",
+    requireAdmin2,
+    async (req, res) => {
+      try {
+        const liveClassId = String(req.params.id);
+        const pollId = Number(req.params.pollId);
+        const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 10));
+        const pollRes = await db2.query(
+          "SELECT id, kind, correct_option_id FROM live_class_polls WHERE id = $1 AND live_class_id = $2",
+          [pollId, liveClassId]
+        );
+        const poll = pollRes.rows[0];
+        if (!poll) return res.status(404).json({ message: "Poll not found" });
+        const correctId = poll.correct_option_id ? Number(poll.correct_option_id) : null;
+        const rows = await db2.query(
+          `SELECT v.user_id,
+                  COALESCE(u.name, '') AS user_name,
+                  v.option_id,
+                  v.voted_at,
+                  CASE WHEN $2::int IS NOT NULL AND v.option_id = $2::int THEN 1 ELSE 0 END AS is_correct
+             FROM live_class_poll_votes v
+             LEFT JOIN users u ON u.id = v.user_id
+            WHERE v.poll_id = $1
+            ORDER BY is_correct DESC, v.voted_at ASC
+            LIMIT $3`,
+          [pollId, correctId, limit]
+        );
+        const leaderboard = rows.rows.map((r, idx) => ({
+          rank: idx + 1,
+          userId: Number(r.user_id),
+          userName: String(r.user_name || "Student"),
+          optionId: Number(r.option_id),
+          votedAt: Number(r.voted_at),
+          isCorrect: Number(r.is_correct) === 1
+        }));
+        res.json({ pollId, kind: poll.kind, correctOptionId: correctId, leaderboard });
+      } catch (err) {
+        console.error("[Poll] leaderboard error:", err?.message || err);
+        res.status(500).json({ message: "Failed to load leaderboard" });
+      }
+    }
+  );
   app2.get("/api/admin/live-classes/:id/polls/:pollId/results", requireAdmin2, async (req, res) => {
     try {
       const pollId = Number(req.params.pollId);
@@ -16218,7 +16386,13 @@ function registerLiveClassPollRoutes({
           percent: total > 0 ? Math.round(count / total * 100) : 0
         };
       });
-      res.json({ poll: pollRes.rows[0], results, totalVotes: total });
+      const pollRow = pollRes.rows[0];
+      res.json({
+        poll: pollRow,
+        results,
+        totalVotes: total,
+        correctOptionId: pollRow.correct_option_id ? Number(pollRow.correct_option_id) : null
+      });
     } catch {
       res.status(500).json({ message: "Failed to load poll results" });
     }
@@ -18430,7 +18604,9 @@ var init_schema_readiness_contract = __esm({
       course_folders: ["parent_id", "subject_key"],
       standalone_folders: ["parent_id", "category", "price", "original_price", "is_free", "description", "validity_months"],
       // Migration 0042 - admin session device binding
-      user_sessions: ["device_id", "platform_family"]
+      user_sessions: ["device_id", "platform_family"],
+      // Migration 0065 - "show poll stats to students" broadcast toggle
+      live_class_polls: ["broadcast_stats"]
     };
     REQUIRED_UNIQUE_INDEX_SPECS = [
       { table: "enrollments", columns: ["user_id", "course_id"] },
@@ -18756,6 +18932,8 @@ function startAdaptiveSchedulerLoop(db2, pool2, sendPushToUsers2) {
       lastTokenCleanupRun = now;
       await runDownloadTokenCleanup(db2, pool2);
       await runMediaTokenCleanup(db2, pool2);
+      await runSessionCleanup(db2, pool2);
+      await runExpiredRateLimitCleanup(db2, pool2);
     }
     scheduleNext(sleepMs);
   };
@@ -18860,6 +19038,33 @@ async function runMediaTokenCleanup(db2, pool2) {
     });
   } catch (err) {
     console.error("[MediaTokenCleanup] Error:", err);
+  }
+}
+async function runSessionCleanup(db2, pool2) {
+  try {
+    await runWithAdvisoryLock2(pool2, SESSION_CLEANUP_LOCK_KEY, async () => {
+      const result = await db2.query(`DELETE FROM "session" WHERE expire < NOW()`);
+      if (result.rowCount && result.rowCount > 0) {
+        console.log(`[SessionCleanup] Deleted ${result.rowCount} expired sessions`);
+      }
+    });
+  } catch (err) {
+    console.error("[SessionCleanup] Error:", err);
+  }
+}
+async function runExpiredRateLimitCleanup(db2, pool2) {
+  try {
+    await runWithAdvisoryLock2(pool2, RATE_LIMIT_CLEANUP_LOCK_KEY, async () => {
+      const result = await db2.query(
+        `DELETE FROM express_rate_limit WHERE reset_time_ms < $1`,
+        [Date.now()]
+      );
+      if (result.rowCount && result.rowCount > 0) {
+        console.log(`[RateLimitCleanup] Deleted ${result.rowCount} expired rate-limit buckets`);
+      }
+    });
+  } catch (err) {
+    console.error("[RateLimitCleanup] Error:", err);
   }
 }
 async function runLiveFinalizeQueueTick(db2, pool2) {
@@ -18980,7 +19185,7 @@ function startNeonKeepalive(db2) {
   }, KEEPALIVE_INTERVAL_MS);
   console.log("[Keepalive] Neon keepalive started \u2014 pings every 30s");
 }
-var DOWNLOAD_CLEANUP_RETRY_LOCK_KEY, DOWNLOAD_TOKEN_CLEANUP_LOCK_KEY, STUCK_LIVE_CLEANUP_LOCK_KEY, LIVE_FINALIZE_QUEUE_LOCK_KEY, MEDIA_TOKEN_CLEANUP_LOCK_KEY, SCHEDULER_MIN_SLEEP_MS, SCHEDULER_MAX_SLEEP_MS, STUCK_LIVE_INTERVAL_MS, TOKEN_CLEANUP_INTERVAL_MS, DOWNLOAD_RETRY_INTERVAL_MS, FINALIZE_CHECK_INTERVAL_MS;
+var DOWNLOAD_CLEANUP_RETRY_LOCK_KEY, DOWNLOAD_TOKEN_CLEANUP_LOCK_KEY, STUCK_LIVE_CLEANUP_LOCK_KEY, LIVE_FINALIZE_QUEUE_LOCK_KEY, MEDIA_TOKEN_CLEANUP_LOCK_KEY, SESSION_CLEANUP_LOCK_KEY, RATE_LIMIT_CLEANUP_LOCK_KEY, SCHEDULER_MIN_SLEEP_MS, SCHEDULER_MAX_SLEEP_MS, STUCK_LIVE_INTERVAL_MS, TOKEN_CLEANUP_INTERVAL_MS, DOWNLOAD_RETRY_INTERVAL_MS, FINALIZE_CHECK_INTERVAL_MS;
 var init_schedulers = __esm({
   "backend/schedulers.ts"() {
     "use strict";
@@ -18994,8 +19199,10 @@ var init_schedulers = __esm({
     STUCK_LIVE_CLEANUP_LOCK_KEY = 31415926538;
     LIVE_FINALIZE_QUEUE_LOCK_KEY = 31415926539;
     MEDIA_TOKEN_CLEANUP_LOCK_KEY = 31415926540;
+    SESSION_CLEANUP_LOCK_KEY = 31415926543;
+    RATE_LIMIT_CLEANUP_LOCK_KEY = 31415926544;
     SCHEDULER_MIN_SLEEP_MS = 3e4;
-    SCHEDULER_MAX_SLEEP_MS = 5 * 60 * 1e3;
+    SCHEDULER_MAX_SLEEP_MS = Math.max(6e4, Number(process.env.SCHEDULER_MAX_SLEEP_MS) || 15 * 60 * 1e3);
     STUCK_LIVE_INTERVAL_MS = 60 * 60 * 1e3;
     TOKEN_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1e3;
     DOWNLOAD_RETRY_INTERVAL_MS = 15 * 60 * 1e3;
@@ -20311,7 +20518,11 @@ function normalizeRateLimitStoreKind(value, fallback) {
       conString: normalizeDatabaseUrl(process.env.DATABASE_URL),
       tableName: "session",
       // Table is created by migrations/0011_distributed_rate_limits_and_session.sql
-      createTableIfMissing: false
+      createTableIfMissing: false,
+      // Disable connect-pg-simple's own ~15 min prune timer — it wakes Neon and
+      // prevents scale-to-zero. Expired sessions are pruned by the daily
+      // scheduler cleanup instead (see backend/schedulers.ts).
+      pruneSessionInterval: false
     });
     const sessionStoreWithEvents = sessionConfig.store;
     sessionStoreWithEvents.on?.("error", (err) => {
@@ -20369,7 +20580,7 @@ function normalizeRateLimitStoreKind(value, fallback) {
   const defaultRateLimitStoreKind = normalizeRateLimitStoreKind(process.env.RATE_LIMIT_STORE, "pg");
   const authRateLimitStoreKind = normalizeRateLimitStoreKind(process.env.AUTH_RATE_LIMIT_STORE, defaultRateLimitStoreKind);
   const mediaRateLimitStoreKind = normalizeRateLimitStoreKind(process.env.MEDIA_RATE_LIMIT_STORE, defaultRateLimitStoreKind);
-  const globalRateLimitStoreKind = normalizeRateLimitStoreKind(process.env.GLOBAL_RATE_LIMIT_STORE, defaultRateLimitStoreKind);
+  const globalRateLimitStoreKind = normalizeRateLimitStoreKind(process.env.GLOBAL_RATE_LIMIT_STORE, "memory");
   const makeRateLimitStore = (prefix, options, storeKind = defaultRateLimitStoreKind) => {
     if (storeKind === "pg") {
       if (rateLimitPool) return new PgRateLimitStore(rateLimitPool, options);

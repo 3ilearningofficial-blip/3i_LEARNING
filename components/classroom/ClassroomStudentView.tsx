@@ -22,8 +22,11 @@ import ClassroomCompositePlayer from "@/components/classroom/ClassroomCompositeP
 import NativeClassroomPlayer from "@/components/classroom/NativeClassroomPlayer";
 import ClassroomLiveOverlays from "@/components/classroom/ClassroomLiveOverlays";
 import ClassroomStudentPortraitShell from "@/components/classroom/ClassroomStudentPortraitShell";
-import LiveClassRecordingTimer from "@/components/LiveClassRecordingTimer";
 import ClassroomHeaderActivityTimer from "@/components/classroom/ClassroomHeaderActivityTimer";
+import StudentActivePollPanel from "@/components/classroom/StudentActivePollPanel";
+import StudentPollStatsOverlay from "@/components/classroom/StudentPollStatsOverlay";
+import { useActivePoll } from "@/lib/classroom/useActivePoll";
+import { usePollBroadcastStats } from "@/lib/classroom/usePollBroadcastStats";
 import { useLiveEngagementSse } from "@/lib/useLiveEngagementSse";
 import { isTruthyDbFlag } from "@/lib/live-class/dbFlags";
 import Colors from "@/constants/colors";
@@ -55,7 +58,7 @@ export default function ClassroomStudentView({
   title,
   showAsLiveUI,
   isLive,
-  startedAt,
+  startedAt: _startedAt,
   isCompleted,
   chatMode = "public",
   pipPosition: _pipPosition,
@@ -84,6 +87,20 @@ export default function ClassroomStudentView({
     enabled: canChat,
     isAdmin: false,
   });
+
+  const { data: activePoll } = useActivePoll(liveClassId, canChat);
+  const pollActive =
+    !!activePoll && Number(activePoll.ends_at) > Date.now() && !activePoll.ended_at;
+
+  const { data: broadcastStats } = usePollBroadcastStats(liveClassId, canChat);
+  const statsBroadcast = !!broadcastStats && !pollActive;
+  const chatReplaced = pollActive || statsBroadcast;
+
+  // Auto-open the side/bottom drawer when a poll goes active OR when the
+  // admin starts broadcasting stats, so students always see the takeover.
+  useEffect(() => {
+    if (chatReplaced) setChatOpen(true);
+  }, [chatReplaced]);
 
   const appendVoiceText = useCallback((text: string) => {
     setChatMsg((prev) => (prev ? `${prev} ${text}` : text));
@@ -209,72 +226,95 @@ export default function ClassroomStudentView({
       style={[
         styles.chatPanel,
         isWideLayout ? styles.chatPanelSide : styles.chatPanelPortrait,
+        chatReplaced && styles.chatPanelPoll,
         { paddingBottom: bottomPadding },
       ]}
     >
       <View style={styles.chatSheetHeader}>
-        <Text style={styles.chatSheetTitle}>Live chat</Text>
+        <Text style={styles.chatSheetTitle}>
+          {pollActive
+            ? activePoll?.kind === "quiz"
+              ? "Quiz"
+              : "Poll"
+            : statsBroadcast
+              ? broadcastStats?.kind === "quiz"
+                ? "Quiz results"
+                : "Poll results"
+              : "Live chat"}
+        </Text>
         <Pressable
           style={styles.closeBtn}
           onPress={() => setChatOpen(false)}
-          accessibilityLabel="Close chat"
+          accessibilityLabel={chatReplaced ? "Hide overlay" : "Close chat"}
         >
-          <Ionicons name="close" size={24} color={Colors.light.text} />
+          <Ionicons name="close" size={24} color={chatReplaced ? "#fff" : Colors.light.text} />
         </Pressable>
       </View>
-      <FlatList
-        ref={listRef}
-        data={displayMessages}
-        keyExtractor={(m) => String(m.id)}
-        style={styles.chatList}
-        keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="interactive"
-        renderItem={({ item }) => (
-          <View style={[styles.bubble, item.is_admin && styles.bubbleAdmin]}>
-            <Text style={styles.bubbleName}>{item.user_name}</Text>
-            <Text style={styles.bubbleText}>{item.message}</Text>
-          </View>
-        )}
-        ListEmptyComponent={
-          <Text style={styles.emptyChat}>No messages yet. Ask your doubt here.</Text>
-        }
-      />
-      <View style={styles.chatInputRow}>
-        <TextInput
-          ref={chatInputRef}
-          style={styles.chatInput}
-          value={chatMsg}
-          onChangeText={setChatMsg}
-          placeholder={canChat ? "Ask a doubt…" : "Chat closed"}
-          editable={canChat}
-          onSubmitEditing={handleSend}
-          autoFocus={chatOpen}
-          enterKeyHint="send"
-        />
-        {Platform.OS === "web" ? (
-          <Pressable
-            style={[styles.micBtn, isListening && styles.micBtnActive]}
-            onPress={isListening ? stopListening : startListening}
-            disabled={!canChat}
-          >
-            <Ionicons
-              name={isListening ? "mic" : "mic-outline"}
-              size={18}
-              color={isListening ? "#EF4444" : Colors.light.textMuted}
+      {pollActive ? (
+        <View style={styles.pollPanelSlot}>
+          <StudentActivePollPanel liveClassId={liveClassId} enabled={canChat} />
+        </View>
+      ) : statsBroadcast ? (
+        <View style={styles.pollPanelSlot}>
+          <StudentPollStatsOverlay liveClassId={liveClassId} enabled={canChat} />
+        </View>
+      ) : (
+        <>
+          <FlatList
+            ref={listRef}
+            data={displayMessages}
+            keyExtractor={(m) => String(m.id)}
+            style={styles.chatList}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="interactive"
+            renderItem={({ item }) => (
+              <View style={[styles.bubble, item.is_admin && styles.bubbleAdmin]}>
+                <Text style={styles.bubbleName}>{item.user_name}</Text>
+                <Text style={styles.bubbleText}>{item.message}</Text>
+              </View>
+            )}
+            ListEmptyComponent={
+              <Text style={styles.emptyChat}>No messages yet. Ask your doubt here.</Text>
+            }
+          />
+          <View style={styles.chatInputRow}>
+            <TextInput
+              ref={chatInputRef}
+              style={styles.chatInput}
+              value={chatMsg}
+              onChangeText={setChatMsg}
+              placeholder={canChat ? "Ask a doubt…" : "Chat closed"}
+              editable={canChat}
+              onSubmitEditing={handleSend}
+              autoFocus={chatOpen}
+              enterKeyHint="send"
             />
-          </Pressable>
-        ) : null}
-        <Pressable
-          style={[styles.sendBtn, !chatMsg.trim() && styles.sendDisabled]}
-          onPress={handleSend}
-          disabled={!canChat || !chatMsg.trim() || sendMutation.isPending}
-        >
-          <Ionicons name="send" size={18} color="#fff" />
-        </Pressable>
-      </View>
-      {sendMutation.error ? (
-        <Text style={styles.chatErrorText}>{sendMutation.error.message}</Text>
-      ) : null}
+            {Platform.OS === "web" ? (
+              <Pressable
+                style={[styles.micBtn, isListening && styles.micBtnActive]}
+                onPress={isListening ? stopListening : startListening}
+                disabled={!canChat}
+              >
+                <Ionicons
+                  name={isListening ? "mic" : "mic-outline"}
+                  size={18}
+                  color={isListening ? "#EF4444" : Colors.light.textMuted}
+                />
+              </Pressable>
+            ) : null}
+            <Pressable
+              style={[styles.sendBtn, !chatMsg.trim() && styles.sendDisabled]}
+              onPress={handleSend}
+              disabled={!canChat || !chatMsg.trim() || sendMutation.isPending}
+            >
+              <Ionicons name="send" size={18} color="#fff" />
+            </Pressable>
+          </View>
+          {sendMutation.error ? (
+            <Text style={styles.chatErrorText}>{sendMutation.error.message}</Text>
+          ) : null}
+        </>
+      )}
     </View>
   );
 
@@ -287,7 +327,6 @@ export default function ClassroomStudentView({
         bottomPadding={bottomPadding}
         showLiveHeader={showLiveHeader}
         isLive={isLive}
-        startedAt={startedAt}
         canChat={canChat}
         handRaised={handRaised}
         onHandRaise={() => handMutation.mutate(!handRaised)}
@@ -321,7 +360,7 @@ export default function ClassroomStudentView({
         </Text>
         {showLiveHeader ? (
           <View style={styles.headerStatus}>
-            <LiveClassRecordingTimer startedAt={startedAt} active={isLive} compact />
+            {/* Recording pill is admin-only; students see just LIVE + the activity timer. */}
             <View style={styles.livePill}>
               <View style={styles.liveDot} />
               <Text style={styles.liveText}>LIVE</Text>
@@ -465,6 +504,10 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 16,
     paddingTop: 12,
   },
+  // Poll variant: dark backdrop so it visually replaces the light chat
+  // panel and the poll's dark card blends with the surrounding chrome.
+  chatPanelPoll: { backgroundColor: "#0F172A" },
+  pollPanelSlot: { flex: 1, minHeight: 0, padding: 12 },
   chatSheetHeader: {
     flexDirection: "row",
     justifyContent: "space-between",

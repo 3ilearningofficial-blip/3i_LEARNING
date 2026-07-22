@@ -22,6 +22,12 @@ interface LiveChatPanelProps {
   liveClassId: string;
   chatMode: "public" | "private";
   isAdmin: boolean;
+  /**
+   * When false, all authenticated pollers stop firing. This keeps the panel
+   * mounted (so tab state, drafts, and hand-raise UI don't unmount) while
+   * silencing 401 loops when the class is not currently live.
+   */
+  enabled?: boolean;
   /** When provided, parent owns raised-hands polling (all broadcast tabs). */
   raisedHands?: HandRaise[];
   onResolveHand?: (userId: number) => void;
@@ -70,6 +76,7 @@ export default function LiveChatPanel({
   liveClassId,
   chatMode,
   isAdmin,
+  enabled = true,
   raisedHands: raisedHandsProp,
   onResolveHand,
 }: LiveChatPanelProps) {
@@ -97,8 +104,8 @@ export default function LiveChatPanel({
       if (!res.ok) return [] as ChatMessage[];
       return (await res.json()) as ChatMessage[];
     },
-    enabled: !authBlocked,
-    refetchInterval: 3000,
+    enabled: enabled && !authBlocked,
+    refetchInterval: enabled ? 3000 : false,
   });
 
   // Filter messages based on chat mode
@@ -126,8 +133,8 @@ export default function LiveChatPanel({
         raisedAt: Number(h.raisedAt ?? h.raised_at ?? 0),
       }));
     },
-    enabled: isAdmin && raisedHandsProp === undefined && !authBlocked,
-    refetchInterval: 500,
+    enabled: enabled && isAdmin && raisedHandsProp === undefined && !authBlocked,
+    refetchInterval: enabled ? 500 : false,
   });
   const raisedHands = raisedHandsProp ?? raisedHandsLocal;
 

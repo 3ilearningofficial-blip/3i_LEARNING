@@ -124,6 +124,8 @@ export const REQUIRED_COLUMNS: Record<string, string[]> = {
   standalone_folders: ["parent_id", "category", "price", "original_price", "is_free", "description", "validity_months"],
   // Migration 0042 - admin session device binding
   user_sessions: ["device_id", "platform_family"],
+  // Migration 0065 - "show poll stats to students" broadcast toggle
+  live_class_polls: ["broadcast_stats"],
 };
 
 export const REQUIRED_UNIQUE_INDEX_SPECS = [

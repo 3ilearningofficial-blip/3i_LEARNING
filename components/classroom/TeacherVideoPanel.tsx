@@ -34,8 +34,15 @@ const PIP_CORNERS: { pos: ClassroomPipPosition; label: string }[] = [
   { pos: "bottom-right", label: "BR" },
 ];
 
-// "contain" shows the full teacher (not cropped) in the admin preview panel.
-const videoStyle = { width: "100%", height: "100%", objectFit: "contain" as const, backgroundColor: "#000" };
+// "contain" + a 4:3 box shows the full teacher (not cropped) in the admin
+// preview panel. Webcams stream landscape 16:9, so the CSS box mirrors that
+// and object-fit contain guarantees no cropping regardless of camera aspect.
+const videoStyle = {
+  width: "100%",
+  height: "100%",
+  objectFit: "contain" as const,
+  backgroundColor: "#000",
+};
 
 export default function TeacherVideoPanel({
   liveClassId,
@@ -179,7 +186,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingTop: 6,
   },
-  videoBox: { height: 200, justifyContent: "center", alignItems: "center", backgroundColor: "#000" },
+  videoBox: {
+    width: "100%",
+    aspectRatio: 4 / 3,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#000",
+  },
   muted: { color: "#9CA3AF", fontSize: 12, padding: 12 },
   error: { color: "#FCA5A5", fontSize: 11, padding: 8, textAlign: "center" },
   controls: {

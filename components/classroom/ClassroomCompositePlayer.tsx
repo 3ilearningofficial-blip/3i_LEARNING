@@ -7,6 +7,8 @@ import {
   lockLandscapeForPlayback,
   restorePortraitAfterPlayback,
 } from "@/lib/video-playback-orientation";
+import StudentActivePollPanel from "@/components/classroom/StudentActivePollPanel";
+import StudentPollStatsOverlay from "@/components/classroom/StudentPollStatsOverlay";
 import Colors from "@/constants/colors";
 
 type Props = {
@@ -220,6 +222,17 @@ export default function ClassroomCompositePlayer({
       >
         <Ionicons name={isFullscreen ? "contract-outline" : "scan-outline"} size={20} color="#fff" />
       </Pressable>
+
+      {/* Poll & stats overlays live *inside* the fullscreen container so
+          they stay visible when a student taps fullscreen on phone-web. The
+          chat-side panel outside the frame is hidden by the browser's
+          fullscreen. */}
+      <View pointerEvents="box-none" style={styles.pollOverlay}>
+        <StudentActivePollPanel liveClassId={liveClassId} enabled={enabled} compact />
+      </View>
+      <View pointerEvents="box-none" style={styles.pollOverlay}>
+        <StudentPollStatsOverlay liveClassId={liveClassId} enabled={enabled} compact />
+      </View>
     </>
   );
 
@@ -315,4 +328,12 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   fsHintText: { color: "#FCD34D", fontSize: 11, textAlign: "center", fontWeight: "600" },
+  pollOverlay: {
+    position: "absolute",
+    left: 12,
+    right: 12,
+    bottom: 12,
+    zIndex: 20,
+    maxHeight: "80%",
+  },
 });

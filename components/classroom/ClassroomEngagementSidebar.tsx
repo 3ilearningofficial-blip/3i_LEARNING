@@ -1,10 +1,11 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { View, Text, StyleSheet, Pressable, Platform } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import LiveChatPanel from "@/components/LiveChatPanel";
 import LiveStudentsPanel from "@/components/LiveStudentsPanel";
 import ClassroomEngagementPanel from "@/components/classroom/ClassroomEngagementPanel";
+import { useActivePoll } from "@/lib/classroom/useActivePoll";
 import Colors from "@/constants/colors";
 import type { ChatMode } from "@/lib/live-stream/types";
 import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
@@ -40,7 +41,27 @@ export default function ClassroomEngagementSidebar({
   parentViewers,
 }: Props) {
   const [activeTab, setActiveTab] = useState<SideTab>("chat");
+  const previousTabRef = useRef<SideTab>("chat");
+  const wasPollActiveRef = useRef(false);
   const qc = useQueryClient();
+
+  const { data: activePoll } = useActivePoll(liveClassId, engagementEnabled);
+  const pollActive =
+    !!activePoll && Number(activePoll.ends_at) > Date.now() && !activePoll.ended_at;
+
+  // Auto-swap: when a poll goes active, jump the admin to the Poll tab so
+  // they can watch results roll in. When it ends, restore whatever tab they
+  // had open before (usually "chat") so the sidebar doesn't feel sticky.
+  useEffect(() => {
+    if (pollActive && !wasPollActiveRef.current) {
+      previousTabRef.current = activeTab;
+      if (activeTab !== "poll") setActiveTab("poll");
+    }
+    if (!pollActive && wasPollActiveRef.current) {
+      if (activeTab === "poll") setActiveTab(previousTabRef.current || "chat");
+    }
+    wasPollActiveRef.current = pollActive;
+  }, [pollActive, activeTab]);
 
   // Own the raised-hands poll at the sidebar level so LiveChatPanel doesn't
   // fire its own 500 ms poll while the parent (chat tab) is already polling
@@ -133,6 +154,7 @@ export default function ClassroomEngagementSidebar({
             liveClassId={liveClassId}
             chatMode={chatMode}
             isAdmin
+            enabled={engagementEnabled}
             raisedHands={raisedHands}
             onResolveHand={(userId) => resolveHandMutation.mutate(userId)}
           />

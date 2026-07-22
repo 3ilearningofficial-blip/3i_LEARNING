@@ -3,7 +3,6 @@ import { View, Text, StyleSheet, Pressable, Platform } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, authFetch, getApiUrl } from "@/lib/query-client";
-import Colors from "@/constants/colors";
 
 type Props = {
   liveClassId: string;
@@ -61,22 +60,6 @@ export default function ClassroomLiveOverlays({
     return () => clearInterval(id);
   }, []);
 
-  const { data: activePoll } = useQuery({
-    queryKey: ["/api/live-classes", liveClassId, "polls", "active"],
-    queryFn: async () => {
-      const res = await authFetch(`${getApiUrl()}/live-classes/${encodeURIComponent(liveClassId)}/polls/active`);
-      if (res.status === 401) {
-        setAuthBlocked(true);
-        return null;
-      }
-      if (!res.ok) return null;
-      const json = await res.json();
-      return json.poll as any;
-    },
-    refetchInterval: 800,
-    enabled: !!liveClassId && sessionActive && enabled && !authBlocked,
-  });
-
   const { data: activeTimer } = useQuery({
     queryKey: ["/api/live-classes", liveClassId, "activity-timer", "active"],
     queryFn: async () => {
@@ -91,21 +74,6 @@ export default function ClassroomLiveOverlays({
     },
     refetchInterval: 800,
     enabled: !!liveClassId && sessionActive && enabled && !authBlocked,
-  });
-
-  const vote = useMutation({
-    mutationFn: async ({ pollId, optionId }: { pollId: number; optionId: number }) => {
-      const res = await apiRequest("POST", `/api/live-classes/${liveClassId}/polls/${pollId}/vote`, {
-        optionId,
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.message || "Vote failed");
-      }
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/live-classes", liveClassId, "polls", "active"] });
-    },
   });
 
   const saveOverlayPosition = useMutation({
@@ -202,41 +170,16 @@ export default function ClassroomLiveOverlays({
 
   if (!sessionActive) return null;
 
-  const pollRemaining =
-    activePoll && Number(activePoll.ends_at) > Date.now()
-      ? Math.max(0, Math.ceil((Number(activePoll.ends_at) - Date.now()) / 1000))
-      : 0;
-
   const timerX = dragPos?.x ?? Number(activeTimer?.overlay_x_pct ?? 85);
   const timerY = dragPos?.y ?? Number(activeTimer?.overlay_y_pct ?? 8);
   const timerLabel = String(activeTimer?.label || "").trim() || "Time remaining";
 
   return (
     <View ref={layerRef} style={styles.layer} pointerEvents="box-none" collapsable={false}>
-      {activePoll && pollRemaining > 0 && !isAdmin ? (
-        <View style={styles.pollAnchor}>
-          <View style={styles.pollCard}>
-            <Text style={styles.pollKind}>
-              {activePoll.kind === "quiz" ? "Quiz" : "Poll"} · {pollRemaining}s
-            </Text>
-            <Text style={styles.pollQ}>{activePoll.question}</Text>
-            {(activePoll.options || []).map((opt: { id: number; label: string }) => {
-              const voted = Number(activePoll.myVoteOptionId) === Number(opt.id);
-              return (
-                <Pressable
-                  key={opt.id}
-                  style={[styles.pollOpt, voted && styles.pollOptVoted]}
-                  onPress={() => void vote.mutate({ pollId: activePoll.id, optionId: opt.id })}
-                  disabled={vote.isPending}
-                >
-                  <Text style={styles.pollOptText}>{opt.label}</Text>
-                </Pressable>
-              );
-            })}
-            {vote.error ? <Text style={styles.pollErrorText}>{vote.error.message}</Text> : null}
-          </View>
-        </View>
-      ) : null}
+      {/* Student poll UI lives in StudentActivePollPanel — rendered both in
+          the chat/under-video slot and inside the video frame so fullscreen
+          keeps it visible. The old floating card was duplicated with that
+          panel and was too small to be usable on phone-web. */}
 
       {timerRemaining > 0 ? (
         <View
@@ -298,42 +241,6 @@ const styles = StyleSheet.create({
     zIndex: 40,
     pointerEvents: "box-none",
   },
-  pollAnchor: {
-    position: "absolute",
-    top: 16,
-    right: 16,
-    left: 16,
-    alignItems: "flex-end",
-    pointerEvents: "box-none",
-  },
-  pollCard: {
-    backgroundColor: "rgba(15,23,42,0.94)",
-    borderRadius: 12,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    maxWidth: 340,
-    width: "100%",
-    borderWidth: 1,
-    borderColor: "#334155",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.35,
-    shadowRadius: 8,
-  },
-  pollKind: { color: "#94A3B8", fontSize: 11, fontWeight: "700", marginBottom: 6 },
-  pollQ: { color: "#fff", fontSize: 14, fontWeight: "600", marginBottom: 10, lineHeight: 20 },
-  pollOpt: {
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    backgroundColor: "#1E293B",
-    marginBottom: 6,
-    borderWidth: 1,
-    borderColor: "#334155",
-  },
-  pollOptVoted: { borderColor: Colors.light.primary, backgroundColor: "#1E3A5F" },
-  pollOptText: { color: "#E2E8F0", fontSize: 13 },
-  pollErrorText: { color: "#FCA5A5", fontSize: 12, marginTop: 6 },
   timerWrap: {
     position: "absolute",
     maxWidth: 220,

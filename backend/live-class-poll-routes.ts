@@ -164,8 +164,12 @@ export function registerLiveClassPollRoutes({
       if (kind !== "poll" && kind !== "quiz") {
         return res.status(400).json({ message: "kind must be poll or quiz" });
       }
-      const q = String(question || "").trim();
-      if (!q) return res.status(400).json({ message: "question required" });
+      // Teachers often write the actual question on the whiteboard and use
+      // the poll only to collect answers, so question is now optional. NULL
+      // is written to the DB when the field is left blank; the migration
+      // dropped NOT NULL on live_class_polls.question.
+      const rawQuestion = String(question || "").trim();
+      const q: string | null = rawQuestion.length > 0 ? rawQuestion : null;
       const opts: string[] = Array.isArray(options)
         ? options.map((o: unknown) => String(o || "").trim()).filter(Boolean)
         : [];
@@ -232,12 +236,154 @@ export function registerLiveClassPollRoutes({
     }
   });
 
+  // Toggle "show poll stats to students on the live class display".
+  // Body: { show: boolean }. When `show` is true, students overlay the
+  // percentage bars + leaderboard until the admin flips it off.
+  app.post(
+    "/api/admin/live-classes/:id/polls/:pollId/broadcast-stats",
+    requireAdmin,
+    async (req: Request, res: Response) => {
+      try {
+        const liveClassId = String(req.params.id);
+        const pollId = Number(req.params.pollId);
+        const show = !!req.body?.show;
+        const t = show ? nowMs() : null;
+
+        if (show) {
+          // Only one poll at a time can be broadcasting stats — flip any
+          // other poll in this class off first so students never see two
+          // overlays.
+          await db.query(
+            "UPDATE live_class_polls SET broadcast_stats = NULL WHERE live_class_id = $1 AND id <> $2 AND broadcast_stats IS NOT NULL",
+            [liveClassId, pollId]
+          );
+        }
+        const upd = await db.query(
+          "UPDATE live_class_polls SET broadcast_stats = $1 WHERE id = $2 AND live_class_id = $3 RETURNING id",
+          [t, pollId, liveClassId]
+        );
+        if (!upd.rows[0]) return res.status(404).json({ message: "Poll not found" });
+
+        // Poke the engagement SSE channel so students refresh their overlay
+        // immediately instead of waiting for the next poll refetch.
+        try {
+          await db.query(
+            "SELECT pg_notify('live_engagement', $1::text)",
+            [
+              JSON.stringify({
+                type: "stats_show",
+                liveClassId,
+                pollId,
+                show,
+              }),
+            ]
+          );
+        } catch (e) {
+          console.warn("[Poll] stats_show NOTIFY failed:", (e as Error).message);
+        }
+        res.json({ ok: true, show });
+      } catch (err: any) {
+        console.error("[Poll] broadcast-stats error:", err?.message || err);
+        res.status(500).json({ message: "Failed to toggle broadcast" });
+      }
+    }
+  );
+
+  // Student endpoint: what poll (if any) is currently broadcast to the
+  // whole class. Returns the poll's percentage bars + top-10 leaderboard
+  // so the student overlay renders both side-by-side.
+  app.get(
+    "/api/live-classes/:id/polls/broadcast-stats",
+    requireAuth,
+    async (req: Request, res: Response) => {
+      try {
+        const liveClassId = String(req.params.id);
+        const user = await getAuthUser(req);
+        const lc = await loadLiveClass(db, liveClassId);
+        if (!lc) return res.status(404).json({ message: "Live class not found" });
+        if (!(await userCanAccessLiveClassContent(db, user, lc))) {
+          return res.status(403).json({ message: "Access denied" });
+        }
+        const pollRes = await db.query(
+          `SELECT id, kind, question, correct_option_id, broadcast_stats
+             FROM live_class_polls
+            WHERE live_class_id = $1 AND broadcast_stats IS NOT NULL
+            ORDER BY broadcast_stats DESC
+            LIMIT 1`,
+          [liveClassId]
+        );
+        const poll = pollRes.rows[0];
+        if (!poll) return res.json({ stats: null });
+
+        const [options, votes, leaderboardRows] = await Promise.all([
+          db.query(
+            "SELECT id, label, sort_order FROM live_class_poll_options WHERE poll_id = $1 ORDER BY sort_order",
+            [poll.id]
+          ),
+          db.query(
+            `SELECT option_id, COUNT(*)::int AS count FROM live_class_poll_votes WHERE poll_id = $1 GROUP BY option_id`,
+            [poll.id]
+          ),
+          db.query(
+            `SELECT v.user_id,
+                    COALESCE(u.name, '') AS user_name,
+                    v.option_id,
+                    v.voted_at,
+                    CASE WHEN $2::int IS NOT NULL AND v.option_id = $2::int THEN 1 ELSE 0 END AS is_correct
+               FROM live_class_poll_votes v
+               LEFT JOIN users u ON u.id = v.user_id
+              WHERE v.poll_id = $1
+              ORDER BY is_correct DESC, v.voted_at ASC
+              LIMIT 10`,
+            [poll.id, poll.correct_option_id ? Number(poll.correct_option_id) : null]
+          ),
+        ]);
+
+        const total = votes.rows.reduce((s: number, r: any) => s + Number(r.count), 0);
+        const results = options.rows.map((o: any) => {
+          const row = votes.rows.find((v: any) => Number(v.option_id) === Number(o.id));
+          const count = Number(row?.count || 0);
+          return {
+            id: o.id,
+            label: o.label,
+            sort_order: o.sort_order,
+            count,
+            percent: total > 0 ? Math.round((count / total) * 100) : 0,
+          };
+        });
+        const leaderboard = leaderboardRows.rows.map((r: any, idx: number) => ({
+          rank: idx + 1,
+          userId: Number(r.user_id),
+          userName: String(r.user_name || "Student"),
+          optionId: Number(r.option_id),
+          votedAt: Number(r.voted_at),
+          isCorrect: Number(r.is_correct) === 1,
+        }));
+
+        res.json({
+          stats: {
+            pollId: poll.id,
+            kind: poll.kind,
+            question: poll.question,
+            correctOptionId: poll.correct_option_id ? Number(poll.correct_option_id) : null,
+            totalVotes: total,
+            results,
+            leaderboard,
+          },
+        });
+      } catch (err: any) {
+        console.error("[Poll] broadcast-stats fetch error:", err?.message || err);
+        res.status(500).json({ message: "Failed to load stats" });
+      }
+    }
+  );
+
   app.get("/api/admin/live-classes/:id/polls/session", requireAdmin, async (req: Request, res: Response) => {
     try {
       const liveClassId = String(req.params.id);
       await finalizeExpiredPolls(db, liveClassId);
       const pollsRes = await db.query(
-        `SELECT p.id, p.kind, p.question, p.started_at, p.ends_at, p.ended_at,
+        `SELECT p.id, p.kind, p.question, p.started_at, p.ends_at, p.ended_at, p.broadcast_stats,
                 COALESCE(v.total_votes, 0)::int AS total_votes
          FROM live_class_polls p
          LEFT JOIN (
@@ -259,12 +405,69 @@ export function registerLiveClassPollRoutes({
         ended_at: p.ended_at,
         total_votes: Number(p.total_votes || 0),
         is_active: !p.ended_at && Number(p.ends_at) > t,
+        broadcast_stats: p.broadcast_stats ? Number(p.broadcast_stats) : null,
       }));
       res.json({ polls });
     } catch {
       res.status(500).json({ message: "Failed to load session polls" });
     }
   });
+
+  // Top-N leaderboard for a poll/quiz. Ranking rules per product spec:
+  //  - Quiz: students who voted for the correct option first (voted_at ASC).
+  //  - Poll: no "correct" answer, so we return the earliest voters. That way
+  //    the endpoint is well-defined for both kinds and the admin can show
+  //    "first ten to vote" as a fun leaderboard.
+  app.get(
+    "/api/admin/live-classes/:id/polls/:pollId/leaderboard",
+    requireAdmin,
+    async (req: Request, res: Response) => {
+      try {
+        const liveClassId = String(req.params.id);
+        const pollId = Number(req.params.pollId);
+        const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 10));
+        const pollRes = await db.query(
+          "SELECT id, kind, correct_option_id FROM live_class_polls WHERE id = $1 AND live_class_id = $2",
+          [pollId, liveClassId]
+        );
+        const poll = pollRes.rows[0];
+        if (!poll) return res.status(404).json({ message: "Poll not found" });
+
+        const correctId = poll.correct_option_id ? Number(poll.correct_option_id) : null;
+        // Rank correct answers first (`is_correct DESC`) so quizzes surface
+        // winners on top; tie-breaker is voted_at ascending (earliest first).
+        // For polls (no correct option) every row has is_correct = 0 so the
+        // ORDER BY collapses to "earliest voter first".
+        const rows = await db.query(
+          `SELECT v.user_id,
+                  COALESCE(u.name, '') AS user_name,
+                  v.option_id,
+                  v.voted_at,
+                  CASE WHEN $2::int IS NOT NULL AND v.option_id = $2::int THEN 1 ELSE 0 END AS is_correct
+             FROM live_class_poll_votes v
+             LEFT JOIN users u ON u.id = v.user_id
+            WHERE v.poll_id = $1
+            ORDER BY is_correct DESC, v.voted_at ASC
+            LIMIT $3`,
+          [pollId, correctId, limit]
+        );
+
+        const leaderboard = rows.rows.map((r: any, idx: number) => ({
+          rank: idx + 1,
+          userId: Number(r.user_id),
+          userName: String(r.user_name || "Student"),
+          optionId: Number(r.option_id),
+          votedAt: Number(r.voted_at),
+          isCorrect: Number(r.is_correct) === 1,
+        }));
+
+        res.json({ pollId, kind: poll.kind, correctOptionId: correctId, leaderboard });
+      } catch (err: any) {
+        console.error("[Poll] leaderboard error:", err?.message || err);
+        res.status(500).json({ message: "Failed to load leaderboard" });
+      }
+    }
+  );
 
   app.get("/api/admin/live-classes/:id/polls/:pollId/results", requireAdmin, async (req: Request, res: Response) => {
     try {
@@ -294,7 +497,13 @@ export function registerLiveClassPollRoutes({
         };
       });
 
-      res.json({ poll: pollRes.rows[0], results, totalVotes: total });
+      const pollRow = pollRes.rows[0];
+      res.json({
+        poll: pollRow,
+        results,
+        totalVotes: total,
+        correctOptionId: pollRow.correct_option_id ? Number(pollRow.correct_option_id) : null,
+      });
     } catch {
       res.status(500).json({ message: "Failed to load poll results" });
     }

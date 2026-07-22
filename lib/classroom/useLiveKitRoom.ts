@@ -127,6 +127,15 @@ export function useLiveKitRoom(
     const el = localVideoRef.current;
     if (!el) return;
     const bundle = publishBundleRef.current;
+    // Prefer the raw camera stream so the admin CAMERA panel shows the full
+    // teacher uncropped (the recording composite crops us into a corner
+    // cutout, which caused the "only face visible" complaint).
+    const rawStream = bundle?.cameraPreview?.stream;
+    if (rawStream) {
+      el.srcObject = rawStream;
+      void el.play().catch(() => {});
+      return;
+    }
     const previewEl = bundle?.recording.previewEl ?? recordingCompositeRef.current?.previewEl;
     if (previewEl?.srcObject) {
       el.srcObject = previewEl.srcObject;

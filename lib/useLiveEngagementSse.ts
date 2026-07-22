@@ -34,6 +34,18 @@ function invalidateEngagementQueries(
         queryKey: ["/api/admin/live-classes", liveClassId, "polls", "session"],
       });
     }
+  } else if (type === "stats_show") {
+    // Admin toggled "show poll stats to students". Invalidate both the
+    // student-facing broadcast-stats query and the admin session poll list
+    // so both sides update immediately.
+    void qc.invalidateQueries({
+      queryKey: ["/api/live-classes", liveClassId, "polls", "broadcast-stats"],
+    });
+    if (isAdmin) {
+      void qc.invalidateQueries({
+        queryKey: ["/api/admin/live-classes", liveClassId, "polls", "session"],
+      });
+    }
   } else if (type === "timer") {
     void qc.invalidateQueries({
       queryKey: ["/api/live-classes", liveClassId, "activity-timer", "active"],
@@ -68,7 +80,7 @@ export function useLiveEngagementSse({ liveClassId, enabled = true, isAdmin = fa
 
     if (Platform.OS !== "web") {
       setActive(true);
-      const pollTypes = ["poll", "timer", ...(isAdmin ? ["hand_raise", "viewer"] : [])];
+      const pollTypes = ["poll", "stats_show", "timer", ...(isAdmin ? ["hand_raise", "viewer"] : [])];
       const t = setInterval(() => {
         for (const type of pollTypes) {
           invalidateEngagementQueries(qcRef.current, liveClassId, type, isAdmin);

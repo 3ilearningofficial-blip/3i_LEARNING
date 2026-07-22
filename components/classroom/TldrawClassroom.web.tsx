@@ -29,6 +29,14 @@ const TLDRAW_LICENSE_KEY = getTldrawLicenseKey();
 const TLDRAW_LICENSE_HINT = tldrawLicenseHint(TLDRAW_LICENSE_KEY);
 let classroomTouchPatchInstalled = false;
 
+// tldraw calls `event.preventDefault()` inside touch AND wheel handlers to
+// stop the browser from scrolling / pinch-zooming the whole page while the
+// user is drawing on the board. Modern Chrome treats `touchstart`,
+// `touchmove`, `wheel`, and `mousewheel` as passive by default on the root
+// element, so those preventDefault() calls become no-ops and the console
+// gets a "Unable to preventDefault inside passive event listener" warning
+// for every stroke. Force `{ passive: false }` on those event types (only)
+// so preventDefault actually works and the console stays clean.
 function installClassroomNonPassiveTouchPatch() {
   if (Platform.OS !== "web" || typeof EventTarget === "undefined" || classroomTouchPatchInstalled) return;
   classroomTouchPatchInstalled = true;
@@ -38,6 +46,15 @@ function installClassroomNonPassiveTouchPatch() {
   };
   if (proto.__classroomAddEventListener) return;
 
+  const NON_PASSIVE_EVENTS = new Set([
+    "touchstart",
+    "touchmove",
+    "touchend",
+    "touchcancel",
+    "wheel",
+    "mousewheel",
+  ]);
+
   const original = proto.addEventListener;
   proto.__classroomAddEventListener = original;
   proto.addEventListener = function patchedAddEventListener(
@@ -45,7 +62,7 @@ function installClassroomNonPassiveTouchPatch() {
     listener: EventListenerOrEventListenerObject | null,
     options?: boolean | AddEventListenerOptions
   ) {
-    if ((type === "touchstart" || type === "touchmove" || type === "touchend") && options !== false) {
+    if (NON_PASSIVE_EVENTS.has(type) && options !== false) {
       const nextOptions =
         typeof options === "object" && options !== null
           ? { ...options, passive: false }

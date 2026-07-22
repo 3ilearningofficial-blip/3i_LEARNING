@@ -12,8 +12,11 @@ import {
 } from "react-native";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import LiveClassRecordingTimer from "@/components/LiveClassRecordingTimer";
 import ClassroomHeaderActivityTimer from "@/components/classroom/ClassroomHeaderActivityTimer";
+import StudentActivePollPanel from "@/components/classroom/StudentActivePollPanel";
+import StudentPollStatsOverlay from "@/components/classroom/StudentPollStatsOverlay";
+import { useActivePoll } from "@/lib/classroom/useActivePoll";
+import { usePollBroadcastStats } from "@/lib/classroom/usePollBroadcastStats";
 import Colors from "@/constants/colors";
 
 type ChatMsg = {
@@ -32,7 +35,6 @@ type Props = {
   bottomPadding: number;
   showLiveHeader: boolean;
   isLive: boolean;
-  startedAt?: number | null;
   canChat: boolean;
   handRaised: boolean;
   onHandRaise: () => void;
@@ -66,7 +68,6 @@ export default function ClassroomStudentPortraitShell({
   bottomPadding,
   showLiveHeader,
   isLive,
-  startedAt,
   canChat,
   handRaised,
   onHandRaise,
@@ -82,6 +83,11 @@ export default function ClassroomStudentPortraitShell({
   onMicPress,
   videoSlot,
 }: Props) {
+  const { data: activePoll } = useActivePoll(liveClassId, canChat);
+  const pollActive =
+    !!activePoll && Number(activePoll.ends_at) > Date.now() && !activePoll.ended_at;
+  const { data: broadcastStats } = usePollBroadcastStats(liveClassId, canChat);
+  const statsBroadcast = !!broadcastStats && !pollActive;
   return (
     <KeyboardAvoidingView
       style={styles.root}
@@ -94,7 +100,7 @@ export default function ClassroomStudentPortraitShell({
         </Pressable>
         {showLiveHeader ? (
           <View style={styles.headerStatus}>
-            <LiveClassRecordingTimer startedAt={startedAt} active={isLive} compact />
+            {/* Recording pill is admin-only; students see just LIVE + the activity timer. */}
             <View style={styles.livePill}>
               <View style={styles.liveDot} />
               <Text style={styles.liveText}>LIVE</Text>
@@ -114,95 +120,109 @@ export default function ClassroomStudentPortraitShell({
         </Text>
       </View>
 
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.actionRowScroll}
-        contentContainerStyle={styles.actionRow}
-      >
-        <Pressable
-          style={[styles.actionBtn, handRaised && styles.actionBtnActive]}
-          onPress={onHandRaise}
-          disabled={!canChat}
-        >
-          <Text style={styles.actionEmoji}>✋</Text>
-          <Text style={[styles.actionLabel, handRaised && styles.actionLabelActive]}>Hand Raise</Text>
-        </Pressable>
-        <View style={[styles.actionBtn, styles.actionBtnSelected]}>
-          <Ionicons name="chatbubbles" size={22} color="#A78BFA" />
-          <Text style={[styles.actionLabel, styles.actionLabelActive]}>Live Chat</Text>
+      {pollActive ? (
+        <View style={[styles.pollBlock, { paddingBottom: Math.max(bottomPadding, 12) }]}>
+          <StudentActivePollPanel liveClassId={liveClassId} enabled={canChat} />
         </View>
-        {Platform.OS === "web" && onMicPress ? (
-          <Pressable
-            style={[styles.actionBtn, isListening && styles.actionBtnActive]}
-            onPress={onMicPress}
-            disabled={!canChat}
+      ) : statsBroadcast ? (
+        <View style={[styles.pollBlock, { paddingBottom: Math.max(bottomPadding, 12) }]}>
+          <StudentPollStatsOverlay liveClassId={liveClassId} enabled={canChat} />
+        </View>
+      ) : (
+        <>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.actionRowScroll}
+            contentContainerStyle={styles.actionRow}
           >
-            <Ionicons
-              name={isListening ? "mic" : "mic-outline"}
-              size={22}
-              color={isListening ? "#EF4444" : "#9CA3AF"}
-            />
-            <Text style={styles.actionLabel}>Voice</Text>
-          </Pressable>
-        ) : null}
-      </ScrollView>
-
-      <View style={styles.chatPanel}>
-        <View style={styles.chatPanelHeader}>
-          <Text style={styles.chatPanelTitle}>Live chat</Text>
-          <Ionicons name="information-circle-outline" size={18} color="#6B7280" />
-        </View>
-        <FlatList
-          ref={listRef}
-          data={displayMessages}
-          keyExtractor={(m) => String(m.id)}
-          style={styles.chatList}
-          contentContainerStyle={styles.chatListContent}
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="interactive"
-          renderItem={({ item }) => (
-            <View style={[styles.msgCard, item.is_admin && styles.msgCardAdmin]}>
-              <View style={styles.msgAvatar}>
-                <Ionicons name="person" size={16} color="#9CA3AF" />
-              </View>
-              <View style={styles.msgBody}>
-                <View style={styles.msgMeta}>
-                  <Text style={styles.msgName} numberOfLines={1}>
-                    {item.user_name}
-                  </Text>
-                  <Text style={styles.msgTime}>{formatRelativeTime(item.created_at)}</Text>
-                </View>
-                <Text style={styles.msgText}>{item.message}</Text>
-              </View>
+            <Pressable
+              style={[styles.actionBtn, handRaised && styles.actionBtnActive]}
+              onPress={onHandRaise}
+              disabled={!canChat}
+            >
+              <Text style={styles.actionEmoji}>✋</Text>
+              <Text style={[styles.actionLabel, handRaised && styles.actionLabelActive]}>
+                Hand Raise
+              </Text>
+            </Pressable>
+            <View style={[styles.actionBtn, styles.actionBtnSelected]}>
+              <Ionicons name="chatbubbles" size={22} color="#A78BFA" />
+              <Text style={[styles.actionLabel, styles.actionLabelActive]}>Live Chat</Text>
             </View>
-          )}
-          ListEmptyComponent={
-            <Text style={styles.emptyChat}>No messages yet. Ask your doubt here.</Text>
-          }
-        />
-        <View style={[styles.chatInputRow, { paddingBottom: Math.max(bottomPadding, 10) }]}>
-          <TextInput
-            ref={chatInputRef}
-            style={styles.chatInput}
-            value={chatMsg}
-            onChangeText={onChatMsgChange}
-            placeholder={canChat ? "Ask a doubt…" : "Chat closed"}
-            placeholderTextColor="#6B7280"
-            editable={canChat}
-            onSubmitEditing={onSend}
-            enterKeyHint="send"
-          />
-          <Pressable
-            style={[styles.sendBtn, (!chatMsg.trim() || sendPending) && styles.sendDisabled]}
-            onPress={onSend}
-            disabled={!canChat || !chatMsg.trim() || sendPending}
-          >
-            <Ionicons name="send" size={18} color="#fff" />
-          </Pressable>
-        </View>
-        {chatError ? <Text style={styles.chatErrorText}>{chatError}</Text> : null}
-      </View>
+            {Platform.OS === "web" && onMicPress ? (
+              <Pressable
+                style={[styles.actionBtn, isListening && styles.actionBtnActive]}
+                onPress={onMicPress}
+                disabled={!canChat}
+              >
+                <Ionicons
+                  name={isListening ? "mic" : "mic-outline"}
+                  size={22}
+                  color={isListening ? "#EF4444" : "#9CA3AF"}
+                />
+                <Text style={styles.actionLabel}>Voice</Text>
+              </Pressable>
+            ) : null}
+          </ScrollView>
+
+          <View style={styles.chatPanel}>
+            <View style={styles.chatPanelHeader}>
+              <Text style={styles.chatPanelTitle}>Live chat</Text>
+              <Ionicons name="information-circle-outline" size={18} color="#6B7280" />
+            </View>
+            <FlatList
+              ref={listRef}
+              data={displayMessages}
+              keyExtractor={(m) => String(m.id)}
+              style={styles.chatList}
+              contentContainerStyle={styles.chatListContent}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="interactive"
+              renderItem={({ item }) => (
+                <View style={[styles.msgCard, item.is_admin && styles.msgCardAdmin]}>
+                  <View style={styles.msgAvatar}>
+                    <Ionicons name="person" size={16} color="#9CA3AF" />
+                  </View>
+                  <View style={styles.msgBody}>
+                    <View style={styles.msgMeta}>
+                      <Text style={styles.msgName} numberOfLines={1}>
+                        {item.user_name}
+                      </Text>
+                      <Text style={styles.msgTime}>{formatRelativeTime(item.created_at)}</Text>
+                    </View>
+                    <Text style={styles.msgText}>{item.message}</Text>
+                  </View>
+                </View>
+              )}
+              ListEmptyComponent={
+                <Text style={styles.emptyChat}>No messages yet. Ask your doubt here.</Text>
+              }
+            />
+            <View style={[styles.chatInputRow, { paddingBottom: Math.max(bottomPadding, 10) }]}>
+              <TextInput
+                ref={chatInputRef}
+                style={styles.chatInput}
+                value={chatMsg}
+                onChangeText={onChatMsgChange}
+                placeholder={canChat ? "Ask a doubt…" : "Chat closed"}
+                placeholderTextColor="#6B7280"
+                editable={canChat}
+                onSubmitEditing={onSend}
+                enterKeyHint="send"
+              />
+              <Pressable
+                style={[styles.sendBtn, (!chatMsg.trim() || sendPending) && styles.sendDisabled]}
+                onPress={onSend}
+                disabled={!canChat || !chatMsg.trim() || sendPending}
+              >
+                <Ionicons name="send" size={18} color="#fff" />
+              </Pressable>
+            </View>
+            {chatError ? <Text style={styles.chatErrorText}>{chatError}</Text> : null}
+          </View>
+        </>
+      )}
     </KeyboardAvoidingView>
   );
 }
@@ -253,6 +273,12 @@ const styles = StyleSheet.create({
     borderBottomColor: "#1F2937",
   },
   titleText: { fontSize: 15, fontWeight: "700", color: "#F9FAFB", lineHeight: 20 },
+  pollBlock: {
+    flex: 1,
+    minHeight: 0,
+    backgroundColor: "#0F172A",
+    padding: 12,
+  },
   actionRowScroll: { flexGrow: 0, backgroundColor: "#0A0A0A" },
   actionRow: {
     flexDirection: "row",
