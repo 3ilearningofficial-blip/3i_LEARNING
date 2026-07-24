@@ -1136,7 +1136,10 @@ export default function LiveClassScreen() {
     </View>
   ), [isAdmin]);
 
-  if (streamType === "classroom" && !isAdmin) {
+  // Live / upcoming classroom uses LiveKit interactive UI. Completed classroom
+  // falls through to the shared recording player (same path as CF recordings)
+  // so students can watch the saved session on web and Expo native.
+  if (streamType === "classroom" && !isAdmin && !liveClassData?.is_completed) {
     return (
       <View style={styles.container}>
         <ClassroomStudentView
@@ -1154,6 +1157,11 @@ export default function LiveClassScreen() {
       </View>
     );
   }
+
+  const noVideoMessage =
+    streamType === "classroom" && isCompleted && !recordingUrl
+      ? "Recording not available yet"
+      : "No video available";
 
   const screenBody = (
     <>
@@ -1381,7 +1389,7 @@ export default function LiveClassScreen() {
             ) : (
               <View style={styles.noVideoOverlay}>
                 <Ionicons name="videocam-off-outline" size={32} color="#666" />
-                <Text style={styles.noVideoText}>No video available</Text>
+                <Text style={styles.noVideoText}>{noVideoMessage}</Text>
               </View>
             )}
             {(canStudentChat || (isAdmin && liveClassData?.is_live)) && id ? (
@@ -1692,7 +1700,7 @@ export default function LiveClassScreen() {
             ) : (
               <View style={styles.noVideoOverlay}>
                 <Ionicons name="videocam-off-outline" size={32} color="#666" />
-                <Text style={styles.noVideoText}>No video available</Text>
+                <Text style={styles.noVideoText}>{noVideoMessage}</Text>
               </View>
             )}
             {(canStudentChat || (isAdmin && liveClassData?.is_live)) && id ? (
