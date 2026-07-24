@@ -70,7 +70,7 @@ function countLocalBoardState(editor: Editor): SnapshotBoardStats {
   return { pageCount: pages.length, shapeCount };
 }
 
-async function parseJsonSnapshotResponse(res: Response, _source: string): Promise<unknown | null> {
+async function parseJsonSnapshotResponse(res: Response, source: string): Promise<unknown | null> {
   const text = await res.text();
   const trimmed = text.trimStart();
   if (trimmed.startsWith("<")) {
