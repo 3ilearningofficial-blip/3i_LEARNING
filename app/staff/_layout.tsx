@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { Tabs, Stack, router, usePathname } from "expo-router";
 import { Platform, View, Text, Pressable, ScrollView, ActivityIndicator, useWindowDimensions } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
@@ -7,14 +7,13 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "@/context/AuthContext";
 import Colors from "@/constants/colors";
 import { useAppTheme } from "@/context/AppThemeContext";
-
-import { STAFF_WEB_NAV } from "@/components/staff/staff-web-nav";
+import { backToApp } from "@/lib/admin/adminNavigation";
+import { useStaffPermissions } from "@/lib/staff/useStaffPermissions";
+import { STAFF_WEB_NAV, filterStaffNav } from "@/components/staff/staff-web-nav";
 import { StaffScreenShell } from "@/components/staff/StaffScreenShell";
 
-const WEB_NAV = STAFF_WEB_NAV;
-
 function StaffGuard({ children }: { children: React.ReactNode }) {
-  const { user, isStaff, isLoading, logout } = useAuth();
+  const { isStaff, isLoading } = useAuth();
   if (isLoading) {
     return (
       <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
@@ -26,7 +25,9 @@ function StaffGuard({ children }: { children: React.ReactNode }) {
     return (
       <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 24 }}>
         <Ionicons name="lock-closed" size={48} color={Colors.light.textMuted} />
-        <Text style={{ marginTop: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.textMuted }}>Teacher access required</Text>
+        <Text style={{ marginTop: 12, fontFamily: "Inter_600SemiBold", color: Colors.light.textMuted }}>
+          Teacher access required
+        </Text>
         <Pressable onPress={() => router.back()} style={{ marginTop: 16 }}>
           <Text style={{ color: Colors.light.primary, fontFamily: "Inter_600SemiBold" }}>Go Back</Text>
         </Pressable>
@@ -43,13 +44,13 @@ function WebStaffShell({ children }: { children: React.ReactNode }) {
   const { user, logout } = useAuth();
   const { width } = useWindowDimensions();
   const isWide = width >= 900;
+  const { canAny, isLoading: permsLoading } = useStaffPermissions();
+  const navItems = useMemo(() => filterStaffNav(STAFF_WEB_NAV, canAny), [canAny, permsLoading]);
 
   if (!isWide) {
     return (
       <StaffGuard>
-        <StaffScreenShell>
-          {children}
-        </StaffScreenShell>
+        <StaffScreenShell>{children}</StaffScreenShell>
       </StaffGuard>
     );
   }
@@ -57,27 +58,82 @@ function WebStaffShell({ children }: { children: React.ReactNode }) {
   return (
     <StaffGuard>
       <View style={{ flex: 1, flexDirection: "row", backgroundColor: colors.background }}>
-        <View style={{ width: 240, borderRightWidth: 1, borderRightColor: colors.border, backgroundColor: colors.surface }}>
-          <LinearGradient colors={[Colors.light.primary, "#1e40af"]} style={{ paddingTop: insets.top + 12, paddingHorizontal: 16, paddingBottom: 16 }}>
-            <Text style={{ color: "#fff", fontFamily: "Inter_800ExtraBold", fontSize: 18 }}>Teacher Portal</Text>
+        <View
+          style={{
+            width: 240,
+            borderRightWidth: 1,
+            borderRightColor: colors.border,
+            backgroundColor: colors.surface,
+          }}
+        >
+          <LinearGradient
+            colors={["#0A1628", "#1A2E50"]}
+            style={{ paddingTop: insets.top + 12, paddingHorizontal: 16, paddingBottom: 16 }}
+          >
+            <Text style={{ color: "#fff", fontFamily: "Inter_800ExtraBold", fontSize: 18 }}>
+              Teacher Dashboard
+            </Text>
             <Text style={{ color: "rgba(255,255,255,0.8)", fontSize: 12, marginTop: 4 }}>{user?.name}</Text>
           </LinearGradient>
           <ScrollView style={{ flex: 1 }}>
-            {WEB_NAV.map((item) => {
-              const active = pathname === item.href || (item.href !== "/staff" && pathname.startsWith(item.href));
+            {navItems.map((item) => {
+              const active =
+                pathname === item.href || (item.href !== "/staff" && pathname.startsWith(item.href));
               return (
                 <Pressable
                   key={item.href}
                   onPress={() => router.push(item.href as any)}
-                  style={{ flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 14, paddingVertical: 13, marginHorizontal: 8, marginVertical: 2, borderRadius: 10, backgroundColor: active ? colors.surfaceAlt : "transparent" }}
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 12,
+                    paddingHorizontal: 14,
+                    paddingVertical: 13,
+                    marginHorizontal: 8,
+                    marginVertical: 2,
+                    borderRadius: 10,
+                    backgroundColor: active ? colors.surfaceAlt : "transparent",
+                  }}
                 >
-                  <Ionicons name={item.icon} size={20} color={active ? Colors.light.primary : colors.textMuted} />
-                  <Text style={{ fontFamily: active ? "Inter_700Bold" : "Inter_500Medium", color: active ? Colors.light.primary : colors.textSecondary }}>{item.label}</Text>
+                  <Ionicons
+                    name={item.icon}
+                    size={20}
+                    color={active ? Colors.light.primary : colors.textMuted}
+                  />
+                  <Text
+                    style={{
+                      fontFamily: active ? "Inter_700Bold" : "Inter_500Medium",
+                      color: active ? Colors.light.primary : colors.textSecondary,
+                    }}
+                  >
+                    {item.label}
+                  </Text>
                 </Pressable>
               );
             })}
           </ScrollView>
-          <Pressable onPress={() => logout()} style={{ padding: 16, borderTopWidth: 1, borderTopColor: colors.border }}>
+          <Pressable
+            onPress={() => backToApp(router)}
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 10,
+              padding: 14,
+              marginHorizontal: 8,
+              marginBottom: 8,
+              borderRadius: 10,
+              backgroundColor: colors.surfaceAlt,
+            }}
+          >
+            <Ionicons name="arrow-back" size={18} color={colors.textMuted} />
+            <Text style={{ fontSize: 14, fontFamily: "Inter_500Medium", color: colors.textSecondary }}>
+              Back to App
+            </Text>
+          </Pressable>
+          <Pressable
+            onPress={() => logout()}
+            style={{ padding: 16, borderTopWidth: 1, borderTopColor: colors.border }}
+          >
             <Text style={{ color: "#dc2626", fontFamily: "Inter_600SemiBold" }}>Logout</Text>
           </Pressable>
         </View>
@@ -89,6 +145,15 @@ function WebStaffShell({ children }: { children: React.ReactNode }) {
 
 export default function StaffLayout() {
   const isWeb = Platform.OS === "web";
+  const { canAny, isLoading: permsLoading } = useStaffPermissions();
+  const showTests = canAny("tests.create", "tests.edit");
+  const showMaterials = canAny(
+    "materials.course.create",
+    "materials.course.edit",
+    "materials.free.create",
+    "materials.free.edit",
+  );
+  const showMissions = canAny("missions.create", "missions.edit");
 
   if (isWeb) {
     return (
@@ -107,12 +172,48 @@ export default function StaffLayout() {
           tabBarInactiveTintColor: Colors.light.textMuted,
         }}
       >
-        <Tabs.Screen name="index" options={{ title: "Home", tabBarIcon: ({ color, size }) => <Ionicons name="home" size={size} color={color} /> }} />
-        <Tabs.Screen name="courses" options={{ title: "Courses", tabBarIcon: ({ color, size }) => <Ionicons name="book" size={size} color={color} /> }} />
-        <Tabs.Screen name="tests" options={{ title: "Tests", tabBarIcon: ({ color, size }) => <Ionicons name="document-text" size={size} color={color} /> }} />
-        <Tabs.Screen name="materials" options={{ title: "Materials", tabBarIcon: ({ color, size }) => <Ionicons name="folder-open" size={size} color={color} /> }} />
-        <Tabs.Screen name="profile" options={{ title: "Profile", tabBarIcon: ({ color, size }) => <Ionicons name="person" size={size} color={color} /> }} />
-        <Tabs.Screen name="missions" options={{ href: null }} />
+        <Tabs.Screen
+          name="index"
+          options={{
+            title: "Home",
+            tabBarIcon: ({ color, size }) => <Ionicons name="home" size={size} color={color} />,
+          }}
+        />
+        <Tabs.Screen
+          name="courses"
+          options={{
+            title: "Courses",
+            tabBarIcon: ({ color, size }) => <Ionicons name="book" size={size} color={color} />,
+          }}
+        />
+        <Tabs.Screen
+          name="tests"
+          options={{
+            title: "Tests",
+            href: !permsLoading && !showTests ? null : undefined,
+            tabBarIcon: ({ color, size }) => (
+              <Ionicons name="document-text" size={size} color={color} />
+            ),
+          }}
+        />
+        <Tabs.Screen
+          name="materials"
+          options={{
+            title: "Materials",
+            href: !permsLoading && !showMaterials ? null : undefined,
+            tabBarIcon: ({ color, size }) => (
+              <Ionicons name="folder-open" size={size} color={color} />
+            ),
+          }}
+        />
+        <Tabs.Screen
+          name="profile"
+          options={{
+            title: "Profile",
+            tabBarIcon: ({ color, size }) => <Ionicons name="person" size={size} color={color} />,
+          }}
+        />
+        <Tabs.Screen name="missions" options={{ href: showMissions ? undefined : null }} />
         <Tabs.Screen name="requests" options={{ href: null }} />
         <Tabs.Screen name="more" options={{ href: null }} />
         <Tabs.Screen name="live" options={{ href: null }} />

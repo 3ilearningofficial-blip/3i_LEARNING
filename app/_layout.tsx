@@ -28,7 +28,7 @@ import { listWebOfflineKeys, removeWebOffline } from "@/lib/web-offline-store";
 import { getStoredAuthUser } from "@/lib/auth-storage";
 import { clearWebPostLoginHomeGrace, getWebPostLoginHomeGraceRemainingMs } from "@/lib/web-post-login-grace";
 import { getPostAuthPathForUser } from "@/lib/post-auth-path";
-import { isAdminWebStudentTabRoute } from "@/lib/admin/adminNavigation";
+import { isAdminWebStudentTabRoute, isStaffWebStudentTabRoute } from "@/lib/admin/adminNavigation";
 import { reportAppInstallOnce, setupPwaInstallListener } from "@/lib/report-admin-ops";
 
 if (Platform.OS === "web") {
@@ -234,8 +234,22 @@ function RootLayoutNav() {
           router.replace(getPostAuthPathForUser(user) as any);
           return;
         }
-        if (staffRole && (currentSegment === "(tabs)" || currentSegmentName === "home")) {
-          router.replace("/staff" as any);
+        if (staffRole && currentSegment === "(tabs)") {
+          const tabChild = (segments as readonly string[]).at(1);
+          // Web: /home is the teacher's app home; header links land on student tab screens.
+          // Native: allow full student tab shell so teachers can preview the student app.
+          if (Platform.OS === "web" && isStaffWebStudentTabRoute(tabChild)) {
+            return;
+          }
+          if (Platform.OS !== "web") {
+            return;
+          }
+          // Web index under (tabs) is not used — send staff to /home instead of /staff.
+          router.replace("/home" as any);
+          return;
+        }
+        if (staffRole && currentSegmentName === "home") {
+          // Teachers may browse student home (Teacher pill returns to /staff).
           return;
         }
         if (adminRole && currentSegment === "(tabs)") {

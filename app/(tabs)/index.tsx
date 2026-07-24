@@ -65,7 +65,7 @@ export default function HomeScreen() {
   const isWideScreen = screenWidth >= 768;
   const isNative = Platform.OS !== "web";
   const isNativePhone = isNative && !isWideScreen;
-  const { user, isAdmin, logout } = useAuth();
+  const { user, isAdmin, isStaff, logout } = useAuth();
   const { colors, isDarkMode } = useAppTheme();
   const qc = useQueryClient();
   const tabVisible = useDocumentVisibility();
@@ -338,6 +338,19 @@ export default function HomeScreen() {
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
                   <Ionicons name="grid" size={15} color="#fff" />
                   <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: "#fff", letterSpacing: 0.3 }}>Admin</Text>
+                </View>
+              </Pressable>
+            )}
+            {isStaff && !isAdmin && (
+              <Pressable
+                style={styles.adminBtn}
+                onPress={() => {
+                  router.push("/staff" as any);
+                }}
+              >
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                  <Ionicons name="grid" size={15} color="#fff" />
+                  <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: "#fff", letterSpacing: 0.3 }}>Teacher</Text>
                 </View>
               </Pressable>
             )}

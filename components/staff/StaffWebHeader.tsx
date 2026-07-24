@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router, usePathname } from "expo-router";
-import React from "react";
+import React, { useMemo } from "react";
 import {
   Image,
   Modal,
@@ -14,7 +14,9 @@ import {
 import Colors from "@/constants/colors";
 import { useAppTheme } from "@/context/AppThemeContext";
 import { useAuth } from "@/context/AuthContext";
-import { STAFF_WEB_NAV } from "./staff-web-nav";
+import { backToApp } from "@/lib/admin/adminNavigation";
+import { useStaffPermissions } from "@/lib/staff/useStaffPermissions";
+import { STAFF_WEB_NAV, filterStaffNav } from "./staff-web-nav";
 
 export function StaffWebHeader() {
   const pathname = usePathname();
@@ -22,6 +24,8 @@ export function StaffWebHeader() {
   const [menuOpen, setMenuOpen] = React.useState(false);
   const { colors, isDarkMode } = useAppTheme();
   const { user, logout } = useAuth();
+  const { canAny, isLoading: permsLoading } = useStaffPermissions();
+  const navItems = useMemo(() => filterStaffNav(STAFF_WEB_NAV, canAny), [canAny, permsLoading]);
 
   React.useEffect(() => {
     setMenuOpen(false);
@@ -48,8 +52,17 @@ export function StaffWebHeader() {
           pressed && styles.pressed,
         ]}
       >
-        <Ionicons name={item.icon} size={compact ? 18 : 16} color={active ? colors.primary : colors.textSecondary} />
-        <Text style={[compact ? styles.mobileNavText : styles.navText, { color: active ? colors.primary : colors.textSecondary }]}>
+        <Ionicons
+          name={item.icon}
+          size={compact ? 18 : 16}
+          color={active ? colors.primary : colors.textSecondary}
+        />
+        <Text
+          style={[
+            compact ? styles.mobileNavText : styles.navText,
+            { color: active ? colors.primary : colors.textSecondary },
+          ]}
+        >
           {item.label}
         </Text>
       </Pressable>
@@ -62,31 +75,57 @@ export function StaffWebHeader() {
         <Pressable onPress={() => navigateTo("/staff")} style={styles.brand}>
           <Image source={require("@/assets/images/logo.png")} style={styles.logoImg} resizeMode="contain" />
           <View>
-            <Text style={[styles.brandText, { color: colors.text }]}>Teacher Portal</Text>
-            {user?.name ? <Text style={[styles.subText, { color: colors.textMuted }]} numberOfLines={1}>{user.name}</Text> : null}
+            <Text style={[styles.brandText, { color: colors.text }]}>Teacher Dashboard</Text>
+            {user?.name ? (
+              <Text style={[styles.subText, { color: colors.textMuted }]} numberOfLines={1}>
+                {user.name}
+              </Text>
+            ) : null}
           </View>
         </Pressable>
       </View>
 
       {isPhoneWeb ? (
         <>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Open teacher navigation menu"
-            onPress={() => setMenuOpen(true)}
-            style={({ pressed }) => [
-              styles.menuButton,
-              { backgroundColor: colors.card, borderColor: colors.border },
-              pressed && styles.pressed,
-            ]}
-          >
-            <Ionicons name="menu" size={26} color={colors.text} />
-          </Pressable>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            <Pressable
+              onPress={() => backToApp(router)}
+              style={({ pressed }) => [
+                styles.backAppBtn,
+                { backgroundColor: colors.card, borderColor: colors.border },
+                pressed && styles.pressed,
+              ]}
+            >
+              <Ionicons name="arrow-back" size={18} color={colors.text} />
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Open teacher navigation menu"
+              onPress={() => setMenuOpen(true)}
+              style={({ pressed }) => [
+                styles.menuButton,
+                { backgroundColor: colors.card, borderColor: colors.border },
+                pressed && styles.pressed,
+              ]}
+            >
+              <Ionicons name="menu" size={26} color={colors.text} />
+            </Pressable>
+          </View>
           <Modal transparent visible={menuOpen} animationType="fade" onRequestClose={() => setMenuOpen(false)}>
             <View style={styles.modalLayer}>
               <Pressable style={StyleSheet.absoluteFill} onPress={() => setMenuOpen(false)} />
               <View style={[styles.mobileMenu, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                {STAFF_WEB_NAV.map((item) => renderNavItem(item, true))}
+                {navItems.map((item) => renderNavItem(item, true))}
+                <Pressable
+                  onPress={() => {
+                    setMenuOpen(false);
+                    backToApp(router);
+                  }}
+                  style={styles.mobileNavItem}
+                >
+                  <Ionicons name="arrow-back" size={18} color={colors.textSecondary} />
+                  <Text style={[styles.mobileNavText, { color: colors.textSecondary }]}>Back to App</Text>
+                </Pressable>
                 <Pressable
                   onPress={() => {
                     setMenuOpen(false);
@@ -102,7 +141,16 @@ export function StaffWebHeader() {
           </Modal>
         </>
       ) : (
-        <View style={styles.nav}>{STAFF_WEB_NAV.map((item) => renderNavItem(item))}</View>
+        <View style={styles.nav}>
+          {navItems.map((item) => renderNavItem(item))}
+          <Pressable
+            onPress={() => backToApp(router)}
+            style={({ pressed }) => [styles.navItem, pressed && styles.pressed]}
+          >
+            <Ionicons name="arrow-back" size={16} color={colors.textSecondary} />
+            <Text style={[styles.navText, { color: colors.textSecondary }]}>Back to App</Text>
+          </Pressable>
+        </View>
       )}
     </View>
   );
@@ -137,6 +185,14 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 14,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  backAppBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
     borderWidth: 1,
     alignItems: "center",
     justifyContent: "center",

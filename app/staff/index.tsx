@@ -19,6 +19,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
 import { useAuth } from "@/context/AuthContext";
 import { CourseCard, type CourseHomeCardCourse } from "@/components/course/CourseHomeCards";
+import { backToApp } from "@/lib/admin/adminNavigation";
+import { useStaffPermissions } from "@/lib/staff/useStaffPermissions";
 
 function assignmentSubjects(course: any): string[] {
   return (course.assignments || [])
@@ -33,6 +35,15 @@ export default function StaffHomeScreen() {
   const { width } = useWindowDimensions();
   const isWide = width >= 768;
   const cardWidth = isWide ? 360 : Math.min(width - 40, 420);
+  const { can, canAny } = useStaffPermissions();
+  const canSchedule = can("live.schedule") || can("live.start");
+  const canTests = canAny("tests.create", "tests.edit");
+  const canMaterials = canAny(
+    "materials.course.create",
+    "materials.course.edit",
+    "materials.free.create",
+    "materials.free.edit",
+  );
 
   const { data, isLoading } = useQuery({
     queryKey: ["/api/staff/dashboard"],
@@ -59,8 +70,31 @@ export default function StaffHomeScreen() {
         colors={isDarkMode ? ["#020617", "#0F172A"] : ["#0A1628", "#1A2E50"]}
         style={{ paddingTop: topPadding + 12, paddingHorizontal: 20, paddingBottom: 22 }}
       >
-        <Text style={styles.headerGreeting}>Hello, {user?.name?.split(" ")[0] || "Teacher"}</Text>
-        <Text style={styles.headerSub}>Teacher Portal Dashboard</Text>
+        <View style={{ flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.headerGreeting}>Hello, {user?.name?.split(" ")[0] || "Teacher"}</Text>
+            <Text style={styles.headerSub}>Teacher Dashboard</Text>
+          </View>
+          {Platform.OS !== "web" ? (
+            <Pressable
+              onPress={() => backToApp(router)}
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 6,
+                paddingHorizontal: 12,
+                height: 36,
+                borderRadius: 18,
+                backgroundColor: "rgba(255,255,255,0.18)",
+                borderWidth: 1,
+                borderColor: "rgba(255,255,255,0.3)",
+              }}
+            >
+              <Ionicons name="arrow-back" size={15} color="#fff" />
+              <Text style={{ fontSize: 12, fontFamily: "Inter_700Bold", color: "#fff" }}>App</Text>
+            </Pressable>
+          ) : null}
+        </View>
       </LinearGradient>
 
       {courses.length > 0 && (
@@ -115,18 +149,24 @@ export default function StaffHomeScreen() {
       <View style={styles.section}>
         <Text style={[styles.sectionTitle, { color: colors.text }]}>Quick Actions</Text>
         <View style={styles.quickRow}>
-          <Pressable style={styles.quickBtn} onPress={() => router.push("/staff/courses" as any)}>
-            <Ionicons name="calendar" size={20} color="#fff" />
-            <Text style={styles.quickText}>Schedule</Text>
-          </Pressable>
-          <Pressable style={styles.quickBtn} onPress={() => router.push("/staff/tests" as any)}>
-            <Ionicons name="create" size={20} color="#fff" />
-            <Text style={styles.quickText}>Add Test</Text>
-          </Pressable>
-          <Pressable style={styles.quickBtn} onPress={() => router.push("/staff/materials" as any)}>
-            <Ionicons name="cloud-upload" size={20} color="#fff" />
-            <Text style={styles.quickText}>Material</Text>
-          </Pressable>
+          {canSchedule ? (
+            <Pressable style={styles.quickBtn} onPress={() => router.push("/staff/courses" as any)}>
+              <Ionicons name="calendar" size={20} color="#fff" />
+              <Text style={styles.quickText}>Schedule</Text>
+            </Pressable>
+          ) : null}
+          {canTests ? (
+            <Pressable style={styles.quickBtn} onPress={() => router.push("/staff/tests" as any)}>
+              <Ionicons name="create" size={20} color="#fff" />
+              <Text style={styles.quickText}>Add Test</Text>
+            </Pressable>
+          ) : null}
+          {canMaterials ? (
+            <Pressable style={styles.quickBtn} onPress={() => router.push("/staff/materials" as any)}>
+              <Ionicons name="cloud-upload" size={20} color="#fff" />
+              <Text style={styles.quickText}>Material</Text>
+            </Pressable>
+          ) : null}
         </View>
       </View>
 

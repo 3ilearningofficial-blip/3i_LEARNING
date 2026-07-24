@@ -5,6 +5,7 @@ import { authFetch, getApiUrl, apiRequest } from "@/lib/query-client";
 import Colors from "@/constants/colors";
 import { useAppTheme } from "@/context/AppThemeContext";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useStaffPermissions } from "@/lib/staff/useStaffPermissions";
 
 export default function StaffTestsScreen() {
   const { colors } = useAppTheme();
@@ -12,6 +13,8 @@ export default function StaffTestsScreen() {
   const qc = useQueryClient();
   const [title, setTitle] = useState("");
   const [courseId, setCourseId] = useState("");
+  const { can } = useStaffPermissions();
+  const canCreate = can("tests.create");
 
   const { data: tests = [], isLoading } = useQuery({
     queryKey: ["/api/staff/tests"],
@@ -23,6 +26,7 @@ export default function StaffTestsScreen() {
   });
 
   const createTest = async () => {
+    if (!canCreate) return Alert.alert("Not allowed", "You do not have permission to create tests.");
     if (!title.trim()) return Alert.alert("Title required");
     try {
       await apiRequest("POST", "/api/staff/tests", {
@@ -41,9 +45,13 @@ export default function StaffTestsScreen() {
   return (
     <ScrollView style={{ flex: 1, backgroundColor: colors.background, paddingTop: insets.top + 12 }} contentContainerStyle={{ padding: 16 }}>
       <Text style={[styles.title, { color: colors.text }]}>Tests</Text>
-      <TextInput style={[styles.input, { backgroundColor: colors.surfaceAlt, color: colors.text }]} placeholder="Test title" value={title} onChangeText={setTitle} placeholderTextColor={colors.textMuted} />
-      <TextInput style={[styles.input, { backgroundColor: colors.surfaceAlt, color: colors.text }]} placeholder="Course ID (optional)" value={courseId} onChangeText={setCourseId} keyboardType="number-pad" placeholderTextColor={colors.textMuted} />
-      <Pressable style={styles.btn} onPress={createTest}><Text style={styles.btnText}>Add Test</Text></Pressable>
+      {canCreate ? (
+        <>
+          <TextInput style={[styles.input, { backgroundColor: colors.surfaceAlt, color: colors.text }]} placeholder="Test title" value={title} onChangeText={setTitle} placeholderTextColor={colors.textMuted} />
+          <TextInput style={[styles.input, { backgroundColor: colors.surfaceAlt, color: colors.text }]} placeholder="Course ID (optional)" value={courseId} onChangeText={setCourseId} keyboardType="number-pad" placeholderTextColor={colors.textMuted} />
+          <Pressable style={styles.btn} onPress={createTest}><Text style={styles.btnText}>Add Test</Text></Pressable>
+        </>
+      ) : null}
       {isLoading ? <ActivityIndicator color={Colors.light.primary} /> : tests.map((t: any) => (
         <View key={t.id} style={[styles.card, { backgroundColor: colors.surfaceAlt }]}>
           <Text style={{ color: colors.text, fontFamily: "Inter_600SemiBold" }}>{t.title}</Text>

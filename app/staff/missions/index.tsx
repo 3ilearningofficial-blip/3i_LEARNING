@@ -5,6 +5,7 @@ import { authFetch, getApiUrl, apiRequest } from "@/lib/query-client";
 import Colors from "@/constants/colors";
 import { useAppTheme } from "@/context/AppThemeContext";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useStaffPermissions } from "@/lib/staff/useStaffPermissions";
 
 export default function StaffMissionsScreen() {
   const { colors } = useAppTheme();
@@ -12,6 +13,8 @@ export default function StaffMissionsScreen() {
   const qc = useQueryClient();
   const [title, setTitle] = useState("");
   const [courseId, setCourseId] = useState("");
+  const { can } = useStaffPermissions();
+  const canCreate = can("missions.create");
 
   const { data: missions = [], isLoading } = useQuery({
     queryKey: ["/api/staff/daily-missions"],
@@ -23,6 +26,7 @@ export default function StaffMissionsScreen() {
   });
 
   const createMission = async () => {
+    if (!canCreate) return Alert.alert("Not allowed", "You do not have permission to create missions.");
     if (!title.trim() || !courseId) return Alert.alert("Title and course ID required");
     try {
       await apiRequest("POST", "/api/staff/daily-missions", {
@@ -40,9 +44,13 @@ export default function StaffMissionsScreen() {
   return (
     <ScrollView style={{ flex: 1, backgroundColor: colors.background, paddingTop: insets.top + 12 }} contentContainerStyle={{ padding: 16 }}>
       <Text style={[styles.title, { color: colors.text }]}>Daily Missions</Text>
-      <TextInput style={[styles.input, { backgroundColor: colors.surfaceAlt, color: colors.text }]} placeholder="Mission title" value={title} onChangeText={setTitle} placeholderTextColor={colors.textMuted} />
-      <TextInput style={[styles.input, { backgroundColor: colors.surfaceAlt, color: colors.text }]} placeholder="Course ID" value={courseId} onChangeText={setCourseId} keyboardType="number-pad" placeholderTextColor={colors.textMuted} />
-      <Pressable style={styles.btn} onPress={createMission}><Text style={styles.btnText}>Add Mission</Text></Pressable>
+      {canCreate ? (
+        <>
+          <TextInput style={[styles.input, { backgroundColor: colors.surfaceAlt, color: colors.text }]} placeholder="Mission title" value={title} onChangeText={setTitle} placeholderTextColor={colors.textMuted} />
+          <TextInput style={[styles.input, { backgroundColor: colors.surfaceAlt, color: colors.text }]} placeholder="Course ID" value={courseId} onChangeText={setCourseId} keyboardType="number-pad" placeholderTextColor={colors.textMuted} />
+          <Pressable style={styles.btn} onPress={createMission}><Text style={styles.btnText}>Add Mission</Text></Pressable>
+        </>
+      ) : null}
       {isLoading ? <ActivityIndicator color={Colors.light.primary} /> : missions.map((m: any) => (
         <View key={m.id} style={[styles.card, { backgroundColor: colors.surfaceAlt }]}>
           <Text style={{ color: colors.text, fontFamily: "Inter_600SemiBold" }}>{m.title}</Text>
